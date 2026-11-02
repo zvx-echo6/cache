@@ -138,17 +138,65 @@ pub fn is_open(dir: &Path) -> bool {
 // ---------------------------------------------------------------------------------------------------------
 // Where the old index of a source is (so `index_seal` needs only the source id)
 
-static LEGACY: Mutex<Option<HashMap<(String, String), PathBuf>>> = Mutex::new(None);
+/// Keyed by the `indexes_dir` too: several handles in one process (tests, or an app with two profiles) can hold the same source
+/// id with old indexes in different folders, and a seal must never be given another handle's folder.
+type LegacyKey = (PathBuf, String, String);
+static LEGACY: Mutex<Option<HashMap<LegacyKey, PathBuf>>> = Mutex::new(None);
 
-/// Remember that the handle's source `(kind, source_id)` keeps its old index in `dir`.
-pub fn note_legacy(kind: &str, source_id: &str, dir: &Path) {
+fn legacy_key(indexes_dir: &Path, kind: &str, source_id: &str) -> LegacyKey {
+    (canon(indexes_dir), kind.to_string(), source_id.to_string())
+}
+
+/// Remember that the handle's source `(kind, source_id)`, whose snapshots live under `indexes_dir`, keeps its old index in `dir`.
+pub fn note_legacy(indexes_dir: &Path, kind: &str, source_id: &str, dir: &Path) {
     if let Ok(mut g) = LEGACY.lock() {
-        g.get_or_insert_with(HashMap::new).insert((kind.to_string(), source_id.to_string()), dir.to_path_buf());
+        g.get_or_insert_with(HashMap::new).insert(legacy_key(indexes_dir, kind, source_id), dir.to_path_buf());
     }
 }
 
-fn legacy_of(kind: &str, source_id: &str) -> Option<PathBuf> {
-    LEGACY.lock().ok()?.as_ref()?.get(&(kind.to_string(), source_id.to_string())).cloned()
+fn legacy_of(indexes_dir: &Path, kind: &str, source_id: &str) -> Option<PathBuf> {
+    LEGACY.lock().ok()?.as_ref()?.get(&legacy_key(indexes_dir, kind, source_id)).cloned()
+}
+
+/// True while a Tantivy writer holds `<dir>/.tantivy-writer.lock` (it takes an exclusive `flock` on it, here probed without
+/// waiting). Sealing must not run beside a writer. Always false where the probe is not available.
+fn writer_live(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let Ok(f) = std::fs::File::open(dir.join(".tantivy-writer.lock")) else { return false };
+        // SAFETY: flock on a descriptor this function owns.
+        unsafe {
+            if libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 {
+                return std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock;
+            }
+            libc::flock(f.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    false
+}
+
+/// What identifies a file's content for sealing: inode (unix), size and modification time. A change between two looks means the
+/// file was rewritten (Tantivy replaces `meta.json` by a rename).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileId {
+    ino: u64,
+    size: u64,
+    mtime: Option<std::time::SystemTime>,
+}
+
+fn file_id(path: &Path) -> Option<FileId> {
+    let m = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let ino = {
+        use std::os::unix::fs::MetadataExt;
+        m.ino()
+    };
+    #[cfg(not(unix))]
+    let ino = 0;
+    Some(FileId { ino, size: m.len(), mtime: m.modified().ok() })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -573,7 +621,7 @@ pub fn prepare_seal(params_json: &str) -> Result<SealRequest> {
         .index_dir
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
-        .or_else(|| legacy_of(kind, &source_id))
+        .or_else(|| legacy_of(Path::new(&p.indexes_dir), kind, &source_id))
         .ok_or_else(|| Error::not_found(format!("no old index is known for {kind} {source_id}")))?;
     let sd = dir_for(Path::new(&p.indexes_dir), kind, &source_id);
     let lock = Lock::acquire(&snapshot::build_dir(&sd))?;
@@ -595,7 +643,7 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
     }
     // the old index must be a finished one of this format and this source
     let format = kind_format(kind);
-    if index::lock_is_live(legacy) {
+    if index::lock_is_live(legacy) || writer_live(legacy) {
         return Err(Error::busy(format!("{} is being indexed", legacy.display())));
     }
     let meta = read_meta(legacy)
@@ -655,6 +703,8 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
     let build_id = snapshot::new_build_id();
     let stage = build.join(format!("publish-{build_id}"));
     std::fs::create_dir_all(&stage).map_err(|e| Error::io(format!("{}: {e}", stage.display())))?;
+    // what every file looked like before it was linked: a rewrite while sealing (a writer or a merge still finishing) shows as a change
+    let before: Vec<Option<FileId>> = names.iter().map(|n| file_id(&legacy.join(n))).collect();
     let mut placed: Vec<(String, Placed)> = Vec::new();
     let undo = |placed: &[(String, Placed)]| {
         for (n, how) in placed {
@@ -742,6 +792,23 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
         undo(&placed);
         return Ok(Outcome::Cancelled);
     }
+    // the old files must be what they were when linked: unchanged, and the same files as the snapshot's (same inode)
+    for ((n, how), was) in placed.iter().zip(&before) {
+        if matches!(how, Placed::Linked) {
+            let (now, linked) = (file_id(&legacy.join(n)), file_id(&stage.join(n)));
+            #[cfg(unix)]
+            let same_file = now.as_ref().map(|f| f.ino) == linked.as_ref().map(|f| f.ino);
+            #[cfg(not(unix))]
+            let same_file = now.as_ref().map(|f| f.size) == linked.as_ref().map(|f| f.size);
+            if now != *was || !same_file {
+                undo(&placed);
+                return Err(Error::busy(format!(
+                    "{n} in {} changed while it was being sealed; try again later",
+                    legacy.display()
+                )));
+            }
+        }
+    }
 
     // 4. publish: the mark first (so a crash right after still finds the old names), then one rename
     (h.phase)("publish", 0, 1);
@@ -802,6 +869,34 @@ mod tests {
         assert!(compat_zim(&m).is_err());
         let l = manifest_for(KIND_LIBRARY, "l@1", "en_stem", Map::new());
         assert!(compat_library(&l).is_ok() && compat_zim(&l).is_err());
+    }
+
+    #[test]
+    fn a_file_replaced_by_a_rename_has_another_identity_and_a_live_writer_is_seen() {
+        let d = std::env::temp_dir().join(format!("cs-idxsnap-id-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("meta.json");
+        std::fs::write(&f, b"{}").unwrap();
+        let a = file_id(&f).unwrap();
+        assert_eq!(file_id(&f).unwrap(), a);
+        // Tantivy rewrites meta.json by writing a new file and renaming it over the old one
+        std::fs::write(d.join("meta.json.tmp"), b"{}").unwrap();
+        std::fs::rename(d.join("meta.json.tmp"), &f).unwrap();
+        #[cfg(unix)]
+        assert_ne!(file_id(&f).unwrap().ino, a.ino);
+        assert!(!writer_live(&d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn legacy_folders_are_looked_up_per_indexes_dir() {
+        let (a, b) = (Path::new("/nonexistent/idx-a"), Path::new("/nonexistent/idx-b"));
+        note_legacy(a, "zim", "u", Path::new("/old/a"));
+        note_legacy(b, "zim", "u", Path::new("/old/b"));
+        assert_eq!(legacy_of(a, "zim", "u").unwrap(), Path::new("/old/a"));
+        assert_eq!(legacy_of(b, "zim", "u").unwrap(), Path::new("/old/b"));
+        assert!(legacy_of(a, "library", "u").is_none());
     }
 
     #[test]
