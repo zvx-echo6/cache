@@ -693,6 +693,17 @@ class PdfIndexState extends ChangeNotifier {
   /// there is not enough). The same as the person's Resume.
   Future<void> start(PdfZimRef z) => resume(z);
 
+  /// The index scheduler's pause (the app went to the back, the battery ran low): a run of [z] stops and keeps its build, but not
+  /// as the person's Pause, so the scheduler starts it again later; a queued [z] leaves the queue.
+  Future<void> hold(PdfZimRef z) async {
+    _queue.remove(z.path);
+    if (_runPath == z.path) _run?.stop(PdfRunStop.battery);
+    notifyListeners();
+  }
+
+  /// What a run of [z] was measured to take, when it has been (null before).
+  PdfEstimate? estimateOf(PdfZimRef z) => _estimates[z.path];
+
   /// Resume (or Free space done, or Try again): starts now, ahead of the queue, on any battery; the space is checked again.
   Future<void> resume(PdfZimRef z) async {
     _failures.remove(z.path);
