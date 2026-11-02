@@ -116,7 +116,7 @@ void main() {
     await _show(tester, VideosScreen(video: v));
     expect(find.text('DOWNLOADING'), findsOneWidget);
     expect(find.text('Purifying water in the field'), findsOneWidget);
-    expect(find.byTooltip('Pause'), findsOneWidget);
+    expect(find.text('Pause'), findsOneWidget);
     expect(find.text('ON THIS DEVICE · 3 videos · 770 MB'), findsOneWidget);
     double y(String s) => tester.getTopLeft(find.text(s)).dy;
     expect(y('Field Skills') < y('Knots every camper should know'), isTrue);
