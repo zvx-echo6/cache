@@ -548,6 +548,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - jni-sys-macros 0.4.1: MIT OR Apache-2.0 (github.com/jni-rs/jni-sys)
 - jobserver 0.1.35: MIT OR Apache-2.0 (github.com/rust-lang/jobserver-rs)
 - jpeg-decoder 0.3.2: MIT OR Apache-2.0 (github.com/image-rs/jpeg-decoder)
+- jpeg-encoder 0.6.1: MIT OR Apache-2.0 (github.com/vstroebel/jpeg-encoder)
 - js-sys 0.3.106: MIT OR Apache-2.0 (github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - lazy_static 1.5.1: MIT OR Apache-2.0 (github.com/rust-lang-nursery/lazy-static.rs)
 - levenshtein_automata 0.2.1: MIT (github.com/tantivy-search/levenshtein-automata)
