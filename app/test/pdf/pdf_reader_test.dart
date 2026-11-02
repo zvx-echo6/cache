@@ -93,11 +93,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('pdf-page-count')));
     await settleUntil(tester, () => _has(find.text('Go to page')));
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.enterText(find.byKey(const ValueKey('pdf-goto-field')), '6');
+    // (The last page cannot reach the top: the view stops at the end of the PDF.)
+    await tester.enterText(find.byKey(const ValueKey('pdf-goto-field')), '2');
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('pdf-goto-go')));
     await settleUntil(tester, () => false, max: 20);
-    atTop(6);
+    atTop(2);
   });
 
   readerTest('a cited passage opens near the top of the view, a small gap above it', (tester) async {
