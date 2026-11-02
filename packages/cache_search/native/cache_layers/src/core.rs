@@ -37,7 +37,7 @@ pub struct LayersCfg {
 }
 
 /// The catalogue of layers Cache builds (public lands, trails and roads, MVUM, BLM routes).
-pub const DEFAULT_CATALOGUE: &str = "https://cache.echo6.co/catalogue.json";
+pub const DEFAULT_CATALOGUE: &str = "https://data.cached.info/catalogue.json";
 
 fn default_catalogues() -> Vec<String> {
     vec![DEFAULT_CATALOGUE.to_string()]

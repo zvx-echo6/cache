@@ -58,7 +58,7 @@ URLs must be `https`; plain `http` is accepted only to this machine (tests, a us
 
 ### Where definitions come from
 
-Later wins by `id`: read-only folders (`layers.defs_dirs`, the starter definitions shipped with the app), then the downloaded catalogue (`<dir>/catalogue.json`: every address in `layers.catalogue_urls`, fetched and merged by `cs_layers_refresh`; the default list is `["https://cache.echo6.co/catalogue.json"]`, `[]` turns it off, users add their own), then **user definitions** (`<dir>/user-defs/<id>.json`, written by `cs_layers_save`, removed by `cs_layers_remove`). The Advanced section of the app is `save` and `remove`; a user pointing Cache at their own server is a definition with their URL.
+Later wins by `id`: read-only folders (`layers.defs_dirs`, the starter definitions shipped with the app), then the downloaded catalogue (`<dir>/catalogue.json`: every address in `layers.catalogue_urls`, fetched and merged by `cs_layers_refresh`; the default list is `["https://data.cached.info/catalogue.json"]`, `[]` turns it off, users add their own), then **user definitions** (`<dir>/user-defs/<id>.json`, written by `cs_layers_save`, removed by `cs_layers_remove`). The Advanced section of the app is `save` and `remove`; a user pointing Cache at their own server is a definition with their URL.
 
 ### Starter definitions (`packages/cache_search/layers/`)
 

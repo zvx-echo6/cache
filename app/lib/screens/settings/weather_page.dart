@@ -22,7 +22,7 @@ Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool 
     title: title ?? c.title,
     gives: '${c.description.isEmpty ? c.title : _sentence(c.description)} You need your own key from $provider.',
     getKeyLabel: 'Get a key from $provider',
-    getKeyUrl: c.docs ?? w.catalogues.map((k) => k.catalogue.homepage).firstWhere((h) => h.startsWith('https://'), orElse: () => 'https://cache.echo6.co'),
+    getKeyUrl: c.docs ?? w.catalogues.map((k) => k.catalogue.homepage).firstWhere((h) => h.startsWith('https://'), orElse: () => 'https://cached.info'),
     steps: const ['Follow their steps to get a key, then copy it'],
     onSave: (key) => w.saveKey(c, key, switchOn: !replace),
     openUrl: d.hub.openUrl,

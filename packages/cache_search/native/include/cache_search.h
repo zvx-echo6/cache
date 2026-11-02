@@ -90,7 +90,7 @@ char *cs_version(void);
  *   "layers": {"dir": ".../layers",                  optional: the map layer engine (cs_layers_*, DESIGN-LAYERS.md);
  *              "defs_dirs": [".../layer-defs"],      read-only folders of definition files (the starter ones)
  *              "catalogue_urls": ["https://..."],    optional; JSON lists of definitions fetched by cs_layers_refresh and merged with
- *                                                    the starter ones. Default ["https://cache.echo6.co/catalogue.json"]; [] = none
+ *                                                    the starter ones. Default ["https://data.cached.info/catalogue.json"]; [] = none
  *              "cache_max_bytes": 268435456,         optional cap of the viewed-tile cache (default 256 MiB)
  *              "online": true}                       optional, default true; false = never use the network
  *   "notebook": {"db_path": ".../notebook/notebook.sqlite",  optional: the Notebook (cs_notebook); photos are files in
