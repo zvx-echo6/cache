@@ -66,6 +66,28 @@ class _VideoListState extends State<VideoList> {
     }
   }
 
+  /// "Saved", or "Downloading 40%" while it downloads, under a result.
+  Widget _state(BuildContext context, VideoItem v) {
+    final k = context.t;
+    final task = widget.video.taskFor(widget.instance.id, v.uuid);
+    if (task != null && task.isActive) {
+      final f = task.fraction;
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(f == null ? 'Downloading' : 'Downloading ${(f * 100).floor()}%', style: TextStyle(fontSize: 14, color: k.accent)),
+      );
+    }
+    if (!v.downloaded && widget.video.savedFor(widget.instance.id, v.uuid) == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(children: [
+        Icon(Icons.download_done, size: 16, color: k.ok),
+        const SizedBox(width: 4),
+        Text('Saved', style: TextStyle(fontSize: 14, color: k.ok)),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -89,7 +111,7 @@ class _VideoListState extends State<VideoList> {
         return VideoTile(
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute<void>(builder: (_) => VideoScreen(video: widget.video, instance: widget.instance, uuid: v.uuid, title: v.title)),
+            MaterialPageRoute<void>(builder: (_) => VideoScreen(video: widget.video, instanceId: widget.instance.id, uuid: v.uuid, title: v.title)),
           ),
           child: Padding(
             padding: const EdgeInsets.all(10),
@@ -105,15 +127,7 @@ class _VideoListState extends State<VideoList> {
                       Text(v.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
                       const SizedBox(height: 4),
                       Text(v.channel.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
-                      if (v.downloaded)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Row(children: [
-                            Icon(Icons.download_done, size: 16, color: k.ok),
-                            const SizedBox(width: 4),
-                            Text('Saved', style: TextStyle(fontSize: 14, color: k.ok)),
-                          ]),
-                        ),
+                      ListenableBuilder(listenable: widget.video, builder: (context, _) => _state(context, v)),
                     ],
                   ),
                 ),

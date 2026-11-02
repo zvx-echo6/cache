@@ -18,3 +18,17 @@ Alerts for
 
 # Maps > Layers section heading: the code has MY LAYERS (shown in capitals); the guide quotes it in normal case.
 My layers
+
+# Videos 1.0.30 (UX-video-30, branch rel-30-video): the old video labels the guide still quotes until the guide pass for the
+# new video screens. Saved is merged into Videos, "instance" is "video site", the Play button is gone (the picture plays).
+Add an instance
+Saved on this device
+Play saved copy
+Remove this instance
+No instances yet. Add the address of a PeerTube site to browse and watch its videos.
+Can't reach the instance. Check the connection and try again.
+That address doesn't look like a PeerTube instance.
+The instance asked us to slow down. Try again in a minute.
+The instance needs you to log in again.
+That instance is not in the list.
+Not found on the instance.

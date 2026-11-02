@@ -6,6 +6,36 @@ import 'package:cache_search/cache_search.dart';
 /// one account, shows a video as saved once its download job has finished. Top-level so it can run in the worker isolate.
 CsNative fakeVideoNative() => VideoFakeNative();
 
+/// A factory of [VideoFakeNative]s with [saved] already on the device (the manifests as cs_video_downloads lists them; the
+/// closure is copied to the worker isolate). [captionFetchFails]: captions_fetch fetches nothing.
+CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false}) =>
+    () => VideoFakeNative()
+      .._saved.addAll([for (final m in saved) {...m}])
+      ..captionFetchFails = captionFetchFails
+      ..noCaptions = noCaptions;
+
+/// A saved video's manifest for [seededVideos].
+Map<String, dynamic> savedManifest({
+  required String uuid,
+  required String title,
+  String channel = 'Field Skills',
+  String at = '2026-10-01T10:00:00Z',
+  int size = 230 * 1024 * 1024,
+  int durationS = 252,
+  String label = '480p',
+  List<Map<String, dynamic>> captions = const [],
+  List<Map<String, dynamic>> missing = const [],
+  String instance = 'example.org',
+  String? thumb,
+}) =>
+    {
+      'instance': instance, 'uuid': uuid, 'title': title, 'channel': {'display_name': channel}, 'duration_s': durationS, 'kind': 'video',
+      'resolution': label.replaceAll('p', ''), 'resolution_label': label, 'size': size, 'path': '/data/$uuid/video.mp4', 'thumbnail_path': thumb,
+      'downloaded_at': at, 'captions': captions, 'missing_captions': missing,
+      'warnings': [for (final m in missing) 'caption ${m['language']} not saved: the instance did not answer'],
+      'description': 'How to tie it, step by step.', 'published_at': '2026-03-14T09:00:00Z',
+    };
+
 class VideoFakeNative implements CsNative {
   // The tool, location, places and live calls are not used by these tests.
   @override
@@ -84,7 +114,7 @@ class VideoFakeNative implements CsNative {
           'description': 'A short video',
           'download_enabled': true,
           'captions': [
-            {'language': 'en', 'label': 'English', 'automatic': true, 'url': 'https://example.org/c.vtt'}
+            if (!noCaptions) {'language': 'en', 'label': 'English', 'automatic': true, 'url': 'https://example.org/c.vtt'}
           ],
           'options': [
             {'key': '720', 'label': '720p', 'kind': 'video', 'size': 9000000, 'source': 'web'},
@@ -97,8 +127,22 @@ class VideoFakeNative implements CsNative {
       case 'downloads':
         return jsonEncode({'downloads': _saved, 'total_bytes': _saved.fold<int>(0, (a, d) => a + (d['size'] as int))});
       case 'delete':
-        _saved.clear();
-        return jsonEncode({'deleted': uuid});
+        _saved.removeWhere((d) => d['uuid'] == r['video']);
+        return jsonEncode({'deleted': r['video']});
+      case 'captions_fetch':
+        final d = _saved.firstWhere((d) => d['uuid'] == r['video'], orElse: () => <String, dynamic>{});
+        if (d.isEmpty) {
+          _error = jsonEncode({'code': 'not_found', 'message': 'no downloaded video'});
+          return null;
+        }
+        if (captionFetchFails) return jsonEncode(d);
+        d['captions'] = [
+          ...(d['captions'] as List),
+          for (final m in (d['missing_captions'] as List? ?? const [])) {...(m as Map), 'path': '/data/${d['uuid']}/captions-${m['language']}.vtt'},
+        ];
+        d['missing_captions'] = <Map<String, dynamic>>[];
+        d['warnings'] = <String>[];
+        return jsonEncode(d);
       case 'resolve':
         if (_saved.isNotEmpty) {
           return jsonEncode({
@@ -168,6 +212,12 @@ class VideoFakeNative implements CsNative {
   String? conversationIds(int conv) => null;
   @override
   void conversationFree(int conv) {}
+
+  /// captions_fetch fetches nothing (the site still does not answer).
+  bool captionFetchFails = false;
+
+  /// The site's video has no captions.
+  bool noCaptions = false;
 
   /// Makes the next token-carrying list call fail once, as an expired token does.
   void expireToken() => _accessValid = false;

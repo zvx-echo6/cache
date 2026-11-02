@@ -117,7 +117,7 @@ class _InstanceSheetState extends State<_InstanceSheet> {
               ] else ...[
                 Text('Log in (optional)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
                 const SizedBox(height: 4),
-                Text('Only needed for videos the instance keeps behind a login.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                Text('Only needed for videos the site keeps behind a login.', style: TextStyle(fontSize: 14, color: k.secondary)),
                 const SizedBox(height: 10),
                 TextField(controller: _user, autocorrect: false, decoration: const InputDecoration(hintText: 'User name')),
                 const SizedBox(height: 8),
@@ -134,7 +134,7 @@ class _InstanceSheetState extends State<_InstanceSheet> {
               TextButton.icon(
                 onPressed: _remove,
                 icon: Icon(Icons.delete_outline, color: k.emergency),
-                label: Text('Remove this instance', style: TextStyle(color: k.emergency)),
+                label: Text('Remove this video site', style: TextStyle(color: k.emergency)),
               ),
             ],
           ),

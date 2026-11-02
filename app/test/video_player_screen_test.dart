@@ -3,98 +3,47 @@ import 'dart:io';
 
 import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/video/captions.dart';
+import 'package:cache/video/video_prefs.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:video_player/video_player.dart';
 
-// No platform playback or codecs: this controller records the screen's contract.
-class RecordingController extends VideoPlayerController {
-  RecordingController({this.pending}) : super.file(File('offline.mp4'));
-  final Completer<void>? pending;
-  final calls = <String>[];
-  ClosedCaptionFile? captions;
-  bool disposed = false;
+import 'video_player_fakes.dart';
 
-  @override
-  Future<void> initialize() async {
-    calls.add('initialize');
-    await pending?.future;
-    if (!disposed) {
-      value = value.copyWith(
-        isInitialized: true,
-        duration: const Duration(seconds: 60),
-        size: const Size(640, 360),
-      );
-    }
-  }
+const Size _phone = Size(430, 932);
+const Size _tablet = Size(1180, 820);
+const Size _shortWide = Size(1180, 560);
 
-  @override
-  Future<void> setPlaybackSpeed(double speed) async {
-    calls.add('speed:$speed');
-    value = value.copyWith(playbackSpeed: speed);
-  }
-
-  @override
-  Future<void> seekTo(Duration position) async {
-    calls.add('seek:${position.inMilliseconds}');
-    value = value.copyWith(position: position);
-  }
-
-  @override
-  Future<void> play() async {
-    calls.add('play');
-    if (!disposed) value = value.copyWith(isPlaying: true);
-  }
-
-  @override
-  Future<void> setClosedCaptionFile(Future<ClosedCaptionFile>? file) async {
-    captions = await file;
-    value = value.copyWith(caption: captions!.captions.first);
-  }
-
-  @override
-  Future<void> dispose() async {
-    calls.add('dispose');
-    disposed = true;
-    // No platform resources were created; release ChangeNotifier listeners.
-    await super.dispose();
-  }
+void _size(WidgetTester tester, Size s) {
+  tester.view.physicalSize = s * 2;
+  tester.view.devicePixelRatio = 2;
+  addTearDown(tester.view.reset);
 }
-
-class NoNetwork extends HttpOverrides {
-  int attempts = 0;
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    attempts++;
-    throw StateError('Offline player attempted HTTP');
-  }
-}
-
-VideoTarget target({
-  bool local = true,
-  double offset = 12.345,
-  List<DownloadedCaption> captions = const [],
-}) => VideoTarget(
-  isLocal: local,
-  uuid: 'test-video',
-  title: 'Saved video',
-  offsetS: offset,
-  durationS: 60,
-  location: local ? 'offline.mp4' : 'https://video.example.test/video.mp4',
-  captions: captions,
-);
 
 Future<void> open(
   WidgetTester tester,
   RecordingController c,
-  VideoTarget t,
-) async {
+  VideoTarget t, {
+  VideoPrefs? prefs,
+  bool cited = false,
+  Size size = _phone,
+  VoidCallback? onRedownload,
+  VoidCallback? onPlaySaved,
+  bool? mobile,
+}) async {
+  _size(tester, size);
   await tester.pumpWidget(
     MaterialApp(
       theme: buildTheme(CacheThemeId.dark),
       home: PlayerScreen(
         target: t,
+        prefs: prefs,
+        cited: cited,
+        onRedownload: onRedownload,
+        onPlaySaved: onPlaySaved,
+        mobileOverride: mobile ?? false,
         controllerFactory: (received) {
           expect(identical(received, t), isTrue);
           return c;
@@ -103,135 +52,380 @@ Future<void> open(
     ),
   );
   await tester.pump();
+  await tester.pump();
+}
+
+Future<void> close(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox());
+  await tester.pump();
 }
 
 void main() {
-  for (final local in [true, false]) {
-    testWidgets(
-      '${local ? 'Downloaded' : 'Stream'} citation initializes, seeks exact offset, then plays',
-      (tester) async {
-        final c = RecordingController();
-        await open(tester, c, target(local: local));
-        expect(c.calls, ['initialize', 'seek:12345', 'play']);
-        expect(find.byTooltip('Pause'), findsOneWidget);
-        expect(find.text('Streaming'), local ? findsNothing : findsOneWidget);
-        await tester.pumpWidget(const SizedBox());
-        expect(c.calls.last, 'dispose');
-      },
-    );
-  }
+  late Directory dir;
+  setUp(() => dir = Directory.systemTemp.createTempSync('cache-player-'));
+  tearDown(() => dir.deleteSync(recursive: true));
 
-  testWidgets('Zero offset plays without an unnecessary seek', (tester) async {
-    final c = RecordingController();
-    await open(tester, c, target(offset: 0));
-    expect(c.calls, ['initialize', 'play']);
-    await tester.pumpWidget(const SizedBox());
+  List<DownloadedCaption> english() => [writeCaption(dir, 'en', 'English', kKnotCues)];
+  List<DownloadedCaption> two() => [writeCaption(dir, 'en', 'English', kKnotCues), writeCaption(dir, 'es', 'Spanish', kKnotCuesEs, automatic: true)];
+
+  group('player states', () {
+    for (final local in [true, false]) {
+      testWidgets('${local ? 'Saved' : 'Stream'}: loading, then playing, then paused; the line under the title says where it plays', (tester) async {
+        final pending = Completer<void>();
+        final c = RecordingController(pending: pending);
+        await open(tester, c, playerTarget(local: local));
+        expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'loading');
+        pending.complete();
+        await tester.pump();
+        await tester.pump();
+        expect(c.calls, ['initialize', 'play']);
+        expect(find.byTooltip('Pause'), findsOneWidget, reason: 'playing');
+        expect(find.text(local ? '1:00 · On this device' : '1:00 · Streaming'), findsOneWidget);
+        await tester.tap(find.byTooltip('Pause'));
+        await tester.pump();
+        expect(find.byTooltip('Play'), findsOneWidget, reason: 'paused');
+        expect(find.text('Speed 1x'), findsOneWidget);
+        expect(find.text('Full screen'), findsOneWidget);
+        expect(find.textContaining('Captions:'), findsNothing, reason: 'no captions: no Captions button');
+        await close(tester);
+        expect(c.calls.last, 'dispose');
+      });
+    }
+
+    testWidgets('A stream that cannot play says so with Try again (and Saved copy when there is one); Try again starts it again', (tester) async {
+      final c = RecordingController(fail: true);
+      var saved = 0;
+      _size(tester, _phone);
+      var made = 0;
+      final t = playerTarget(local: false);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: t,
+          onPlaySaved: () => saved++,
+          mobileOverride: false,
+          controllerFactory: (_) {
+            made++;
+            return made == 1 ? c : RecordingController();
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text("This video can't be played."), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-saved-copy')));
+      expect(saved, 1);
+      await tester.tap(find.byKey(const ValueKey('player-retry')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(made, 2);
+      expect(find.text("This video can't be played."), findsNothing);
+      expect(find.byTooltip('Pause'), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('A saved file that cannot play offers "Delete it and download again"', (tester) async {
+      var again = 0;
+      await open(tester, RecordingController(fail: true), playerTarget(), onRedownload: () => again++);
+      expect(find.text("This file can't be played."), findsOneWidget);
+      await tester.tap(find.text('Delete it and download again'));
+      expect(again, 1);
+      await close(tester);
+    });
+
+    testWidgets('Skips clamp to zero and duration', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(offset: 3));
+      await tester.tap(find.byTooltip('Back 10 seconds'));
+      await tester.pump();
+      expect(c.calls.last, 'seek:0');
+      c.at(const Duration(seconds: 57));
+      await tester.pump();
+      await tester.tap(find.byTooltip('Forward 10 seconds'));
+      await tester.pump();
+      expect(c.calls.last, 'seek:60000');
+      await close(tester);
+    });
+
+    testWidgets('Speed sheet, and true full screen with the controls on a tap; Back leaves full screen', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget());
+      await tester.tap(find.byKey(const ValueKey('player-speed')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('speed-1.5')));
+      await tester.pumpAndSettle();
+      expect(c.calls.last, 'speed:1.5');
+      expect(find.text('Speed 1.5x'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-fullscreen')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
+      expect(find.byType(AppBar), findsNothing, reason: 'the video alone');
+      expect(find.text('Leave full screen'), findsOneWidget, reason: 'the controls show at first');
+      await tester.tap(find.byKey(const ValueKey('player-full')), warnIfMissed: false);
+      await tester.pump();
+      expect(find.text('Leave full screen'), findsNothing, reason: 'a tap hides them');
+      final nav = tester.state<NavigatorState>(find.byType(Navigator));
+      await nav.maybePop();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-full')), findsNothing);
+      expect(find.byType(AppBar), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('A phone turned sideways on a wide video goes full screen', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(), size: const Size(860, 400), mobile: true);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('Keys: Space plays and pauses, Right and Left move 5 seconds, F full screen, Esc leaves it', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(), size: const Size(1440, 900));
+      c.at(const Duration(seconds: 20));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(c.calls.last, 'pause');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(c.calls.last, 'seek:25000');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(c.calls.last, 'seek:20000');
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-full')), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('Unmount during initialization disposes and never seeks or plays', (tester) async {
+      final pending = Completer<void>();
+      final c = RecordingController(pending: pending);
+      await open(tester, c, playerTarget(offset: 12.3));
+      await close(tester);
+      pending.complete();
+      await tester.pump();
+      expect(c.calls, ['initialize', 'dispose']);
+    });
   });
 
-  testWidgets(
-    'Downloaded WebVTT captions parse locally and toggle without HTTP',
-    (tester) async {
+  group('resume', () {
+    testWidgets('Opens where it was left, says so for 5 seconds with Start over, and keeps the new place', (tester) async {
+      final prefs = VideoPrefs();
+      final key = VideoPrefs.keyOf(instance: 'example.org', uuid: 'test-video');
+      prefs.setPosition(key, const Duration(seconds: 42), const Duration(seconds: 60));
+      final c = RecordingController();
+      await open(tester, c, playerTarget(), prefs: prefs);
+      expect(c.calls, ['initialize', 'seek:42000', 'play']);
+      expect(find.text('Resumed at 0:42'), findsOneWidget);
+      expect(find.text('Start over'), findsOneWidget);
+      await tester.pump(kResumedNotice + const Duration(milliseconds: 100));
+      expect(find.text('Resumed at 0:42'), findsNothing, reason: 'gone after 5 seconds');
+      c.at(const Duration(seconds: 30));
+      await tester.pump(const Duration(seconds: 5));
+      expect(prefs.positionOf(key), const Duration(seconds: 30), reason: 'kept while it plays');
+      await close(tester);
+    });
+
+    testWidgets('Start over goes back to the beginning and forgets the place', (tester) async {
+      final prefs = VideoPrefs();
+      final key = VideoPrefs.keyOf(instance: 'example.org', uuid: 'test-video');
+      prefs.setPosition(key, const Duration(seconds: 42), const Duration(seconds: 60));
+      final c = RecordingController();
+      await open(tester, c, playerTarget(), prefs: prefs);
+      await tester.tap(find.text('Start over'));
+      await tester.pump();
+      expect(c.calls.last, 'seek:0');
+      expect(find.text('Resumed at 0:42'), findsNothing);
+      expect(prefs.positionOf(key), isNull);
+      await close(tester);
+    });
+
+    testWidgets('The place is cleared in the last 10 seconds, and kept on leaving', (tester) async {
+      final prefs = VideoPrefs();
+      final key = VideoPrefs.keyOf(instance: 'example.org', uuid: 'test-video');
+      final c = RecordingController();
+      await open(tester, c, playerTarget(), prefs: prefs);
+      expect(find.textContaining('Resumed'), findsNothing, reason: 'nothing kept yet: from the start');
+      c.at(const Duration(seconds: 25));
+      await close(tester);
+      expect(prefs.positionOf(key), const Duration(seconds: 25), reason: 'leaving keeps the place');
+
+      final c2 = RecordingController();
+      await open(tester, c2, playerTarget(), prefs: prefs);
+      c2.at(const Duration(seconds: 55));
+      await tester.pump(const Duration(seconds: 5));
+      expect(prefs.positionOf(key), isNull, reason: 'the last 10 seconds: watched');
+      await close(tester);
+    });
+
+    testWidgets('A citation overrides the kept place', (tester) async {
+      final prefs = VideoPrefs();
+      prefs.setPosition(VideoPrefs.keyOf(instance: 'example.org', uuid: 'test-video'), const Duration(seconds: 42), const Duration(seconds: 60));
+      final c = RecordingController();
+      await open(tester, c, playerTarget(offset: 12.345), prefs: prefs, cited: true);
+      expect(c.calls, ['initialize', 'seek:12345', 'play']);
+      expect(find.textContaining('Resumed'), findsNothing);
+      await close(tester);
+    });
+
+    test('Kept on this device in its own file, read back; damaged reads as empty', () async {
+      final f = File('${dir.path}/video-prefs.json');
+      final a = VideoPrefs(file: f);
+      await a.load();
+      a.setPosition('pt:x/1', const Duration(seconds: 90), const Duration(minutes: 40));
+      a.captions = 'es';
+      await a.flush();
+      final b = VideoPrefs(file: f);
+      await b.load();
+      expect(b.positionOf('pt:x/1'), const Duration(seconds: 90));
+      expect(b.captions, 'es');
+      f.writeAsStringSync('{not json');
+      final c = VideoPrefs(file: f);
+      await c.load();
+      expect(c.positionOf('pt:x/1'), isNull);
+      expect(c.captions, isNull);
+    });
+  });
+
+  group('captions', () {
+    testWidgets('One language: Captions turns on and off (no sheet); the caption is on the picture; the choice is kept, and the next video starts with it', (tester) async {
       final network = NoNetwork();
       final previous = HttpOverrides.current;
       HttpOverrides.global = network;
       addTearDown(() => HttpOverrides.global = previous);
-      final dir = await tester.runAsync(
-        () => Directory.systemTemp.createTemp('cache-player-'),
-      );
-      addTearDown(() => dir!.deleteSync(recursive: true));
-      final file = File('${dir!.path}/captions.vtt');
-      file.writeAsStringSync(
-        'WEBVTT\n\n00:00:10.000 --> 00:00:15.000\nLocal caption\n\n00:00:20.000 --> 00:00:25.000\nSecond cue\n',
-      );
+      final prefs = VideoPrefs();
       final c = RecordingController();
-      await open(
-        tester,
-        c,
-        target(
-          captions: [
-            DownloadedCaption(
-              language: 'en',
-              label: 'English',
-              path: file.path,
-            ),
-          ],
-        ),
-      );
-      expect(find.text('Local caption'), findsNothing);
-      await tester.runAsync(() async {
-        await tester.tap(find.byTooltip('Show captions'));
-        for (var i = 0; i < 50 && c.captions == null; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
-      });
+      await open(tester, c, playerTarget(captions: english()), prefs: prefs);
+      expect(find.text('Captions: Off'), findsOneWidget, reason: 'off the first time');
+      c.at(const Duration(seconds: 13));
       await tester.pump();
-      expect(c.captions!.captions, hasLength(2));
-      expect(c.captions!.captions.first.start, const Duration(seconds: 10));
-      expect(c.captions!.captions.first.end, const Duration(seconds: 15));
-      expect(c.captions!.captions.last.text, 'Second cue');
-      expect(find.text('Local caption'), findsOneWidget);
-      await tester.tap(find.byTooltip('Hide captions'));
+      expect(find.text('It makes a loop that will not slip or jam.'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('player-captions')));
       await tester.pump();
-      expect(find.text('Local caption'), findsNothing);
-      expect(find.byTooltip('Show captions (English)'), findsOneWidget);
+      expect(find.text('Captions: English'), findsOneWidget);
+      expect(find.byKey(const ValueKey('captions-off')), findsNothing, reason: 'one language: no sheet');
+      expect(find.descendant(of: find.byKey(const ValueKey('caption-band')), matching: find.text('It makes a loop that will not slip or jam.')), findsOneWidget);
+      expect(prefs.captions, 'en');
+      expect(find.byKey(const ValueKey('player-transcript')), findsNothing, reason: 'a phone has no transcript');
+      await close(tester);
+
+      final c2 = RecordingController();
+      await open(tester, c2, playerTarget(captions: english(), uuid: 'other'), prefs: prefs);
+      expect(find.text('Captions: English'), findsOneWidget, reason: 'the kept choice');
+      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.pump();
+      expect(find.text('Captions: Off'), findsOneWidget);
+      expect(prefs.captions, 'off');
       expect(network.attempts, 0);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+      await close(tester);
+    });
 
-  testWidgets('Skips clamp to zero and duration', (tester) async {
-    final c = RecordingController();
-    await open(tester, c, target(offset: 3));
-    await tester.tap(find.byTooltip('Back 10 seconds'));
-    await tester.pump();
-    expect(c.calls.last, 'seek:0');
-    c.value = c.value.copyWith(position: const Duration(seconds: 57));
-    await tester.pump();
-    await tester.tap(find.byTooltip('Forward 10 seconds'));
-    await tester.pump();
-    expect(c.calls.last, 'seek:60000');
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('Playback speed, and true full screen with the controls on a tap; Back leaves full screen', (tester) async {
-    final c = RecordingController();
-    await open(tester, c, target(offset: 3));
-    expect(find.text('1x'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('player-speed')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('speed-1.5')));
-    await tester.pumpAndSettle();
-    expect(c.calls.last, 'speed:1.5');
-    expect(find.text('1.5x'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('player-fullscreen')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
-    expect(find.byType(AppBar), findsNothing, reason: 'the video alone');
-    expect(find.byTooltip('Leave full screen'), findsOneWidget, reason: 'the controls show at first');
-    await tester.tap(find.byKey(const ValueKey('player-full')), warnIfMissed: false);
-    await tester.pump();
-    expect(find.byTooltip('Leave full screen'), findsNothing, reason: 'a tap hides them');
-    final nav = tester.state<NavigatorState>(find.byType(Navigator));
-    await nav.maybePop();
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('player-full')), findsNothing);
-    expect(find.byType(AppBar), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets(
-    'Unmount during initialization disposes and never seeks or plays',
-    (tester) async {
-      final pending = Completer<void>();
-      final c = RecordingController(pending: pending);
-      await open(tester, c, target());
-      expect(c.calls, ['initialize']);
-      await tester.pumpWidget(const SizedBox());
-      expect(c.calls, ['initialize', 'dispose']);
-      pending.complete();
+    testWidgets('Two languages: the sheet has Off and each language; the choice is kept by language', (tester) async {
+      final prefs = VideoPrefs();
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: two()), prefs: prefs);
+      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('captions-off')), findsOneWidget);
+      expect(find.text('English'), findsOneWidget);
+      expect(find.text('Spanish (automatic)'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('captions-es')));
+      await tester.pumpAndSettle();
+      expect(find.text('Captions: Spanish (automatic)'), findsOneWidget);
+      expect(prefs.captions, 'es');
+      c.at(const Duration(seconds: 7));
       await tester.pump();
-      expect(c.calls, ['initialize', 'dispose']);
-      expect(tester.takeException(), isNull);
-    },
-  );
+      expect(find.text('Primero, el as de guía. Hace un lazo fijo.'), findsOneWidget);
+      await close(tester);
+
+      // a video without the kept language starts with its first one
+      final c2 = RecordingController();
+      await open(tester, c2, playerTarget(captions: english(), uuid: 'other'), prefs: prefs);
+      expect(find.text('Captions: English'), findsOneWidget);
+      await close(tester);
+    });
+
+    test('WebVTT and SubRip cues parse in time order; the cue at a time and the cited cue', () {
+      final vtt = parseCues('WEBVTT\n\n00:00:05.000 --> 00:00:08.000\nSecond\n\n00:00:01.000 --> 00:00:04.000\nFirst\n');
+      expect([for (final c in vtt) c.text], ['First', 'Second']);
+      final srt = parseCues('1\n00:00:01,000 --> 00:00:04,000\nUno\n\n2\n00:00:05,000 --> 00:00:08,000\nDos\n');
+      expect([for (final c in srt) c.text], ['Uno', 'Dos']);
+      expect(cueAt(vtt, const Duration(seconds: 2)), 0);
+      expect(cueAt(vtt, const Duration(milliseconds: 4500)), -1);
+      expect(citedCue(vtt, const Duration(milliseconds: 4500)), 1, reason: 'a moment just before a cue finds it');
+      expect(citedCue(vtt, const Duration(seconds: 30)), 1);
+    });
+  });
+
+  group('transcript and the cited moment', () {
+    testWidgets('Tablet: the transcript sits beside the video, follows playback, and a tap on a line seeks there', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english()), size: _tablet);
+      expect(find.byKey(const ValueKey('player-transcript')), findsOneWidget);
+      expect(find.text('First, the bowline. It makes a fixed loop.'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('cue-3')));
+      await tester.pump();
+      expect(c.calls.last, 'seek:18000');
+      await close(tester);
+    });
+
+    testWidgets('Tablet, cited: opens at the cue start with Match on it in the transcript; it clears once playback moves past', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english(), offset: 12.4), size: _tablet, cited: true);
+      await tester.pump();
+      expect(c.calls, ['initialize', 'seek:12000', 'play'], reason: 'the cue start');
+      final match = find.byKey(const ValueKey('transcript-match'));
+      expect(match, findsOneWidget);
+      expect(find.ancestor(of: match, matching: find.byKey(const ValueKey('cue-2'))), findsOneWidget);
+      c.at(const Duration(seconds: 19));
+      await tester.pump();
+      expect(match, findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('Tablet, cited: tapping another line clears Match', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english(), offset: 12), size: _tablet, cited: true);
+      expect(find.byKey(const ValueKey('transcript-match')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('cue-5')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('transcript-match')), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('Phone, cited: captions show with the cited line marked Match on the picture; the kept choice is not changed', (tester) async {
+      final prefs = VideoPrefs();
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english(), offset: 12), prefs: prefs, cited: true);
+      expect(find.byKey(const ValueKey('player-transcript')), findsNothing);
+      expect(find.byKey(const ValueKey('caption-match')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('caption-band')), matching: find.text('It makes a loop that will not slip or jam.')), findsOneWidget);
+      expect(prefs.captions, isNull);
+      c.at(const Duration(seconds: 19));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('caption-match')), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('A wide window too short for the transcript beside: Captions opens the sheet with Transcript', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english()), size: _shortWide);
+      expect(find.byKey(const ValueKey('player-transcript')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('captions-transcript')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('player-transcript')), findsOneWidget);
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      await close(tester);
+    });
+  });
 }
