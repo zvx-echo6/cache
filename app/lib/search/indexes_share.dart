@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceStatus;
 
+// kIndexesDirName lives in indexes_dir.dart: the Cache Server helper (plain Dart, no Flutter packages) reads core_config.dart too.
+export 'indexes_dir.dart' show kIndexesDirName;
+
 /// The device's syncable search indexes (the core's `indexes_dir`): one folder, `<kind>/<source id>/`, each with its working
 /// `.build/` and its sealed snapshots `snap/<build-id>/` (manifest.json written last). It is shared with every linked device
 /// once sharing is set up, whatever kinds are ticked, so an index reaches any device that has the same source, even when the
@@ -9,9 +12,6 @@ import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceSta
 
 /// The always-on share of the indexes folder.
 const String kIndexesShareId = 'indexes';
-
-/// The indexes folder, under the app's support folder.
-const String kIndexesDirName = 'shared-indexes';
 
 /// What never syncs from it: each index's build (which also holds a publish in progress, renamed into `snap/` in one step), the
 /// core's own notes about this device (`.local/`, such as the snapshots it rejected), and SQLite's working files, which belong to
