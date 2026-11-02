@@ -81,3 +81,4 @@ video-sign-in | A video site's sheet: "Sign in (optional)" with two "Sign in wit
 pdf-reader | The PDF reader at page 12: the title, "12 of 340", Find in this PDF, and the bar with Previous page, Fit page and Next page
 pdf-cited-passage | The PDF reader opened at a cited page: the "Cited passage" strip and the passage highlighted
 search-pdf-hits | Home search with passages from a ZIM's PDFs (title "[PDF], p. 47") among the Library results
+settings-indexing-speed | Settings > Storage > Advanced: "Background indexing speed" with Gentle (ticked) and Normal
