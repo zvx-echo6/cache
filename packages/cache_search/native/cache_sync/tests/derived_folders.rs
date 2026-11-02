@@ -7,10 +7,9 @@ use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
 /// The app's patterns (app/lib/sources/libraries_state.dart kLibraryNotShared, app/lib/regions/regions_state.dart
-/// kRegionsNotShared and kMapLayersNotShared, app/lib/pdf/index/pdf_index_core.dart kIndexesNotShared); keep them equal.
+/// kRegionsNotShared and kMapLayersNotShared); keep them equal.
 fn app_patterns() -> Value {
     json!({
-        "indexes": ["zim-pdf/*/.*"],
         "libraries": ["*/index"],
         "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
         "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
@@ -19,16 +18,9 @@ fn app_patterns() -> Value {
 
 fn engine(dir: &Path, name: &str, port: u16, exclude: bool) -> SyncEngine {
     let ex = if exclude { app_patterns() } else { json!({}) };
-    // app/lib/pdf/index/pdf_index_core.dart kIndexesLocalDeletes.
-    let local = if exclude { json!({"indexes": ["zim-pdf/*/snap"]}) } else { json!({}) };
-    engine_with(dir, name, port, ex, local, json!({}))
-}
-
-fn engine_with(dir: &Path, name: &str, port: u16, exclude: Value, local_deletes: Value, fetch_only: Value) -> SyncEngine {
     let cfg: Config = serde_json::from_value(json!({
         "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false,
-        "interval_secs": 5, "reserve_bytes": 0, "port": port, "exclude": exclude, "local_deletes": local_deletes,
-        "fetch_only": fetch_only,
+        "interval_secs": 5, "reserve_bytes": 0, "port": port, "exclude": ex,
     }))
     .unwrap();
     SyncEngine::open(cfg).unwrap()
@@ -99,89 +91,6 @@ fn globs_within_a_segment_and_at_any_depth() {
     }
     let mid = vec!["a*b*c".to_string()];
     assert!(excluded(&mid, "abc") && excluded(&mid, "aXbYc") && !excluded(&mid, "acb") && !excluded(&mid, "ab"));
-}
-
-/// The indexes share: each ZIM's PDF index is `zim-pdf/<uuid>/`; its snapshots under `snap/` are matched by nothing (they
-/// travel), its build (`.build/`) and the publish's temporary folder (dot-named) are.
-#[test]
-fn index_share_patterns() {
-    let p = vec!["zim-pdf/*/.*".to_string()];
-    for yes in ["zim-pdf/u1/.build", "zim-pdf/u1/.build/meta.json", "zim-pdf/u1/.build/seg.idx", "zim-pdf/u1/.publish-b7/manifest.json"] {
-        assert!(excluded(&p, yes), "{yes} is excluded");
-    }
-    for no in ["zim-pdf", "zim-pdf/u1", "zim-pdf/u1/snap", "zim-pdf/u1/snap/b7/manifest.json", "zim-pdf/u1/snap/b7/.managed.json", "zim-pdf/u1/snap/b7/seg.store"] {
-        assert!(!excluded(&p, no), "{no} syncs");
-    }
-    // The receiver's filter: the ZIMs this device has.
-    let only = vec!["zim-pdf/u1".to_string()];
-    assert!(excluded(&only, "zim-pdf/u1/snap/b7/seg.store"));
-    assert!(!excluded(&only, "zim-pdf/u2/snap/b7/seg.store"));
-    assert!(!excluded(&only, "zim-pdf/u10/snap/b7/seg.store"));
-}
-
-fn index_engine(dir: &Path, name: &str, port: u16, uuids: &[&str]) -> SyncEngine {
-    let only: Vec<String> = uuids.iter().map(|u| format!("zim-pdf/{u}")).collect();
-    engine_with(dir, name, port, app_patterns(), json!({"indexes": ["zim-pdf/*/snap"]}), json!({"indexes": only}))
-}
-
-/// The indexes share end to end: a snapshot reaches a device that has the ZIM; the build and a publish in progress stay where
-/// they were made; a snapshot one device deletes (its own clean-up) stays on the other, which does not send it back; and a
-/// device takes only the indexes of the ZIMs it has, which `set_fetch_only` changes while it runs.
-#[test]
-fn index_snapshots_travel_to_devices_with_the_zim_and_their_deletes_stay_local() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
-    let (ia, ib) = (tmp.path().join("idx-a"), tmp.path().join("idx-b"));
-    let parts = ["zim-pdf/u1/snap/b1/seg.store", "zim-pdf/u1/snap/b1/manifest.json"];
-    let other_zim = ["zim-pdf/u2/snap/c1/seg.store", "zim-pdf/u2/snap/c1/manifest.json"];
-    let working = ["zim-pdf/u1/.build/meta.json", "zim-pdf/u1/.build/seg.idx", "zim-pdf/u1/.publish-b2/manifest.json"];
-    for f in parts.iter().chain(&other_zim).chain(&working) {
-        write(&ia.join(f), &format!("A {f}"));
-    }
-    std::fs::create_dir_all(&ib).unwrap();
-    let (pa, pb) = (port(), port());
-    // A has both ZIMs; B has only u1.
-    let a = index_engine(&da, "Desk", pa, &["u1", "u2"]);
-    let b = index_engine(&db, "Phone", pb, &["u1"]);
-    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
-    call(&b, "link", json!({"code": code}));
-    for (e, d) in [(&a, &ia), (&b, &ib)] {
-        call(e, "share_add", json!({"id": "indexes", "name": "Indexes", "path": d}));
-    }
-    std::thread::sleep(Duration::from_secs(6));
-    until("u1's snapshot on B", 90, &a, &b, || parts.iter().all(|f| ib.join(f).exists()));
-    rounds(&a, &b);
-    for f in &parts {
-        assert_eq!(std::fs::read_to_string(ib.join(f)).unwrap(), format!("A {f}"), "{f} travels whole");
-    }
-    for f in &other_zim {
-        assert!(!ib.join(f).exists(), "{f}: B has no such ZIM, so it takes no index for it");
-    }
-    for f in &working {
-        assert!(!ib.join(f).exists(), "{f} must not travel");
-        assert!(ia.join(f).exists(), "A keeps its {f}");
-    }
-    let st = call(&b, "status", json!({}));
-    assert_eq!(st["shares"][0]["pending_files"], 0, "nothing of u2 counts as pending on B: {st}");
-
-    // B gets ZIM u2: its filter grows, and u2's index arrives.
-    call(&b, "set_fetch_only", json!({"share": "indexes", "patterns": ["zim-pdf/u1", "zim-pdf/u2"]}));
-    until("u2's snapshot on B", 90, &a, &b, || other_zim.iter().all(|f| ib.join(f).exists()));
-
-    // A newer snapshot from B reaches A; then A cleans up the old one for itself.
-    write(&ib.join("zim-pdf/u1/snap/b3/seg.store"), "B seg");
-    write(&ib.join("zim-pdf/u1/snap/b3/manifest.json"), "B manifest");
-    std::thread::sleep(Duration::from_secs(6));
-    until("B's snapshot on A", 90, &a, &b, || ia.join("zim-pdf/u1/snap/b3/manifest.json").exists());
-    std::fs::remove_dir_all(ia.join("zim-pdf/u1/snap/b1")).unwrap();
-    std::thread::sleep(Duration::from_secs(6));
-    rounds(&a, &b);
-    rounds(&a, &b);
-    assert!(ib.join("zim-pdf/u1/snap/b1/manifest.json").exists(), "a delete under snap/ must not reach B");
-    assert!(ib.join("zim-pdf/u1/snap/b1/seg.store").exists(), "a delete under snap/ must not reach B");
-    assert!(!ia.join("zim-pdf/u1/snap/b1").exists(), "A must not fetch back what it deleted");
-    a.close();
-    b.close();
 }
 
 /// The Regions folders: every downloaded part travels; what a device fetched or cached for itself, and SQLite's -shm, never does.

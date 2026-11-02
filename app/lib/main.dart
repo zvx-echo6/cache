@@ -53,7 +53,7 @@ import 'models/model_downloads.dart';
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
-import 'pdf/index/pdf_index_core.dart' show kIndexesDirName, kIndexesLocalDeletes, kIndexesNotShared, kIndexesShareId, zimPdfFetchOnly;
+import 'pdf/index/pdf_index_core.dart' show kIndexesDirName, kIndexesLast, kIndexesLocalDeletes, kIndexesNotShared, kIndexesShareId, zimPdfFetchOnly;
 import 'pdf/index/pdf_index_state.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
@@ -281,17 +281,16 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
-    // The indexes folder syncs whenever sharing is set up, whatever kinds are ticked: each linked device takes only the PDF
-    // indexes of the ZIMs it has (refreshed as ZIMs come and go).
-    autoShares: [
-      AutoShare(
+    // The indexes folder syncs whenever sharing is set up, whatever kinds are ticked; each linked device takes only the PDF
+    // indexes of the ZIMs it has (setOnly, kept in step as ZIMs come and go: _syncIndexesOnly).
+    always: [
+      AlwaysShared(
         id: kIndexesShareId,
-        name: 'Indexes',
+        name: 'Search indexes',
         dir: () => _support(kIndexesDirName),
-        notShared: kIndexesNotShared,
+        exclude: kIndexesNotShared,
         localDeletes: kIndexesLocalDeletes,
-        fetchOnly: () => zimPdfFetchOnly([for (final z in sources.zims) ?sources.idOf(z)]),
-        changes: sources,
+        last: kIndexesLast,
       ),
     ],
   );
@@ -507,6 +506,8 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
+    // The indexes share fetches the PDF indexes of the ZIMs this device has, as they come and go.
+    sources.addListener(_syncIndexesOnly);
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(onResume: () {
@@ -584,6 +585,10 @@ class _CacheAppState extends State<CacheApp> {
     maps.init();
     _openHistory();
   }
+
+  /// Tells sharing which ZIMs' PDF indexes this device fetches (the ZIMs whose uuid the core has read).
+  void _syncIndexesOnly() =>
+      unawaited(sharing.setOnly(kIndexesShareId, zimPdfFetchOnly([for (final z in sources.zims) ?sources.idOf(z)])));
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
@@ -666,6 +671,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     browse.dispose();
     nav.dispose();
+    sources.removeListener(_syncIndexesOnly);
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();

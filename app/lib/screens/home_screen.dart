@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../brand.dart';
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
+import '../layout/modules.dart' show ModuleId;
 import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
@@ -17,7 +18,8 @@ import 'weather_turn_on.dart';
 
 /// Home: the blocks the person chose, in the order they chose (Set up Cache while it is not done, the search box, Weather and alerts,
 /// Shortcuts by default), a gear for Settings at the top right, and "Edit Home" at the bottom. The search box searches all of Cache;
-/// its first row always asks Cache exactly what was typed.
+/// its first row always asks Cache exactly what was typed. With no model on this device ([askOn] false) the box is search only:
+/// "Search Cache", results as you type, no Ask row, and a shortcut to the Ask module is not drawn.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
@@ -33,7 +35,15 @@ class HomeScreen extends StatefulWidget {
     this.setup,
     this.updates,
     this.onOpenWeatherSettings,
+    this.askOn = true,
+    this.onChooseModel,
   });
+
+  /// Ask is available (a chat model is on this device). False: search only.
+  final bool askOn;
+
+  /// "Choose a model" under a search that found nothing, with no model on this device; null leaves it out.
+  final VoidCallback? onChooseModel;
 
   /// "Turn on" on the Weather card when every source is off: Settings > Weather and alerts.
   final VoidCallback? onOpenWeatherSettings;
@@ -109,7 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _ask() {
     final text = _query.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || !widget.askOn) return;
     _clear();
     widget.onAsk(text);
   }
@@ -192,12 +202,13 @@ class _HomeScreenState extends State<HomeScreen> {
     controller: _query,
     focusNode: _focus,
     onChanged: _changed,
-    onSubmitted: (_) => _ask(),
-    // Enter asks Cache: the keyboard's action key is the send key.
-    textInputAction: TextInputAction.send,
+    // Enter asks Cache: the keyboard's action key is the send key. Search only (no model): the results show as you type, and
+    // the key is the keyboard's search key.
+    onSubmitted: widget.askOn ? (_) => _ask() : null,
+    textInputAction: widget.askOn ? TextInputAction.send : TextInputAction.search,
     style: TextStyle(fontSize: 15, color: k.text),
     decoration: InputDecoration(
-      hintText: 'Search Cache or ask anything',
+      hintText: widget.askOn ? 'Search Cache or ask anything' : 'Search Cache',
       hintStyle: TextStyle(color: k.secondary),
       prefixIcon: Icon(Icons.search, color: k.secondary),
       suffixIcon: _query.text.isEmpty ? null : IconButton(tooltip: 'Clear', icon: const Icon(Icons.close), onPressed: _clear),
@@ -248,6 +259,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (widget.askOn)
           row(
             key: const ValueKey('search-ask'),
             icon: Icons.subdirectory_arrow_left,
@@ -263,7 +275,9 @@ class _HomeScreenState extends State<HomeScreen> {
             trailing: Text('Enter', style: TextStyle(fontSize: 12, color: k.secondary)),
             onTap: _ask,
           ),
-          if (results != null && results.isEmpty)
+          if (results != null && results.isEmpty && !widget.askOn)
+            _nothingOnDevice(k)
+          else if (results != null && results.isEmpty)
             row(
               key: const ValueKey('search-nothing'),
               icon: Icons.search_off,
@@ -287,8 +301,47 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [list, note]);
   }
 
+  /// Search only, and nothing found: says so, and under it, small, the way to answers in words.
+  Widget _nothingOnDevice(CacheTokens k) => Material(
+    key: const ValueKey('search-nothing'),
+    color: k.surface,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.search_off, size: 20, color: k.secondary),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Nothing found on this device.', style: TextStyle(fontSize: 14, color: k.secondary))),
+            ],
+          ),
+          if (widget.onChooseModel != null) ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 32, top: 4),
+              child: Text('For an answer in words, choose a model.', style: TextStyle(fontSize: 12, color: k.secondary)),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 20),
+              child: TextButton(
+                key: const ValueKey('search-choose-model'),
+                onPressed: () {
+                  _clear();
+                  widget.onChooseModel!();
+                },
+                child: const Text('Choose a model'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
   Widget _shortcuts(BuildContext context, CacheTokens k) {
-    final items = layout.shortcuts;
+    // A shortcut to the Ask module is not drawn while there is no model (a chat's shortcut stays: it opens read-only).
+    final items = [for (final s in layout.shortcuts) if (widget.askOn || s.module != ModuleId.ask) s];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

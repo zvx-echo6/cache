@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
-import 'package:cache/pdf/index/pdf_index_core.dart' show PdfIndexPaths, kIndexesLocalDeletes, kIndexesNotShared, kIndexesShareId, zimPdfFetchOnly;
 import 'package:cache/regions/regions_state.dart' show kMapLayersNotShared, kRegionsNotShared;
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
@@ -11,7 +10,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
-import 'support/sync_fake.dart';
 
 void main() {
   testWidgets('set up, link with a code, and tick a folder to share', (tester) async {
@@ -103,77 +101,53 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('the indexes folder is shared whenever sharing is set up, taking only the PDF indexes of the ZIMs here', (tester) async {
+  testWidgets('the search indexes are always shared once sharing is set up, and fetch only what this device holds', (tester) async {
     final r = await SettingsRig.create(tester);
-    final indexes = Directory('${r.dir.path}/shared-indexes');
-    final zims = ValueNotifier<List<String>>(['uuid-a']);
-    final sync = _ArgsSync();
-    Map<String, Object?>? config;
-    final sharing = SharingState(
+    final configs = <Map<String, Object?>>[];
+    SharingState make() => SharingState(
       policy: r.policy,
       supportDir: () async => r.dir,
-      // No kind ticked: the indexes share does not depend on them.
       kinds: const [],
-      autoShares: [
-        AutoShare(
-          id: kIndexesShareId,
-          name: 'Indexes',
-          dir: () => indexes,
-          notShared: kIndexesNotShared,
-          localDeletes: kIndexesLocalDeletes,
-          fetchOnly: () => zimPdfFetchOnly(zims.value),
-          changes: zims,
+      always: [
+        AlwaysShared(
+          id: 'indexes',
+          name: 'Search indexes',
+          dir: () => Directory('${r.dir.path}/search-indexes'),
+          exclude: const ['**/.build', '**/*-shm'],
+          localDeletes: const ['*/*/snap'],
+          last: const ['*/*/snap/*/manifest.json'],
         ),
       ],
       opener: (c) async {
-        config = c;
-        return sync;
+        configs.add(c);
+        return r.sync;
       },
     );
+    final sharing = make();
     await tester.runAsync(sharing.setUp);
-    // The same patterns cache_sync's tests check (derived_folders.rs): the build and the publish's temporary folder never sync,
-    // a snapshot's delete stays on the device, and only zim-pdf/<uuid> of the ZIMs here is taken.
-    expect(config?['exclude'], {'indexes': ['zim-pdf/*/.*']});
-    expect(config?['local_deletes'], {'indexes': ['zim-pdf/*/snap']});
-    expect(config?['fetch_only'], {'indexes': ['zim-pdf/uuid-a']});
-    expect(sync.shares.single['id'], 'indexes');
-    expect(sync.shares.single['path'], indexes.path);
-    expect(indexes.existsSync(), isTrue);
-    // A ZIM added (or removed): the filter follows.
-    zims.value = ['uuid-a', 'uuid-b'];
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    expect(sync.fetchOnly.last, {'share': 'indexes', 'patterns': ['zim-pdf/uuid-a', 'zim-pdf/uuid-b']});
-    zims.value = [];
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    expect(sync.fetchOnly.last, {'share': 'indexes', 'patterns': <String>[]});
-    // Started again: the share is there already and is not added twice.
+    final c = configs.single;
+    expect((c['exclude'] as Map)['indexes'], ['**/.build', '**/*-shm']);
+    expect((c['local_deletes'] as Map)['indexes'], ['*/*/snap']);
+    expect((c['last'] as Map)['indexes'], ['*/*/snap/*/manifest.json']);
+    expect((c['only'] as Map)['indexes'], isEmpty, reason: 'nothing is fetched before the app says what this device holds');
+    // Shared without any box ticked, its folder made.
+    expect(r.sync.argsOf['share_add']!.single, {'id': 'indexes', 'name': 'Search indexes', 'path': '${r.dir.path}/search-indexes'});
+    expect(Directory('${r.dir.path}/search-indexes').existsSync(), isTrue);
+
+    await tester.runAsync(() => sharing.setOnly('indexes', ['zim/B', 'zim/A']));
+    expect(r.sync.argsOf['set_only']!.single, {'id': 'indexes', 'only': ['zim/A', 'zim/B']});
+    await tester.runAsync(() => sharing.setOnly('indexes', ['zim/A', 'zim/B']));
+    expect(r.sync.argsOf['set_only'], hasLength(1), reason: 'the same list again is not sent');
     sharing.dispose();
-    final again = SharingState(
-      policy: r.policy,
-      supportDir: () async => r.dir,
-      kinds: const [],
-      autoShares: [AutoShare(id: kIndexesShareId, name: 'Indexes', dir: () => indexes)],
-      opener: (_) async => sync,
-    );
+
+    // A restart: already shared, so not added again; the engine starts with what was last set.
+    final again = make();
+    await tester.runAsync(() => again.setOnly('indexes', ['zim/A']));
     await tester.runAsync(again.init);
-    expect(sync.shares.where((s) => s['id'] == 'indexes'), hasLength(1));
+    expect((configs.last['only'] as Map)['indexes'], ['zim/A']);
+    expect(r.sync.argsOf['share_add'], hasLength(1));
     again.dispose();
-    // Where a ZIM's PDF index lives in it: zim-pdf/<uuid>/ with .build/ and snap/.
-    final paths = PdfIndexPaths(indexes.path, 'uuid-a');
-    String rel(Directory d) => d.path.substring(indexes.path.length + 1).replaceAll(Platform.pathSeparator, '/');
-    expect([rel(paths.root), rel(paths.build), rel(paths.snaps)], ['zim-pdf/uuid-a', 'zim-pdf/uuid-a/.build', 'zim-pdf/uuid-a/snap']);
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });
-}
-
-/// The fake engine, keeping the receive filters it is told.
-class _ArgsSync extends FakeSync {
-  final fetchOnly = <Map<String, Object?>>[];
-
-  @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) {
-    if (method == 'set_fetch_only') fetchOnly.add(Map.of(args));
-    return super.call(method, args);
-  }
 }
