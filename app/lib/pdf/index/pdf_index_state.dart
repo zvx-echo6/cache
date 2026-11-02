@@ -129,7 +129,7 @@ class PdfIndexState extends ChangeNotifier {
   final List<PdfZimRef> Function() zims;
   final Listenable? changes;
 
-  /// The device's indexes folder (the core's indexes_dir): each ZIM's PDF index is zim-pdf/<uuid>/ in it.
+  /// The device's indexes folder (the core's indexes_dir): each ZIM's PDF index is `zim-pdf/<uuid>/` in it.
   final Future<Directory> Function() indexesDir;
   String? _indexes;
 
