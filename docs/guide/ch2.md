@@ -530,6 +530,8 @@ Matches are highlighted and the page scrolls to the current one. A new search re
 
 When you open a PDF from a search result or from a source in "Ask", it opens at the cited page. The cited passage is highlighted, and a strip under the title says "Cited passage".
 
+![A cited passage in a PDF](shot:pdf-cited-passage)
+
 1. Read the highlighted passage.
 2. Tap the page, or tap "Close" on the strip, to clear the highlight.
 

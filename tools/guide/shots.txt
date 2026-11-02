@@ -79,3 +79,4 @@ video-player | The video player on a phone with the gear's sheet open: Speed, "Q
 video-transcript | The video player on a wide window (960 by 640) with the transcript beside the video, the line being said highlighted
 video-sign-in | A video site's sheet: "Sign in (optional)" with two "Sign in with [name]" buttons, then the user name and password
 pdf-reader | The PDF reader at page 12: the title, "12 of 340", Find in this PDF, and the bar with Previous page, Fit page and Next page
+pdf-cited-passage | The PDF reader opened at a cited page: the "Cited passage" strip and the passage highlighted
