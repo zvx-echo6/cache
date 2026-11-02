@@ -391,13 +391,15 @@ fn make_library_id(title: &str) -> String {
 /// The reader child: this program as `extract-pdf`. In the unit tests this program is the test binary, which has no such command, so
 /// there it is the binary run on `tests::extract_child_entry`, which acts as the child (every test goes through a real child process).
 fn default_extractor(tmp: PathBuf) -> ChildExtractor {
-    let mut e = ChildExtractor::current_exe(tmp);
     #[cfg(test)]
     {
+        let mut e = ChildExtractor::current_exe(tmp);
         e.args = ["--exact", "libbuild::tests::extract_child_entry", "--nocapture", "--test-threads=1"].iter().map(Into::into).collect();
         e.env = vec![("CACHE_TEST_EXTRACT_CHILD".into(), "1".into())];
+        e
     }
-    e
+    #[cfg(not(test))]
+    ChildExtractor::current_exe(tmp)
 }
 
 /// A book that was mid-attempt when the service died this many times is not tried again.
