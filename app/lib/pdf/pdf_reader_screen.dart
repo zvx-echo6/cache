@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../layout/adaptive.dart' show kDesktopMinWidth;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
@@ -24,7 +25,7 @@ export 'pdf_settings.dart';
 const double kPdfMaxFitWidth = 840;
 
 /// The window width from which the reader lays out as on a desktop (the app's desktop width class).
-const double kPdfDesktopWidth = 1280;
+const double kPdfDesktopWidth = kDesktopMinWidth;
 
 /// The widest the find row gets on a desktop.
 const double kPdfFindRowMaxWidth = 480;
@@ -407,8 +408,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _goToPage(s.page, animate: false);
       return;
     }
-    final range = PdfPageTextRange(pageText: layer, start: s.start, end: s.end);
-    unawaited(_controller.goToRectInsidePage(pageNumber: s.page, rect: range.bounds, anchor: PdfPageAnchor.center, duration: const Duration(milliseconds: 200)));
+    // The match to the middle of the view, at the zoom the person has.
+    final page = _doc!.pages[s.page - 1];
+    final r = PdfPageTextRange(pageText: layer, start: s.start, end: s.end).bounds.toRectInDocument(page: page, pageRect: _controller.layout.pageLayouts[s.page - 1]);
+    final visible = _controller.visibleRect;
+    final x = r.left >= visible.left && r.right <= visible.right ? _controller.centerPosition.dx : r.center.dx;
+    unawaited(_controller.goTo(_controller.calcMatrixFor(Offset(x, r.center.dy), zoom: _controller.currentZoom), duration: const Duration(milliseconds: 200)));
   }
 
   PdfTextSpan? _pendingSpan;
@@ -585,9 +590,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       ..strokeWidth = 1.2;
     void mark(PdfTextSpan s, bool isCurrent) {
       if (s.start < 0 || s.end > layer.fullText.length || s.end <= s.start) return;
-      final range = PdfPageTextRange(pageText: layer, start: s.start, end: s.end);
-      for (final f in range.enumerateFragmentBoundingRects()) {
-        final r = f.bounds.toRectInDocument(page: page, pageRect: rect).inflate(1);
+      for (final r in _lineRects(PdfPageTextRange(pageText: layer, start: s.start, end: s.end), page, rect)) {
         canvas.drawRect(r, isCurrent ? current : wash);
         if (isCurrent) canvas.drawRect(r, ring);
       }
@@ -602,6 +605,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     for (final s in cited) {
       mark(s, true);
     }
+  }
+
+  /// The boxes of [range] joined into one box per line.
+  static List<Rect> _lineRects(PdfPageTextRange range, PdfPage page, Rect pageRect) {
+    final rs = [for (final f in range.enumerateFragmentBoundingRects()) f.bounds.toRectInDocument(page: page, pageRect: pageRect)];
+    final out = <Rect>[];
+    for (final r in rs) {
+      final i = out.indexWhere((l) => math.min(l.bottom, r.bottom) - math.max(l.top, r.top) > 0.5 * math.min(l.height, r.height));
+      if (i >= 0) {
+        out[i] = out[i].expandToInclude(r);
+      } else {
+        out.add(r);
+      }
+    }
+    return [for (final r in out) r.inflate(1)];
   }
 
   @override
@@ -833,6 +851,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                           decoration: InputDecoration(
                             hintText: _scanned ? 'No searchable text in this PDF.' : 'Find in this PDF',
                             border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            disabledBorder: InputBorder.none,
+                            filled: false,
                           ),
                           onChanged: (v) {
                             f?.type(v);
@@ -1089,7 +1111,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           _computeZoomRange();
           final s = _pendingSpan;
           _pendingSpan = null;
-          if (s != null) _goToSpan(s);
+          // After the first zoom and page are set.
+          if (s != null) {
+            Future<void>.delayed(const Duration(milliseconds: 80), () {
+              if (mounted) _goToSpan(s);
+            });
+          }
         },
         onViewSizeChanged: (size, old, c) {
           if (mounted) _computeZoomRange();
@@ -1173,7 +1200,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // ---- Go to page
 
   Future<void> _goToSheet() async {
-    if (!_ready || _pageCount < 1) return;
+    if (_pageCount < 1) return;
     final n = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,

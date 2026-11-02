@@ -7,6 +7,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/pdf_test_kit.dart';
 import '../support/pdfium_for_tests.dart';
 import '../support/sample_pdf.dart';
 
@@ -44,13 +45,13 @@ void main() {
     tester.view.physicalSize = const Size(430, 932) * 2;
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: reader));
+    await tester.pumpWidget(MaterialApp(key: UniqueKey(), theme: buildTheme(CacheThemeId.light), home: reader));
   }
 
   PdfReaderScreen reader(String path, {int? page, String? quote}) =>
       PdfReaderScreen(source: PdfFileSource(path, title: 'Water and Shelter Handbook'), initialPage: page, quote: quote);
 
-  testWidgets('opens at the asked page; the count opens Go to page, which refuses a page that is not there', (tester) async {
+  readerTest('opens at the asked page; the count opens Go to page, which refuses a page that is not there', (tester) async {
     await show(tester, reader(six, page: 3));
     await settleUntil(tester, () => _has(find.text('3 of 6')));
     expect(find.text('3 of 6'), findsOneWidget);
@@ -72,7 +73,7 @@ void main() {
     expect(find.text('5 of 6'), findsOneWidget);
   });
 
-  testWidgets('find: the count, next and previous, and closing', (tester) async {
+  readerTest('find: the count, next and previous, and closing', (tester) async {
     await show(tester, reader(six));
     await settleUntil(tester, () => _has(find.text('1 of 6')));
     await tester.tap(find.byKey(const ValueKey('pdf-find')));
@@ -97,7 +98,7 @@ void main() {
     expect(find.byKey(const ValueKey('pdf-find-row')), findsNothing);
   });
 
-  testWidgets('a citation: the passage is found and marked; the strip closes', (tester) async {
+  readerTest('a citation: the passage is found and marked; the strip closes', (tester) async {
     const quote = 'If you cannot boil water, filter it through a clean cloth, then add household bleach without scent';
     await show(tester, reader(six, page: 2, quote: quote));
     await settleUntil(tester, () => _has(find.text('Cited passage')));
@@ -108,7 +109,7 @@ void main() {
     expect(find.text('Cited passage'), findsNothing);
   });
 
-  testWidgets('a citation whose passage is not on the page offers to find it on other pages', (tester) async {
+  readerTest('a citation whose passage is not on the page offers to find it on other pages', (tester) async {
     await show(tester, reader(six, page: 2, quote: 'Nothing like this is printed anywhere in the handbook at all'));
     await settleUntil(tester, () => _has(find.text('Page 2. The exact passage was not found on this page.')));
     expect(find.text('Find on other pages'), findsOneWidget);
@@ -117,13 +118,13 @@ void main() {
     expect(find.byKey(const ValueKey('pdf-find-row')), findsOneWidget);
   });
 
-  testWidgets('a cited page the file does not have opens page 1 and says so', (tester) async {
+  readerTest('a cited page the file does not have opens page 1 and says so', (tester) async {
     await show(tester, reader(six, page: 400));
     await settleUntil(tester, () => _has(find.text('This PDF has 6 pages. Cited page 400 is not here.')));
     expect(find.text('1 of 6'), findsOneWidget);
   });
 
-  testWidgets('a scanned PDF: the note, and find has nothing to search', (tester) async {
+  readerTest('a scanned PDF: the note, and find has nothing to search', (tester) async {
     await show(tester, reader(scanned));
     await settleUntil(tester, () => _has(find.text("This PDF is scanned pictures. Search can't read it.")));
     await tester.tap(find.byKey(const ValueKey('pdf-find')));
@@ -132,7 +133,7 @@ void main() {
     expect(tester.widget<TextField>(find.byKey(const ValueKey('pdf-find-field'))).enabled, isFalse);
   });
 
-  testWidgets('a damaged file and a missing file', (tester) async {
+  readerTest('a damaged file and a missing file', (tester) async {
     await show(tester, reader(junk));
     await settleUntil(tester, () => _has(find.text("This PDF can't be opened. The file may be damaged.")));
     expect(find.text('Try again'), findsOneWidget);
@@ -141,7 +142,7 @@ void main() {
     expect(find.text('This file is no longer on this device.'), findsOneWidget);
   });
 
-  testWidgets('a PDF inside a ZIM is got ready first', (tester) async {
+  readerTest('a PDF inside a ZIM is got ready first', (tester) async {
     final bytes = File(six).readAsBytesSync();
     final src = PdfZimSource(address: 'zim:x/I/handbook.pdf', title: 'handbook', read: (a) async => bytes, tempDir: () async => dir);
     await show(tester, PdfReaderScreen(source: src, initialPage: 2));
@@ -149,7 +150,7 @@ void main() {
     expect(find.text('2 of 6'), findsOneWidget);
   });
 
-  testWidgets('the states before the pages, as worded', (tester) async {
+  readerTest('the states before the pages, as worded', (tester) async {
     final cases = {
       PdfDebugPhase.opening: 'Opening...',
       PdfDebugPhase.slow: 'Still opening. This file is 312 MB.',

@@ -10,6 +10,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../test/support/pdf_test_kit.dart';
 import '../test/support/pdfium_for_tests.dart';
 import '../test/support/sample_pdf.dart';
 import 'shot_kit.dart';
@@ -87,19 +88,22 @@ String _t(CacheThemeId t) => t == CacheThemeId.light ? 'light' : 'dark';
 
 Future<void> _snap(WidgetTester tester, String name, CacheThemeId theme) => snap(tester, _out, '$name-${_t(theme)}');
 
+/// The find row's count reading [text].
+Finder _count(String text) => find.byWidgetPredicate((w) => w is Text && w.key == const ValueKey('pdf-find-count') && w.data == text);
+
 Future<void> _ready(WidgetTester tester, String count) async {
   await _until(tester, find.text(count));
   await _settle(tester);
 }
 
-Future<void> _find(WidgetTester tester, String q, {Finder? until}) async {
+Future<void> _find(WidgetTester tester, String q, {Finder? until, int max = 200}) async {
   await tester.tap(find.byKey(const ValueKey('pdf-find')));
   await tester.pump();
   if (q.isNotEmpty) {
     await tester.enterText(find.byKey(const ValueKey('pdf-find-field')), q);
     await tester.pump(const Duration(milliseconds: 350));
   }
-  if (until != null) await _until(tester, until);
+  if (until != null) await _until(tester, until, max: max);
   await _settle(tester, n: 12);
 }
 
@@ -120,7 +124,7 @@ void main() {
   });
 
   for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-    testWidgets('1: page 12, bars shown; bars hidden with the page pill (${_t(theme)})', (tester) async {
+    readerTest('1: page 12, bars shown; bars hidden with the page pill (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_book, page: 12), theme: theme);
       await _ready(tester, '12 of 340');
       await _snap(tester, '1a-viewer-page-12', theme);
@@ -130,7 +134,7 @@ void main() {
       await _snap(tester, '1b-bars-hidden-pill', theme);
     });
 
-    testWidgets('2: Go to page; a page that is not there (${_t(theme)})', (tester) async {
+    readerTest('2: Go to page; a page that is not there (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_book, page: 12), theme: theme);
       await _ready(tester, '12 of 340');
       await tester.tap(find.byKey(const ValueKey('pdf-page-count')));
@@ -143,7 +147,7 @@ void main() {
       await _snap(tester, '2b-go-to-page-out-of-range', theme);
     });
 
-    testWidgets('3: fit width, fit page with its label, zoom limited (${_t(theme)})', (tester) async {
+    readerTest('3: fit width, fit page with its label, zoom limited (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_book, page: 12), theme: theme);
       await _ready(tester, '12 of 340');
       await _snap(tester, '3a-fit-width', theme);
@@ -156,7 +160,7 @@ void main() {
       await _snap(tester, '3c-zoom-limited', theme);
     });
 
-    testWidgets('4: find: empty, searching, 3 of 17, no matches, a long file (${_t(theme)})', (tester) async {
+    readerTest('4: find: empty, searching, 3 of 17, no matches, a long file (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_six), theme: theme);
       await _ready(tester, '1 of 6');
       await _find(tester, '');
@@ -183,7 +187,7 @@ void main() {
       await _snap(tester, '4e-find-long-file', theme);
     });
 
-    testWidgets('5: a citation: the passage marked; not on the page; a page the file does not have (${_t(theme)})', (tester) async {
+    readerTest('5: a citation: the passage marked; not on the page; a page the file does not have (${_t(theme)})', (tester) async {
       const quote = 'If you cannot boil water, filter it through a clean cloth, then add household bleach without scent: '
           'two drops to each litre, stir, and wait thirty minutes.';
       await _open(tester, _reader(_book, page: 47, quote: quote), theme: theme);
@@ -200,7 +204,7 @@ void main() {
       await _snap(tester, '5c-page-not-in-file', theme);
     });
 
-    testWidgets('6: scanned: the note, find off; a mixed PDF (${_t(theme)})', (tester) async {
+    readerTest('6: scanned: the note, find off; a mixed PDF (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_scan), theme: theme);
       await _until(tester, find.text("This PDF is scanned pictures. Search can't read it."));
       await _settle(tester);
@@ -219,7 +223,7 @@ void main() {
       await _snap(tester, '6d-citation-scanned-page', theme);
     });
 
-    testWidgets('7: opening, slow, copying, no space, locked, wrong password, damaged, gone, a web link (${_t(theme)})', (tester) async {
+    readerTest('7: opening, slow, copying, no space, locked, wrong password, damaged, gone, a web link (${_t(theme)})', (tester) async {
       final states = {
         '7a-opening': PdfDebugPhase.opening,
         '7b-slow': PdfDebugPhase.slow,
@@ -243,7 +247,7 @@ void main() {
       await _snap(tester, '7i-web-link', theme);
     });
 
-    testWidgets('8: pages not yet drawn while scrolling a large file (${_t(theme)})', (tester) async {
+    readerTest('8: pages not yet drawn while scrolling a large file (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_book, page: 200, placeholders: true), theme: theme);
       await _ready(tester, '200 of 340');
       await tester.drag(find.byType(PdfReaderScreen), const Offset(0, -380));
@@ -252,7 +256,7 @@ void main() {
       await _snap(tester, '8-placeholders', theme);
     });
 
-    testWidgets('9: tablet and desktop: the whole window; browser slow note (${_t(theme)})', (tester) async {
+    readerTest('9: tablet and desktop: the whole window; browser slow note (${_t(theme)})', (tester) async {
       for (final (name, size) in [
         ('9a-tablet-portrait-820', const Size(820, 1180)),
         ('9b-tablet-landscape-1180', const Size(1180, 820)),
@@ -267,7 +271,7 @@ void main() {
       ]) {
         await _open(tester, _reader(_book, page: 12), theme: theme, size: size);
         await _ready(tester, '12 of 340');
-        await _find(tester, 'water', until: find.text('1 of 2041'));
+        await _find(tester, 'ridge line', until: _count('1 of 340'), max: 900);
         await _snap(tester, name, theme);
       }
       await _open(tester, _reader(_book, phase: PdfDebugPhase.slow, browser: true), theme: theme, size: const Size(1280, 800));
@@ -275,7 +279,7 @@ void main() {
       await _snap(tester, '9e-browser-slow', theme);
     });
 
-    testWidgets('10: large text (200%) top bar; what a screen reader reads (${_t(theme)})', (tester) async {
+    readerTest('10: large text (200%) top bar; what a screen reader reads (${_t(theme)})', (tester) async {
       await _open(tester, _reader(_book, page: 12), theme: theme, textScale: 2);
       await _ready(tester, '12 of 340');
       await _snap(tester, '10a-large-text-200', theme);
