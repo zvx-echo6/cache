@@ -205,7 +205,7 @@ void main() {
     expect(find.text('Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache'), findsOneWidget);
   });
 
-  testWidgets('the active model can be unloaded; Ask then shows the no-model state with "Choose a model"', (tester) async {
+  testWidgets('the active model can be unloaded; Ask then says no model is loaded, with Load', (tester) async {
     File('${app.modelsDir!.path}/gemma-4-E2B-it-Q4_K_M.gguf').writeAsBytesSync(List.filled(2048, 1));
     await tester.runAsync(app.init);
     app.active = app.models.single;
@@ -227,8 +227,9 @@ void main() {
 
     await show(tester, AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const [])));
     expect(find.text('No model'), findsWidgets);
-    expect(find.text('Choose a model at the top to start.'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Choose a model'), findsOneWidget);
+    // A model is still on this device: not no-model mode, so Ask shows the fix at the top (1.0.30).
+    expect(find.text('No model is loaded.'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Load gemma-4-E2B-it-Q4_K_M'), findsOneWidget);
   });
 
   testWidgets('Ask: the model name has its arrow and opens the model, the memory it takes, Unload and Manage models', (tester) async {

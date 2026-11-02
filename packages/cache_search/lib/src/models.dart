@@ -141,6 +141,8 @@ class SourceStatus {
     this.keywordSource,
     this.embeddingModel,
     this.wholeLibraryOnly,
+    this.sourceId,
+    this.index,
   });
 
   factory SourceStatus.fromJson(Map<String, dynamic> j) {
@@ -159,6 +161,8 @@ class SourceStatus {
       keywordSource: j['keyword_source'] as String?,
       embeddingModel: j['embedding_model'] as String?,
       wholeLibraryOnly: j['whole_library_only'] as bool?,
+      sourceId: j['source_id'] as String?,
+      index: j['index'] is Map ? SourceIndex.fromJson((j['index'] as Map).cast<String, dynamic>()) : null,
       error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
     );
   }
@@ -186,8 +190,37 @@ class SourceStatus {
   final int docs;
   final CoreSourceError? error;
 
+  /// The source's id under the indexes folder (`<kind>/<source id>/`, percent-encoded by the core); null from a core that does
+  /// not report it.
+  final String? sourceId;
+
+  /// Where the source's search index is (a sealed snapshot, the old place, or none); null from a core that does not report it.
+  final SourceIndex? index;
+
   /// True when search can use this source right now.
   bool get searchable => id != null && indexed && !building && !opening && !updating && error == null;
+}
+
+/// cs_status's `index` of a source: where its search index is and what it is.
+class SourceIndex {
+  const SourceIndex({required this.location, this.snapshot, this.format, this.kind});
+
+  factory SourceIndex.fromJson(Map<String, dynamic> j) => SourceIndex(
+    location: (j['location'] ?? 'none') as String,
+    snapshot: j['snapshot'] as String?,
+    format: (j['format'] as num?)?.toInt(),
+    kind: j['kind'] as String?,
+  );
+
+  /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
+  final String location;
+
+  /// The snapshot in use (its build id), when [location] is "snapshot".
+  final String? snapshot;
+  final int? format;
+
+  /// The folder kind in the indexes folder: zim, zim-pdf, library, region-index or places-index.
+  final String? kind;
 }
 
 class CoreSourceError {

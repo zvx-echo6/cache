@@ -64,6 +64,21 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
+    // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
+    let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    battery.setMethodCallHandler { call, result in
+      guard call.method == "read" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let device = UIDevice.current
+      device.isBatteryMonitoringEnabled = true
+      let level = device.batteryLevel
+      let charging = device.batteryState == .charging || device.batteryState == .full
+      let percent: Int = level < 0 ? -1 : Int((level * 100).rounded())
+      let answer: [String: Any] = ["percent": percent, "charging": charging]
+      result(answer)
+    }
   }
 }
 

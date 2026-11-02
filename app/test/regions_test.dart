@@ -94,6 +94,17 @@ class _Rig {
     }
   }
 
+  /// [settle] until [done] holds (at most [turns] turns). A widget test lets the app's real file work run only inside runAsync,
+  /// and what follows each step only at the next pump, so every file step (open, write, flush, close, rename) takes one turn: a
+  /// chain like removing a region (two saves of regions-app.json around a refresh) needs about a dozen turns, more when the
+  /// machine is busy and a step misses its turn. A fixed number of turns ran out on a busy CI runner now and then.
+  Future<void> settleUntil(WidgetTester tester, bool Function() done, {int turns = 300}) async {
+    for (var i = 0; i < turns && !done(); i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
   Future<void> dispose(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
@@ -204,7 +215,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Delete Twin Falls County?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('confirm-delete')));
-    await r.settle(tester);
+    // Until the removal has saved, refreshed and told the screen (see settleUntil).
+    await r.settleUntil(tester, () => r.regions.local.isEmpty && find.text('Nothing downloaded yet').evaluate().isNotEmpty);
     expect(r.core.regions, isEmpty);
     expect(r.core.calls, contains('remove'));
     expect(r.s.engine.storageTotal, 0, reason: 'its map area is deleted too');

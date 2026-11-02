@@ -16,8 +16,11 @@ import '../location/position_source.dart' show LocationPermissionState;
 import '../theme.dart';
 import '../video/format.dart';
 import 'answer_reports_ui.dart';
+import '../models/model_downloads.dart';
+import '../models/recommendations.dart';
 import 'confirm_card.dart';
 import 'history_drawer.dart';
+import 'model_search_screen.dart' show downloadModel;
 import 'models_screen.dart';
 
 class AskScreen extends StatefulWidget {
@@ -34,7 +37,15 @@ class AskScreen extends StatefulWidget {
     this.location,
     this.chatLocation,
     this.reports,
+    this.readOnly = false,
+    this.onBack,
   });
+
+  /// No model on this device: the chat stays readable and copyable, and the composer is one line with "Choose a model".
+  final bool readOnly;
+
+  /// The back arrow of a read-only chat (in place of the chats list).
+  final VoidCallback? onBack;
 
   /// Where "Report this answer" keeps its reports (on this phone); the app's store when null.
   final AnswerReports? reports;
@@ -249,10 +260,19 @@ class _AskScreenState extends State<AskScreen> {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      drawer: HistoryDrawer(chat: widget.chat, layout: widget.layout),
+      drawer: widget.readOnly ? null : HistoryDrawer(chat: widget.chat, layout: widget.layout),
       appBar: AppBar(
         titleSpacing: 0,
-        leading: Builder(
+        leading: widget.readOnly
+            ? IconButton(
+                key: const ValueKey('ask-read-back'),
+                tooltip: 'Back',
+                iconSize: 26,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back),
+              )
+            : Builder(
           builder: (ctx) => IconButton(
             tooltip: 'Chats',
             iconSize: 26,
@@ -261,7 +281,9 @@ class _AskScreenState extends State<AskScreen> {
             icon: const Icon(Icons.menu),
           ),
         ),
-        title: ListenableBuilder(
+        title: widget.readOnly
+            ? const Text('Ask')
+            : ListenableBuilder(
           listenable: widget.app,
           builder: (context, _) {
             final app = widget.app;
@@ -312,19 +334,21 @@ class _AskScreenState extends State<AskScreen> {
                     icon: const Icon(Icons.ios_share),
                   ),
           ),
-          IconButton(
-            tooltip: 'New chat',
-            iconSize: 26,
-            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-            onPressed: widget.chat.newChat,
-            icon: const Icon(Icons.add_comment_outlined),
-          ),
+          if (!widget.readOnly)
+            IconButton(
+              tooltip: 'New chat',
+              iconSize: 26,
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              onPressed: widget.chat.newChat,
+              icon: const Icon(Icons.add_comment_outlined),
+            ),
         ],
       ),
       body: SafeArea(
         top: false,
         child: Column(
           children: [
+            ListenableBuilder(listenable: widget.app, builder: (context, _) => _fixLine(context) ?? const SizedBox.shrink()),
             Expanded(
               child: ListenableBuilder(
                 listenable: Listenable.merge([widget.chat, widget.app]),
@@ -332,6 +356,8 @@ class _AskScreenState extends State<AskScreen> {
                   final msgs = widget.chat.messages;
                   if (msgs.isEmpty) {
                     final app = widget.app;
+                    // A model on this device that is not loaded: the line at the top says what to do; nothing more here.
+                    if (_notLoaded) return const SizedBox.shrink();
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32),
@@ -391,8 +417,98 @@ class _AskScreenState extends State<AskScreen> {
   /// The answers' text, which the reading width is measured in.
   static const TextStyle _readingStyle = TextStyle(fontSize: 18);
 
+  /// Situation B: a chat model is on this device but none is loaded (it failed, or was unloaded). Not while one loads.
+  bool get _notLoaded {
+    final app = widget.app;
+    return !widget.readOnly && app.started && app.models.isNotEmpty && app.active == null && app.loading == null;
+  }
+
+  /// The fix for a model that is on this device but not loaded: one red line at the top and one button.
+  Widget? _fixLine(BuildContext context) {
+    if (!_notLoaded) return null;
+    final app = widget.app;
+    final k = context.t;
+    final failed = app.failed;
+    final String line;
+    final String button;
+    final VoidCallback onPressed;
+    if (failed != null && app.failure != null) {
+      final name = app.displayName(failed);
+      switch (app.failure!) {
+        case LoadFailure.tooBig:
+          line = '$name did not load. It is too big for this device.';
+          button = 'Choose a smaller model';
+          onPressed = _openModels;
+        case LoadFailure.damaged:
+          line = '$name did not load. The file may be damaged.';
+          button = 'Delete and download again';
+          onPressed = () => _downloadAgain(failed);
+        case LoadFailure.other:
+          line = '$name did not load.';
+          button = 'Choose a model';
+          onPressed = _openModels;
+      }
+    } else {
+      final usable = [for (final m in app.models) if (!app.isUnsupported(m)) m];
+      line = 'No model is loaded.';
+      if (usable.isEmpty) {
+        button = 'Choose a model';
+        onPressed = _openModels;
+      } else {
+        button = 'Load ${app.displayName(usable.first)}';
+        onPressed = () => app.activate(usable.first);
+      }
+    }
+    return Container(
+      key: const ValueKey('ask-fix'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: k.emergency.withValues(alpha: 0.6))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(line, key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.emergency)),
+          const SizedBox(height: 6),
+          FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
+        ],
+      ),
+    );
+  }
+
+  /// "Delete and download again": the damaged file goes; a recommended model downloads again (its download pop-up first), any other
+  /// opens Models to get it again.
+  Future<void> _downloadAgain(ModelEntry m) async {
+    final app = widget.app;
+    if (!await app.deleteModel(m) || !mounted) return;
+    final d = ModelDownloads.shared;
+    final r = RecommendedModels.shared.models.where((r) => r.file == m.fileName).firstOrNull;
+    if (d != null && r != null) {
+      await downloadModel(context, d, r.hfFile);
+    } else {
+      _openModels();
+    }
+  }
+
+  /// A read-only chat's composer: Ask is off, with the way to a model.
+  Widget _offLine(BuildContext context) {
+    final k = context.t;
+    return Padding(
+      key: const ValueKey('ask-off-composer'),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Row(
+        children: [
+          Expanded(child: Text('Ask is off. Choose a model to carry on.', style: TextStyle(fontSize: 15, color: k.secondary))),
+          const SizedBox(width: 8),
+          FilledButton(key: const ValueKey('ask-off-choose'), onPressed: _openModels, child: const Text('Choose a model')),
+        ],
+      ),
+    );
+  }
+
   Widget _composer(BuildContext context) {
     final k = context.t;
+    if (widget.readOnly) return _offLine(context);
     return ListenableBuilder(
       listenable: Listenable.merge([widget.chat, widget.app]),
       builder: (context, _) {
