@@ -196,6 +196,7 @@ impl Job {
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
+            "index_source" => Self::start_index_source(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -230,6 +231,24 @@ impl Job {
         let lock = req.take_lock();
         Self::spawn("cs-pdfindex-finish", lock, 1, move |sh| {
             let (outcome, result) = crate::pdfbuild::finish(&req, &|ph, d, t| sh.set_phase(ph, d, t), &|| sh.cancel.load(Ordering::SeqCst))?;
+            if let (Some(r), Ok(mut g)) = (result, sh.result.lock()) {
+                *g = Some(r);
+            }
+            Ok(outcome)
+        })
+    }
+
+    /// Start an `index_source` job: `{"indexes_dir","kind","source_id"}` with kind `captions`, `zim-captions` or `zim-epub`
+    /// (`zim-epub` also takes `"previous": {"zim_uuid"}`). Reads the source, builds the keyword index (resumable, in
+    /// `.build/`) and publishes it as a snapshot (see kwbuild.rs). `bad_json` for bad parameters, `not_found` for a saved
+    /// video or a ZIM the core does not know, `busy` while another job builds the same source. Progress phases "read"
+    /// (done of total items), "index", "merge", "manifest", "publish"; cancel is honoured until "publish" and keeps the
+    /// build for a resume; the result is in the progress JSON as "result" when done.
+    fn start_index_source(params_json: &str) -> Result<Job> {
+        let mut req = crate::kwbuild::prepare(params_json)?;
+        let lock = req.take_lock();
+        Self::spawn("cs-index-source", lock, 0, move |sh| {
+            let (outcome, result) = crate::kwbuild::run(&mut req, &|ph, d, t| sh.set_phase(ph, d, t), &|| sh.cancel.load(Ordering::SeqCst))?;
             if let (Some(r), Ok(mut g)) = (result, sh.result.lock()) {
                 *g = Some(r);
             }
