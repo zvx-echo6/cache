@@ -1,0 +1,42 @@
+# Temporary (removed before merge): repeats cache_sync's index_share test, which timed out once (run 41408966024).
+name: Flaky check
+
+on:
+  push:
+    branches: [rel-30-scheduler]
+    paths: ['packages/cache_search/native/cache_sync/**', '.github/workflows/flaky-check.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          cache-on-failure: true
+      - name: Build the test
+        run: cargo test -p cache_sync --locked --test index_share --no-run
+      - name: The index_share test 12 times, 3 at once (busy, as on the shared runner)
+        run: |
+          fails=0
+          for round in 1 2 3 4; do
+            for i in 1 2 3; do (cargo test -q -p cache_sync --locked --test index_share > run-$round-$i.log 2>&1; echo $? > rc-$round-$i) & done
+            wait
+            for i in 1 2 3; do
+              if [ "$(cat rc-$round-$i)" = 0 ]; then echo "run $round.$i: pass"; else fails=$((fails+1)); echo "run $round.$i: FAIL"; grep -E "panicked|timed out" run-$round-$i.log | head -5; fi
+            done
+          done
+          echo "failures: $fails of 12"
+          [ "$fails" = 0 ]
