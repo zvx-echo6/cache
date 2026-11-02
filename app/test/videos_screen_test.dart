@@ -252,6 +252,7 @@ void main() {
     expect(find.byKey(const ValueKey('video-locked')), findsOneWidget);
     expect(find.byIcon(Icons.play_circle_outline), findsNothing, reason: 'never a play sign while it needs a login');
     await tester.tap(find.byKey(const ValueKey('video-login')));
+    await settle(tester);
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'User name'), 'alice');
     await tester.enterText(find.widgetWithText(TextField, 'Password'), 'right');
