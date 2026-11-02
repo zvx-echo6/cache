@@ -345,23 +345,3 @@ class PdfSnapshot {
     }
   }
 }
-
-/// The always-on share of the device's indexes folder: on whenever sharing is set up, whatever kinds the person ticked, so an
-/// index reaches every linked device that has the same source even when the source itself does not sync.
-const String kIndexesShareId = 'indexes';
-
-/// The device's indexes folder, under the app's support folder (the core's `indexes_dir`).
-const String kIndexesDirName = 'shared-indexes';
-
-/// What never syncs in the indexes share (`<kind>/<source>/...`): each index's build, which also holds the publish in progress
-/// (`.build/publish-<id>/`, renamed into `snap/<id>/`).
-const List<String> kIndexesNotShared = ['*/*/.build'];
-
-/// Where a delete stays on the device that made it: snapshots each device cleans up for itself.
-const List<String> kIndexesLocalDeletes = ['*/*/snap'];
-
-/// What comes after the rest of a snapshot: its manifest, whose arrival says the snapshot is whole.
-const List<String> kIndexesLast = ['*/*/snap/*/manifest.json'];
-
-/// The receiver's filter on the indexes share: only the PDF indexes of the ZIMs this device has.
-List<String> zimPdfFetchOnly(Iterable<String> zimUuids) => [for (final u in zimUuids) 'zim-pdf/$u'];

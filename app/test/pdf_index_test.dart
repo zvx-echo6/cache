@@ -231,7 +231,6 @@ void main() {
     test("the folders are the ZIM uuid's in the device's indexes folder", () {
       String rel(Directory d) => d.path.substring(indexes.length + 1).replaceAll(Platform.pathSeparator, '/');
       expect([rel(paths.root), rel(paths.build), rel(paths.snaps)], ['zim-pdf/u1', 'zim-pdf/u1/.build', 'zim-pdf/u1/snap']);
-      expect(zimPdfFetchOnly(['u1', 'u2']), ['zim-pdf/u1', 'zim-pdf/u2']);
     });
   });
 

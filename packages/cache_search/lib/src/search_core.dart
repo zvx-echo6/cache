@@ -86,7 +86,9 @@ class SearchCore {
   Future<Map<String, dynamic>> version() async => (await _call('version') as Map).cast<String, dynamic>();
 
   /// Replaces the source list (a ZIM was added or removed).
-  Future<void> setSources(List<SourceConfig> sources) => _call('setSources', {'sources': jsonSources(sources)});
+  /// Replaces the source list; [extra] are the config fields cs_set_sources takes again each time (`indexes_dir`).
+  Future<void> setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) =>
+      _call('setSources', {'sources': jsonSources(sources), 'extra': extra});
 
   Future<List<SourceStatus>> status() async => [
         for (final s in await _call('status') as List) SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
@@ -396,7 +398,7 @@ void _workerMain(List<dynamic> init) {
         case 'deleteSavedPlace':
           eng().deleteSavedPlace(a['key'] as String);
         case 'setSources':
-          eng().setSources(_sourcesFrom(a['sources'] as List));
+          eng().setSources(_sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
         case 'status':
           result = [
             for (final s in eng().status())
@@ -414,6 +416,8 @@ void _workerMain(List<dynamic> init) {
                 'keyword_source': s.keywordSource,
                 'embedding_model': s.embeddingModel,
                 'whole_library_only': s.wholeLibraryOnly,
+                'source_id': s.sourceId,
+                'index': s.index?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];

@@ -159,15 +159,12 @@ void main() {
       );
     });
 
-    test("setSources gives the core the indexes folder again (each cs_set_sources replaces it; a ZIM's PDF index is attached from it)", () {
+    test('setSources passes the fields it takes again each time (indexes_dir)', () {
       final n = FakeNative();
-      final e = SearchEngine.open(n, [_zim], extra: {'indexes_dir': '/data/indexes', 'snippet_chars': 300});
-      e.setSources([_zim]);
-      final sent = jsonDecode((n.calls.last).substring('setSources:'.length)) as Map;
-      expect(sent['indexes_dir'], '/data/indexes');
-      expect(sent.containsKey('snippet_chars'), isFalse, reason: 'the other sections are kept by the core');
-      final plain = SearchEngine.open(FakeNative(), [_zim]);
-      plain.setSources([_zim]);
+      final e = SearchEngine.open(n, [_zim]);
+      e.setSources([_zim], extra: {'indexes_dir': '/d/shared-indexes'});
+      final last = n.calls.lastWhere((c) => c.startsWith('setSources:'));
+      expect(jsonDecode(last.substring('setSources:'.length))['indexes_dir'], '/d/shared-indexes');
     });
 
     test('setSources raises on a negative result', () {

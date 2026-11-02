@@ -82,6 +82,27 @@ class _FlakyNative extends _IndexNative {
 
 CsNative _makeFlakyNative() => _FlakyNative();
 
+/// A core that writes each config cs_set_sources is given into its indexes folder (the worker isolate cannot share memory with
+/// the test), and reports a source id for every source.
+class _RecordingNative extends _IndexNative {
+  @override
+  int setSources(int handle, String configJson) {
+    final dir = (jsonDecode(configJson) as Map)['indexes_dir'];
+    if (dir is String) File('$dir/set_sources.json').writeAsStringSync(configJson);
+    return super.setSources(handle, configJson);
+  }
+
+  @override
+  String? status(int handle) => jsonEncode({
+        'sources': [
+          for (final p in paths)
+            {'id': 'u-$p', 'kind': 'zim', 'path': p, 'title': p, 'indexed': true, 'building': false, 'docs': 1, 'source_id': 'u-${p.split('/').last}'},
+        ],
+      });
+}
+
+CsNative _makeRecordingNative() => _RecordingNative();
+
 void main() {
   late Directory tmp;
   late Directory zims;
@@ -233,5 +254,21 @@ void main() {
     await s.refresh();
     expect(s.zims.map((z) => z.fileName), ['a.zim']);
     expect(left(), ['a.zim.idx', 'notes', 'slow.zim.idx']);
+  });
+
+  test('the core is given the indexes folder again each time its sources are set, and says which source is which', () async {
+    final indexes = Directory('${tmp.path}/shared-indexes')..createSync();
+    File('${zims.path}/a.zim').writeAsBytesSync([1]);
+    final s = SourcesState(
+      zimsDirOverride: zims,
+      indexesDirOverride: Directory('${tmp.path}/indexes'),
+      nativeFactory: _makeRecordingNative,
+      coreExtras: {'indexes_dir': indexes.path},
+    );
+    addTearDown(s.dispose);
+    await s.init();
+    final seen = jsonDecode(File('${indexes.path}/set_sources.json').readAsStringSync()) as Map;
+    expect(seen['indexes_dir'], indexes.path, reason: 'cs_set_sources replaces indexes_dir, so it comes every time');
+    expect(s.statuses.single.sourceId, 'u-a.zim');
   });
 }

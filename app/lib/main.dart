@@ -53,7 +53,6 @@ import 'models/model_downloads.dart';
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
-import 'pdf/index/pdf_index_core.dart' show kIndexesDirName, kIndexesLast, kIndexesLocalDeletes, kIndexesNotShared, kIndexesShareId, zimPdfFetchOnly;
 import 'pdf/index/pdf_index_state.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
@@ -74,6 +73,7 @@ import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
+import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
@@ -217,8 +217,7 @@ class _CacheAppState extends State<CacheApp> {
       label: 'Library',
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
-      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library. The
-      // indexes folder (ZIM PDF indexes) syncs on its own, as the always-on indexes share.
+      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
       notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
@@ -281,8 +280,8 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
-    // The indexes folder syncs whenever sharing is set up, whatever kinds are ticked; each linked device takes only the PDF
-    // indexes of the ZIMs it has (setOnly, kept in step as ZIMs come and go: _syncIndexesOnly).
+    // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
+    // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
     always: [
       AlwaysShared(
         id: kIndexesShareId,
@@ -294,6 +293,9 @@ class _CacheAppState extends State<CacheApp> {
       ),
     ],
   );
+
+  /// Tells sharing which indexes this device fetches: those of the sources the core has open.
+  void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
@@ -506,8 +508,6 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
-    // The indexes share fetches the PDF indexes of the ZIMs this device has, as they come and go.
-    sources.addListener(_syncIndexesOnly);
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(onResume: () {
@@ -572,7 +572,10 @@ class _CacheAppState extends State<CacheApp> {
     // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+      // A snapshot that came by sync is attached when the core is given its sources again.
+      if (ids.contains(kIndexesShareId)) unawaited(sources.refresh());
     };
+    sources.addListener(_syncIndexesOnly);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
@@ -585,10 +588,6 @@ class _CacheAppState extends State<CacheApp> {
     maps.init();
     _openHistory();
   }
-
-  /// Tells sharing which ZIMs' PDF indexes this device fetches (the ZIMs whose uuid the core has read).
-  void _syncIndexesOnly() =>
-      unawaited(sharing.setOnly(kIndexesShareId, zimPdfFetchOnly([for (final z in sources.zims) ?sources.idOf(z)])));
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;

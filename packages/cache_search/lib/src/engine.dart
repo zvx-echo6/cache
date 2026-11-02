@@ -17,12 +17,8 @@ class SearchEngine {
   factory SearchEngine.open(CsNative native, List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
     final h = native.open(jsonEncode(openConfigJson(sources, extra: extra)));
     if (h == 0) throw CacheSearchException.fromJson(native.lastError(0));
-    return SearchEngine(native, h).._indexesDir = extra?['indexes_dir'] as String?;
+    return SearchEngine(native, h);
   }
-
-  /// The indexes folder cs_open was given: every cs_set_sources gives it again (the core replaces it with each call, and a ZIM's
-  /// PDF index is attached from it).
-  String? _indexesDir;
 
   final CsNative native;
   int _handle;
@@ -40,10 +36,10 @@ class SearchEngine {
   /// {"version":..,"index_format":..}
   Map<String, dynamic> version() => _object(native.version() ?? '{}');
 
-  /// Replaces the source list (a ZIM was added or removed).
-  void setSources(List<SourceConfig> sources) {
-    final keep = _indexesDir == null ? null : <String, dynamic>{'indexes_dir': _indexesDir};
-    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: keep))) < 0) {
+  /// Replaces the source list (a ZIM was added or removed). [extra] are the config's other fields cs_set_sources takes again
+  /// each time (`indexes_dir`).
+  void setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: extra))) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));
     }
   }

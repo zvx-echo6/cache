@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../sources/sources_state.dart';
 import 'pdf_index_binding.dart';
+import '../../search/indexes_share.dart' show kIndexesDirName;
 import 'pdf_index_core.dart';
 import 'pdf_index_state.dart';
 
