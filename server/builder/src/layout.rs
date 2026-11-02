@@ -933,8 +933,9 @@ mod tests {
             }
             *b = Block::from_lines(std::mem::take(&mut b.lines));
         }
-        let r1 = column("r", 380.0, 100.0, 8);
-        let r2 = column("r", 380.0, 220.0, 8);
+        // (the right page's lines are 6 points lower, so the page is not rows of cells, which would read as a table)
+        let r1 = column("r", 380.0, 106.0, 8);
+        let r2 = column("r", 380.0, 226.0, 8);
         let blocks = vec![a1.clone(), a2.clone(), b1.clone(), b2.clone(), r1.clone(), r2.clone()];
         assert_eq!(order(&blocks), blocks);
     }
