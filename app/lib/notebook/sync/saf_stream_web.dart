@@ -15,4 +15,7 @@ class SafStream {
 
   Future<SafNewFile> writeFileBytes(String treeUri, String fileName, String mime, Uint8List data, {bool? overwrite, bool? append}) async =>
       throw UnsupportedError('web: SafStream.writeFileBytes');
+
+  Future<SafNewFile> writeFileUriBytes(String fileUri, Uint8List data, {bool? append}) async =>
+      throw UnsupportedError('web: SafStream.writeFileUriBytes');
 }
