@@ -23,6 +23,9 @@ String indexWaitingWords(String kind) => switch (kind) {
   _ => 'Waiting to get the search index ready',
 };
 
+/// Running, slowed for heat: "device is warm" only when the system's thermal status says so; on its forecast alone, keeping it cool.
+String indexSlowedWords(bool warm) => warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool';
+
 /// Why work waits, and what makes it go on, in the same words on the Library rows, their menus, the Library's overview and the
 /// Settings line: "Paused · battery low (12%) · plug in to continue", "Waits for charging (long job)", "Paused · device is
 /// warm", "Paused · Cache is in the background", "Paused · while Ask answers", "Needs 1.2 GB free · Free space", "Paused by
@@ -53,7 +56,7 @@ String? indexItemWords(IndexItem i, {BatteryReading? battery}) {
     case IndexState.running:
       final held = indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm);
       if (held != null) return '$held$of';
-      if (i.slowed) return '${i.warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool'}$of';
+      if (i.slowed) return '${indexSlowedWords(i.warm)}$of';
       return '${indexDoingWords(i.kind)}$of';
     case IndexState.held:
       return indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm) ?? indexWaitingWords(i.kind);
@@ -72,7 +75,7 @@ String? indexStatusLine(IndexScheduler s) {
   final head = 'Getting search ready · ${s.doneCount} of ${s.totalCount} done';
   final running = s.running == null ? null : s.statusOf(s.running!);
   if (running != null && running.why == IndexWait.none && running.slowed) {
-    return '$head · ${running.warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool'}';
+    return '$head · ${indexSlowedWords(running.warm)}';
   }
   final why = s.reason;
   final first = [for (final i in s.items) if (i.why == why) i].firstOrNull;

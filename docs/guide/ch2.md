@@ -467,6 +467,7 @@ When Cache waits, the bar, the row and the menu say why and what to do:
 - `Paused · battery low (12%) · plug in to continue`: under 20% and not plugged in. Plug in, and it goes on by itself;
 - "Waits for charging (long job)": a long job starts only on charge, or with the battery above half. Once it runs, it goes on until the battery is low;
 - "Slowed down · device is warm" or "Paused · device is warm": the work eases off when the device is warm;
+- "Slowed down · keeping the device cool" or "Paused · keeping the device cool": the device is not warm yet, but the system says it would get warm, so the work eases off first;
 - "Paused · while Ask answers": it waits while "Ask" writes an answer;
 - "Paused · Cache is in the background": work runs only while Cache is open;
 - `Needs 1.2 GB free · Free space`: it needs room. Tap "Free space";
@@ -619,7 +620,7 @@ The player opens when you tap the picture on the video page.
 ![The player's settings sheet](shot:video-player)
 
 1. Tap the picture to show or hide the controls. While it plays they hide after 3 seconds. When it is paused they stay.
-2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
+2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". At the end of the video the button is "Replay". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
 3. Drag the bar to move through the video. The time shows as the time so far and the length.
 4. Tap "Full screen" for the video alone. A wide video turns landscape and the system bars hide. Tap "Leave full screen" or press Back to come out.
 5. Tap the gear ("Settings") for "Speed", "Quality" and "Captions".

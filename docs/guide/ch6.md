@@ -110,6 +110,7 @@ On a library's menu (press and hold it in "Library"):
 - `Waits for charging (long job) · 340 of 5,768`: a long job waits for charge or more than half a battery.
 - `Paused · battery low (12%) · plug in to continue`: under 20% and not plugged in. It goes on when you charge.
 - `Slowed down · device is warm · 340 of 5,768`: it eases off until the device cools.
+- `Slowed down · keeping the device cool · 340 of 5,768`: it eases off before the device gets warm.
 - "Paused · while Ask answers": it goes on when the answer is written.
 - `Needs 1.2 GB free · Free space` or "Needs more free space · Free space": tap "Free space".
 - "Stopped: the library could not be read": tap "Resume". If it repeats, delete the library and add it again.
