@@ -15,7 +15,10 @@ cs: command line and HTTP wrapper over the cache_search core
 
   cs index-zim       --zim <path> --index-dir <dir> [--heap-mb 200]
   cs unpack-library  --snapshot <file> --dir <dir>
-  cs index-library   --library <dir> --index-dir <dir> [--settings <cache-library.json>] [--heap-mb 200]
+  cs index-library   --library <dir> (--index-dir <dir> | --indexes-dir <dir>) [--settings <cache-library.json>] [--heap-mb 200]
+                     (--indexes-dir is the app's syncable indexes folder: the index is built in <dir>/library/<library_id@version>/.build/
+                     and published there as a snapshot, snap/<id>/ with manifest.json, as the app does; --index-dir is the old plain folder)
+  cs index-seal      --indexes-dir <dir> --kind zim|library --source-id <id> [--index-dir <old index folder>]
   cs library-manifest --library <dir> [--out <file>]
   cs update-library  --library <dir> --snapshot <file> --manifest <file>
   cs search          --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [EMBED] [--open-timeout 600]
@@ -241,13 +244,29 @@ pub fn index_zim(argv: &[String]) -> Result<(), ApiError> {
 }
 
 pub fn index_library(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["library", "index-dir", "settings", "heap-mb"], &[], false)?;
-    let mut p = json!({"library_path": a.req("library").map_err(usage_err)?, "index_dir": a.req("index-dir").map_err(usage_err)?,
-                       "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?});
+    let a = parse(argv, &["library", "index-dir", "indexes-dir", "settings", "heap-mb"], &[], false)?;
+    let mut p = json!({"library_path": a.req("library").map_err(usage_err)?, "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?});
+    // the same job parameters the app uses: `indexes_dir` builds a snapshot in the syncable indexes folder, `index_dir` the old plain folder
+    match (a.get("index-dir"), a.get("indexes-dir")) {
+        (Some(d), None) => p["index_dir"] = json!(d),
+        (None, Some(d)) => p["indexes_dir"] = json!(d),
+        _ => return Err(usage_err("give --index-dir (the old index folder) or --indexes-dir (the app's syncable indexes folder), not both")),
+    }
     if let Some(s) = a.get("settings") {
         p["settings"] = read_settings(s)?;
     }
     run_job("index_library", p)
+}
+
+/// The core's `index_seal` job (what the app runs to turn an index in its old folder into a snapshot): `{"indexes_dir","kind","source_id","index_dir"?}`.
+pub fn index_seal(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["indexes-dir", "kind", "source-id", "index-dir"], &[], false)?;
+    let mut p = json!({"indexes_dir": a.req("indexes-dir").map_err(usage_err)?, "kind": a.req("kind").map_err(usage_err)?,
+                       "source_id": a.req("source-id").map_err(usage_err)?});
+    if let Some(d) = a.get("index-dir") {
+        p["index_dir"] = json!(d);
+    }
+    run_job("index_seal", p)
 }
 
 /// The core's helper `library::unpack_library` (it has no C ABI function): unpack plus segments manifest.
@@ -828,6 +847,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "index-zim" => index_zim(rest),
         "unpack-library" => unpack_library(rest),
         "index-library" => index_library(rest),
+        "index-seal" => index_seal(rest),
         "library-manifest" => library_manifest(rest),
         "update-library" => update_library(rest),
         "search" => search(rest),

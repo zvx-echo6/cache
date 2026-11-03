@@ -461,6 +461,22 @@ fn library_manifest_and_update_library_commands() {
 }
 
 #[test]
+fn index_library_takes_one_index_folder_option_and_index_seal_needs_its_fields() {
+    let tmp = TempDir::new("idxflags");
+    let lib = tmp.path("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    // neither folder option, or both: a usage error before any job starts
+    let o = cs(&["index-library", "--library", &lib]);
+    assert!(!o.ok && o.stderr.contains("--indexes-dir"), "{}", o.stderr);
+    let (a, b) = (tmp.path("a"), tmp.path("b"));
+    let o = cs(&["index-library", "--library", &lib, "--index-dir", &a, "--indexes-dir", &b]);
+    assert!(!o.ok && o.stderr.contains("not both"), "{}", o.stderr);
+    // index-seal without its fields
+    let o = cs(&["index-seal", "--indexes-dir", &a]);
+    assert!(!o.ok, "{}", o.stderr);
+}
+
+#[test]
 fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
     let tmp = TempDir::new("idxfail");
     // an existing folder that is not a library: the job starts, then fails on its own thread
