@@ -689,6 +689,8 @@ void main() {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather alerts'), true);
       await h.weather.setRowOn(row('Earthquakes'), true);
+      // one that updates, so the line has an age and the failures beside it
+      await h.weather.setRowOn(row('Wildfires'), true);
       h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
       h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('fetch_failed', 'HTTP 503');
       await h.weather.updateNow();
