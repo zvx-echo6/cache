@@ -213,7 +213,7 @@ void main() {
       await r.storage.measure();
     });
     // Search indexes are being made in the background: the one quiet line at the foot of Settings.
-    final indexing = _ShotIndexing('Getting search ready: 3 of 12');
+    final indexing = _ShotIndexing('Getting search ready · 3 of 12 done');
     addTearDown(indexing.dispose);
     final h = r.hub;
     r.hub = SettingsHub(
@@ -1644,6 +1644,9 @@ class _ShotIndexing extends IndexScheduler {
 
   @override
   String? get line => _line;
+
+  @override
+  double get fraction => 0.3;
 }
 
 /// The Library's PDF indexing as the rows read it: each ZIM's PDFs part (by file name), set by the picture (no work is run).

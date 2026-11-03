@@ -87,11 +87,11 @@ void main() {
     s.setOpen(true);
     await _settle();
     expect(work.started, ['zim/small']);
-    expect(s.line, 'Getting search ready: 0 of 3');
+    expect(s.line, 'Getting search ready · 0 of 3 done');
     work.finish('zim/small');
     await _settle();
     expect(work.started, ['zim/small', 'zim/big']);
-    expect(s.line, 'Getting search ready: 1 of 3');
+    expect(s.line, 'Getting search ready · 1 of 3 done');
     work.finish('zim/big');
     await _settle();
     work.finish('library/rare');
@@ -107,7 +107,7 @@ void main() {
     await _settle();
     expect(work.started, isEmpty);
     expect(s.wait, IndexWait.charging);
-    expect(s.line, 'Getting search ready: 0 of 1 · waits for charging');
+    expect(s.line, 'Getting search ready · 0 of 1 done · Waits for charging (long job)');
     work.add('library/sealme', long: false);
     await s.kick();
     expect(work.started, ['library/sealme']);
@@ -130,7 +130,7 @@ void main() {
     await s.kick();
     expect(work.runs['zim/a']!.pauses, 1);
     expect(s.running, isNull);
-    expect(s.line, 'Getting search ready: 0 of 1 · paused, battery low');
+    expect(s.line, 'Getting search ready · 0 of 1 done · Paused · battery low (15%) · plug in to continue');
     battery = const BatteryReading(percent: 15, charging: true);
     await s.kick();
     expect(work.started, ['zim/a', 'zim/a'], reason: 'started again (the job resumes from what it kept)');
@@ -143,7 +143,7 @@ void main() {
     await _settle();
     expect(work.started, isEmpty);
     expect(s.wait, IndexWait.storage);
-    expect(s.line, 'Getting search ready: 0 of 1 · paused, not enough space');
+    expect(s.line, 'Getting search ready · 0 of 1 done · Needs 2.0 GB free · Free space');
     space = const Space(free: 30 * _gb, reserve: 20 * _gb);
     await s.kick();
     expect(work.started, ['zim/a']);
@@ -164,12 +164,12 @@ void main() {
       ..add('zim/b');
     s.setOpen(true);
     await _settle();
-    expect(s.line, 'Getting search ready: 0 of 2 · waits for charging');
+    expect(s.line, 'Getting search ready · 0 of 2 done · Waits for charging (long job)');
     // zim/a's snapshot arrived by sync: the source no longer lists it.
     work.tasks.remove('zim/a');
     await s.kick();
     expect(work.started, isEmpty);
-    expect(s.line, 'Getting search ready: 1 of 2 · waits for charging');
+    expect(s.line, 'Getting search ready · 1 of 2 done · Waits for charging (long job)');
   });
 
   test('the app going to the back pauses the work; back to the front, it goes on', () async {
@@ -183,6 +183,115 @@ void main() {
     s.setOpen(true);
     await _settle();
     expect(work.started, ['zim/a', 'zim/a']);
+  });
+
+  group('each piece of work says where it stands (the one source of the rows, menus, overview and Settings line)', () {
+    test('only the running work is running; the rest are queued in order, with their place', () async {
+      work
+        ..add('zim-pdf/a', size: 1)
+        ..add('zim-pdf/b', size: 2)
+        ..add('zim-epub/c', size: 3);
+      s.setOpen(true);
+      await _settle();
+      expect([for (final i in s.items) (i.key, i.state, i.position)], [
+        ('zim-pdf/a', IndexState.running, 0),
+        ('zim-pdf/b', IndexState.queued, 2),
+        ('zim-epub/c', IndexState.queued, 3),
+      ]);
+      expect(s.statusOf('zim-pdf/b')!.why, IndexWait.none);
+      work.finish('zim-pdf/a');
+      await _settle();
+      expect(s.statusOf('zim-pdf/a')!.state, IndexState.done);
+      expect(s.statusOf('zim-pdf/b')!.state, IndexState.running);
+      expect(s.statusOf('zim-pdf/zzz'), isNull, reason: 'work the scheduler has not seen has no status');
+    });
+
+    test('on a low battery every piece is held for the battery, none says running', () async {
+      battery = const BatteryReading(percent: 12, charging: false);
+      work
+        ..add('zim-pdf/a')
+        ..add('zim-epub/a', long: false);
+      s.setOpen(true);
+      await _settle();
+      expect(work.started, isEmpty);
+      expect([for (final i in s.items) (i.state, i.why)], [(IndexState.held, IndexWait.battery), (IndexState.held, IndexWait.battery)]);
+      expect(s.reading!.percent, 12);
+    });
+
+    test('long work held for charging while short work runs; the long one says why', () async {
+      battery = const BatteryReading(percent: 40, charging: false);
+      work
+        ..add('zim-pdf/a', size: 1)
+        ..add('zim/a', size: 2, long: false);
+      s.setOpen(true);
+      await _settle();
+      expect(s.running, 'zim/a');
+      expect((s.statusOf('zim-pdf/a')!.state, s.statusOf('zim-pdf/a')!.why), (IndexState.held, IndexWait.charging));
+    });
+
+    test('work that needs room says how much', () async {
+      space = const Space(free: 21 * _gb, reserve: 20 * _gb);
+      work.add('zim-pdf/a', bytes: 2 * _gb);
+      s.setOpen(true);
+      await _settle();
+      final i = s.statusOf('zim-pdf/a')!;
+      expect((i.state, i.why, i.bytesNeeded), (IndexState.held, IndexWait.storage, 2 * _gb));
+    });
+
+    test('in the background everything is held for that reason', () async {
+      work
+        ..add('zim-pdf/a')
+        ..add('zim-pdf/b');
+      s.setOpen(true);
+      await _settle();
+      s.setOpen(false);
+      await _settle();
+      expect([for (final i in s.items) i.why], [IndexWait.closed, IndexWait.closed]);
+      expect(s.line, 'Getting search ready · 0 of 2 done · Paused · Cache is in the background');
+    });
+
+    test('Pause all holds everything as paused by you; Resume lets the rules decide again', () async {
+      work
+        ..add('zim-pdf/a')
+        ..add('zim-pdf/b');
+      s.setOpen(true);
+      await _settle();
+      await s.pauseAll();
+      expect(work.runs['zim-pdf/a']!.pauses, 1);
+      expect(s.running, isNull);
+      expect([for (final i in s.items) (i.state, i.why)], [(IndexState.held, IndexWait.person), (IndexState.held, IndexWait.person)]);
+      expect(s.line, 'Getting search ready · 0 of 2 done · Paused by you · Resume');
+      await s.kick();
+      expect(s.running, isNull, reason: 'nothing starts while paused by you');
+      await s.resumeAll();
+      await _settle();
+      expect(s.running, 'zim-pdf/a');
+    });
+
+    test('a battery that cannot be read does not hold work (it runs as if plugged in)', () async {
+      battery = null;
+      work.add('zim-pdf/a');
+      s.setOpen(true);
+      await _settle();
+      expect(s.running, 'zim-pdf/a');
+      expect(s.reading, isNull);
+      expect(s.statusOf('zim-pdf/a')!.why, IndexWait.none);
+    });
+
+    test('the running work reports its progress and title as its task gives them', () async {
+      var done = 3;
+      work.tasks['zim-pdf/a'] = IndexTask(
+        key: 'zim-pdf/a',
+        title: 'Army Publishing',
+        progress: () => (done, 10),
+        start: () async => work.runs['zim-pdf/a'] = _Run(),
+      );
+      s.setOpen(true);
+      await _settle();
+      expect((s.statusOf('zim-pdf/a')!.title, s.statusOf('zim-pdf/a')!.progress), ('Army Publishing', (3, 10)));
+      done = 4;
+      expect(s.statusOf('zim-pdf/a')!.progress, (4, 10));
+    });
   });
 
   test("the core's work: a build is long, a seal short, keyed by kind and source", () async {

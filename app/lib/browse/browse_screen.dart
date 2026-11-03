@@ -1,11 +1,16 @@
 import 'dart:io';
 
+import 'package:cache_search/cache_search.dart' show ZimSubIndex;
 import 'package:flutter/material.dart';
 
 import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_state.dart' show PdfPart, PdfPartPhase, PdfPause;
 import '../pdf/index/pdf_index_ui.dart';
 import '../search/core_index_calls.dart' show coreIndexShared;
 import '../search/epub_index_row.dart';
+import '../search/index_overview.dart';
+import '../search/index_scheduler.dart' show IndexState, indexSchedulerShared;
+import '../search/index_status.dart';
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
@@ -188,18 +193,71 @@ class _BrowseScreenState extends State<BrowseScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (pdfIndexShared != null) PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z)),
+                if (pdfIndexShared != null)
+                  PdfIndexPartRow(
+                    state: pdfIndexShared!,
+                    zim: pdfZimRef(sources, z),
+                    changes: indexSchedulerShared,
+                    schedulerLine: (part) => _schedulerPdfLine(z, part),
+                  ),
+                // the EPUBs and the caption files, as the scheduler says them (only what it runs says "Making")
                 ListenableBuilder(
-                  listenable: Listenable.merge([sources, ?coreIndexShared?.progress]),
+                  listenable: Listenable.merge([sources, ?coreIndexShared?.progress, ?indexSchedulerShared]),
                   builder: (context, _) {
-                    final e = sources.statusAt(z.path)?.epubIndex;
-                    final id = e?.sourceId ?? sources.idOf(z);
-                    return EpubIndexRow(epub: e, progress: id == null ? null : coreIndexShared?.progress.value['zim-epub/$id']);
+                    final st = sources.statusAt(z.path);
+                    final s = indexSchedulerShared;
+                    Widget sub(String kind, ZimSubIndex? e) {
+                      final id = e?.sourceId ?? sources.idOf(z);
+                      final key = '$kind/$id';
+                      return EpubIndexRow(
+                        kind: kind,
+                        epub: e,
+                        progress: id == null ? null : coreIndexShared?.progress.value[key],
+                        item: id == null ? null : s?.statusOf(key),
+                        battery: s?.reading,
+                      );
+                    }
+
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [sub('zim-epub', st?.epubIndex), sub('zim-captions', st?.captionsIndex)],
+                    );
                   },
                 ),
               ],
             ),
     );
+  }
+
+  /// What a ZIM's row says of its search index work, from the index scheduler (the one source: only what it runs says
+  /// "Making", with progress; queued work says "Waiting to make ..."; held work says why and what makes it go on); then what
+  /// only the PDF state knows (the person's pause, no room, a failure).
+  String? _indexNote(ZimFile z) {
+    final part = pdfIndexShared?.partOf(pdfZimRef(sources, z));
+    final s = indexSchedulerShared;
+    if (s == null) return pdfRowNote(part);
+    final id = sources.idOf(z);
+    final words = id == null ? null : indexRowWords(s, zimIndexKeys(id));
+    if (words != null) return words;
+    return switch (part?.phase) {
+      PdfPartPhase.paused when part!.pause == PdfPause.person => pdfPartLine(part),
+      PdfPartPhase.needsSpace || PdfPartPhase.failed => pdfRowNote(part),
+      _ => null,
+    };
+  }
+
+  /// The PDFs line in a ZIM's menu as the scheduler says it, when it has the ZIM's PDFs and they are not done, out of room,
+  /// failed or paused by the person (the PDF state's own line says those).
+  String? _schedulerPdfLine(ZimFile z, PdfPart part) {
+    final s = indexSchedulerShared;
+    final id = sources.idOf(z);
+    if (s == null || id == null) return null;
+    if (part.phase == PdfPartPhase.done || part.phase == PdfPartPhase.needsSpace || part.phase == PdfPartPhase.failed) return null;
+    if (part.phase == PdfPartPhase.paused && part.pause == PdfPause.person) return null;
+    final item = s.statusOf('zim-pdf/$id');
+    if (item == null || item.state == IndexState.done) return null;
+    return indexItemWords(item, battery: s.reading);
   }
 
   LibraryActions _libraryActions(LibraryItem l) => LibraryActions(
@@ -251,7 +309,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       resizeToAvoidBottomInset: false,
       appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([b, sources, ?libs, ?pdfIndexShared]),
+        listenable: Listenable.merge([b, sources, ?libs, ?pdfIndexShared, ?indexSchedulerShared, ?coreIndexShared?.progress]),
         builder: (context, _) {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
@@ -277,6 +335,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                   child: Text('Icons come from each source\'s website; change one from the hold menu.', style: TextStyle(fontSize: 12, color: k.secondary)),
                 ),
+              // one line while search indexes are being made: what runs and why anything waits; tap for the queue
+              if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
               for (final t in transfers) _transferRow(k, t),
               if (task != null) _taskRow(k, task),
               for (final z in sources.zims) _zimRow(k, z),
@@ -326,7 +386,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       detail: [
         if (o != null && o.summary.isNotEmpty) o.summary,
         formatBytes(z.size),
-        ?pdfRowNote(pdfIndexShared?.partOf(pdfZimRef(sources, z))),
+        ?_indexNote(z),
       ].join(' · '),
       badge: badge,
       onTap: canOpen ? () => _openZim(z) : null,

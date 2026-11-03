@@ -50,7 +50,7 @@ class IndexDuty {
   String toString() => paused ? 'IndexDuty(paused: ${hold.name})' : 'IndexDuty($workMs ms on, $idleMs ms off, ${hold.name}, threads $threads)';
 }
 
-/// The shares of one core (owner, 2026-11-02: "Throttle it", then "dynamically throttle": never hot, laggy or a battery hog).
+/// The shares of one core (owner decision, 2026-11-02: throttle indexing dynamically, so it is never hot, laggy or a battery hog).
 const double kShareGentle = 2 / 3; // 2 s on, 1 s off
 const double kShareNormal = 8 / 9; // 2 s on, a quarter second off
 const double kShareFull = 1; // charging and cool

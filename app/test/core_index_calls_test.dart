@@ -122,7 +122,7 @@ void main() {
     job.now = const JobProgress(state: JobState.running, done: 40, total: 85, phase: 'read');
     await _ticks();
     expect(calls.progress.value['zim-epub/u2'], (40, 85));
-    expect(epubLine(const ZimSubIndex(state: 'none', needsBuild: true), calls.progress.value['zim-epub/u2']), 'Making EPUBs searchable: 40 of 85');
+    expect(epubLine(const ZimSubIndex(state: 'none', needsBuild: true), calls.progress.value['zim-epub/u2']), 'Making EPUBs searchable · 40 of 85');
     job.now = const JobProgress(state: JobState.done, done: 85, total: 85);
     expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
     expect(calls.progress.value, isEmpty);

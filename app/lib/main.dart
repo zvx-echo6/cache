@@ -579,6 +579,7 @@ class _CacheAppState extends State<CacheApp> {
     );
     indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    indexSchedulerShared = indexing;
     coreIndexShared = coreIndexCalls;
     // The model generating an answer pauses background index work; the speed setting applies at once.
     chat.addListener(_onChatForIndexing);

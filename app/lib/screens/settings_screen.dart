@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../search/index_overview.dart';
+
 import '../nav/units.dart';
 import '../layout/adaptive.dart';
 import '../theme.dart';
@@ -207,18 +209,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
-            // One quiet line while search indexes are being made or sealed for sync.
+            // While search indexes are being made or sealed for sync: the same progress bar as at the top of the Library.
             if (d.hub.indexing case final indexing?)
-              ListenableBuilder(
-                listenable: indexing,
-                builder: (context, _) {
-                  final line = indexing.line;
-                  if (line == null) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
-                    child: Text(line, key: const ValueKey('index-status'), style: TextStyle(fontSize: 12, color: context.t.secondary)),
-                  );
-                },
+              Padding(
+                key: const ValueKey('index-status'),
+                padding: const EdgeInsets.only(top: 12),
+                child: IndexOverviewLine(scheduler: indexing),
               ),
           ],
         ),
