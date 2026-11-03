@@ -60,11 +60,13 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {Pdf
     return const PdfPagesOutcome.damaged();
   }
   try {
-    // The Title and the page labels, which pdfrx does not wrap: PDFium's own calls on the document, while pdfrx's worker is held
-    // (PDFium is not thread-safe). A PDF that says neither gives null.
+    // The Title and the page labels, which pdfrx does not wrap: PDFium's own calls on the document, made in pdfrx's worker isolate
+    // (PDFium is not thread-safe, and a big PDF reads through that isolate's callback). A PDF that says neither gives null.
     ({String? title, List<String?>? labels}) meta = (title: null, labels: null);
     try {
-      meta = await doc.useNativeDocumentHandle((handle) => readPdfMeta(handle, doc.pages.length));
+      // the handle only (no PDFium call here); the calls themselves run in pdfrx's worker isolate (see readPdfMeta)
+      final handle = await doc.useNativeDocumentHandle((h) => h);
+      meta = await readPdfMeta(handle, doc.pages.length);
     } catch (_) {}
     final pages = <String>[];
     for (final page in doc.pages) {
