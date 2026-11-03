@@ -27,7 +27,7 @@ fn model_bytes(version: u32, sha: &str) -> Vec<u8> {
     encode(&ModelSpec {
         classifier_version: version,
         embedding_sha256: sha_bytes,
-        dims: DIMS,
+        dims: DIMS as u32,
         threshold: 0.6,
         recipe: Recipe { first_pieces: 2, spread_pieces: 1 },
         classes: vec![Class { division: 110, label: "A".into() }, Class { division: 120, label: "B".into() }, Class { division: 130, label: "C".into() }],
