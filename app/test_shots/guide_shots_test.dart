@@ -1083,7 +1083,10 @@ void main() {
     final browse = BrowseState(sources: sources, libraries: libs, catalog: catalogWith(recorded), policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     await tester.runAsync(browse.init);
     // Search indexes are being made: the overview line and bar at the top of the Library (the same one as in Settings).
-    final libraryIndexing = _ShotIndexing('Getting search ready · 3 of 12 done');
+    final medicineId = sources.ids.entries.firstWhere((e) => e.key.contains('medicine')).value;
+    final libraryIndexing = _ShotIndexing('Getting search ready · 3 of 12 done', shown: [
+      IndexItem(key: 'zim-pdf/$medicineId', state: IndexState.running, title: 'Wikipedia Medicine', progress: (340, 5768)),
+    ]);
     indexSchedulerShared = libraryIndexing;
     addTearDown(() {
       indexSchedulerShared = null;
@@ -1646,12 +1649,21 @@ class _MemFolder implements SyncFolder {
 
 /// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
 class _ShotIndexing extends IndexScheduler {
-  _ShotIndexing(this._line) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
+  _ShotIndexing(this._line, {this.shown = const []}) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
 
   final String _line;
 
+  /// The work the picture shows (the rows and the overview read it); none: only the line.
+  final List<IndexItem> shown;
+
   @override
   String? get line => _line;
+
+  @override
+  List<IndexItem> get items => shown;
+
+  @override
+  IndexItem? statusOf(String key) => shown.where((i) => i.key == key).firstOrNull;
 
   @override
   double get fraction => 0.3;
