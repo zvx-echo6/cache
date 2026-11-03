@@ -71,6 +71,17 @@ void main() {
       expect(indexWaitWords(IndexWait.none), isNull);
     });
 
+    test('the queue names the step running work is on; stuck work keeps the step it stopped at', () {
+      const running = IndexItem(key: 'zim-pdf/w', state: IndexState.running, title: 'Wikipedia', progress: (2, 37), step: 'Reading page 12 of 300 · PDF 3 of 37 · 12 MB');
+      expect(indexQueueWords(running), 'Reading page 12 of 300 · PDF 3 of 37 · 12 MB');
+      expect(indexItemWords(running), 'Making PDFs searchable · 2 of 37', reason: 'the Library row keeps its own words');
+      const slowed = IndexItem(key: 'zim-pdf/w', state: IndexState.running, slowed: true, warm: true, step: 'Opening · PDF 1 of 37 · 4.2 MB');
+      expect(indexQueueWords(slowed), 'Slowed down · device is warm · Opening · PDF 1 of 37 · 4.2 MB');
+      const stuck = IndexItem(key: 'zim-pdf/w', state: IndexState.held, why: IndexWait.stuck, step: 'Opening · PDF 1 of 37 · 4.2 MB');
+      expect(indexItemWords(stuck), 'Stuck at: opening · PDF 1 of 37 · 4.2 MB · Retry');
+      expect(indexQueueWords(stuck), 'Stuck at: opening · PDF 1 of 37 · 4.2 MB · Retry');
+    });
+
     test('libraries of the same name are told apart in the queue by what the app knows of each', () {
       indexItemDetail = (key) => {'zim-epub/law': 'Law books', 'zim-epub/edu': 'Education'}[key];
       addTearDown(() => indexItemDetail = null);

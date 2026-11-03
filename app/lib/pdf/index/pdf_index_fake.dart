@@ -31,7 +31,8 @@ class FakeZim {
 }
 
 /// Reads the pages of a [FakePdf]'s bytes, as readPdfPagesFromBytes reads a real PDF.
-Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
+Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name, {PdfPermit? betweenPages, void Function(String step)? onStep}) async {
+  onStep?.call('Opening');
   final s = utf8.decode(bytes, allowMalformed: true);
   if (s == 'LOCKED') return const PdfPagesOutcome.locked();
   if (!s.startsWith('FAKEPDF\n')) return const PdfPagesOutcome.damaged();

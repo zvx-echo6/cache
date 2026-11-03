@@ -33,10 +33,10 @@ FakeZim _zim({String uuid = 'u1'}) => FakeZim(
 /// Reads pages as the fake does, and calls [onRead] with the count of PDFs read so far (to pause or cancel mid-run).
 PdfBytesReader _reader(void Function(int n) onRead) {
   var n = 0;
-  return (Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
+  return (Uint8List bytes, String name, {PdfPermit? betweenPages, void Function(String step)? onStep}) async {
     n++;
     onRead(n);
-    return readFakePdfPages(bytes, name, betweenPages: betweenPages);
+    return readFakePdfPages(bytes, name, betweenPages: betweenPages, onStep: onStep);
   };
 }
 

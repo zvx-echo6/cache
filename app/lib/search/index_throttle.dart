@@ -72,19 +72,27 @@ const int kBatteryResume = 25;
 /// A new share smaller than this change from the current one is not applied (no flapping).
 const double kShareStep = 0.05;
 
-/// The heat a reading says, 0 to 1: Android's thermal headroom where the phone gives one (1.0 is where it throttles hard),
-/// else the thermal status (nominal 0, light 0.4, moderate 0.7, severe and above 1); unknown is cool.
+/// The heat a reading says, 0 to 1, from the system's thermal status: nominal and light (an iPhone's "fair", where it sits under
+/// any steady work) run as usual (0); moderate (an iPhone's "serious") slows the work ([kHeatModerate]); severe and critical
+/// pause it (1). Android's thermal headroom (a forecast that rises with any steady load) is a hint to slow down only: at most
+/// [kHeadroomMost], never a pause. Unknown is cool.
 double heatOf(BatteryReading? r) {
   if (r == null) return 0;
-  final h = r.headroom;
-  if (h != null && h >= 0) return h.clamp(0.0, 1.0);
-  return switch (r.thermal) {
-    Thermal.unknown || Thermal.nominal => 0,
-    Thermal.light => 0.4,
-    Thermal.moderate => 0.7,
-    Thermal.severe || Thermal.critical => 1,
+  final status = switch (r.thermal) {
+    Thermal.unknown || Thermal.nominal || Thermal.light => 0.0,
+    Thermal.moderate => kHeatModerate,
+    Thermal.severe || Thermal.critical => 1.0,
   };
+  final h = r.headroom;
+  final hint = h != null && h >= 0 ? h.clamp(0.0, kHeadroomMost) : 0.0;
+  return status > hint ? status : hint;
 }
+
+/// The heat of a moderate thermal status (an iPhone's "serious"): slowed down, well short of a pause.
+const double kHeatModerate = 0.55;
+
+/// The most heat Android's headroom forecast alone can say: it slows work, never pauses it.
+const double kHeadroomMost = 0.6;
 
 /// What heat leaves of a share: all of it up to [kHeatEase], then less and less, to [kHeatFloor] at [kHeatPause].
 double heatFactor(double heat) {
@@ -151,9 +159,10 @@ class IndexThrottle extends ChangeNotifier {
   /// Heat is slowing the work down or holding it (from the thermal headroom, the system's forecast, or the thermal status).
   bool get warm => _duty.hold == IndexHold.heat;
 
-  /// The system says the device IS warm (its thermal status light or above). The headroom alone (a forecast that rises with any
-  /// steady load on a cool phone) slows the work too, but is never called warm: then the words are "keeping the device cool".
-  bool get thermalWarm => (_reading?.thermal.index ?? 0) >= Thermal.light.index;
+  /// The system says the device IS warm: its thermal status moderate or above (an iPhone's "serious"). The headroom alone (a
+  /// forecast that rises with any steady load on a cool phone) slows the work too, but is never called warm: then the words are
+  /// "keeping the device cool".
+  bool get thermalWarm => (_reading?.thermal.index ?? 0) >= Thermal.moderate.index;
 
   /// Runs the control loop (reads every [every]) while there is work; the scheduler turns it on and off.
   void watch(bool on) {

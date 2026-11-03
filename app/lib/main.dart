@@ -54,6 +54,7 @@ import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
 import 'pdf/index/pdf_index_state.dart';
+import 'pdf/index/pdf_pages.dart' show pdfStepScale;
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
@@ -603,6 +604,11 @@ class _CacheAppState extends State<CacheApp> {
     indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
     indexSchedulerShared = indexing;
+    // A PDF step may take longer in proportion as the throttle slows the work.
+    pdfStepScale = () {
+      final d = indexThrottle.duty;
+      return d.paused || d.share <= 0 ? 1 : 1 / d.share.clamp(0.05, 1.0);
+    };
     // Several libraries of one name (the Project Gutenberg ZIMs): the queue tells them apart by the catalogue's summary.
     indexItemDetail = (key) {
       final z = sources.zimById(key.substring(key.indexOf('/') + 1));

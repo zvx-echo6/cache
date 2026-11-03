@@ -200,6 +200,24 @@ class PdfIndexRun extends ChangeNotifier {
 
   int get total => list.pdfs.length;
   int get handled => done + skipped;
+
+  /// The step the run is on now, in words for the queue ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"): what a stuck run
+  /// was doing when it stopped moving.
+  String? step;
+
+  /// Steps taken so far: a sign of life for the scheduler's watchdog (a page read, an entry read, a PDF added).
+  int steps = 0;
+
+  void _step(String words) {
+    step = words;
+    steps++;
+    notifyListeners();
+  }
+
+  /// "PDF 3 of 37 · 12 MB": which PDF, of all, and its size.
+  String _which(ZimPdf pdf) => 'PDF ${handled + 1} of ${list.pdfs.length} · ${_mb(pdf.size)}';
+
+  static String _mb(int bytes) => bytes >= 1 << 20 ? '${(bytes / (1 << 20)).toStringAsFixed(bytes >= 10 << 20 ? 0 : 1)} MB' : '${(bytes >> 10).clamp(1, 1023)} KB';
   double get fraction => total == 0 ? 1 : (handled / total).clamp(0.0, 1.0);
 
   /// Time since this run started.
@@ -299,6 +317,7 @@ class PdfIndexRun extends ChangeNotifier {
         Uint8List? read;
         if (session != null && reusable[pdf.path] == pdf.size && pdf.size > 0) {
           try {
+            _step('Reading from the library · ${_which(pdf)}');
             read = await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
             final r = await core.reuse(session, path: pdf.path, sha256: crypto.sha256.convert(read).toString());
             if (r.reused) {
@@ -331,6 +350,7 @@ class PdfIndexRun extends ChangeNotifier {
           skipped++;
         } else {
           if (session != null) {
+            _step('Adding to the search index · ${_which(pdf)}');
             // The PDF's own Title when it has a real one, else "" (the core names it from its file name).
             final a = await core.add(session, path: pdf.path, title: one.title, pieces: one.pieces, pages: one.pages, size: one.size, sha256: one.sha256);
             pieces = a.pieces;
@@ -395,6 +415,7 @@ class PdfIndexRun extends ChangeNotifier {
 
   Future<PdfRunEnd> _finish() async {
     finishing = true;
+    _step('Finishing the index');
     notifyListeners();
     final job = _job = await core.finish(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
     try {
@@ -438,6 +459,7 @@ class PdfIndexRun extends ChangeNotifier {
     final sw = Stopwatch()..start();
     final Uint8List data;
     try {
+      if (bytes == null) _step('Reading from the library · ${_which(pdf)}');
       data = bytes ?? await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
     } catch (e) {
       if (_isFull(e)) rethrow;
@@ -456,7 +478,7 @@ class PdfIndexRun extends ChangeNotifier {
       pages = await readPages(data, pdf.path, betweenPages: permit == null ? null : () async {
         await permit!();
         _checkStop();
-      });
+      }, onStep: (s) => _step('$s · ${_which(pdf)}'));
     } finally {
       // Extraction returned (or threw): no native crash on this PDF, whatever comes next.
       _clearAttempt();
@@ -472,6 +494,7 @@ class PdfIndexRun extends ChangeNotifier {
     _checkStop();
     sw.reset();
     final labels = pages.labels;
+    _step('Splitting into passages · ${_which(pdf)}');
     final chunks = await core.chunk([
       for (var i = 0; i < pages.pages.length; i++) PdfPageText(i, pages.pages[i], label: labels != null && i < labels.length ? labels[i] : null),
     ]);

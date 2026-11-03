@@ -151,7 +151,7 @@ class IndexQueueSheet extends StatelessWidget {
         child: Text(t.toUpperCase(), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: k.secondary)),
       );
       Widget row(IndexItem i) {
-        final words = indexItemWords(i, battery: scheduler.reading);
+        final words = indexQueueWords(i, battery: scheduler.reading);
         final p = i.progress;
         final storage = i.why == IndexWait.storage && openStorageForSpace != null;
         final stuck = i.why == IndexWait.stuck;

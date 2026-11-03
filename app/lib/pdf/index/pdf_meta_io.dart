@@ -15,7 +15,7 @@ var _tmpCount = 0;
 /// answers. When that answer does not come (the app's isolate busy or stopped: seen on iPhone, a library's PDFs stuck at "0 of 37"),
 /// the worker waits for ever, and every PDF after it too. A file is read by PDFium itself. Returns the document and what removes
 /// the file (after the document is disposed).
-Future<(PdfDocument, Future<void> Function())> openPdfForIndexing(Uint8List bytes, String name) async {
+Future<(PdfDocument, Future<void> Function())> openPdfForIndexing(Uint8List bytes, String name, {void Function(String step)? onStep}) async {
   final dir = await Directory.systemTemp.createTemp('pdfindex');
   final f = File('${dir.path}/${_tmpCount++}.pdf');
   Future<void> remove() async {
@@ -25,7 +25,9 @@ Future<(PdfDocument, Future<void> Function())> openPdfForIndexing(Uint8List byte
   }
 
   try {
+    onStep?.call('Copying to a file');
     await f.writeAsBytes(bytes, flush: true);
+    onStep?.call('Opening');
     return (await PdfDocument.openFile(f.path, firstAttemptByEmptyPassword: true), remove);
   } catch (_) {
     await remove();

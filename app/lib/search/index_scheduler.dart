@@ -29,9 +29,13 @@ class IndexTask {
     this.title = '',
     this.progress,
     this.pulse,
+    this.step,
   });
 
   final String key;
+
+  /// The step it is on now, in words ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when it cannot say.
+  final String? Function()? step;
 
   /// A sign of life while it runs, finer than [progress] (a PDF's pages, a core job's step): the watchdog calls the work stuck
   /// when neither changes for [IndexScheduler.stuckAfter]. Null: [progress] alone.
@@ -92,7 +96,10 @@ enum IndexState { running, queued, held, done }
 /// One piece of work as the scheduler sees it now: the one source of the Library rows, their menus, the Library's overview and
 /// the Settings line, so none of them says "Making" for work that is not running.
 class IndexItem {
-  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false, this.warm = false});
+  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false, this.warm = false, this.step});
+
+  /// The step it is on (running), or was on when it stopped moving (stuck): "Opening · PDF 1 of 37 · 12 MB".
+  final String? step;
 
   final String key;
   final IndexState state;
@@ -150,14 +157,30 @@ class IndexScheduler extends ChangeNotifier {
 
   /// Work skipped as stuck this session ([IndexWait.stuck]); [retry] tries it again.
   final Set<String> _stuck = {};
+
+  /// The step stuck work was on when it stopped moving: what its row keeps showing.
+  final Map<String, String> _stuckAt = {};
   Timer? _watch;
   Object? _lastPulse;
-  DateTime _pulseAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Time the running work has had to work since its last sign of life: time held (heat, the battery, Ask answering) is not
+  /// counted.
+  Duration _quiet = Duration.zero;
+  DateTime _lastLook = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// How long running work may go without a sign of life at the duty now: [stuckAfter] at full speed, longer in proportion as
+  /// the throttle slows it (a third of the time: three times as long).
+  Duration get stuckAfterNow {
+    final d = throttle?.duty;
+    final share = d == null || d.paused || d.share <= 0 ? 1.0 : d.share.clamp(0.05, 1.0);
+    return Duration(microseconds: (stuckAfter.inMicroseconds / share).round());
+  }
 
   static Object? _pulseOf(IndexTask t) => (t.progress?.call(), t.pulse?.call());
 
-  /// The watchdog: the running work's progress and sign of life; unchanged for [stuckAfter] while nothing holds it (heat, the
-  /// battery, Ask answering: a held job is waiting, not stuck), it is stopped and skipped, and the next one runs.
+  /// The watchdog: the running work's progress and sign of life (a PDF's pages, a core job's step); unchanged for
+  /// [stuckAfterNow] of time it could work (time held for heat, the battery or Ask answering does not count), it is stopped
+  /// and skipped, and the next one runs.
   void _watchdog() {
     final t = _current;
     if (t == null || _disposed) {
@@ -166,16 +189,22 @@ class IndexScheduler extends ChangeNotifier {
       return;
     }
     final now = _clock();
+    final since = now.difference(_lastLook);
+    _lastLook = now;
     final p = _pulseOf(t);
-    final held = throttle?.duty.paused ?? false;
-    if (held || p != _lastPulse) {
+    if (p != _lastPulse) {
       _lastPulse = p;
-      _pulseAt = now;
+      _quiet = Duration.zero;
       return;
     }
-    if (now.difference(_pulseAt) < stuckAfter) return;
-    debugPrint('Index work ${t.key} is stuck: no progress for ${stuckAfter.inMinutes} min (at ${t.progress?.call()}); skipped for now');
+    if (throttle?.duty.paused ?? false) return;
+    _quiet += since;
+    final limit = stuckAfterNow;
+    if (_quiet < limit) return;
+    final at = t.step?.call();
+    debugPrint('Index work ${t.key} is stuck at "${at ?? 'a step it cannot name'}": no progress for ${limit.inMinutes} min of working time (at ${t.progress?.call()}); skipped for now');
     _stuck.add(t.key);
+    if (at != null) _stuckAt[t.key] = at;
     _watch?.cancel();
     _watch = null;
     unawaited(_pause(IndexWait.stuck).then((_) {
@@ -187,6 +216,7 @@ class IndexScheduler extends ChangeNotifier {
   /// Tries work skipped as stuck again (the queue sheet's Retry).
   Future<void> retry(String key) {
     _stuck.remove(key);
+    _stuckAt.remove(key);
     _why.remove(key);
     notifyListeners();
     return kick();
@@ -279,7 +309,7 @@ class IndexScheduler extends ChangeNotifier {
               IndexHold.model || IndexHold.none => IndexWait.model,
             }
           : IndexWait.none;
-      return IndexItem(key: key, state: IndexState.running, title: title, why: held, progress: t?.progress?.call(), slowed: held == IndexWait.none && (throttle?.warm ?? false), warm: deviceWarm);
+      return IndexItem(key: key, state: IndexState.running, title: title, why: held, progress: t?.progress?.call(), slowed: held == IndexWait.none && (throttle?.warm ?? false), warm: deviceWarm, step: t?.step?.call());
     }
     final at = _order.indexOf(key);
     if (at >= 0) {
@@ -293,6 +323,7 @@ class IndexScheduler extends ChangeNotifier {
         bytesNeeded: t?.bytesNeeded ?? 0,
         progress: t?.progress?.call(),
         warm: deviceWarm,
+        step: why == IndexWait.stuck ? _stuckAt[key] : null,
       );
     }
     if (_done.contains(key)) return IndexItem(key: key, state: IndexState.done, title: title);
@@ -501,7 +532,8 @@ class IndexScheduler extends ChangeNotifier {
     _current = t;
     _set(IndexWait.none);
     _lastPulse = _pulseOf(t);
-    _pulseAt = _clock();
+    _quiet = Duration.zero;
+    _lastLook = _clock();
     _watch?.cancel();
     _watch = Timer.periodic(watchEvery, (_) => _watchdog());
     try {
@@ -597,7 +629,10 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse, this.step});
+
+  /// The running job's step in words ("Looking through the library · 2,000 of 40,000").
+  final String? Function()? step;
 
   /// The running job's step and place in it (any step, also those [progress] leaves out), for the watchdog.
   final Object? Function()? pulse;
@@ -649,6 +684,7 @@ class CoreIndexWork implements IndexWorkSource {
             title: n.title,
             progress: n.progress,
             pulse: n.pulse,
+            step: n.step,
             start: () => calls.start(n),
           ),
       ];

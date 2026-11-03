@@ -60,6 +60,9 @@ String? indexItemWords(IndexItem i, {BatteryReading? battery}) {
       if (i.slowed) return '${indexSlowedWords(i.warm)}$of';
       return '${indexDoingWords(i.kind)}$of';
     case IndexState.held:
+      // stuck: where it stopped moving, so a screenshot shows the step it hangs in
+      final at = i.step;
+      if (i.why == IndexWait.stuck && at != null && at.isNotEmpty) return 'Stuck at: ${at[0].toLowerCase()}${at.substring(1)} · Retry';
       return indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm) ?? indexWaitingWords(i.kind);
     case IndexState.queued:
       return indexWaitingWords(i.kind);
@@ -123,4 +126,15 @@ String indexItemTitle(IndexItem i, Iterable<IndexItem> all) {
   final same = all.any((o) => o.key != i.key && o.kind == i.kind && o.title == i.title);
   final detail = same ? indexItemDetail?.call(i.key) : null;
   return detail == null || detail.isEmpty ? '${i.title} · $part' : '${i.title} · $detail · $part';
+}
+
+/// One piece of work in the queue sheet: as [indexItemWords], but running work names its step as it goes ("Reading page 12 of
+/// 300 · PDF 3 of 37 · 12 MB"; slowed or held: "Slowed down · device is warm · Reading page 12 of 300 · ...").
+String? indexQueueWords(IndexItem i, {BatteryReading? battery}) {
+  final step = i.step;
+  if (i.state != IndexState.running || step == null || step.isEmpty) return indexItemWords(i, battery: battery);
+  final held = indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm);
+  if (held != null) return '$held · $step';
+  if (i.slowed) return '${indexSlowedWords(i.warm)} · $step';
+  return step;
 }

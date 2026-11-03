@@ -30,7 +30,8 @@ class PdfIndexWork implements IndexWorkSource {
                 final p? when p.total > 0 => (p.handled, p.total),
                 _ => null,
               },
-              pulse: () => (state.beats, state.partOf(z)?.phase, state.partOf(z)?.finishFraction),
+              pulse: () => (state.beats, state.stepsOf(z), state.partOf(z)?.phase, state.partOf(z)?.finishFraction),
+              step: () => state.stepOf(z),
               start: () async {
                 await state.start(z);
                 return PdfIndexRun(state, z);

@@ -79,12 +79,13 @@ import workmanager_apple
       let level = device.batteryLevel
       let charging = device.batteryState == .charging || device.batteryState == .full
       let percent: Int = level < 0 ? -1 : Int((level * 100).rounded())
-      // How warm the iPhone is: background index work eases off as it warms and pauses when severe (serious is "severe").
+      // How warm the iPhone is: nominal and fair (where an iPhone sits under any steady work) run as usual, serious slows
+      // background index work down ("moderate"), only critical pauses it.
       let thermal: String
       switch ProcessInfo.processInfo.thermalState {
       case .nominal: thermal = "nominal"
       case .fair: thermal = "light"
-      case .serious: thermal = "severe"
+      case .serious: thermal = "moderate"
       case .critical: thermal = "critical"
       @unknown default: thermal = "unknown"
       }

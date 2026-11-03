@@ -456,6 +456,12 @@ class PdfIndexState extends ChangeNotifier {
   }
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
+  /// The step the run on [z] is on now ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when none runs on it.
+  String? stepOf(PdfZimRef z) => _runPath == z.path ? _run?.step : null;
+
+  /// Steps the run on [z] has taken (a sign of life for the watchdog).
+  int stepsOf(PdfZimRef z) => _runPath == z.path ? (_run?.steps ?? 0) : 0;
+
   PdfPart? partOf(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null || _indexes == null) return null;
     final total = _total(z);
