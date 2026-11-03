@@ -36,7 +36,7 @@ URLs:
   headers. Xapian and ICU 73 **with its data** are inside the one file (no `ICU_DATA` step); it needs only libc, libm, libgcc_s and
   libstdc++ (x86_64 also ld-linux). Requirements (objdump): glibc 2.34 (x86_64) or 2.29 (aarch64), GLIBCXX 3.4.30 (GCC 12's
   libstdc++: Ubuntu 22.04+, Debian 12+, Raspberry Pi OS bookworm+), so the prebuilt is used and libzim is not built from source.
-  The Linux core links `libzim.so.9` with RPATH `$ORIGIN`, so it ships next to `libcache_search.so` (Cache for Linux: `lib/libzim.so.9`).
+  The Linux core links `libzim.so.9` with RPATH `$ORIGIN`, so it ships next to `libcache_search.so` (Cache Server: `lib/libzim.so.9`).
 
 ## Fetch and build
 

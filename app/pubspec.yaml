@@ -73,7 +73,7 @@ dependencies:
   # Both BSD-3-Clause; approved 2026-10-30. Pinned (published 2026-09-30 and 2026-10-21).
   saf_util: 3.1.1
   saf_stream: 4.0.3
-  # Cache for Linux's Library in a browser: the calls to the device (http, already used by cache_search) and the file chooser, drag and
+  # Cache Server's Library in a browser: the calls to the device (http, already used by cache_search) and the file chooser, drag and
   # drop and upload (web, the browser bindings). Both were already in the lock file; versions match it.
   http: ^1.6.0
   web: ^1.1.1

@@ -91,7 +91,7 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024, bool http
   }
 }
 
-/// [fetchBytes] in a browser: through [api] (Cache for Linux's `/api/fetch`, which only reads the catalogue hosts the app uses).
+/// [fetchBytes] in a browser: through [api] (Cache Server's `/api/fetch`, which only reads the catalogue hosts the app uses).
 Future<List<int>> fetchBytesViaDevice(DeviceApi api, Uri url, {int maxBytes = 4 * 1024 * 1024}) async {
   try {
     final body = await api.fetch(url);

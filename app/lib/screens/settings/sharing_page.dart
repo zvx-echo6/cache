@@ -202,7 +202,7 @@ class _SharingPageState extends State<SharingPage> {
             children: [
               const NoteText(
                 'Link your Cache devices and keep their library, maps, models and videos the same, over Wi-Fi nearby or the internet. '
-                'Devices talk to each other directly; nothing goes through a server run by Cache. Setting up creates this device\'s identity.',
+                'Devices talk to each other directly; nothing goes through a Cache server. Setting up creates this device\'s identity.',
               ),
               FilledButton(onPressed: _busy ? null : () => _run(s.setUp), child: const Text('Set up sharing')),
             ],
