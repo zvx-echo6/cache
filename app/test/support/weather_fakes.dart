@@ -54,7 +54,7 @@ Map<String, dynamic> entry(
 Map<String, String> buildCatalogue({
   String id = 'cache-connectors',
   String title = 'Cache connectors',
-  String base = 'https://cache.echo6.co/connectors/',
+  String base = 'https://data.cached.info/connectors/',
   int format = 1,
   required List<Map<String, dynamic>> connectors,
   Map<String, String> definitions = const {},

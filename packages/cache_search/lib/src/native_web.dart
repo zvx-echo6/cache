@@ -5,7 +5,7 @@ import 'native_api.dart';
 export 'native_api.dart';
 
 /// The real library does not exist on the web. [open] throws; no member of this class can be reached.
-class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative {
   FfiCsNative._();
 
   /// Opens the native library of the current platform. Throws on the web.

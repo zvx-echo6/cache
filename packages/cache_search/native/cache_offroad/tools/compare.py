@@ -16,15 +16,15 @@ for line in open('t10.out'):
     if mm and cur: mine[cur]['segs'].append((mm[1],int(mm[2])))
 rows=[]
 for (rid,s,e,sc,ec,b) in m.ROUTES:
-    n=json.load(open(f'navi_out/{rid}.json'))
+    n=json.load(open(f'ref_out/{rid}.json'))
     mi=mine.get(rid,{})
-    if n.get('status')!='ok': print(rid,'NAVI',n); continue
+    if n.get('status')!='ok': print(rid,'REF',n); continue
     feats=n['route']['features']
     segs=[(f['properties']['network_mode'], round(sum(hav(a,b2) for a,b2 in zip(f['geometry']['coordinates'],f['geometry']['coordinates'][1:])))) for f in feats if f['properties']['segment_type']=='unified']
     nt=n['summary']['total_effort_minutes']; nd=n['summary']['total_distance_km']
     rows.append((rid,nt,nd,sorted(n['selected_mode_set']),segs,mi))
     if 'effort' in mi:
-        print(f"{rid:26s} navi {nt:9.3f} min {nd:8.3f} km {'+'.join(sorted(n['selected_mode_set'])):18s} | port {mi['effort']:9.3f} min {mi['dist']:8.3f} km {'+'.join(mi['modes']):18s} | d_effort {100*(mi['effort']-nt)/nt:+6.2f}% d_dist {100*(mi['dist']-nd)/nd:+6.2f}%  grid {mi['grid']}")
-        print('      navi segs', segs); print('      port segs', mi['segs'])
+        print(f"{rid:26s} ref {nt:9.3f} min {nd:8.3f} km {'+'.join(sorted(n['selected_mode_set'])):18s} | port {mi['effort']:9.3f} min {mi['dist']:8.3f} km {'+'.join(mi['modes']):18s} | d_effort {100*(mi['effort']-nt)/nt:+6.2f}% d_dist {100*(mi['dist']-nd)/nd:+6.2f}%  grid {mi['grid']}")
+        print('      ref segs', segs); print('      port segs', mi['segs'])
     else:
-        print(rid, 'port:', mi.get('err'), 'navi', nt, nd)
+        print(rid, 'port:', mi.get('err'), 'ref', nt, nd)

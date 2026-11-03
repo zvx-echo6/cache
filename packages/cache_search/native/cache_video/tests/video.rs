@@ -179,6 +179,7 @@ fn download_list_resolve_delete() {
     assert_eq!(man["size"], WEB_SIZE);
     assert_eq!(man["sha256"], sha_hex(&blob(WEB_SIZE, 7)));
     assert_eq!(man["captions"][0]["language"], "en");
+    assert_eq!(man["missing_captions"], json!([]));
     assert_eq!(man["duration_s"], 11);
     assert_eq!(man["channel"]["name"], "big-clive");
     assert!(man["path"].as_str().unwrap().ends_with("video.mp4") && std::path::Path::new(man["path"].as_str().unwrap()).is_file());
@@ -365,4 +366,103 @@ fn at_most_two_downloads_per_instance() {
     drop(a);
     let c = dl::acquire("limit.test", &|| true).unwrap();
     drop((b, c, other));
+}
+
+#[test]
+fn a_caption_that_did_not_save_is_fetched_again_alone() {
+    let (t, m, v, id) = setup("capfetch");
+    assert_eq!(job(&v, &t, &id, WEB_UUID, "lowest", json!({})).unwrap(), Outcome::Done);
+    let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
+    // as a download whose English caption failed to save leaves it
+    std::fs::remove_file(dir.join("captions-en.vtt")).unwrap();
+    let mut man: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    man["captions"] = json!([]);
+    man["warnings"] = json!(["caption en not saved: the instance did not answer"]);
+    man["missing_captions"] = json!([{"language": "en", "label": "English", "automatic": true}]);
+    std::fs::write(dir.join("manifest.json"), man.to_string()).unwrap();
+    let video_before = std::fs::metadata(dir.join("video.mp4")).unwrap().modified().unwrap();
+    let hits_before = m.hits.lock().unwrap().len();
+
+    let r = j(v.captions_fetch(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    assert_eq!(r["captions"][0]["language"], "en");
+    assert!(r["captions"][0]["path"].as_str().unwrap().ends_with("captions-en.vtt"));
+    assert_eq!(r["warnings"], json!([]));
+    assert_eq!(r["missing_captions"], json!([]));
+    assert!(dir.join("captions-en.vtt").is_file());
+    assert_eq!(std::fs::metadata(dir.join("video.mp4")).unwrap().modified().unwrap(), video_before, "the video is not fetched again");
+    let hits: Vec<String> = m.hits.lock().unwrap()[hits_before..].iter().map(|h| h.path.clone()).collect();
+    assert!(hits.iter().all(|p| p.contains("caption")), "only the captions list and file: {hits:?}");
+    assert_eq!(j(v.downloads_json())["downloads"][0]["captions"][0]["language"], "en");
+
+    // nothing missing: nothing fetched but the list
+    let r = j(v.captions_fetch(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    assert_eq!(r["captions"].as_array().unwrap().len(), 1);
+    assert_eq!(v.captions_fetch(&json!({"instance": id, "video": HLS_UUID}).to_string()).unwrap_err().code, "not_found");
+}
+
+#[test]
+fn the_video_page_lists_the_stream_qualities() {
+    let (_t, _m, v, id) = setup("qualities");
+    let d = j(v.get(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    let q = d["stream"]["qualities"].as_array().unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0]["key"].as_str().unwrap(), q[0]["format"].as_str().unwrap()), ("608", "mp4"));
+    assert!(q[0]["url"].as_str().unwrap().ends_with("-608.mp4"));
+}
+
+#[test]
+fn a_private_video_signed_in_has_its_qualities_with_the_file_token() {
+    let (_t, m, v, id) = setup("private-q");
+    m.knobs.lock().unwrap().private_hls = true;
+    let d = j(v.get(&json!({"instance": id, "video": HLS_UUID, "token": "A1"}).to_string()));
+    let q = d["stream"]["qualities"].as_array().unwrap();
+    assert_eq!(q.len(), 1, "the 720p file has no sound; 360p plays");
+    assert_eq!(q[0]["key"], "360");
+    assert!(q[0]["url"].as_str().unwrap().ends_with("360-fragmented.mp4?videoFileToken=FT1"));
+    assert_eq!(d["stream"]["qualities_expire"], "2026-01-01T00:00:00.000Z");
+    assert!(m.hits_for("/token").iter().any(|h| h.method == "POST" && h.header("Authorization") == Some("Bearer A1")));
+}
+
+#[test]
+fn sign_in_methods_from_the_site_config_and_an_external_sign_in() {
+    let (_t, m, v, id) = setup("auth");
+    let methods = |cfg: Option<Value>| {
+        m.knobs.lock().unwrap().auth_config = cfg;
+        j(v.auth_methods(&json!({"instance": id}).to_string()))
+    };
+    let gitlab = json!({"npmName": "peertube-plugin-auth-openid-connect", "name": "auth-openid-connect", "version": "1.2.0", "authName": "openid-connect", "authDisplayName": "GitLab"});
+    let saml = json!({"npmName": "peertube-plugin-auth-saml2", "name": "auth-saml2", "version": "0.4.1", "authName": "saml2", "authDisplayName": "University login"});
+
+    // only the site's own accounts (a recorded config from before these fields, and an empty list)
+    let a = methods(None);
+    assert_eq!((a["password"].as_bool().unwrap(), a["external"].as_array().unwrap().len()), (true, 0));
+    let a = methods(Some(json!({"plugin": {"registered": [], "registeredExternalAuths": [], "registeredIdAndPassAuths": []}})));
+    assert_eq!((a["password"].as_bool().unwrap(), a["external"].as_array().unwrap().len()), (true, 0));
+
+    // both: external methods and the password form
+    let a = methods(Some(json!({"plugin": {"registeredExternalAuths": [gitlab, saml], "registeredIdAndPassAuths": []},
+                                "client": {"menu": {"login": {"redirectOnSingleExternalAuth": false}}}})));
+    assert!(a["password"].as_bool().unwrap());
+    assert_eq!(a["external"][0]["display_name"], "GitLab");
+    assert_eq!(a["external"][0]["url"], format!("{}/plugins/auth-openid-connect/1.2.0/auth/openid-connect", m.url()));
+    assert_eq!(a["external"][1]["display_name"], "University login");
+    assert_eq!(a["return_prefix"], format!("{}/login", m.url()));
+
+    // only external: one method and the site sends its users straight to it
+    let a = methods(Some(json!({"plugin": {"registeredExternalAuths": [gitlab]}, "client": {"menu": {"login": {"redirectOnSingleExternalAuth": true}}}})));
+    assert!(!a["password"].as_bool().unwrap());
+    assert_eq!(a["external"].as_array().unwrap().len(), 1);
+
+    // the one-time token from the redirect is traded for the usual tokens, which refresh as usual
+    let t = j(v.login(&json!({"instance": id, "username": "bob", "external_auth_token": "EXT1"}).to_string()));
+    assert_eq!((t["access_token"].as_str().unwrap(), t["refresh_token"].as_str().unwrap()), ("A1", "R1"));
+    let form = m.hits_for("/api/v1/users/token").last().unwrap().body.clone();
+    assert!(form.contains("grant_type=password") && form.contains("externalAuthToken=EXT1") && form.contains("username=bob") && !form.contains("password="));
+    let r = j(v.refresh(&json!({"instance": id, "refresh_token": "R1"}).to_string()));
+    assert_eq!(r["access_token"], "A2");
+    // a used or expired token: auth_failed, the person signs in again
+    let e = v.login(&json!({"instance": id, "username": "bob", "external_auth_token": "OLD"}).to_string()).unwrap_err();
+    assert_eq!(e.code, "auth_failed");
+    // neither a password nor a token
+    assert_eq!(v.login(&json!({"instance": id, "username": "bob"}).to_string()).unwrap_err().code, "bad_json");
 }

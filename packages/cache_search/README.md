@@ -22,12 +22,19 @@ build machine (cargo is found in `$CARGO_HOME/bin` or `~/.cargo/bin`). Only arm6
 (every phone); for the emulator add `-PcacheSearchAbis=arm64-v8a,x86_64` to the Gradle command line. An ABI
 without the core still runs; Search then says it is not available. The Rust release profile is always used.
 
+## iOS build
+
+iPhone only (device, `aarch64-apple-ios`; no simulator slice). `ios/build-core.sh <libzim-build-dir>` builds the Rust
+core as a static library (`ios/native/libcache_search.a`), unpacks Kiwix's CoreKiwix.xcframework as
+`ios/native/libCoreKiwix.a` and builds Valhalla (`libcache_valhalla.a`); run it on a Mac with Xcode and the
+`aarch64-apple-ios` Rust target before `pod install`. `ios/cache_search.podspec` links the three libraries into the app
+(`ios: ffiPlugin: true` in `pubspec.yaml`), and `FfiCsNative.open` finds the C ABI with `DynamicLibrary.process()`.
+The TestFlight workflow (`.github/workflows/ios-testflight.yml`) runs the same steps.
+
 ## Other platforms (TODO)
 
-* iOS: build `aarch64-apple-ios` (and the simulator targets) as a static library or xcframework, add a podspec
-  and `ios: ffiPlugin: true` to `pubspec.yaml`. `FfiCsNative.open` already uses `DynamicLibrary.process()`.
 * Windows: build `cache_search.dll` (the Qdrant Edge dependency has to be checked there) and add
   `windows: ffiPlugin: true`.
 
-Until then those apps build without the core and `SearchCore.open` throws a `CacheSearchException`/error that
+Until then the app builds there without the core and `SearchCore.open` throws a `CacheSearchException`/error that
 the app shows as "Search is not available".

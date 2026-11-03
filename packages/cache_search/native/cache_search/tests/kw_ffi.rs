@@ -523,6 +523,12 @@ fn saved_video_captions_build_publish_attach_search_cite_read_and_resume() {
     assert!(t1 > t0 && t1 - t0 <= 45.0, "{t0} {t1}");
     assert_eq!(c.lang.as_deref(), Some("en"));
     assert!(c.quote.as_ref().unwrap().contains("sandbag barriers"));
+    // the result itself carries where it opens, as the citation does (the app's Home search opens it with these)
+    assert_eq!(first["link"].as_str(), c.link.as_deref(), "{first}");
+    assert_eq!(first["time"].as_f64(), Some(t0), "{first}");
+    assert_eq!(first["time_end"].as_f64(), Some(t1), "{first}");
+    assert_eq!(first["lang"], "en");
+    assert_eq!(first["quote"].as_str(), c.quote.as_deref());
     assert_eq!(
         title,
         format!("Flood Safety Basics, at {:02}:{:02}", t0 as u64 / 60, t0 as u64 % 60)
@@ -658,27 +664,20 @@ fn cancelling_keeps_the_build_and_a_later_run_continues() {
     p["hold_ms"] = json!(30_000);
     let j = start(p.clone());
     let t0 = Instant::now();
-    let mut phases: Vec<String> = Vec::new();
+    // wait until the job holds in the merge phase (the hold keeps it there); the phases it went through are the job's own
+    // record ("phases" in the progress JSON), not what a poll happened to see: "read" can be over between two polls
     loop {
         let pr: Value = serde_json::from_str(&j.progress_json()).unwrap();
-        if let Some(ph) = pr["phase"].as_str() {
-            if phases.last().map(String::as_str) != Some(ph) {
-                phases.push(ph.to_string());
-            }
-            if ph == "merge" {
-                break;
-            }
+        if pr["phase"] == "merge" {
+            break;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(60),
-            "never reached the merge: {phases:?}"
-        );
+        assert!(t0.elapsed() < Duration::from_secs(60), "never reached the merge: {pr}");
         std::thread::sleep(Duration::from_millis(5));
     }
     j.cancel();
     let p1 = wait(&j);
     assert_eq!(p1["state"], "cancelled", "{p1}");
-    assert_eq!(phases, ["read", "index", "merge"], "the phases in order");
+    assert_eq!(p1["phases"], json!(["read", "index", "merge"]), "the phases in order: {p1}");
     let src_dir = idx.join("captions").join(format!("{HOST}%2F{VIDEO}"));
     assert!(src_dir.join(".build").is_dir() && snap_dirs(&src_dir).is_empty());
     p.as_object_mut().unwrap().remove("hold_ms");
@@ -799,6 +798,9 @@ fn zim_captions_skip_hls_pair_videos_and_cite_the_zim() {
     );
     assert_eq!(c.lang.as_deref(), Some("en"));
     assert!(c.time_end.is_some() && c.quote.as_ref().unwrap().contains("sandbag barriers"));
+    assert_eq!(first["link"].as_str(), c.link.as_deref(), "{first}");
+    assert_eq!(first["time"].as_f64(), c.time.as_ref().and_then(|t| t.as_f64()), "{first}");
+    assert_eq!(first["lang"], "en");
     // a caption without a video: the citation names the caption entry
     let r = search(&mut h, "generator safety", json!({"kinds": ["zim-captions"]}));
     let g = r["results"][0]["address"].as_str().unwrap().to_string();
@@ -941,6 +943,9 @@ fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
     assert!(frag.starts_with("cache-b"), "{frag}");
     assert!(c.quote.as_ref().unwrap().contains("wildfire"));
     assert!(c.time.is_none());
+    assert_eq!(first["link"].as_str(), Some(link.as_str()), "{first}");
+    assert_eq!(first["quote"].as_str(), c.quote.as_deref());
+    assert!(first.get("time").is_none() && first.get("lang").is_none(), "{first}");
     // read: the chapter around the passage, with its heading
     let read: Value = serde_json::from_str(&h.read(&addr, 6000).unwrap()).unwrap();
     assert_eq!(read["title"], "Field Guide, Wildfire");

@@ -83,7 +83,7 @@ pub trait WebSearchProvider: Send + Sync {
     }
 }
 
-/// Kagi's search API (v1): `POST` with a JSON body and `Authorization: Bearer <key>`. It matches the request AIDA uses in
+/// Kagi's search API (v1): `POST` with a JSON body and `Authorization: Bearer <key>`. It matches the request the reference assistant uses in
 /// production (Open WebUI kagi.py); the invalid-key answer is live-verified (2026-10-26), a valid search is not. Tested against a local stand-in server.
 #[derive(Debug)]
 pub struct KagiProvider {

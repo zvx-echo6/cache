@@ -10,6 +10,7 @@ import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/places.dart';
+import '../../notebook/sync/connections.dart';
 import '../../theme.dart';
 import 'field_inputs.dart';
 import 'quick_add_sheet.dart' show deleteWithUndo;
@@ -18,7 +19,11 @@ import 'quick_add_sheet.dart' show deleteWithUndo;
 /// formatted as it is typed; a checklist is `- [ ]` lines in it); then only what applies: the notebook's fields when it has
 /// some, photos, the documents once something is attached, the place, Private. Saves as you type: a new entry is an unfinished draft until Done; [x] keeps it.
 class EntryEditor extends StatefulWidget {
-  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.at, this.now = DateTime.now});
+  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.at, this.now = DateTime.now, this.connections});
+
+  /// Obsidian and Logseq: an entry imported from a note by its tag offers "Stop syncing this note"; one that stopped shows the
+  /// sync-off icon. Null leaves both out.
+  final NotebookConnections? connections;
 
   final NotebookState notebook;
   final Notebook book;
@@ -145,6 +150,24 @@ class _EntryEditorState extends State<EntryEditor> {
 
   Future<void> _delete() async {
     final id = _id;
+    final from = id == null ? null : widget.connections?.importedFrom(id);
+    if (from != null) {
+      // A note imported from Obsidian or Logseq: what happens to the note is said first.
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const ValueKey('delete-imported'),
+          title: const Text('Delete this entry?'),
+          content: Text('It is removed from Cache. The note in $from stays and loses its Cache ID. '
+              'Cache does not add it again unless you delete the line "cachesync: off" from it.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(key: const ValueKey('delete-imported-confirm'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+    }
     _debounce?.cancel();
     final messenger = ScaffoldMessenger.of(context);
     Navigator.pop(context);
@@ -154,6 +177,18 @@ class _EntryEditorState extends State<EntryEditor> {
     }
     final e = await widget.notebook.entry(id);
     if (e != null) await deleteWithUndo(messenger, widget.notebook, e, 'Entry deleted');
+  }
+
+  Future<void> _stopSyncing() async {
+    final id = _id;
+    final c = widget.connections;
+    final from = id == null ? null : c?.importedFrom(id);
+    if (id == null || c == null || from == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final done = await showDialog<bool>(context: context, builder: (_) => StopSyncingDialog(app: from, stop: () => c.stopSyncing(id)));
+    if (done != true || !mounted) return;
+    setState(() {});
+    messenger.showSnackBar(const SnackBar(content: Text('Stopped syncing. The note stays in both.')));
   }
 
   Future<void> _attach() async {
@@ -190,8 +225,12 @@ class _EntryEditorState extends State<EntryEditor> {
             if (!_isNew)
               PopupMenuButton<String>(
                 key: const ValueKey('editor-menu'),
-                onSelected: (_) => _delete(),
-                itemBuilder: (_) => const [PopupMenuItem(value: 'delete', child: Text('Delete'))],
+                onSelected: (v) => v == 'stop' ? _stopSyncing() : _delete(),
+                itemBuilder: (_) => [
+                  if (_id != null && widget.connections?.importedFrom(_id!) != null)
+                    const PopupMenuItem(key: ValueKey('editor-stop-sync'), value: 'stop', child: Text('Stop syncing this note')),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
               ),
           ],
         ),
@@ -210,7 +249,14 @@ class _EntryEditorState extends State<EntryEditor> {
               controller: _title,
               textCapitalization: TextCapitalization.sentences,
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: k.text),
-              decoration: const InputDecoration(hintText: 'Title (optional)', border: InputBorder.none),
+              decoration: InputDecoration(
+                hintText: 'Title (optional)',
+                border: InputBorder.none,
+                suffixIcon: switch (_id == null ? null : widget.connections?.stoppedWith(_id!)) {
+                  final app? => SyncOffIcon(app: app, size: 20),
+                  null => null,
+                },
+              ),
               onChanged: (_) => _changed(),
             ),
             Align(alignment: Alignment.centerRight, child: const MarkdownHelpButton()),
@@ -321,6 +367,82 @@ class _EntryEditorState extends State<EntryEditor> {
         ),
         ),
       ),
+    );
+  }
+}
+
+/// The small sync-off mark of an entry that stopped syncing with Obsidian or Logseq (kept in Cache, unsynced).
+class SyncOffIcon extends StatelessWidget {
+  const SyncOffIcon({super.key, required this.app, this.size = 16});
+
+  final String app;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: 'Not syncing with $app',
+        excludeSemantics: true,
+        child: Tooltip(message: 'Not syncing with $app', child: Icon(Icons.sync_disabled, key: const ValueKey('sync-off'), size: size, color: context.t.secondary)),
+      );
+}
+
+/// "Stop syncing this note?": what happens, then [Stop syncing]; when the folder cannot be reached it says so and offers only
+/// Cancel (never half done). Pops true when done.
+class StopSyncingDialog extends StatefulWidget {
+  const StopSyncingDialog({super.key, required this.app, required this.stop, this.unreachable});
+
+  final String app;
+
+  /// Stops it: null when done, else what is wrong.
+  final Future<String?> Function() stop;
+
+  /// Starts in the unreachable state with this message (renders).
+  final String? unreachable;
+
+  @override
+  State<StopSyncingDialog> createState() => _StopSyncingDialogState();
+}
+
+class _StopSyncingDialogState extends State<StopSyncingDialog> {
+  late String? _error = widget.unreachable;
+  bool _busy = false;
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final err = await widget.stop();
+    if (!mounted) return;
+    if (err == null) {
+      Navigator.pop(context, true);
+    } else {
+      setState(() {
+        _busy = false;
+        _error = err;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return AlertDialog(
+      key: const ValueKey('stop-sync-dialog'),
+      title: const Text('Stop syncing this note?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('The entry stays in Cache. The Cache ID is removed from the note in ${widget.app}, which stays where it is. '
+              'They will no longer change each other.'),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!, key: const ValueKey('stop-sync-error'), style: TextStyle(color: k.emergency)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        if (_error == null) TextButton(key: const ValueKey('stop-sync-confirm'), onPressed: _busy ? null : _go, child: const Text('Stop syncing')),
+      ],
     );
   }
 }

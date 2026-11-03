@@ -1,6 +1,6 @@
-# Generates oracle fixtures by running navi's own code (read-only copy in ./navi) on synthetic worlds.
+# Generates oracle fixtures by running the reference server's own code (read-only copy in ./ref) on synthetic worlds.
 import sys, json, math, os
-sys.path.insert(0, 'navi')
+sys.path.insert(0, 'ref')
 import types
 def stub(name, **attrs):
     m = types.ModuleType(name); m.__dict__.update(attrs); sys.modules[name] = m; return m

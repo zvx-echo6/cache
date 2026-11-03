@@ -55,9 +55,15 @@ void main() {
         RejectedSnapshot(kind: 'zim-pdf', sourceId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8', buildId: 'b-7', reason: 'format'),
         RejectedSnapshot(kind: 'library', sourceId: 'guide@2', buildId: 'b-1'),
         RejectedSnapshot(kind: '', sourceId: 'x', buildId: 'y'),
+        // As e541cb2 gives it: the path the core wrote, the source id encoded as a folder name.
+        RejectedSnapshot(kind: 'captions', sourceId: 'p.example/v1', buildId: 'b-2', path: 'captions/p.example%2Fv1/snap/b-2'),
+        // The region engine's tile indexes record theirs in the same file (9030b15): they come through as they are.
+        RejectedSnapshot(kind: 'region-index', sourceId: '2026-10', buildId: 'b-3', path: 'region-index/2026-10/snap/b-3'),
       ]),
-      ['library/guide@2/snap/b-1', 'zim-pdf/6ba7b810-9dad-11d1-80b4-00c04fd430c8/snap/b-7'],
+      ['captions/p.example%2Fv1/snap/b-2', 'library/guide@2/snap/b-1', 'region-index/2026-10/snap/b-3', 'zim-pdf/6ba7b810-9dad-11d1-80b4-00c04fd430c8/snap/b-7'],
     );
+    // The path built here matches the core's for the same snapshot.
+    expect(indexesNeverFetch(const [RejectedSnapshot(kind: 'captions', sourceId: 'p.example/v1', buildId: 'b-2')]), ['captions/p.example%2Fv1/snap/b-2']);
   });
 
   test("Tantivy's hidden files in a snapshot travel (its manifest lists .managed.json)", () {

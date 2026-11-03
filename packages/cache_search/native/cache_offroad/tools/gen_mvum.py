@@ -1,5 +1,5 @@
 import sys, json, gzip
-sys.path.insert(0, 'navi')
+sys.path.insert(0, 'ref')
 import types
 for n in ['psycopg2','rasterio','pmtiles','pmtiles.reader']:
     pass

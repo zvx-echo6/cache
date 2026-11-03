@@ -90,7 +90,7 @@ char *cs_version(void);
  *   "layers": {"dir": ".../layers",                  optional: the map layer engine (cs_layers_*, DESIGN-LAYERS.md);
  *              "defs_dirs": [".../layer-defs"],      read-only folders of definition files (the starter ones)
  *              "catalogue_urls": ["https://..."],    optional; JSON lists of definitions fetched by cs_layers_refresh and merged with
- *                                                    the starter ones. Default ["https://cache.echo6.co/catalogue.json"]; [] = none
+ *                                                    the starter ones. Default ["https://data.cached.info/catalogue.json"]; [] = none
  *              "cache_max_bytes": 268435456,         optional cap of the viewed-tile cache (default 256 MiB)
  *              "online": true}                       optional, default true; false = never use the network
  *   "notebook": {"db_path": ".../notebook/notebook.sqlite",  optional: the Notebook (cs_notebook); photos are files in
@@ -191,7 +191,17 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
  * thread ("opening":true until ready). "updating" is false for everything else.
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
- * "indexed":false and its "error"; the other sources work normally. */
+ * "indexed":false and its "error"; the other sources work normally.
+ * With an indexes_dir the object also has "rejected_snapshots":[{"kind","source_id","build_id","reason","at","path"}]: the
+ * snapshots this device removed or refused, read from its own file <indexes_dir>/.local/rejected.json. "path" is the folder
+ * relative to indexes_dir ("<kind>/<source id>/snap/<build id>"). The app adds these paths to the receiver's exclude list of
+ * the indexes share, so sync does not fetch a snapshot back from a peer that still has it (deletions do not sync).
+ * <indexes_dir>/.local/ is device-local and must never be synced (add it to the share's exclusions). The core writes to it
+ * when, with a usable snapshot of a source in use, it removes (on this device only): a usable duplicate or older snapshot
+ * (reason "superseded: ..."), a snapshot it cannot use (reason "incompatible: ..." for another format, Tantivy version,
+ * tokenizer or chunker; "failed verify: ..."; "is the <kind> snapshot of <id>"), or one that never completed: a snapshot that
+ * is still arriving (no manifest yet, a listed file missing or short) stays until it is complete, or until nothing in it has
+ * changed for 24 hours (reason "incomplete, unchanged for N s"). The list keeps the latest 2000 entries. */
 char *cs_status(cs_handle *h);
 
 /* Last error on this handle: {"code","message"}, or NULL if none.
@@ -224,6 +234,13 @@ void cs_close(cs_handle *h);
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
  *          "page", the printed label; no other result has that key)
+ *          (a caption or EPUB result, address "cap:", "zimcap:" or "zimepub:", also has where it opens, as its citation:
+ *          "link" (the video, or the EPUB chapter with its "#cache-b<n>" anchor), "quote" (the passage's first words), and for
+ *          a caption "time" and "time_end" (seconds) and "lang" when known; never shown to the model)
+ *          (the snippet of a PDF, caption or EPUB result is cut around the part of the piece that matches the query best, from the
+ *          start of its sentence where that fits, at most the same length as before; the start of the piece when nothing
+ *          matches or when the piece is short. Results with the same title and the same snippet are one, the first, across
+ *          all sources; the dropped ones do not count toward "k" or "offset", so paging continues where it ended)
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 
@@ -808,7 +825,8 @@ char *cs_map_progress(cs_handle *h, const char *request_json);
  *   <manifest> = {"version":1,"instance","instance_url","id","uuid","short_uuid","title","description","channel":<channel>,
  *                "duration_s","published_at","kind":"video"|"audio","resolution":"480"|"audio","resolution_label",
  *                "source":"web"|"hls"|"hls+audio","size","sha256","checksum_verified":null|"playlist","file",
- *                "thumbnail":null|name,"captions":[{"language","label","automatic","file"}],"warnings":[...],
+ *                "thumbnail":null|name,"captions":[{"language","label","automatic","file"}],
+ *                "missing_captions":[{"language","label","automatic"}] (captions the instance has that did not save),"warnings":[...],
  *                "downloaded_at", and, added when listed: "dir","path","thumbnail_path","captions"[i]."path"} */
 
 /* {"instances":[{"id","url","name","version","added_at"}]} */
@@ -827,8 +845,21 @@ char *cs_video_instance_remove(cs_handle *h, const char *request_json);
  * request_json: {"instance","username","password","otp"?}. Returns {"instance","token_type","access_token",
  * "refresh_token","expires_in","refresh_token_expires_in"}; the caller stores them. The password is used for this
  * call only and is never in an error message. Wrong credentials: "auth_failed"; "otp_required" when the account
- * has two-factor login and "otp" was not given. */
+ * has two-factor login and "otp" was not given.
+ * External sign-in (an auth plugin such as OpenID Connect): {"instance","username","external_auth_token"} in place of the
+ * password, with the one-time externalAuthToken and username the site's /login page receives when the plugin's auth page
+ * (cs_video_auth_methods) finishes; traded with grant_type=password and externalAuthToken (PeerTube's documented flow).
+ * The token lives 5 minutes and is used once: an expired or used one is "auth_failed". */
 char *cs_video_login(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance"}. How the site lets people sign in, from its public GET /api/v1/config:
+ * {"instance","password":bool,"external":[{"name","version","auth_name","display_name","url"}],"return_prefix"}.
+ * "external" is plugin.registeredExternalAuths, each with its auth page /plugins/<name>/<version>/auth/<authName> (as the
+ * site's web client builds it) and the site's own authDisplayName; "password" is false only when the site sends its users
+ * straight to its single external method (client.menu.login.redirectOnSingleExternalAuth with exactly one), as its own
+ * login page does; "return_prefix" is the site's /login page, where a finished external sign-in comes back with
+ * ?externalAuthToken=...&username=... (or ?externalAuthError=true). */
+char *cs_video_auth_methods(cs_handle *h, const char *request_json);
 
 /* request_json: {"instance","refresh_token"}. Same answer as cs_video_login (the refresh token changes too). */
 char *cs_video_refresh(cs_handle *h, const char *request_json);
@@ -854,8 +885,14 @@ char *cs_video_search(cs_handle *h, const char *request_json);
  *  "nsfw","tags","channel":<channel>,"thumbnail","preview","download_enabled":bool,
  *  "captions":[{"language","label","automatic","url"}],
  *  "options":[{"key","label","kind":"video"|"audio","size":null|bytes,"source":"web"|"hls"|"hls+audio"}],
- *  "stream":{"hls":null|url,"mp4":null|url,"needs_auth":bool},
+ *  "stream":{"hls":null|url,"mp4":null|url,"needs_auth":bool,"qualities":[{"key":"720","label","url","format":"mp4"|"hls"}],
+ *            "qualities_expire":null|"<ISO time>"},
  *  "downloaded":null|{"kind","resolution","size","downloaded_at"}}
+ * "qualities" are the stream's resolutions with sound, high to low: the web video MP4, else the HLS file's own playlist of
+ * that resolution when the instance gives one, else the HLS playlist's fragmented MP4. A video whose files need a token
+ * (needs_auth) has them only when "token" is given: the core asks POST /api/v1/videos/{id}/token for PeerTube's file token
+ * and adds videoFileToken (and reinjectVideoFileToken for a playlist) to each address; "qualities_expire" is when that file
+ * token expires (ask cs_video_get again after it). Without a token such a video has none.
  * "options" are the download choices, resolutions high to low then "audio" (audio only, only when the instance has an
  * audio-only file), with the size to show before downloading. For one resolution the file is chosen like this: a web-video
  * MP4 if there is one; else the HLS playlist's fragmented MP4 (a downloadable file) when it has sound; else, on
@@ -873,6 +910,12 @@ char *cs_video_downloads(cs_handle *h);
 /* request_json: {"instance","video"}. Deletes the downloaded video's files (and a half-finished download of it).
  * {"deleted":"<uuid>","instance","freed_bytes"}, or "not_found". */
 char *cs_video_delete(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","video","token"?}. Fetches again only the caption files a downloaded video is missing (a caption
+ * that failed to save is a "caption <lang> not saved: ..." warning in its manifest); the video file is not fetched. The
+ * manifest is rewritten with the captions it now has, the warnings of the ones that saved dropped and a new warning for one
+ * that failed again. Answers the <manifest> as cs_video_downloads lists it, or "not_found" when it is not downloaded. */
+char *cs_video_captions_fetch(cs_handle *h, const char *request_json);
 
 /* Citations: where to open a video at a time. request_json: {"video":"<link|uuid|short uuid>","instance"?:"<id|address>",
  * "offset_s"?:12.5,"token"?}. "video" may be a PeerTube link (/w/<id>, /videos/watch/<id>, /videos/embed/<id>; a start= or t=
@@ -1104,7 +1147,9 @@ cs_job *cs_job_start(const char *kind, const char *params_json);
 /* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"},
  *  "duty":{"work_ms","idle_ms","threads"},"effective":{"work_ms","idle_ms","threads"},"auto":bool,"paused":bool}
  * layer_download jobs add "detail":{"bytes":N} (bytes written so far). "duty" is what the app set, "effective" adds the
- * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. */
+ * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. A job that reports "phase"
+ * also has "phases":["read","index",...]: every phase it has entered, in order, so a poller that missed a short one still
+ * sees it. */
 char *cs_job_progress(cs_job *j);
 
 /* --- Job pacing (duty) ---

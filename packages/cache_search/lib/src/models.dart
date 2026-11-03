@@ -41,6 +41,11 @@ class SearchHit {
     required this.sourceTitle,
     this.page,
     this.pdfPage,
+    this.link,
+    this.time,
+    this.timeEnd,
+    this.lang,
+    this.quote,
   });
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
@@ -53,6 +58,11 @@ class SearchHit {
         // A PDF page's printed label may be text ("iv"): only a number is a page here.
         page: j['page'] is int ? j['page'] as int : null,
         pdfPage: (j['pdf_page'] as num?)?.toInt(),
+        link: j['link'] is String ? j['link'] as String : null,
+        time: (j['time'] as num?)?.toDouble(),
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
+        quote: j['quote'] is String ? j['quote'] as String : null,
       );
 
   final String address;
@@ -65,6 +75,18 @@ class SearchHit {
 
   /// For a passage of a ZIM's PDF ("zimpdf:" address): the real 1-based PDF page it is on ([page] is the printed label).
   final int? pdfPage;
+
+  /// Where a caption or EPUB hit ("cap:", "zimcap:", "zimepub:") opens, as its citation does: the video (a watch link or a
+  /// `zim:` entry) or the EPUB chapter with its `#cache-b<n>` anchor; null for other hits and from older cores.
+  final String? link;
+
+  /// A caption hit's moment and end in the video, in seconds, and its language code.
+  final double? time;
+  final double? timeEnd;
+  final String? lang;
+
+  /// A caption or EPUB hit's first words, for the place it opens to mark them.
+  final String? quote;
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
@@ -225,13 +247,14 @@ class SourceStatus {
 /// One of cs_status's "rejected_snapshots": a snapshot the core found unusable and removed on this device (kept in
 /// `<indexes_dir>/.local/rejected.json`), which sync then never fetches again.
 class RejectedSnapshot {
-  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason});
+  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason, this.path});
 
   factory RejectedSnapshot.fromJson(Map<String, dynamic> j) => RejectedSnapshot(
     kind: (j['kind'] ?? '') as String,
     sourceId: (j['source_id'] ?? '') as String,
     buildId: (j['build_id'] ?? '') as String,
     reason: j['reason'] as String?,
+    path: j['path'] as String?,
   );
 
   final String kind;
@@ -239,7 +262,11 @@ class RejectedSnapshot {
   final String buildId;
   final String? reason;
 
-  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason};
+  /// The snapshot's folder relative to the indexes folder, as the core writes it: "<kind>/<source id, as a folder name>/snap/
+  /// <build id>".
+  final String? path;
+
+  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason, 'path': path};
 }
 
 /// cs_status's `captionsindex` or `epubindex` of a ZIM: its caption files' or EPUBs' keyword index.
@@ -328,7 +355,7 @@ class CoreSourceError {
 
 /// One number of the conversation's id map.
 class ConversationId {
-  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote});
+  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
 
   factory ConversationId.fromJson(Map<String, dynamic> j) => ConversationId(
         n: j['n'] as int,
@@ -338,6 +365,8 @@ class ConversationId {
         time: (j['time'] as num?)?.toDouble(),
         pdfPage: (j['pdf_page'] as num?)?.toInt(),
         quote: j['quote'] is String ? j['quote'] as String : null,
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
       );
 
   final int n;
@@ -354,7 +383,13 @@ class ConversationId {
   final int? pdfPage;
   final String? quote;
 
-  Map<String, dynamic> toJson() => {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote};
+  /// A caption passage's end (seconds) and language code, when the core gives them (a caption citation opens the player at
+  /// [time] with that language's cue marked). Never part of what the model reads.
+  final double? timeEnd;
+  final String? lang;
+
+  Map<String, dynamic> toJson() =>
+      {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote, 'time_end': ?timeEnd, 'lang': ?lang};
 }
 
 /// What cs_format returns: the exact tool message and the id map so far.

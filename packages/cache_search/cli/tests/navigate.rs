@@ -323,9 +323,9 @@ fn navigate_is_not_offered_without_the_routing_data() {
 }
 
 
-// ---- AIDA's recorded navigate results (cli/tests/fixtures/aida_navigate) ----------------------------------------------
+// ---- the reference assistant's recorded navigate results (cli/tests/fixtures/recorded_navigate) ----------------------------------------------
 
-/// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
+/// The reference assistant's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
 /// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
 const RESULT_ORDER: [&str; 20] = [
     "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
@@ -363,7 +363,7 @@ fn same_types(got: &Value, want: &Value, what: &str) {
     for (k, g) in got.as_object().unwrap() {
         if let Some(w) = want.get(k) {
             if !g.is_null() && !w.is_null() {
-                assert_eq!(kind_of(g), kind_of(w), "{what}.{k}: Cache {g} vs AIDA {w}");
+                assert_eq!(kind_of(g), kind_of(w), "{what}.{k}: Cache {g} vs the reference assistant {w}");
             }
         }
     }
@@ -376,37 +376,37 @@ fn sorted(mut v: Vec<String>) -> Vec<String> {
 
 /// What Cache cannot fill, and why (the values are null, the keys stay):
 ///  county, distance_km (the geocoder's county and distance to the bias point), and the `near` of from_matched / to_matched
-///  (navi's reverse geocode of the end): no places pack yet; kind, street, locality, state of a place given as coordinates.
+///  (the reference server's reverse geocode of the end): no places pack yet; kind, street, locality, state of a place given as coordinates.
 ///  er_tier: only the places pack knows it.  pins, bridge: Meshtastic radio features, not on the phone.
-fn compare_to_aida(example: &str, cache: &Value) {
-    let rec: Value = serde_json::from_str(&std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/aida_navigate").join(example)).unwrap()).unwrap();
-    let aida = &rec["result"];
+fn compare_to_recorded(example: &str, cache: &Value) {
+    let rec: Value = serde_json::from_str(&std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recorded_navigate").join(example)).unwrap()).unwrap();
+    let recorded = &rec["result"];
     assert_eq!(cache["ok"], true, "{example}: {cache}");
     let got = names(cache);
     in_order(&got, &RESULT_ORDER, example);
-    // every key of AIDA's result is in Cache's, except the radio's `pins` and the ones that depend on the route
+    // every key of the reference assistant's result is in Cache's, except the radio's `pins` and the ones that depend on the route
     let conditional = ["pins", "road_steps_omitted", "offroad_steps_omitted", "offroad_mi", "offroad_note", "warnings", "nearest_search"];
-    for k in names(aida) {
+    for k in names(recorded) {
         if !conditional.contains(&k.as_str()) && !["steps", "step_count", "steps_truncated"].contains(&k.as_str()) {
-            assert!(got.contains(&k), "{example}: AIDA has {k}, Cache does not ({got:?})");
+            assert!(got.contains(&k), "{example}: the reference assistant has {k}, Cache does not ({got:?})");
         }
     }
     for k in &got {
-        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start", "traffic"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
+        assert!(recorded.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start", "traffic"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
     }
-    same_types(cache, aida, example);
+    same_types(cache, recorded, example);
     for end in ["from_matched", "to_matched"] {
         in_order(&names(&cache[end]), &PLACE_ORDER, end);
-        // AIDA's `_place` fields, `near` and `snap_distance_m`, plus er_tier when the source has one
+        // The reference assistant's `_place` fields, `near` and `snap_distance_m`, plus er_tier when the source has one
         // (Cache adds `lat` and `lon` to both ends)
-        let mut want: Vec<String> = names(&aida[end]).into_iter().filter(|k| k != "er_tier").collect();
+        let mut want: Vec<String> = names(&recorded[end]).into_iter().filter(|k| k != "er_tier").collect();
         want.extend(["lat".to_string(), "lon".to_string()]);
         let have: Vec<String> = names(&cache[end]).into_iter().filter(|k| k != "er_tier").collect();
         assert_eq!(sorted(have), sorted(want), "{example}.{end}");
-        same_types(&cache[end], &aida[end], end);
+        same_types(&cache[end], &recorded[end], end);
     }
     for c in cache["other_destination_candidates"].as_array().unwrap() {
-        let want: Vec<String> = names(&aida["other_destination_candidates"][0]);
+        let want: Vec<String> = names(&recorded["other_destination_candidates"][0]);
         assert_eq!(sorted(names(c)), sorted(want), "{example}: candidate");
     }
     for m in cache["major_roads"].as_array().unwrap() {
@@ -414,9 +414,9 @@ fn compare_to_aida(example: &str, cache: &Value) {
     }
     assert!(cache.get("steps").is_none(), "turn instructions belong to Maps");
     if let Some(w) = cache.get("warnings") {
-        // AIDA's keys, then the two Cache adds (v2 S4): why that end got no off-road leg
+        // The reference assistant's keys, then the two Cache adds (v2 S4): why that end got no off-road leg
         assert_eq!(names(&w[0]), ["code", "end", "road_point", "gap_m", "reason", "detail"]);
-        if let Some(aw) = aida.get("warnings") {
+        if let Some(aw) = recorded.get("warnings") {
             let mut want = names(&aw[0]);
             want.extend(["reason".to_string(), "detail".to_string()]);
             assert_eq!(sorted(names(&w[0])), sorted(want));
@@ -430,10 +430,10 @@ fn compare_to_aida(example: &str, cache: &Value) {
         assert_eq!(w[0]["detail"], detail, "{example}");
     }
     if let Some(n) = cache.get("offroad_note") {
-        // AIDA's note with the grid size corrected (the z12 pixel grid is ~15 m in the US, not 30 m)
-        let want = aida["offroad_note"].as_str().unwrap().replace("~30 m", "~15 m");
-        assert_ne!(want, aida["offroad_note"].as_str().unwrap(), "{example}: AIDA's note no longer says ~30 m");
-        assert_eq!(n.as_str().unwrap(), want, "{example}: AIDA's note text, grid size corrected");
+        // The reference assistant's note with the grid size corrected (the z12 pixel grid is ~15 m in the US, not 30 m)
+        let want = recorded["offroad_note"].as_str().unwrap().replace("~30 m", "~15 m");
+        assert_ne!(want, recorded["offroad_note"].as_str().unwrap(), "{example}: the reference assistant's note no longer says ~30 m");
+        assert_eq!(n.as_str().unwrap(), want, "{example}: the reference assistant's note text, grid size corrected");
     }
 }
 
@@ -446,7 +446,7 @@ fn results_match_aidas_recorded_navigate_results() {
     let t = Tmp::new("golden");
     let (_, cfg) = config_file(&t, "config.json", Some(routing(true)));
     let mut core = Core::open(&cfg).unwrap();
-    // AIDA's requests with the place names turned into coordinates (Cache has no geocoder yet); values differ, names and types must not
+    // The reference assistant's requests with the place names turned into coordinates (Cache has no geocoder yet); values differ, names and types must not
     let cases: [(&str, Value); 3] = [
         ("offroad-v24-12-t1-h.json", json!({"from": "43.4868,-116.4166", "to": "43.4575,-116.4180", "mode": "drive", "near": "Kuna, Idaho"})),
         ("offroad-v24-18-t1-h.json", json!({"from": "42.1167,-113.6339", "to": "42.0728,-113.7020", "mode": "drive", "near": "Almo, Idaho"})),
@@ -461,10 +461,10 @@ fn results_match_aidas_recorded_navigate_results() {
         }
         // the wire form of the c-abi result itself is `ok:true, n:1` first
         assert_eq!(names(&v)[..2], ["ok", "n"]);
-        compare_to_aida(example, &v);
+        compare_to_recorded(example, &v);
         if v["offroad_mi"].as_f64().unwrap_or(0.0) > 0.0 { kinds.insert("offroad".to_string()); }
     }
-    // the off-road step fields were compared against AIDA's recorded ones somewhere in these routes
+    // the off-road step fields were compared against the reference assistant's recorded ones somewhere in these routes
     assert!(kinds.contains("offroad") || kinds.contains("offroad_follow"), "no off-road legs in any golden route: {kinds:?}");
 
     // the warning example needs a road-only config: the road route stands in for the off-road leg
@@ -477,7 +477,7 @@ fn results_match_aidas_recorded_navigate_results() {
     if let Ok(dir) = std::env::var("NAVIGATE_OUT_DIR") {
         std::fs::write(PathBuf::from(dir).join("golden-warning.json"), serde_json::to_string_pretty(&v).unwrap()).unwrap();
     }
-    compare_to_aida("warning-v25-offroad-v24-01-t1-r.json", &v);
+    compare_to_recorded("warning-v25-offroad-v24-01-t1-r.json", &v);
     assert!(v.get("warnings").is_some(), "{v}");
 }
 

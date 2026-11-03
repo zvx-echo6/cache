@@ -288,7 +288,66 @@ What you get:
 Cache writes your text as you typed it. Each entry's title, date and place go in its properties. Photos are saved too.
 
 - Private notebooks are written like any other, with a private mark in their properties.
+- To bring a note in from Obsidian or Logseq, tag it. See Import notes by tag.
 - If a Logseq graph isn't Markdown, Cache says it can write to Markdown graphs only.
+
+## Import notes by tag
+
+A note you wrote in Obsidian or Logseq can come into Cache when you tag it. This works for Obsidian and for Logseq with a folder of Markdown files. It does not work for "Logseq 2", which is export only.
+
+1. [Open "Notebooks"](cache://notebooks), open its menu and tap "Connections".
+2. Under "Obsidian" or "Logseq", find "Import tag". It says "Notes with this tag are added to Cache." The tag shows on the right. It starts as `#cachesync`.
+3. In Obsidian or Logseq, add that tag to a note. A tag in the text, or in the note's tags property, both count.
+4. Let Cache sync. Cache adds the note as an entry in your Journal. If you have no Journal, it goes to a notebook called Notes.
+5. Cache writes its ID into the note: `cache_id: <id>` in Obsidian, or `cache-id::` in Logseq. From then on the ID decides, not the tag. Changes in either place update the other.
+
+![The Import tag row in Connections.](shot:import-tag-row)
+
+Cache says "Added from Obsidian: [title]." for one note, or `3 notes added from Obsidian`. When all went to one notebook the message has "Show". Tap it to open the notebook.
+
+To choose the notebook, add it after the tag: `#cachesync/Camping` adds the note to the notebook Camping. Cache makes it if it is not there.
+
+To use another tag:
+1. Tap "Import tag".
+2. Type the tag in the field "Import tag". It starts with `#` and has letters, numbers, `-`, `_` or `/`. No spaces. If it is wrong, it says "Use a tag like #cachesync. No spaces." and "Save" stays off.
+3. Tap "Save". Cache says "Import tag is #camping."
+
+![Choose your own import tag.](shot:import-tag-sheet)
+
+To go back, tap "Use #cachesync". Notes already in Cache keep syncing when you change the tag. The row says "Notes already in Cache keep syncing."
+
+To keep a note private in Cache, add `private: true` to its properties in Obsidian. In Logseq, add `private:: true` to the page's or block's properties. The row shows this hint too.
+
+- If a folder can't be written to, the connection says "1 note not added: Cache cannot change it." For several, it says `3 notes not added: Cache cannot change them.`
+- A note is imported once. Cache never changes its text or its own tags.
+
+On a phone, Obsidian sends and receives changes only while the Obsidian app is open. The connection says "On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync." A change made in Cache goes out the next time Obsidian is open on the phone. You do not need to restart anything. Logseq does not show this line.
+
+Do not edit the same note on two devices before it has synced. A change made on a computer can overwrite one made in Cache.
+
+## Stop syncing a note
+
+You can stop an imported note from following its entry. The entry stays in Cache. The note stays in Obsidian or Logseq. They stop changing each other.
+
+1. Open the entry.
+2. Open its menu and tap "Stop syncing this note". It is above "Delete".
+3. The pop-up asks "Stop syncing this note?" It says the Cache ID is removed from the note and they will no longer change each other. Tap "Stop syncing".
+
+![Stop syncing an imported note.](shot:stop-syncing-note)
+
+Cache says "Stopped syncing. The note stays in both." It takes the Cache ID out of the note and writes `cachesync: off` in its place (`cachesync:: off` in Logseq). Cache never imports that note again, even with the tag.
+
+The entry shows a small mark with a line through two arrows. Its label reads "Not syncing with Obsidian", or Logseq.
+
+![An entry that no longer syncs with Obsidian.](shot:note-sync-off)
+
+To start again, delete the line `cachesync: off` from the note. It is imported again at the next sync.
+
+If you delete the Cache ID from a note by hand, that is the same as stopping.
+
+If you delete the entry, the pop-up asks "Delete this entry?" It says the entry is removed from Cache. The note stays and loses its Cache ID. Cache does not add it again unless you delete the line "cachesync: off" from it.
+
+- If Cache can't reach Obsidian or Logseq, the pop-up says "Cache cannot reach Obsidian right now. Try again when it is connected." Only "Cancel" is left. Try later.
 
 ## Manage a connected folder
 

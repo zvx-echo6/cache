@@ -296,7 +296,7 @@ fn place_source_for_navigate() {
     assert_eq!(n.matches[0].place_name, "St. Luke's Boise Medical Center");
     assert_eq!(n.matches[0].er_tier, Some(1));
     assert!((n.matches[0].distance_km.unwrap() - 37.5).abs() < 2.0, "{:?}", n.matches[0].distance_km);
-    // Near Burley the likely hospitals come first, with navi's tier 3.
+    // Near Burley the likely hospitals come first, with the reference server's tier 3.
     let b = src.nearest(&NearestQuery { category: "emergency_room", from: (42.536, -113.792), limit: 2 }).unwrap();
     assert_eq!((b.matches[0].place_name.as_str(), b.matches[0].er_tier), ("Cassia Regional Hospital", Some(3)));
     assert!(src.nearest(&NearestQuery { category: "urgent_care", from: (43.8, -115.8), limit: 2 }).unwrap().matches.is_empty());

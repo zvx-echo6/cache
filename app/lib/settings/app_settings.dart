@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../app_fs.dart';
 
 /// Where connectors are published: the catalogue the app starts with (configurable in Advanced).
-const String kDefaultCatalogueUrl = 'https://cache.echo6.co/connectors/catalogue.json';
+const String kDefaultCatalogueUrl = 'https://data.cached.info/connectors/catalogue.json';
 
 /// The id of "Where I am" among the watched places: the place follows the phone.
 const String kWatchHere = 'here';

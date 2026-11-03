@@ -187,6 +187,10 @@ class CoreDispatcher {
         result = eng().zimPdfs(a['zimId'] as String);
       case 'pdfIndex':
         result = eng().pdfIndex(a['op'] as String, session: (a['session'] as int?) ?? 0, args: (a['args'] as Map?)?.cast<String, dynamic>());
+      case 'hasCaptionsSearch':
+        result = eng().hasCaptionsSearch;
+      case 'captionsSearch':
+        result = eng().captionsSearch((a['request'] as Map).cast<String, dynamic>());
       case 'userLayers':
         result = eng().userLayers(a['call'] as String, a['arg'] as String?);
       case 'placesList':

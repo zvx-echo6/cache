@@ -3,6 +3,19 @@
 The lines the "What's new in 1.0.N" sheet shows once after an update: one "## <version>" heading, then one "- " line each,
 written by the owner (lead words in **bold**). A version with no lines shows no sheet; the app never writes them itself.
 
+## 1.0.30
+- **Search inside your ZIMs:** PDFs, e-books and video captions inside your libraries are now searchable, and answers cite the exact page, chapter or moment.
+- **Built quietly:** Cache makes them searchable on its own in the background, going easy on battery and heat. Settings shows the progress, with a speed choice under Advanced.
+- **Shared between devices:** search and map indexes built on one linked device are used on your others, so each is built only once.
+- **PDF viewer:** read PDFs right in Cache, find text, jump to a page, and turn on dark pages.
+- **Videos, redesigned:** a new player with captions, quality choice, resume where you stopped, and a transcript beside the video on larger screens.
+- **Search your videos:** find saved videos by what's said in them.
+- **Video sites:** sign in with whatever methods your site offers, and play private videos.
+- **No model needed:** Cache works for search and reading without a model; saved chats stay readable, and Ask returns when you add one.
+- **Import notes by tag:** tag a note #cachesync in Obsidian or Logseq to bring it into Cache.
+- **Wide screens:** a layout made for computers and the big iPad sideways.
+- **Fixes:** the Kiwix icon shows correctly; Regions no longer syncs files each device builds for itself; Add to Library no longer appears twice on wide screens.
+
 ## 1.0.29
 - **Emergency alerts:** official IPAWS alerts for your area, along with the weather alerts.
 - **Faster downloads:** region maps download many times faster, with speed and time left shown.

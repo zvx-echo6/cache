@@ -1,5 +1,6 @@
-# Builds Cache for iPhone, signs it and (only when `upload` is ticked) sends it to TestFlight, then hands it to the public
-# testers (the "Public" group: export compliance, "What to test", the group, and beta review when one is needed).
+# Builds Cache for iPhone, signs it and (only when `upload` is ticked) sends it to TestFlight, then hands it to the chosen testers:
+# the "Public" group by default (export compliance, "What to test", the group, and beta review when one is needed), or only the
+# "Family" group for a test build (an internal group that gets every build: export compliance and "What to test", no beta review).
 # Manual trigger only: macOS runner minutes cost about 10x Linux on a private repo.
 #
 # Signing: a distribution certificate and an App Store provisioning profile made with the App Store Connect API (the account has no
@@ -32,6 +33,11 @@ on:
         description: '"What to test" for the testers (empty = the Unreleased section of CHANGELOG.md)'
         type: string
         default: ''
+      group:
+        description: Who gets the uploaded build (Public = the public testers, a release; Family = only the internal Family group, a test build)
+        type: choice
+        options: [Public, Family]
+        default: Public
 
 concurrency:
   group: ios-testflight-${{ github.run_id }}
@@ -87,19 +93,18 @@ jobs:
             done
           fi
           echo "Required configuration is present (secret values are not logged)."
-      # The version is 1.0.<build>, the build number the same on iPhone and Android: pubspec.yaml's "version: 1.0.27+27" is
-      # version 1.0.27, build 27. It is the build number TestFlight gets (not the run number), so it is checked here.
+      # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and build number 31, the same on iPhone and
+      # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
+      # version are two builds), so it is not tied to the version's last number. It is the build number TestFlight gets (not the run
+      # number), and the next step checks it is higher than every one already on TestFlight.
       - name: Version and build number from pubspec.yaml
         id: v
         run: |
           line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
-          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.([0-9]+))\+([0-9]+)\ *$ ]]; then
-            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<build>+<build>, found: $line"; exit 1
+          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\ *$ ]]; then
+            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<patch>+<build number>, as in 1.0.30+31, found: $line"; exit 1
           fi
-          name=${BASH_REMATCH[1]} patch=${BASH_REMATCH[2]} build=${BASH_REMATCH[3]}
-          if [[ "$patch" != "$build" ]]; then
-            echo "::error::The version's last number ($patch) must be the build number ($build), as in 1.0.27+27."; exit 1
-          fi
+          name=${BASH_REMATCH[1]} build=${BASH_REMATCH[2]}
           echo "build_name=$name" >> "$GITHUB_OUTPUT"
           echo "build_number=$build" >> "$GITHUB_OUTPUT"
           echo "version $name, build $build"
@@ -378,7 +383,8 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
           rm -rf "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/private_keys"
 
-  # Every uploaded build goes to the public testers. Waiting for Apple to process the upload runs on Linux, not the Mac.
+  # Every uploaded build goes to the chosen group (Public unless Family was picked). Waiting for Apple to process the upload runs
+  # on Linux, not the Mac.
   public:
     needs: [plan, app]
     if: needs.plan.outputs.upload == 'true'
@@ -389,12 +395,13 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
-      - name: Give the build to the public testers
+      - name: Give the build to the ${{ inputs.group || 'Public' }} testers
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
           WHATS_NEW_INPUT: ${{ inputs.whats_new }}
+          GROUP: ${{ inputs.group || 'Public' }}
         run: |
           export WHATS_NEW="$WHATS_NEW_INPUT"
-          python3 -I packages/cache_search/ios/testflight_public.py "${{ needs.plan.outputs.build_number }}" Public
+          python3 -I packages/cache_search/ios/testflight_public.py "${{ needs.plan.outputs.build_number }}" "$GROUP"

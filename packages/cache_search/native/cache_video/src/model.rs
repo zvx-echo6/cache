@@ -89,6 +89,8 @@ pub struct FileInfo {
     pub hls: bool,
     /// The HLS playlist's `segmentsSha256Url`, when the file belongs to one.
     pub sha_url: Option<String>,
+    /// An HLS file's own playlist of this resolution (`playlistUrl`), when the instance gives it.
+    pub playlist: Option<String>,
 }
 
 impl FileInfo {
@@ -114,6 +116,7 @@ fn file_of(inst: &Instance, f: &Value, hls: bool, sha_url: Option<String>) -> Op
         url: abs(&inst.url, &url),
         hls,
         sha_url,
+        playlist: s(&f["playlistUrl"]).map(|u| abs(&inst.url, &u)),
     })
 }
 
@@ -205,6 +208,42 @@ pub fn mp4_stream(files: &[FileInfo]) -> Option<&FileInfo> {
     web.iter().filter(|f| f.res <= 720).max_by_key(|f| f.res).or_else(|| web.iter().min_by_key(|f| f.res)).copied()
 }
 
+/// The qualities a stream can be played at, high to low: per resolution with sound, the web video's MP4, else the HLS
+/// file's own playlist of that resolution (when the instance gives one), else the HLS playlist's fragmented MP4 of it.
+/// Audio-only files are left out. A video whose files need a token has them only with [file_token] (PeerTube's
+/// `videoFileToken`, added to every address); without one, none.
+pub fn qualities(files: &[FileInfo], d: &Value, file_token: Option<&str>) -> Vec<Value> {
+    let private = needs_auth(d);
+    if private && file_token.is_none() {
+        return vec![];
+    }
+    let with_token = |url: &str, hls: bool| match file_token.filter(|_| private) {
+        Some(t) => {
+            let mut u = format!("{url}{}videoFileToken={}", if url.contains('?') { '&' } else { '?' }, crate::api::enc(t));
+            if hls {
+                u.push_str("&reinjectVideoFileToken=true");
+            }
+            u
+        }
+        None => url.to_string(),
+    };
+    let mut res: Vec<i64> = files.iter().filter(|f| !f.audio_only() && f.has_audio).map(|f| f.res).collect();
+    res.sort_unstable_by(|a, b| b.cmp(a));
+    res.dedup();
+    let mut out = vec![];
+    for r in res {
+        let of_res = || files.iter().filter(move |f| f.res == r && !f.audio_only() && f.has_audio);
+        if let Some(f) = of_res().find(|f| !f.hls) {
+            out.push(json!({"key": r.to_string(), "label": f.label, "url": with_token(&f.url, false), "format": "mp4"}));
+        } else if let Some((f, p)) = of_res().find_map(|f| f.playlist.as_ref().map(|p| (f, p))) {
+            out.push(json!({"key": r.to_string(), "label": f.label, "url": with_token(p, true), "format": "hls"}));
+        } else if let Some(f) = of_res().next() {
+            out.push(json!({"key": r.to_string(), "label": f.label, "url": with_token(&f.url, false), "format": "mp4"}));
+        }
+    }
+    out
+}
+
 pub fn hls_master(d: &Value, inst: &Instance) -> Option<String> {
     d["streamingPlaylists"].as_array()?.iter().find_map(|sp| s(&sp["playlistUrl"])).map(|u| abs(&inst.url, &u))
 }
@@ -225,7 +264,8 @@ pub fn option_json(o: &Opt) -> Value {
 }
 
 /// The video page: details, captions, download options, stream addresses.
-pub fn details(inst: &Instance, d: &Value, captions: &[Value], downloaded: Option<Value>) -> Value {
+/// [file_token]: a private video's file token and when it expires (`POST /api/v1/videos/{id}/token`), for its qualities.
+pub fn details(inst: &Instance, d: &Value, captions: &[Value], downloaded: Option<Value>, file_token: Option<(&str, Option<&str>)>) -> Value {
     let fl = files(inst, d);
     let opts = options(&fl);
     let download_enabled = d["downloadEnabled"].as_bool().unwrap_or(false);
@@ -255,6 +295,8 @@ pub fn details(inst: &Instance, d: &Value, captions: &[Value], downloaded: Optio
             "hls": hls_master(d, inst),
             "mp4": mp4_stream(&fl).map(|f| f.url.clone()),
             "needs_auth": needs_auth(d),
+            "qualities": qualities(&fl, d, file_token.map(|t| t.0)),
+            "qualities_expire": file_token.and_then(|t| t.1),
         },
         "downloaded": downloaded,
     })
@@ -280,7 +322,7 @@ mod tests {
     }
 
     fn f(id: i64, res: i64, size: u64, hls: bool, audio: bool, video: bool) -> FileInfo {
-        FileInfo { id, res, label: format!("{res}p"), size, fps: None, has_audio: audio, has_video: video, url: format!("https://example.org/f/{id}"), hls, sha_url: None }
+        FileInfo { id, res, label: format!("{res}p"), size, fps: None, has_audio: audio, has_video: video, url: format!("https://example.org/f/{id}"), hls, sha_url: None, playlist: None }
     }
 
     #[test]
@@ -339,6 +381,26 @@ mod tests {
         let i = inst();
         assert_eq!(actor(&i, &json!({"name":"a","host":"example.org"}))["handle"], "a");
         assert_eq!(actor(&i, &json!({"name":"a","host":"other.net"}))["handle"], "a@other.net");
+    }
+
+    #[test]
+    fn stream_qualities_high_to_low_mp4_first_then_hls_playlist() {
+        let mut h720 = f(3, 720, 9, true, true, true);
+        h720.playlist = Some("https://example.org/p/720.m3u8".into());
+        let h360_no_playlist = f(4, 360, 3, true, true, true);
+        let fl = vec![f(1, 480, 5, false, true, true), h720, h360_no_playlist, f(5, 0, 1, false, true, false), f(6, 240, 2, false, false, true)];
+        let q = qualities(&fl, &json!({"privacy":{"id":1}}), None);
+        let got: Vec<(String, String)> = q.iter().map(|x| (x["label"].as_str().unwrap().to_string(), x["format"].as_str().unwrap().to_string())).collect();
+        let want = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+        assert_eq!(got, want(&[("720p", "hls"), ("480p", "mp4"), ("360p", "mp4")]), "no sound, audio only: left out");
+        assert_eq!(q[0]["url"], "https://example.org/p/720.m3u8");
+        assert_eq!(q[1]["url"], "https://example.org/f/1");
+        assert_eq!(q[2]["url"], "https://example.org/f/4", "no playlist: the HLS file itself");
+        let private = json!({"privacy":{"id":3}});
+        assert!(qualities(&fl, &private, None).is_empty(), "a private video's files need a token");
+        let q = qualities(&fl, &private, Some("FT1"));
+        assert_eq!(q[0]["url"], "https://example.org/p/720.m3u8?videoFileToken=FT1&reinjectVideoFileToken=true");
+        assert_eq!(q[1]["url"], "https://example.org/f/1?videoFileToken=FT1");
     }
 
     #[test]

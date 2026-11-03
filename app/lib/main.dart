@@ -90,6 +90,7 @@ import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
+import 'video/caption_search.dart' show CoreCaptionSearch;
 import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
 import 'browse/browse_screen.dart';
@@ -194,6 +195,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final VideoState video = VideoState(
     policy: policy,
+    captionSearch: CoreCaptionSearch(() => sources.core),
     indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(

@@ -17,6 +17,7 @@ import '../pdf/pdf_source.dart';
 import '../screens/search_model_line.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
+import '../video/zim_video.dart' show isZimMediaAddress, openZimMediaInPlayer;
 import 'epub_address.dart';
 import 'zim_urls.dart';
 import 'reader_resources.dart';
@@ -755,6 +756,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           final a = addressOfUrl(u);
           if (a != null && isPdfAddress(a)) {
             _openPdfEntry(u.hasFragment ? '$a#${u.fragment}' : a);
+            return NavigationActionPolicy.CANCEL;
+          }
+          // A link to a video entry plays in the app's player (the same one as saved videos, with its captions); a video
+          // inside the page stays in the page.
+          final play = openZimMediaInPlayer;
+          if (a != null && play != null && isZimMediaAddress(a)) {
+            play(a);
             return NavigationActionPolicy.CANCEL;
           }
           // A link to an EPUB entry opens its first chapter here.

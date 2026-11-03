@@ -1,4 +1,4 @@
-//! State and country of a point, from the admin boundaries in navi's admins.sqlite (Valhalla's admin database:
+//! State and country of a point, from the admin boundaries in the reference server's admins.sqlite (Valhalla's admin database:
 //! countries at level 2, states and provinces at level 4, geometry as SpatiaLite blobs). The blobs are decoded here, so
 //! SpatiaLite itself is not needed.
 

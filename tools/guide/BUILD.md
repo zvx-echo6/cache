@@ -9,7 +9,24 @@ The version is the build date, `YYYY-MM-DD` (add a letter, `2026-10-30b`, for a 
 `cache-library.json` as `version` and in the file name: `cache-guide-<version>.cache-library`. The `library_id` is always
 `cache-guide`, so a newer version replaces the old one on the phone. Never overwrite an earlier build's files.
 
-## What you need
+## In GitHub Actions (the usual way)
+
+Build it on a runner, not on a shared machine: run the **Guide library** workflow (`.github/workflows/guide-library.yml`)
+by hand on the branch that has the chapters, with the version as its input:
+
+    gh workflow run guide-library.yml --ref <branch> -f version=YYYY-MM-DD
+
+Until the workflow is on the default branch (`main`), GitHub cannot run it by hand: push the commit to a branch named
+`guide-library-YYYY-MM-DD` instead (the version is taken from the name), and delete that branch after.
+
+It does every step below on Linux: it builds `libcache_llama.so` (CPU) from `packages/cache_llama/src` and the Linux `cs`,
+downloads bge-m3 and checks its sha256, then splits, embeds, assembles, writes the snapshot, packages, unpacks, indexes and
+runs `verify.py`; a failed check fails the run. The artifact `cache-guide-<version>` holds `cache-guide-<version>.cache-library`
+(what is published and shipped), the uncompressed `.tar`, `cache-library.json`, `sha256.txt`, `verify.txt` and the
+`manifest.json`. Fetch it with `gh run download <run id> -n cache-guide-<version>`. The workflow commits and publishes nothing.
+
+## What you need (by hand)
+
 
 - Python 3 (`-I` is used below so no stray module is loaded).
 - A Windows machine with a Cache command-line build folder (`BIN`): `cs.exe`, `cache_llama.dll` and a working config
@@ -31,6 +48,8 @@ Set `W` to an empty work folder and `OUT` to where the library is kept.
 2. Embed each section (writes `text_vec` and `title_text_vec` for every section):
 
        python -I tools/guide/embed_guide.py --bin-dir BIN --model MODEL W/manifest.json W/vectors.json
+
+   On Linux, pass the library itself instead of the folder: `--lib path/to/libcache_llama.so`.
 
 3. Make the points. The library uses the `title_text_vec` embedding, the embedding of "title, blank line, text":
 

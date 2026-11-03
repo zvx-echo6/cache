@@ -54,7 +54,32 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       }).catchError((_) {});
     }
     nb.start();
+    widget.deps.connections?.addListener(_onSync);
     widget.deps.connections?.syncAll();
+  }
+
+  @override
+  void dispose() {
+    widget.deps.connections?.removeListener(_onSync);
+    super.dispose();
+  }
+
+  /// Notes imported from Obsidian or Logseq by their tag: "2 notes added from Obsidian" [Show].
+  void _onSync() {
+    final c = widget.deps.connections;
+    if (c == null || !mounted) return;
+    final news = c.takeImported();
+    if (news.isEmpty) return;
+    final titles = [for (final x in news) ...x.titles];
+    final apps = {for (final x in news) x.app}.join(' and ');
+    final books = {for (final x in news) ...x.books};
+    final book = books.length == 1 ? nb.notebook(books.single) : null;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      key: const ValueKey('imported-snack'),
+      persist: false,
+      content: Text(titles.length == 1 ? 'Added from $apps: ${titles.single}.' : '${titles.length} notes added from $apps'),
+      action: book == null ? null : SnackBarAction(label: 'Show', onPressed: () => _open(book)),
+    ));
   }
 
   /// The shelf's context inside the two panes (a tablet opens a notebook beside the shelf).

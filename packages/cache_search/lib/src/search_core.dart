@@ -198,6 +198,13 @@ class SearchCore {
   Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
       _map('pdfIndex', {'op': op, 'session': session, 'args': args});
 
+  /// True when the core has cs_captions_search.
+  Future<bool> hasCaptionsSearch() async => (await _call('hasCaptionsSearch')) as bool;
+
+  /// Saved videos and ZIM videos matched by caption text (cs_captions_search): {"videos":[...]}.
+  Future<Map<String, dynamic>> captionsSearch(String query, {int? k, String? lang}) =>
+      _map('captionsSearch', {'request': {'query': query, 'k': ?k, 'lang': ?lang}});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 

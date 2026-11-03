@@ -1,0 +1,155 @@
+// Home search's Library part: ZIM pages, PDF passages, words said in videos (caption hits) and EPUB passages, each with
+// its row text and where tapping it opens.
+import 'dart:io';
+
+import 'package:cache/search/app_search_providers.dart';
+import 'package:cache_search/cache_search.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'browse/fakes.dart';
+
+const _uuid = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+/// Sources whose core answers every search with [hits].
+class _Searched extends FakeSources {
+  _Searched(super.dir, this.hits);
+
+  final List<Map<String, dynamic>> hits;
+
+  @override
+  bool get coreReady => true;
+
+  @override
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+      SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
+}
+
+void main() {
+  late Directory dir;
+  setUp(() => dir = Directory.systemTemp.createTempSync('library-search'));
+  tearDown(() => dir.deleteSync(recursive: true));
+
+  final page = {
+    'address': 'zim:$_uuid/A/Water_purification',
+    'title': 'Water purification',
+    'snippet': 'Boil it.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Wikipedia Medicine',
+    'page': null,
+  };
+  final pdf = {
+    'address': 'zimpdf:$_uuid/Manuals/water.pdf@3',
+    'title': 'Water and Shelter Handbook, p. 47',
+    'snippet': 'Bring it to a rolling boil.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Survival Library',
+    'page': 47,
+    'pdf_page': 49,
+  };
+  final savedCaption = {
+    'address': 'cap:tube.example.org/0a1b2c3d/captions-en.vtt@12',
+    'title': 'Knots every camper should know, at 01:04',
+    'snippet': 'It makes a loop that will not slip.',
+    'source_id': 'tube.example.org/0a1b2c3d',
+    'source_kind': 'video',
+    'source_title': 'Knots every camper should know',
+    'page': null,
+    'link': 'https://tube.example.org/w/0a1b2c3d',
+    'time': 64,
+    'time_end': 70.5,
+    'lang': 'en',
+    'quote': 'It makes a loop',
+  };
+  final zimCaption = {
+    'address': 'zimcap:$_uuid/Media/knots_en.srt@4',
+    'title': 'Knots, at 00:12',
+    'snippet': 'A loop that will not slip.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Field Skills Videos',
+    'page': null,
+    'link': 'zim:$_uuid/Media/knots.mp4',
+    'time': 12,
+    'lang': 'en',
+    'quote': 'A loop that',
+  };
+  final epub = {
+    'address': 'zimepub:$_uuid/Books/guide.epub@7',
+    'title': 'Field Guide, Wildfire',
+    'snippet': 'Clear a firebreak.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Survival Library',
+    'page': null,
+    'link': 'zim:$_uuid/Books/guide.epub!/OEBPS/ch2.xhtml#cache-b12',
+    'quote': 'Clear a firebreak around',
+  };
+
+  test('every kind of hit is a row with plain text: the page once, the collection as the second line', () async {
+    final p = LibrarySearchProvider(
+      sources: _Searched(dir, [page, pdf, savedCaption, zimCaption, epub]),
+      openZim: (_) {},
+      openAddress: (_) {},
+      openVideo: (_, _, _) {},
+      openPassage: (_, _) {},
+    );
+    final rows = await p.search('water');
+    expect([for (final r in rows) (r.title, r.detail)], [
+      ('Water purification', 'Wikipedia Medicine'),
+      ('Water and Shelter Handbook, p. 47', 'Survival Library'),
+      // a saved video's name begins its title: not said twice
+      ('Knots every camper should know, at 01:04', ''),
+      ('Knots, at 00:12', 'Field Skills Videos'),
+      ('Field Guide, Wildfire', 'Survival Library'),
+    ]);
+    expect(rows.every((r) => r.module == 'Library'), isTrue);
+  });
+
+  test('a page opens in the reader, a PDF passage at its real PDF page', () async {
+    final opened = <String>[];
+    final p = LibrarySearchProvider(sources: _Searched(dir, [page, pdf]), openZim: (_) {}, openAddress: opened.add);
+    for (final r in await p.search('water')) {
+      r.open();
+    }
+    expect(opened, ['zim:$_uuid/A/Water_purification', 'zim:$_uuid/Manuals/water.pdf#page=49']);
+  });
+
+  test('a caption hit opens the video at its moment, in its language (a saved video and a ZIM video)', () async {
+    final played = <(String, double, String?)>[];
+    final p = LibrarySearchProvider(
+      sources: _Searched(dir, [savedCaption, zimCaption]),
+      openZim: (_) {},
+      openAddress: (_) => fail('a caption hit is not a reader page'),
+      openVideo: (link, time, lang) => played.add((link, time, lang)),
+      openPassage: (_, _) => fail('a caption hit is not a passage'),
+    );
+    for (final r in await p.search('loop')) {
+      r.open();
+    }
+    expect(played, [('https://tube.example.org/w/0a1b2c3d', 64.0, 'en'), ('zim:$_uuid/Media/knots.mp4', 12.0, 'en')]);
+  });
+
+  test('an EPUB hit opens its chapter at the passage, with the passage marked', () async {
+    final passages = <(String, String)>[];
+    final p = LibrarySearchProvider(
+      sources: _Searched(dir, [epub]),
+      openZim: (_) {},
+      openAddress: (_) => fail('an EPUB hit opens as a passage'),
+      openVideo: (_, _, _) => fail('an EPUB hit is not a video'),
+      openPassage: (a, q) => passages.add((a, q)),
+    );
+    final rows = await p.search('firebreak');
+    rows.single.open();
+    expect(passages, [('zim:$_uuid/Books/guide.epub!/OEBPS/ch2.xhtml#cache-b12', 'Clear a firebreak around')]);
+  });
+
+  test('caption and EPUB hits are left out where they cannot be opened (no opener, or an older core with no link)', () async {
+    final noLink = {...epub}..remove('link');
+    final p = LibrarySearchProvider(sources: _Searched(dir, [page, savedCaption, noLink]), openZim: (_) {}, openAddress: (_) {});
+    expect([for (final r in await p.search('x')) r.title], ['Water purification']);
+    final q = LibrarySearchProvider(sources: _Searched(dir, [noLink]), openZim: (_) {}, openAddress: (_) {}, openPassage: (_, _) {});
+    expect(await q.search('x'), isEmpty);
+  });
+}

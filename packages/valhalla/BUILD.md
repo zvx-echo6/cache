@@ -1,6 +1,6 @@
 # Valhalla 3.7.0 for Cache (Windows x64 + Android arm64)
 
-Valhalla **3.7.0** (the version navi serves, so navi's tiles load unchanged) built as one
+Valhalla **3.7.0** (the version the reference server serves, so the reference server's tiles load unchanged) built as one
 library plus a small C shim, `valhalla_shim`. The Rust core calls the shim over FFI.
 Windows is the desktop test harness; Android arm64 is the phone build.
 
@@ -14,7 +14,7 @@ Valhalla sources and build outputs are **not** committed. The scripts clone the 
 | `shim/valhalla_shim.h`, `shim/valhalla_shim.cc` | C ABI over `valhalla::tyr::actor_t`. Valhalla JSON in, Valhalla JSON out, no interpretation. |
 | `test/shim_test.c` | Tiny C test program (init, route / matrix / locate, per-call timing). |
 | `CMakeLists.txt`, `vcpkg.json`, `triplets/` | Top-level project: Valhalla via `add_subdirectory`, routing-only modules, vcpkg manifest. |
-| `scripts/build-windows.bat`, `scripts/build-android.bat` | Build scripts (run on the Windows desktop). |
+| `scripts/build-windows.bat`, `scripts/build-android.bat` | Build scripts (run on a Windows build machine). |
 | `scripts/stubs/make.cmd` | No-op `make` for the Android cross build (see "tz leapseconds"). |
 | `tz/leapseconds` | Pre-generated tz file (see below). |
 | `tools/tilecut/` | Rust tile cutter (bbox subset of a tile_extract tar). |
@@ -37,7 +37,7 @@ vcpkg dependencies (`vcpkg.json`): boost headers (algorithm, foreach, format, ge
 property-tree, range, tokenizer), protobuf (Valhalla links the lite runtime), zlib, pkgconf (host).
 Everything else (rapidjson, date, unordered_dense, dirent, protozero) is Valhalla's vendored copy.
 
-## Build prerequisites (Windows desktop)
+## Build prerequisites (Windows build machine)
 
 - Visual Studio 2022 or Build Tools with the C++ workload (its bundled CMake and Ninja are used; no separate install).
 - git.
@@ -56,7 +56,7 @@ scripts\build-android.bat  [workdir]
 Outputs: `build-win\valhalla_shim.dll` (+ `valhalla_shim_test.exe`) and
 `build-android\libvalhalla_shim.so` (`libvalhalla_shim.stripped.so` is the shippable copy) +
 `valhalla_shim_test`. vcpkg builds its dependencies during CMake configure (first run takes roughly an hour on
-the desktop because of the many Boost ports; later runs are fast).
+a build machine because of the many Boost ports; later runs are fast).
 
 Windows triplet is `x64-windows-static-md-rel` (static libs, release only, dynamic MSVC runtime), so the DLL
 needs only the VC++ 2015-2022 redistributable. The Android `.so` is self-contained (static libc++), it needs only
@@ -65,7 +65,7 @@ needs only the VC++ 2015-2022 redistributable. The Android `.so` is self-contain
 ### tz leapseconds
 
 Valhalla generates `third_party/tz/leapseconds` by running `nmake leapseconds` (Windows target) or
-`make leapseconds` (anything else), which needs `awk`. The desktop has neither. `tz/leapseconds` is the output of
+`make leapseconds` (anything else), which needs `awk`. The Windows build machine has neither. `tz/leapseconds` is the output of
 `make leapseconds` from the exact tz commit Valhalla pins (`dd6be6d`); the scripts copy it into the tree and
 touch it, so the rule never runs (Android uses `scripts/stubs/make.cmd` because Ninja still runs that rule once on a
 fresh build directory). Public-domain data; regenerate it if Valhalla's tz submodule is ever updated.
@@ -89,10 +89,10 @@ Responses are Valhalla's own JSON, malloc'd, freed with `valhalla_shim_string_fr
 `last_error` holds Valhalla's message. A handle serialises its calls with a mutex (`actor_t` is not thread-safe);
 use one handle per thread for parallel requests. The actor is created with `auto_cleanup = true` so workers give
 memory back after each request. The config selects the tiles: `mjolnir.tile_extract` (tar) or `mjolnir.tile_dir`.
-Use a full Valhalla config (navi's `valhalla.json` works; remove the `mjolnir` paths to files you do not ship, such as
+Use a full Valhalla config (the reference server's `valhalla.json` works; remove the `mjolnir` paths to files you do not ship, such as
 `admin`, `timezone`, `landmarks`).
 
-Note: the costmatrix limits in navi's config (`thor.costmatrix.hierarchy_limits`, `max_iterations`) apply, so a
+Note: the costmatrix limits in the reference server's config (`thor.costmatrix.hierarchy_limits`, `max_iterations`) apply, so a
 long matrix leg (Burley to Boise, 257 km) can come back as null while the same pair routes fine. That is Valhalla's
 configured behaviour, not a shim issue.
 
@@ -105,7 +105,7 @@ valhalla_shim_test <config.json> <route|matrix|locate|trace_attributes> <request
 ## Tile cutter (`tools/tilecut`)
 
 Cuts a bbox out of a Valhalla `tile_extract` tar and writes a smaller tar and/or a `tile_dir`. Std-only Rust, no
-dependencies. Build and run (cargo is installed on the desktop):
+dependencies. Build and run (cargo is installed on the build machine):
 
 ```
 cd packages\valhalla\tools\tilecut
@@ -175,7 +175,7 @@ bash packages/valhalla/scripts/build-ios.sh "$RUNNER_TEMP/valhalla" "$RUNNER_TEM
 The script checks out Valhalla commit `72f459fc5661fb906ad424be5378c4e32d9a5b3b`
 (tag 3.7.0) recursively and vcpkg commit `0e39c10736341cc8135b560438229bbda3d3219a`
 (the manifest baseline). Submodule commits and dependency versions come from those
-pinned trees. It bootstraps vcpkg only inside the runner work directory; no desktop
+pinned trees. It bootstraps vcpkg only inside the runner work directory; no build-machine
 packages are installed. `arm64-ios-rel` selects static Release libraries, the
 iphoneos SDK and deployment target 16.3. Host protoc runs on macOS; target protobuf
 is protobuf-lite. Features and dependencies match Android: no LZ4, HTTP, services,
@@ -210,7 +210,7 @@ Runner for `_valhalla_shim_init` and `_valhalla_shim_route`, in addition to exis
 core/chat exports. Upload remains an explicit workflow input.
 
 Validation at implementation: both shell scripts pass Bash syntax checks on the
-desktop; whitespace diff checks pass. Device compile/link and final app checks
+build machine; whitespace diff checks pass. Device compile/link and final app checks
 require the coordinated macOS run; no claim of runtime routing follows from a
 link check. Host runtime smoke is deferred until that first compile is diagnosed.
 The lead supplied the public single-part Idaho extract for that follow-up:
@@ -351,7 +351,7 @@ TARGET_DIRECTORY valhalla-baldr, requires INSTALL=. for iOS and rejects that
 definition on other platforms. The generated-command gate verifies actual compiler
 arguments beyond the source-property assertion. No upstream code is changed.
 
-Validation on the desktop used ten temporary E: fixtures: valid arguments and
+Validation on the build machine used ten temporary E: fixtures: valid arguments and
 shell command formats; missing INSTALL; leaked INSTALL; OS TZDB enabled; networking
 enabled; missing offline definition; INSTALL undefined; duplicate and missing
 tz_alt.cpp commands. All expected outcomes passed without invoking a compiler.

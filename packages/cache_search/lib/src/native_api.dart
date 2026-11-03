@@ -186,3 +186,12 @@ abstract class CsPdfNative {
   /// answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
   String? pdfIndex(String op, {int session = 0, String json = '{}'});
 }
+
+/// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
+/// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsCaptionsNative {
+  bool get hasCaptionsSearch;
+
+  /// cs_captions_search: {"videos":[...]}, or null on error (ask [CsNative.lastError]).
+  String? captionsSearch(int handle, String requestJson);
+}

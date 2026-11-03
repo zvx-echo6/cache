@@ -41,6 +41,7 @@ import '../sources/sources_state.dart';
 import '../update/app_update.dart' show ReleaseFileSource;
 import '../update/update_ui.dart';
 import '../video/video_state.dart';
+import '../video/zim_video.dart' show openZimMediaInPlayer;
 import '../weather/alert_notifier.dart';
 import '../weather/alert_watch.dart';
 import 'ask_off.dart';
@@ -188,6 +189,11 @@ class _ShellState extends State<Shell> {
     PdfReaderLinks.openLibrary = (context) {
       Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
       _goModule(ModuleId.library);
+    };
+    // A link to a ZIM's video entry in the reader plays in the app's player.
+    openZimMediaInPlayer = (address) {
+      if (!mounted) return;
+      unawaited(playZimVideo(context, widget.video, _zimVideos, address: address).catchError((Object _) => _say("This video can't be played.")));
     };
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
@@ -351,7 +357,17 @@ class _ShellState extends State<Shell> {
   }
 
   /// A video citation: the player at the cited moment (the saved copy when there is one).
-  void _openVideo(String link, double time) => openVideoCitation(context, widget.video, video: link, offsetS: time);
+  void _openVideo(String link, double time, String? lang) =>
+      openVideoCitation(context, widget.video, video: link, offsetS: time, lang: lang, zims: _zimVideos, openInReader: _openSource);
+
+  /// A ZIM's videos for the player: read with the reader's own entry read; named by the ZIM's title.
+  late final ZimVideoReader _zimVideos = ZimVideoReader(
+    read: widget.sources.zimGet,
+    titleOf: (id) {
+      final z = widget.sources.zimById(id);
+      return z == null ? 'the Library' : widget.sources.titleOf(z);
+    },
+  );
 
   SettingsDeps get _settingsDeps => SettingsDeps(
     app: widget.app,
@@ -412,6 +428,9 @@ class _ShellState extends State<Shell> {
         if (id != null) _openSource(await widget.sources.zimMainPage(id));
       },
       openAddress: _openSource,
+      // Words said in a video and passages of EPUB books open as their citations in Ask do.
+      openVideo: _openVideo,
+      openPassage: _openSource,
     ),
     PlacesSearchProvider(
       backend: widget.nav.backend,
@@ -641,7 +660,7 @@ class _ShellState extends State<Shell> {
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
-        ModuleId.videos => VideosScreen(video: widget.video),
+        ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),

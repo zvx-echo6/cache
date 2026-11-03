@@ -887,6 +887,20 @@ pub unsafe extern "C" fn cs_video_downloads(h: *mut Handle) -> *mut c_char {
 /// # Safety
 /// `h` NULL or live; `request_json` NULL or NUL-terminated.
 #[no_mangle]
+pub unsafe extern "C" fn cs_video_captions_fetch(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_captions_fetch(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_auth_methods(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_auth_methods(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
 pub unsafe extern "C" fn cs_video_delete(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_delete(arg_str(request_json, "request_json")?)?))
 }
@@ -1202,6 +1216,8 @@ mod tests {
             assert!(cs_video_downloads(ptr::null_mut()).is_null());
             assert!(cs_captions_search(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_delete(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_auth_methods(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_captions_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_resolve(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_layers_list(ptr::null_mut()).is_null());
             assert!(cs_layers_server(ptr::null_mut(), ptr::null()).is_null());

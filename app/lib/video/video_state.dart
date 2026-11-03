@@ -6,30 +6,33 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../settings/data_policy.dart';
+import '../settings/space.dart';
+import 'caption_search.dart';
 import 'format.dart';
 import 'token_store.dart';
 import '../platform.dart' as plat;
+import 'video_prefs.dart';
 
 /// What a person is told when a video call fails.
 String videoErrorText(Object e) {
   if (e is CacheSearchException) {
     switch (e.code) {
       case 'fetch_failed':
-        return "Can't reach the instance. Check the connection and try again.";
+        return "Can't reach the video site. Check the connection and try again.";
       case 'quota':
-        return 'The instance asked us to slow down. Try again in a minute.';
+        return 'The video site asked us to slow down. Try again in a minute.';
       case 'auth_failed':
-        return 'The instance needs you to log in again.';
+        return 'The video site needs you to sign in again.';
       case 'otp_required':
         return 'This account needs its two-factor code.';
       case 'not_found':
-        return e.message.contains('add it first') ? 'That instance is not in the list.' : 'Not found on the instance.';
+        return e.message.contains('add it first') ? 'That video site is not in the list.' : 'Not found on the video site.';
       case 'unsupported':
         return e.message;
       case 'no_space':
         return 'Not enough free space on this device.';
       case 'bad_response':
-        return "That address doesn't look like a PeerTube instance.";
+        return "That address doesn't look like a PeerTube site.";
       case 'bad_json':
         return e.message;
       case 'damaged':
@@ -41,6 +44,22 @@ String videoErrorText(Object e) {
 }
 
 enum DownloadPhase { running, done, failed, cancelled }
+
+/// One heading of the saved videos (a channel; null when there is only one) and its videos, newest first.
+class SavedGroup {
+  const SavedGroup(this.heading, this.videos);
+
+  final String? heading;
+  final List<DownloadedVideo> videos;
+}
+
+/// "Spanish captions did not save." (or "English and Spanish captions did not save.") for a saved video missing some.
+String missingCaptionsLine(DownloadedVideo d) {
+  final names = [for (final c in d.missingCaptions) c.label.isEmpty ? c.language : c.label];
+  if (names.isEmpty) return '';
+  final list = names.length == 1 ? names.first : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+  return '$list captions did not save.';
+}
 
 /// One download the app started. The partial file stays on disk after a cancel or a failure, so [VideoState.retry]
 /// continues where it stopped.
@@ -75,7 +94,32 @@ class DownloadTask {
 /// The video connector as the app uses it: instances, logins (tokens in secure storage), browse calls with the
 /// token and one automatic refresh, downloads with progress, the saved videos, and citation links.
 class VideoState extends ChangeNotifier {
-  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, this.indexesDir}) : tokens = tokens ?? const SecureTokenStore();
+  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, VideoPrefs? prefs, this.captionSearch = const CaptionSearchMissing(), this.spaceOf, this.indexesDir})
+      : tokens = tokens ?? const SecureTokenStore(),
+        // ignore: prefer_initializing_formals
+        _prefs = prefs;
+
+  /// Where each video was left and the captions choice, on this device only (beside the app's other files, never in the shared
+  /// videos folder). Tests give one in memory.
+  VideoPrefs get prefs => _prefs ??= VideoPrefs();
+  VideoPrefs? _prefs;
+
+  /// Search saved videos by caption text (the core's captions index; [CaptionSearchMissing] until it is in the core).
+  CaptionSearch captionSearch;
+
+  /// The storage the videos go to (tests set it); null: the videos folder's own.
+  final Space Function()? spaceOf;
+
+  /// The storage a download would use, or null when it cannot be read.
+  Space? get space {
+    try {
+      if (spaceOf != null) return spaceOf!();
+      final d = dir;
+      return d == null ? null : Space.of(d.path);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The device's indexes folder (the core's indexes_dir): a saved video's captions are indexed there (captions_index).
   final Future<Directory?> Function()? indexesDir;
@@ -123,6 +167,12 @@ class VideoState extends ChangeNotifier {
     }
     this.dir = dir;
     await dir.create(recursive: true);
+    if (_prefs == null && dirOverride == null) {
+      try {
+        _prefs = VideoPrefs(file: File('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}video-prefs.json'));
+      } catch (_) {}
+    }
+    await prefs.load();
     try {
       _core = await VideoCore.open(dir.path, indexesDir: (await indexesDir?.call())?.path, native: nativeFactory ?? _defaultNative);
     } catch (e) {
@@ -183,6 +233,25 @@ class VideoState extends ChangeNotifier {
 
   Future<void> login(String instance, String username, String password, {String? otp}) async {
     final t = await core.login(instance, username, password, otp: otp);
+    await _store(instance, t);
+    await tokens.write(_k(instance, 'user'), username);
+    _users[instance] = username;
+    notifyListeners();
+  }
+
+  /// How the site lets people sign in (its public config); the user name and password form alone when it cannot be read.
+  Future<VideoAuthMethods> authMethods(String instance) async {
+    try {
+      return await core.authMethods(instance);
+    } catch (_) {
+      return const VideoAuthMethods(password: true, external: [], returnPrefix: '');
+    }
+  }
+
+  /// Finishes a sign-in with the site's external auth plugin: trades the one-time token its /login page got for the usual
+  /// tokens, kept in secure storage like a password login (the refresh token works the same).
+  Future<void> loginExternal(String instance, String username, String externalAuthToken) async {
+    final t = await core.loginExternal(instance, username, externalAuthToken);
     await _store(instance, t);
     await tokens.write(_k(instance, 'user'), username);
     _users[instance] = username;
@@ -372,7 +441,44 @@ class VideoState extends ChangeNotifier {
   Future<void> deleteSaved(DownloadedVideo d) async {
     await core.delete(d.instance, d.uuid);
     tasks.removeWhere((t) => t.instance == d.instance && t.uuid == d.uuid && !t.isActive);
+    prefs.clearPosition(VideoPrefs.keyOf(instance: d.instance, uuid: d.uuid));
     await refresh();
+  }
+
+  /// The saved videos whose captions are being fetched again.
+  final Set<String> fetchingCaptions = {};
+
+  /// Fetches again only the captions [d] is missing (the video file stays); null when that worked, else what to tell the person.
+  Future<String?> fetchMissingCaptions(DownloadedVideo d) async {
+    final key = '${d.instance}/${d.uuid}';
+    fetchingCaptions.add(key);
+    notifyListeners();
+    try {
+      final token = await tokens.read(_k(d.instance, 'access'));
+      final after = await core.fetchMissingCaptions(d.instance, d.uuid, token: token);
+      await refresh();
+      return after.missingCaptions.isEmpty ? null : "${missingCaptionsLine(after)} Check the connection and try again.";
+    } catch (e) {
+      return videoErrorText(e);
+    } finally {
+      fetchingCaptions.remove(key);
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// The saved videos in groups for the list: by channel when they come from two or more channels (each group's newest first,
+  /// the group with the most recently saved video first); one group with no heading otherwise.
+  List<SavedGroup> savedGroups([List<DownloadedVideo>? list]) {
+    final all = list ?? saved;
+    String channelOf(DownloadedVideo d) => d.channelName.isNotEmpty ? d.channelName : (instanceById(d.instance)?.name ?? d.instance);
+    String at(DownloadedVideo d) => d.downloadedAt ?? '';
+    final sorted = [...all]..sort((a, b) => at(b).compareTo(at(a)));
+    final groups = <String, List<DownloadedVideo>>{};
+    for (final d in sorted) {
+      groups.putIfAbsent(channelOf(d), () => []).add(d);
+    }
+    if (groups.length < 2) return [if (sorted.isNotEmpty) SavedGroup(null, sorted)];
+    return [for (final e in groups.entries) SavedGroup(e.key, e.value)];
   }
 
   // ---- citations

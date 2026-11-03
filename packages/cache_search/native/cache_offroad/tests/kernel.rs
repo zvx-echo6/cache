@@ -1,4 +1,4 @@
-//! Ports of navi's kernel / cost unit tests (tests/test_offroute.py) with the same fixtures and
+//! Ports of the reference server's kernel / cost unit tests (tests/test_offroute.py) with the same fixtures and
 //! assertions, plus the scipy gaussian_filter exactness check.
 use cache_offroad::astar::*;
 use cache_offroad::cost::*;
@@ -34,7 +34,7 @@ fn inflation_bumps_neighbors_and_preserves_inf() {
     assert!(g2[15 * 30 + 16].is_finite() && g2[15 * 30 + 16] > 1.0);
 }
 
-/// Bit-level comparison with navi's `inflate_cost_multiplier` (scipy gaussian_filter, mode="nearest").
+/// Bit-level comparison with the reference server's `inflate_cost_multiplier` (scipy gaussian_filter, mode="nearest").
 #[test]
 fn inflate_matches_scipy_exactly() {
     let (rows, cols) = (17usize, 23usize);

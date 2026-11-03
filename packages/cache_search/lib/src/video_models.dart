@@ -23,6 +23,39 @@ class VideoInstance {
   String get host => url.replaceFirst(RegExp(r'^https?://'), '');
 }
 
+/// One sign-in method of a site's external auth plugin (cs_video_auth_methods "external").
+class VideoExternalAuth {
+  const VideoExternalAuth({required this.authName, required this.displayName, required this.url});
+
+  factory VideoExternalAuth.fromJson(Map<String, dynamic> j) =>
+      VideoExternalAuth(authName: (j['auth_name'] ?? '') as String, displayName: (j['display_name'] ?? j['auth_name'] ?? '') as String, url: (j['url'] ?? '') as String);
+
+  final String authName;
+
+  /// The site's own name for it ("GitLab").
+  final String displayName;
+
+  /// Its auth page on the site.
+  final String url;
+}
+
+/// How a site lets people sign in: its own user name and password form, and its external methods.
+class VideoAuthMethods {
+  const VideoAuthMethods({required this.password, required this.external, required this.returnPrefix});
+
+  factory VideoAuthMethods.fromJson(Map<String, dynamic> j) => VideoAuthMethods(
+        password: j['password'] != false,
+        external: [for (final e in _list(j['external'])) VideoExternalAuth.fromJson(e)],
+        returnPrefix: (j['return_prefix'] ?? '') as String,
+      );
+
+  final bool password;
+  final List<VideoExternalAuth> external;
+
+  /// The site's /login page: a finished external sign-in comes back there with externalAuthToken and username.
+  final String returnPrefix;
+}
+
 /// The tokens a login returns. The core keeps nothing: the app stores them in its secure storage.
 class VideoTokens {
   const VideoTokens({required this.accessToken, this.refreshToken, this.expiresIn});
@@ -143,6 +176,20 @@ class VideoOption {
   final String source;
 }
 
+/// A quality a stream can be switched to (cs_video_get "stream"."qualities").
+class VideoQuality {
+  const VideoQuality({required this.key, required this.label, required this.url, this.isHls = false});
+
+  factory VideoQuality.fromJson(Map<String, dynamic> j) =>
+      VideoQuality(key: (j['key'] ?? '') as String, label: (j['label'] ?? j['key'] ?? '') as String, url: (j['url'] ?? '') as String, isHls: j['format'] == 'hls');
+
+  /// The resolution ("720").
+  final String key;
+  final String label;
+  final String url;
+  final bool isHls;
+}
+
 class VideoCaptionInfo {
   const VideoCaptionInfo({required this.language, required this.label, required this.url, this.automatic = false});
 
@@ -180,6 +227,8 @@ class VideoDetails {
     this.mp4Url,
     this.needsAuth = false,
     this.downloadedResolution,
+    this.qualities = const [],
+    this.qualitiesExpire,
   });
 
   factory VideoDetails.fromJson(Map<String, dynamic> j) {
@@ -204,6 +253,8 @@ class VideoDetails {
       mp4Url: stream['mp4'] as String?,
       needsAuth: (stream['needs_auth'] ?? false) as bool,
       downloadedResolution: dl is Map ? dl['resolution'] as String? : null,
+      qualities: [for (final q in _list(stream['qualities'])) VideoQuality.fromJson(q)],
+      qualitiesExpire: stream['qualities_expire'] is String ? DateTime.tryParse(stream['qualities_expire'] as String) : null,
     );
   }
 
@@ -228,18 +279,31 @@ class VideoDetails {
   /// The resolution key already on this phone ("480", "audio"), or null.
   final String? downloadedResolution;
 
+  /// The qualities the stream can be switched to, high to low (none for a video whose files need a token).
+  final List<VideoQuality> qualities;
+
+  /// When the file token in a private video's quality addresses expires (then the page is read again for new ones).
+  final DateTime? qualitiesExpire;
+
   bool get canStream => !isLive && (hlsUrl != null || mp4Url != null);
 }
 
 class DownloadedCaption {
-  const DownloadedCaption({required this.language, required this.label, required this.path});
+  const DownloadedCaption({required this.language, required this.label, required this.path, this.automatic = false});
 
-  factory DownloadedCaption.fromJson(Map<String, dynamic> j) =>
-      DownloadedCaption(language: (j['language'] ?? '') as String, label: (j['label'] ?? j['language'] ?? '') as String, path: j['path'] as String);
+  factory DownloadedCaption.fromJson(Map<String, dynamic> j) => DownloadedCaption(
+        language: (j['language'] ?? '') as String,
+        label: (j['label'] ?? j['language'] ?? '') as String,
+        path: j['path'] as String,
+        automatic: (j['automatic'] ?? false) == true,
+      );
 
   final String language;
   final String label;
   final String path;
+
+  /// Made by the instance's speech recognition, not by a person.
+  final bool automatic;
 }
 
 /// A video saved on this phone (its manifest).
@@ -275,6 +339,10 @@ class DownloadedVideo {
     required this.captions,
     this.thumbnailPath,
     this.downloadedAt,
+    this.description,
+    this.publishedAt,
+    this.warnings = const [],
+    this.missingCaptions = const [],
     this.captionsIndex,
   });
 
@@ -291,6 +359,13 @@ class DownloadedVideo {
         thumbnailPath: j['thumbnail_path'] as String?,
         downloadedAt: j['downloaded_at'] as String?,
         captions: [for (final c in _list(j['captions'])) DownloadedCaption.fromJson(c)],
+        description: j['description'] as String?,
+        publishedAt: j['published_at'] as String?,
+        warnings: [for (final w in (j['warnings'] as List? ?? const [])) if (w is String) w],
+        missingCaptions: [
+          for (final c in _list(j['missing_captions']))
+            VideoCaptionInfo(language: (c['language'] ?? '') as String, label: (c['label'] ?? c['language'] ?? '') as String, url: '', automatic: c['automatic'] == true),
+        ],
         captionsIndex: j['captions_index'] is Map ? VideoCaptionsIndex.fromJson((j['captions_index'] as Map).cast<String, dynamic>()) : null,
       );
 
@@ -309,6 +384,14 @@ class DownloadedVideo {
   final String? thumbnailPath;
   final String? downloadedAt;
   final List<DownloadedCaption> captions;
+  final String? description;
+  final String? publishedAt;
+
+  /// What did not save with the video ("caption es not saved: ...", "thumbnail not saved: ..."): the video plays without it.
+  final List<String> warnings;
+
+  /// The captions the instance has that did not save with the video (fetched again with VideoCore.fetchMissingCaptions).
+  final List<VideoCaptionInfo> missingCaptions;
 }
 
 /// Where to open a video for a citation: the file on this phone, or a stream.

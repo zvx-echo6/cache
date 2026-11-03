@@ -69,6 +69,17 @@ class _Packs extends ZimDownloader {
   }
 }
 
+/// Lets timers and file work run until [done] (at most [turns] turns of 40 ms, then the test's own expects say what is missing).
+Future<void> _settleUntil(WidgetTester tester, bool Function() done, {int turns = 300}) async {
+  for (var i = 0; i < turns && !done(); i++) {
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  // one more turn, so what arrived with the last change is drawn
+  await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+  await tester.pump(const Duration(milliseconds: 50));
+}
+
 void main() {
   group('the catalogue and the packs a region needs', () {
     final packs = parseOffroadCatalogue(_catalogue([_idaho, _utah, _nevada, {'id': 'broken'}]));
@@ -132,15 +143,11 @@ void main() {
     await tester.runAsync(() async {
       await tester.enterText(find.byKey(const ValueKey('region-search')), 'twin falls county');
     });
-    for (var i = 0; i < 6; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
+    // The search and the pop-up's plan run outside the test's clock: wait for what they show, not a fixed number of turns (a
+    // busy runner took longer than 6, Tests 41547954797).
+    await _settleUntil(tester, () => find.byKey(const ValueKey('hit-$_county')).evaluate().isNotEmpty);
     await tester.tap(find.byKey(const ValueKey('hit-$_county')));
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
+    await _settleUntil(tester, () => find.text('Download Twin Falls County?').evaluate().isNotEmpty && find.textContaining('off-road').evaluate().isNotEmpty);
     // One pop-up: the parts, with off-road among them, and the size from the catalogue (nothing worked out on the phone).
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     expect(find.textContaining('off-road'), findsOneWidget);
@@ -185,10 +192,7 @@ void main() {
     await tester.pumpWidget(const SizedBox()); // a fresh app: the pop-up opened above is not under this one
     await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => openRegionOffer(c, regions, idahoState), child: const Text('open')))));
     await tester.tap(find.text('open'));
-    for (var i = 0; i < 6; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
+    await _settleUntil(tester, () => find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('already on this device')).evaluate().isNotEmpty);
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('already on this device')), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Embed every manifest section with bge-m3, through the llama DLL that ships with the Cache command-line build.
+"""Embed every manifest section with bge-m3, through cache_llama (the llama library that ships with Cache).
 
-usage: embed_guide.py --bin-dir DIR --model bge-m3-Q8_0.gguf MANIFEST.json OUT.json
+usage: embed_guide.py (--lib LIBRARY | --bin-dir DIR) --model bge-m3-Q8_0.gguf MANIFEST.json OUT.json
 
-DIR holds cache_llama.dll (and the DLLs next to it). Windows only. Writes a list of
-{title, text_vec, title_text_vec}: the embedding of the section body, and of "<title>\\n\\n<body>". The library uses
-title_text_vec (see BUILD.md). It loads the 0.6 GB model plus the llama runtime, so check free memory first.
+--lib is the library itself: libcache_llama.so on Linux (built from packages/cache_llama/src, as the Guide library workflow
+does) or cache_llama.dll on Windows. --bin-dir is a Windows Cache command-line build folder holding cache_llama.dll and the
+DLLs next to it. Writes a list of {title, text_vec, title_text_vec}: the embedding of the section body, and of
+"<title>\\n\\n<body>". The library uses title_text_vec (see BUILD.md). It loads the 0.6 GB model plus the llama runtime,
+so check free memory first.
 """
 import argparse
 import ctypes
@@ -13,14 +15,19 @@ import json
 import os
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--bin-dir', required=True)
+where = ap.add_mutually_exclusive_group(required=True)
+where.add_argument('--lib')
+where.add_argument('--bin-dir')
 ap.add_argument('--model', required=True)
 ap.add_argument('manifest')
 ap.add_argument('out')
 a = ap.parse_args()
 
-os.add_dll_directory(a.bin_dir)
-lib = ctypes.CDLL(os.path.join(a.bin_dir, 'cache_llama.dll'))
+if a.bin_dir:
+    os.add_dll_directory(a.bin_dir)  # Windows: the DLLs cache_llama.dll needs sit beside it
+    lib = ctypes.CDLL(os.path.join(a.bin_dir, 'cache_llama.dll'))
+else:
+    lib = ctypes.CDLL(os.path.abspath(a.lib))
 lib.cl_embed_load.restype = ctypes.c_void_p
 lib.cl_embed_load.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
 lib.cl_embed_info.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]

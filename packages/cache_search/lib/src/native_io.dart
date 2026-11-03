@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -92,6 +92,8 @@ class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, C
         _videoGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_get'),
         _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
         _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
+        _videoAuthMethods = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_auth_methods'),
+        _videoCaptionsFetch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_captions_fetch'),
         _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
         _layersList = lib.lookupFunction<_HStrC, _HStr>('cs_layers_list'),
         _layersRefresh = lib.lookupFunction<_HStrC, _HStr>('cs_layers_refresh'),
@@ -164,6 +166,8 @@ class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, C
   final _HStrStr _videoGet;
   final _HStr _videoDownloads;
   final _HStrStr _videoDelete;
+  final _HStrStr _videoAuthMethods;
+  final _HStrStr _videoCaptionsFetch;
   final _HStrStr _videoResolve;
   final _HStr _layersList;
   final _HStr _layersRefresh;
@@ -315,6 +319,8 @@ class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, C
       'get' => _take(_videoGet(_p(handle), req)),
       'downloads' => _take(_videoDownloads(_p(handle))),
       'delete' => _take(_videoDelete(_p(handle), req)),
+      'auth_methods' => _take(_videoAuthMethods(_p(handle), req)),
+      'captions_fetch' => _take(_videoCaptionsFetch(_p(handle), req)),
       'resolve' => _take(_videoResolve(_p(handle), req)),
       _ => throw ArgumentError('Unknown video call $op'),
         };
@@ -543,6 +549,16 @@ class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, C
     };
     return _callHS(f, handle, arg ?? '');
   }
+
+  // ---- caption search: looked up on first use ----
+
+  late final _HStrStr? _captionsSearch = _lookupHS('cs_captions_search');
+
+  @override
+  bool get hasCaptionsSearch => _captionsSearch != null;
+
+  @override
+  String? captionsSearch(int handle, String requestJson) => _callHS(_captionsSearch, handle, requestJson);
 
   // ---- PDF indexes of ZIMs: looked up on first use ----
 

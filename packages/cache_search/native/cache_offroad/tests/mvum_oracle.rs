@@ -1,4 +1,4 @@
-//! MVUM access grids vs navi's `_row_access` + `_rasterize_feature` on random features.
+//! MVUM access grids vs the reference server's `_row_access` + `_rasterize_feature` on random features.
 mod common;
 use cache_offroad::grid::GridMeta;
 use cache_offroad::mvum::*;
@@ -9,7 +9,7 @@ fn s(v: &serde_json::Value) -> Option<String> {
 }
 
 #[test]
-fn mvum_grids_match_navi() {
+fn mvum_grids_match_reference() {
     let j = common::load_gz(include_bytes!("fixtures/mvum_cases.json.gz"));
     let (rows, cols) = (j["rows"].as_u64().unwrap() as usize, j["cols"].as_u64().unwrap() as usize);
     let (south, west) = (j["south"].as_f64().unwrap(), j["west"].as_f64().unwrap());

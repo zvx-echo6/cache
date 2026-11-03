@@ -377,6 +377,44 @@ fn window_start(text: &str, p: usize, max: usize) -> usize {
     }
 }
 
+/// A snippet of at most `max` chars of `text` (a stored piece) around the part that matches the query best: Tantivy's snippet
+/// generator picks the densest window of query terms in `field`, the start moves back to the start of its sentence when that
+/// fits, and the cut keeps whole sentences where it can. The start of the text when nothing matches.
+pub(crate) fn match_snippet(searcher: &Searcher, query: &dyn Query, field: Field, text: &str, max: usize) -> String {
+    // a piece that fits is shown whole, exactly as before
+    if text.split_whitespace().map(|w| w.chars().count() + 1).sum::<usize>() <= max {
+        return html::snippet_from_text(text, max);
+    }
+    let Ok(mut gen) = SnippetGenerator::create(searcher, query, field) else {
+        return html::snippet_from_text(text, max);
+    };
+    gen.set_max_num_chars(max.max(1));
+    let snip = gen.snippet(text);
+    let frag = snip.fragment();
+    let hl = snip.highlighted();
+    let (Some(first), Some(last)) = (hl.first(), hl.last()) else { return html::snippet_from_text(text, max) };
+    let Some(p) = text.find(frag) else { return html::tidy_fragment(frag) };
+    let (last_end, first_start) = (p + last.end, p + first.start);
+    // from the start of the sentence the first match is in, when the matches still fit in `max` characters from there
+    let mut from = window_start(text, first_start, max);
+    if text[from..last_end].chars().count() > max {
+        from = p;
+    }
+    let out = html::snippet_from_text(&text[from..], max);
+    // the cut must not lose the last match; the fragment itself then (it fits by construction)
+    // (the 40-byte look-back is moved up to a character boundary: the text has curly quotes, dashes and ligatures)
+    let mut t0 = first_start.max(last_end.saturating_sub(40));
+    while !text.is_char_boundary(t0) {
+        t0 += 1;
+    }
+    let tail = text[t0..last_end].split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.contains(&tail) {
+        out
+    } else {
+        html::tidy_fragment(frag)
+    }
+}
+
 /// A snippet of at most `max` chars cut from `text` (an article's main text): starting a little before the first word
 /// that stems to one of `stems`, or at the start of the text when none does.
 pub fn main_snippet(text: &str, an: &mut TextAnalyzer, stems: &HashSet<String>, max: usize) -> String {
@@ -776,8 +814,10 @@ impl Handle {
         let mut per_pdf: HashMap<(usize, String), usize> = HashMap::new();
         let mut first_pdf_of_text: HashMap<String, (usize, String)> = HashMap::new();
         let mut shown: Vec<Shown> = Vec::new();
+        // a few more than asked for: results that repeat an earlier one (same title, same snippet) are dropped below
+        let cap = need + opts.k.max(5);
         for e in order {
-            if shown.len() >= need {
+            if shown.len() >= cap {
                 break;
             }
             match e {
@@ -829,124 +869,173 @@ impl Handle {
         let mut generators: HashMap<usize, Option<SnippetGenerator>> = HashMap::new();
         let mut fitters: HashMap<usize, (TextAnalyzer, HashSet<String>)> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
-        for e in shown.into_iter().skip(opts.offset).take(opts.k) {
-            let (m_si, hi) = match e {
-                Shown::Lib(src_i, h) => {
-                    let Source::Library(l) = &self.sources[src_i] else { continue };
-                    if !h.cite.is_empty() {
-                        self.last_cites.push((h.address.clone(), h.cite.clone()));
+        let mut kept = 0usize;
+        let mut seen_text: HashSet<(String, String)> = HashSet::new();
+        for e in shown {
+            if kept >= opts.offset + opts.k {
+                break;
+            }
+            let (mark, n0) = (self.last_cites.len(), results.len());
+            'item: {
+                let (m_si, hi) = match e {
+                    Shown::Lib(src_i, h) => {
+                        let Source::Library(l) = &self.sources[src_i] else { break 'item };
+                        if !h.cite.is_empty() {
+                            self.last_cites.push((h.address.clone(), h.cite.clone()));
+                        }
+                        results.push(json!({
+                            "address": h.address,
+                            "title": h.title,
+                            "snippet": h.snippet,
+                            "source_id": l.id(),
+                            "source_kind": "library",
+                            "source_title": l.settings.title,
+                            "page": h.page,
+                        }));
+                        break 'item;
                     }
-                    results.push(json!({
-                        "address": h.address,
-                        "title": h.title,
-                        "snippet": h.snippet,
-                        "source_id": l.id(),
-                        "source_kind": "library",
-                        "source_title": l.settings.title,
-                        "page": h.page,
-                    }));
-                    continue;
-                }
-                Shown::Pdf(pi, hi) => {
-                    let (k, h) = (&pdf_kw[pi], &pdf_kw[pi].hits[hi]);
-                    let address = pdfindex::address_of(&k.zim_id, &h.pid);
-                    self.last_cites.push((
-                        address.clone(),
-                        Cite {
-                            link: Some(pdfindex::link_of(&k.zim_id, &h.zim_path, h.pdf_page)),
-                            time: None,
-                            pdf_page: Some(h.pdf_page),
-                            quote: Some(pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS)),
-                            ..Default::default()
-                        },
-                    ));
-                    results.push(json!({
-                        "address": address,
-                        "title": if h.label.is_empty() { h.title.clone() } else { format!("{}, p. {}", h.title, h.label) },
-                        "snippet": html::snippet_from_text(&h.text, snippet_chars),
-                        "source_id": k.zim_id,
-                        "source_kind": "zim",
-                        "source_title": k.zim_title,
-                        "page": page_value(&h.label),
-                        "pdf_page": h.pdf_page,
-                    }));
-                    continue;
-                }
-                Shown::Kw(ki, hi) => {
-                    let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
-                    let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
-                    self.last_cites.push((address.clone(), cite));
-                    results.push(json!({
-                        "address": address,
-                        "title": title,
-                        "snippet": html::snippet_from_text(&h.piece.text, snippet_chars),
-                        "source_id": k.source_id,
-                        "source_kind": if k.kind == kwindex::CAPTIONS { "video" } else { "zim" },
-                        "source_title": k.source_title,
-                        "page": Value::Null,
-                    }));
-                    continue;
-                }
-                Shown::Zim(si, hi) => (si, hi),
-            };
-            let p = &per[m_si];
-            let h = &p.hits[hi];
-            let address = zimsrc::format_address(&p.id, &h.path);
-            let (searcher, query, lead_f, title_f) = match &p.engine {
-                Engine::Xapian(xhits) => {
-                    // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet. libzim picks its
-                    // passage from the whole page, menus and footers included, so a snippet that is not in the article's
-                    // main text is rebuilt from that text around the query's first term (see `fit_snippet`).
-                    let xh = &xhits[hi];
-                    let snippet = clean_snippet(&xh.snippet, snippet_chars);
-                    let snippet = self.fit_snippet(&mut fitters, m_si, p.tokenizer, &words, &address, snippet, snippet_chars);
-                    let art_title = if xh.title.is_empty() { xh.path.clone() } else { xh.title.clone() };
-                    results.push(json!({
-                        "address": address,
-                        "title": format!("{}: {}", p.title, art_title),
-                        "snippet": snippet,
-                        "source_id": p.id,
-                        "source_kind": "zim",
-                        "source_title": p.title,
-                        "page": Value::Null,
-                    }));
-                    continue;
-                }
-                Engine::Tantivy { searcher, query, lead, title_f } => (searcher, query, *lead, *title_f),
-            };
-            let Some(addr) = h.addr else { continue };
-            let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { continue };
-            let art_title = text_of(&doc, title_f);
-            let lead = text_of(&doc, lead_f);
-            let gen = generators.entry(m_si).or_insert_with(|| {
-                let mut g = SnippetGenerator::create(searcher, &**query, lead_f).ok();
-                if let Some(g) = g.as_mut() {
-                    g.set_max_num_chars(snippet_chars.max(1));
-                }
-                g
-            });
-            let frag = gen.as_ref().map(|g| g.snippet(&lead).fragment().to_string()).unwrap_or_default();
-            let snippet = if frag.trim().is_empty() {
-                html::snippet_from_text(&lead, snippet_chars)
-            } else {
-                let t = html::tidy_fragment(&frag);
-                if t.chars().count() > snippet_chars {
-                    html::snippet_from_text(&t, snippet_chars)
+                    Shown::Pdf(pi, hi) => {
+                        let (k, h) = (&pdf_kw[pi], &pdf_kw[pi].hits[hi]);
+                        let address = pdfindex::address_of(&k.zim_id, &h.pid);
+                        self.last_cites.push((
+                            address.clone(),
+                            Cite {
+                                link: Some(pdfindex::link_of(&k.zim_id, &h.zim_path, h.pdf_page)),
+                                time: None,
+                                pdf_page: Some(h.pdf_page),
+                                quote: Some(pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS)),
+                                ..Default::default()
+                            },
+                        ));
+                        results.push(json!({
+                            "address": address,
+                            "title": if h.label.is_empty() { h.title.clone() } else { format!("{}, p. {}", h.title, h.label) },
+                            "snippet": self
+                                .pdf_index(&k.zim_id)
+                                .map(|i| i.snippet(query, &h.text, snippet_chars))
+                                .unwrap_or_else(|| html::snippet_from_text(&h.text, snippet_chars)),
+                            "source_id": k.zim_id,
+                            "source_kind": "zim",
+                            "source_title": k.zim_title,
+                            "page": page_value(&h.label),
+                            "pdf_page": h.pdf_page,
+                        }));
+                        break 'item;
+                    }
+                    Shown::Kw(ki, hi) => {
+                        let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
+                        let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
+                        let mut r = json!({
+                            "address": address.clone(),
+                            "title": title,
+                            "snippet": self
+                                .kw_index(k.kind, &k.source_id)
+                                .map(|i| i.snippet(query, &h.piece.text, snippet_chars))
+                                .unwrap_or_else(|| html::snippet_from_text(&h.piece.text, snippet_chars)),
+                            "source_id": k.source_id,
+                            "source_kind": if k.kind == kwindex::CAPTIONS { "video" } else { "zim" },
+                            "source_title": k.source_title,
+                            "page": Value::Null,
+                        });
+                        // Where the hit opens, as its citation does (the app's own search opens it the same way): a caption
+                        // hit's video link, its moment and end (seconds) and language; an EPUB hit's chapter link with its
+                        // block anchor; the passage's first words. Never part of what the model reads (the search tool shows
+                        // titles and snippets only).
+                        if let Some(l) = &cite.link {
+                            r["link"] = json!(l);
+                        }
+                        if let Some(t) = &cite.time {
+                            r["time"] = json!(t);
+                        }
+                        if let Some(t) = &cite.time_end {
+                            r["time_end"] = json!(t);
+                        }
+                        if let Some(l) = &cite.lang {
+                            r["lang"] = json!(l);
+                        }
+                        if let Some(q) = &cite.quote {
+                            r["quote"] = json!(q);
+                        }
+                        self.last_cites.push((address, cite));
+                        results.push(r);
+                        break 'item;
+                    }
+                    Shown::Zim(si, hi) => (si, hi),
+                };
+                let p = &per[m_si];
+                let h = &p.hits[hi];
+                let address = zimsrc::format_address(&p.id, &h.path);
+                let (searcher, query, lead_f, title_f) = match &p.engine {
+                    Engine::Xapian(xhits) => {
+                        // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet. libzim picks its
+                        // passage from the whole page, menus and footers included, so a snippet that is not in the article's
+                        // main text is rebuilt from that text around the query's first term (see `fit_snippet`).
+                        let xh = &xhits[hi];
+                        let snippet = clean_snippet(&xh.snippet, snippet_chars);
+                        let snippet = self.fit_snippet(&mut fitters, m_si, p.tokenizer, &words, &address, snippet, snippet_chars);
+                        let art_title = if xh.title.is_empty() { xh.path.clone() } else { xh.title.clone() };
+                        results.push(json!({
+                            "address": address,
+                            "title": format!("{}: {}", p.title, art_title),
+                            "snippet": snippet,
+                            "source_id": p.id,
+                            "source_kind": "zim",
+                            "source_title": p.title,
+                            "page": Value::Null,
+                        }));
+                        break 'item;
+                    }
+                    Engine::Tantivy { searcher, query, lead, title_f } => (searcher, query, *lead, *title_f),
+                };
+                let Some(addr) = h.addr else { break 'item };
+                let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { break 'item };
+                let art_title = text_of(&doc, title_f);
+                let lead = text_of(&doc, lead_f);
+                let gen = generators.entry(m_si).or_insert_with(|| {
+                    let mut g = SnippetGenerator::create(searcher, &**query, lead_f).ok();
+                    if let Some(g) = g.as_mut() {
+                        g.set_max_num_chars(snippet_chars.max(1));
+                    }
+                    g
+                });
+                let frag = gen.as_ref().map(|g| g.snippet(&lead).fragment().to_string()).unwrap_or_default();
+                let snippet = if frag.trim().is_empty() {
+                    html::snippet_from_text(&lead, snippet_chars)
                 } else {
-                    t
+                    let t = html::tidy_fragment(&frag);
+                    if t.chars().count() > snippet_chars {
+                        html::snippet_from_text(&t, snippet_chars)
+                    } else {
+                        t
+                    }
+                };
+                // an index built before main-content extraction has menu text in its leads: same check as for Xapian hits
+                let snippet = self.fit_snippet(&mut fitters, m_si, per[m_si].tokenizer, &words, &address, snippet, snippet_chars);
+                results.push(json!({
+                    "address": address,
+                    "title": format!("{}: {}", p.title, art_title),
+                    "snippet": snippet,
+                    "source_id": p.id,
+                    "source_kind": "zim",
+                    "source_title": p.title,
+                    "page": Value::Null,
+                }));
+            }
+            // the same title with the same snippet is one result however many sources or paths hold it: the first stays
+            // (counted before the paging offset, so a later page continues where the earlier one ended)
+            if results.len() > n0 {
+                let key = results.last().map(|r| (r["title"].as_str().unwrap_or("").to_string(), r["snippet"].as_str().unwrap_or("").to_string())).unwrap_or_default();
+                if !seen_text.insert(key) {
+                    results.pop();
+                    self.last_cites.truncate(mark);
+                    continue;
                 }
-            };
-            // an index built before main-content extraction has menu text in its leads: same check as for Xapian hits
-            let snippet = self.fit_snippet(&mut fitters, m_si, per[m_si].tokenizer, &words, &address, snippet, snippet_chars);
-            results.push(json!({
-                "address": address,
-                "title": format!("{}: {}", p.title, art_title),
-                "snippet": snippet,
-                "source_id": p.id,
-                "source_kind": "zim",
-                "source_title": p.title,
-                "page": Value::Null,
-            }));
+                kept += 1;
+                if kept <= opts.offset {
+                    results.pop();
+                    self.last_cites.truncate(mark);
+                }
+            }
         }
         Ok(json!({
             "results": results,
@@ -1298,6 +1387,71 @@ mod tests {
         let lists3 = vec![lists[0].clone(), lists[1].clone(), vec![item(2.0, 1.0, "q".to_string())]];
         let g = merge_keyword_grouped(&lists3, &[0, 0, 2], 0.5, 0.0, 3);
         assert!(g.iter().any(|m| m.addr == "q" && (m.score - 1.0).abs() < 1e-9));
+    }
+
+
+    #[test]
+    fn the_match_snippet_is_around_the_densest_match_and_falls_back_to_the_start() {
+        use tantivy::schema::{Schema, TEXT};
+        use tantivy::{doc, Index};
+        let mut sb = Schema::builder();
+        let f = sb.add_text_field("text", TEXT);
+        let index = Index::create_in_ram(sb.build());
+        index.tokenizers().register("default", index::make_analyzer("en_stem"));
+        let text = format!(
+            "Homeowners insurance does not cover flooding. {}Flood insurance covers your home and belongings up to $250,000 for the residential property. {}",
+            "Keep every receipt and take photographs of the rooms. ".repeat(10),
+            "Policies take thirty days to start. ".repeat(10)
+        );
+        let mut w = index.writer(15_000_000).unwrap();
+        w.add_document(doc!(f => text.as_str())).unwrap();
+        w.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let qp = QueryParser::for_index(&index, vec![f]);
+        let q = qp.parse_query("flood insurance home belongings").unwrap();
+        let s = match_snippet(&searcher, &*q, f, &text, 200);
+        assert!(s.contains("$250,000"), "{s}");
+        assert!(s.chars().count() <= 200 && !s.starts_with("Homeowners"), "{s}");
+        // no match: the start of the text
+        let q = qp.parse_query("zebra").unwrap();
+        assert_eq!(match_snippet(&searcher, &*q, f, &text, 200), html::snippet_from_text(&text, 200));
+    }
+
+
+    #[test]
+    fn the_match_snippet_never_cuts_inside_a_multibyte_character() {
+        use tantivy::schema::{Schema, TEXT};
+        use tantivy::{doc, Index};
+        let mut sb = Schema::builder();
+        let f = sb.add_text_field("text", TEXT);
+        let index = Index::create_in_ram(sb.build());
+        index.tokenizers().register("default", index::make_analyzer("en_stem"));
+        let qp = QueryParser::for_index(&index, vec![f]);
+        let q = qp.parse_query("water storage person emergency supplies").unwrap();
+        // curly quotes, dashes, ligatures and accents (2 to 3 bytes each) all around the matches, at every alignment
+        for pad in 0..8 {
+            let text = format!(
+                "{}\u{2019}Store one gallon of water per person per day\u{2014}a \u{201c}three-day\u{201d} supply \u{fb01}rst. {}\u{2022} Emergency supplies: store water\u{2019}s \u{e9}quivalent in the pantry\u{2026} {}",
+                "\u{e9}".repeat(pad),
+                "Keep the \u{2018}kit\u{2019} near the door \u{2013} and check it twice a year. ".repeat(12),
+                "Rotate stored water every six months \u{2014} then store more water per person. ".repeat(6)
+            );
+            let mut w = index.writer(15_000_000).unwrap();
+            w.add_document(doc!(f => text.as_str())).unwrap();
+            w.commit().unwrap();
+            drop(w);
+            let searcher = index.reader().unwrap().searcher();
+            // matches that follow a run of 3-byte characters closely (the 40 bytes before the last match end inside the run)
+            let text2 = format!("Water {}{}person {}", "\u{2019}".repeat(18 + pad / 3), " ".repeat(1 + pad % 3), "Filler words go on and on here. ".repeat(40));
+            for max in [60, 100, 200] {
+                let s = match_snippet(&searcher, &*q, f, &text2, max);
+                assert!(s.chars().count() <= max, "{s}");
+            }
+            for max in [60, 200, 400, 800] {
+                let s = match_snippet(&searcher, &*q, f, &text, max);
+                assert!(!s.is_empty() && s.chars().count() <= max, "pad {pad} max {max}: {s}");
+            }
+        }
     }
 
     #[test]

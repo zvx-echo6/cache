@@ -21,6 +21,8 @@ The status lines show the state without opening the row. For example, "Storage" 
 
 There is no Library or Videos page here. Open them from "Modules".
 
+At the foot of the page, a small grey line shows while Cache makes search ready in the background. For example "Getting search ready: 3 of 12". It can add why it waits: `waits for charging`, `paused, battery low`, `paused, not enough space` or `slowed down, phone is warm`. It goes away when the work is done. You do not need to do anything. See Background indexing speed.
+
 - If a row says "Not available", that part of Cache couldn't start. Restart Cache. See When part of Cache is not available in chapter 6.
 
 ## Cache model and web search
@@ -211,10 +213,10 @@ This page shows what Cache uses and lets you free space.
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
 2. Read the usage bar and the line such as "118 GB used by Cache · 103 GB free on this device".
-3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather".
+3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather". "Videos and weather" opens the list "Saved videos".
 4. Remove an item. A pop-up shows what it frees. Confirm.
 
-The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below.
+The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows "Background indexing: Gentle" or "Background indexing: Normal". See Background indexing speed.
 
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
@@ -237,6 +239,24 @@ Open "Regions" in ["Settings" > "Storage"](cache://settings/storage) to see an "
 ![Storage, Regions](shot:storage-regions)
 
 A note explains: "Each state's off-road data is downloaded once and kept while a region that uses it is on this device."
+
+## Background indexing speed
+
+Cache makes your PDFs, EPUBs, captions and libraries searchable in the background. You choose how fast.
+
+1. Go to ["Settings" > "Storage"](cache://settings/storage).
+2. At the foot, tap "Advanced". It shows `Background indexing: Gentle` or `Background indexing: Normal`.
+3. Under "Background indexing speed", tap one:
+   - "Gentle": "Keeps the device cool and the battery longer". This is the start setting;
+   - "Normal": "Finishes sooner, uses more battery".
+
+![Background indexing speed](shot:settings-indexing-speed)
+
+Changes apply at once. Either way the work eases off when the device warms up, when the battery is low and when you are using Cache. It stops while the model writes an answer. It runs only while Cache is open.
+
+On a computer, with no battery to read, Cache uses the faster pace.
+
+The grey line at the foot of "Settings" shows the progress, for example "Getting search ready: 3 of 12". See Search inside PDFs, EPUBs and captions in chapter 2.
 
 ## Mobile data downloads
 
@@ -292,7 +312,7 @@ After linking, pick what to share.
    - "Library": ZIM files and your own libraries;
    - "Maps": downloaded regions;
    - "Models": chat models and the search model;
-   - "Videos": saved videos;
+   - "Videos": saved videos (not where you left off in them);
    - "Notebooks": notebooks, with their photos;
    - "Shared folder": any files you want on every device.
 3. Tick the same kinds on both devices.
@@ -304,6 +324,23 @@ Unticking stops sharing. The files stay. Files whose names start with a dot are 
 - If sharing waits, "Mobile data downloads" may be off. Sync waits for Wi-Fi.
 - If the other device offers more than fits, Cache fetches what fits and pauses.
 - Private notebooks are left out by default. See Private notebooks in chapter 5.
+
+## Search indexes on linked devices
+
+When you build a search index on one device, your other devices can use it. Nothing to set and nothing to tick.
+
+An index covers a ZIM's pages, PDFs, EPUBs and captions, a library of your own, the captions of your saved videos, and the places and routing data of a region. It reaches any linked device that has the same ZIM, library or region. The device does not need the "Library" or "Maps" box ticked. It only needs sharing set up.
+
+1. Set up sharing and link the devices. See Sharing and sync: set up and link devices.
+2. Have the same ZIM, library or region on both. Each can have downloaded it by itself.
+3. Wait. When one device finishes its index, the other fetches it and uses it.
+
+A device fetches only the indexes of what it has. It never gets one for a ZIM it doesn't hold. If the other device finishes first, a PDF status can say "Another device finished this. Using its index."
+
+A device that has not got the index builds its own. The status lines and the line at the foot of "Settings" show that work.
+
+- Sharing follows "Mobile data downloads". Indexes wait for Wi-Fi when it is off.
+- To stop sharing indexes, unlink the device. See Stop sharing in chapter 7.
 
 ## Appearance
 
@@ -318,6 +355,9 @@ Appearance changes how Cache looks. Changes apply straight away.
    - "Parchment": warm paper, easy in daylight;
    - "Tactical": red on black, protects night vision.
 3. Under "Module icons", choose "Small" (three across) or "Large" (bigger).
+4. Under "PDF pages", turn "Dark pages" on or off.
+
+"Dark pages" is for the PDF reader. Off: "Off: pages look as printed, dimmed in a dark theme". On: "On: in a dark theme, pages are light on dark. Pictures look wrong". It only matters in a dark theme.
 
 ## Credits and licences
 

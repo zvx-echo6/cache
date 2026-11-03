@@ -1,4 +1,4 @@
-//! Directions on the Idaho data against navi PROD's POST /api/directions (recorded 2026-10-25, mode drive,
+//! Directions on the Idaho data against the reference server's POST /api/directions (recorded 2026-10-25, mode drive,
 //! describe_ends false). Runs only with the Idaho env vars (see parity_idaho.rs).
 //!
 //! D4 (Yellow Pine) and D6 (track to track) are pure Valhalla road routes: steps, summary and shape must be
@@ -46,10 +46,10 @@ fn cmp(a: &Value, b: &Value, path: &str) {
 }
 
 #[test]
-fn road_directions_identical_to_navi() {
+fn road_directions_identical_to_reference() {
     for (name, from, to, expected) in [
-        ("D4", (44.95441, -115.48184), (45.16382, -115.43481), include_str!("fixtures/navi_directions_D4.json")),
-        ("D6", (44.18793, -114.95605), (44.25092, -115.00720), include_str!("fixtures/navi_directions_D6.json")),
+        ("D4", (44.95441, -115.48184), (45.16382, -115.43481), include_str!("fixtures/reference_directions_D4.json")),
+        ("D6", (44.18793, -114.95605), (44.25092, -115.00720), include_str!("fixtures/reference_directions_D6.json")),
     ] {
         let Some((got, _)) = run(from, to) else { return };
         let exp: Value = serde_json::from_str(expected).unwrap();
@@ -61,9 +61,9 @@ fn road_directions_identical_to_navi() {
 }
 
 #[test]
-fn offroad_lead_directions_close_to_navi() {
+fn offroad_lead_directions_close_to_reference() {
     let Some((got, d)) = run((44.03164, -114.98780), (44.13596, -114.91450)) else { return };
-    let exp: Value = serde_json::from_str(include_str!("fixtures/navi_directions_D1.json")).unwrap();
+    let exp: Value = serde_json::from_str(include_str!("fixtures/reference_directions_D1.json")).unwrap();
     assert!(d.ok && got["routing"] == "offroad" && exp["routing"] == "offroad");
     let (gk, ek) = (got["summary"]["distance_km"].as_f64().unwrap(), exp["summary"]["distance_km"].as_f64().unwrap());
     let (gs, es) = (got["summary"]["duration_s"].as_f64().unwrap(), exp["summary"]["duration_s"].as_f64().unwrap());

@@ -1,4 +1,4 @@
-//! End-to-end oracle: navi's own `_route_auto` (numba kernel, scipy blur, real cost layers) was run on
+//! End-to-end oracle: the reference server's own `_route_auto` (numba kernel, scipy blur, real cost layers) was run on
 //! synthetic worlds (gen_fixtures.py) and recorded; the Rust port must reproduce path, cost, distance,
 //! transitions and mode segments.
 mod common;
@@ -16,7 +16,7 @@ fn modes(v: &Value) -> BTreeSet<usize> {
 }
 
 #[test]
-fn route_matches_navi_route_auto() {
+fn route_matches_reference_route_auto() {
     let cases = common::load_gz(include_bytes!("fixtures/oracle_cases.json.gz"));
     let mut checked = 0;
     for case in cases.as_array().unwrap() {

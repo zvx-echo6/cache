@@ -532,7 +532,7 @@ Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provide
 error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
 `POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
 from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
-matches the request AIDA uses in production (Open WebUI kagi.py); live-verified for the invalid-key answer only (below). HTTP 401/403, an error code
+matches the request the reference assistant uses in production (Open WebUI kagi.py); live-verified for the invalid-key answer only (below). HTTP 401/403, an error code
 401/403, or the code `general.invalid_token` (what Kagi answers to an invalid key, with HTTP 400) is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
 `quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
 used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
@@ -804,7 +804,7 @@ coverage reads; first suggestion = `cs_suggest` k=5.
 
 Closing it gives all of it back (private bytes 0 to 2 MiB above the start after each close). The two figures that matter are the
 first row, 3.2 s, which reads pages of the file that nothing has touched since the machine started using them, and the rest, about
-0.3 s, where the OS file cache holds everything that open and those queries read. The first is the closer to the phone: the desktop
+0.3 s, where the OS file cache holds everything that open and those queries read. The first is the closer to the phone: the build machine
 has far more RAM than the 115 GiB file's hot pages need and keeps them cached, so a reopen here costs 0.3 s, where the phone's
 page cache is a few GB shared with everything else and a reopened Wikipedia reads its pages back from flash. The cache could not be
 emptied here (nothing is installed to do it), so the true cold cost on a phone is at least the first row and was not measured. The
@@ -1026,7 +1026,7 @@ bge-m3 library found by a paraphrased query through both the CLI and the server.
 
 ## Measured on the recon library (2026-10-25)
 
-recon-vm, a 4-core VM, Linux. Device numbers will differ: phone flash and CPUs are slower, and the VM's host
+A 4-core Linux VM. Device numbers will differ: phone flash and CPUs are slower, and the VM's host
 may have cached reads.
 
 - Shard: 3,519,279 points, 11 segments, 28 GB on disk (dense 1024 float32 cosine, no quantization, sparse
@@ -1548,11 +1548,11 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 **Kinds (format 2, 2026-10-26).** Every place has a `kind_id`: a stable machine id (`drinking_water`, `spring`, `water_well`, `emergency_shelter`, `picnic_shelter`, `hospital`, `pharmacy`, ...) with a label ("Drinking water tap") and a one-line description in the `kinds` table. The kinds are a data table (`kinds` in `categories.json`, copied into the pack): each has OSM tag conditions and/or Overture basic categories, tried in file order, first match wins, and a kind belongs to one category or to none (the geocoder's named places). A place no kind rule covers takes the value of its raw type as its id ("amenity=school" -> `school`, "mountain_pass=yes" -> `mountain_pass`) with the label read from the id. Names are never read. `nearby` and `locate` output `kind` and `kind_label`; a place with no name is called by its kind label and carries `"unnamed": true`. The map search keeps `kind` as the card's display text (now the kind label) and adds `kind_id`, `kind_label` and `unnamed`. `FORMAT_VERSION` is 2 and `Pack` still reads format 1 (no `kinds` table, no `kind_id` column: kind absent). A format 2 pack needs a core that reads format 2; an older core refuses it ("pack format 2 is not supported").
 
-**Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, and only where an OSM hospital (amenity=hospital or healthcare=hospital) is within 250 m: the row takes that hospital's name, address, phone and wiki ids and remembers it (`matched_source_id`); emergency-department records with no hospital there (air ambulances, ambulance services, clinics) are dropped; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from navi's admins.sqlite.
+**Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, and only where an OSM hospital (amenity=hospital or healthcare=hospital) is within 250 m: the row takes that hospital's name, address, phone and wiki ids and remembers it (`matched_source_id`); emergency-department records with no hospital there (air ambulances, ambulance services, clinics) are dropped; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from the reference server's admins.sqlite.
 
 **Geocoder (`Geocoder` trait, in cache_places until it moves to cache_tool).** `forward(query, near, limit)`: the query is split at commas ("Walgreens, Burley, ID": a state qualifier filters, a town qualifier biases); FTS5 over towns and places; a name that equals the query wins, a town match gets a boost, so a bare "Burley" is the town and not a school named after it; `near` pulls ties toward a point; when the words do not all match, any-word matching is tried. `reverse(lat, lon)`: nearest town (a hamlet only when it is within 3 km and clearly closer).
 
-**Emergency rooms: confirmed and likely (decided 2026-10-26; navi's approach).** The `emergency_room` category rule in `categories.json` has a second rule, `{"source":"category","category":"hospital","primary_tier":"confirmed","tier":"likely","note":"hospital, likely has an emergency room","beats_primary_only_if_nearer_by_mi":10}`, which the tools read from the pack. A search for `emergency_room` returns the confirmed rows (`er_tier` "confirmed") and then the OSM hospitals that no confirmed row stands for (`er_tier` "likely", with the note). They rank by distance, but a likely hospital goes ahead of a confirmed one only when it is nearer by more than 10 miles (the margin stands in for "15 minutes' drive" until Valhalla ranks by drive time). For navigate's `PlaceSource` the tiers are 1 (confirmed) and 3 (likely), navi's numbers. The rule is data and ids only: no name matching.
+**Emergency rooms: confirmed and likely (decided 2026-10-26; the reference server's approach).** The `emergency_room` category rule in `categories.json` has a second rule, `{"source":"category","category":"hospital","primary_tier":"confirmed","tier":"likely","note":"hospital, likely has an emergency room","beats_primary_only_if_nearer_by_mi":10}`, which the tools read from the pack. A search for `emergency_room` returns the confirmed rows (`er_tier` "confirmed") and then the OSM hospitals that no confirmed row stands for (`er_tier` "likely", with the note). They rank by distance, but a likely hospital goes ahead of a confirmed one only when it is nearer by more than 10 miles (the margin stands in for "15 minutes' drive" until Valhalla ranks by drive time). For navigate's `PlaceSource` the tiers are 1 (confirmed) and 3 (likely), the reference server's numbers. The rule is data and ids only: no name matching.
 
 **Tools.** `nearby` (schema None until a pack with places is installed; the category enum and descriptions come from the packs' category tables) and `locate` (always offered; a GPS fix needs no pack; nearest town and place names need one). Registered by the `places` section of the `cs_open` config, `{"packs": [paths]}`. Packs are opened on demand and reopened when the file changes. `nearby` ranks by straight-line distance (`ranked_by: "distance"`) out to 300 km; drive-time ranking comes with Valhalla. Citable addresses are `place:<source id>`, `town:<source id>` and `loc:<lat>,<lon>`. `locate` also returns `usng` and `plus_code` (computed offline in `cache_places::coord`).
 
@@ -1564,8 +1564,8 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 - **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
   (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
-- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike, and Cache's offroad_foot and offroad_vehicle), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
-  Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
+- **Arguments.** The reference assistant's `from`, `to`, `to_type`, `mode` (drive, walk, bike, and Cache's offroad_foot and offroad_vehicle), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+  Off-road legs come back inside the route, as in the reference assistant: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
   off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
   off-road files the road route is returned with an `offroad_unavailable` warning. The off-road modes route the whole trip with the off-road router
   (`offroad_foot`: foot only; `offroad_vehicle`: the unified Auto search), no road route first and no alternatives; where no off-road pack covers both ends
@@ -1573,20 +1573,20 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 - **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
   `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
   enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.
-- **Result = AIDA's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
+- **Result = the reference assistant's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
   (`sender_node_position` for the phone's fix, `near:<name>`, `from_place`, null), `route_id`, `from_matched`, `to_matched` (place_name, kind, street, locality,
   county, state, distance_km, [er_tier], near, snap_distance_m, lat, lon), `other_destination_candidates` (always, at most 2; `drive_min` on a nearest search),
   `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `direction_from_start` (8-point compass word of the start-to-destination bearing), `major_roads` [{name, distance_km}], `traffic` (Cache's; {delay_min, as_of, source, slow_sections [{name, delay_min}]} or null, null until a traffic source is wired), `step_count`, `steps`
   (at most 12; every off-road step is kept, the first road steps fill the rest), `steps_truncated`, `road_steps_omitted` / `offroad_steps_omitted`,
-  `offroad_mi` + `offroad_note` (AIDA's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
+  `offroad_mi` + `offroad_note` (the reference assistant's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
   type, street_names, distance_mi, cardinal, instruction; off-road steps add travel, grade_class, elev_gain_m, elev_loss_m, terrain (only when known, underscores
-  to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as AIDA's `_step_text` does. Not filled (null): county and
-  distance_km (the geocoder's), `near` (navi's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
-- **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where AIDA attaches them): `geocode_empty` {which, query, searched_within_km, hint}
+  to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as the reference assistant's `_step_text` does. Not filled (null): county and
+  distance_km (the geocoder's), `near` (the reference server's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
+- **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where the reference assistant attaches them): `geocode_empty` {which, query, searched_within_km, hint}
   (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings (a list, `[]` when none, never null)} + from_matched, `same_place` + both places, the router's own
   code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
-  requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
+  requires byte-identical output, and compares four requests with the reference assistant's recorded results in `cli/tests/fixtures/recorded_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
 
 ## The map: search, route and guidance (`cs_map_search`, `cs_map_route`, `cs_map_progress`)
 

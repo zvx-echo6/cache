@@ -208,7 +208,7 @@ class SettingsRig {
     r.liveDir = Directory('${r.dir.path}/live-sources');
     r.catalogueDir = Directory('${r.dir.path}/live-catalogues');
     r.liveCore = FakeLiveCore(r.liveDir);
-    r.web = FakeWeb()..serve('https://cache.echo6.co/connectors/', standardCatalogue());
+    r.web = FakeWeb()..serve('https://data.cached.info/connectors/', standardCatalogue());
     r.weather = WeatherState(
       settings: r.settings,
       policy: r.policy,

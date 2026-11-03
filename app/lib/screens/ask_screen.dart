@@ -5,9 +5,9 @@ import '../chat/answer_markdown.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../chat/tool.dart' show SourceResult;
 import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
-import '../browse/zim_urls.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth;
 import '../layout/layout_state.dart';
@@ -69,7 +69,7 @@ class AskScreen extends StatefulWidget {
   final void Function(String address, String quote)? onOpenPassage;
 
   /// Opens the video a citation points at, at its moment (a library point that maps a link and a time).
-  final void Function(String link, double time)? onOpenVideo;
+  final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -614,7 +614,7 @@ class _AssistantBlock extends StatefulWidget {
   final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
   final void Function(String address, String quote)? onOpenPassage;
-  final void Function(String link, double time)? onOpenVideo;
+  final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -622,6 +622,20 @@ class _AssistantBlock extends StatefulWidget {
 }
 
 class _AssistantBlockState extends State<_AssistantBlock> {
+  /// What tapping a citation does: a video moment opens the player there (a saved video's or a ZIM's caption); a citation the
+  /// reader can show opens it ([SourceResult.readerAddress]: a ZIM page, a PDF page, an EPUB chapter), with its passage
+  /// marked when it has one; anything else does nothing.
+  VoidCallback? _tapOf(SourceResult r) {
+    final video = widget.onOpenVideo;
+    if (r.isVideoMoment && video != null) return () => video(r.link!, r.time!, r.lang);
+    final a = r.readerAddress;
+    if (a == null) return null;
+    final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
+    if (passage != null && quote != null) return () => passage(a, quote);
+    if (source != null) return () => source(a);
+    return null;
+  }
+
   bool _open = false;
 
   @override
@@ -787,13 +801,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
               ),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                onTap: s.result.isVideoMoment && widget.onOpenVideo != null
-                    ? () => widget.onOpenVideo!(s.result.link!, s.result.time!)
-                    : widget.onOpenPassage != null && s.result.quote != null && isZimAddress(s.result.address)
-                    ? () => widget.onOpenPassage!(s.result.openAddress, s.result.quote!)
-                    : widget.onOpenSource != null && isZimAddress(s.result.address)
-                    ? () => widget.onOpenSource!(s.result.openAddress)
-                    : null,
+                onTap: _tapOf(s.result),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
@@ -815,7 +823,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                             style: TextStyle(fontSize: 14, color: k.secondary),
                           ),
                         ),
-                      if (isZimAddress(s.result.address))
+                      // what opens in the reader says so (a page, a PDF page, an EPUB chapter)
+                      if (s.result.readerAddress != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Text(

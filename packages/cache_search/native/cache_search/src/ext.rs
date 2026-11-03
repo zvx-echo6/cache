@@ -425,6 +425,7 @@ video_calls!(
     video_instance_add => instance_add,
     video_instance_remove => instance_remove,
     video_login => login,
+    video_auth_methods => auth_methods,
     video_refresh => refresh,
     video_me => me,
     video_channels => channels,
@@ -432,6 +433,7 @@ video_calls!(
     video_search => search,
     video_get => get,
     video_delete => delete_download,
+    video_captions_fetch => captions_fetch,
     video_resolve => resolve,
 );
 

@@ -8,7 +8,7 @@ use cache_tool::hours::{hours_note, open_status};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
-/// AIDA's OFFROAD_NOTE, with the grid size corrected: AIDA says ~30 m, but the router's grid is the global z12 pixel grid
+/// The reference assistant's OFFROAD_NOTE, with the grid size corrected: the reference assistant says ~30 m, but the router's grid is the global z12 pixel grid
 /// (2^21 pixels around the world: 19 m at the equator, 13-15 m across the continental US).
 const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
 
@@ -54,7 +54,7 @@ fn travel_phrase(t: &str) -> String {
     }
 }
 
-/// AIDA's `_step_text`: navi's instruction, or for an off-road step what to follow, heading, length, slope, climb and
+/// The reference assistant's `_step_text`: the reference server's instruction, or for an off-road step what to follow, heading, length, slope, climb and
 /// terrain, prefixed with how it is travelled (except walking legs on a walking or off-road foot trip).
 pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     if let Some(i) = s.instruction.as_deref().filter(|i| !i.is_empty()) {
@@ -97,7 +97,7 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     }
 }
 
-/// AIDA's `_place`: place_name, kind, street, locality, county, state, distance_km, and er_tier when the source has one.
+/// The reference assistant's `_place`: place_name, kind, street, locality, county, state, distance_km, and er_tier when the source has one.
 pub fn place(r: &Resolved) -> Map<String, Value> {
     place_at(r, None)
 }
@@ -153,7 +153,7 @@ pub fn candidate(r: &Resolved, drive_min: Option<Option<f64>>) -> Value {
 }
 
 /// A place of the result's `from_matched` / `to_matched`: `_place` plus `near` and `snap_distance_m`. Cache has no
-/// reverse geocoder, so `near` (navi's description of the end) is null. `now` is given for the destination only.
+/// reverse geocoder, so `near` (the reference server's description of the end) is null. `now` is given for the destination only.
 fn end_json(r: &Resolved, snap_m: Option<i64>, now: Option<&str>) -> Value {
     let mut m = place_at(r, now);
     m.insert("near".into(), Value::Null);
@@ -305,7 +305,7 @@ pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
     warnings
 }
 
-/// AIDA's `{from_matched, to_matched}` that ride beside an error; the destination with its place details as of `now`.
+/// The reference assistant's `{from_matched, to_matched}` that ride beside an error; the destination with its place details as of `now`.
 pub fn with_ends(e: ToolError, from: &Resolved, to: Option<&Resolved>, now: &str) -> ToolError {
     let e = e.with_top("from_matched", Value::Object(place(from)));
     match to {
@@ -374,7 +374,7 @@ mod step_tests {
     }
 
     #[test]
-    fn offroad_text_is_aidas() {
+    fn offroad_text_is_the_recorded_one() {
         let mut s = step(0, "offroad");
         s.mode = Some("4w".into());
         s.cardinal = Some("NE".into());

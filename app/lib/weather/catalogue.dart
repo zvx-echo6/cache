@@ -26,7 +26,7 @@ const Map<String, String> liveReplaces = {
 
 final RegExp _idPattern = RegExp(r'^[a-z0-9][a-z0-9_-]{0,63}$');
 
-/// Hosts a catalogue may be served from over plain HTTP: this phone itself (the app is tested against a server on the desktop through
+/// Hosts a catalogue may be served from over plain HTTP: this phone itself (the app is tested against a server on a computer through
 /// adb reverse). Everything else must be https.
 /// True for an address a catalogue or definition may be fetched from: https, or http to this phone.
 bool isAllowedAddress(Uri u) => isFetchAllowed(u);

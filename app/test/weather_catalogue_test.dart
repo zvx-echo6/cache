@@ -11,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/weather_fakes.dart';
 
-const base = 'https://cache.echo6.co/connectors/';
+const base = 'https://data.cached.info/connectors/';
 
 String cat({int format = 1, String baseUrl = base, List<Map<String, dynamic>>? connectors, String id = 'cache-connectors'}) => jsonEncode({
   'format': format,

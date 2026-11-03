@@ -1,5 +1,5 @@
 //! The plain Rust API for the navigate feature: route between two points, or to a place, given a travel
-//! mode and a land-access mode, and get the directions result (navi's `/api/directions` shape).
+//! mode and a land-access mode, and get the directions result (the reference server's `/api/directions` shape).
 //!
 //! ```ignore
 //! let nav = Navigator::new(&pack, &elevation, &valhalla);
@@ -19,7 +19,7 @@ pub use crate::directions::{Directions, OffroadChoice, TravelMode};
 
 /// A start or end of a trip: a bare coordinate, or a resolved place (the geocoder/place search of the app
 /// gives the coordinates; `category` is the place's OSM "key:value" hint, which seeds the travel modes at that
-/// end exactly like navi's `start_category` / `end_category`; `arrival` is where a route to the place goes when the places
+/// end exactly like the reference server's `start_category` / `end_category`; `arrival` is where a route to the place goes when the places
 /// data says it is not the place's point: an airport's passenger terminal, a main entrance, a park's parking).
 #[derive(Debug, Clone)]
 pub enum Waypoint {
@@ -125,7 +125,7 @@ impl<'a> Navigator<'a> {
     }
 
     /// Route and build turn-by-turn directions. Route failures are an `Ok(Directions { ok: false, errors })`
-    /// with a coded error (no_route, too_far, out_of_coverage, route_too_long, ...), as in navi; only a malformed
+    /// with a coded error (no_route, too_far, out_of_coverage, route_too_long, ...), as in the reference server; only a malformed
     /// request is an `Err`.
     pub fn navigate(&self, req: &NavigateRequest) -> Result<Directions, NavigateError> {
         check_point(req.from.route_point(), "from")?;
