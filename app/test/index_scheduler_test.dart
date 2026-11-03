@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cache/platform/battery.dart';
 import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/search/index_status.dart' show indexItemWords;
 import 'package:cache/search/index_throttle.dart';
 import 'package:cache/settings/space.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -188,6 +189,55 @@ void main() {
     await s.kick();
     expect(s.line, startsWith('Getting search ready · 0 of 3 done'));
     expect(s.statusOf('zim/a')?.state, isNot(IndexState.done));
+  });
+
+  test('work with no progress for the stuck time is stopped and skipped; the next runs; Retry tries it again', () async {
+    var now = DateTime(2026, 11, 3);
+    final s = IndexScheduler(
+      sources: [work],
+      space: () => space,
+      battery: () async => const BatteryReading(percent: 80, charging: true),
+      every: const Duration(hours: 1),
+      stuckAfter: const Duration(minutes: 5),
+      watchEvery: const Duration(milliseconds: 10),
+      clock: () => now,
+    );
+    addTearDown(s.dispose);
+    var read = 0;
+    work.tasks['zim-captions/nhs'] = IndexTask(
+      key: 'zim-captions/nhs',
+      size: 1,
+      progress: () => (read, 12),
+      start: () async {
+        work.started.add('zim-captions/nhs');
+        return work.runs['zim-captions/nhs'] = _Run();
+      },
+    );
+    work.add('zim-pdf/law', size: 2);
+    s.setOpen(true);
+    await _settle();
+    expect(s.running, 'zim-captions/nhs');
+    // progress moves: not stuck however long it takes
+    now = now.add(const Duration(minutes: 4));
+    read = 1;
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    now = now.add(const Duration(minutes: 4));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(s.running, 'zim-captions/nhs');
+    // then nothing for over five minutes: stuck, stopped, skipped; the next one runs
+    now = now.add(const Duration(minutes: 2));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    await _settle();
+    expect(work.runs['zim-captions/nhs']!.pauses, 1);
+    expect(s.running, 'zim-pdf/law');
+    expect(s.statusOf('zim-captions/nhs')?.why, IndexWait.stuck);
+    expect(indexItemWords(s.statusOf('zim-captions/nhs')!), 'Stuck · skipped for now · Retry');
+    // Retry: back in the queue, after the one running
+    work.finish('zim-pdf/law');
+    await s.retry('zim-captions/nhs');
+    await _settle();
+    expect(s.running, 'zim-captions/nhs');
+    expect(work.started.where((k) => k == 'zim-captions/nhs'), hasLength(2));
   });
 
   test('the app going to the back pauses the work; back to the front, it goes on', () async {

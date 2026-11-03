@@ -469,6 +469,7 @@ When Cache waits, the bar, the row and the menu say why and what to do:
 - "Slowed down · device is warm" or "Paused · device is warm": the work eases off when the device is warm;
 - "Slowed down · keeping the device cool" or "Paused · keeping the device cool": the device is not warm yet, but the system says it would get warm, so the work eases off first;
 - "Paused · while Ask answers": it waits while "Ask" writes an answer;
+- "Stuck · skipped for now · Retry": it made no progress for 5 minutes, so Cache went on with the rest. Tap it in the list to try again;
 - "Paused · Cache is in the background": work runs only while Cache is open;
 - `Needs 1.2 GB free · Free space`: it needs room. Tap "Free space";
 - "Paused by you · Resume": you paused it. Tap "Resume".

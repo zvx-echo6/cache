@@ -154,6 +154,7 @@ class IndexQueueSheet extends StatelessWidget {
         final words = indexItemWords(i, battery: scheduler.reading);
         final p = i.progress;
         final storage = i.why == IndexWait.storage && openStorageForSpace != null;
+        final stuck = i.why == IndexWait.stuck;
         return ListTile(
           key: ValueKey('index-item-${i.key}'),
           title: Text(i.title.isEmpty ? indexPartWord(i.kind) : '${i.title} · ${indexPartWord(i.kind)}', maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -168,7 +169,10 @@ class IndexQueueSheet extends StatelessWidget {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
-                    value: i.state == IndexState.done ? 1 : (p != null && p.$2 > 0 ? (p.$1 / p.$2).clamp(0.0, 1.0) : 0),
+                    // running and not able to say how far yet: the moving bar, never an empty one
+                    value: i.state == IndexState.done
+                        ? 1
+                        : (p != null && p.$2 > 0 ? (p.$1 / p.$2).clamp(0.0, 1.0) : (i.state == IndexState.running ? null : 0)),
                     minHeight: 4,
                     color: i.state == IndexState.held ? k.secondary : k.accent,
                     backgroundColor: k.secondary.withValues(alpha: 0.15),
@@ -177,7 +181,7 @@ class IndexQueueSheet extends StatelessWidget {
               ),
             ],
           ),
-          onTap: storage ? () => openStorageForSpace!(context) : null,
+          onTap: storage ? () => openStorageForSpace!(context) : (stuck ? () => scheduler.retry(i.key) : null),
         );
       }
 

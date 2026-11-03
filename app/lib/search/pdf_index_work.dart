@@ -30,6 +30,7 @@ class PdfIndexWork implements IndexWorkSource {
                 final p? when p.total > 0 => (p.handled, p.total),
                 _ => null,
               },
+              pulse: () => (state.beats, state.partOf(z)?.phase, state.partOf(z)?.finishFraction),
               start: () async {
                 await state.start(z);
                 return PdfIndexRun(state, z);
@@ -47,6 +48,7 @@ PdfHold pdfHoldOf(IndexWait why) => switch (why) {
       IndexWait.closed => PdfHold.closed,
       IndexWait.model => PdfHold.model,
       IndexWait.person => PdfHold.person,
+      IndexWait.stuck => PdfHold.stuck,
       IndexWait.none => PdfHold.waiting,
     };
 

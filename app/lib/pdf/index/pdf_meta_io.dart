@@ -1,10 +1,37 @@
 import 'dart:ffi';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:pdfium_dart/pdfium_dart.dart' as pdfium_bindings;
 import 'package:pdfrx/pdfrx.dart';
 
 pdfium_bindings.PDFium? _pdfium;
+
+var _tmpCount = 0;
+
+/// Opens a PDF to index from a temporary file of its [bytes], never from the bytes themselves: pdfrx opens bytes over 1 MB through
+/// a read callback that, for every read PDFium makes, asks the app's isolate for the bytes and blocks PDFium's worker until it
+/// answers. When that answer does not come (the app's isolate busy or stopped: seen on iPhone, a library's PDFs stuck at "0 of 37"),
+/// the worker waits for ever, and every PDF after it too. A file is read by PDFium itself. Returns the document and what removes
+/// the file (after the document is disposed).
+Future<(PdfDocument, Future<void> Function())> openPdfForIndexing(Uint8List bytes, String name) async {
+  final dir = await Directory.systemTemp.createTemp('pdfindex');
+  final f = File('${dir.path}/${_tmpCount++}.pdf');
+  Future<void> remove() async {
+    try {
+      await dir.delete(recursive: true);
+    } catch (_) {}
+  }
+
+  try {
+    await f.writeAsBytes(bytes, flush: true);
+    return (await PdfDocument.openFile(f.path, firstAttemptByEmptyPassword: true), remove);
+  } catch (_) {
+    await remove();
+    rethrow;
+  }
+}
 
 /// The PDFium pdfrx loaded (the same library: pdfrx's module path, given by the isolate that asks, since the worker isolate has
 /// its own copy of pdfrx's settings).

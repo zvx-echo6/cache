@@ -112,6 +112,7 @@ On a library's menu (press and hold it in "Library"):
 - `Slowed down · device is warm · 340 of 5,768`: it eases off until the device cools.
 - `Slowed down · keeping the device cool · 340 of 5,768`: it eases off before the device gets warm.
 - "Paused · while Ask answers": it goes on when the answer is written.
+- "Stuck · skipped for now · Retry": it made no progress for 5 minutes and Cache went on with the rest. Tap the bar at the top of the Library, then tap the item to try again. A PDF that takes over 2 minutes to open or to read one page is skipped as one that could not be read.
 - `Needs 1.2 GB free · Free space` or "Needs more free space · Free space": tap "Free space".
 - "Stopped: the library could not be read": tap "Resume". If it repeats, delete the library and add it again.
 - `Making EPUBs searchable · 40 of 85`, "Waiting to make EPUBs searchable" or "EPUBs: searching ready": the same, for EPUB books. Captions say the same with "captions".

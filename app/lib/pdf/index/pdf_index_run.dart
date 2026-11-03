@@ -426,6 +426,15 @@ class PdfIndexRun extends ChangeNotifier {
   }
 
   Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
+    // Each PDF's start and end in the log (with what came of it and how long it took), so a device's logs show where work stands.
+    final all = Stopwatch()..start();
+    debugPrint('PDF index ${list.zimUuid}: ${pdf.path} (${pdf.size >> 10} KB) starts');
+    final one = await _indexOneLogged(pdf, row, bytes: bytes);
+    debugPrint('PDF index ${list.zimUuid}: ${pdf.path} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms');
+    return one;
+  }
+
+  Future<_OnePdf> _indexOneLogged(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     final sw = Stopwatch()..start();
     final Uint8List data;
     try {

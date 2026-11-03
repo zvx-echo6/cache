@@ -383,10 +383,23 @@ const GENTLE_PAUSE: Duration = Duration::from_millis(2);
 /// also holds `.ts` segments) are left out. A ZIM that `walk_candidates` rules out is not walked: it
 /// has none. `gentle` lowers the thread's priority and pauses now and then (the status scan; a build does not).
 pub fn scan_zim(src: &ZimSource, gentle: bool) -> Result<ZimMedia> {
+    scan_zim_with(src, gentle, &|_, _| {}, &|| false).map(|m| m.unwrap_or_default())
+}
+
+/// [scan_zim] that reports its place in the ZIM's entries (`progress(done, total)`, every [SCAN_REPORT_EVERY] entries) and
+/// stops when `cancelled` says so (then `None`): an index job's first step, so a big ZIM's look through its entries shows
+/// progress and can be paused, instead of an empty bar.
+pub fn scan_zim_with(
+    src: &ZimSource,
+    gentle: bool,
+    progress: &dyn Fn(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<ZimMedia>> {
     let czim = src.zim()?;
     if !walk_candidates(&czim.mime_table, src.entry_count()) {
-        return Ok(ZimMedia::default());
+        return Ok(Some(ZimMedia::default()));
     }
+    let count = src.entry_count() as u64;
     WALKED.lock().unwrap_or_else(|e| e.into_inner()).push(src.id.clone());
     if gentle {
         lower_thread_priority();
@@ -395,6 +408,12 @@ pub fn scan_zim(src: &ZimSource, gentle: bool) -> Result<ZimMedia> {
     let mut media = ZimMedia::default();
     let mut ts_folders: HashSet<String> = HashSet::new();
     for idx in 0..src.entry_count() as u32 {
+        if idx % SCAN_REPORT_EVERY == 0 {
+            progress(idx as u64, count);
+            if cancelled() {
+                return Ok(None);
+            }
+        }
         if gentle && idx % GENTLE_EVERY == GENTLE_EVERY - 1 {
             std::thread::sleep(GENTLE_PAUSE);
         }
@@ -437,8 +456,12 @@ pub fn scan_zim(src: &ZimSource, gentle: bool) -> Result<ZimMedia> {
     }
     media.captions.sort();
     media.epubs.sort();
-    Ok(media)
+    progress(count, count);
+    Ok(Some(media))
 }
+
+/// How often [scan_zim_with] reports its place (entries).
+const SCAN_REPORT_EVERY: u32 = 2000;
 
 impl ZimMedia {
     /// The video entry a caption belongs to: same folder, same base name once a trailing `_<lang>` is dropped.
@@ -1073,7 +1096,9 @@ pub fn run(
     let mut prev_name = String::new();
     if let Some(Deferred::Zim(zim)) = req.deferred.take() {
         prev_name = zim_name_of(&zim);
-        let media = scan_zim(&zim, false)?;
+        let Some(media) = scan_zim_with(&zim, false, &|d, t| progress("scan", d, t), cancelled)? else {
+            return Ok((Outcome::Cancelled, None));
+        };
         req.src = if req.kind == ZIM_CAPTIONS {
             Box::new(ZimCaptionsSource { src: zim, media })
         } else {

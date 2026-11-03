@@ -12,6 +12,9 @@ import 'index_throttle.dart';
 /// state says).
 IndexScheduler? indexSchedulerShared;
 
+/// Running work with no progress at all for this long is stuck (see [IndexScheduler.stuckAfter]).
+const Duration kIndexStuckAfter = Duration(minutes: 5);
+
 /// One piece of automatic index work: build a source's index (the core's `index_source`), seal an index built before snapshots
 /// (`index_seal`), or make a ZIM's PDFs searchable (the PDF loop). [key] is `<kind>/<source id>`, the same folder the
 /// snapshot goes to.
@@ -25,9 +28,14 @@ class IndexTask {
     this.bytesNeeded = 0,
     this.title = '',
     this.progress,
+    this.pulse,
   });
 
   final String key;
+
+  /// A sign of life while it runs, finer than [progress] (a PDF's pages, a core job's step): the watchdog calls the work stuck
+  /// when neither changes for [IndexScheduler.stuckAfter]. Null: [progress] alone.
+  final Object? Function()? pulse;
 
   /// What the work is on, as the person knows it: the library's or video's name ("Army Publishing"); empty when not known.
   final String title;
@@ -74,7 +82,8 @@ abstract class IndexWorkSource {
 
 /// Why nothing runs right now, when there is work: Cache is in the background, the battery is low, long work waits for
 /// charging, not enough room, the device is warm, Ask is answering, or the person paused it all.
-enum IndexWait { none, closed, battery, charging, storage, heat, model, person }
+/// [stuck]: it ran with no progress at all for [IndexScheduler.stuckAfter] and was skipped for now (Retry, or the next start).
+enum IndexWait { none, closed, battery, charging, storage, heat, model, person, stuck }
 
 /// Where one piece of work stands: running now, queued (next in turn, nothing holds it but the one running), held (with its
 /// reason), or done this session.
@@ -124,8 +133,63 @@ class IndexScheduler extends ChangeNotifier {
     this.throttle,
     BatteryReader? battery,
     this.every = const Duration(seconds: 30),
-  }) : _battery = battery ?? throttle?.read ?? readBattery {
+    this.stuckAfter = kIndexStuckAfter,
+    this.watchEvery = const Duration(seconds: 30),
+    DateTime Function()? clock,
+  }) : _battery = battery ?? throttle?.read ?? readBattery,
+       _clock = clock ?? DateTime.now {
     throttle?.addListener(_onDuty);
+  }
+
+  /// Running work with no progress at all for this long is stuck: skipped for now, so one bad source never holds up the rest.
+  final Duration stuckAfter;
+
+  /// How often the running work's progress is looked at for that.
+  final Duration watchEvery;
+  final DateTime Function() _clock;
+
+  /// Work skipped as stuck this session ([IndexWait.stuck]); [retry] tries it again.
+  final Set<String> _stuck = {};
+  Timer? _watch;
+  Object? _lastPulse;
+  DateTime _pulseAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  static Object? _pulseOf(IndexTask t) => (t.progress?.call(), t.pulse?.call());
+
+  /// The watchdog: the running work's progress and sign of life; unchanged for [stuckAfter] while nothing holds it (heat, the
+  /// battery, Ask answering: a held job is waiting, not stuck), it is stopped and skipped, and the next one runs.
+  void _watchdog() {
+    final t = _current;
+    if (t == null || _disposed) {
+      _watch?.cancel();
+      _watch = null;
+      return;
+    }
+    final now = _clock();
+    final p = _pulseOf(t);
+    final held = throttle?.duty.paused ?? false;
+    if (held || p != _lastPulse) {
+      _lastPulse = p;
+      _pulseAt = now;
+      return;
+    }
+    if (now.difference(_pulseAt) < stuckAfter) return;
+    debugPrint('Index work ${t.key} is stuck: no progress for ${stuckAfter.inMinutes} min (at ${t.progress?.call()}); skipped for now');
+    _stuck.add(t.key);
+    _watch?.cancel();
+    _watch = null;
+    unawaited(_pause(IndexWait.stuck).then((_) {
+      notifyListeners();
+      return kick();
+    }));
+  }
+
+  /// Tries work skipped as stuck again (the queue sheet's Retry).
+  Future<void> retry(String key) {
+    _stuck.remove(key);
+    _why.remove(key);
+    notifyListeners();
+    return kick();
   }
 
   final List<IndexWorkSource> sources;
@@ -391,6 +455,7 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   IndexWait _blocked(IndexTask t, BatteryReading? b, Space s, {required bool running}) {
+    if (_stuck.contains(t.key)) return IndexWait.stuck;
     // Held by the throttle (too warm, a low battery, the model generating): nothing new starts; what runs is held by its duty.
     final d = throttle?.duty;
     if (!running && d != null && d.paused) {
@@ -435,6 +500,10 @@ class IndexScheduler extends ChangeNotifier {
   Future<void> _start(IndexTask t) async {
     _current = t;
     _set(IndexWait.none);
+    _lastPulse = _pulseOf(t);
+    _pulseAt = _clock();
+    _watch?.cancel();
+    _watch = Timer.periodic(watchEvery, (_) => _watchdog());
     try {
       final run = await t.start();
       _run = run;
@@ -502,6 +571,7 @@ class IndexScheduler extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _watch?.cancel();
     throttle?.removeListener(_onDuty);
     _timer?.cancel();
     final run = _run;
@@ -527,7 +597,10 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse});
+
+  /// The running job's step and place in it (any step, also those [progress] leaves out), for the watchdog.
+  final Object? Function()? pulse;
 
   /// The library's or video's name.
   final String title;
@@ -575,6 +648,7 @@ class CoreIndexWork implements IndexWorkSource {
             bytesNeeded: n.bytesNeeded,
             title: n.title,
             progress: n.progress,
+            pulse: n.pulse,
             start: () => calls.start(n),
           ),
       ];

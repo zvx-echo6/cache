@@ -42,6 +42,7 @@ String? indexWaitWords(IndexWait w, {BatteryReading? battery, int bytesNeeded = 
   IndexWait.model => 'Paused · while Ask answers',
   IndexWait.storage => bytesNeeded > 0 ? 'Needs ${formatBytes(bytesNeeded)} free · Free space' : 'Needs more free space · Free space',
   IndexWait.person => 'Paused by you · Resume',
+  IndexWait.stuck => 'Stuck · skipped for now · Retry',
 };
 
 /// "340 of 5,768".

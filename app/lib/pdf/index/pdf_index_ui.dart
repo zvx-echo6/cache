@@ -46,6 +46,7 @@ String pdfHoldWords(PdfHold h) => switch (h) {
   PdfHold.closed => 'Paused · Cache is in the background',
   PdfHold.model => 'Paused · while Ask answers',
   PdfHold.person => 'Paused by you · Resume',
+  PdfHold.stuck => 'Stuck · skipped for now · Retry',
 };
 
 /// Why a run stopped, in plain words.
