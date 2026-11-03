@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'pdf_meta.dart';
+import '../../platform/app_log.dart';
 
 export 'pdf_meta.dart' show readPdfMeta, openPdfForIndexing;
 
@@ -72,7 +73,7 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {Pdf
   } on PdfPasswordException {
     return const PdfPagesOutcome.locked();
   } on TimeoutException {
-    debugPrint('PDF $name: opening took over ${_stepTimeout.inMinutes} min; skipped as unreadable');
+    logError('A PDF took over ${_stepTimeout.inMinutes} min to open; skipped as unreadable', detail: name);
     return const PdfPagesOutcome.damaged();
   } catch (_) {
     return const PdfPagesOutcome.damaged();
@@ -105,7 +106,7 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {Pdf
     }
     return PdfPagesOutcome.read(pages, title: meta.title, labels: meta.labels);
   } on TimeoutException {
-    debugPrint('PDF $name: a page took over ${_stepTimeout.inMinutes} min; skipped as unreadable');
+    logError('A PDF page took over ${_stepTimeout.inMinutes} min; skipped as unreadable', detail: name);
     return const PdfPagesOutcome.damaged();
   } catch (_) {
     return const PdfPagesOutcome.damaged();

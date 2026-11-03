@@ -54,6 +54,10 @@ class MainActivity : FlutterActivity() {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "read" -> result.success(memory())
+                    // The log's header: the phone's maker and model.
+                    "device" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
+                    // The log: why the app's process ended the last times (Android 11 and later).
+                    "exits" -> result.success(exits())
                     else -> result.notImplemented()
                 }
             }
@@ -71,6 +75,30 @@ class MainActivity : FlutterActivity() {
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun exits(): List<Map<String, Any>> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyList()
+        return try {
+            am.getHistoricalProcessExitReasons(packageName, 0, 8).map { e ->
+                val reason = when (e.reason) {
+                    android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+                    android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native crash"
+                    android.app.ApplicationExitInfo.REASON_ANR -> "not responding"
+                    android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low memory"
+                    android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "closed itself"
+                    android.app.ApplicationExitInfo.REASON_SIGNALED -> "stopped by a signal"
+                    android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
+                    android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
+                    android.app.ApplicationExitInfo.REASON_OTHER -> "other"
+                    else -> "reason ${e.reason}"
+                }
+                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun memory(): Map<String, Any> {

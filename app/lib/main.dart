@@ -79,6 +79,8 @@ import 'search/pdf_index_work.dart';
 import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
+import 'platform/app_log.dart';
+import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
@@ -98,6 +100,9 @@ import 'keyboard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
+  logDartErrors();
+  unawaited(openAppLog());
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
@@ -350,8 +355,8 @@ class _CacheAppState extends State<CacheApp> {
   /// The memory is logged as the model starts, to see what each takes.
   void _onChatForIndexing() {
     final on = chat.busy || app.loading != null;
-    if (on && !_modelRunning) debugPrint('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
-    if (!on && _modelRunning) debugPrint('Model done; ${memoryNow()}');
+    if (on && !_modelRunning) logInfo('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
+    if (!on && _modelRunning) logInfo('Model done; ${memoryNow()}');
     _modelRunning = on;
     indexThrottle.setGenerating(on);
   }
@@ -630,8 +635,8 @@ class _CacheAppState extends State<CacheApp> {
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
     listenMemoryTrim((level, reading) {
       if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
-      debugPrint('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
-      unawaited(app.release().then((_) => debugPrint('Model let go; ${memoryNow()}')));
+      logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
+      unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
     });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
@@ -844,7 +849,18 @@ class _CacheAppState extends State<CacheApp> {
               onPointerDown: (_) => indexThrottle.noteActivity(),
               onPointerMove: (_) => indexThrottle.noteActivity(),
               onPointerSignal: (_) => indexThrottle.noteActivity(),
-              child: child!,
+              // While the log keeps everything, a line at the top says so on every screen.
+              child: ListenableBuilder(
+                listenable: appLog,
+                // one shape whether the banner shows or not, so the app below keeps its state when it comes and goes
+                builder: (context, _) => Column(
+                  children: [
+                    const LogEverythingBanner(),
+                    // the banner holds the status bar's room while it shows
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                  ],
+                ),
+              ),
             ),
             IgnorePointer(
               ignoring: app.started && _coreDone,

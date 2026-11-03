@@ -64,6 +64,21 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
+    // The log's header: the iPhone's model identifier ("iPhone17,1"). Free memory is not read here (the app's start does not
+    // wait for it on iPhone).
+    let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    memory.setMethodCallHandler { call, result in
+      guard call.method == "device" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      var info = utsname()
+      uname(&info)
+      let machine = withUnsafePointer(to: &info.machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+      }
+      result(machine)
+    }
     // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
     let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     // Monitoring is on from the start, so the first read already has the level (UIDevice reports -1 until it is on; the app

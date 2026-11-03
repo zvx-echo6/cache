@@ -4,12 +4,16 @@
 // dark. flutter test test_shots/indexstatus_renders_test.dart --update-goldens  (pictures in test_shots/indexstatus/)
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cache/browse/browse_screen.dart' show LibraryRow;
 import 'package:cache/browse/library_actions.dart';
 import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
+import 'package:cache/platform/app_log.dart';
 import 'package:cache/platform/battery.dart';
+import 'package:cache/screens/settings/storage_page.dart';
+import 'package:cache/settings/app_settings.dart';
 import 'package:cache/search/epub_index_row.dart';
 import 'package:cache/search/index_overview.dart';
 import 'package:cache/search/index_scheduler.dart';
@@ -173,6 +177,39 @@ void main() {
       });
       await tester.pump();
       await _snap(tester, '3b-queue-sheet-paused-by-you', theme);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('5: Details of a job in the queue: its last log lines (${_t(theme)})', (tester) async {
+      final s = await _scheduler(tester, const BatteryReading(percent: 80, charging: true));
+      for (final l in [
+        'Index job starts',
+        'PDF 339 of 5,768 (412 KB) starts',
+        'PDF 339 of 5,768 done in 1840 ms',
+        'PDF 340 of 5,768 (2,048 KB) starts',
+      ]) {
+        appLog.add(LogLevel.standard, 'INFO', l, job: 'zim-pdf/army');
+      }
+      await _show(tester, _library(s), theme);
+      await tester.tap(find.byKey(const ValueKey('index-overview')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('index-details-zim-pdf/army')));
+      await tester.pumpAndSettle();
+      await _snap(tester, '5a-job-details', theme);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('6: Storage > Advanced: the log level, Share log, Clear log (${_t(theme)})', (tester) async {
+      final dir = Directory.systemTemp.createTempSync('log-renders');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final settings = AppSettings(settingsDirOverride: dir);
+      await tester.runAsync(settings.init);
+      final log = AppLog(echo: (_) {});
+      await tester.runAsync(() => log.open(Directory('${dir.path}/logs')));
+      phone(tester);
+      await tester.pumpWidget(shotApp(IndexingSpeedPage(settings: settings, log: log), theme: theme));
+      await tester.pump(const Duration(milliseconds: 300));
+      await _snap(tester, '6a-advanced-log', theme);
       await tester.pumpWidget(const SizedBox());
     });
 

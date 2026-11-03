@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../files.dart';
+import '../platform/app_log.dart';
 
 /// The file in the app's support folder that holds the places' alert rules.
 const String kPlaceAlertsFile = 'place_alerts.json';
@@ -89,7 +90,7 @@ class PlaceAlerts extends ChangeNotifier {
       if (j is Map) _rules = {for (final e in j.entries) '${e.key}': PlaceAlertRule.fromJson(e.value)};
       notifyListeners();
     } catch (e) {
-      debugPrint('cache place alerts: could not read ($e)');
+      logError('Place alerts could not be read', error: e);
     }
   }
 

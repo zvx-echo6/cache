@@ -216,7 +216,7 @@ This page shows what Cache uses and lets you free space.
 3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather". "Videos and weather" opens the list "Saved videos".
 4. Remove an item. A pop-up shows what it frees. Confirm.
 
-The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows "Background indexing: Gentle" or "Background indexing: Normal". See Background indexing speed.
+The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows the background indexing speed and the log level, for example `Background indexing: Gentle · Log: Standard`. See Background indexing speed, and The log.
 
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
@@ -245,7 +245,7 @@ A note explains: "Each state's off-road data is downloaded once and kept while a
 Cache makes your PDFs, EPUBs, captions and libraries searchable in the background. You choose how fast.
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
-2. At the foot, tap "Advanced". It shows `Background indexing: Gentle` or `Background indexing: Normal`.
+2. At the foot, tap "Advanced". It shows, for example, `Background indexing: Gentle · Log: Standard`.
 3. Under "Background indexing speed", tap one:
    - "Gentle": "Keeps the device cool and the battery longer". This is the start setting;
    - "Normal": "Finishes sooner, uses more battery".
@@ -256,7 +256,22 @@ Changes apply at once. Either way the work eases off when the device warms up, w
 
 On a computer, with no battery to read, Cache uses the faster pace.
 
-The bar at the top of "Library" and at the foot of "Settings" shows the progress, for example `Getting search ready · 3 of 12 done`. See Search inside PDFs, EPUBs and captions in chapter 2.
+The bar at the top of "Library" and at the foot of "Settings" shows the progress, for example `Getting search ready · 3 of 12 done`. Tap it for the queue. Each item there says the step it is on, for example "Reading page 12 of 300 · PDF 3 of 37 · 12 MB", and "Details" shows its last log lines. See Search inside PDFs, EPUBs and captions in chapter 2.
+
+## The log
+
+Cache keeps a log on this device: what it does, and what goes wrong. It helps find a problem. Nothing leaves the device unless you share it.
+
+1. Go to ["Settings" > "Storage"](cache://settings/storage) and tap "Advanced".
+2. Under "Log level", tap one:
+   - "Minimal": "Only what goes wrong";
+   - "Standard (default)": "What Cache does, without names or content";
+   - "Detailed": "Also file names, links and timings";
+   - "Everything": "Also what you search, ask and write. For 24 hours". While it is on, a line at the top of every screen says so, with "Turn off". After 24 hours the level goes back to the one before.
+3. To send the log, tap "Share log". Your phone's share sheet opens with the log files and a short note: the app version, the device, its free memory and storage. With "Everything" on, Cache first warns that the log holds what you searched, asked and wrote.
+4. "Clear log" removes it.
+
+The log takes at most about 10 MB. The oldest lines go first.
 
 ## Mobile data downloads
 

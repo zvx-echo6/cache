@@ -15,6 +15,7 @@ import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
 import '../net/fetch.dart';
+import '../platform/app_log.dart';
 
 enum TransferPhase {
   /// Waiting for Wi-Fi: the phone is on mobile data and mobile data downloads are off. It starts by itself on Wi-Fi.
@@ -446,11 +447,11 @@ class BrowseState extends ChangeNotifier {
           ..done = f.lengthSync()
           ..total = e.size;
         _remember(e, installed);
-        debugPrint('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
+        logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
       } on CatalogException catch (e) {
-        debugPrint('Partial download $fileName not matched yet (catalogue: ${e.message}); kept');
+        logInfo('A partial download is not matched yet (catalogue: ${e.message}); kept', detail: fileName);
       } catch (e) {
-        debugPrint('Partial download $fileName not matched yet ($e); kept');
+        logError('A partial download is not matched yet; kept', error: e, detail: fileName);
       }
     }
     notifyListeners();
@@ -515,6 +516,9 @@ class BrowseState extends ChangeNotifier {
     }
     final token = t.token = CancelToken();
     final part = File('${sources.partialDir.path}/${entry.fileName}.part');
+    final from = part.existsSync() ? part.lengthSync() : 0;
+    final started = DateTime.now();
+    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${from >> 20} of ${entry.size >> 20} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
     final previous = _loops[entry.id];
     final loop = Completer<void>();
     _loops[entry.id] = t.loop = loop.future;
@@ -559,6 +563,8 @@ class BrowseState extends ChangeNotifier {
         fileName: entry.fileName,
       );
       if (transfers[entry.id] == t) transfers.remove(entry.id);
+      final secs = DateTime.now().difference(started).inSeconds;
+      logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
       _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
@@ -570,11 +576,13 @@ class BrowseState extends ChangeNotifier {
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
+        logError('Download failed: ${entry.title} (${e.code}, at ${t.done >> 20} MB)', error: e.message, job: 'download/${entry.id}');
       }
       notifyListeners();
     } catch (e) {
       t.phase = TransferPhase.failed;
       t.error = 'Could not finish the download: $e';
+      logError('Download failed: ${entry.title}', error: e, job: 'download/${entry.id}');
       notifyListeners();
     } finally {
       loop.complete();
@@ -587,6 +595,7 @@ class BrowseState extends ChangeNotifier {
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
+    logInfo('Download paused: ${entry.title} at ${t.done >> 20} of ${t.total >> 20} MB', job: 'download/${entry.id}');
     // resumed later, the speed is measured afresh (not across the pause)
     DlMeter.reset('zim:${entry.id}');
     t.token?.cancel();
@@ -608,6 +617,7 @@ class BrowseState extends ChangeNotifier {
     if (t == null) return;
     t.token?.cancel();
     transfers.remove(entry.id);
+    logInfo('Download cancelled: ${entry.title}', job: 'download/${entry.id}');
     _forget(entry.id);
     notifyListeners();
     final started = _starts[entry.id];

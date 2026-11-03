@@ -8,6 +8,7 @@ import '../maps/maps_state.dart';
 import '../nav/nav_backend.dart';
 import '../sources/sources_state.dart';
 import 'app_search.dart';
+import '../platform/app_log.dart';
 
 /// A result found by a search that ranks its own results: the best keeps most of its place, later ones less, and a name that
 /// matches what was typed counts as much as its own rank.
@@ -88,7 +89,11 @@ class LibrarySearchProvider implements AppSearchProvider {
           AppSearchResult(title: sources.titleOf(z), module: module, icon: icon, score: m, open: () => openZim(z)),
     ];
     if (!sources.coreReady) return out;
+    final sw = Stopwatch()..start();
     final r = await sources.searchIn(query, k: limit);
+    // the timing and count (Detailed); the words searched only at Everything
+    logDetail('Library search: ${r.results.length} results in ${sw.elapsedMilliseconds} ms');
+    logContent('Library search for "$query"');
     final hits = [
       for (final h in r.results)
         if (_opener(h) case final open?) (h, open),

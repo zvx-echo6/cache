@@ -12,6 +12,7 @@ import '../browse/zim_download.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import 'sources_state.dart';
+import '../platform/app_log.dart';
 
 /// The settings file of a library (docs/LIBRARY-FORMAT.md): inside a .cache-library archive, and beside the library here.
 const String kLibrarySettingsFile = 'cache-library.json';
@@ -265,13 +266,13 @@ class LibrariesState extends ChangeNotifier {
             try {
               d.renameSync(real.path);
             } catch (e) {
-              debugPrint('Could not restore ${d.path}: $e');
+              logError('Could not restore a library', error: e, detail: d.path);
             }
           }
         }
       }
     } catch (e) {
-      debugPrint('Libraries folder: $e');
+      logError('Libraries folder', error: e);
     }
   }
 
@@ -279,7 +280,7 @@ class LibrariesState extends ChangeNotifier {
     try {
       if (e.existsSync()) e.deleteSync(recursive: true);
     } catch (err) {
-      debugPrint('Could not remove ${e.path}: $err');
+      logError('Could not remove a library folder', error: err, detail: e.path);
     }
   }
 
@@ -293,7 +294,7 @@ class LibrariesState extends ChangeNotifier {
         final f = File('${d.path}${Platform.pathSeparator}$kLibrarySettingsFile');
         if (f.existsSync()) settings = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
       } catch (e) {
-        debugPrint('Library settings of $name: $e');
+        logError('Library settings', error: e, detail: name);
       }
       found.add(LibraryItem(dir: d, settings: settings, size: await _treeSize(d)));
     }
@@ -605,7 +606,7 @@ class LibrariesState extends ChangeNotifier {
   /// Plain words for a core error; the core's own text (paths, library internals) goes to the log only.
   String _words(Object e) {
     if (e is CacheSearchException) {
-      debugPrint('Libraries: ${e.code}: ${e.message}');
+      logError('Libraries (${e.code})', error: e.message);
       switch (e.code) {
         case 'no_space':
           return 'Not enough free space on this device for the library.';
@@ -629,7 +630,7 @@ class LibrariesState extends ChangeNotifier {
     final names = tarEntryNames(archive);
     if (names != null && names.contains(kTemplateSnapshotName)) return kEmptyTemplate;
     if (e.code == 'unsupported' || e.code == 'io') {
-      debugPrint('Libraries: ${e.code}: ${e.message}');
+      logError('Libraries (${e.code})', error: e.message);
       return kNotALibrary;
     }
     return _words(e);

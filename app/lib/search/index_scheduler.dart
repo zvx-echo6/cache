@@ -7,6 +7,7 @@ import '../settings/space.dart';
 import '../platform/memory.dart';
 import 'index_status.dart' show indexStatusLine;
 import 'index_throttle.dart';
+import '../platform/app_log.dart';
 
 /// The app's one index scheduler, set at start; null in tests that do not need it (the Library then shows only what the PDF
 /// state says).
@@ -202,7 +203,7 @@ class IndexScheduler extends ChangeNotifier {
     final limit = stuckAfterNow;
     if (_quiet < limit) return;
     final at = t.step?.call();
-    debugPrint('Index work ${t.key} is stuck at "${at ?? 'a step it cannot name'}": no progress for ${limit.inMinutes} min of working time (at ${t.progress?.call()}); skipped for now');
+    logError('Index work ${t.key} is stuck at "${at ?? 'a step it cannot name'}": no progress for ${limit.inMinutes} min of working time (at ${t.progress?.call()}); skipped for now');
     _stuck.add(t.key);
     if (at != null) _stuckAt[t.key] = at;
     _watch?.cancel();
@@ -414,7 +415,7 @@ class IndexScheduler extends ChangeNotifier {
       try {
         work.addAll(await s.pending());
       } catch (e) {
-        debugPrint('Index work could not be listed: $e');
+        logError('Index work could not be listed', error: e);
       }
     }
     final keys = {for (final t in work) t.key};
@@ -448,7 +449,7 @@ class IndexScheduler extends ChangeNotifier {
     // in. Said once in the log.
     if (b == null && !_saidNoBattery) {
       _saidNoBattery = true;
-      debugPrint('Index work: the battery could not be read; it runs as if plugged in');
+      logInfo('Index work: the battery could not be read; it runs as if plugged in');
     }
     reading = b;
     final s = space();
@@ -517,7 +518,7 @@ class IndexScheduler extends ChangeNotifier {
       // document and pages. A model and a busy index on one phone was enough for Android to kill Cache mid-answer.
       _heldForModel = true;
       if (_current != null) {
-        unawaited(_pause(IndexWait.model).then((_) => debugPrint('Index work stopped while the model runs; ${memoryNow()}')));
+        unawaited(_pause(IndexWait.model).then((_) => logInfo('Index work stopped while the model runs; ${memoryNow()}')));
       }
     } else if (!forModel && _heldForModel) {
       // The answer is written: the rules decide again (the work carries on from what it kept).
@@ -555,7 +556,7 @@ class IndexScheduler extends ChangeNotifier {
         notifyListeners();
         kick();
       }, onError: (Object e) {
-        debugPrint('Index work ${t.key} failed: $e');
+        logError('Index work ${t.key} failed', error: e, job: t.key);
         if (_current?.key == t.key) {
           _current = null;
           _run = null;
@@ -563,7 +564,7 @@ class IndexScheduler extends ChangeNotifier {
         notifyListeners();
       }));
     } catch (e) {
-      debugPrint('Index work ${t.key} could not start: $e');
+      logError('Index work ${t.key} could not start', error: e, job: t.key);
       _current = null;
       _run = null;
       notifyListeners();
@@ -589,7 +590,7 @@ class IndexScheduler extends ChangeNotifier {
       try {
         await run.pause(why);
       } catch (e) {
-        debugPrint('Index work could not pause: $e');
+        logError('Index work could not pause', error: e);
       }
     }
   }

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/foundation.dart';
+import '../platform/app_log.dart';
 
 /// The core's user-layer calls (cs_userlayer*): `import`, `list`, `get`, `set_visible`, `delete`, `export`.
 typedef UserLayerCall = Future<Map<String, dynamic>> Function(String call, [String? arg]);
@@ -205,9 +206,9 @@ class UserLayersState extends ChangeNotifier {
       _revision++;
       notifyListeners();
     } on CacheSearchException catch (e) {
-      debugPrint('cache user layers: ${e.message}');
+      logError('User layers', error: e.message);
     } catch (e) {
-      debugPrint('cache user layers: $e');
+      logError('User layers', error: e);
     }
   }
 

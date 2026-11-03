@@ -24,6 +24,7 @@ import 'live_view.dart';
 import 'place_alerts.dart';
 import 'places.dart';
 import 'words.dart';
+import '../platform/app_log.dart';
 
 /// Where the phone is, as far as weather is concerned.
 typedef Position = ({double lat, double lon});
@@ -415,7 +416,7 @@ class WeatherState extends ChangeNotifier {
     try {
       _builtIn = [for (final t in await builtIns()) Connector.parse(t)];
     } catch (e) {
-      debugPrint('Built-in live sources: $e');
+      logError('Built-in live sources', error: e);
     }
     _catalogues = _store!.loadAll();
     _readStatus();
@@ -522,7 +523,7 @@ class WeatherState extends ChangeNotifier {
       final listed = await core.sources();
       _registered = {for (final s in (listed['sources'] as List? ?? const [])) (s as Map)['id'] as String};
     } catch (e) {
-      debugPrint('Live sources folder: ${e.runtimeType}');
+      logError('Live sources folder', error: e);
     }
   }
 
@@ -546,7 +547,7 @@ class WeatherState extends ChangeNotifier {
       try {
         await core.setKey(c.id, key);
       } catch (e) {
-        debugPrint('Live key: ${e.runtimeType}');
+        logError('Live key', error: e);
         return;
       }
     }
@@ -568,7 +569,7 @@ class WeatherState extends ChangeNotifier {
       await core.setFetchPolicy(body);
       _lastPolicy = text;
     } catch (e) {
-      debugPrint('Live policy: ${e.runtimeType}');
+      logError('Live policy', error: e);
     }
   }
 
@@ -820,13 +821,13 @@ class WeatherState extends ChangeNotifier {
             final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
             r['fetched'] == true ? fetched++ : fresh++;
           } on CacheSearchException catch (e) {
-            debugPrint('Live update of ${c.id}: ${e.code}: ${e.message}');
+            logError('Live update failed (${e.code})', error: e.message, detail: c.id);
             final who = c.provider.isEmpty ? c.title : c.provider;
             final line = '$who for ${p.name} failed: ${_fetchFailureWords(e)}';
             failures.add(line);
             _sourceErrors[c.id] = _fetchFailureWords(e);
           } catch (e) {
-            debugPrint('Live update of ${c.id}: ${e.runtimeType}: $e');
+            logError('Live update failed', error: e, detail: c.id);
             failures.add('${c.title} for ${p.name} failed');
             _sourceErrors[c.id] = "Couldn't update.";
           }

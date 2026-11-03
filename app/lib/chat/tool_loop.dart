@@ -1,5 +1,4 @@
 import 'package:cache_llama/cache_llama.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../actions/confirm.dart';
 
@@ -9,6 +8,7 @@ import 'model_backend.dart';
 import 'navigation_action.dart';
 import 'tool.dart';
 import 'tool_call_text.dart';
+import '../platform/app_log.dart';
 
 /// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
 const String kSystemPrompt =
@@ -192,7 +192,7 @@ class ToolLoop {
     try {
       if (host != null) {
         _hostSchemas = await host!.schemas();
-        debugPrint('cache tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
+        logDetail('Ask tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
       }
       if (seed != null) {
         yield const TurnUpdate(phase: TurnPhase.searching);
@@ -275,7 +275,7 @@ class ToolLoop {
       try {
         final r = await host.call(call.name, call.argumentsMap, DateTime.now());
         // One line per call for logcat (no arguments or text): which tool ran and which [n] it gave.
-        debugPrint('cache tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
+        logInfo('Ask tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
         for (final id in r.ids) {
           _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote, timeEnd: id.timeEnd, lang: id.lang)));
         }

@@ -13,6 +13,7 @@ import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/memory.dart';
 import 'theme.dart';
+import 'platform/app_log.dart';
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -160,7 +161,7 @@ class AppState extends ChangeNotifier {
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
           if (r != null && modelMemoryNeed(e.size) > r.room) {
-            debugPrint('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
             resting = e;
             notifyListeners();
           } else {
@@ -296,7 +297,10 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
+      final sw = Stopwatch()..start();
+      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
+      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -322,6 +326,7 @@ class AppState extends ChangeNotifier {
       if (active?.path != previous?.path) modelGeneration++;
     } catch (e) {
       loadError = e.toString().replaceFirst('Bad state: ', '');
+      logError('Model did not load', error: e, detail: entry.fileName);
       failed = entry;
       failure = loadFailureOf(loadError!);
       active = null;
@@ -347,6 +352,7 @@ class AppState extends ChangeNotifier {
     modelGeneration++;
     notifyListeners();
     await session.unload();
+    logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
   }
 

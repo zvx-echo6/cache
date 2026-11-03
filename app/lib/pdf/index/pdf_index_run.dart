@@ -9,6 +9,7 @@ import '../pdf_source.dart' show isNoSpace;
 import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
+import '../../platform/app_log.dart';
 
 /// Why a run stopped before the end.
 enum PdfRunStop { none, person, battery, cancel, superseded }
@@ -211,6 +212,8 @@ class PdfIndexRun extends ChangeNotifier {
   void _step(String words) {
     step = words;
     steps++;
+    // each step, timed by the log's clock (Detailed); the queue's Details show the last ones
+    logDetail(words, job: 'zim-pdf/${list.zimUuid}');
     notifyListeners();
   }
 
@@ -449,9 +452,9 @@ class PdfIndexRun extends ChangeNotifier {
   Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     // Each PDF's start and end in the log (with what came of it and how long it took), so a device's logs show where work stands.
     final all = Stopwatch()..start();
-    debugPrint('PDF index ${list.zimUuid}: ${pdf.path} (${pdf.size >> 10} KB) starts');
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size >> 10} KB) starts', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
     final one = await _indexOneLogged(pdf, row, bytes: bytes);
-    debugPrint('PDF index ${list.zimUuid}: ${pdf.path} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms');
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
     return one;
   }
 

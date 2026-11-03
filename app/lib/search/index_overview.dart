@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../platform/app_log.dart' show appLog;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../theme.dart';
 import 'index_scheduler.dart';
@@ -182,6 +183,10 @@ class IndexQueueSheet extends StatelessWidget {
             ],
           ),
           onTap: storage ? () => openStorageForSpace!(context) : (stuck ? () => scheduler.retry(i.key) : null),
+          // what the log says of this piece of work lately
+          trailing: i.state == IndexState.done
+              ? null
+              : TextButton(key: ValueKey('index-details-${i.key}'), onPressed: () => showIndexJobDetails(context, i, items), child: const Text('Details')),
         );
       }
 
@@ -224,3 +229,38 @@ class IndexQueueSheet extends StatelessWidget {
     },
   );
 }
+
+/// A piece of work's Details: its last log lines (kept in memory, at any log level, for the screen only), newest last.
+Future<void> showIndexJobDetails(BuildContext context, IndexItem i, List<IndexItem> all) => showModalBottomSheet<void>(
+  context: context,
+  showDragHandle: true,
+  isScrollControlled: true,
+  builder: (ctx) {
+    final k = ctx.t;
+    final lines = appLog.jobLines(i.key);
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.7),
+        child: ListView(
+          key: ValueKey('index-details-sheet-${i.key}'),
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          children: [
+            Text(indexItemTitle(i, all), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+            const SizedBox(height: 4),
+            Text(indexQueueWords(i) ?? 'Searching ready', style: TextStyle(color: k.secondary)),
+            const SizedBox(height: 12),
+            if (lines.isEmpty)
+              Text('Nothing logged for this yet.', style: TextStyle(color: k.secondary))
+            else
+              for (final l in lines)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: SelectableText(l, style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: k.text)),
+                ),
+          ],
+        ),
+      ),
+    );
+  },
+);

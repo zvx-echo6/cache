@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../maps/ui/format.dart' show formatCount;
 import 'index_scheduler.dart';
 import 'index_throttle.dart';
+import '../platform/app_log.dart';
 
 /// The app's core index work, set at start; null in tests that do not need it (the Library then shows no EPUB progress).
 AppIndexCoreCalls? coreIndexShared;
@@ -146,7 +147,7 @@ class AppIndexCoreCalls implements IndexCoreCalls {
       rethrow;
     }
     if (job == null) throw StateError('the search core is not open');
-    debugPrint('Index job $key starts (${need.seal ? 'index_seal' : 'index_source'})');
+    logInfo('Index job $key starts (${need.seal ? 'index_seal' : 'index_source'})', job: key);
     steps[key] = 'Starting';
     return CoreIndexRun(job, key, progress, pulse: pulse, steps: steps, poll: poll, onError: (code) {
       if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
@@ -203,7 +204,7 @@ class CoreIndexRun implements IndexRun {
       final p = await job.progress();
       if (p.state == JobState.running) {
         if (++_polls % 15 == 0 && _pace != null) {
-          unawaited(job.pace(_pace!).catchError((Object e) => debugPrint('Index job $key: $e')));
+          unawaited(job.pace(_pace!).catchError((Object e) => logError('Index job $key', error: e, job: key)));
         }
         pulse[key] = '${p.phase} ${p.done} of ${p.total}';
         steps[key] = coreStepWords(p.phase, p.done, p.total);
@@ -214,10 +215,10 @@ class CoreIndexRun implements IndexRun {
       }
       if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
       if (p.state == JobState.done) onDone?.call();
-      debugPrint('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}');
+      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}', job: key);
       _end(p.state == JobState.done);
     } catch (e) {
-      debugPrint('Index job $key: $e');
+      logError('Index job $key', error: e, job: key);
       _end(false);
     } finally {
       _checking = false;
@@ -252,7 +253,7 @@ class CoreIndexRun implements IndexRun {
     if (_done.isCompleted) return;
     final pace = duty.paused ? {'paused': true} : {'work_ms': duty.workMs, 'idle_ms': duty.idleMs, 'paused': false};
     _pace = pace;
-    unawaited(job.pace(pace).catchError((Object e) => debugPrint('Index job $key: $e')));
+    unawaited(job.pace(pace).catchError((Object e) => logError('Index job $key', error: e, job: key)));
   }
 }
 
