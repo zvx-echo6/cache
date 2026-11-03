@@ -30,7 +30,7 @@ void main() {
     d.queue.add(searchFile);
     d.current = chatFile;
     d.total = 100;
-    expect(dlLine(d.stateOf(searchFile)), 'Waiting for chat-Q4.gguf to finish');
+    expect(dlLine(d.stateOf(searchFile)), 'Waiting for chat-Q4 to finish');
     d.current = null;
     d.queue.clear();
     d.failed[searchFile.fileName] = 'The connection failed: connection reset';

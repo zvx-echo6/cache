@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
 import '../search/index_overview.dart';
 
 import '../nav/units.dart';
@@ -54,6 +55,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return joinParts([
       if (app.loading != null)
         const [Part('Loading…')]
+      else if (app.active == null && modelDownloadLine() != null)
+        [Part(modelDownloadLine()!)]
       else if (app.active == null)
         const [Part('Choose a model', Tone.warn)]
       else
@@ -135,7 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions, ?ModelDownloads.shared]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [

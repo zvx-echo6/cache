@@ -554,6 +554,15 @@ class _CacheAppState extends State<CacheApp> {
   void initState() {
     super.initState();
     ModelDownloads.shared = modelDownloads;
+    // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
+    // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
+    modelDownloads.nameOf = (f) {
+      if (modelDownloads.isSearchModel(f)) return 'Search model';
+      for (final r in RecommendedModels.shared.models) {
+        if (r.file == f.fileName) return r.name;
+      }
+      return f.fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
+    };
     // A model the recommended list names loads with the settings the list gives it (none today: the usual ones).
     app.settingsFor = (e) {
       for (final r in RecommendedModels.shared.models) {
