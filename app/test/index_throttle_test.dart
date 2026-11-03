@@ -92,11 +92,20 @@ void main() {
       expect(warm.hold, IndexHold.heat);
     });
 
+    test('a high headroom forecast on a cool phone slows the work but is not called warm; the thermal status is', () async {
+      final d = await at(_r(thermal: Thermal.nominal, headroom: 0.5));
+      expect(d.hold, IndexHold.heat, reason: 'the forecast still eases the work off');
+      expect(t.warm, isTrue);
+      expect(t.thermalWarm, isFalse, reason: 'the system says nominal: the words must not say warm');
+      await at(_r(thermal: Thermal.light, headroom: 0.5));
+      expect(t.thermalWarm, isTrue);
+    });
+
     test('heat rises: eased off step by step, paused when severe; it goes on again only well below that', () async {
       final light = await at(_r(thermal: Thermal.light));
       expect(light.paused, isFalse);
       expect(light.share, closeTo(kShareGentle * heatFactor(0.4), 0.01));
-      expect(t.warm, isTrue, reason: 'Settings says slowed down, phone is warm');
+      expect(t.warm, isTrue, reason: 'slowed down for heat');
       final moderate = await at(_r(thermal: Thermal.moderate));
       expect(moderate.share, lessThan(light.share));
       final severe = await at(_r(thermal: Thermal.severe));
@@ -219,19 +228,30 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       await s.kick();
       expect(runs.single.duties.single.idleMs, 1000);
+      // The model loading or answering STOPS the running work (it keeps what it did), so its memory is back before the model
+      // needs it; nothing starts meanwhile. After the answer it carries on.
       t.setGenerating(true);
-      expect(runs.single.duties.last.paused, isTrue, reason: 'a core job is paused through cs_job_set, not stopped');
+      await Future<void>.delayed(Duration.zero);
+      expect(s.running, isNull);
+      expect(await runs.single.finished, isFalse);
+      await s.kick();
+      expect(runs, hasLength(1), reason: 'nothing starts while the model runs');
+      expect(s.statusOf('zim/a')?.why ?? s.statusOf('zim/b')?.why, IndexWait.model);
       t.setGenerating(false);
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(runs, hasLength(2), reason: 'it carries on once the answer is written');
       await at(_r(thermal: Thermal.light));
-      expect(runs.single.duties.last.hold, IndexHold.heat);
+      expect(runs.last.duties.last.hold, IndexHold.heat);
       expect(s.line, 'Getting search ready · 0 of 2 done · Slowed down · device is warm');
       // Severe: the running work is held by its duty; nothing new would start.
       await at(_r(thermal: Thermal.severe));
-      expect(runs.single.duties.last.paused, isTrue);
-      runs.single.finish();
+      expect(runs.last.duties.last.paused, isTrue);
+      runs.last.finish();
       await Future<void>.delayed(Duration.zero);
       await s.kick();
-      expect(runs, hasLength(1), reason: 'too warm to start the next one');
+      expect(runs, hasLength(2), reason: 'too warm to start the next one');
       expect(s.wait, IndexWait.heat);
     });
   });

@@ -62,7 +62,8 @@ void main() {
       expect(indexWaitWords(IndexWait.battery, battery: battery), 'Paused · battery low (12%) · plug in to continue');
       expect(indexWaitWords(IndexWait.battery), 'Paused · battery low · plug in to continue');
       expect(indexWaitWords(IndexWait.charging), 'Waits for charging (long job)');
-      expect(indexWaitWords(IndexWait.heat), 'Paused · device is warm');
+      expect(indexWaitWords(IndexWait.heat, warm: true), 'Paused · device is warm');
+      expect(indexWaitWords(IndexWait.heat), 'Paused · keeping the device cool', reason: 'held on the forecast alone, never called warm');
       expect(indexWaitWords(IndexWait.closed), 'Paused · Cache is in the background');
       expect(indexWaitWords(IndexWait.model), 'Paused · while Ask answers');
       expect(indexWaitWords(IndexWait.storage, bytesNeeded: 1288490189), 'Needs 1.2 GB free · Free space');
@@ -75,7 +76,8 @@ void main() {
       expect(indexItemWords(const IndexItem(key: 'zim-epub/u', state: IndexState.running, progress: (40, 85))), 'Making EPUBs searchable · 40 of 85');
       expect(indexItemWords(const IndexItem(key: 'zim-captions/u', state: IndexState.running)), 'Making captions searchable');
       expect(indexItemWords(const IndexItem(key: 'zim/u', state: IndexState.running)), 'Getting the search index ready');
-      expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.running, slowed: true, progress: (1, 2))), 'Slowed down · device is warm · 1 of 2');
+      expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.running, slowed: true, warm: true, progress: (1, 2))), 'Slowed down · device is warm · 1 of 2');
+      expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.running, slowed: true, progress: (1, 2))), 'Slowed down · keeping the device cool · 1 of 2');
       expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.running, why: IndexWait.model, progress: (1, 2))), 'Paused · while Ask answers · 1 of 2');
       expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.queued, position: 2)), 'Waiting to make PDFs searchable');
       expect(indexItemWords(const IndexItem(key: 'zim-epub/u', state: IndexState.queued, position: 3)), 'Waiting to make EPUBs searchable');

@@ -172,6 +172,24 @@ void main() {
     expect(s.line, 'Getting search ready · 1 of 2 done · Waits for charging (long job)');
   });
 
+  test('work listed again after it was done counts as not done (the count matches the rows)', () async {
+    battery = const BatteryReading(percent: 30, charging: false);
+    work
+      ..add('zim/a')
+      ..add('zim/b')
+      ..add('zim/c');
+    s.setOpen(true);
+    await _settle();
+    work.tasks.remove('zim/a');
+    await s.kick();
+    expect(s.line, startsWith('Getting search ready · 1 of 3 done'));
+    // zim/a got more to index (a new file in the library): it is listed again
+    work.add('zim/a');
+    await s.kick();
+    expect(s.line, startsWith('Getting search ready · 0 of 3 done'));
+    expect(s.statusOf('zim/a')?.state, isNot(IndexState.done));
+  });
+
   test('the app going to the back pauses the work; back to the front, it goes on', () async {
     work.add('zim/a');
     s.setOpen(true);

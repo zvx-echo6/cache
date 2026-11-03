@@ -54,6 +54,11 @@ class LibrarySearchProvider implements AppSearchProvider {
       return open == null || link == null || quote == null ? null : () => open(link, quote);
     }
     if (!isZimAddress(h.address) && pdfEntryOfIndexHit(h.address) == null) return null;
+    // A passage of a ZIM's PDF opens as its citation does: the PDF at the page with the passage marked ("Cited passage").
+    if (pdfEntryOfIndexHit(h.address) != null && link != null && h.quote != null && openPassage != null) {
+      final (open, quote) = (openPassage!, h.quote!);
+      return () => open(link, quote);
+    }
     // A hit on a page of a PDF entry opens the PDF at that page (a hit in a ZIM's PDF index: its PDF, at the printed page
     // when that is a number).
     return () {

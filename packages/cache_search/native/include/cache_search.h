@@ -233,7 +233,8 @@ void cs_close(cs_handle *h);
  * "[mm:ss] text" line each; of an EPUB address the chapter's text from a few blocks before the passage, after "Chapter: <heading>".
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
- *          "page", the printed label; no other result has that key)
+ *          "page", the printed label, and "link" (the PDF at that page) and "quote" (the passage's first words, for the reader to
+ *          mark); no other result has "pdf_page")
  *          (a caption or EPUB result, address "cap:", "zimcap:" or "zimepub:", also has where it opens, as its citation:
  *          "link" (the video, or the EPUB chapter with its "#cache-b<n>" anchor), "quote" (the passage's first words), and for
  *          a caption "time" and "time_end" (seconds) and "lang" when known; never shown to the model)

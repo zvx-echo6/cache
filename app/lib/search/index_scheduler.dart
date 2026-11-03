@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../platform/battery.dart';
 import '../settings/space.dart';
+import '../platform/memory.dart';
 import 'index_status.dart' show indexStatusLine;
 import 'index_throttle.dart';
 
@@ -82,7 +83,7 @@ enum IndexState { running, queued, held, done }
 /// One piece of work as the scheduler sees it now: the one source of the Library rows, their menus, the Library's overview and
 /// the Settings line, so none of them says "Making" for work that is not running.
 class IndexItem {
-  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false});
+  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false, this.warm = false});
 
   final String key;
   final IndexState state;
@@ -100,8 +101,11 @@ class IndexItem {
   /// The room it needs (for "Needs 1.2 GB free").
   final int bytesNeeded;
 
-  /// Running, but slowed down because the device is warm.
+  /// Running, but slowed down for heat (the device warm, or the system forecasting it would be).
   final bool slowed;
+
+  /// The system's thermal status says the device is warm (not only the forecast): only then do the words say "device is warm".
+  final bool warm;
 
   /// The kind of work: the part of the key before its last "/" ("zim-pdf", "zim-epub", "zim-captions", "captions", "zim",
   /// "library").
@@ -190,6 +194,9 @@ class IndexScheduler extends ChangeNotifier {
     return (sum / _seen.length).clamp(0.0, 1.0);
   }
 
+  /// The system's thermal status says the device is warm (see [IndexThrottle.thermalWarm]).
+  bool get deviceWarm => throttle?.thermalWarm ?? false;
+
   /// Whether there is work not done yet (the Settings line and the Library's overview show while there is).
   bool get busy => _seen.isNotEmpty && _done.length < _seen.length;
 
@@ -208,7 +215,7 @@ class IndexScheduler extends ChangeNotifier {
               IndexHold.model || IndexHold.none => IndexWait.model,
             }
           : IndexWait.none;
-      return IndexItem(key: key, state: IndexState.running, title: title, why: held, progress: t?.progress?.call(), slowed: held == IndexWait.none && (throttle?.warm ?? false));
+      return IndexItem(key: key, state: IndexState.running, title: title, why: held, progress: t?.progress?.call(), slowed: held == IndexWait.none && (throttle?.warm ?? false), warm: deviceWarm);
     }
     final at = _order.indexOf(key);
     if (at >= 0) {
@@ -221,6 +228,7 @@ class IndexScheduler extends ChangeNotifier {
         position: at + 1,
         bytesNeeded: t?.bytesNeeded ?? 0,
         progress: t?.progress?.call(),
+        warm: deviceWarm,
       );
     }
     if (_done.contains(key)) return IndexItem(key: key, state: IndexState.done, title: title);
@@ -316,6 +324,9 @@ class IndexScheduler extends ChangeNotifier {
     }
     final keys = {for (final t in work) t.key};
     _seen.addAll(keys);
+    // Listed again is not done (a library that got more to index after it was done, or a job stopped and listed again): the
+    // count and the rows say what is really left.
+    _done.removeAll(keys);
     // What is no longer listed is done (built here, or its snapshot came from a linked device).
     _done.addAll(_seen.where((k) => !keys.contains(k) && k != _current?.key));
     if (work.isEmpty && _current == null) {
@@ -399,8 +410,24 @@ class IndexScheduler extends ChangeNotifier {
     return IndexWait.none;
   }
 
+  bool _heldForModel = false;
+
   void _onDuty() {
     final d = throttle?.duty;
+    final forModel = d != null && d.paused && d.hold == IndexHold.model;
+    if (forModel && !_heldForModel) {
+      // The model is loading or writing an answer: the running work STOPS (it keeps what it did) instead of only waiting at its
+      // next checkpoint, so its memory goes back before the model needs it: a core job's index writer, the PDF loop's open
+      // document and pages. A model and a busy index on one phone was enough for Android to kill Cache mid-answer.
+      _heldForModel = true;
+      if (_current != null) {
+        unawaited(_pause(IndexWait.model).then((_) => debugPrint('Index work stopped while the model runs; ${memoryNow()}')));
+      }
+    } else if (!forModel && _heldForModel) {
+      // The answer is written: the rules decide again (the work carries on from what it kept).
+      _heldForModel = false;
+      unawaited(kick());
+    }
     if (d != null) _run?.setDuty(d);
     notifyListeners();
   }

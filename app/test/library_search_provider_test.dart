@@ -107,6 +107,20 @@ void main() {
     expect(rows.every((r) => r.module == 'Library'), isTrue);
   });
 
+  test('a PDF passage with its link and words opens as a citation: the page, with the passage marked', () async {
+    final marked = <(String, String)>[];
+    final p = LibrarySearchProvider(
+      sources: _Searched(dir, [
+        {...pdf, 'link': 'zim:$_uuid/Manuals/water.pdf#page=49', 'quote': 'Bring it to a rolling boil'},
+      ]),
+      openZim: (_) {},
+      openAddress: (_) => fail('a PDF passage with its words opens marked'),
+      openPassage: (a, q) => marked.add((a, q)),
+    );
+    (await p.search('boil')).single.open();
+    expect(marked, [('zim:$_uuid/Manuals/water.pdf#page=49', 'Bring it to a rolling boil')]);
+  });
+
   test('a page opens in the reader, a PDF passage at its real PDF page', () async {
     final opened = <String>[];
     final p = LibrarySearchProvider(sources: _Searched(dir, [page, pdf]), openZim: (_) {}, openAddress: opened.add);

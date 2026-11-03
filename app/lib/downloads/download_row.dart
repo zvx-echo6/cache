@@ -95,7 +95,9 @@ String dlLine(DlState s, {String idle = '', String? done}) {
         if (s.speed != null && s.speed! > 0) ...[
           dlSpeed(s.speed!),
           if (s.total > s.done) '${dlTimeLeft(Duration(seconds: ((s.total - s.done) / s.speed!).round()))} left',
-        ],
+        ] else if (s.speed != null)
+          // measured for seconds and nothing came: the server is not sending
+          'Waiting for the server',
       ].join(' · '),
     DlPhase.pausing => 'Pausing…',
     DlPhase.paused => ['Paused', ?bytes].join(' · '),

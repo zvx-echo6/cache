@@ -148,8 +148,12 @@ class IndexThrottle extends ChangeNotifier {
   /// How work may run now.
   IndexDuty get duty => _duty;
 
-  /// Heat is slowing the work down or holding it.
+  /// Heat is slowing the work down or holding it (from the thermal headroom, the system's forecast, or the thermal status).
   bool get warm => _duty.hold == IndexHold.heat;
+
+  /// The system says the device IS warm (its thermal status light or above). The headroom alone (a forecast that rises with any
+  /// steady load on a cool phone) slows the work too, but is never called warm: then the words are "keeping the device cool".
+  bool get thermalWarm => (_reading?.thermal.index ?? 0) >= Thermal.light.index;
 
   /// Runs the control loop (reads every [every]) while there is work; the scheduler turns it on and off.
   void watch(bool on) {

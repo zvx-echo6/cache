@@ -27,13 +27,14 @@ String indexWaitingWords(String kind) => switch (kind) {
 /// Settings line: "Paused · battery low (12%) · plug in to continue", "Waits for charging (long job)", "Paused · device is
 /// warm", "Paused · Cache is in the background", "Paused · while Ask answers", "Needs 1.2 GB free · Free space", "Paused by
 /// you · Resume". Null for none (running as usual or queued).
-String? indexWaitWords(IndexWait w, {BatteryReading? battery, int bytesNeeded = 0}) => switch (w) {
+String? indexWaitWords(IndexWait w, {BatteryReading? battery, int bytesNeeded = 0, bool warm = false}) => switch (w) {
   IndexWait.none => null,
   IndexWait.battery => battery == null
       ? 'Paused · battery low · plug in to continue'
       : 'Paused · battery low (${battery.percent}%) · plug in to continue',
   IndexWait.charging => 'Waits for charging (long job)',
-  IndexWait.heat => 'Paused · device is warm',
+  // "warm" only when the system's thermal status says so; held on the forecast alone, it is keeping the device cool
+  IndexWait.heat => warm ? 'Paused · device is warm' : 'Paused · keeping the device cool',
   IndexWait.closed => 'Paused · Cache is in the background',
   IndexWait.model => 'Paused · while Ask answers',
   IndexWait.storage => bytesNeeded > 0 ? 'Needs ${formatBytes(bytesNeeded)} free · Free space' : 'Needs more free space · Free space',
@@ -50,12 +51,12 @@ String? indexItemWords(IndexItem i, {BatteryReading? battery}) {
   final of = p == null || p.$2 <= 0 ? '' : ' · ${indexOf(p)}';
   switch (i.state) {
     case IndexState.running:
-      final held = indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded);
+      final held = indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm);
       if (held != null) return '$held$of';
-      if (i.slowed) return 'Slowed down · device is warm$of';
+      if (i.slowed) return '${i.warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool'}$of';
       return '${indexDoingWords(i.kind)}$of';
     case IndexState.held:
-      return indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded) ?? indexWaitingWords(i.kind);
+      return indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm) ?? indexWaitingWords(i.kind);
     case IndexState.queued:
       return indexWaitingWords(i.kind);
     case IndexState.done:
@@ -70,10 +71,12 @@ String? indexStatusLine(IndexScheduler s) {
   if (!s.busy) return null;
   final head = 'Getting search ready · ${s.doneCount} of ${s.totalCount} done';
   final running = s.running == null ? null : s.statusOf(s.running!);
-  if (running != null && running.why == IndexWait.none && running.slowed) return '$head · Slowed down · device is warm';
+  if (running != null && running.why == IndexWait.none && running.slowed) {
+    return '$head · ${running.warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool'}';
+  }
   final why = s.reason;
   final first = [for (final i in s.items) if (i.why == why) i].firstOrNull;
-  final words = indexWaitWords(why, battery: s.reading, bytesNeeded: first?.bytesNeeded ?? 0);
+  final words = indexWaitWords(why, battery: s.reading, bytesNeeded: first?.bytesNeeded ?? 0, warm: s.deviceWarm);
   return words == null ? head : '$head · $words';
 }
 

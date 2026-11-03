@@ -78,6 +78,7 @@ import 'search/pdf_index_work.dart';
 import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
+import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
@@ -341,7 +342,17 @@ class _CacheAppState extends State<CacheApp> {
 
   void _kickIndexing() => unawaited(indexing.kick());
 
-  void _onChatForIndexing() => indexThrottle.setGenerating(chat.busy);
+  bool _modelRunning = false;
+
+  /// The model loading or writing an answer holds the index work: the scheduler stops what runs, so its memory is back first.
+  /// The memory is logged as the model starts, to see what each takes.
+  void _onChatForIndexing() {
+    final on = chat.busy || app.loading != null;
+    if (on && !_modelRunning) debugPrint('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
+    if (!on && _modelRunning) debugPrint('Model done; ${memoryNow()}');
+    _modelRunning = on;
+    indexThrottle.setGenerating(on);
+  }
 
   void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
 
@@ -395,6 +406,8 @@ class _CacheAppState extends State<CacheApp> {
         _beside(app.modelsDir, '.partial'),
         if (_tempPath != null) Directory(_tempPath!),
       ],
+      // A ZIM download a crash or a force stop left is a paused download (Resume carries on), not a leftover.
+      keep: () => browse.resumableParts,
       // Damaged downloads: the files whose published size and SHA-256 are kept (the off-road packs).
       manifests: () => regions.offroadManifests,
       busy: () =>
@@ -592,6 +605,7 @@ class _CacheAppState extends State<CacheApp> {
     coreIndexShared = coreIndexCalls;
     // The model generating an answer pauses background index work; the speed setting applies at once.
     chat.addListener(_onChatForIndexing);
+    app.addListener(_onChatForIndexing);
     settings.addListener(_onSettingsForIndexing);
     // iOS says when the thermal state changes: read it at once.
     kBatteryChannel.setMethodCallHandler((call) async {
@@ -767,6 +781,7 @@ class _CacheAppState extends State<CacheApp> {
     video.removeListener(_syncIndexesOnly);
     video.removeListener(_kickIndexing);
     chat.removeListener(_onChatForIndexing);
+    app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
     indexThrottle.dispose();

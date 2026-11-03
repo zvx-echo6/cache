@@ -152,6 +152,24 @@ void main() {
       await close(tester);
     });
 
+    testWidgets('At the end the controls stay with Replay (not Pause at 0:00); Replay plays from the start', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget());
+      // Android reports the end as completed, back at 0:00 and still "playing"
+      c.value = c.value.copyWith(isCompleted: true, position: Duration.zero);
+      await tester.pump(kControlsHide + const Duration(milliseconds: 100));
+      expect(find.byTooltip('Replay'), findsOneWidget);
+      expect(find.byIcon(Icons.replay), findsOneWidget);
+      expect(find.byTooltip('Pause'), findsNothing);
+      c.calls.clear();
+      await tester.tap(find.byTooltip('Replay'));
+      c.value = c.value.copyWith(isCompleted: false);
+      await tester.pump();
+      expect(c.calls, ['seek:0', 'play']);
+      expect(find.byTooltip('Pause'), findsOneWidget);
+      await close(tester);
+    });
+
     testWidgets('A double tap on the right half skips forward 10 s, on the left back 10 s, with a brief +10 s / -10 s', (tester) async {
       final c = RecordingController();
       await open(tester, c, playerTarget());

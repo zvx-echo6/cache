@@ -365,8 +365,11 @@ fn the_snapshot_is_attached_and_its_hits_cite_the_page() {
             let want = if t.starts_with("Manual A") { 2 } else { 7 };
             assert_eq!(r["pdf_page"], want, "{r}");
             assert_eq!(r["page"], want, "{r}");
+            // where it opens and the passage to mark, as its citation
+            assert!(r["link"].as_str().unwrap().ends_with(&format!(".pdf#page={want}")), "{r}");
+            assert!(!r["quote"].as_str().unwrap().is_empty(), "{r}");
         } else {
-            assert!(r.get("pdf_page").is_none(), "{r}");
+            assert!(r.get("pdf_page").is_none() && r.get("quote").is_none(), "{r}");
         }
     }
     let s = call(unsafe { cs_search(h, cstr("flood").as_ptr(), o.as_ptr()) });

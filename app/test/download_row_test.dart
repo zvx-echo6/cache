@@ -14,6 +14,7 @@ void main() {
       expect(dlLine(DlState(DlPhase.starting, total: total)), 'Starting…');
       expect(dlLine(DlState(DlPhase.running, done: done, total: total, speed: 6.2 * _mb)), '1.7 of 4.6 GB · 6.2 MB/s · about 8 min left');
       expect(dlLine(DlState(DlPhase.running, done: done, total: total)), '1.7 of 4.6 GB', reason: 'no speed before 5 seconds of data');
+      expect(dlLine(DlState(DlPhase.running, done: done, total: total, speed: 0)), '1.7 of 4.6 GB · Waiting for the server', reason: 'measured, and nothing came');
       expect(dlLine(DlState(DlPhase.pausing, done: done, total: total)), 'Pausing…');
       expect(dlLine(DlState(DlPhase.paused, done: done, total: total)), 'Paused · 1.7 of 4.6 GB');
       expect(dlLine(DlState(DlPhase.failed, done: done, total: total, reason: DlReason.noConnection)), 'Stopped: no connection · 1.7 of 4.6 GB');

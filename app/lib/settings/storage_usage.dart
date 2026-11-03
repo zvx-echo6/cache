@@ -32,6 +32,7 @@ class StorageUsage extends ChangeNotifier {
     required this.kinds,
     required this.freeIn,
     this.leftovers = _noDirs,
+    this.keep = _noKeep,
     this.manifests = _noManifests,
     this.busy = _idle,
     FreeSpace? freeSpace,
@@ -50,6 +51,10 @@ class StorageUsage extends ChangeNotifier {
   /// Where unfinished downloads and temporary files collect (partial-download folders, the temporary folder). Clean up empties them.
   final List<Directory?> Function() leftovers;
 
+  /// Files in those folders that are not leftovers: the partial files of downloads that can still be carried on (a ZIM download a
+  /// crash stopped shows as paused, with Resume). They are neither counted nor removed by Clean up.
+  final Set<String> Function() keep;
+
   /// The downloaded files that have a published manifest (size and SHA-256): one that does not match it is damaged, and Clean up
   /// removes it so it can be downloaded again. Files with no manifest are never checked.
   final List<FileManifest> Function() manifests;
@@ -65,6 +70,7 @@ class StorageUsage extends ChangeNotifier {
 
   static List<Directory?> _noDirs() => const [];
   static List<FileManifest> _noManifests() => const [];
+  static Set<String> _noKeep() => const {};
   static bool _idle() => false;
 
   final Map<String, int> _bytes = {};
@@ -100,6 +106,19 @@ class StorageUsage extends ChangeNotifier {
     }
   }
 
+  /// The leftover folders' bytes, less the files to [keep].
+  Future<int> _leftoverBytes() async {
+    final kept = keep();
+    var t = await _sum(leftovers());
+    for (final p in kept) {
+      try {
+        final f = File(p);
+        if (f.existsSync() && leftovers().any((d) => d != null && p.startsWith('${d.path}/'))) t -= f.lengthSync();
+      } catch (_) {}
+    }
+    return t < 0 ? 0 : t;
+  }
+
   Future<int> _sum(List<Directory?> dirs) async {
     var t = 0;
     for (final d in dirs) {
@@ -119,7 +138,7 @@ class StorageUsage extends ChangeNotifier {
       }
       // Sizes at once; the checksums (worked out once per file) follow.
       damagedFiles = await _damaged.find(manifests(), hash: false);
-      cleanupBytes = await _sum(leftovers()) + _bytesOf(damagedFiles);
+      cleanupBytes = await _leftoverBytes() + _bytesOf(damagedFiles);
       measured = true;
     } finally {
       _busy = false;
@@ -163,11 +182,13 @@ class StorageUsage extends ChangeNotifier {
         await File(m.path).delete();
       } catch (_) {}
     }
+    final kept = keep();
     for (final d in leftovers()) {
       if (d == null) continue;
       try {
         if (!await d.exists()) continue;
         await for (final e in d.list(followLinks: false)) {
+          if (kept.contains(e.path)) continue;
           try {
             await e.delete(recursive: true);
           } catch (_) {}

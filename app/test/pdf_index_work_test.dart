@@ -140,7 +140,7 @@ void main() {
     }
     // Slowed by heat while it runs.
     run.setDuty(IndexDuty.share(0.3, hold: IndexHold.heat));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down · device is warm · '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down · keeping the device cool · '));
     run.setDuty(IndexDuty.share(2 / 3));
     expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable · '));
     // Held because it waits for charging: not "low battery".
@@ -166,7 +166,7 @@ void main() {
   test('the words for each reason', () {
     expect(pdfHoldWords(PdfHold.waiting), 'Waiting to make PDFs searchable');
     expect(pdfHoldWords(PdfHold.charging), 'Waits for charging (long job)');
-    expect(pdfHoldWords(PdfHold.warm), 'Slowed down · device is warm');
+    expect(pdfHoldWords(PdfHold.warm), 'Slowed down · keeping the device cool');
     expect(pdfHoldWords(PdfHold.battery), 'Paused · battery low · plug in to continue');
     expect(pdfHoldWords(PdfHold.storage), 'Needs more free space · Free space');
     expect(pdfHoldWords(PdfHold.closed), 'Paused · Cache is in the background');

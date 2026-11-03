@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -174,6 +175,49 @@ void main() {
       expect(Directory(sources.partialDir.path).listSync(), isEmpty);
     });
 
+    test('a download a crash stopped comes back as paused with its partial file, and Resume finishes it', () async {
+      final e = entryFor(server.port);
+      // what the stopped app left: the record of the download and its partial file
+      File('${settings.path}/browse.json').writeAsStringSync(jsonEncode({
+        'language': 'eng',
+        'downloads': {
+          e.id: {'entry': e.toJson()},
+        },
+      }));
+      final part = File('${sources.partialDir.path}/${e.fileName}.part')..createSync(recursive: true);
+      part.writeAsBytesSync(bytes.sublist(0, 50000));
+      final b = make(downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
+      await b.init();
+      final t = b.transfers[e.id]!;
+      expect((t.phase, t.done, t.total), (TransferPhase.paused, 50000, bytes.length));
+      expect(b.resumableParts, {part.path}, reason: 'Storage does not offer it as a leftover');
+      await b.resume(e);
+      expect(b.transfers, isEmpty);
+      expect(File(sources.zims.single.path).readAsBytesSync(), bytes);
+      // finished: the record is gone, so the next start brings nothing back
+      await Future<void>.delayed(const Duration(milliseconds: 100)); // the record is written without waiting
+      final again = make(downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
+      await again.init();
+      expect(again.transfers, isEmpty);
+    });
+
+    test('a record whose partial file is gone is forgotten', () async {
+      final e = entryFor(server.port);
+      File('${settings.path}/browse.json').writeAsStringSync(jsonEncode({
+        'downloads': {
+          e.id: {'entry': e.toJson()},
+        },
+      }));
+      final b = make();
+      await b.init();
+      expect(b.transfers, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 100)); // the record is written without waiting
+      final again = make();
+      await again.init();
+      expect(again.transfers, isEmpty);
+      expect(File('${settings.path}/browse.json').readAsStringSync(), isNot(contains(e.id)));
+    });
+
     test('a failed download is kept as a failure with the reason and can be tried again', () async {
       final b = make(downloader: ZimDownloader(freeSpace: (_) => 10));
       await b.init();
@@ -312,6 +356,9 @@ void main() {
     expect(b.inLanguage(e('eng')), isTrue);
     expect(b.inLanguage(e('eng,jpn')), isFalse, reason: 'the Japanese Stack Overflow is tagged eng,jpn');
     expect(b.inLanguage(e('rus')), isFalse);
+    expect(b.inLanguage(e('eng,ara,spa,fra,kor,vie,ind,ita,por,zho,rus,tur,mya')), isTrue, reason: 'a multi-language collection (TED) includes it');
+    expect(b.inLanguage(e('mul')), isTrue, reason: 'tagged as multi-language');
+    expect(b.inLanguage(e('ara,spa,fra')), isFalse, reason: 'many languages, but not this one');
     expect(b.inLanguage(e('')), isTrue, reason: 'no language given: kept');
     b.language = '';
     expect(b.inLanguage(e('eng,jpn')), isTrue, reason: 'All languages lists every collection');

@@ -14,6 +14,7 @@ import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
 import '../video/format.dart';
+import 'index/pdf_pages.dart' show cleanPdfTitle, readPdfMeta;
 import 'pdf_find.dart';
 import 'pdf_settings.dart';
 import 'pdf_source.dart';
@@ -101,6 +102,10 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _cancelled = false;
   PdfDocument? _doc;
   PdfDocumentRef? _ref;
+
+  /// The PDF's own title (its metadata Title, cleaned as the search index cleans it), once read: the reader shows the title its
+  /// search results and citations show. Null: the source's (the file name).
+  String? _ownTitle;
   final PdfViewerController _controller = PdfViewerController();
 
   bool _showOpening = false;
@@ -280,6 +285,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         ..onCurrent = _goToMatch;
       _setPhase(_Phase.open, () => _wrongPassword = false);
       unawaited(_afterOpen(start));
+      unawaited(_readOwnTitle(doc));
     } on PdfPasswordException {
       _setPhase(_Phase.locked, () => _wrongPassword = password != null);
     } on PdfGone {
@@ -687,12 +693,23 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // ---- building
 
+  Future<void> _readOwnTitle(PdfDocument doc) async {
+    try {
+      // the handle only here; PDFium itself is called in pdfrx's worker (see readPdfMeta)
+      final handle = await doc.useNativeDocumentHandle((h) => h);
+      final t = cleanPdfTitle((await readPdfMeta(handle, 0)).title);
+      if (mounted && _doc == doc && t.isNotEmpty) setState(() => _ownTitle = t);
+    } catch (_) {
+      // no title to read: the file name stays
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     final nav = Navigator.of(context);
     final open = _phase == _Phase.open;
-    final title = widget.source.title;
+    final title = _ownTitle ?? widget.source.title;
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () => _openFind(),
