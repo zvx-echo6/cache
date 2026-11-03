@@ -34,6 +34,17 @@ sources you want, and Cache uses them offline.
   </tr>
 </table>
 
+## Get Cache
+
+Cache is in open testing. Its home page is [cached.info](https://cached.info).
+
+- **Android:** [join the open test on Google Play](https://play.google.com/apps/testing/com.happylittlellc.cache), then
+  [install Cache from Google Play](https://play.google.com/store/apps/details?id=com.happylittlellc.cache).
+- **iPhone and iPad:** [join the test on TestFlight](https://testflight.apple.com/join/EcC7T8wx).
+- **Android APK for sideloading:** coming in [GitHub Releases](https://github.com/zvx-echo6/cache/releases).
+
+Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later. Linux and Raspberry Pi: coming in 1.1.
+
 ## What it does (1.0.30)
 
 **Ask, on the device**
@@ -84,18 +95,6 @@ sources you want, and Cache uses them offline.
 - Layouts for phones, tablets (two panes) and wide windows.
 
 The full user guide is in [docs/guide](docs/guide/ch1.md).
-
-## Get it
-
-Cache is in testing.
-
-- **Android:** Google Play testing. Join links coming soon.
-- **iPhone:** TestFlight. Join links coming soon.
-- **Android APK for sideloading:** coming in [GitHub Releases](https://github.com/zvx-echo6/cache/releases).
-
-Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later.
-
-Linux and Raspberry Pi: coming in 1.1.
 
 ## Build from source
 

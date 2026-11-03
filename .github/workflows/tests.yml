@@ -5,6 +5,9 @@
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
 #   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
 #            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it)
+#   embed-parity  the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
+#            with the pinned bge-m3 model and a Linux cache_llama (places_pack's parity_tests, then
+#            app/test/query_embedder_parity_test.dart, matched to the golden at cosine 0.999 and to each other exactly)
 #
 # The core builds on Linux without libzim: build.rs compiles the C++ shim over the official prebuilt libzim only for Windows,
 # Android and iOS, so the `xapian` feature is on (the default) but has no effect here, and the zimx tests (cfg(zimx)) run on
@@ -27,6 +30,9 @@ concurrency:
 
 env:
   FLUTTER_VERSION: 3.44.8
+  # The embedding model the places builder and the phone use (as guide-library.yml and places_pack/RECIPE.md).
+  MODEL_URL: https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf
+  MODEL_SHA256: c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
   RUST_VERSION: 1.99.1
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
@@ -99,3 +105,52 @@ jobs:
         run: |
           flutter pub get
           flutter test --no-pub
+
+  embed-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # llama.cpp, for cache_llama
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          key: embed-parity
+          cache-on-failure: true
+      - name: The embedding model
+        run: |
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $RUNNER_TEMP/models/bge-m3-Q8_0.gguf" | sha256sum -c -
+      - name: cache_llama (Linux, CPU, AVX2 as the build host)
+        run: |
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/llama" -DCMAKE_BUILD_TYPE=Release -DCACHE_LLAMA_X86_AVX2=ON
+          cmake --build "$RUNNER_TEMP/llama" --target cache_llama -j "$(nproc)"
+          lib=$(find "$RUNNER_TEMP/llama" -name 'libcache_llama.so' | head -n 1)
+          [ -n "$lib" ] || { echo 'libcache_llama.so was not built'; exit 1; }
+          echo "LLAMA_LIB=$lib" >> "$GITHUB_ENV"
+          echo "LLAMA_DIR=$(dirname "$lib")" >> "$GITHUB_ENV"
+      - name: Builder parity (places_pack)
+        working-directory: packages/cache_search/native
+        run: |
+          PLACES_EMBED_LIB="$LLAMA_LIB" PLACES_EMBED_MODEL="$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" \
+          PLACES_EMBED_LOCAL_OUT="$RUNNER_TEMP/local-golden.json" \
+            cargo test --locked -p places_pack parity_tests -- --nocapture
+          test -s "$RUNNER_TEMP/local-golden.json"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Phone parity (app)
+        working-directory: app
+        run: |
+          flutter pub get
+          CACHE_EMBED_MODELS_DIR="$RUNNER_TEMP/models" CACHE_EMBED_LOCAL_GOLDEN="$RUNNER_TEMP/local-golden.json" \
+          LD_LIBRARY_PATH="$LLAMA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test --no-pub test/query_embedder_parity_test.dart
