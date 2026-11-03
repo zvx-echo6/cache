@@ -4,7 +4,12 @@ import 'package:flutter/foundation.dart';
 
 import '../platform/battery.dart';
 import '../settings/space.dart';
+import 'index_status.dart' show indexStatusLine;
 import 'index_throttle.dart';
+
+/// The app's one index scheduler, set at start; null in tests that do not need it (the Library then shows only what the PDF
+/// state says).
+IndexScheduler? indexSchedulerShared;
 
 /// One piece of automatic index work: build a source's index (the core's `index_source`), seal an index built before snapshots
 /// (`index_seal`), or make a ZIM's PDFs searchable (the PDF loop). [key] is `<kind>/<source id>`, the same folder the
@@ -17,9 +22,18 @@ class IndexTask {
     this.uses = 0,
     this.long = true,
     this.bytesNeeded = 0,
+    this.title = '',
+    this.progress,
   });
 
   final String key;
+
+  /// What the work is on, as the person knows it: the library's or video's name ("Army Publishing"); empty when not known.
+  final String title;
+
+  /// How far the work is while it runs (items done, of all): the PDFs read, the caption files or EPUBs read. Null when the
+  /// work cannot say.
+  final (int, int)? Function()? progress;
 
   /// What the work is about, to put the small first: bytes of the source, or items in it.
   final int size;
@@ -57,8 +71,42 @@ abstract class IndexWorkSource {
   Future<List<IndexTask>> pending();
 }
 
-/// Why nothing runs right now, when there is work.
-enum IndexWait { none, closed, battery, charging, storage, heat, model }
+/// Why nothing runs right now, when there is work: Cache is in the background, the battery is low, long work waits for
+/// charging, not enough room, the device is warm, Ask is answering, or the person paused it all.
+enum IndexWait { none, closed, battery, charging, storage, heat, model, person }
+
+/// Where one piece of work stands: running now, queued (next in turn, nothing holds it but the one running), held (with its
+/// reason), or done this session.
+enum IndexState { running, queued, held, done }
+
+/// One piece of work as the scheduler sees it now: the one source of the Library rows, their menus, the Library's overview and
+/// the Settings line, so none of them says "Making" for work that is not running.
+class IndexItem {
+  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false});
+
+  final String key;
+  final IndexState state;
+  final String title;
+
+  /// Why it is held ([IndexState.held]).
+  final IndexWait why;
+
+  /// Its place in the queue, from 1 (queued and held work); 0 for running and done work.
+  final int position;
+
+  /// Items done, of all, while it runs.
+  final (int, int)? progress;
+
+  /// The room it needs (for "Needs 1.2 GB free").
+  final int bytesNeeded;
+
+  /// Running, but slowed down because the device is warm.
+  final bool slowed;
+
+  /// The kind of work: the part of the key before its last "/" ("zim-pdf", "zim-epub", "zim-captions", "captions", "zim",
+  /// "library").
+  String get kind => key.contains('/') ? key.substring(0, key.indexOf('/')) : key;
+}
 
 /// The one place that decides when automatic index work runs (every kind: index_source, index_seal, the PDF loop). Rules:
 /// only while the app is open; one piece at a time, the most used first and, among those, the smallest; long work needs
@@ -99,6 +147,21 @@ class IndexScheduler extends ChangeNotifier {
   final Set<String> _seen = {};
   final Set<String> _done = {};
 
+  /// The work listed at the last look, in the order it runs, and why each is held (none: queued or running).
+  List<String> _order = const [];
+  final Map<String, IndexWait> _why = {};
+  final Map<String, IndexTask> _tasks = {};
+  final Map<String, String> _titles = {};
+
+  bool _saidNoBattery = false;
+
+  /// The person's Pause all: nothing runs until Resume.
+  bool _pausedAll = false;
+  bool get pausedAll => _pausedAll;
+
+  /// The battery at the last look (null when the device cannot say: then nothing waits for the battery).
+  BatteryReading? reading;
+
   IndexWait wait = IndexWait.none;
 
   /// The key of the work running now.
@@ -106,17 +169,103 @@ class IndexScheduler extends ChangeNotifier {
   int get doneCount => _done.length;
   int get totalCount => _seen.length;
 
-  /// The quiet line Settings shows while there is work; null when there is none.
-  String? get line {
-    if (_seen.isEmpty || _done.length >= _seen.length) return null;
-    final head = 'Getting search ready: ${_done.length} of ${_seen.length}';
-    if (throttle?.warm ?? false) return '$head · slowed down, phone is warm';
-    return switch (wait) {
-      IndexWait.battery => '$head · paused, battery low',
-      IndexWait.charging => '$head · waits for charging',
-      IndexWait.storage => '$head · paused, not enough space',
-      _ => head,
-    };
+  /// The quiet line Settings and the Library's overview show while there is work; null when there is none.
+  String? get line => indexStatusLine(this);
+
+  /// How much of all the work seen is done, 0 to 1, for the overview's bar. Each source counts as one equal share (the
+  /// headline says "3 of 9 done" in sources); inside its share a source fills by the items it reports (PDFs read of all its
+  /// PDFs, caption files or EPUBs read), so the bar moves while a big library runs instead of sitting still for an hour. Work
+  /// that cannot say its progress fills its share when it is done.
+  double get fraction {
+    if (_seen.isEmpty) return 1;
+    var sum = 0.0;
+    for (final k in _seen) {
+      if (_done.contains(k)) {
+        sum += 1;
+        continue;
+      }
+      final p = _tasks[k]?.progress?.call();
+      if (p != null && p.$2 > 0) sum += (p.$1 / p.$2).clamp(0.0, 1.0);
+    }
+    return (sum / _seen.length).clamp(0.0, 1.0);
+  }
+
+  /// Whether there is work not done yet (the Settings line and the Library's overview show while there is).
+  bool get busy => _seen.isNotEmpty && _done.length < _seen.length;
+
+  /// Where [key]'s work stands now; null when the scheduler has not seen it (nothing to do, or not listed yet).
+  IndexItem? statusOf(String key) {
+    final title = _titles[key] ?? '';
+    final t = _tasks[key];
+    if (_current?.key == key) {
+      // Running, but the throttle may be holding it at its next checkpoint (too warm, a low battery, Ask answering): that is
+      // its reason; warm but not held is slowed down.
+      final d = throttle?.duty;
+      final held = d != null && d.paused
+          ? switch (d.hold) {
+              IndexHold.heat => IndexWait.heat,
+              IndexHold.battery => IndexWait.battery,
+              IndexHold.model || IndexHold.none => IndexWait.model,
+            }
+          : IndexWait.none;
+      return IndexItem(key: key, state: IndexState.running, title: title, why: held, progress: t?.progress?.call(), slowed: held == IndexWait.none && (throttle?.warm ?? false));
+    }
+    final at = _order.indexOf(key);
+    if (at >= 0) {
+      final why = _why[key] ?? IndexWait.none;
+      return IndexItem(
+        key: key,
+        state: why == IndexWait.none ? IndexState.queued : IndexState.held,
+        title: title,
+        why: why,
+        position: at + 1,
+        bytesNeeded: t?.bytesNeeded ?? 0,
+        progress: t?.progress?.call(),
+      );
+    }
+    if (_done.contains(key)) return IndexItem(key: key, state: IndexState.done, title: title);
+    return null;
+  }
+
+  /// Everything seen since the last time all was done: the running work, then the rest in the order it runs, then what is done.
+  List<IndexItem> get items => [
+    if (_current case final c?) statusOf(c.key)!,
+    for (final k in _order)
+      if (k != _current?.key) statusOf(k)!,
+    for (final k in _seen)
+      if (_done.contains(k) && !_order.contains(k) && k != _current?.key) IndexItem(key: k, state: IndexState.done, title: _titles[k] ?? ''),
+  ];
+
+  /// Why the work does not go on as usual, for the Settings line and the overview: the running work's slowing down, else the
+  /// reason the first held work waits; none when work runs as usual or is only queued.
+  IndexWait get reason {
+    if (_current case final c?) return statusOf(c.key)!.why;
+    for (final k in _order) {
+      final w = _why[k] ?? IndexWait.none;
+      if (w != IndexWait.none) return w;
+    }
+    return wait;
+  }
+
+  /// The person's Pause all (the Library's queue sheet): what runs pauses and keeps its work, and nothing starts until
+  /// [resumeAll].
+  Future<void> pauseAll() async {
+    if (_pausedAll) return;
+    _pausedAll = true;
+    for (final k in _order) {
+      _why[k] = IndexWait.person;
+    }
+    await _pause(IndexWait.person);
+    notifyListeners();
+  }
+
+  /// Resume after [pauseAll]: the rules decide again at once.
+  Future<void> resumeAll() async {
+    if (!_pausedAll) return;
+    _pausedAll = false;
+    _why.clear();
+    notifyListeners();
+    await kick();
   }
 
   /// The app came to the front (true) or went to the back (false): work runs only while it is open.
@@ -156,6 +305,7 @@ class IndexScheduler extends ChangeNotifier {
 
   Future<void> _tick() async {
     if (!_open) return _pause(IndexWait.closed);
+    if (_pausedAll) return _pause(IndexWait.person);
     final work = <IndexTask>[];
     for (final s in sources) {
       try {
@@ -172,28 +322,61 @@ class IndexScheduler extends ChangeNotifier {
       if (_done.length >= _seen.length) {
         _seen.clear();
         _done.clear();
+        _order = const [];
+        _why.clear();
+        _tasks.clear();
       }
       _set(IndexWait.none);
+      notifyListeners();
       return;
     }
     work.sort((a, b) => b.uses != a.uses ? b.uses.compareTo(a.uses) : a.size.compareTo(b.size));
+    for (final t in work) {
+      _tasks[t.key] = t;
+      if (t.title.isNotEmpty) _titles[t.key] = t.title;
+    }
+    _order = [for (final t in work) t.key];
+    _why.removeWhere((k, _) => !keys.contains(k));
     final b = await _battery();
+    // A device that cannot say its battery (a desktop, or a failed read) never holds work for the battery: it runs as if plugged
+    // in. Said once in the log.
+    if (b == null && !_saidNoBattery) {
+      _saidNoBattery = true;
+      debugPrint('Index work: the battery could not be read; it runs as if plugged in');
+    }
+    reading = b;
     final s = space();
-    // The running work goes on while the rules allow it; otherwise it pauses (resumable).
+    // The running work goes on while the rules allow it; otherwise it pauses (resumable). The rest wait their turn.
     final cur = _current;
     if (cur != null) {
       final why = _blocked(cur, b, s, running: true);
-      if (why != IndexWait.none) await _pause(why);
+      for (final t in work) {
+        _why[t.key] = IndexWait.none;
+      }
+      if (why != IndexWait.none) {
+        await _pause(why);
+      } else {
+        notifyListeners();
+      }
       return;
     }
+    // Each in turn: the first the rules let through starts; those before it say why they wait; those after it are queued.
+    var started = false;
     for (final t in work) {
-      final why = _blocked(t, b, s, running: false);
-      if (why == IndexWait.none) {
-        await _start(t);
-        return;
+      if (started) {
+        _why[t.key] = IndexWait.none;
+        continue;
       }
-      _set(why);
+      final why = _blocked(t, b, s, running: false);
+      _why[t.key] = why;
+      if (why == IndexWait.none) {
+        started = true;
+        await _start(t);
+      } else {
+        _set(why);
+      }
     }
+    notifyListeners();
   }
 
   IndexWait _blocked(IndexTask t, BatteryReading? b, Space s, {required bool running}) {
@@ -234,7 +417,10 @@ class IndexScheduler extends ChangeNotifier {
       if (d != null) run.setDuty(d);
       unawaited(run.finished.then((ok) {
         if (_current?.key != t.key) return;
-        if (ok) _done.add(t.key);
+        if (ok) {
+          _done.add(t.key);
+          _order = [for (final k in _order) if (k != t.key) k];
+        }
         _current = null;
         _run = null;
         throttle?.watch(false);
@@ -258,9 +444,18 @@ class IndexScheduler extends ChangeNotifier {
 
   Future<void> _pause(IndexWait why) async {
     final run = _run;
+    final cur = _current;
     _current = null;
     _run = null;
     throttle?.watch(false);
+    // What ran goes back to the front of the queue, held for the same reason; on closing or Pause all, everything is held.
+    if (cur != null && !_order.contains(cur.key)) _order = [cur.key, ..._order];
+    if (cur != null) _why[cur.key] = why;
+    if (why == IndexWait.closed || why == IndexWait.person) {
+      for (final k in _order) {
+        _why[k] = why;
+      }
+    }
     _set(why);
     if (run != null) {
       try {
@@ -305,7 +500,13 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress});
+
+  /// The library's or video's name.
+  final String title;
+
+  /// The running job's progress (items read, of all), while it runs.
+  final (int, int)? Function()? progress;
 
   final String kind;
   final String sourceId;
@@ -345,6 +546,8 @@ class CoreIndexWork implements IndexWorkSource {
             uses: n.uses,
             long: !n.seal,
             bytesNeeded: n.bytesNeeded,
+            title: n.title,
+            progress: n.progress,
             start: () => calls.start(n),
           ),
       ];

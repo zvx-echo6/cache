@@ -33,8 +33,10 @@ enum PdfPartPhase { waiting, starting, running, pausing, finishing, paused, need
 /// Who paused it: the person, a low battery (the run's own check), Cache closing, or the app's index scheduler ([held]).
 enum PdfPause { person, battery, closed, held }
 
-/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words.
-enum PdfHold { waiting, charging, warm, battery, storage }
+/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words: queued behind other
+/// work, long work waiting for charging, the device warm, the battery low, not enough room, Cache in the background, Ask
+/// answering, or the person's Pause all.
+enum PdfHold { waiting, charging, warm, battery, storage, closed, model, person }
 
 /// What the PDFs part of one library shows.
 class PdfPart {

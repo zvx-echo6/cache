@@ -224,7 +224,7 @@ void main() {
       t.setGenerating(false);
       await at(_r(thermal: Thermal.light));
       expect(runs.single.duties.last.hold, IndexHold.heat);
-      expect(s.line, 'Getting search ready: 0 of 2 · slowed down, phone is warm');
+      expect(s.line, 'Getting search ready · 0 of 2 done · Slowed down · device is warm');
       // Severe: the running work is held by its duty; nothing new would start.
       await at(_r(thermal: Thermal.severe));
       expect(runs.single.duties.last.paused, isTrue);

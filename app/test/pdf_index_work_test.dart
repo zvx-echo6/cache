@@ -140,9 +140,9 @@ void main() {
     }
     // Slowed by heat while it runs.
     run.setDuty(IndexDuty.share(0.3, hold: IndexHold.heat));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down, phone is warm · '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down · device is warm · '));
     run.setDuty(IndexDuty.share(2 / 3));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable: '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable · '));
     // Held because it waits for charging: not "low battery".
     await run.pause(IndexWait.charging);
     expect(await run.finished.timeout(const Duration(seconds: 10)), isFalse);
@@ -151,12 +151,12 @@ void main() {
     }
     final held = pdf.partOf(z)!;
     expect(held.pause, PdfPause.held);
-    expect(pdfPartLine(held), startsWith('Waits for charging · '));
+    expect(pdfPartLine(held), startsWith('Waits for charging (long job) · '));
     expect(File('${dir.path}/pdf-index.json').readAsStringSync(), contains('"pause":"held"'));
     expect(pdf.needsIndex(z), isTrue, reason: 'the scheduler starts it again');
     // The app went to the back: just waiting.
     await pdf.hold(z, pdfHoldOf(IndexWait.closed));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Waiting · '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Paused · Cache is in the background · '));
     // Started again: the reason goes.
     await pdf.start(z);
     expect(pdf.partOf(z)!.pause, isNot(PdfPause.held));
@@ -164,15 +164,21 @@ void main() {
   });
 
   test('the words for each reason', () {
-    expect(pdfHoldWords(PdfHold.waiting), 'Waiting');
-    expect(pdfHoldWords(PdfHold.charging), 'Waits for charging');
-    expect(pdfHoldWords(PdfHold.warm), 'Slowed down, phone is warm');
-    expect(pdfHoldWords(PdfHold.battery), 'Paused, battery low');
-    expect(pdfHoldWords(PdfHold.storage), 'Paused, not enough space');
+    expect(pdfHoldWords(PdfHold.waiting), 'Waiting to make PDFs searchable');
+    expect(pdfHoldWords(PdfHold.charging), 'Waits for charging (long job)');
+    expect(pdfHoldWords(PdfHold.warm), 'Slowed down · device is warm');
+    expect(pdfHoldWords(PdfHold.battery), 'Paused · battery low · plug in to continue');
+    expect(pdfHoldWords(PdfHold.storage), 'Needs more free space · Free space');
+    expect(pdfHoldWords(PdfHold.closed), 'Paused · Cache is in the background');
+    expect(pdfHoldWords(PdfHold.model), 'Paused · while Ask answers');
+    expect(pdfHoldWords(PdfHold.person), 'Paused by you · Resume');
     expect(pdfHoldOf(IndexWait.storage), PdfHold.storage);
     expect(pdfHoldOf(IndexWait.heat), PdfHold.warm);
     expect(pdfHoldOf(IndexWait.battery), PdfHold.battery);
-    expect(pdfHoldOf(IndexWait.closed), PdfHold.waiting);
-    expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 10, handled: 3, pause: PdfPause.battery)), 'Paused, battery low');
+    expect(pdfHoldOf(IndexWait.closed), PdfHold.closed);
+    expect(pdfHoldOf(IndexWait.model), PdfHold.model);
+    expect(pdfHoldOf(IndexWait.person), PdfHold.person);
+    expect(pdfHoldOf(IndexWait.none), PdfHold.waiting);
+    expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 10, handled: 3, pause: PdfPause.battery)), 'Paused · battery low · plug in to continue · 3 of 10');
   });
 }

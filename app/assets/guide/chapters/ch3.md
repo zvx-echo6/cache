@@ -21,7 +21,7 @@ The status lines show the state without opening the row. For example, "Storage" 
 
 There is no Library or Videos page here. Open them from "Modules".
 
-At the foot of the page, a small grey line shows while Cache makes search ready in the background. For example "Getting search ready: 3 of 12". It can add why it waits: `waits for charging`, `paused, battery low`, `paused, not enough space` or `slowed down, phone is warm`. It goes away when the work is done. You do not need to do anything. See Background indexing speed.
+At the foot of the page, a bar shows while Cache makes search ready in the background, for example `Getting search ready · 3 of 12 done`. It adds why it waits, for example `Paused · battery low (12%) · plug in to continue` or "Waits for charging (long job)". Tap it to see the queue. It goes away when the work is done. You do not need to do anything. See Background indexing speed, and Search inside PDFs, EPUBs and captions in chapter 2.
 
 - If a row says "Not available", that part of Cache couldn't start. Restart Cache. See When part of Cache is not available in chapter 6.
 
@@ -256,7 +256,7 @@ Changes apply at once. Either way the work eases off when the device warms up, w
 
 On a computer, with no battery to read, Cache uses the faster pace.
 
-The grey line at the foot of "Settings" shows the progress, for example "Getting search ready: 3 of 12". See Search inside PDFs, EPUBs and captions in chapter 2.
+The bar at the top of "Library" and at the foot of "Settings" shows the progress, for example `Getting search ready · 3 of 12 done`. See Search inside PDFs, EPUBs and captions in chapter 2.
 
 ## Mobile data downloads
 

@@ -95,14 +95,21 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     return [
       for (final s in statuses())
         if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}'))
-          CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir),
+          CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir, title: s.title),
       for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
           if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null && !_waits('${sub.kind}/${sub.sourceId ?? s.sourceId}'))
-            CoreIndexNeed(kind: sub.kind!, sourceId: (sub.sourceId ?? s.sourceId)!, seal: false, size: sub.entries ?? 0),
+            CoreIndexNeed(
+              kind: sub.kind!,
+              sourceId: (sub.sourceId ?? s.sourceId)!,
+              seal: false,
+              size: sub.entries ?? 0,
+              title: s.title,
+              progress: () => progress.value['${sub.kind}/${sub.sourceId ?? s.sourceId}'],
+            ),
       for (final v in videos())
         if (v.captionsIndex case final c? when c.needsBuild && c.sourceId.isNotEmpty && !_waits('captions/${c.sourceId}'))
-          CoreIndexNeed(kind: 'captions', sourceId: c.sourceId, seal: false, size: c.files),
+          CoreIndexNeed(kind: 'captions', sourceId: c.sourceId, seal: false, size: c.files, title: v.title, progress: () => progress.value['captions/${c.sourceId}']),
     ];
   }
 

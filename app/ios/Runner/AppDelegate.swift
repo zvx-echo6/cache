@@ -66,6 +66,9 @@ import workmanager_apple
     }
     // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
     let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    // Monitoring is on from the start, so the first read already has the level (UIDevice reports -1 until it is on; the app
+    // then treats the battery as unknown and does not hold work for it).
+    UIDevice.current.isBatteryMonitoringEnabled = true
     battery.setMethodCallHandler { call, result in
       guard call.method == "read" else {
         result(FlutterMethodNotImplemented)
