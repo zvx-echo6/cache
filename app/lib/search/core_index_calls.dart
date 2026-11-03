@@ -264,5 +264,5 @@ String coreStepWords(String? phase, int done, int total) => switch (phase) {
   'index' => 'Writing the index',
   'merge' => 'Merging the index',
   'publish' || 'manifest' => 'Saving the index',
-  _ => phase ?? 'Working',
+  _ => phase,
 };
