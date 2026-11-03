@@ -157,7 +157,7 @@ class IndexQueueSheet extends StatelessWidget {
         final stuck = i.why == IndexWait.stuck;
         return ListTile(
           key: ValueKey('index-item-${i.key}'),
-          title: Text(i.title.isEmpty ? indexPartWord(i.kind) : '${i.title} · ${indexPartWord(i.kind)}', maxLines: 1, overflow: TextOverflow.ellipsis),
+          title: Text(indexItemTitle(i, items), maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,

@@ -110,3 +110,17 @@ String? indexRowWords(IndexScheduler s, List<String> keys) {
   if (queued.isNotEmpty) return indexItemWords(queued.first, battery: s.reading);
   return null;
 }
+
+/// What tells one library from another of the same name, by work key ("zim-epub/<id>"): the catalogue's summary of that ZIM, or
+/// its file name. Set by the app; null in tests.
+String? Function(String key)? indexItemDetail;
+
+/// An item's name in the queue: "Wikipedia · PDFs"; when another item of the same kind has the same name (several "Project
+/// Gutenberg Library" ZIMs), with what tells them apart: "Project Gutenberg Library · Law books · EPUBs".
+String indexItemTitle(IndexItem i, Iterable<IndexItem> all) {
+  final part = indexPartWord(i.kind);
+  if (i.title.isEmpty) return part;
+  final same = all.any((o) => o.key != i.key && o.kind == i.kind && o.title == i.title);
+  final detail = same ? indexItemDetail?.call(i.key) : null;
+  return detail == null || detail.isEmpty ? '${i.title} · $part' : '${i.title} · $detail · $part';
+}

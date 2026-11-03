@@ -80,6 +80,7 @@ import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
+import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
@@ -602,6 +603,13 @@ class _CacheAppState extends State<CacheApp> {
     indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
     indexSchedulerShared = indexing;
+    // Several libraries of one name (the Project Gutenberg ZIMs): the queue tells them apart by the catalogue's summary.
+    indexItemDetail = (key) {
+      final z = sources.zimById(key.substring(key.indexOf('/') + 1));
+      if (z == null) return null;
+      final summary = sources.originOf(z)?.summary ?? '';
+      return summary.isNotEmpty ? summary : z.fileName.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
+    };
     coreIndexShared = coreIndexCalls;
     // The model generating an answer pauses background index work; the speed setting applies at once.
     chat.addListener(_onChatForIndexing);
