@@ -180,9 +180,9 @@ form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
   function relearn(){
     return fetch('/auth/state',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(s){
       S=s; busy=false; clearAll(); setStep(1); pw.value=''; init();
-    },function(){busy=false;clearAll();flag('offline',1);say('Server unreachable')});
+    },function(){busy=false;clearAll();flag('offline',1);say('This device is unreachable')});
   }
-  function offline(){ busy=false; pw.readOnly=false; clearAll(); app.classList.remove('auto'); flag('offline',1); say('Server unreachable'); }
+  function offline(){ busy=false; pw.readOnly=false; clearAll(); app.classList.remove('auto'); flag('offline',1); say('This device is unreachable'); }
 
   function success(){
     clearAll(); flag('ok',1); flag('okpill',1); say('Signed in'); busy=true;
@@ -268,7 +268,7 @@ form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
 
   fetch('/auth/state',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(s){S=s;init()},function(){
     S={mode:'password',start_with_password:false,security_key_available:false,key_file_available:false};
-    init(); flag('offline',1); say('Server unreachable');
+    init(); flag('offline',1); say('This device is unreachable');
   });
 })();
 </script>

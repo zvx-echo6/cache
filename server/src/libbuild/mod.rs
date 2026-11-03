@@ -597,12 +597,12 @@ fn migrate_flat_sources(data: &Path, libs: &mut [LibMeta]) {
                     b.source_rel = Some(format!("{}/{}", classify::UNSORTED, n));
                     changed = true;
                 }
-                Err(e) => eprintln!("cache-server: filing the PDF of {}: {e}", b.doc_id),
+                Err(e) => eprintln!("cache: filing the PDF of {}: {e}", b.doc_id),
             }
         }
         if changed {
             if let Err(e) = write_json(&data.join("build/libs").join(format!("{}.json", m.id)), &*m) {
-                eprintln!("cache-server: saving library {}: {e}", m.id);
+                eprintln!("cache: saving library {}: {e}", m.id);
             }
         }
     }
@@ -812,7 +812,7 @@ impl BuildService {
     pub(crate) fn save_queue_locked(&self, st: &State) {
         let q = QueueFile { paused: st.paused, items: st.items.clone() };
         if let Err(e) = write_json(&self.data.join("build/queue.json"), &q) {
-            eprintln!("cache-server: writing queue.json: {e}");
+            eprintln!("cache: writing queue.json: {e}");
         }
     }
 
@@ -853,7 +853,7 @@ impl BuildService {
         let h = lock(&self.rt).clone();
         if let Some(h) = h {
             if let Err(e) = h.block_on(self.lib.rescan()) {
-                eprintln!("cache-server: rescan after a library change failed: {e}");
+                eprintln!("cache: rescan after a library change failed: {e}");
             }
         }
     }
@@ -1217,7 +1217,7 @@ impl BuildService {
             None => match self.shelve_batch(&item.library_id, &[(book.doc_id.clone(), book.division.clone(), By::Auto)]) {
                 Ok(mut calls) => calls.remove(&book.doc_id).filter(|t| !t.is_empty()),
                 Err(e) => {
-                    eprintln!("cache-server: writing the library log: {e}");
+                    eprintln!("cache: writing the library log: {e}");
                     None
                 }
             },
@@ -1274,7 +1274,7 @@ impl BuildService {
         // With no classifier model (or one that cannot score this book) the book waits in Unsorted, unclassified, with no
         // suggestions; it is looked at when a model appears.
         let verdict = match self.models.current() {
-            Some(model) => classify::classify(&model, pieces).map_err(|e| eprintln!("cache-server: classifying: {e}")).ok(),
+            Some(model) => classify::classify(&model, pieces).map_err(|e| eprintln!("cache: classifying: {e}")).ok(),
             None => None,
         };
         let (division, suggestions, unsure, classified, classifier_version) = match verdict {
@@ -1311,7 +1311,7 @@ impl BuildService {
                     Ok(cl) => {
                         c.classes = Arc::new(cl);
                     }
-                    Err(e) => eprintln!("cache-server: build/classes.json is not usable ({e}); the last good classes stay"),
+                    Err(e) => eprintln!("cache: build/classes.json is not usable ({e}); the last good classes stay"),
                 }
             }
             c.mtime = mtime;
@@ -1341,7 +1341,7 @@ impl BuildService {
                     let _ = self.save_meta(&m);
                 }
             }
-            Err(e) => eprintln!("cache-server: deleting old points of {lib}: {e}"),
+            Err(e) => eprintln!("cache: deleting old points of {lib}: {e}"),
         }
     }
 
@@ -1487,7 +1487,7 @@ impl BuildService {
         };
         for id in due {
             if let Err(e) = self.publish(&id) {
-                eprintln!("cache-server: publishing library {id}: {e}");
+                eprintln!("cache: publishing library {id}: {e}");
                 let mut st = lock(&self.st);
                 st.retry_after.insert(id.clone(), Instant::now() + self.cfg.publish_every);
                 if let Some(m) = st.libs.iter_mut().find(|l| l.id == id) {
@@ -1899,7 +1899,7 @@ impl BuildService {
         pack.header.set_title(&title);
         write_pack(&pack, &self.packs_dir(id)).map_err(|e| err(500, "server_error", e.to_string()))?;
         if let Err(e) = self.log_title(id, doc, &title) {
-            eprintln!("cache-server: writing the library log: {e}");
+            eprintln!("cache: writing the library log: {e}");
         }
         {
             let w = self.open_work(id).map_err(|e| err(500, "server_error", e))?;

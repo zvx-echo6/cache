@@ -1,6 +1,6 @@
 # Web-safe platform checks: recipe for the app branches
 
-dart:io's `Platform.isAndroid`, `isIOS` and the rest throw "Unsupported operation: Platform._operatingSystem" in a browser, so the web build (served by Cache Server) crashes at start. The fix is one small helper, `app/lib/platform.dart`, and a mechanical replacement. Phone behaviour is identical: off the web every getter returns what dart:io returns.
+dart:io's `Platform.isAndroid`, `isIOS` and the rest throw "Unsupported operation: Platform._operatingSystem" in a browser, so the web build (served by Cache for Linux) crashes at start. The fix is one small helper, `app/lib/platform.dart`, and a mechanical replacement. Phone behaviour is identical: off the web every getter returns what dart:io returns.
 
 Use it as top-level getters through a prefix: `import 'platform.dart' as plat;` then `plat.isAndroid`. Getters: `isWeb`, `isAndroid`, `isIOS`, `isWindows`, `isLinux`, `isMacOS`, `operatingSystem` ('web' in a browser), `hostName` (dart:io's `Platform.localHostname`; in a browser, `Uri.base.host`, the server's own name). New in the helper: `hostName`. Use `plat.hostName` wherever `Platform.localHostname` could run on the web (the device name in main.dart).
 
@@ -21,7 +21,7 @@ Use it as top-level getters through a prefix: `import 'platform.dart' as plat;` 
 import 'platform_io.dart' if (dart.library.js_interop) 'platform_web.dart' as impl;
 
 // Flutter's kIsWeb is defined exactly so (foundation/constants.dart); it is spelled out here so this file, and everything that imports
-// it (lib/search/core_config.dart, which Cache Server's helper reads), needs no Flutter.
+// it (lib/search/core_config.dart, which Cache for Linux's helper reads), needs no Flutter.
 const bool _isWeb = bool.fromEnvironment('dart.library.js_util');
 bool get isWeb => _isWeb;
 bool get isAndroid => impl.isAndroid;
@@ -60,7 +60,7 @@ String get operatingSystem => 'web';
 String get hostName => Uri.base.host;
 ```
 
-**Keep `platform.dart` free of Flutter.** `lib/search/core_config.dart` imports it, and Cache Server's helper (a plain Dart program, no Flutter SDK) imports `core_config.dart` by relative path to build the core's config. Do not add `package:flutter/...` to `platform.dart`, `platform_io.dart`, `platform_web.dart` or `core_config.dart`.
+**Keep `platform.dart` free of Flutter.** `lib/search/core_config.dart` imports it, and Cache for Linux's helper (a plain Dart program, no Flutter SDK) imports `core_config.dart` by relative path to build the core's config. Do not add `package:flutter/...` to `platform.dart`, `platform_io.dart`, `platform_web.dart` or `core_config.dart`.
 
 ## 2. Replace the call sites
 

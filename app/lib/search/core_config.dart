@@ -1,4 +1,4 @@
-// Rule: this file and everything it imports stay free of Flutter and package:cache_search imports (Cache Server's plain-Dart
+// Rule: this file and everything it imports stay free of Flutter and package:cache_search imports (Cache for Linux's plain-Dart
 // helper reads it), and dart:ffi stays behind conditional imports with a web stub (the web build cannot import dart:ffi).
 
 import 'dart:io';

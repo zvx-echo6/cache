@@ -128,7 +128,7 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
       addRow('sec','Register a security key',K.webauthn_available?'Plug it in, then touch it when it blinks.':NEED_HOST,!K.webauthn_available)+'</div>';
     h+='<h2>KEY FILES</h2><div class="card">'+(K.key_files.length?K.key_files.map(function(k){return row(k,fileIco,'file','Made')}).join(''):'<div class="empty">No key files made.</div>')+
       addRow('file','Make a key file','Downloads a file. Save it on a USB stick and keep it safe.',false)+'</div>';
-    h+='<div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>You cannot lock yourself out</b><small>The reset command on the server always works and puts sign-in back to password only. Key only needs at least one key. Your last key cannot be removed while a key is required.</small></div></div>';
+    h+='<div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>You cannot lock yourself out</b><small>The reset command on this device always works and puts sign-in back to password only. Key only needs at least one key. Your last key cannot be removed while a key is required.</small></div></div>';
     document.getElementById('m').innerHTML=h;
     var n=document.getElementById('name');
     if(n&&focusName){focusName=false;n.focus();n.setSelectionRange(n.value.length,n.value.length)}
@@ -144,7 +144,7 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
     api('PUT','/api/settings/signin',{mode:sel,start_with_password:swp&&sel==='either'}).then(function(r){
       if(r.ok)return load().then(function(){msg.save='Saved';msg.saveBad=false;say('Saved');render()});
       return errText(r).then(function(t){msg.save=t;msg.saveBad=true;say(t)});
-    }).catch(function(e){if(!e||!e.handled){msg.save='Could not reach the server.';msg.saveBad=true}}).then(function(){busy=false;render()});
+    }).catch(function(e){if(!e||!e.handled){msg.save='Could not reach this device.';msg.saveBad=true}}).then(function(){busy=false;render()});
   }
   function remove(kind,id){
     var url='/api/settings/'+(kind==='sec'?'security-keys/':'key-files/')+encodeURIComponent(id);

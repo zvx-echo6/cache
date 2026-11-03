@@ -22,7 +22,7 @@ pub const FETCH_MAX_BYTES: u64 = 50 << 20;
 /// How long to wait for a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-const USER_AGENT: &str = concat!("Cache-Server/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Cache/", env!("CARGO_PKG_VERSION"));
 
 /// An address taken apart. Only what the rules need.
 #[derive(Debug, PartialEq)]

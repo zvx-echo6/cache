@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds libcache_llama.so (llama.cpp at the pinned submodule commit plus cl_embed and the chat engine) for Linux on the machine it
-# runs on (x86_64 or aarch64; no cross-compiling), the same way for the Cache Server tarball and for the native-libs workflow.
+# runs on (x86_64 or aarch64; no cross-compiling), the same way for the Cache for Linux tarball and for the native-libs workflow.
 #
 # Usage: build-linux.sh <build-dir>
 # Result: <build-dir>/libcache_llama.so, stripped, with libstdc++ and libgcc linked in so it needs nothing but libc.

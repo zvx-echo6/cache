@@ -1,4 +1,4 @@
-//! Cache Server: the browser app and the core's search and read calls behind one port and one password.
+//! Cache for Linux: the browser app and the core's search and read calls behind one port and one password.
 //!
 //! The core lives in a Dart helper process (server/helper) that this server supervises (`helper`); `/api/core` forwards the
 //! browser app's calls to it. The rest is the web side: sign-in (`auth`, `keys`), the sign-in and settings pages (`pages`), the routes (`http`), the files of the browser app
@@ -57,7 +57,7 @@ impl TempDir {
     pub fn new(tag: &str) -> TempDir {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
-        let p = std::env::temp_dir().join(format!("cache-server-test-{}-{}-{tag}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let p = std::env::temp_dir().join(format!("cache-test-{}-{}-{tag}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&p).unwrap();
         TempDir(p)
     }

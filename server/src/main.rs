@@ -1,4 +1,4 @@
-//! `cache-server`: `serve` runs the server, `set-password` sets (or resets) the one password and puts sign-in back to
+//! `cache`: `serve` runs the server, `set-password` sets (or resets) the one password and puts sign-in back to
 //! password only, `keys` lists or removes registered keys.
 
 use cache_server::auth::{Auth, AuthFile, Sessions, StoredPassword};
@@ -12,17 +12,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const USAGE: &str = "usage:
-  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>] [--embed-lib <lib>]
+  cache serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>] [--embed-lib <lib>]
       (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so,
        --embed-lib (the cache_llama library that embeds text) to <folder>/lib/libcache_llama.so;
        --public-origin, or public_origin in <dir>/config.json, is the address people use, for security keys: it needs a host name)
-  cache-server set-password --data <dir> [--sign-out-all]
+  cache set-password --data <dir> [--sign-out-all]
       (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out;
        it also puts sign-in back to password only and keeps the registered keys)
-  cache-server keys --data <dir> --list
-  cache-server keys --data <dir> --remove <id>
+  cache keys --data <dir> --list
+  cache keys --data <dir> --remove <id>
       (lists the registered security keys and key files, or removes one; a running server follows at once)
-  cache-server --version";
+  cache --version";
 
 struct Args {
     values: Vec<(String, String)>,
@@ -163,7 +163,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
     let use_tls = !a.flag("no-tls");
-    eprintln!("cache-server {VERSION} starting");
+    eprintln!("cache {VERSION} starting");
 
     config::make_folders(&data).map_err(|e| format!("{}: {e}", data.display()))?;
     let tls_config = if use_tls {
@@ -181,7 +181,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     }
     let auth = Auth::load(&data, use_tls).map_err(|e| format!("auth.json: {e}"))?.with_webauthn(webauthn);
     if !auth.has_password() {
-        eprintln!("no password is set: nobody can sign in. Run: cache-server set-password --data {}", data.display());
+        eprintln!("no password is set: nobody can sign in. Run: cache set-password --data {}", data.display());
     }
 
     let install_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
@@ -264,7 +264,7 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let result = match argv.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
-            println!("cache-server {VERSION}");
+            println!("cache {VERSION}");
             return;
         }
         // Hidden: the server re-runs itself as this to read one PDF, so a PDF that crashes MuPDF takes down only this process.
@@ -275,7 +275,7 @@ fn main() {
         _ => Err("a command is required".to_string()),
     };
     if let Err(m) = result {
-        let _ = writeln!(std::io::stderr(), "cache-server: {m}\n{USAGE}");
+        let _ = writeln!(std::io::stderr(), "cache: {m}\n{USAGE}");
         std::process::exit(1);
     }
 }

@@ -13,7 +13,7 @@ export 'core_dispatch.dart' show CsNativeFactory;
 CsNative _openNative() => FfiCsNative.open();
 
 /// The search core for the UI. Every call goes through a [CoreTransport] to the core's [CoreDispatcher]: on the phone a
-/// long-lived background isolate that owns the handle, in the browser HTTPS to Cache Server's helper.
+/// long-lived background isolate that owns the handle, in the browser HTTPS to Cache for Linux's helper.
 class SearchCore {
   SearchCore._(this._transport);
 
@@ -75,7 +75,7 @@ class SearchCore {
     return ZimBytes(r[0] as Uint8List, r[1] as String);
   }
 
-  /// Cache Server only (the phone's core does not have this call): what the server's own index jobs are doing, by source path:
+  /// Cache for Linux only (the phone's core does not have this call): what the server's own index jobs are doing, by source path:
   /// `fraction` (0..1, or null while the total is not known) for a source being indexed, `error` for one whose index failed.
   Future<Map<String, ({double? fraction, String? error})>> indexState() async => {
         for (final e in ((await _call('index.state')) as Map).entries)

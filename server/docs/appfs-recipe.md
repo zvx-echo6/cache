@@ -1,7 +1,7 @@
 # AppFs recipe (for the app team)
 
 The browser build cannot use `path_provider` or `dart:io` `File`. Every file the app keeps in its own folders goes through one
-seam, `AppFs`. On a phone it is today's dart:io code, unchanged; in a browser it calls Cache Server's `fs.*` operations through
+seam, `AppFs`. On a phone it is today's dart:io code, unchanged; in a browser it calls Cache for Linux's `fs.*` operations through
 the same `/api/core` transport `SearchCore` uses.
 
 ## The files
@@ -92,4 +92,4 @@ reload; each stays as left (the four files are in `<data>/app/support`).
 
 - `flutter analyze` clean; `flutter test` (same count as before the change; the `*DirOverride` seams are untouched).
 - `flutter build web --release --no-tree-shake-icons --no-web-resources-cdn`.
-- In a browser against Cache Server: the splash clears; change a setting, reload, and it is still set (it is in `<data>/app/support`).
+- In a browser against Cache for Linux: the splash clears; change a setting, reload, and it is still set (it is in `<data>/app/support`).

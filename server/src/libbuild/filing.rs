@@ -182,7 +182,7 @@ impl BuildService {
         b2.call_text = match self.shelve_batch(lib, &[(doc.to_string(), division.clone(), by)]) {
             Ok(mut calls) => calls.remove(doc).filter(|t| !t.is_empty()),
             Err(e) => {
-                eprintln!("cache-server: writing the library log: {e}");
+                eprintln!("cache: writing the library log: {e}");
                 None
             }
         };
@@ -321,7 +321,7 @@ impl BuildService {
                     moved += usize::from(m);
                 }
                 Err(e) => {
-                    eprintln!("cache-server: classifying {}: {e}", b.doc_id);
+                    eprintln!("cache: classifying {}: {e}", b.doc_id);
                     failed += 1;
                 }
             }
@@ -349,7 +349,7 @@ impl BuildService {
         let Some((lib, b)) = next else { return };
         let done = self.verdict_for(&lib, &b, &model).and_then(|vd| self.apply_verdict(&lib, &b.doc_id, &vd));
         if let Err(e) = done {
-            eprintln!("cache-server: classifying {}: {e}", b.doc_id);
+            eprintln!("cache: classifying {}: {e}", b.doc_id);
             let _ = self.update_book(&lib, &b.doc_id, |x| x.classified = true);
             *lock(&self.classify_retry) = Some(Instant::now() + Duration::from_secs(60));
         }

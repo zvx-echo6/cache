@@ -21,7 +21,7 @@ paused, or at most every 5 minutes while books keep coming. `dirty` in the libra
 The keyword index is rebuilt by the helper after each publish; until it ends, search works by meaning only (the core's source
 status says it is being indexed).
 
-Each PDF is read (MuPDF) in a child process: the server runs itself as the hidden `cache-server extract-pdf`, with a time limit
+Each PDF is read (MuPDF) in a child process: the server runs itself as the hidden `cache extract-pdf`, with a time limit
 (2 minutes plus 15 seconds per MB, at most an hour) and, on Linux, an address-space limit (2 GiB plus 64 times the file size, at
 most 8 GiB). A damaged PDF that crashes MuPDF, runs out of time or memory fails its own book with "Cache couldn't read this PDF; it
 may be damaged." (a drop-folder file goes to `failed/` with that in its `.why.txt`) and the service carries on. Before a book is

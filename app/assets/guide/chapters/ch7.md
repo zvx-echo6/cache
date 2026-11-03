@@ -2,7 +2,7 @@
 
 ## What stays on your device
 
-Cache works on your device, with no account and no Cache server in the middle.
+Cache works on your device, with no account and no server run by Cache in the middle.
 
 These stay on your device:
 - the assistant and its model, so your questions and answers are worked out there;
@@ -115,7 +115,7 @@ Sharing is off until you tap "Set up sharing" in ["Settings" > "Sharing and sync
 
 When it's on:
 - It links only your own devices, by a link code you copy across. A code works once, for 15 minutes.
-- Devices talk directly. Nothing goes through a Cache server.
+- Devices talk directly. Nothing goes through a server run by Cache.
 - If a direct link isn't possible, they use a relay ("Connected through a relay"). What they send is encrypted end to end, so the relay can't read it.
 - Devices look for each other on the local network and on the internet.
 - Only the kinds you tick under "Shared with linked devices" are shared: "Library", "Maps", "Models", "Videos", "Notebooks" and "Shared folder".

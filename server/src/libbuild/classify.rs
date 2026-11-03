@@ -217,8 +217,8 @@ impl ModelStore {
                     found = Some(Arc::new(m));
                     break;
                 }
-                Ok(_) => eprintln!("cache-server: classifier model {n} was trained on another embedding model; not used"),
-                Err(e) => eprintln!("cache-server: classifier model {n} is not usable: {e}"),
+                Ok(_) => eprintln!("cache: classifier model {n} was trained on another embedding model; not used"),
+                Err(e) => eprintln!("cache: classifier model {n} is not usable: {e}"),
             }
         }
         st.seen = Some(sig);

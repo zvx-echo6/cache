@@ -3,7 +3,7 @@ name = "cache_server"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Cache Server: one HTTPS port serving the browser app and proxying its core calls to a supervised Dart helper, behind a single password"
+description = "Cache for Linux: one HTTPS port serving the browser app and proxying its core calls to a supervised Dart helper, behind a single password"
 # This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
 workspace = "../packages/cache_search/native"
 
@@ -12,7 +12,7 @@ name = "cache_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "cache-server"
+name = "cache"
 path = "src/main.rs"
 
 # A stand-in for the Dart helper, used only by the proxy tests (tests/proxy.rs); it is not installed.

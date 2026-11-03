@@ -2,7 +2,7 @@
  "ok": true,
  "result": {
   "settings": {
-   "folder": "/var/lib/cache-server/drop",
+   "folder": "/var/lib/cache-app/drop",
    "enabled": true,
    "library_id": "hunting-and-field-guides-3bc5df",
    "library_title": "Hunting and field guides"

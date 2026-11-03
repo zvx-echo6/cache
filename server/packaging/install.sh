@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install or update Cache Server from a release tarball, or go back to the previous release. Run as root:
+# Install or update Cache from a release tarball, or go back to the previous release. Run as root:
 #   install.sh <path-to-release-tarball>
 #   install.sh --rollback
 #
-# The tarball holds `cache-server` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
+# The tarball holds `cache` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
 # `lib/libcache_search.so` (the core library the helper loads), `lib/libzim.so.9` (libzim with Xapian and ICU, which
 # the core links and finds next to itself), `lib/libcache_llama.so` (llama.cpp behind cl_embed: the server
 # loads it to embed text with the search model, which it downloads into the data folder on first need), `web/` (the browser app)
@@ -14,13 +14,18 @@
 # `previous` and restarts the service. Installing the same build again replaces that release's folder in place.
 # It installs no operating-system packages.
 #
+# Where things are (the same names in the service file): the program and its releases in /opt/cache-app, your library and
+# settings in /var/lib/cache-app (the libraries you build in app/docs/libraries, ZIM files in app/docs/zims, the password in
+# auth.json). The folder names say cache-app on purpose, and nothing is kept in any system cache folder, so clearing caches never
+# touches your library. Nothing has been released yet, so there is no migration from older paths: a test machine gets a fresh install.
+#
 # TODO: downloading the tarball from GitHub Releases comes later; for now it is a local file.
 
 set -eu
 
-OPT=/opt/cache-server
-DATA=/var/lib/cache-server
-UNIT=/etc/systemd/system/cache-server.service
+OPT=/opt/cache-app
+DATA=/var/lib/cache-app
+UNIT=/etc/systemd/system/cache.service
 PORT=8443
 
 die() {
@@ -41,12 +46,12 @@ point() {
 
 # install the unit file that belongs to the current release
 install_unit() {
-    if [ -f "$OPT/current/cache-server.service" ]; then
-        install -m 644 "$OPT/current/cache-server.service" "$UNIT"
-    elif [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/cache-server.service" ]; then
-        install -m 644 "$SCRIPT_DIR/cache-server.service" "$UNIT"
+    if [ -f "$OPT/current/cache.service" ]; then
+        install -m 644 "$OPT/current/cache.service" "$UNIT"
+    elif [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/cache.service" ]; then
+        install -m 644 "$SCRIPT_DIR/cache.service" "$UNIT"
     elif [ ! -f "$UNIT" ]; then
-        die "cache-server.service not found next to this script or in the tarball"
+        die "cache.service not found next to this script or in the tarball"
     fi
 }
 
@@ -78,8 +83,8 @@ if [ "$ROLLBACK" -eq 1 ]; then
     point "$OPT/previous" "$CUR"
     install_unit
     systemctl daemon-reload
-    systemctl restart cache-server
-    echo "Rolled back: Cache Server $(basename "$PREV") is running; $(basename "$CUR") is now the previous release."
+    systemctl restart cache
+    echo "Rolled back: Cache $(basename "$PREV") is running; $(basename "$CUR") is now the previous release."
     echo "(run install.sh --rollback again to go forward)"
     exit 0
 fi
@@ -106,7 +111,7 @@ VERSION=$(tr -d ' \r\n' <"$STAGE/VERSION")
 case "$VERSION" in
     "" | . | .. | *[!A-Za-z0-9._+-]*) die "the VERSION file holds something that is not a version" ;;
 esac
-[ -x "$STAGE/cache-server" ] || chmod 755 "$STAGE/cache-server" 2>/dev/null || die "the tarball has no cache-server program"
+[ -x "$STAGE/cache" ] || chmod 755 "$STAGE/cache" 2>/dev/null || die "the tarball has no cache program"
 [ -f "$STAGE/helper/cache-core-helper" ] || die "the tarball has no helper/cache-core-helper"
 [ -f "$STAGE/lib/libcache_search.so" ] || die "the tarball has no lib/libcache_search.so"
 [ -f "$STAGE/lib/libcache_llama.so" ] || die "the tarball has no lib/libcache_llama.so"
@@ -114,7 +119,7 @@ esac
 [ -f "$STAGE/lib/libzim.so.9" ] || die "the tarball has no lib/libzim.so.9"
 chown -R root:root "$STAGE"
 # the service runs as the cache user: it must execute the program and the helper and read the library and the web files
-chmod 755 "$STAGE/cache-server" "$STAGE/helper/cache-core-helper"
+chmod 755 "$STAGE/cache" "$STAGE/helper/cache-core-helper"
 chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so" "$STAGE/lib/libzim.so.9"
 chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
 chmod 755 "$STAGE"
@@ -186,23 +191,25 @@ if [ ! -f "$DATA/auth.json" ]; then
         fi
     done
     if command -v runuser >/dev/null 2>&1; then
-        printf '%s\n' "$PW1" | runuser -u cache -- "$OPT/current/cache-server" set-password --data "$DATA"
+        printf '%s\n' "$PW1" | runuser -u cache -- "$OPT/current/cache" set-password --data "$DATA"
     else
-        printf '%s\n' "$PW1" | su -s /bin/sh cache -c "$OPT/current/cache-server set-password --data $DATA"
+        printf '%s\n' "$PW1" | su -s /bin/sh cache -c "$OPT/current/cache set-password --data $DATA"
     fi
     PW1= PW2=
 fi
 
 systemctl daemon-reload
-systemctl enable cache-server
-systemctl restart cache-server
+systemctl enable cache
+systemctl restart cache
 
 HOST=$(hostname -f 2>/dev/null || hostname)
-echo "Cache Server $VERSION is running. Open https://$HOST:$PORT/"
+echo "Cache $VERSION is running. Open https://$HOST:$PORT/"
 if [ -L "$OPT/previous" ]; then
     echo "The previous release is $(basename "$(link_of "$OPT/previous")"); to go back, run: install.sh --rollback"
 fi
+echo "Your library and settings are in $DATA (books you build: $DATA/app/docs/libraries, ZIM files: $DATA/app/docs/zims)."
+echo "The program is in $OPT. Clearing caches never touches your library."
 echo "(the certificate is self-signed, so the browser asks you to accept it once)"
 echo "Sign-in is the password you chose. Security keys and key files are set up after you sign in, at https://$HOST:$PORT/settings/keys"
 echo "(security keys also need a host name and a trusted certificate: see the README, --public-origin)"
-echo "If you ever lose a key, reset with: $OPT/current/cache-server set-password --data $DATA   (as the cache user)"
+echo "If you ever lose a key, reset with: $OPT/current/cache set-password --data $DATA   (as the cache user)"

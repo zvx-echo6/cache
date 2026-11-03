@@ -869,7 +869,7 @@ fn drop_settings_are_checked_and_remembered() {
 
 // ---- reading PDFs in a child process, and the crash-loop guard
 
-/// The reading child for the tests below: this test program, told to act as `cache-server extract-pdf`. A PDF carrying the marker
+/// The reading child for the tests below: this test program, told to act as `cache extract-pdf`. A PDF carrying the marker
 /// makes it crash the way MuPDF does on a damaged file; any other PDF is read by the real extraction.
 #[test]
 fn extract_child_entry() {

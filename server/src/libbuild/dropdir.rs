@@ -481,14 +481,14 @@ impl BuildService {
         match r {
             Ok(()) => {
                 if let Err(x) = move_unique(&e.path, &root.join("complete").join(sub), &e.name) {
-                    eprintln!("cache-server: moving {} to complete/: {x}", e.name);
+                    eprintln!("cache: moving {} to complete/: {x}", e.name);
                 }
             }
             Err(reason) => match move_unique(&e.path, &root.join("failed"), &e.name) {
                 Ok(n) => {
                     let _ = std::fs::write(root.join("failed").join(format!("{n}.why.txt")), format!("{reason}\n"));
                 }
-                Err(x) => eprintln!("cache-server: moving {} to failed/: {x}", e.name),
+                Err(x) => eprintln!("cache: moving {} to failed/: {x}", e.name),
             },
         }
     }

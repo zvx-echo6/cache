@@ -31,7 +31,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib licence.
 - MapLibre Native (draws the map, through the maplibre_gl package): BSD-2-Clause. https://maplibre.org
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
-- OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
+- OpenSSL 3 (inside Cache for Linux, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
 - MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
 - PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType Licence), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library Licence 2), zlib (zlib licence), libtiff (libtiff licence), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode Licence v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.

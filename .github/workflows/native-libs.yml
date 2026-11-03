@@ -1,4 +1,4 @@
-# Builds the native libraries the Cache Server (and later every platform) shares, one job per platform and library, each pinned exactly
+# Builds the native libraries that Cache for Linux (and later every platform) shares, one job per platform and library, each pinned exactly
 # like the other platforms and tested. Today: Linux x86_64 and aarch64 (each on a native runner, no cross-compiling).
 #
 #   cache-llama-linux-<arch>   libcache_llama.so: llama.cpp at the pinned submodule commit (packages/cache_llama/third_party/llama.cpp,

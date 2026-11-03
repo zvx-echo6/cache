@@ -363,11 +363,11 @@ impl AuthState {
         }
         match AuthFile::load(&path) {
             Ok(f) => {
-                eprintln!("cache-server: auth.json changed; using the new settings");
+                eprintln!("cache: auth.json changed; using the new settings");
                 self.file = f.unwrap_or_default();
                 self.seen = now_stamp;
             }
-            Err(e) => eprintln!("cache-server: auth.json could not be read ({e}); keeping the previous settings"),
+            Err(e) => eprintln!("cache: auth.json could not be read ({e}); keeping the previous settings"),
         }
     }
 }

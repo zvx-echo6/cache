@@ -1,6 +1,6 @@
-# Cache Server
+# Cache for Linux
 
-Cache Server runs the Cache core on a machine of your own and serves the browser app from one port. You sign in
+Cache for Linux (it also runs on Raspberry Pi) is the same Cache as on a phone, running on a machine of your own and serving the browser app from one port. You sign in
 with a single password (no username), a security key, a key file, or a mix (see "Signing in" below). The core runs in a helper process (`server/helper`, a Dart program that hosts the
 app's own core dispatcher); the server starts it, restarts it if it dies (waits of 1, 2, 5, then 10 seconds, logging each
 restart) and forwards the browser's `POST /api/core {"op","args"}` calls to it, one at a time. The server owns the one
@@ -15,7 +15,7 @@ From the repository root:
     cd packages/cache_search/native
     cargo build --release -p cache_server
 
-The program is `target/release/cache-server`. It also needs the helper and the core library (see the release tarball
+The program is `target/release/cache`. It also needs the helper and the core library (see the release tarball
 below), whose paths are the `--helper` and `--core-lib` options; by default they are `helper/cache-core-helper` and
 `lib/libcache_search.so` beside the program.
 
@@ -47,21 +47,29 @@ bookworm (64-bit)+, on x86_64 and aarch64. Older systems are not supported. The 
 
 ## Install (Linux, systemd)
 
-The release tarball (built by `.github/workflows/server-release.yml`) holds `cache-server`, `helper/cache-core-helper`,
-`lib/libcache_search.so`, `web/` (the Flutter web build), `cache-server.service` and a `VERSION` file. As root:
+The release tarball (built by `.github/workflows/server-release.yml`) holds `cache`, `helper/cache-core-helper`,
+`lib/libcache_search.so`, `web/` (the Flutter web build), `cache.service` and a `VERSION` file. As root:
 
     packaging/install.sh <path-to-release-tarball>
 
-It creates the `cache` user, unpacks to `/opt/cache-server/releases/<version>`, points `/opt/cache-server/current`
+Where things are: the program and its releases are in `/opt/cache-app`; your library and settings are in `/var/lib/cache-app`
+(the libraries you build in `app/docs/libraries`, ZIM files in `app/docs/zims`, the password and sign-in settings in `auth.json`);
+there is no configuration folder, the few settings are files in the data folder. The names say `cache-app` on purpose: a folder
+simply called `cache` reads as safe to delete, and nothing is ever written under any system cache folder (a test fails if a
+default path does).
+
+Nothing has been released yet, so there is no migration from earlier paths: a test machine gets a fresh install.
+
+It creates the `cache` user, unpacks to `/opt/cache-app/releases/<version>`, points `/opt/cache-app/current`
 at it, installs and starts the service, and on a first install asks for the password twice. Running it again with a
 newer tarball is an update; the data and the password stay. It installs no packages.
 
 The version is `<Cargo version>+<short git sha>`, for example `0.1.0+d5145e6`, so two builds of the same Cargo version
-are two releases. `cache-server --version` and the first line of the service log (`journalctl -u cache-server`) show it.
+are two releases. `cache --version` and the first line of the service log (`journalctl -u cache`) show it.
 
 ### Rollback
 
-An install keeps exactly one earlier release: the one that was running becomes `/opt/cache-server/previous`, and anything
+An install keeps exactly one earlier release: the one that was running becomes `/opt/cache-app/previous`, and anything
 older is removed. The release in use is never removed. Installing the same build again replaces that release's folder
 (the old copy stays reachable until the new one is in place, so `current` never points at nothing). To go back:
 
@@ -106,14 +114,14 @@ The settings page will not let you lock yourself out: Key only and Password and 
 registered, and the last key cannot be removed while the setting needs one. Wrong passwords, keys and files are slowed
 down together (see below). Registered keys are listed and can be removed on the server too:
 
-    sudo -u cache /opt/cache-server/current/cache-server keys --data /var/lib/cache-server --list
-    sudo -u cache /opt/cache-server/current/cache-server keys --data /var/lib/cache-server --remove <id>
+    sudo -u cache /opt/cache-app/current/cache keys --data /var/lib/cache-app --list
+    sudo -u cache /opt/cache-app/current/cache keys --data /var/lib/cache-app --remove <id>
 
 (removing the last key while the setting needs one puts sign-in back to password only).
 
 ## Set or reset the password
 
-    sudo -u cache /opt/cache-server/current/cache-server set-password --data /var/lib/cache-server [--sign-out-all]
+    sudo -u cache /opt/cache-app/current/cache set-password --data /var/lib/cache-app [--sign-out-all]
 
 No restart is needed. The running server re-reads `auth.json` at the next sign-in after it changed, so the old password
 stops working and the new one works at once. Browsers that are already signed in stay signed in, unless you add
@@ -130,17 +138,17 @@ the answer is held back 2, 4, 8, 16 and then 30 seconds.
 ## Logs
 
 The server writes plain lines to standard error, which systemd sends to the journal at its default priority (info); the
-unit sets no log level and there is none to set. `journalctl -u cache-server` shows, among others: `cache-server <version>
+unit sets no log level and there is none to set. `journalctl -u cache` shows, among others: `cache <version>
 starting`, `helper started (pid N)`, `helper ready`, `core opened (N sources)`, `restarting the helper in Ns (reason: ...)`
 and `helper stopped`.
 
 ## Running by hand
 
-    cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>]
+    cache serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>]
 
 ## Files and folders
 
-Under the data folder (`/var/lib/cache-server` when installed):
+Under the data folder (`/var/lib/cache-app` when installed):
 
 | Path | What |
 |---|---|
@@ -148,7 +156,7 @@ Under the data folder (`/var/lib/cache-server` when installed):
 | `config.json` | optional: `{"public_origin": "https://your-host-name"}`, the same as `--public-origin` |
 | `sessions.json` | signed-in sessions, as hashes, valid for 30 days (owner only) |
 | `tls/cert.pem`, `tls/key.pem` | the certificate and key (the key is owner only) |
-| `sources.json` | optional: the sources the core opens, a JSON array as the app's `SearchCore.open` sends them, e.g. `[{"kind":"zim","path":"/var/lib/cache-server/app/docs/zims/wiki.zim","index_dir":"/var/lib/cache-server/app/support/indexes/wiki.zim.idx"}]`. Missing means the helper finds them: every `*.zim` in `app/docs/zims` and every folder with a `shard` folder in `app/docs/libraries` |
+| `sources.json` | optional: the sources the core opens, a JSON array as the app's `SearchCore.open` sends them, e.g. `[{"kind":"zim","path":"/var/lib/cache-app/app/docs/zims/wiki.zim","index_dir":"/var/lib/cache-app/app/support/indexes/wiki.zim.idx"}]`. Missing means the helper finds them: every `*.zim` in `app/docs/zims` and every folder with a `shard` folder in `app/docs/libraries` |
 | `app/support/` | the app's support folder (`getApplicationSupportDirectory` on a phone): the core's databases (`user.sqlite`, `live.sqlite`, `notebook/`), `regions/`, `layers/`, `indexes/` |
 | `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
 | `zims/`, `libraries/`, `index/` | the older folders, no longer read |

@@ -13,7 +13,7 @@ abstract class OpHandler {
   Object? handle(String op, Map<String, dynamic> args);
 }
 
-/// Cache Server's helper protocol: UTF-8 lines on [input] and [output], one JSON object per line.
+/// Cache for Linux's helper protocol: UTF-8 lines on [input] and [output], one JSON object per line.
 ///
 /// Prints `{"ready":true}` first. A request is `{"id":<int>,"op":<string>,"args":{...}}`; the reply is
 /// `{"id":<int>,"ok":true,"result":<json>}` or `{"id":<int>,"ok":false,"error":{"code","message"}}`. Byte arrays travel as

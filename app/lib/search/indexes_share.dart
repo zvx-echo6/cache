@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceStatus;
 
-// kIndexesDirName lives in indexes_dir.dart: the Cache Server helper (plain Dart, no Flutter packages) reads core_config.dart too.
+// kIndexesDirName lives in indexes_dir.dart: the Cache for Linux helper (plain Dart, no Flutter packages) reads core_config.dart too.
 export 'indexes_dir.dart' show kIndexesDirName;
 
 /// The device's syncable search indexes (the core's `indexes_dir`): one folder, `<kind>/<source id>/`, each with its working

@@ -10,7 +10,7 @@ AppFs createAppFs({Directory? supportOverride, Directory? docsOverride}) => WebA
 // One transport for every WebAppFs: the same /api/core endpoint (same origin, so the session cookie goes along) that SearchCore uses.
 final CoreTransport _transport = HttpTransport();
 
-/// The browser side: the files are on Cache Server, reached by its fs.* operations through /api/core. Each operation takes
+/// The browser side: the files are on Cache for Linux, reached by its fs.* operations through /api/core. Each operation takes
 /// {root: "support"|"docs", path: relative, '/'-separated}. A missing file comes back as not_found, which reads here the way a
 /// missing file reads on a phone (null, false, nothing to delete); bad_path and io_error are thrown as CacheSearchException.
 class WebAppFs implements AppFs {

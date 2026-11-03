@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-// How core calls travel as JSON between the browser and Cache Server's helper. JSON has no byte arrays, so a Uint8List
+// How core calls travel as JSON between the browser and Cache for Linux's helper. JSON has no byte arrays, so a Uint8List
 // anywhere in an argument or a result becomes `{"$bytes": "<base64>"}` and is turned back into a Uint8List at the other end.
 // The phone's isolate passes Dart objects directly and never uses this.
 

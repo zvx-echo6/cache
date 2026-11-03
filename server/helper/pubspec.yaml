@@ -1,5 +1,5 @@
 name: cache_core_helper
-description: "Cache Server's Dart helper: runs the app's core dispatcher over stdin/stdout for the Rust server."
+description: "Cache for Linux's Dart helper: runs the app's core dispatcher over stdin/stdout for the Rust server."
 version: 0.0.1
 publish_to: 'none'
 

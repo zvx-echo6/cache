@@ -131,7 +131,7 @@ abstract class DeviceApi {
 /// Library from being read again, and its cards would stay as they were.
 const Duration kDeviceCallTimeout = Duration(seconds: 30);
 
-/// The browser's [DeviceApi]: Cache Server's `/api/library/...` and `/api/fetch`, same origin, so the session goes along.
+/// The browser's [DeviceApi]: Cache for Linux's `/api/library/...` and `/api/fetch`, same origin, so the session goes along.
 class HttpDeviceApi implements DeviceApi {
   HttpDeviceApi({http.Client? client}) : _client = client ?? http.Client();
 

@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-/// What the device really answers (taken from a running Cache Server), read by the browser's own parsers.
+/// What the device really answers (taken from a running Cache for Linux), read by the browser's own parsers.
 String sample(String name) => File('test/fixtures/device_build/$name.json').readAsStringSync();
 
 void main() {
@@ -117,7 +117,7 @@ void main() {
   test('the drop folder: settings, counts, and each file with where it is', () async {
     api = HttpBuildApi(client: client({'/api/build/drop': sample('drop_done')}));
     final d = await api.drop();
-    expect(d.settings.folder, '/var/lib/cache-server/drop');
+    expect(d.settings.folder, '/var/lib/cache-app/drop');
     expect(d.settings.enabled, isTrue);
     expect(d.settings.libraryTitle, 'Hunting and field guides');
     expect(d.status.state, 'ok');

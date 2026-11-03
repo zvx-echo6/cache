@@ -1,4 +1,4 @@
-# Cache Server: Library flows
+# Cache for Linux: Library flows
 
 Based on the phone code (browse, download, catalogue, theme). Mock: library-mock.html (`?theme=&state=`), viewed at 1920x1080. Sample numbers. User-visible text never says "server" or "job". One device word everywhere: "this device". Phone and tablet move to it in 1.0.30; Linux and Windows use it from the start. Model-visible "this phone" text (system prompt, tool definitions) is unchanged; that is the training session's call.
 

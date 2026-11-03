@@ -173,7 +173,7 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
 struct Dir(PathBuf);
 impl Dir {
     fn new(tag: &str) -> Dir {
-        let p = std::env::temp_dir().join(format!("cache-server-lib-{}-{tag}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("cache-test-lib-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         Dir(p)

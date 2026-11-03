@@ -29,11 +29,11 @@ pub fn build_webauthn(origin: Option<&str>) -> Result<Option<Webauthn>, String> 
     let Some(raw) = origin.map(str::trim).filter(|s| !s.is_empty()) else { return Ok(None) };
     let url = Url::parse(raw).map_err(|e| format!("--public-origin {raw:?}: {e}"))?;
     let Some(host) = url.domain().map(str::to_string) else {
-        eprintln!("cache-server: --public-origin has no host name (an IP address does not work for security keys); security keys are off");
+        eprintln!("cache: --public-origin has no host name (an IP address does not work for security keys); security keys are off");
         return Ok(None);
     };
     if url.scheme() != "https" && !(url.scheme() == "http" && host == "localhost") {
-        eprintln!("cache-server: --public-origin is not https; security keys are off");
+        eprintln!("cache: --public-origin is not https; security keys are off");
         return Ok(None);
     }
     // only scheme, host and port make an origin

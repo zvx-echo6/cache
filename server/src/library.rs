@@ -406,10 +406,10 @@ impl Library {
     fn save_jobs(&self, jobs: &[Job]) {
         let text = match serde_json::to_string_pretty(jobs) {
             Ok(t) => t,
-            Err(e) => return eprintln!("cache-server: jobs.json: {e}"),
+            Err(e) => return eprintln!("cache: jobs.json: {e}"),
         };
         if let Err(e) = crate::write_private(&self.data.join("jobs.json"), text.as_bytes()) {
-            eprintln!("cache-server: writing jobs.json: {e}");
+            eprintln!("cache: writing jobs.json: {e}");
         }
     }
 
@@ -466,7 +466,7 @@ impl Library {
             let mut note = None;
             if res.is_ok() && job.kind == "zim" {
                 if let Err(e) = self.rescan().await {
-                    eprintln!("cache-server: rescan after installing {} failed: {e}", job.name);
+                    eprintln!("cache: rescan after installing {} failed: {e}", job.name);
                     note = Some(format!("Installed, but the search core was not told: {e}"));
                 }
             }
@@ -868,7 +868,7 @@ impl Library {
         }
         let rescan = self.rescan().await;
         if let Err(e) = &rescan {
-            eprintln!("cache-server: rescan after the upload of {name} failed: {e}");
+            eprintln!("cache: rescan after the upload of {name} failed: {e}");
         }
         let mut out = json!({"name": name, "bytes": got, "id": item_id("zim", &name)});
         if let Err(e) = rescan {
@@ -929,7 +929,7 @@ impl Library {
         tokio::task::spawn_blocking(move || me.remove_files(&k2, &n2)).await.unwrap_or_else(|e| Err(api_err(500, "server_error", e.to_string())))?;
         let mut out = json!({"removed": true, "id": id});
         if let Err(e) = self.rescan().await {
-            eprintln!("cache-server: rescan after removing {name} failed: {e}");
+            eprintln!("cache: rescan after removing {name} failed: {e}");
             out["note"] = json!(format!("Removed, but the search core was not told: {e}"));
         }
         Ok(out)

@@ -12,7 +12,7 @@ use std::time::Duration;
 struct Dir(PathBuf);
 impl Dir {
     fn new(tag: &str) -> Dir {
-        let p = std::env::temp_dir().join(format!("cache-server-proxy-{}-{tag}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("cache-test-proxy-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         Dir(p)

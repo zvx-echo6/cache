@@ -49,7 +49,7 @@ class OpenOp implements OpHandler {
   }
 }
 
-/// The helper's `sources.rescan`, which only cache-server may call (the server's `/api/core` refuses it from browsers, as it does
+/// The helper's `sources.rescan`, which only cache may call (the server's `/api/core` refuses it from browsers, as it does
 /// `open`, `close` and `setSources`). The server sends it after it has put a ZIM or a library on disk, or removed one:
 /// `sources.rescan {"sources": <array or null>}`. As with [OpenOp], the array is the server's `sources.json` and `null` means
 /// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.

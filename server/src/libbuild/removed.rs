@@ -38,7 +38,7 @@ impl BuildService {
 
     fn save_removed(&self, list: &[RemovedEntry]) {
         if let Err(e) = super::write_json(&self.data.join("build/removed/manifest.json"), &list) {
-            eprintln!("cache-server: writing the Removed manifest: {e}");
+            eprintln!("cache: writing the Removed manifest: {e}");
         }
     }
 

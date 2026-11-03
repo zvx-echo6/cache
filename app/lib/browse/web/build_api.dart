@@ -367,7 +367,7 @@ abstract class BuildApi {
   Future<DropState> retryDrop(String name);
 }
 
-/// The browser's [BuildApi]: Cache Server's `/api/build/...`, same origin, so the session goes along.
+/// The browser's [BuildApi]: Cache for Linux's `/api/build/...`, same origin, so the session goes along.
 class HttpBuildApi implements BuildApi {
   HttpBuildApi({http.Client? client}) : _client = client ?? http.Client();
 

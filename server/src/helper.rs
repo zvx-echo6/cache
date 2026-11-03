@@ -87,8 +87,8 @@ impl Running {
             };
             match serde_json::from_str::<Value>(&line) {
                 Ok(v) if v["id"] == json!(id) => return Ok(v),
-                Ok(_) => eprintln!("cache-server: helper sent a reply for another request; ignored"),
-                Err(e) => eprintln!("cache-server: helper sent a line that is not JSON ({e}); ignored"),
+                Ok(_) => eprintln!("cache: helper sent a reply for another request; ignored"),
+                Err(e) => eprintln!("cache: helper sent a line that is not JSON ({e}); ignored"),
             }
         }
     }
@@ -128,7 +128,7 @@ impl Helper {
         match h.launch().await {
             Ok(run) => st.run = Some(run),
             Err(e) => {
-                eprintln!("cache-server: starting the helper failed: {e}");
+                eprintln!("cache: starting the helper failed: {e}");
                 st.failures = 1;
                 st.reason = e;
                 h.schedule_restart(&mut st);
@@ -149,7 +149,7 @@ impl Helper {
                 Ok(v)
             }
             Err(e) => {
-                eprintln!("cache-server: helper failed during {op}: {e}");
+                eprintln!("cache: helper failed during {op}: {e}");
                 if let Some(mut dead) = st.run.take() {
                     let _ = dead.child.start_kill();
                 }
@@ -176,7 +176,7 @@ impl Helper {
                 (st.failures.max(1), st.reason.clone())
             };
             let wait = self.cfg.backoff.get(failures - 1).or(self.cfg.backoff.last()).copied().unwrap_or(Duration::from_secs(1));
-            eprintln!("cache-server: restarting the helper in {}s (reason: {reason})", wait.as_secs_f32());
+            eprintln!("cache: restarting the helper in {}s (reason: {reason})", wait.as_secs_f32());
             tokio::time::sleep(wait).await;
             if self.stopping.load(Ordering::Relaxed) {
                 return;
@@ -186,12 +186,12 @@ impl Helper {
                 Ok(run) => {
                     st.run = Some(run);
                     st.restarting = false;
-                    eprintln!("cache-server: helper restarted");
+                    eprintln!("cache: helper restarted");
                     return;
                 }
                 Err(e) => {
                     st.failures += 1;
-                    eprintln!("cache-server: restarting the helper failed: {e}");
+                    eprintln!("cache: restarting the helper failed: {e}");
                     st.reason = e;
                 }
             }
@@ -214,8 +214,8 @@ impl Helper {
             .spawn()
             .map_err(|e| format!("{}: {e}", self.cfg.exe.display()))?;
         match child.id() {
-            Some(pid) => eprintln!("cache-server: helper started (pid {pid})"),
-            None => eprintln!("cache-server: helper started"),
+            Some(pid) => eprintln!("cache: helper started (pid {pid})"),
+            None => eprintln!("cache: helper started"),
         }
         let stdin = child.stdin.take().ok_or("no standard input")?;
         let stdout = child.stdout.take().ok_or("no standard output")?;
@@ -246,7 +246,7 @@ impl Helper {
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(format!("the helper was not ready within {}s", self.cfg.ready_timeout.as_secs())),
         }
-        eprintln!("cache-server: helper ready");
+        eprintln!("cache: helper ready");
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let reply = match timeout(self.cfg.open_timeout, run.exchange(id, "open", json!({"sources": sources}))).await {
             Ok(Ok(v)) => v,
@@ -262,9 +262,9 @@ impl Helper {
         match result["extras"].as_array() {
             Some(x) => {
                 let names: Vec<&str> = x.iter().filter_map(Value::as_str).collect();
-                eprintln!("cache-server: core opened ({n} sources; config sections: {})", names.join(", "));
+                eprintln!("cache: core opened ({n} sources; config sections: {})", names.join(", "));
             }
-            None => eprintln!("cache-server: core opened ({n} sources)"),
+            None => eprintln!("cache: core opened ({n} sources)"),
         }
         Ok(run)
     }
@@ -277,10 +277,10 @@ impl Helper {
             let Running { mut child, stdin, .. } = run;
             drop(stdin);
             if timeout(self.cfg.stop_wait, child.wait()).await.is_err() {
-                eprintln!("cache-server: the helper did not stop; killing it");
+                eprintln!("cache: the helper did not stop; killing it");
                 let _ = child.kill().await;
             }
-            eprintln!("cache-server: helper stopped");
+            eprintln!("cache: helper stopped");
         }
     }
 }

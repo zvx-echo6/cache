@@ -24,7 +24,7 @@ pub const SYNC_DIR: &str = "sync";
 
 /// The device id used when the identity cannot be made or read (a full or read-only disk): one fixed name, so the log is still
 /// written by one writer to one file.
-const UNSYNCED_ID: &str = "server-unsynced";
+const UNSYNCED_ID: &str = "unsynced";
 
 /// This server's device id: the cache_sync identity in `<data>/sync` (made the first time, read back after that), as the EndpointId's
 /// text (lower-case letters and digits). It names the library log, `log/<device_id>.jsonl`. A reinstall that loses the key starts a
@@ -34,11 +34,11 @@ pub(crate) fn load_device_id(data: &Path) -> String {
     match cache_sync::identity::load_or_create(&data.join(SYNC_DIR)) {
         Ok((_, id)) if valid_device_id(&id) => id,
         Ok((_, id)) => {
-            eprintln!("cache-server: the sync identity {id:?} is not usable as a log name; using {UNSYNCED_ID}");
+            eprintln!("cache: the sync identity {id:?} is not usable as a log name; using {UNSYNCED_ID}");
             UNSYNCED_ID.to_string()
         }
         Err(e) => {
-            eprintln!("cache-server: could not load the sync identity ({e}); using {UNSYNCED_ID}");
+            eprintln!("cache: could not load the sync identity ({e}); using {UNSYNCED_ID}");
             UNSYNCED_ID.to_string()
         }
     }
@@ -168,17 +168,17 @@ impl BuildService {
             return;
         }
         if let Err(e) = rebuild_view(&self.live_dir(lib), &packs) {
-            eprintln!("cache-server: writing the local view of {lib}: {e}");
+            eprintln!("cache: writing the local view of {lib}: {e}");
         }
     }
 
     /// What publishing does for the log: shelve books it has never seen, refresh the call numbers, make the view again.
     pub(crate) fn catch_up(&self, lib: &str) {
         if let Err(e) = self.shelve_missing(lib) {
-            eprintln!("cache-server: shelving the books of {lib}: {e}");
+            eprintln!("cache: shelving the books of {lib}: {e}");
         }
         if let Err(e) = self.refresh_calls(lib) {
-            eprintln!("cache-server: call numbers of {lib}: {e}");
+            eprintln!("cache: call numbers of {lib}: {e}");
         }
         self.rebuild_view_quietly(lib);
     }

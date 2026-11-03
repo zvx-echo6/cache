@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 /// The two folders the app keeps its files in. On a phone they are the app's support folder and its documents folder (the
-/// external-storage folder on Android); in a browser they are the same two folders on Cache Server.
+/// external-storage folder on Android); in a browser they are the same two folders on Cache for Linux.
 enum AppRoot { support, docs }
 
 /// One file or folder, as [AppFs.list] and [AppFs.stat] report it.
@@ -16,7 +16,7 @@ class AppFsEntry {
 
 /// How the app reaches its own files. A file is addressed as ([AppRoot], relative path): the path is relative to the root, uses
 /// '/' and has no '..'; the empty path is the root itself. On a phone this is plain dart:io (app_fs_io.dart); in a browser it is
-/// Cache Server's fs.* operations (app_fs_web.dart). A file that is not there reads as null, [exists] is false and [delete] does
+/// Cache for Linux's fs.* operations (app_fs_web.dart). A file that is not there reads as null, [exists] is false and [delete] does
 /// nothing; any other failure is thrown, as dart:io throws it.
 abstract class AppFs {
   Future<String?> readString(AppRoot root, String path);
@@ -58,7 +58,7 @@ abstract class AppFs {
   Future<void> rename(AppRoot root, String from, String to);
 
   /// The absolute path of the root on the machine that holds the files. A job of the search core takes paths of that machine, so
-  /// in a browser this is a path on Cache Server, not something the browser can open.
+  /// in a browser this is a path on Cache for Linux, not something the browser can open.
   Future<String> rootPath(AppRoot root);
 
   /// Creates the folder and the folders above it. The empty path (the root) is only made sure of.
