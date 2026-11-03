@@ -150,7 +150,8 @@ Every key of `book` is always written (`null` when unknown). `cache-build pdf` a
 - `title` and `source_title`: from `--title` or the PDF metadata, as before (a `--titles` file replaces the title, keeping the old one as `source_title`).
 - `original_blake3`: the hash of the file as it came (before `--compress`). `--original-blake3 HEX` names it when the PDF given is an OCR copy.
 - `compression`: the outcome of `--compress`, else `null`.
-- `ocr`: `--ocr-engine E --ocr-version V [--ocr-pages N]`, or `--ocr-json FILE`. The JSON is either `{"engine", "version", "pages_ocrd", "original_blake3"?}`
+- `ocr`: `--ocr-engine E --ocr-version V [--ocr-pages N]`, or `--ocr-json FILE`. With an OCR record every page of the PDF is marked as OCR text
+  (`text_source_ocr_pages` lists all pages: an OCR'd copy has its whole text layer replaced); `--ocr-text-pages 1-5,9` lists only the pages that are (partial OCR). The JSON is either `{"engine", "version", "pages_ocrd", "original_blake3"?}`
   (applies to every PDF in the call) or an object of those keyed by input file name (a file with no entry has no OCR record). The recon OCR'd
   copies use this.
 - `suggested`: from `--labels` (source `label`, see below) or, in the build service, the classifier (source `classifier`).

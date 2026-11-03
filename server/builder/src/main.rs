@@ -2,11 +2,12 @@
 //!
 //!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder | --embed-url URL] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
 //!                                            [--created-at TEXT] [--pieces-out FILE] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
-//!                                            [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]
+//!                                            [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]
 //!       Writes revision 4 packs: the `book` block holds the title, the arrival hash (`original_blake3`: the hash of the file as it
 //!       came, before compression; --original-blake3 names it when the PDF given is an OCR copy), the compression outcome, the OCR
 //!       (--ocr-engine/--ocr-version/--ocr-pages, or --ocr-json: either {engine, version, pages_ocrd, original_blake3?} or an object
-//!       of those keyed by input file name) and the suggested division (--labels, source "label").
+//!       of those keyed by input file name) and the suggested division (--labels, source "label"). With an OCR record, every page is
+//!       marked as OCR text (`text_source_ocr_pages`: all pages) unless --ocr-text-pages lists the pages that are (partial OCR).
 //!       Each PDF is read in a child process (this program run as the hidden `extract-pdf`), so a PDF that crashes MuPDF fails alone and
 //!       a long batch goes on; --in-process reads in this process instead (for debugging).
 //!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--built-at TIME]
@@ -60,7 +61,7 @@ fn usage() -> ! {
         "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
     );
     eprintln!(
-        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]"
+        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]"
     );
     std::process::exit(2);
 }
@@ -197,6 +198,16 @@ fn cmd_pdf(a: &Args) -> i32 {
         Ok(o) => o,
         Err(code) => return code,
     };
+    let ocr_text_pages: Option<Vec<usize>> = match a.get("--ocr-text-pages") {
+        Some(v) => match parse_page_list(&v) {
+            Some(l) => Some(l),
+            None => {
+                eprintln!("error: --ocr-text-pages takes pages like 1-5,9 (from 1)");
+                return 2;
+            }
+        },
+        None => None,
+    };
     let sidecar: Option<Value> = match a.get("--ocr-json") {
         Some(f) => match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
             Some(v) => Some(v),
@@ -259,12 +270,24 @@ fn cmd_pdf(a: &Args) -> i32 {
         o.original_blake3 = Some(a.get("--original-blake3").or(side.1).unwrap_or(arrival));
         o.compression = outcome;
         o.ocr = flag_ocr.clone().or(side.0);
+        let ocr_on = o.ocr.is_some();
         if let Some(v) = a.get("--doc-version") {
             o.doc_version = v.parse().unwrap_or(0);
         }
         let extract = |b: &[u8]| if in_process { extract_pdf(b) } else { child.extract(b) };
         match build_pack_with_extractor(&bytes, &o, embedder, &mut |_| {}, &extract) {
             Ok((mut pack, r)) => {
+                // Text that came from OCR: with an OCR record, every page's text is OCR (an OCR'd copy has its whole text layer
+                // replaced) unless --ocr-text-pages names the pages (partial OCR).
+                if ocr_on {
+                    let pages: Vec<usize> = ocr_text_pages.clone().unwrap_or_else(|| (1..=pack.header.page_count).collect());
+                    if let Some(bad) = pages.iter().find(|p| **p > pack.header.page_count) {
+                        eprintln!("{f}: FAILED: --ocr-text-pages names page {bad}, the PDF has {}", pack.header.page_count);
+                        failed += 1;
+                        continue;
+                    }
+                    pack.header.text_source_ocr_pages = pages;
+                }
                 if use_over {
                     let e = over.entry(&pack.header, &mut applied);
                     pack.header.set_title(e.effective_title());
@@ -368,6 +391,28 @@ fn overrides_from(a: &Args) -> Result<Overrides, i32> {
         }
     }
     Ok(over)
+}
+
+/// A page list such as `1-5,9`: pages from 1, sorted, each once. `None` when it is not one.
+fn parse_page_list(s: &str) -> Option<Vec<usize>> {
+    let mut out = Vec::new();
+    for part in s.split(',') {
+        let part = part.trim();
+        let (a, b) = match part.split_once('-') {
+            Some((a, b)) => (a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?),
+            None => {
+                let n = part.parse::<usize>().ok()?;
+                (n, n)
+            }
+        };
+        if a == 0 || b < a {
+            return None;
+        }
+        out.extend(a..=b);
+    }
+    out.sort_unstable();
+    out.dedup();
+    (!out.is_empty()).then_some(out)
 }
 
 /// `--ocr-engine E --ocr-version V [--ocr-pages N]` (the exit code on error).
@@ -806,4 +851,18 @@ fn cmd_passages(a: &Args) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_page_list;
+
+    #[test]
+    fn page_lists_are_ranges_and_numbers() {
+        assert_eq!(parse_page_list("1-3,9"), Some(vec![1, 2, 3, 9]));
+        assert_eq!(parse_page_list(" 5 , 2-3,3"), Some(vec![2, 3, 5]));
+        for bad in ["", "0", "3-2", "a", "1-", "-4", "1,,2"] {
+            assert_eq!(parse_page_list(bad), None, "{bad:?}");
+        }
+    }
 }

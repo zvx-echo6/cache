@@ -326,3 +326,44 @@ fn packs_of_revision_2_3_and_4_still_read_and_the_new_keys_are_optional() {
     let path = write_pack(&read_pack_bytes(&with).unwrap(), tmp.path()).unwrap();
     assert_eq!(read_header(&path).unwrap().text_source_ocr_pages, vec![2, 3]);
 }
+
+#[test]
+fn an_ocr_record_on_pdf_marks_every_page_as_ocr_unless_the_pages_are_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf_path = tmp.path().join("scan.pdf");
+    std::fs::write(&pdf_path, headed_book()).unwrap(); // three pages
+    let run = |out: &str, extra: &[&str]| {
+        cli()
+            .arg("pdf")
+            .arg(pdf_path.as_path())
+            .arg("--out")
+            .arg(tmp.path().join(out))
+            .args(["--fake-embedder", "--in-process", "--created-at", STAMP, "--doc-id", "scan"])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let header = |out: &str| read_header(&tmp.path().join(out).join("scan@1.cdoc")).unwrap();
+    // no OCR record: every page is the text layer
+    assert!(run("none", &[]).status.success());
+    assert!(header("none").text_source_ocr_pages.is_empty());
+    // an OCR record: every page's text is OCR
+    let o = run("all", &["--ocr-engine", "docTR", "--ocr-version", "1.1.0", "--ocr-pages", "3"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let h = header("all");
+    assert_eq!(h.text_source_ocr_pages, vec![1, 2, 3]);
+    assert_eq!(h.book.as_ref().unwrap().ocr.as_ref().map(|o| o.pages_ocrd), Some(3));
+    // the same from a JSON file keyed by the input's name
+    let side = tmp.path().join("ocr.json");
+    std::fs::write(&side, json!({"scan.pdf": {"engine": "docTR", "version": "1.1.0", "pages_ocrd": 3}}).to_string()).unwrap();
+    assert!(run("json", &["--ocr-json", side.to_str().unwrap()]).status.success());
+    assert_eq!(header("json").text_source_ocr_pages, vec![1, 2, 3]);
+    // partial OCR: the listed pages only
+    let o = run("some", &["--ocr-engine", "docTR", "--ocr-version", "1.1.0", "--ocr-text-pages", "2-3"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(header("some").text_source_ocr_pages, vec![2, 3]);
+    // a list that is not a list, or names a page the PDF does not have, is refused
+    assert_eq!(run("bad1", &["--ocr-engine", "docTR", "--ocr-version", "1", "--ocr-text-pages", "3-1"]).status.code(), Some(2));
+    assert!(!run("bad2", &["--ocr-engine", "docTR", "--ocr-version", "1", "--ocr-text-pages", "9"]).status.success());
+    assert!(!tmp.path().join("bad2").join("scan@1.cdoc").exists());
+}
