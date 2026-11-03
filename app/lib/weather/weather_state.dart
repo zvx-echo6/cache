@@ -806,6 +806,9 @@ class WeatherState extends ChangeNotifier {
     _updating = true;
     _sourceErrors.clear();
     notifyListeners();
+    // The core reads its definitions from the folder: write it from what is on now, whichever way a source was switched on (a
+    // switch, Turn on weather, a catalogue's default), so no source that is on is missing there ("no live source").
+    await _syncFolder();
     // The policy the core fetches under must be the one just checked (it is also what the assistant's fetch uses).
     await pushPolicy();
     var fetched = 0, fresh = 0;
@@ -834,7 +837,8 @@ class WeatherState extends ChangeNotifier {
     }
     _lastRunAt = _now();
     if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
-    _lastFailure = failures.isEmpty ? null : failures.first;
+    // Every source that failed, not only the first.
+    _lastFailure = failures.isEmpty ? null : (failures.length == 1 ? failures.single : '${failures.length} updates failed: ${failures.join('; ')}');
     _saveStatus();
     notifyListeners();
     // Every update checks, fresh copies included: an alert that arrived through the assistant or before pop-ups existed is still

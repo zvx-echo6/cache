@@ -93,12 +93,12 @@ This page turns weather sources on and off.
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. It also looks for new sources, the same as "Check for updates". If data is old, the line warns, for example "Updated 3 days ago".
-3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
+3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts" and "Wildfires". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
 4. Turn its switch on or off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
 
-The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions and space weather. Its bottom has "Add sources from a link" and "Catalogues in use".
+The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Its bottom has "Add sources from a link" and "Catalogues in use".
 
 - If the row has a "Get key" button, the source needs a free key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.

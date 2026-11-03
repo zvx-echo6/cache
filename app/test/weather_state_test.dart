@@ -685,6 +685,32 @@ void main() {
       expect(h.weather.status().headline, 'Updated just now · USGS for Where I am failed: the service answered HTTP 500');
     });
 
+    test('every failing source is in the line, not only the first', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
+      h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      await h.weather.updateNow();
+      final line = h.weather.status().headline;
+      expect(line, contains('2 updates failed'));
+      expect(line, contains('USGS for Where I am failed'));
+      expect(line, contains('NWS for Where I am failed'));
+    });
+
+    test('an update writes the definitions of every source that is on first, however it was switched on', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      // the folder lost them (a source switched on another way, before its definition was there): the update puts them back
+      for (final f in h.liveDir.listSync().whereType<File>()) {
+        if (f.path.endsWith('.json')) f.deleteSync();
+      }
+      expect(h.inFolder, isEmpty);
+      await h.weather.updateNow();
+      expect(h.inFolder, containsAll(['nws-alerts-point.json', 'usgs-quakes-near.json']));
+    });
+
     test('the age is kept across a restart', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather alerts'), true);
