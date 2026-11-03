@@ -1,22 +1,49 @@
-# Cache
-
-Cache is an offline survival and preparedness app for Android and iPhone. It puts an assistant, a reference library, maps with
-turn-by-turn directions, weather and alerts, and your own notebooks on the phone, and keeps them working with no connection.
-The assistant runs on the device with a local language model and answers from what you have downloaded, with citations you can
-open. Nothing depends on anyone's servers: there is no account, no sign-in and no server of ours in the middle, and what you keep
-stays on your device. Cache is a framework. No data or models ship inside the app: you choose the models, libraries, regions
-and sources you want, and Cache uses them offline.
-
-Website: [cached.info](https://cached.info)
-
-<p>
-  <img src="app/assets/guide/shots/home.png" width="200" alt="Home, with weather, an alert and shortcuts">
-  <img src="app/assets/guide/shots/ask-sources.png" width="200" alt="An answer from Ask with its source">
-  <img src="app/assets/guide/shots/library.png" width="200" alt="The Library">
-  <img src="app/assets/guide/shots/regions-sheet.png" width="200" alt="Downloading a map region">
-  <img src="app/assets/guide/shots/notebooks.png" width="200" alt="The Notebooks list">
-  <img src="app/assets/guide/shots/weather.png" width="200" alt="The Weather screen">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/assets/brand/wordmark_parchment.png">
+    <img src="app/assets/brand/wordmark_charcoal.png" width="360" alt="Cache">
+  </picture>
 </p>
+
+<h1 align="center">Cache</h1>
+
+<p align="center"><b>Your offline survival and preparedness kit: an assistant, a library, maps, weather and notebooks that keep working with no signal.</b></p>
+
+<p align="center"><a href="https://cached.info">cached.info</a></p>
+
+Cache is an app for Android and iPhone. The assistant runs on the device with a local language model and answers from what
+you have downloaded, with sources you can open. There is no account, no sign-in and no server of ours in the middle, and what
+you keep stays on your device. No data or models ship inside the app: you choose the models, libraries, map regions and data
+sources you want, and Cache uses them offline.
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/home.png" width="200" alt="Home: weather, alerts and your shortcuts"><br><sub>Home: weather, alerts and your shortcuts</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/ask-sources.png" width="200" alt="Ask answers from your own sources, with citations"><br><sub>Ask answers from your own sources, with citations</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/pdf-cited-passage.png" width="200" alt="A citation opens the page it came from"><br><sub>A citation opens the page it came from</sub></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/library.png" width="200" alt="The Library: Kiwix ZIMs and your own libraries"><br><sub>The Library: Kiwix ZIMs and your own libraries</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/ask-open-navigation.png" width="200" alt="Directions from Ask, then turn by turn in Maps"><br><sub>Directions from Ask, then turn by turn in Maps</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/regions-sheet.png" width="200" alt="Map regions to download for offline use"><br><sub>Map regions to download for offline use</sub></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/weather.png" width="200" alt="Weather and alerts, kept for when the signal is gone"><br><sub>Weather and alerts, kept for when the signal is gone</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/notebook-entry.png" width="200" alt="Notebooks for journals, logs and notes"><br><sub>Notebooks for journals, logs and notes</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/videos-list.png" width="200" alt="Videos saved for offline, with captions"><br><sub>Videos saved for offline, with captions</sub></td>
+  </tr>
+</table>
+
+## Get Cache
+
+Cache is in open testing. Its home page is [cached.info](https://cached.info).
+
+- **Android:** [join the open test on Google Play](https://play.google.com/apps/testing/com.happylittlellc.cache), then
+  [install Cache from Google Play](https://play.google.com/store/apps/details?id=com.happylittlellc.cache).
+- **iPhone and iPad:** [join the test on TestFlight](https://testflight.apple.com/join/EcC7T8wx).
+- **Android APK for sideloading:** coming in [GitHub Releases](https://github.com/zvx-echo6/cache/releases).
+
+Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later. Linux and Raspberry Pi: coming in 1.1.
 
 ## What it does (1.0.30)
 
@@ -68,18 +95,6 @@ Website: [cached.info](https://cached.info)
 - Layouts for phones, tablets (two panes) and wide windows.
 
 The full user guide is in [docs/guide](docs/guide/ch1.md).
-
-## Get it
-
-Cache is in testing.
-
-- **Android:** Google Play testing. Join links coming soon.
-- **iPhone:** TestFlight. Join links coming soon.
-- **Android APK for sideloading:** coming in [GitHub Releases](https://github.com/zvx-echo6/cache/releases).
-
-Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later.
-
-Cache on Linux and Raspberry Pi, with its interface in a browser, coming in 1.1.
 
 ## Build from source
 
