@@ -612,6 +612,13 @@ class _CacheAppState extends State<CacheApp> {
       if (call.method == 'changed') await indexThrottle.read(fresh: true);
       return null;
     });
+    // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
+    // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    listenMemoryTrim((level, reading) {
+      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      debugPrint('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
+      unawaited(app.release().then((_) => debugPrint('Model let go; ${memoryNow()}')));
+    });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {

@@ -8,6 +8,7 @@ import 'model_search_screen.dart';
 import '../browse/zim_download.dart' show freeBytesOnDisk;
 import '../downloads/download_row.dart';
 import '../models/search_model.dart' show kSearchModel;
+import '../platform/memory.dart' show modelMemoryNeed;
 import 'download_confirm.dart';
 import 'settings/widgets.dart' show GroupLabel;
 
@@ -43,6 +44,7 @@ class ModelsScreen extends StatefulWidget {
 class _ModelsScreenState extends State<ModelsScreen> {
   late final RecommendedModels _recommended = widget.recommended ?? RecommendedModels.shared;
   int? _memory;
+  int? _room;
 
   AppState get app => widget.app;
 
@@ -51,6 +53,12 @@ class _ModelsScreenState extends State<ModelsScreen> {
     super.initState();
     _memory = widget.memory;
     if (_memory == null) totalMemoryBytes().then((m) => mounted ? setState(() => _memory = m) : null);
+    // What is free now, with the model Cache holds counted as free (choosing another lets it go)
+    app.memory().then((r) {
+      if (r == null || !mounted) return;
+      final held = app.active;
+      setState(() => _room = r.room + (held == null ? 0 : modelMemoryNeed(held.size)));
+    });
     if (ModelDownloads.shared != null) _recommended.load();
     // A waiting row names the download it waits for by the name its own row shows.
     final d = ModelDownloads.shared;
@@ -168,7 +176,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
   Widget _recommendedTile(BuildContext context, ModelDownloads d, ModelRecommendation r) {
     final k = context.t;
     final f = r.hfFile;
-    final fit = ModelFit.of(r.size, _memory);
+    final fit = ModelFit.of(r.size, _memory, room: _room);
     final colour = switch (fit) {
       ModelFit.fits => k.ok,
       ModelFit.tight => k.warning,

@@ -201,6 +201,36 @@ void main() {
       expect(again.transfers, isEmpty);
     });
 
+    test('a partial file with no record (an older build crashed) is matched to its catalogue entry and comes back paused', () async {
+      final listed = (await make().catalog.entries()).entries;
+      final e = listed.first;
+      final part = File('${sources.partialDir.path}/${e.fileName}.part')..createSync(recursive: true);
+      part.writeAsBytesSync(List.filled(4096, 7));
+      // and one the catalogue does not have (an old release): a leftover
+      final gone = File('${sources.partialDir.path}/${e.name}_2001-01.zim.part')..writeAsBytesSync([1, 2, 3]);
+      final b = make();
+      await b.init();
+      for (var i = 0; i < 20 && b.transfers[e.id] == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final t = b.transfers[e.id]!;
+      expect((t.phase, t.done, t.total), (TransferPhase.paused, 4096, e.size));
+      expect(b.resumableParts, contains(part.path), reason: 'not offered as a leftover');
+      expect(b.resumableParts, isNot(contains(gone.path)), reason: 'nothing to carry on: a leftover');
+      // now it has a record: the next start brings it back as any other
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(File('${settings.path}/browse.json').readAsStringSync(), contains(e.id));
+    });
+
+    test('while the catalogue cannot be reached, a partial file with no record is kept (not a leftover), not adopted', () async {
+      final part = File('${sources.partialDir.path}/wikivoyage_en_europe_nopic_2026-09.zim.part')..createSync(recursive: true);
+      final b = make(catalog: catalogWith((u) async => throw const CatalogException('No connection')));
+      await b.init();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(b.transfers, isEmpty);
+      expect(b.resumableParts, contains(part.path));
+    });
+
     test('a record whose partial file is gone is forgotten', () async {
       final e = entryFor(server.port);
       File('${settings.path}/browse.json').writeAsStringSync(jsonEncode({

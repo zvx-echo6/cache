@@ -363,10 +363,14 @@ class BrowseState extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> _pending = {};
   bool _restored = false;
 
-  /// The partial files of the downloads that can be carried on: Storage never offers them as leftovers to clean up.
+  /// The partial files of the downloads that can be carried on: Storage never offers them as leftovers to clean up. With them
+  /// the partial files with no record that may still be (see [_adoptOrphans]).
   Set<String> get resumableParts => sources.zimsDir == null
       ? const {}
-      : {for (final t in transfers.values) '${sources.partialDir.path}/${t.entry.fileName}.part'};
+      : {for (final t in transfers.values) '${sources.partialDir.path}/${t.entry.fileName}.part', ..._orphans};
+
+  /// Partial files with no record, not matched to the catalogue yet (it could not be reached): kept, tried again next start.
+  final Set<String> _orphans = {};
 
   /// Brings back the downloads a stopped app left (once the ZIMs folder is known): each whose partial file is still there is a
   /// paused download at its size so far; one whose file is gone is forgotten.
@@ -396,6 +400,59 @@ class BrowseState extends ChangeNotifier {
       }
     }
     if (changed) unawaited(_save());
+    notifyListeners();
+    unawaited(_adoptOrphans());
+  }
+
+  /// Partial ZIM files with no download record (stopped by a crash in a build that did not keep one) are adopted: a file named
+  /// as Kiwix names its files ({name}_{flavour}_{YYYY-MM}.zim) is looked up in the catalogue by that name, and the entry of
+  /// exactly that file comes back as a paused download at the file's size; Resume carries on from there. A file the catalogue
+  /// no longer has (or not a Kiwix name) is a leftover for Storage's clean-up; while the catalogue cannot be reached it is kept.
+  Future<void> _adoptOrphans() async {
+    final Directory dir;
+    final List<File> parts;
+    try {
+      dir = sources.partialDir;
+      if (!dir.existsSync()) return;
+      final known = {for (final t in transfers.values) '${t.entry.fileName}.part'};
+      parts = [
+        for (final f in dir.listSync(followLinks: false).whereType<File>())
+          if (f.path.toLowerCase().endsWith('.zim.part') && !known.contains(f.uri.pathSegments.last)) f,
+      ];
+    } catch (_) {
+      return;
+    }
+    if (parts.isEmpty) return;
+    _orphans.addAll([for (final f in parts) f.path]);
+    final byName = <String, List<CatalogEntry>>{};
+    for (final f in parts) {
+      final fileName = f.uri.pathSegments.last.substring(0, f.uri.pathSegments.last.length - '.part'.length);
+      final o = ZimOrigin.fromFileName(fileName);
+      if (o == null) {
+        _orphans.remove(f.path);
+        continue;
+      }
+      try {
+        final list = byName[o.name] ??= (await catalog.entries(name: o.name, count: 30)).entries;
+        final e = list.where((e) => e.fileName == fileName).firstOrNull;
+        _orphans.remove(f.path);
+        if (e == null || transfers.containsKey(e.id) || !f.existsSync()) continue;
+        final installed = installedFor(e);
+        final o2 = installed == null ? null : sources.originOf(installed);
+        // the same release is already on the device: a leftover
+        if (installed != null && (o2 == null || o2.release.compareTo(e.release) >= 0)) continue;
+        transfers[e.id] = ZimTransfer(e, replaces: installed)
+          ..phase = TransferPhase.paused
+          ..done = f.lengthSync()
+          ..total = e.size;
+        _remember(e, installed);
+        debugPrint('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
+      } on CatalogException catch (e) {
+        debugPrint('Partial download $fileName not matched yet (catalogue: ${e.message}); kept');
+      } catch (e) {
+        debugPrint('Partial download $fileName not matched yet ($e); kept');
+      }
+    }
     notifyListeners();
   }
 
@@ -530,6 +587,8 @@ class BrowseState extends ChangeNotifier {
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
+    // resumed later, the speed is measured afresh (not across the pause)
+    DlMeter.reset('zim:${entry.id}');
     t.token?.cancel();
     notifyListeners();
   }

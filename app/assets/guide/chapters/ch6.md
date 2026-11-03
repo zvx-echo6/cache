@@ -189,7 +189,7 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 Models, regions, Library items and videos show their progress the same way.
 
 - "Starting…": you tapped it and it has not begun yet.
-- "1.7 of 4.6 GB · 6.2 MB/s · about 8 min left": the size so far, the speed and the time left. The speed and time appear after about 5 seconds. The time reads "less than a minute", "about 8 min" or "about 2 hr". If the size is not known, the line reads "1.7 GB so far".
+- "1.7 of 4.6 GB · 6.2 MB/s · about 8 min left": the size so far, the speed and the time left. The speed and time appear after about 2 seconds; if nothing arrives for a while, the line says "Waiting for the server". The time reads "less than a minute", "about 8 min" or "about 2 hr". If the size is not known, the line reads "1.7 GB so far".
 - "Pausing…": it is stopping because you asked.
 - "Paused", then how much is downloaded and the full size: tap "Resume" to carry on.
 - "Stopped: [reason] · [done] of [total]": the reason is "no connection", "this device is full", "server did not answer" or "download was cut off". A model that needs an account says "this model needs a Hugging Face account". On a region the line ends with its places instead of the size. Fix the cause, then tap "Resume".

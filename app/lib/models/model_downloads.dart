@@ -9,6 +9,7 @@ import '../downloads/download_row.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
+import '../platform/memory.dart' show modelMemoryNeed;
 import 'device_memory.dart';
 import 'hf_hub.dart';
 
@@ -37,10 +38,12 @@ enum ModelFit {
   const ModelFit(this.label);
   final String label;
 
-  static ModelFit of(int fileBytes, int? memory) {
+  /// [room]: the memory free now for a model (see [MemoryReading.room], with the model Cache holds counted as free): a model
+  /// that fits the phone but not what is free now is tight.
+  static ModelFit of(int fileBytes, int? memory, {int? room}) {
     if (memory == null || memory <= 0) return ModelFit.unknown;
     final need = fileBytes + (768 << 20);
-    if (need <= memory * 0.55) return ModelFit.fits;
+    if (need <= memory * 0.55) return room != null && modelMemoryNeed(fileBytes) > room ? ModelFit.tight : ModelFit.fits;
     if (need <= memory * 0.75) return ModelFit.tight;
     return ModelFit.tooBig;
   }

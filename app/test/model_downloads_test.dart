@@ -254,5 +254,8 @@ void main() {
     expect(ModelFit.of(5 * gb, 8 * gb), ModelFit.tight);
     expect(ModelFit.of(7 * gb, 8 * gb), ModelFit.tooBig);
     expect(ModelFit.of(gb, null), ModelFit.unknown);
+    // fits the phone, but not the memory free now: tight
+    expect(ModelFit.of(3 * gb + gb ~/ 2, 8 * gb, room: 2 * gb), ModelFit.tight);
+    expect(ModelFit.of(3 * gb + gb ~/ 2, 8 * gb, room: 4 * gb), ModelFit.fits);
   });
 }

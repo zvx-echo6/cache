@@ -1,6 +1,7 @@
 package com.happylittlellc.cache
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -13,6 +14,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var memoryChannel: MethodChannel? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
 
@@ -46,6 +48,16 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // The device's free memory (lib/platform/memory.dart): the model loads only when it fits what is free now, and is let go
+        // when Android says memory is low.
+        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/memory").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "read" -> result.success(memory())
+                    else -> result.notImplemented()
+                }
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -53,6 +65,26 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        memoryChannel?.setMethodCallHandler(null)
+        memoryChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun memory(): Map<String, Any> {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyMap()
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+        return mapOf("avail" to info.availMem, "total" to info.totalMem, "threshold" to info.threshold, "low" to info.lowMemory)
+    }
+
+    // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not
+    // the one killed. Delivered on top of what Flutter does with it.
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + memory())
     }
 
     // Battery level and whether the phone is plugged in (lib/platform/battery.dart): long automatic work (search indexes)

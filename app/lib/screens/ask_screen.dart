@@ -451,7 +451,12 @@ class _AskScreenState extends State<AskScreen> {
     } else {
       final usable = [for (final m in app.models) if (!app.isUnsupported(m)) m];
       line = 'No model is loaded.';
-      if (usable.isEmpty) {
+      final resting = app.resting;
+      if (resting != null) {
+        // the chosen model, let go to leave memory free: it loads again
+        button = 'Load ${app.displayName(resting)}';
+        onPressed = app.wake;
+      } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;
       } else {

@@ -266,11 +266,15 @@ class _ShellState extends State<Shell> {
         _onModules = true;
       });
 
-  void _goModule(ModuleId m) => setState(() {
-        _module = m;
-        _onModules = false;
-        _built.add(m);
-      });
+  void _goModule(ModuleId m) {
+    // Ask opens: the chosen model, let go to leave memory free, loads again.
+    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    setState(() {
+      _module = m;
+      _onModules = false;
+      _built.add(m);
+    });
+  }
 
   void _openNavigation(NavigationAction action) {
     final route = action.route;
