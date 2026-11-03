@@ -111,7 +111,7 @@ String? indexRowWords(IndexScheduler s, List<String> keys) {
   return null;
 }
 
-/// What tells one library from another of the same name, by work key ("zim-epub/<id>"): the catalogue's summary of that ZIM, or
+/// What tells one library from another of the same name, by work key (`zim-epub/<id>`): the catalogue's summary of that ZIM, or
 /// its file name. Set by the app; null in tests.
 String? Function(String key)? indexItemDetail;
 

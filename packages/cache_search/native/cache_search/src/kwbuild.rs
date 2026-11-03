@@ -399,7 +399,7 @@ pub fn scan_zim_with(
     if !walk_candidates(&czim.mime_table, src.entry_count()) {
         return Ok(Some(ZimMedia::default()));
     }
-    let count = src.entry_count() as u64;
+    let count = src.entry_count();
     WALKED.lock().unwrap_or_else(|e| e.into_inner()).push(src.id.clone());
     if gentle {
         lower_thread_priority();
