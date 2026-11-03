@@ -71,6 +71,18 @@ void main() {
       expect(indexWaitWords(IndexWait.none), isNull);
     });
 
+    test('libraries of the same name are told apart in the queue by what the app knows of each', () {
+      indexItemDetail = (key) => {'zim-epub/law': 'Law books', 'zim-epub/edu': 'Education'}[key];
+      addTearDown(() => indexItemDetail = null);
+      const law = IndexItem(key: 'zim-epub/law', state: IndexState.queued, title: 'Project Gutenberg Library');
+      const edu = IndexItem(key: 'zim-epub/edu', state: IndexState.queued, title: 'Project Gutenberg Library');
+      const wiki = IndexItem(key: 'zim-pdf/w', state: IndexState.running, title: 'Wikipedia');
+      expect(indexItemTitle(law, [law, edu, wiki]), 'Project Gutenberg Library · Law books · EPUBs');
+      expect(indexItemTitle(edu, [law, edu, wiki]), 'Project Gutenberg Library · Education · EPUBs');
+      expect(indexItemTitle(wiki, [law, edu, wiki]), 'Wikipedia · PDFs', reason: 'a name of its own needs nothing more');
+      expect(indexItemTitle(law, [law]), 'Project Gutenberg Library · EPUBs');
+    });
+
     test('running says Making with progress; queued says Waiting; held says why', () {
       expect(indexItemWords(const IndexItem(key: 'zim-pdf/u', state: IndexState.running, progress: (340, 5768))), 'Making PDFs searchable · 340 of 5,768');
       expect(indexItemWords(const IndexItem(key: 'zim-epub/u', state: IndexState.running, progress: (40, 85))), 'Making EPUBs searchable · 40 of 85');
