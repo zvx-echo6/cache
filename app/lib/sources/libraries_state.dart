@@ -24,7 +24,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-11-02b';
+const String kGuideVersion = '2026-11-03';
 
 /// What a library folder holds that never syncs with the libraries folder (see DataKind.notShared): its old keyword index
 /// ([LibraryItem.indexPath]). Library indexes now build into the indexes folder and sync from there as snapshots

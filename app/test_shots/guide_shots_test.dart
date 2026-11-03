@@ -1082,9 +1082,17 @@ void main() {
 
     final browse = BrowseState(sources: sources, libraries: libs, catalog: catalogWith(recorded), policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     await tester.runAsync(browse.init);
+    // Search indexes are being made: the overview line and bar at the top of the Library (the same one as in Settings).
+    final libraryIndexing = _ShotIndexing('Getting search ready · 3 of 12 done');
+    indexSchedulerShared = libraryIndexing;
+    addTearDown(() {
+      indexSchedulerShared = null;
+      libraryIndexing.dispose();
+    });
     await show(tester, BrowseScreen(browse: browse, active: true));
     await settle(tester);
     await shot(tester, 'library');
+    indexSchedulerShared = null;
 
     await show(tester, AddToLibraryScreen(browse: browse));
     await tester.pumpAndSettle();

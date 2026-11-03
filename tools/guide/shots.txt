@@ -13,7 +13,7 @@ settings | Settings, the top page, with the quiet line "Getting search ready: 3 
 settings-storage | Settings > Storage: what uses the device's space, with "Clean up", and "Advanced" (Background indexing: Gentle) at the foot
 settings-maps | Settings > Maps: one line per region, the layers and Advanced
 weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
-library | Library: two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
+library | Library: the "Getting search ready · 3 of 12 done" line with its bar at the top, two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
 library-add | Library > Add: a library from the list, a file or a download link
 guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
 notebooks | Notebooks: the list of notebooks
