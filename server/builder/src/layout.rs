@@ -28,6 +28,16 @@ pub struct Layout {
     pub body_size: f32,
 }
 
+/// The version of the layout step: reading order, furniture stripping, heading detection, paragraph joining and the aside rule.
+/// It is written to every pack (`extractor.layout_version`), beside the extractor and chunker versions, so a pack says which
+/// layout its passages came from. 1 was the layout before the column fix, 2 is the layout with it.
+///
+/// Bump it whenever the same extracted pages could give different headings, paragraphs or order: a change to `layout()` or to
+/// anything it calls that changes its output. Do not bump it for a refactor, a comment, speed, or a change to extraction or to
+/// the chunker (those have their own versions: `extract::EXTRACTOR_VERSION`, `chunk::CHUNKER_VERSION`). A pack with a lower
+/// version than the code is not wrong, only older: the build service may rebuild it the next time it has the PDF.
+pub const LAYOUT_VERSION: u32 = 2;
+
 /// A page with fewer text characters than this, and pictures, needs OCR.
 pub const MIN_PAGE_CHARS: usize = 30;
 /// A line this much above the body size (12%) is a heading.

@@ -31,6 +31,10 @@ pub struct Source {
 pub struct Tool {
     pub name: String,
     pub version: String,
+    /// The version of the layout step that turned the extracted pages into headings and paragraphs (`layout::LAYOUT_VERSION`);
+    /// absent in packs written before it was recorded, and when the pages were laid out by something else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,6 +65,10 @@ pub struct Header {
     pub page_count: usize,
     /// 1-based PDF pages skipped because they have no text layer (OCR comes later).
     pub ocr_pages: Vec<usize>,
+    /// 1-based PDF pages whose text came from OCR; every other page's text came from the PDF's own text layer. Absent (empty):
+    /// all from the text layer (revision 2 to 4 packs written before pages could be OCR'd).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_source_ocr_pages: Vec<usize>,
     pub pieces: usize,
     /// Revision 3 only, read-only: the division the document was filed in. Revision 4 replaces it with `book.suggested`
     /// ([`Header::suggested`] maps it), so it is never written; a pack that carries it is written back as revision 4.

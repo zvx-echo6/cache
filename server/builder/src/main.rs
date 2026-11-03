@@ -18,6 +18,14 @@
 //!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok}), keeping the old one as source_title;
 //!       --classes names the divisions (default: the server's classes-default.json). Packs are matched by doc_id = id, then source
 //!       BLAKE3 = blake3, then the PDF's file name when only one record has it (see PACK-FORMAT.md)
+//!   cache-build pages <in.pdf> --out <pages.json>
+//!       reads the PDF and writes what the layout step made of it as pages.json (the input of `pack`); for debugging and tests
+//!   cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME)
+//!                    [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--meta-title T] [--ppi N] [--year N] [--page-count N]
+//!                    [--extractor-name NAME] [--extractor-version V] [--layout-version N] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE]
+//!                    [--original-blake3 HEX] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
+//!       the shared writer: the text of any source, page by page, becomes a pack with the same passages `pdf` would make from the same pages
+//!       (PACK-FORMAT.md, "pages.json"). A page with "text_source": "ocr" needs --ocr-engine and --ocr-version.
 //!   cache-build view --library <libdir> [--packs <packs dir>]
 //!       rebuilds <libdir>/.local/docs.json from the packs (default <libdir>/packs) and every log in <libdir>/log/
 //!   cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]
@@ -35,6 +43,7 @@ use cache_builder::zim::{survey as zim_survey, Survey, ZimPdfOptions};
 use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles, Applied, Overrides};
 use cache_builder::log::{now_ms, parse_utc_ms};
 use cache_builder::pack::OcrInfo;
+use cache_builder::pagewriter;
 use cache_builder::view::rebuild_view;
 use serde_json::Value;
 use cache_builder::library::{build_library_with, check_library_dir, LibraryOptions, VectorDatatype};
@@ -47,7 +56,7 @@ fn usage() -> ! {
         "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
     );
     eprintln!(
-        "more options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME]\n  cache-build view --library <library dir> [--packs <packs dir>]"
+        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME]\n  cache-build view --library <library dir> [--packs <packs dir>]"
     );
     std::process::exit(2);
 }
@@ -123,6 +132,8 @@ fn main() {
         "pdf" => cmd_pdf(&a),
         "library" => cmd_library(&a),
         "view" => cmd_view(&a),
+        "pack" => cmd_pack(&a),
+        "pages" => cmd_pages(&a),
         "zim-pdfs" => cmd_zim_pdfs(&a),
         "dump" => cmd_dump(&a),
         "passages" => cmd_passages(&a),
@@ -178,19 +189,9 @@ fn cmd_pdf(a: &Args) -> i32 {
     };
     let use_over = over.labels.is_some() || over.titles.is_some();
     let mut applied = Applied::default();
-    let flag_ocr = match (a.get("--ocr-engine"), a.get("--ocr-version")) {
-        (Some(engine), Some(version)) => match a.get("--ocr-pages").map_or(Ok(0), |p| p.parse::<u32>()) {
-            Ok(pages_ocrd) => Some(OcrInfo { engine, version, pages_ocrd }),
-            Err(_) => {
-                eprintln!("error: --ocr-pages needs a number");
-                return 2;
-            }
-        },
-        (None, None) => None,
-        _ => {
-            eprintln!("error: --ocr-engine and --ocr-version go together");
-            return 2;
-        }
+    let flag_ocr = match ocr_from_flags(a) {
+        Ok(o) => o,
+        Err(code) => return code,
     };
     let sidecar: Option<Value> = match a.get("--ocr-json") {
         Some(f) => match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
@@ -363,6 +364,233 @@ fn overrides_from(a: &Args) -> Result<Overrides, i32> {
         }
     }
     Ok(over)
+}
+
+/// `--ocr-engine E --ocr-version V [--ocr-pages N]` (the exit code on error).
+fn ocr_from_flags(a: &Args) -> Result<Option<OcrInfo>, i32> {
+    match (a.get("--ocr-engine"), a.get("--ocr-version")) {
+        (Some(engine), Some(version)) => match a.get("--ocr-pages").map_or(Ok(0), |p| p.parse::<u32>()) {
+            Ok(pages_ocrd) => Ok(Some(OcrInfo { engine, version, pages_ocrd })),
+            Err(_) => {
+                eprintln!("error: --ocr-pages needs a number");
+                Err(2)
+            }
+        },
+        (None, None) => Ok(None),
+        _ => {
+            eprintln!("error: --ocr-engine and --ocr-version go together");
+            Err(2)
+        }
+    }
+}
+
+/// A number option (the exit code on error).
+fn number_opt(a: &Args, k: &str) -> Result<Option<u64>, i32> {
+    match a.get(k) {
+        None => Ok(None),
+        Some(v) => v.parse::<u64>().map(Some).map_err(|_| {
+            eprintln!("error: {k} needs a number");
+            2
+        }),
+    }
+}
+
+/// The labels and titles of `over` applied to a pack that was just built (what `pdf` does inline).
+fn apply_overrides(over: &Overrides, pack: &mut cache_builder::pack::Pack, applied: &mut Applied) {
+    let e = over.entry(&pack.header, applied);
+    pack.header.set_title(e.effective_title());
+    if let Some(b) = pack.header.book.as_mut() {
+        b.source_title = e.source_title.clone();
+        b.suggested = e.suggested.clone();
+    }
+}
+
+/// `cache-build pages <in.pdf> --out <pages.json>`: what the layout step makes of the PDF, in the shape `pack` reads.
+fn cmd_pages(a: &Args) -> i32 {
+    let (Some(f), Some(out)) = (a.pos.first(), a.get("--out")) else { usage() };
+    let bytes = match std::fs::read(f) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{f}: FAILED reading: {e}");
+            return 1;
+        }
+    };
+    let ext = match extract_pdf(&bytes) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("{f}: FAILED: {e}");
+            return 1;
+        }
+    };
+    let lay = cache_builder::layout::layout(&ext);
+    let name = PathBuf::from(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.clone());
+    let (_, pages) = cache_builder::build::pages_of(&ext, &lay, &bytes, &name);
+    match pagewriter::pages_json(&pages).and_then(|t| std::fs::write(&out, t).map_err(|e| cache_builder::Error::ctx(&format!("writing {out}"), e))) {
+        Ok(()) => {
+            println!("{name}: {} pages -> {out}", pages.len());
+            0
+        }
+        Err(e) => {
+            eprintln!("FAILED: {e}");
+            1
+        }
+    }
+}
+
+/// `cache-build pack`: the shared writer on a `pages.json` (see the header of this file).
+fn cmd_pack(a: &Args) -> i32 {
+    let (Some(out), Some(pages_file)) = (a.get("--out"), a.get("--pages")) else { usage() };
+    let http: Option<HttpEmbedder> = match a.get("--embed-url") {
+        Some(u) => match HttpEmbedder::new(&u) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                eprintln!("error: --embed-url: {e}");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    if http.is_none() && !a.has("--fake-embedder") {
+        eprintln!("error: pass --embed-url (a llama-server running bge-m3 Q8_0) or --fake-embedder (stand-in vectors for testing the pipeline)");
+        return 2;
+    }
+    if http.is_some() && a.has("--fake-embedder") {
+        eprintln!("error: --embed-url and --fake-embedder cannot be used together");
+        return 2;
+    }
+    let fake = FakeEmbedder;
+    let embedder: &dyn Embedder = match &http {
+        Some(h) => h,
+        None => &fake,
+    };
+    let mut pages = match std::fs::read_to_string(&pages_file).map_err(|e| cache_builder::Error::ctx(&format!("reading {pages_file}"), e)).and_then(|t| pagewriter::parse_pages(&t)) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: --pages: {e}");
+            return 2;
+        }
+    };
+    pagewriter::normalize_pages(&mut pages);
+    // the file the pages came from
+    let (src_hash, size, file_name) = match (a.get("--source"), a.get("--source-blake3"), a.get("--source-size"), a.get("--file-name")) {
+        (Some(f), None, None, name) => match std::fs::read(&f) {
+            Ok(b) => (blake3::hash(&b).to_hex().to_string(), b.len() as u64, name.unwrap_or_else(|| PathBuf::from(&f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.clone()))),
+            Err(e) => {
+                eprintln!("{f}: FAILED reading: {e}");
+                return 1;
+            }
+        },
+        (None, Some(h), Some(sz), Some(name)) => match sz.parse::<u64>() {
+            Ok(n) => (h.to_lowercase(), n, name),
+            Err(_) => {
+                eprintln!("error: --source-size needs a number");
+                return 2;
+            }
+        },
+        _ => {
+            eprintln!("error: give the file the pages came from: --source FILE, or --source-blake3 HEX --source-size N --file-name NAME");
+            return 2;
+        }
+    };
+    let (ppi, year, page_count, layout_version) = match (number_opt(a, "--ppi"), number_opt(a, "--year"), number_opt(a, "--page-count"), number_opt(a, "--layout-version")) {
+        (Ok(p), Ok(y), Ok(c), Ok(l)) => (p.map(|n| n as u32), y.map(|n| n as u32), c.map_or(0, |n| n as usize), l.map(|n| n as u32)),
+        _ => return 2,
+    };
+    let ocr_pages_in_pages = pages.iter().filter(|p| p.text_source == pagewriter::TextSource::Ocr).count();
+    let mut ocr = match ocr_from_flags(a) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let mut original = a.get("--original-blake3");
+    if let Some(f) = a.get("--ocr-json") {
+        match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+            Some(v) => {
+                let (o, h) = ocr_entry(&v);
+                ocr = ocr.or(o);
+                original = original.or(h);
+            }
+            None => {
+                eprintln!("error: --ocr-json {f}: not a readable JSON file");
+                return 2;
+            }
+        }
+    }
+    if ocr_pages_in_pages > 0 && ocr.is_none() {
+        eprintln!("error: {ocr_pages_in_pages} page(s) have \"text_source\": \"ocr\", so --ocr-engine and --ocr-version (or --ocr-json) are needed");
+        return 2;
+    }
+    let ocr = ocr.map(|mut o| {
+        if a.get("--ocr-pages").is_none() && o.pages_ocrd == 0 {
+            o.pages_ocrd = ocr_pages_in_pages as u32;
+        }
+        o
+    });
+    let over = match overrides_from(a) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let use_over = over.labels.is_some() || over.titles.is_some();
+    let created = a.get("--created-at").unwrap_or_else(now_utc);
+    let mut o = BuildOptions::new(&file_name, &created);
+    o.doc_id = a.get("--doc-id");
+    o.title = a.get("--title");
+    o.https = a.get("--https");
+    if let Some(v) = a.get("--doc-version") {
+        o.doc_version = v.parse().unwrap_or(0);
+    }
+    o.original_blake3 = Some(original.unwrap_or_else(|| src_hash.clone()));
+    o.ocr = ocr;
+    let src = pagewriter::PagesSource {
+        blake3: src_hash,
+        size,
+        file_name,
+        extractor: cache_builder::pack::Tool {
+            name: a.get("--extractor-name").unwrap_or_else(|| "pages".into()),
+            version: a.get("--extractor-version").unwrap_or_else(|| "1".into()),
+            layout_version,
+        },
+        meta_title: a.get("--meta-title"),
+        ppi,
+        year,
+        page_count,
+        ocr_pages: None,
+        text_pages: None,
+    };
+    let t0 = Instant::now();
+    match pagewriter::build_pack_from_pages(&src, &pages, &o, embedder, &mut |_| {}) {
+        Ok((mut pack, r)) => {
+            let mut applied = Applied::default();
+            if use_over {
+                apply_overrides(&over, &mut pack, &mut applied);
+            }
+            match write_pack(&pack, &PathBuf::from(&out)) {
+                Ok(p) => {
+                    println!(
+                        "{}: pages {} pieces {} words/piece mean {:.0} min {} max {} ocr_pages {} headings {} time {:.1}s -> {}",
+                        src.file_name,
+                        r.pages,
+                        r.pieces,
+                        r.mean_words,
+                        r.min_words,
+                        r.max_words,
+                        r.ocr_pages.len(),
+                        r.heading_count,
+                        t0.elapsed().as_secs_f32(),
+                        p.display()
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("FAILED writing the pack: {e}");
+                    1
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("FAILED: {e}{}", http.as_ref().and_then(|h| h.last_error()).map(|m| format!(" ({m})")).unwrap_or_default());
+            1
+        }
+    }
 }
 
 /// The OCR record and the arrival hash of one entry of an `--ocr-json` file: `{engine, version, pages_ocrd, original_blake3}`.

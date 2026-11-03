@@ -235,3 +235,12 @@ are `<data>/build/tuning.json` (`same_jaccard` 0.85, `same_cosine` 0.95, `editio
 
 `400 invalid | invalid_name | not_pdf | bad_json`, `404 not_found`, `409 name_taken | busy | not_failed | cannot_retry`, `411
 length_required`, `507 no_space`, `500 server_error`. All with a plain-sentence `message`.
+
+## Pages in, pack out
+
+Any text source can make a pack through one writer: `cache-build pack --pages pages.json ...`, with `pages.json` an array of
+`{pdf_page, label, text_source: "layer"|"ocr", blocks: [{text, kind: "body"|"heading"|"aside", level?, bullet?}]}`, the blocks in
+reading order. The build service's own PDF path (`cache-build pdf`, and the service's builds) goes through the same writer after
+its layout step, so the same pages give the same passages. A phone, or any OCR engine, hands its text in the same way (one `body`
+block per page is enough). The shape of `pages.json`, the pack fields it sets (`text_source_ocr_pages`, `book.ocr`,
+`extractor.layout_version`) and the `LAYOUT_VERSION` rule are in builder/PACK-FORMAT.md ("Pages in, pack out", "Layout version").

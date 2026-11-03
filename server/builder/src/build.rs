@@ -1,14 +1,12 @@
 //! PDF bytes to a document pack: extract, lay out, chunk, embed.
 
-use crate::chunk::{chunk, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted, EXTRACTOR_NAME, EXTRACTOR_VERSION};
-use crate::fingerprint::{fingerprint, mean_vector};
-use crate::layout::{layout, Element, MIN_PAGE_CHARS};
+use crate::layout::{layout, Element, Layout, LAYOUT_VERSION};
 use crate::compress::CompressionOutcome;
-use crate::pack::{valid_doc_id, BookBlock, Chunker, EmbeddingInfo, Header, OcrInfo, Pack, PackPiece, Samebook, Source, Suggested, Tool, PACK_FORMAT};
-use crate::text::word_count;
+use crate::pack::{valid_doc_id, OcrInfo, Pack, Suggested, Tool};
+use crate::pagewriter::{build_pack_from_pages, BlockKind, PageBlock, PageIn, PagesSource, TextSource};
 
 /// What the caller chooses for one document.
 #[derive(Debug, Clone)]
@@ -72,7 +70,7 @@ pub struct Report {
 }
 
 /// The first big (top level) heading in the first five pages.
-fn first_big_heading(elements: &[Element]) -> Option<String> {
+pub(crate) fn first_big_heading(elements: &[Element]) -> Option<String> {
     elements.iter().find_map(|e| match e {
         Element::Heading { level: 1, text, page } if *page < 5 && (3..=120).contains(&text.chars().count()) => Some(text.clone()),
         _ => None,
@@ -80,7 +78,7 @@ fn first_big_heading(elements: &[Element]) -> Option<String> {
 }
 
 /// A metadata title that names a real title, not a file the PDF was made from ("Microsoft Word - notes.doc").
-fn usable_metadata_title(t: &str) -> Option<String> {
+pub(crate) fn usable_metadata_title(t: &str) -> Option<String> {
     let t = t.trim();
     let t = t.strip_prefix("Microsoft Word - ").or_else(|| t.strip_prefix("Microsoft Word- ")).unwrap_or(t).trim();
     let lower = t.to_lowercase();
@@ -105,7 +103,7 @@ pub fn tidy_file_title(file_name: &str) -> String {
 }
 
 /// Pieces embedded per call (the server's build service batches the same way).
-const EMBED_BATCH: usize = 16;
+pub(crate) const EMBED_BATCH: usize = 16;
 
 /// Where a build has got to, for callers that show progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,9 +132,8 @@ pub fn build_pack_with_extractor(
     on: &mut dyn FnMut(Progress),
     extract: &dyn Fn(&[u8]) -> Result<Extracted>,
 ) -> Result<(Pack, Report)> {
-    let hash = blake3::hash(pdf).to_hex().to_string();
-    let doc_id = opts.doc_id.clone().unwrap_or_else(|| hash.clone());
-    if !valid_doc_id(&doc_id) {
+    // (the default doc_id is a hash, always valid; the shared writer checks again)
+    if let Some(doc_id) = opts.doc_id.as_ref().filter(|d| !valid_doc_id(d)) {
         return Err(Error::new(format!("invalid doc_id {doc_id:?}: use letters, digits, '.', '_' and '-'")));
     }
     if opts.doc_version == 0 {
@@ -144,118 +141,50 @@ pub fn build_pack_with_extractor(
     }
     let ext = extract(pdf)?;
     let lay = layout(&ext);
-    let pieces = chunk(&lay.elements);
-    let ocr_pages: Vec<usize> = lay.ocr_pages.iter().map(|i| i + 1).collect();
-    on(Progress::Extracted { pages: ext.pages.len(), pieces: pieces.len(), ocr_pages: ocr_pages.len() });
-    if pieces.is_empty() {
-        return Err(Error::new(if ocr_pages.is_empty() {
-            "no text found in the PDF".to_string()
-        } else {
-            format!("no text layer: {} page(s) need OCR", ocr_pages.len())
-        }));
-    }
-    let texts: Vec<String> = pieces.iter().map(|p| p.text.clone()).collect();
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-    for batch in texts.chunks(EMBED_BATCH) {
-        let v = embedder.embed_batch(batch);
-        if v.len() != batch.len() {
-            return Err(Error::new("the embedder returned a different number of vectors than texts"));
+    let (src, pages) = pages_of(&ext, &lay, pdf, &opts.file_name);
+    build_pack_from_pages(&src, &pages, opts, embedder, on)
+}
+
+/// What the layout step made of a document, as the input of the shared pack writer ([`build_pack_from_pages`]): one [`PageIn`]
+/// for every page (headings, body paragraphs and asides in reading order, `text_source` layer) and the facts about the file.
+/// `cache-build pdf` builds its pack from exactly this, so a pack made from the same pages by `cache-build pack` has the same pieces.
+pub fn pages_of(ext: &Extracted, lay: &Layout, pdf: &[u8], file_name: &str) -> (PagesSource, Vec<PageIn>) {
+    // The elements come page by page, so one pass puts each in its page.
+    let mut blocks: Vec<Vec<PageBlock>> = vec![Vec::new(); ext.pages.len()];
+    for e in &lay.elements {
+        match e {
+            Element::Heading { level, text, page } => {
+                if let Some(b) = blocks.get_mut(*page) {
+                    b.push(PageBlock { text: text.clone(), kind: BlockKind::Heading, level: Some(*level), bullet: false });
+                }
+            }
+            Element::Para { text, page, bullet, aside } => {
+                if let Some(b) = blocks.get_mut(*page) {
+                    b.push(PageBlock { text: text.clone(), kind: if *aside { BlockKind::Aside } else { BlockKind::Body }, level: None, bullet: *bullet });
+                }
+            }
         }
-        vectors.extend(v);
-        on(Progress::Embedded { done: vectors.len(), total: texts.len() });
     }
-    let dims = vectors[0].len();
-    if dims == 0 || vectors.iter().any(|v| v.len() != dims) {
-        return Err(Error::new("the embedder returned vectors of different sizes"));
-    }
-    let label = |i: usize| ext.pages.get(i).map(|p| p.label.clone()).unwrap_or_else(|| (i + 1).to_string());
-    let first_heading = first_big_heading(&lay.elements);
-    // The title the PDF itself gives; a caller's title replaces it, and the replaced one is kept as `source_title`.
-    let auto_title: String = if opts.smart_title {
-        ext.title.as_deref().and_then(usable_metadata_title).or_else(|| first_heading.clone()).unwrap_or_else(|| tidy_file_title(&opts.file_name))
-    } else {
-        ext.title
-            .clone()
-            .unwrap_or_else(|| std::path::Path::new(&opts.file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| opts.file_name.clone()))
-    };
-    let title = opts.title.clone().unwrap_or_else(|| auto_title.clone());
-    let source_title = (title != auto_title).then_some(auto_title);
-    let words: Vec<usize> = pieces.iter().map(|p| word_count(&p.text)).collect();
-    let headings_all: Vec<(u8, String)> = lay
-        .elements
+    let pages: Vec<PageIn> = ext
+        .pages
         .iter()
-        .filter_map(|e| match e {
-            Element::Heading { level, text, .. } => Some((*level, text.clone())),
-            _ => None,
-        })
+        .zip(blocks)
+        .enumerate()
+        .map(|(i, (rp, blocks))| PageIn { pdf_page: i + 1, label: rp.label.clone(), text_source: TextSource::Layer, blocks })
         .collect();
-    let pack_pieces: Vec<PackPiece> = pieces
-        .iter()
-        .zip(vectors)
-        .map(|(p, v)| PackPiece {
-            index: p.index,
-            text: p.text.clone(),
-            page: label(p.page),
-            pdf_page: Some((p.page + 1) as u32),
-            page_end: if p.page_end != p.page { Some(label(p.page_end)) } else { None },
-            pdf_page_end: if p.page_end != p.page { Some((p.page_end + 1) as u32) } else { None },
-            heading_path: p.heading_path.clone(),
-            vector: v,
-        })
-        .collect();
-    let mut header = Header {
-        cdoc: PACK_FORMAT,
-        doc_id,
-        doc_version: opts.doc_version,
-        title,
-        source: Source { blake3: hash.clone(), size: pdf.len() as u64, file_name: opts.file_name.clone(), https: opts.https.clone() },
-        extractor: Tool { name: EXTRACTOR_NAME.to_string(), version: EXTRACTOR_VERSION.to_string() },
-        chunker: Chunker { version: CHUNKER_VERSION, target_words: TARGET_WORDS as u32, max_words: MAX_WORDS as u32 },
-        embedding: EmbeddingInfo { embedder: embedder.name(), dims },
-        created_at: opts.created_at.clone(),
-        page_count: ext.pages.len(),
-        ocr_pages: ocr_pages.clone(),
-        pieces: pack_pieces.len(),
-        division: None,
-        book: None,
-        samebook: None,
-    };
-    header.book = Some(BookBlock {
-        title: header.title.clone(),
-        source_title,
-        original_blake3: opts.original_blake3.clone().unwrap_or(hash),
-        compression: opts.compression.clone(),
-        ocr: opts.ocr.clone(),
-        suggested: opts.suggested.clone(),
-    });
-    let print = fingerprint(pack_pieces.iter().map(|p| p.text.as_str()));
-    let report = Report {
-        pages: ext.pages.len(),
-        pieces: pack_pieces.len(),
-        mean_words: words.iter().sum::<usize>() as f32 / words.len() as f32,
-        min_words: *words.iter().min().unwrap(),
-        max_words: *words.iter().max().unwrap(),
-        ocr_pages,
-        headings: headings_all.iter().take(15).cloned().collect(),
-        heading_count: headings_all.len(),
-        text_pages: ext.pages.iter().filter(|p| p.text_chars() >= MIN_PAGE_CHARS).count(),
-        words: print.words,
+    let src = PagesSource {
+        blake3: blake3::hash(pdf).to_hex().to_string(),
+        size: pdf.len() as u64,
+        file_name: file_name.to_string(),
+        extractor: Tool { name: EXTRACTOR_NAME.to_string(), version: EXTRACTOR_VERSION.to_string(), layout_version: Some(LAYOUT_VERSION) },
+        meta_title: ext.title.clone(),
         ppi: ext.ppi,
         year: ext.year,
-        minhash: print.minhash,
-        mean_vector: mean_vector(&pack_pieces),
-        first_heading,
+        page_count: ext.pages.len(),
+        ocr_pages: Some(lay.ocr_pages.iter().map(|i| i + 1).collect()),
+        text_pages: Some(ext.pages.iter().filter(|p| p.text_chars() >= crate::layout::MIN_PAGE_CHARS).count()),
     };
-    // Revision 3: the same-book fingerprint travels in the pack, so every device can compare copies without the PDF.
-    header.samebook = Some(Samebook::new(
-        report.minhash.clone(),
-        &report.mean_vector,
-        report.text_pages as u32,
-        report.pages as u32,
-        report.ppi,
-        pdf.len() as u64,
-    ));
-    Ok((Pack { header, pieces: pack_pieces }, report))
+    (src, pages)
 }
 
 #[cfg(test)]

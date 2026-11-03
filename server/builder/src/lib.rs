@@ -16,6 +16,7 @@ pub mod docs;
 pub mod library;
 pub mod log;
 pub mod pack;
+pub mod pagewriter;
 pub mod samebook;
 pub mod text;
 pub mod view;

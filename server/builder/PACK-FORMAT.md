@@ -30,12 +30,13 @@ Line 1, the header (one JSON object):
 | `doc_id`, `doc_version` | Identity (see above). |
 | `title` | The document title: caller's, else the PDF metadata title, else the file name without extension. |
 | `source` | `{blake3, size, file_name, https?}`: the PDF's BLAKE3 (hex), size in bytes, file name, and an optional address it can be fetched from. |
-| `extractor` | `{name, version}`, e.g. `mupdf` / `0.8.0`. |
+| `extractor` | `{name, version, layout_version?}`, e.g. `mupdf` / `0.8.0` / `2`: what read the pages and, when the producer laid them out, the version of the layout step (see "Layout version"). `layout_version` is absent in older packs and when the pages came from something that did its own layout. |
 | `chunker` | `{version, target_words, max_words}`. |
 | `embedding` | `{embedder, dims}`: what made the vectors (the GGUF name for bge-m3, `fake-hash-v1` for the test stand-in) and their size. |
 | `created_at` | Text given by the caller (the builder never reads the clock). |
 | `page_count` | Pages in the PDF. |
-| `ocr_pages` | 1-based PDF pages skipped because they have no text layer (OCR comes later). |
+| `ocr_pages` | 1-based PDF pages skipped because they have no text layer and still need OCR. |
+| `text_source_ocr_pages` | Optional. 1-based PDF pages whose text came from OCR; every other page's text came from the PDF's own text layer. Absent (or empty) means all from the text layer, which is what every pack written before OCR'd pages existed means. This is the per-page `text_source` of `pages.json` (`"layer"` or `"ocr"`); a piece's text came from OCR when any page it covers is listed. |
 | `pieces` | The number of piece lines that follow. Readers check it. |
 | `division` | Revision 3 only; read, never written by revision 4. The division the document was filed in; revision 4 reads it as `book.suggested`. See below. |
 | `book` | Optional (revision 4). The facts about the book: its title, arrival hash, compression, OCR and suggested division; see "Revision 4". |
@@ -153,6 +154,60 @@ Every key of `book` is always written (`null` when unknown). `cache-build pdf` a
   (applies to every PDF in the call) or an object of those keyed by input file name (a file with no entry has no OCR record). The recon OCR'd
   copies use this.
 - `suggested`: from `--labels` (source `label`, see below) or, in the build service, the classifier (source `classifier`).
+
+## Pages in, pack out (`pages.json`)
+
+There is one pack writer (`cache_builder::pagewriter::build_pack_from_pages`). It takes the text of a document page by page and
+makes the pack with the shared chunker (`cache_chunk`); it reads no PDF and has no MuPDF dependency, so the core can call it
+later. **Any OCR engine's output, a phone's text extractor and `cache-build pdf` all enter here**, so the same pages give the
+same passages wherever they were made. `cache-build pdf` reads the PDF with MuPDF, lays it out, converts what the layout step
+made into these pages and calls the same writer.
+
+`pages.json` is a JSON array, one object per page:
+
+```json
+[
+  {"pdf_page": 1, "label": "i", "text_source": "layer",
+   "blocks": [
+     {"text": "Wells", "kind": "heading", "level": 1},
+     {"text": "A well is a hole dug to reach water. Dig below the dry season level.", "kind": "body"},
+     {"text": "Hand-dug wells are slow work.", "kind": "aside"}
+   ]},
+  {"pdf_page": 2, "label": "2", "text_source": "ocr", "blocks": [{"text": "The text of the page, as one paragraph.", "kind": "body"}]}
+]
+```
+
+| Key | Meaning |
+|---|---|
+| `pdf_page` | The 1-based page of the PDF (what a viewer opens). Required, at least 1, once each. |
+| `label` | The printed page label (a numeral or number). Empty or absent: the PDF page number. |
+| `text_source` | `"layer"` (the PDF's text layer; the default when absent) or `"ocr"`. Anything else is refused. |
+| `blocks` | The page's blocks **in reading order**. A page with none has no text (the writer lists it in `ocr_pages` unless the caller says otherwise). |
+| `blocks[].text` | The text of one paragraph or heading, whitespace normalised. (`cache-build pack` normalises it: runs of whitespace, no-break and zero-width spaces become one space, soft hyphens and control characters go.) |
+| `blocks[].kind` | `"body"` (running text), `"heading"`, or `"aside"` (a pull-quote, epigraph, caption or note: the chunker keeps it from interrupting a sentence that runs on to the next page). |
+| `blocks[].level` | Heading level from 1 (outermost); 1 when a heading has none; 0 is refused. |
+| `blocks[].bullet` | Optional, `true` for a list item. |
+
+The simplest input, a phone with no layout of its own, is one `body` block per page. Passages never cross a heading, are cut at
+sentences, and are about 200 words, as for every pack (the chunker rule is `CHUNKER_VERSION`).
+
+`cache-build pack --pages pages.json --out <packs dir> --doc-id ID (--fake-embedder | --embed-url URL)` writes the pack. It also
+needs the file the pages came from (`--source FILE`, or `--source-blake3 HEX --source-size N --file-name NAME`) and takes the
+same fact flags as `pdf` (`--doc-version`, `--title`, `--https`, `--created-at`, `--original-blake3`, `--labels`, `--titles`,
+`--classes`, `--ocr-engine E --ocr-version V [--ocr-pages N]`, `--ocr-json FILE` with one object) plus `--meta-title T`, `--ppi N`,
+`--year N`, `--page-count N`, `--extractor-name NAME` and `--extractor-version V` (default `pages` / `1`; the producer's name),
+and `--layout-version N` (only when the producer laid the pages out with a layout version of its own). A page marked
+`"text_source": "ocr"` needs the OCR record (`book.ocr`); `pages_ocrd` defaults to the number of such pages.
+`cache-build pages <in.pdf> --out pages.json` writes the pages the layout step makes of a PDF (for debugging and the equality test).
+
+## Layout version
+
+`layout::LAYOUT_VERSION` (2 now; 1 was the layout before the column fix) is written to every pack `cache-build pdf` makes, as
+`extractor.layout_version`, beside the extractor version (`EXTRACTOR_VERSION`) and the chunker version (`CHUNKER_VERSION`). The
+three together say how a pack's passages were made. **Bump it when the layout step could give different headings, paragraphs
+or reading order for the same extracted pages** (a change to `layout()` or what it calls that changes its output); do not bump it
+for a refactor, a comment or speed, or for a change to extraction or chunking, which have their own versions. A pack with a lower
+version than the code is older, not wrong.
 
 ## The library folder and the local view
 
