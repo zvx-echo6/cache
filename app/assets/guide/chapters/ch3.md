@@ -92,7 +92,7 @@ This page turns weather sources on and off.
 ![The Weather and alerts settings](shot:settings-weather)
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
-2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. If data is old, the line warns, for example "Updated 3 days ago".
+2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. It also looks for new sources, the same as "Check for updates". If data is old, the line warns, for example "Updated 3 days ago".
 3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
 4. Turn its switch on or off.
 

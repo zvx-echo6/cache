@@ -64,7 +64,10 @@ class _WeatherPageState extends State<WeatherPage> {
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
   }
 
+  /// The refresh button: the source list first (the connector catalogues, as "Check for updates" does, so a newly published
+  /// source shows here), then the data.
   Future<void> _refresh() async {
+    await w.refreshCatalogues();
     final r = await w.updateNow(force: true);
     if (mounted) say(context, r.words);
   }
