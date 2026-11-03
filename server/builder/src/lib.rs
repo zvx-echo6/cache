@@ -14,9 +14,11 @@ pub mod isolate;
 pub mod layout;
 pub mod docs;
 pub mod library;
+pub mod log;
 pub mod pack;
 pub mod samebook;
 pub mod text;
+pub mod view;
 pub mod zim;
 
 pub use build::{build_pack, build_pack_with, build_pack_with_extractor, BuildOptions, Progress, Report};

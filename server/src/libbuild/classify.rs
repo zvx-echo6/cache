@@ -1,4 +1,4 @@
-//! Cache Decimal Classification: the classes, how a book is scored against them, call numbers and the names of filed files.
+//! Cache Decimal System (CDS): the classes, how a book is scored against them, call numbers and the names of filed files.
 //! The classes are `build/classes.json` (a built-in default is written when it is missing, and any edit to it is picked up); it
 //! names the folders and says which divisions are in use. Which division a book goes in is decided by the trained classifier
 //! (`cache_classify`): its weights are a data file, `<data>/models/cache-classifier-<version>.bin`, loaded by [`ModelStore`].
@@ -272,9 +272,13 @@ pub fn safe_part(s: &str, max: usize) -> String {
     }
 }
 
-/// The name of a filed book: `530 · KEA  The Water Purification Handbook.pdf`.
+/// The name of a filed book: `CDS 530-001  The Water Purification Handbook.pdf`, or just the title while it is in Unsorted.
 pub fn file_name(call: &str, title: &str) -> String {
-    format!("{}  {}.pdf", safe_part(call, 40), safe_part(title, 120))
+    if call.is_empty() {
+        format!("{}.pdf", safe_part(title, 120))
+    } else {
+        format!("{}  {}.pdf", safe_part(call, 40), safe_part(title, 120))
+    }
 }
 
 /// A short sentence for why a book is in Unsorted.

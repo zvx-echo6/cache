@@ -5,6 +5,7 @@
 //! base64 of little-endian f32. Plain text under gzip was chosen over zstd/CBOR because it is inspectable with `zcat`, needs
 //! no new crate (flate2 is already in the lockfile), and is deterministic: the same inputs give the same bytes.
 
+use crate::compress::CompressionOutcome;
 use crate::error::{Error, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -61,9 +62,13 @@ pub struct Header {
     /// 1-based PDF pages skipped because they have no text layer (OCR comes later).
     pub ocr_pages: Vec<usize>,
     pub pieces: usize,
-    /// Revision 3, optional: the division the document is filed in (absent in older packs).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Revision 3 only, read-only: the division the document was filed in. Revision 4 replaces it with `book.suggested`
+    /// ([`Header::suggested`] maps it), so it is never written; a pack that carries it is written back as revision 4.
+    #[serde(default, skip_serializing)]
     pub division: Option<Division>,
+    /// Revision 4, optional: the facts about the book (title, arrival hash, compression, OCR, suggested division).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book: Option<BookBlock>,
     /// Revision 3, optional: what is needed to tell whether two files are the same book and to pick the better copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samebook: Option<Samebook>,
@@ -94,6 +99,123 @@ impl Division {
             return Err(Error::new(format!("division source {:?} is not one of label, sorter, user", self.source)));
         }
         Ok(())
+    }
+}
+
+/// Where a suggested division came from: `classifier` or `label`.
+pub const SUGGESTED_SOURCES: [&str; 2] = ["classifier", "label"];
+
+/// The division suggested for a book (pack revision 4; revision 3's `division` mapped).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Suggested {
+    /// The three-digit division code, e.g. `"440"`.
+    pub div: String,
+    pub label: String,
+    #[serde(default)]
+    pub score: Option<f32>,
+    #[serde(default)]
+    pub classifier_version: Option<u32>,
+    /// One of [`SUGGESTED_SOURCES`].
+    pub source: String,
+    #[serde(default)]
+    pub second_div: Option<String>,
+}
+
+impl Suggested {
+    fn check(&self) -> Result<()> {
+        if !SUGGESTED_SOURCES.contains(&self.source.as_str()) {
+            return Err(Error::new(format!("suggested source {:?} is not one of classifier, label", self.source)));
+        }
+        Ok(())
+    }
+
+    /// Revision 3's division as a suggestion: `sorter` is the classifier; `label` and `user` are labels.
+    pub fn from_division(d: &Division) -> Suggested {
+        Suggested {
+            div: d.division.clone(),
+            label: d.label.clone(),
+            score: d.score,
+            classifier_version: d.classifier_version,
+            source: if d.source == "sorter" { "classifier".into() } else { "label".into() },
+            second_div: d.second_division.clone(),
+        }
+    }
+}
+
+/// What OCR did to the book's text: the engine and version, and how many pages it read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrInfo {
+    pub engine: String,
+    pub version: String,
+    pub pages_ocrd: u32,
+}
+
+/// The `book` block of a revision 4 header: facts that belong to the book and never change after it is built.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BookBlock {
+    pub title: String,
+    /// The title before a caller or a titles file replaced it; `null` when it was not replaced.
+    #[serde(default)]
+    pub source_title: Option<String>,
+    /// BLAKE3 (hex) of the file as it arrived. A book's identity is this hash even when the stored file was compressed or the
+    /// text came from an OCR copy.
+    pub original_blake3: String,
+    #[serde(default)]
+    pub compression: Option<CompressionOutcome>,
+    #[serde(default)]
+    pub ocr: Option<OcrInfo>,
+    #[serde(default)]
+    pub suggested: Option<Suggested>,
+}
+
+impl Header {
+    /// The suggested division: the `book` block's, else revision 3's `division` mapped.
+    pub fn suggested(&self) -> Option<Suggested> {
+        match &self.book {
+            Some(b) => b.suggested.clone(),
+            None => self.division.as_ref().map(Suggested::from_division),
+        }
+    }
+
+    /// The book's title: the `book` block's, else the header's.
+    pub fn book_title(&self) -> &str {
+        self.book.as_ref().map_or(self.title.as_str(), |b| b.title.as_str())
+    }
+
+    /// Changes the title in the header and in the `book` block together.
+    pub fn set_title(&mut self, title: &str) {
+        self.title = title.to_string();
+        if let Some(b) = self.book.as_mut() {
+            b.title = title.to_string();
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        if let Some(d) = &self.division {
+            d.check()?;
+        }
+        if let Some(s) = self.book.as_ref().and_then(|b| b.suggested.as_ref()) {
+            s.check()?;
+        }
+        Ok(())
+    }
+
+    /// The header as it is written: a revision 3 header (a `division`, no `book`) gets the `book` block it lacks.
+    fn for_writing(&self) -> Header {
+        let mut h = self.clone();
+        if h.book.is_none() {
+            if let Some(d) = &h.division {
+                h.book = Some(BookBlock {
+                    title: h.title.clone(),
+                    source_title: None,
+                    original_blake3: h.source.blake3.clone(),
+                    compression: None,
+                    ocr: None,
+                    suggested: Some(Suggested::from_division(d)),
+                });
+            }
+        }
+        h
     }
 }
 
@@ -296,11 +418,9 @@ pub fn pack_bytes(pack: &Pack) -> Result<Vec<u8>> {
     if pack.header.pieces != pack.pieces.len() {
         return Err(Error::new("the header's piece count does not match the pieces"));
     }
-    if let Some(d) = &pack.header.division {
-        d.check()?;
-    }
+    pack.header.check()?;
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
-    let h = serde_json::to_string(&pack.header).map_err(|e| Error::ctx("writing the header", e))?;
+    let h = serde_json::to_string(&pack.header.for_writing()).map_err(|e| Error::ctx("writing the header", e))?;
     writeln!(gz, "{h}").map_err(|e| Error::ctx("writing the pack", e))?;
     for p in &pack.pieces {
         let line = PieceLine {
@@ -343,9 +463,7 @@ pub fn read_pack_bytes(bytes: &[u8]) -> Result<Pack> {
     if header.cdoc != PACK_FORMAT {
         return Err(Error::new(format!("pack format {} is not supported (this reads {PACK_FORMAT})", header.cdoc)));
     }
-    if let Some(d) = &header.division {
-        d.check()?;
-    }
+    header.check()?;
     let mut pieces = Vec::with_capacity(header.pieces);
     for l in lines {
         let l = l.map_err(|e| Error::ctx("reading the pack", e))?;
@@ -372,6 +490,20 @@ pub fn read_pack_bytes(bytes: &[u8]) -> Result<Pack> {
         return Err(Error::new(format!("the pack has {} pieces, the header says {}", pieces.len(), header.pieces)));
     }
     Ok(Pack { header, pieces })
+}
+
+/// Reads only a pack's header (the first line), so a library of thousands of books can be listed without reading their vectors.
+pub fn read_header(path: &Path) -> Result<Header> {
+    let ctx = |e: Error| Error::ctx(&path.display().to_string(), e);
+    let f = std::fs::File::open(path).map_err(|e| Error::ctx(&format!("reading {}", path.display()), e))?;
+    let mut lines = std::io::BufReader::new(flate2::read::GzDecoder::new(f)).lines();
+    let first = lines.next().ok_or_else(|| ctx(Error::new("empty pack")))?.map_err(|e| ctx(Error::ctx("reading the pack", e)))?;
+    let header: Header = serde_json::from_str(&first).map_err(|e| ctx(Error::ctx("the pack header", e)))?;
+    if header.cdoc != PACK_FORMAT {
+        return Err(ctx(Error::new(format!("pack format {} is not supported (this reads {PACK_FORMAT})", header.cdoc))));
+    }
+    header.check().map_err(ctx)?;
+    Ok(header)
 }
 
 pub fn read_pack(path: &Path) -> Result<Pack> {

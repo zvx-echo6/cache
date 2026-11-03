@@ -41,9 +41,9 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 | `PATCH /api/build/libraries/{id}` | `{"title"}` | the library; 404, 409 `name_taken` |
 | `DELETE /api/build/libraries/{id}` | | `{removed:true,id}`; deletes books, packs, PDF copies and search data. 409 `busy` while a book of it is being built. Confirm in the UI. |
 | `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in,compression}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
-| `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number keeps its letters; the filed PDF takes the new title in its name. |
+| `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number does not change; the filed PDF takes the new title in its name. |
 | `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
-| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530", "device"?: "Kitchen tablet"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to the corrections log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
+| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to this device's library log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
 | `DELETE /api/build/libraries/{id}/books/{doc}` | | `{removed:true,id}`. The person's own PDF is not touched. |
 | `POST /api/build/libraries/{id}/books/{doc}/replace?name=<file name>` | the PDF, streamed, `Content-Length` required | the queue item (`replace` set). The old book stays searchable until the new one is published; `doc_version` + 1. |
 
@@ -123,7 +123,7 @@ finished ones stay (up to 1000) so "x of 214 books done" can be counted: `counts
 | `POST /api/build/queue/pause` | the queue. The book being built is finished, then building holds. Remembered across restarts. |
 | `POST /api/build/queue/resume` | the queue |
 | `POST /api/build/queue/stop` | the queue plus `removed` (the waiting books taken off the list). The book being built finishes. Files in the drop folder's `ingest/` would be queued again at the next check, so the Stop dialog's "Also turn off the drop folder" matters. |
-| `POST /api/build/queue/{id}/decide` | `{"action": "keep_both"\|"replace_older"}` for a `needs_decision` book (409 `not_waiting` otherwise). `keep_both` queues it to be added as its own book (its call number gets the year, or `2e`, `3e`... after the letters, so two editions in one division read `530 · KEA` and `530 · KEA 2019`). `replace_older` rebuilds the older book from this file (`doc_version` + 1, same call number and place) and puts it at the front of the queue, next after the book being worked on. The queue. |
+| `POST /api/build/queue/{id}/decide` | `{"action": "keep_both"\|"replace_older"}` for a `needs_decision` book (409 `not_waiting` otherwise). `keep_both` queues it to be added as its own book (it takes the next call number in its division). `replace_older` rebuilds the older book from this file (`doc_version` + 1, same call number and place) and puts it at the front of the queue, next after the book being worked on. The queue. |
 | `POST /api/build/queue/{id}/retry` | the queue. For `failed` / `ocr_needed` only (409 `not_failed` otherwise). The book goes to the end; a drop-folder file goes back to `ingest/`. |
 | `DELETE /api/build/queue/{id}` | the queue. Dismiss a finished item, or cancel a waiting one; 409 `busy` while it is being built. |
 
@@ -171,7 +171,7 @@ Default folder: `<data>/drop`, off, no library chosen, compression off. `setting
 
 ## Filing by subject
 
-The classes are Cache Decimal Classification (`vault/projects/cache-classification.md`): 10 classes of 9 divisions (060 is unassigned). They are
+The classes are Cache Decimal System, CDS (`vault/projects/cache-classification.md`): 10 classes of 9 divisions (060 is unassigned). They are
 `<data>/build/classes.json`, written from the built-in default (see `server/docs/classes-default.md`) when missing, and read again when the
 file changes. A division has a `number`, a `name` and a `description`; the file names the folders and says which divisions are in use (an empty
 description means not in use). The descriptions are not used to sort books, and are never shown to the assistant.
@@ -187,14 +187,18 @@ both). Nothing of this is in the pack or the search payloads. With no usable mod
 and no `classifier_version` (`unsure_reason`: "This book has not been looked at yet."), and is sorted when a model file appears and the queue is idle.
 There are no keyword rules.
 
-Every placement by hand (`place`, below) is appended to the library's corrections log, `<data>/app/docs/libraries/<library_id>/corrections.jsonl`
-(the library's root, beside `packs/` and `shard/`, so no search payload carries it): one JSON line `{"doc_id","from","to","classifier_version","time","device"}`,
-`from` and `to` a division number or `"unsorted"`, `classifier_version` the version that sorted the book (null if none), `time` RFC 3339, `device` the
-optional `"device"` name sent with the placement (null when not sent). It is kept for training future versions; it is appended to and goes with the library.
+Every shelving change is appended to this device's library log, `<data>/app/docs/libraries/<library_id>/log/<device_id>.jsonl` (the library's
+root, beside `packs/` and `shard/`, so no search payload carries it): a book built gets `place` and `assign` (by `auto`, or `unsort` when the sorter was
+unsure); a placement by hand (`place`, below) gets `place` (by `user`), `retire` of the old number and `assign` of a new one; a rename gets `title`.
+The device id is a random one the server keeps in `<data>/build/device_id` (the server has no sync identity of its own). The format, the resolution
+rules and the local view `.local/docs.json` are in server/builder/LIBRARY-LOG.md. This log replaces the corrections log: a user `place` whose division
+differs from the pack's `book.suggested` is a training correction. The `"device"` name in a placement body is no longer used.
 
-A call number is the division and three letters of the clean title, skipping a leading "The", "A" or "An": `530 · WAT`. In Unsorted it is just
-the letters. The clean title is the PDF's metadata title when it names a real title (not "Microsoft Word - notes.doc"), else its first big heading
-in the first five pages, else the file name tidied. It can be edited with the book PATCH.
+A call number is `CDS ` + the division + `-` + a sequence number of at least three digits: `CDS 530-001`. The numbers of a division run 1, 2, 3
+in the order books are shelved there, are never reused when a book moves away, and a book in Unsorted has none (`call_number` is null). When two
+devices claim the same number the earlier claim keeps it and the others show a suffix, `CDS 530-001.1`, `CDS 530-001.2`. The clean title is
+still how a book is named: the PDF's metadata title when it names a real title (not "Microsoft Word - notes.doc"), else its first big heading in
+the first five pages, else the file name tidied. It can be edited with the book PATCH.
 
 | Call | Result |
 |---|---|
