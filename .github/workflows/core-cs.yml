@@ -1,0 +1,150 @@
+# Builds the core's command line `cs` (cache_search_cli) for Linux x86_64 from ANY ref of this repository, on demand. It is for
+# tools that must use exactly the core a released build ships, such as the keyword snapshot of a library (`cs index-library`), which
+# a device only accepts if the core that made it is the one it runs. Run it by hand:
+#
+#   Actions > Core cs > Run workflow > ref (a tag, a branch or a commit; default build-1.0.30-32, the tag of rel-30 commit 9b1c9c2)
+#
+# It never runs on a push. The workflow file lives on the server branch but checks out and builds another ref, so every step is
+# written out here and nothing is taken from the ref's own .github (the files there may not exist at an old tag): libzim 9.8.2-1
+# (Kiwix's official prebuilt, pinned by sha256 and md5, the same as packages/cache_search/native/zimx/fetch-libzim-linux.sh) is
+# fetched by this file. A ref whose build.rs does not link libzim on Linux simply ignores LIBZIM_DIR.
+#
+# Built in an ubuntu:22.04 container, like native-libs.yml and server-release.yml, so the binary needs glibc 2.35 or older; a step
+# fails the job if it needs a newer one. The artifact is cs-linux-x86_64-<short sha of the ref>: cs, BUILD-INFO.txt, and lib/libzim.so.9
+# when cs needs it.
+name: Core cs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The tag, branch or commit to build
+        required: true
+        default: build-1.0.30-32
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: 1.99.1
+
+jobs:
+  cs-linux-x86_64:
+    name: cs-linux-x86_64
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git for the checkout
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update -q && apt-get install -y -q git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Which commit
+        id: commit
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:9}" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ inputs.ref }} = $sha"
+      - name: Build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -q
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip lld file
+          g++ --version | sed -n 1p
+          ldd --version | sed -n 1p
+      - name: Rust
+        id: rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
+          echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        run: |
+          ver=9.8.2-1
+          name="libzim_linux-x86_64-$ver.tar.gz"
+          sha256=6dc2d70cbe0e8d584ab70b489f82429dd9a6e9d509ea96b5a0c8da0fea0d7bbe
+          md5=32099d4f377645ba8723e69359a4aa14
+          base="$RUNNER_TEMP/zimbuild/libzim"
+          mkdir -p "$base"
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$base/$name" "https://download.openzim.org/release/libzim/$name"
+          [ "$(sha256sum "$base/$name" | cut -d' ' -f1)" = "$sha256" ] && [ "$(md5sum "$base/$name" | cut -d' ' -f1)" = "$md5" ] || { echo "::error::checksum mismatch for $name"; exit 1; }
+          dest="$base/linux-x86_64-$ver"
+          rm -rf "$dest"; mkdir -p "$dest"
+          tar -xzf "$base/$name" -C "$dest" --strip-components=1
+          ls "$dest"/lib/*/libzim.so
+          echo "LIBZIM_DIR=$dest" >> "$GITHUB_ENV"
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-corecs-x86_64-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-corecs-x86_64-
+      - name: Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-corecs-x86_64-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-corecs-x86_64-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: Build cs (release)
+        working-directory: packages/cache_search/native
+        run: cargo build --locked --release -p cache_search_cli
+      - name: Package
+        id: pack
+        run: |
+          bin=packages/cache_search/native/target/release/cs
+          [ -x "$bin" ] || { echo "::error::the build made no cs"; exit 1; }
+          name="cs-linux-x86_64-${{ steps.commit.outputs.short }}"
+          out="$PWD/out/$name"
+          mkdir -p "$out"
+          install -m 755 "$bin" "$out/cs"
+          if env -u LD_LIBRARY_PATH ldd "$out/cs" | grep -q 'libzim.so.9 => not found'; then
+            mkdir -p "$out/lib"
+            cp -L "$LIBZIM_DIR"/lib/*/libzim.so.9 "$out/lib/libzim.so.9"
+            chmod 755 "$out/lib/libzim.so.9"
+          fi
+          {
+            echo "cs (the core's command line) for linux-x86_64"
+            echo "ref: ${{ inputs.ref }}"
+            echo "source commit: ${{ steps.commit.outputs.sha }}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(uname -srm) by workflow run $GITHUB_RUN_ID"
+            echo "rust: $(rustc --version)"
+            echo "glibc (container): $(ldd --version | sed -n 1p)"
+            echo "cs sha256: $(sha256sum "$out/cs" | cut -d' ' -f1)"
+            echo "cs NEEDED: $(readelf -d "$out/cs" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | tr '\n' ' ')"
+            echo "cs max GLIBC: $(objdump -T "$out/cs" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
+          } > "$out/BUILD-INFO.txt"
+          cat "$out/BUILD-INFO.txt"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+      - name: Check glibc and that cs runs
+        run: |
+          out="${{ steps.pack.outputs.dir }}"
+          max=$(objdump -T "$out/cs" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+          echo "cs: max GLIBC_${max:-none}"
+          if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" 2.35 | sort -V | tail -n 1)" != "2.35" ]]; then echo "::error::cs needs GLIBC_$max, newer than 2.35"; exit 1; fi
+          ldd "$out/cs" || true
+          if [ -d "$out/lib" ]; then export LD_LIBRARY_PATH="$out/lib"; fi
+          "$out/cs" --help 2>&1 | head -20 || true
+          "$out/cs" index-library --help 2>&1 | head -30 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.dir }}
+          retention-days: 30
+          if-no-files-found: error

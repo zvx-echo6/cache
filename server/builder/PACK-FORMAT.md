@@ -220,6 +220,16 @@ A built library is the normal library (`shard/`, `cache-library.json`, `document
 - `.local/docs.json`: the **view**, format 2, rebuilt from the packs and every log (never synced, not in `SHA256SUMS`, not in any search payload). `cache-build view
   --library <dir> [--packs <packs dir>]` makes it again (the packs default to `<dir>/packs`). See LIBRARY-LOG.md for its shape.
 
+`cache-build library --classifier cache-classifier-N.bin` files the books that no label and no pack has placed. Each is scored from its
+vectors by the same sorter the build service uses (`cache_builder::sorter`); the model must have been trained on the embedding model
+Cache uses (it is refused otherwise). A confident book gets a `place` (by `auto`) and an `assign` in the seed log, as a labelled one does,
+and its view entry has `suggested` with source `classifier`, the score, the second choice (`second_div`) and the classifier version.
+A book the sorter is not sure of is left in Unsorted: **no `place` event**, and the view still shows the best guess in `suggested` (so a
+person's "Place it" can offer it), with no shelf. Packs are not changed. `--sorter-report FILE.tsv` writes one line per book the sorter
+looked at: `doc_id, file_name, title, classifier_version, division, score, decision (Filed or Unsorted), top3 (division=score ...), reason (low or no_text)`.
+The guess of an unsure book is in the view `library` writes, not in the packs, so `cache-build view` (packs and logs only) shows such a book
+with no suggestion.
+
 The format 1 `docs.json` at the library root and `overrides.json` were never released and are gone. `cache-library.json` no longer has a `docs` key, and the
 `.cache-library` archive holds the shard and the settings file only (the seed log travels beside it, in the library folder).
 

@@ -24,6 +24,10 @@ mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts
 cache_search = { path = "../../packages/cache_search/native/cache_search" }
 # The passage chunker, shared with the core (cs_pdf_chunk): one implementation.
 cache_chunk = { path = "../../packages/cache_chunk" }
+# The division classifier (pure Rust), for `cache-build library --classifier`; cache_embed only for the id of the embedding model
+# the classifier must have been trained on.
+cache_classify = { path = "../../packages/cache_classify" }
+cache_embed = { path = "../../packages/cache_search/native/cache_embed" }
 # The read-write shard (the same Qdrant revision as cache_search).
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 # PDF compression (compress.rs): the pure-Rust JPEG encoder for recompressed page images (no dependencies), and mupdf-sys for the

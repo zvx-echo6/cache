@@ -199,6 +199,8 @@ pub struct Overrides {
     pub titles: Option<Titles>,
     /// Names for the divisions of `labels`; a division without a name gets its code as its label.
     pub names: HashMap<String, String>,
+    /// The division sorter (`cache-build library --classifier`): files the books no label and no pack has placed.
+    pub sorter: Option<cache_classify::Model>,
 }
 
 impl Overrides {

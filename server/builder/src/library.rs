@@ -193,6 +193,25 @@ pub struct LibraryReport {
     pub shard_dir: PathBuf,
     pub settings_path: PathBuf,
     pub archive: Option<PathBuf>,
+    /// What the sorter made of each book it looked at (`build_library_with` with a classifier); empty otherwise.
+    pub sorter: Vec<SorterRow>,
+}
+
+/// One line of the sorter report: a book the sorter looked at, because no label (or pack) had placed it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SorterRow {
+    pub doc_id: String,
+    pub file_name: String,
+    pub title: String,
+    pub classifier_version: u32,
+    /// The division it was filed in; `None` when it was left in Unsorted.
+    pub division: Option<String>,
+    /// The best division's probability (0 when there was none).
+    pub score: f32,
+    /// The best three, best first.
+    pub top: Vec<crate::sorter::Suggestion>,
+    /// Why it is in Unsorted: `low`, `no_text`, or the error text.
+    pub unsure: Option<String>,
 }
 
 /// The pack files in a folder, sorted by name.
@@ -375,7 +394,7 @@ impl LibraryWriter {
         } else {
             None
         };
-        Ok(LibraryReport { points, documents: rows.len(), shard_dir, settings_path, archive })
+        Ok(LibraryReport { points, documents: rows.len(), shard_dir, settings_path, archive, sorter: Vec::new() })
     }
 
     /// Give up: remove what was written.
@@ -399,7 +418,7 @@ pub fn seed_device_id(library_id: &str) -> String {
 pub fn seed_events(facts: &BTreeMap<String, BookFacts>, dev: &str, at: u64) -> Vec<Event> {
     let mut by_div: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
     for (id, f) in facts {
-        if let Some(s) = f.suggested.as_ref().filter(|s| valid_division(&s.div)) {
+        if let Some(s) = f.suggested.as_ref().filter(|s| !f.unsure && valid_division(&s.div)) {
             by_div.entry(s.div.as_str()).or_default().push((f.effective_title(), id.as_str()));
         }
     }
@@ -505,17 +524,64 @@ pub fn build_library_with(packs_dir: &Path, out: &Path, opts: &LibraryOptions, o
         }
     }
     let mut applied = Applied::default();
+    let mut rows: Vec<SorterRow> = Vec::new();
     let docs: Vec<LibDoc> = packs
         .iter()
         .map(|p| {
             let mut d = LibDoc::from_pack(p);
-            let e = over.entry(&p.header, &mut applied);
+            let mut e = over.entry(&p.header, &mut applied);
+            // A book nothing has placed (no label, nothing in its pack) is filed by the sorter from its vectors, when there is one.
+            if e.suggested.is_none() {
+                if let Some(model) = &over.sorter {
+                    sort_book(model, p, &over.names, &mut e, &mut rows);
+                }
+            }
             d.title = e.effective_title().to_string();
             d.entry = Some(e);
             d
         })
         .collect();
-    write_library(out, opts, docs).map(|r| (r, applied))
+    write_library(out, opts, docs).map(|mut r| {
+        r.sorter = rows;
+        (r, applied)
+    })
+}
+
+/// Runs the sorter on a book and records its verdict: the best guess as the book's `suggested` (source `classifier`, with the
+/// score, the second choice and the classifier version), `unsure` when it is not filed, and a row for the report.
+fn sort_book(model: &cache_classify::Model, pack: &Pack, names: &std::collections::HashMap<String, String>, e: &mut BookFacts, rows: &mut Vec<SorterRow>) {
+    let h = &pack.header;
+    let mut row = SorterRow {
+        doc_id: h.doc_id.clone(),
+        file_name: h.source.file_name.clone(),
+        title: e.effective_title().to_string(),
+        classifier_version: model.version(),
+        division: None,
+        score: 0.0,
+        top: Vec::new(),
+        unsure: None,
+    };
+    match crate::sorter::classify(model, &pack.pieces) {
+        Ok(v) => {
+            if let Some(best) = v.top.first() {
+                e.suggested = Some(crate::pack::Suggested {
+                    div: best.division.clone(),
+                    label: names.get(&best.division).cloned().unwrap_or_else(|| best.division.clone()),
+                    score: Some(best.score),
+                    classifier_version: Some(v.version),
+                    source: "classifier".into(),
+                    second_div: v.top.get(1).map(|s| s.division.clone()),
+                });
+                e.unsure = v.division.is_none();
+                row.score = best.score;
+            }
+            row.division = v.division;
+            row.top = v.top;
+            row.unsure = v.unsure;
+        }
+        Err(msg) => row.unsure = Some(msg),
+    }
+    rows.push(row);
 }
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's

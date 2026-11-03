@@ -14,6 +14,10 @@
 //!       (the seed log), SHA256SUMS and .local/docs.json (the view)
 //!       --built-at is the `at` of every seed event: UTC milliseconds or YYYY-MM-DDTHH:MM:SSZ (default: now; pass a fixed one so a
 //!       rebuild is byte-identical);
+//!       --classifier MODEL (cache-classifier-N.bin) files the books nothing else placed: each is scored from its vectors; a confident
+//!       one gets its division as `suggested` (source "classifier", with the score, the second choice and the classifier version) and
+//!       a place and assign in the seed log, any other is left in Unsorted (its best guess is still in the view, with no place event);
+//!       --sorter-report FILE.tsv writes one line per book the sorter looked at (division, score, Filed/Unsorted, its top 3);
 //!       --labels sets each document's division (source "label") from a labels file ([{id, path, final, second_division}]);
 //!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok}), keeping the old one as source_title;
 //!       --classes names the divisions (default: the server's classes-default.json). Packs are matched by doc_id = id, then source
@@ -56,7 +60,7 @@ fn usage() -> ! {
         "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
     );
     eprintln!(
-        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME]\n  cache-build view --library <library dir> [--packs <packs dir>]"
+        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]"
     );
     std::process::exit(2);
 }
@@ -632,10 +636,25 @@ fn cmd_library(a: &Args) -> i32 {
             }
         },
     };
-    let over = match overrides_from(a) {
+    let mut over = match overrides_from(a) {
         Ok(o) => o,
         Err(code) => return code,
     };
+    if let Some(f) = a.get("--classifier") {
+        match std::fs::read(&f).map_err(|e| cache_builder::Error::ctx(&format!("reading {f}"), e)).and_then(|b| cache_builder::sorter::load_model(&b)) {
+            Ok(m) => {
+                println!("classifier {f}: version {}, threshold {}", m.version(), m.threshold());
+                over.sorter = Some(m);
+            }
+            Err(e) => {
+                eprintln!("error: --classifier: {e}");
+                return 2;
+            }
+        }
+    } else if a.has("--sorter-report") {
+        eprintln!("error: --sorter-report needs --classifier");
+        return 2;
+    }
     let built_at = match a.get("--built-at") {
         Some(v) => match parse_utc_ms(&v) {
             Some(t) => t,
@@ -655,6 +674,34 @@ fn cmd_library(a: &Args) -> i32 {
             }
             if over.titles.is_some() {
                 println!("titles: {} matched, {} ambiguous (file name shared), {} not found", ap.titles_matched, ap.titles_ambiguous, ap.titles_unmatched);
+            }
+            if over.sorter.is_some() {
+                let filed = r.sorter.iter().filter(|s| s.division.is_some()).count();
+                println!("sorter: {} books looked at, {} filed, {} left in Unsorted", r.sorter.len(), filed, r.sorter.len() - filed);
+                if let Some(f) = a.get("--sorter-report") {
+                    let mut t = String::from("doc_id\tfile_name\ttitle\tclassifier_version\tdivision\tscore\tdecision\ttop3\treason\n");
+                    for s in &r.sorter {
+                        let top: Vec<String> = s.top.iter().map(|x| format!("{}={:.4}", x.division, x.score)).collect();
+                        let clean = |x: &str| x.replace(['\t', '\n', '\r'], " ");
+                        t.push_str(&format!(
+                            "{}\t{}\t{}\t{}\t{}\t{:.4}\t{}\t{}\t{}\n",
+                            s.doc_id,
+                            clean(&s.file_name),
+                            clean(&s.title),
+                            s.classifier_version,
+                            s.division.clone().unwrap_or_default(),
+                            s.score,
+                            if s.division.is_some() { "Filed" } else { "Unsorted" },
+                            top.join(" "),
+                            s.unsure.clone().unwrap_or_default()
+                        ));
+                    }
+                    if let Err(e) = std::fs::write(&f, t) {
+                        eprintln!("error: writing {f}: {e}");
+                        return 1;
+                    }
+                    println!("sorter report {f}");
+                }
             }
             match check_library_dir(&PathBuf::from(&out)) {
                 Ok(c) => println!("check: docs {} whole_library_only {}", c["docs"], c["whole_library_only"]),

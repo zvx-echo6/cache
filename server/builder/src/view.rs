@@ -27,13 +27,16 @@ pub struct BookFacts {
     /// A title a rebuild's titles file gave. The seed log records it as a `title` event, so the view can be made again.
     pub title_override: Option<String>,
     pub suggested: Option<Suggested>,
+    /// The sorter looked at the book and was not sure: `suggested` is its best guess, but the book is left in Unsorted (the seed
+    /// log gets no `place` for it).
+    pub unsure: bool,
     pub compression: Option<CompressionOutcome>,
     pub ocr: Option<OcrInfo>,
 }
 
 impl BookFacts {
     pub fn new(title: &str, suggested: Option<Suggested>) -> BookFacts {
-        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, compression: None, ocr: None }
+        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None }
     }
 
     pub fn from_header(h: &Header) -> BookFacts {
@@ -43,6 +46,7 @@ impl BookFacts {
             source_title: b.and_then(|b| b.source_title.clone()),
             title_override: None,
             suggested: h.suggested(),
+            unsure: false,
             compression: b.and_then(|b| b.compression.clone()),
             ocr: b.and_then(|b| b.ocr.clone()),
         }

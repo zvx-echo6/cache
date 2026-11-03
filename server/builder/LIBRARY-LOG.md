@@ -155,6 +155,7 @@ same bytes (no clock, keys in a fixed order, books in `doc_id` order).
 - `place` (by `auto`) then `assign` for every book that has a suggested division (from the pack's `book.suggested`, or `--labels`).
 - Numbers go in order of **(title, doc_id)** within each division (plain string order of the title as the library uses it, then of the `doc_id`), starting at 1, so a rebuild gives the same numbers.
 - Books with no division (Unsorted) get no `place` or `assign`.
+- With `--classifier`, a book no label and no pack placed is sorted from its vectors: a confident one is placed and numbered like the rest; an unsure one gets no event (it stays in Unsorted) and the view keeps the sorter's best guess as `suggested`.
 - A title that a `--titles` file replaced is written as a `title` event, after the placements, so the view can be made again from the packs and the log.
 - Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). The recon build passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
 - Divisions are written in number order; within a division, books in number order, each as `place` then `assign`.
