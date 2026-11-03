@@ -98,7 +98,7 @@ void main() {
     final log = await open(fileBytes: 200, files: 3);
     for (var i = 0; i < 60; i++) {
       log.add(LogLevel.standard, 'INFO', 'line $i ${'x' * 20}');
-      await Future<void>.delayed(Duration.zero);
+      await log.flush();
     }
     await log.flush();
     final files = log.logFiles;
