@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache/app_state.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/chat/tool.dart';
+import 'package:cache/chat/tool_loop.dart' show TurnPhase;
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
