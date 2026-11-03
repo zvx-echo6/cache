@@ -1,6 +1,6 @@
 //! The service's side of the per-device library log (server/builder/LIBRARY-LOG.md).
 //!
-//! The server is one device. It appends to `<library>/log/<device_id>.jsonl` (only it writes that file), reads every device's log
+//! The server is one device, with the cache_sync identity kept in `<data>/sync`. It appends to `<library>/log/<device_id>.jsonl` (only it writes that file), reads every device's log
 //! to decide which call number is free, and makes the local view `<library>/.local/docs.json` from the packs and the logs.
 //!
 //! - After a book is built, `place` and `assign` are appended (by `auto`), or `unsort` when the classifier was unsure.
@@ -18,18 +18,30 @@ use cache_builder::log::{now_ms, read_logs, resolve, valid_device_id, Event, Kin
 use cache_builder::view::rebuild_view;
 use std::collections::BTreeMap;
 
-/// This server's device id. The server has no sync identity of its own, so it keeps a random one in `<data>/build/device_id`, made
-/// the first time and read back after that. A new id (the file deleted) simply starts a new log file.
+/// The folder of Cache on Linux's sync identity, `<data>/sync`: `identity.key` (the device's iroh key pair) lives here, and so will
+/// anything else sync keeps for this device. It is the one place; the library log and any later sync use the same identity.
+pub const SYNC_DIR: &str = "sync";
+
+/// The device id used when the identity cannot be made or read (a full or read-only disk): one fixed name, so the log is still
+/// written by one writer to one file.
+const UNSYNCED_ID: &str = "server-unsynced";
+
+/// This server's device id: the cache_sync identity in `<data>/sync` (made the first time, read back after that), as the EndpointId's
+/// text (lower-case letters and digits). It names the library log, `log/<device_id>.jsonl`. A reinstall that loses the key starts a
+/// new id and so a new log file; the old one stays and its events still count. The random `server-<hex>` id of earlier builds
+/// (`<data>/build/device_id`) is no longer read or written; its log file is left alone.
 pub(crate) fn load_device_id(data: &Path) -> String {
-    let path = data.join("build/device_id");
-    if let Some(id) = std::fs::read_to_string(&path).ok().map(|t| t.trim().to_string()).filter(|t| valid_device_id(t)) {
-        return id;
+    match cache_sync::identity::load_or_create(&data.join(SYNC_DIR)) {
+        Ok((_, id)) if valid_device_id(&id) => id,
+        Ok((_, id)) => {
+            eprintln!("cache-server: the sync identity {id:?} is not usable as a log name; using {UNSYNCED_ID}");
+            UNSYNCED_ID.to_string()
+        }
+        Err(e) => {
+            eprintln!("cache-server: could not load the sync identity ({e}); using {UNSYNCED_ID}");
+            UNSYNCED_ID.to_string()
+        }
     }
-    let id = format!("server-{}", random_hex());
-    if let Err(e) = write_bytes_atomic(&path, id.as_bytes()) {
-        eprintln!("cache-server: could not save the device id ({e}); this one lasts until the server stops");
-    }
-    id
 }
 
 impl BuildService {

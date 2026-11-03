@@ -25,9 +25,11 @@
 
 ## The device id
 
-The device id is `cache_sync`'s identity, which a reinstall replaces. A new id simply starts a new log file. It is used in a file name, so it holds letters, digits,
-`.`, `_` and `-` only (at most 64, not starting with a dot). The seed log's id is `builder-<library_id>`. **Cache Server** has no sync identity of its own, so it
-keeps a random one, `server-<16 hex>`, in `<data>/build/device_id` (made the first time, read back after that).
+The device id is `cache_sync`'s identity (`cache_sync::identity::load_or_create`: the EndpointId's text, lower-case letters and digits), which a reinstall replaces. A new id simply
+starts a new log file. It is used in a file name, so it holds letters, digits, `.`, `_` and `-` only (at most 64, not starting with a dot). The seed log's id is
+`builder-<library_id>`, kept by the `cache-build` command line. **Cache Server** (Cache on Linux) keeps its identity in `<data>/sync` (`identity.key`, the 32 secret-key
+bytes), the one folder for this device's sync identity and anything sync keeps later; the library log's `dev` is that id. If the identity cannot be made it logs as
+`server-unsynced`. The random `server-<hex>` id of earlier builds (`<data>/build/device_id`) is no longer read or written; its log file stays and its events still count.
 
 ## Events
 

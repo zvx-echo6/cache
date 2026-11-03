@@ -1500,11 +1500,19 @@ fn every_placement_is_written_to_this_devices_log_and_the_view_follows() {
 fn the_device_id_is_kept_and_other_devices_logs_decide_which_number_is_free() {
     let d = TempDir::new("m4");
     small_classes(&d);
+    // an earlier build kept a random id in build/device_id: it is neither read nor written now
+    std::fs::create_dir_all(d.0.join("build")).unwrap();
+    std::fs::write(d.0.join("build/device_id"), "server-0ldid\n").unwrap();
     let (svc, _) = rig(&d);
-    assert!(cache_builder::log::valid_device_id(&svc.device) && svc.device.starts_with("server-"));
+    assert!(cache_builder::log::valid_device_id(&svc.device));
+    assert_ne!(svc.device, "server-0ldid");
+    // the id is the cache_sync identity kept in <data>/sync
+    let (_, sync_id) = cache_sync::identity::load_or_create(&d.0.join(booklog::SYNC_DIR)).unwrap();
+    assert_eq!(svc.device, sync_id);
+    assert!(d.0.join("sync/identity.key").is_file());
     let (svc2, _) = rig(&d);
     assert_eq!(svc2.device, svc.device, "the id is kept in the data folder");
-    assert_eq!(std::fs::read_to_string(d.0.join("build/device_id")).unwrap().trim(), svc.device);
+    assert_eq!(std::fs::read_to_string(d.0.join("build/device_id")).unwrap(), "server-0ldid\n");
     let lib = new_lib(&svc, "L");
     add(&svc, &lib, "w.pdf", &book("well", 3, Some("The Well Handbook")));
     drain(&svc);

@@ -489,8 +489,8 @@ pub struct BuildService {
     models: ModelStore,
     last_maintenance: Mutex<Instant>,
     classify_retry: Mutex<Option<Instant>>,
-    /// This device's id: the name of its library log (`log/<device>.jsonl`). The server has no sync identity of its own, so it
-    /// keeps a random one in `<data>/build/device_id` (see [`booklog::load_device_id`]).
+    /// This device's id: the cache_sync identity in `<data>/sync` (see [`booklog::load_device_id`]); the name of its library log,
+    /// `log/<device>.jsonl`.
     pub(crate) device: String,
 }
 

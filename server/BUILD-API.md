@@ -190,7 +190,7 @@ There are no keyword rules.
 Every shelving change is appended to this device's library log, `<data>/app/docs/libraries/<library_id>/log/<device_id>.jsonl` (the library's
 root, beside `packs/` and `shard/`, so no search payload carries it): a book built gets `place` and `assign` (by `auto`, or `unsort` when the sorter was
 unsure); a placement by hand (`place`, below) gets `place` (by `user`), `retire` of the old number and `assign` of a new one; a rename gets `title`.
-The device id is a random one the server keeps in `<data>/build/device_id` (the server has no sync identity of its own). The format, the resolution
+The device id is the server's cache_sync identity, kept in `<data>/sync` (`identity.key`; the one folder for this device's sync identity, also for any later sync), shown as the EndpointId's text. The random id of earlier builds in `<data>/build/device_id` is no longer used; its log file stays. The format, the resolution
 rules and the local view `.local/docs.json` are in server/builder/LIBRARY-LOG.md. This log replaces the corrections log: a user `place` whose division
 differs from the pack's `book.suggested` is a training correction. The `"device"` name in a placement body is no longer used.
 
