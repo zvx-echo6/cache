@@ -114,8 +114,9 @@ class AppLog extends ChangeNotifier {
     }
     _level = l;
     _write('LOG', 'Log level: ${logLevelTitle(l)}');
-    await _saveLevel();
+    // the rows show it at once; the level is kept on the device after
     notifyListeners();
+    await _saveLevel();
   }
 
   /// Everything ends now: the level before it again.
