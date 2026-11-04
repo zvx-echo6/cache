@@ -156,7 +156,7 @@ class AppLog extends ChangeNotifier {
     _write(tag, line);
   }
 
-  /// The last lines logged for a piece of work (its key: "zim-pdf/<id>"), oldest first: what the queue's Details show.
+  /// The last lines logged for a piece of work (its key: `zim-pdf/<id>`), oldest first: what the queue's Details show.
   List<String> jobLines(String job) => List.of(_jobs[job] ?? const <String>[]);
 
   void _write(String tag, String line) {

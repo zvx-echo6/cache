@@ -68,7 +68,7 @@ class ActionRegistry extends ChangeNotifier {
     try {
       return f(fields, summary);
     } catch (e) {
-      logError('Actions: card lines failed', error: e, detail: '$action');
+      logError('Actions: card lines failed', error: e, detail: action);
       return null;
     }
   }
