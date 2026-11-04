@@ -329,6 +329,8 @@ class _CacheAppState extends State<CacheApp> {
     indexesDir: () => _support(kIndexesDirName)?.path,
     videoDir: () => video.dir?.path,
     duty: () => indexThrottle.duty,
+    // a finished index job: the status is read again, so the Library and the queue say it is built
+    onJobDone: () => unawaited(sources.refresh()),
   );
 
   /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
