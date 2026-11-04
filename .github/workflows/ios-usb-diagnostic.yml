@@ -1,0 +1,325 @@
+# Internal diagnostic IPA for registered test phones. Built on CI and installed over USB; no store upload.
+name: iOS USB Diagnostic
+
+on:
+  push:
+    branches: [diag-40]
+    paths: ['.github/workflows/ios-usb-diagnostic.yml']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (empty = the branch the workflow was started on)
+        type: string
+        default: ''
+      stage:
+        description: What to build (core or llama only, to test one native part cheaply)
+        type: choice
+        options: [all, core, llama]
+        default: all
+
+concurrency:
+  group: ios-usb-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  TEAM_ID: 7G87LQAK4J
+  BUNDLE_ID: com.happylittle.cache
+  FLUTTER_VERSION: 3.44.8
+  IPHONEOS_DEPLOYMENT_TARGET: '16.3'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.p.outputs.stage }}
+      build_name: ${{ steps.v.outputs.build_name }}
+      build_number: ${{ steps.v.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          sparse-checkout: |
+            .github
+            app/pubspec.yaml
+      - name: Validate the source reference
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          if [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{7,39}$ ]]; then
+            echo "::error::Use a full 40-character commit SHA or a branch/tag name; shortened commit IDs cannot be checked out by this workflow."
+            exit 1
+          fi
+      - name: Check USB signing configuration
+        if: (inputs.stage || 'all') == 'all'
+        env:
+          IOS_DIST_P12_B64: ${{ secrets.IOS_DIST_P12_B64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          IOS_PROFILE_B64: ${{ secrets.IOS_DIAG_PROFILE_B64 }}
+        run: |
+          for key in IOS_DIST_P12_B64 IOS_DIST_P12_PASSWORD IOS_PROFILE_B64; do
+            if [[ -z "${!key}" ]]; then echo "::error::Missing required signing secret: $key"; exit 1; fi
+          done
+          echo "Required configuration is present (secret values are not logged)."
+      # The installed diagnostic version and build number come from pubspec.yaml.
+      - name: Version and build number from pubspec.yaml
+        id: v
+        run: |
+          line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
+          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\ *$ ]]; then
+            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<patch>+<build number>, as in 1.0.30+31, found: $line"; exit 1
+          fi
+          name=${BASH_REMATCH[1]} build=${BASH_REMATCH[2]}
+          echo "build_name=$name" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build" >> "$GITHUB_OUTPUT"
+          echo "version $name, build $build"
+      - id: p
+        run: |
+          echo "stage=${{ (inputs.stage || 'all') }}" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  core:
+    needs: plan
+    if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'core'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Preflight native iOS configuration and toolchain
+        env:
+          EXPECTED_SOURCE: ${{ inputs.ref }}
+        run: |
+          if [[ "$EXPECTED_SOURCE" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            bash packages/valhalla/scripts/preflight-ios.sh "$EXPECTED_SOURCE"
+          else
+            bash packages/valhalla/scripts/preflight-ios.sh
+          fi
+      - name: Check the disk-space helper on macOS
+        run: |
+          env -u IPHONEOS_DEPLOYMENT_TARGET clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
+            packages/cache_search/ios/tests/free_space_test.c -framework CoreFoundation -o "$RUNNER_TEMP/free-space-test"
+          "$RUNNER_TEMP/free-space-test" "$RUNNER_TEMP" "$RUNNER_TEMP/missing-$(uuidgen)"
+      - name: Compile the offline reader rules with WebKit
+        run: |
+          env -u IPHONEOS_DEPLOYMENT_TARGET swift packages/cache_search/ios/tests/reader_rules_test.swift \
+            packages/cache_search/ios/tests/offline-reader-rules.json
+      - name: Native toolchain identity
+        id: toolchain
+        run: |
+          echo "id=$( { xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version; rustc -vV; cmake --version; ninja --version; uname -m; } | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/ios/native
+          key: core-routing-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/**/*.rs', 'packages/cache_search/native/**/Cargo.toml', 'packages/cache_search/native/Cargo.lock', 'packages/cache_search/native/zimx/**', 'packages/cache_search/ios/build-core.sh', 'packages/valhalla/**', '.github/workflows/ios-testflight.yml') }}
+      - name: Cargo registry cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-
+      - name: Cargo target cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: CoreKiwix download cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/libzim/libzim
+          key: corekiwix-14.2.1-2
+      - name: Valhalla source and dependency cache
+        id: routing-cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/libzim/valhalla
+          key: valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # Only dependency work may fall back across recipes. Configure always
+          # reruns: vcpkg recalculates ABIs and CMake regenerates target flags.
+          restore-keys: |
+            valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-
+            valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-
+      - name: Build the Rust core
+        if: steps.out.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+        run: |
+          rustup target add aarch64-apple-ios
+          rustc --version
+          xcodebuild -version
+          packages/cache_search/ios/build-core.sh "$RUNNER_TEMP/libzim"
+      - name: Save resumable Valhalla dependencies
+        if: always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != '' && steps.routing-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/libzim/valhalla
+          key: ${{ steps.routing-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-core
+          path: packages/cache_search/ios/native
+          retention-days: 2
+
+  llama:
+    needs: plan
+    if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'llama'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          submodules: recursive
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_llama/ios/native/libcache_llama_all.a
+          key: llama-out-${{ hashFiles('packages/cache_llama/src/**', 'packages/cache_llama/ios/build-native.sh', 'packages/cache_llama/third_party/llama.cpp/CMakeLists.txt', 'packages/cache_llama/third_party/llama.cpp/src/**', 'packages/cache_llama/third_party/llama.cpp/ggml/src/**') }}
+      - name: Build llama.cpp (Metal) and the chat engine
+        if: steps.out.outputs.cache-hit != 'true'
+        run: |
+          cmake --version
+          xcodebuild -version
+          packages/cache_llama/ios/build-native.sh "$RUNNER_TEMP/llama-build"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-llama
+          path: packages/cache_llama/ios/native/libcache_llama_all.a
+          retention-days: 2
+
+  app:
+    needs: [plan, core, llama]
+    if: needs.plan.outputs.stage == 'all'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-core
+          path: packages/cache_search/ios/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-llama
+          path: packages/cache_llama/ios/native
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cocoapods
+          key: cocoapods-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile') }}
+          restore-keys: cocoapods-
+      - name: Flutter packages and Pods
+        working-directory: app
+        env:
+          CACHE_READER_RULES_FILE: ${{ runner.temp }}/reader-rules.json
+        run: |
+          flutter --version
+          flutter pub get
+          flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart test/browse/reader_resources_test.dart test/video_player_screen_test.dart
+          cmp ../packages/cache_search/ios/tests/offline-reader-rules.json "$RUNNER_TEMP/reader-rules.json"
+          flutter build ios --config-only --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
+          cd ios && pod install
+      - name: Signing certificate and profile
+        env:
+          P12: ${{ secrets.IOS_DIST_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_DIAG_PROFILE_B64 }}
+        run: |
+          KC="$RUNNER_TEMP/build.keychain-db"
+          KCPW=$(uuidgen)
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$P12" | base64 -D > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" login.keychain-db
+          rm -f "$RUNNER_TEMP/dist.p12"
+          security find-identity -v -p codesigning "$KC"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROFILE" | base64 -D > "$RUNNER_TEMP/cache.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/cache.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          cp "$RUNNER_TEMP/cache.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "profile: $(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist") $UUID"
+          rm -f "$RUNNER_TEMP/profile.plist"
+      - name: Archive
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          # Keep the normal release signing settings in the repository; only this runner uses the USB profile.
+          sed -i '' 's/Cache App Store/Cache USB Diagnostics/g' Runner.xcodeproj/project.pbxproj
+          xcodebuild archive \
+            -workspace Runner.xcworkspace -scheme Runner -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
+      - name: Verify the signed archive
+        run: |
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+            "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
+      - name: Export the .ipa
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>release-testing</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>iPhone Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>${BUNDLE_ID}</key><string>Cache USB Diagnostics</string></dict>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/ipa"
+          ls -l "$RUNNER_TEMP/ipa"
+          mkdir -p "$GITHUB_WORKSPACE/out" && cp "$RUNNER_TEMP"/ipa/*.ipa "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.ipa"
+      - name: Verify the actual exported IPA payload
+        run: |
+          test -s out/Cache-${{ needs.plan.outputs.build_name }}.ipa
+          stat -f 'IPA bytes: %z' out/*.ipa
+          shasum -a 256 out/*.ipa
+          mkdir "$RUNNER_TEMP/ipa-check"
+          unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+            "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
+          rm -rf "$RUNNER_TEMP/ipa-check"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cache-ipa
+          path: out/*.ipa
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/archive.log
+          retention-days: 3
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+          rm -rf "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/private_keys"
+
