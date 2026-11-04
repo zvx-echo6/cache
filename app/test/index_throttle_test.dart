@@ -45,12 +45,15 @@ void main() {
       expect(heatOf(null), 0);
       expect(heatOf(_r(thermal: Thermal.unknown)), 0);
       expect(heatOf(_r(thermal: Thermal.nominal)), 0);
-      expect(heatOf(_r(thermal: Thermal.light)), 0.4);
-      expect(heatOf(_r(thermal: Thermal.moderate)), 0.7);
+      expect(heatOf(_r(thermal: Thermal.light)), 0, reason: "an iPhone's fair: where it sits under any steady work; runs as usual");
+      expect(heatOf(_r(thermal: Thermal.moderate)), kHeatModerate, reason: "an iPhone's serious: slowed down");
+      expect(heatFactor(kHeatModerate), lessThan(1));
+      expect(kHeatModerate, lessThan(kHeatPause), reason: 'moderate never pauses');
       expect(heatOf(_r(thermal: Thermal.severe)), 1);
       expect(heatOf(_r(thermal: Thermal.critical)), 1);
-      expect(heatOf(_r(thermal: Thermal.nominal, headroom: 0.55)), 0.55, reason: 'the headroom is finer than the status');
-      expect(heatOf(_r(headroom: 1.4)), 1);
+      expect(heatOf(_r(thermal: Thermal.nominal, headroom: 0.5)), 0.5, reason: 'the headroom forecast is a hint to slow down');
+      expect(heatOf(_r(headroom: 1.4)), kHeadroomMost, reason: 'never a pause from the forecast alone');
+      expect(heatOf(_r(thermal: Thermal.severe, headroom: 0.2)), 1, reason: 'the status wins when it is hotter');
     });
 
     test('the share eases off steadily from 0.3 to a sixth or so at 0.9', () {
@@ -87,24 +90,50 @@ void main() {
 
     test('charging and cool: the full duty cycle; charging but warm: eased like on battery', () async {
       expect((await at(_r(charging: true))).idleMs, 0);
+      expect((await at(_r(charging: true, thermal: Thermal.light))).idleMs, 0, reason: 'fair and charging: full speed');
       final warm = await at(_r(charging: true, thermal: Thermal.moderate));
-      expect(warm.share, closeTo(kShareGentle * heatFactor(0.7), 0.01));
+      expect(warm.share, closeTo(kShareGentle * heatFactor(kHeatModerate), 0.01));
       expect(warm.hold, IndexHold.heat);
     });
 
-    test('heat rises: eased off step by step, paused when severe; it goes on again only well below that', () async {
+    test('a high headroom forecast on a cool phone slows the work but is not called warm; the thermal status is', () async {
+      final d = await at(_r(thermal: Thermal.nominal, headroom: 0.5));
+      expect(d.hold, IndexHold.heat, reason: 'the forecast still eases the work off');
+      expect(t.warm, isTrue);
+      expect(t.thermalWarm, isFalse, reason: 'the system says nominal: the words must not say warm');
+      await at(_r(thermal: Thermal.light, headroom: 0.5));
+      expect(t.thermalWarm, isFalse, reason: "light (an iPhone's fair) is not called warm");
+      await at(_r(thermal: Thermal.moderate));
+      expect(t.thermalWarm, isTrue, reason: "moderate (an iPhone's serious) is");
+    });
+
+    test("the forecast alone never pauses, however high; an iPhone's fair runs as usual", () async {
+      for (var i = 0; i < 4; i++) {
+        expect((await at(_r(headroom: 0.99))).paused, isFalse);
+      }
+      expect(t.duty.hold, IndexHold.heat, reason: 'slowed');
+      t.dispose();
+      t = make();
+      for (var i = 0; i < 4; i++) {
+        final d = await at(_r(thermal: Thermal.light));
+        expect((d.paused, d.hold), (false, IndexHold.none));
+        expect(d.share, closeTo(kShareGentle, 0.01));
+      }
+    });
+
+    test('heat rises: slowed when moderate, paused only when severe; it goes on again only well below that', () async {
       final light = await at(_r(thermal: Thermal.light));
-      expect(light.paused, isFalse);
-      expect(light.share, closeTo(kShareGentle * heatFactor(0.4), 0.01));
-      expect(t.warm, isTrue, reason: 'Settings says slowed down, phone is warm');
+      expect((light.paused, light.hold), (false, IndexHold.none));
       final moderate = await at(_r(thermal: Thermal.moderate));
+      expect(moderate.paused, isFalse);
       expect(moderate.share, lessThan(light.share));
+      expect(t.warm, isTrue, reason: 'slowed down for heat');
       final severe = await at(_r(thermal: Thermal.severe));
       expect(severe.paused, isTrue);
       expect(severe.hold, IndexHold.heat);
-      // Cooling a little is not enough (hysteresis): 1.0 then moderate (0.7) smooths to 0.85, still paused.
+      // Cooling a little is not enough (hysteresis): 1.0 then moderate (0.55) smooths to 0.775, still paused.
       expect((await at(_r(thermal: Thermal.moderate))).paused, isTrue);
-      // Then nominal: 0.425, below 0.6, it goes on, slowed.
+      // Then nominal: 0.3875, below 0.6, it goes on, slowed.
       final cooler = await at(_r(thermal: Thermal.nominal));
       expect(cooler.paused, isFalse);
       expect(cooler.hold, IndexHold.heat);
@@ -115,10 +144,15 @@ void main() {
       expect(t.warm, isFalse);
     });
 
-    test('a single warm reading takes effect at once; cooling down takes a few readings', () async {
-      expect((await at(_r(headroom: 0.95))).paused, isTrue);
-      expect((await at(_r(headroom: 0.3))).paused, isTrue, reason: '(0.95 + 0.3) / 2 is still above 0.6');
-      expect((await at(_r(headroom: 0.3))).paused, isFalse);
+    test('a single hot reading takes effect at once; cooling down takes a few readings', () async {
+      expect((await at(_r(thermal: Thermal.critical))).paused, isTrue);
+      expect((await at(_r(thermal: Thermal.nominal))).paused, isFalse, reason: '(1 + 0) / 2 is below 0.6');
+      expect((await at(_r(thermal: Thermal.critical))).paused, isTrue);
+      expect((await at(_r(thermal: Thermal.moderate))).paused, isTrue, reason: '(1 + 0.55) / 2 is still above 0.6');
+      expect((await at(_r(thermal: Thermal.moderate))).paused, isTrue, reason: '0.6625: still above 0.6');
+      expect((await at(_r(thermal: Thermal.moderate))).paused, isTrue, reason: '0.606: still above 0.6');
+      final on = await at(_r(thermal: Thermal.moderate));
+      expect((on.paused, on.hold), (false, IndexHold.heat), reason: '0.578: it goes on, slowed');
     });
 
     test('a low battery pauses until 25% or plugged in', () async {
@@ -219,20 +253,82 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       await s.kick();
       expect(runs.single.duties.single.idleMs, 1000);
+      // The model loading or answering STOPS the running work (it keeps what it did), so its memory is back before the model
+      // needs it; nothing starts meanwhile. After the answer it carries on.
       t.setGenerating(true);
-      expect(runs.single.duties.last.paused, isTrue, reason: 'a core job is paused through cs_job_set, not stopped');
+      await Future<void>.delayed(Duration.zero);
+      expect(s.running, isNull);
+      expect(await runs.single.finished, isFalse);
+      await s.kick();
+      expect(runs, hasLength(1), reason: 'nothing starts while the model runs');
+      expect(s.statusOf('zim/a')?.why ?? s.statusOf('zim/b')?.why, IndexWait.model);
       t.setGenerating(false);
-      await at(_r(thermal: Thermal.light));
-      expect(runs.single.duties.last.hold, IndexHold.heat);
-      expect(s.line, 'Getting search ready: 0 of 2 · slowed down, phone is warm');
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(runs, hasLength(2), reason: 'it carries on once the answer is written');
+      await at(_r(thermal: Thermal.moderate));
+      expect(runs.last.duties.last.hold, IndexHold.heat);
+      expect(s.line, 'Getting search ready · 0 of 2 done · Slowed down · device is warm');
       // Severe: the running work is held by its duty; nothing new would start.
       await at(_r(thermal: Thermal.severe));
-      expect(runs.single.duties.last.paused, isTrue);
-      runs.single.finish();
+      expect(runs.last.duties.last.paused, isTrue);
+      runs.last.finish();
       await Future<void>.delayed(Duration.zero);
       await s.kick();
-      expect(runs, hasLength(1), reason: 'too warm to start the next one');
+      expect(runs, hasLength(2), reason: 'too warm to start the next one');
       expect(s.wait, IndexWait.heat);
+    });
+
+    test('a slow but moving job at a low duty is never stuck; time held for heat is not counted; quiet long enough, it is', () async {
+      var at0 = DateTime(2026, 11, 3);
+      final runs = <_Run>[];
+      final work = _Work(runs);
+      var pulse = 0;
+      final steady = _Pulsed(work, () => pulse);
+      final s = IndexScheduler(
+        sources: [steady],
+        space: () => const Space(free: 100 << 30, reserve: 0),
+        throttle: t,
+        every: const Duration(hours: 1),
+        stuckAfter: const Duration(minutes: 5),
+        watchEvery: const Duration(milliseconds: 5),
+        clock: () => at0,
+      );
+      addTearDown(s.dispose);
+      now = _r(thermal: Thermal.moderate);
+      await t.read(fresh: true);
+      s.setOpen(true);
+      await Future<void>.delayed(Duration.zero);
+      await s.kick();
+      final first = s.running!;
+      final limit = s.stuckAfterNow;
+      expect(limit, greaterThan(const Duration(minutes: 5)), reason: 'slowed: longer in proportion');
+      Future<void> pass(Duration d) async {
+        at0 = at0.add(d);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      // a step every 4 minutes for an hour: slow, but moving
+      for (var i = 0; i < 15; i++) {
+        await pass(const Duration(minutes: 4));
+        pulse++;
+      }
+      expect(s.running, isNotNull);
+      // held for heat (severe) for half an hour, nothing moving: not counted
+      await at(_r(thermal: Thermal.severe));
+      for (var i = 0; i < 6; i++) {
+        await pass(const Duration(minutes: 5));
+      }
+      expect(s.running, isNotNull, reason: 'time held for heat is not working time');
+      // cool again, and nothing moves for longer than the limit at this duty: stuck
+      await at(_r(thermal: Thermal.nominal));
+      await at(_r(thermal: Thermal.nominal));
+      await pass(const Duration(seconds: 1));
+      await pass(s.stuckAfterNow + const Duration(minutes: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(await runs.first.finished, isFalse, reason: 'stopped');
+      expect(s.statusOf(first)?.why, IndexWait.stuck);
     });
   });
 }
@@ -275,5 +371,18 @@ class _Work implements IndexWorkSource {
               return r;
             },
           ),
+      ];
+}
+
+/// [_Work] whose tasks give a sign of life from [beat].
+class _Pulsed implements IndexWorkSource {
+  _Pulsed(this.inner, this.beat);
+  final _Work inner;
+  final int Function() beat;
+
+  @override
+  Future<List<IndexTask>> pending() async => [
+        for (final t in await inner.pending())
+          IndexTask(key: t.key, long: t.long, start: t.start, pulse: () => beat()),
       ];
 }

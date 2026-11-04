@@ -266,11 +266,15 @@ class _ShellState extends State<Shell> {
         _onModules = true;
       });
 
-  void _goModule(ModuleId m) => setState(() {
-        _module = m;
-        _onModules = false;
-        _built.add(m);
-      });
+  void _goModule(ModuleId m) {
+    // Ask opens: the chosen model, let go to leave memory free, loads again.
+    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    setState(() {
+      _module = m;
+      _onModules = false;
+      _built.add(m);
+    });
+  }
 
   void _openNavigation(NavigationAction action) {
     final route = action.route;
@@ -428,6 +432,9 @@ class _ShellState extends State<Shell> {
         if (id != null) _openSource(await widget.sources.zimMainPage(id));
       },
       openAddress: _openSource,
+      // Words said in a video and passages of EPUB books open as their citations in Ask do.
+      openVideo: _openVideo,
+      openPassage: _openSource,
     ),
     PlacesSearchProvider(
       backend: widget.nav.backend,

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../files.dart';
 import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
+import '../platform/app_log.dart';
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -121,7 +122,7 @@ class SharingState extends ChangeNotifier {
         await d.create(recursive: true);
         await _call('share_add', {'id': a.id, 'name': a.name, 'path': d.path});
       } catch (e) {
-        debugPrint('Could not share ${a.name}: $e');
+        logError('Could not share', error: e, detail: a.name);
       }
     }
   }
@@ -138,7 +139,7 @@ class SharingState extends ChangeNotifier {
     try {
       await c.call('set_only', {'id': id, 'only': sorted});
     } catch (e) {
-      debugPrint('Could not set what ${_nameOf(id)} fetches: $e');
+      logError('Sync: could not set what a device fetches', error: e, detail: _nameOf(id));
     }
   }
 
@@ -155,7 +156,7 @@ class SharingState extends ChangeNotifier {
     try {
       await c.call('set_never_fetch', {'id': id, 'never_fetch': sorted});
     } catch (e) {
-      debugPrint('Could not set what ${_nameOf(id)} never fetches: $e');
+      logError('Sync: could not set what a device never fetches', error: e, detail: _nameOf(id));
     }
   }
 

@@ -418,7 +418,7 @@ Each row has an icon, name, description and size. A badge shows only when someth
 - "Update ready";
 - "Getting ready", while Cache opens a library.
 
-After the size, a row can add a few words about its PDFs: "Making PDFs searchable", "PDFs paused", "PDFs need more space" or "PDFs stopped". Nothing shows when they are ready.
+After the size, a row can add a few words about making it searchable: `Making PDFs searchable · 340 of 5,768` on the one Cache works on now, "Waiting to make PDFs searchable" on the others, why it waits (for example `Paused · battery low (12%) · plug in to continue`), or "PDFs stopped". Nothing shows when they are ready. See Search inside PDFs, EPUBs and captions.
 
 The guide that comes with Cache shows "Built in". Your own libraries show "Your own".
 
@@ -450,28 +450,31 @@ The reader opens a Library item.
 
 Search in a library reaches more than its pages. It finds words inside the PDFs and EPUB books in a ZIM, and in the captions of its videos. Nothing to switch on and nothing to start. It is always on.
 
-![PDF passages in Home search](shot:search-pdf-hits)
+![A PDF passage and words said in a video in Home search](shot:search-pdf-hits)
 
 1. Add a Library item that holds PDFs, EPUBs or videos with captions. See Add to your Library in chapter 1.
 2. Leave Cache open. It makes them searchable in the background, a little at a time, so your device stays cool.
 3. Search as usual: the Home search box, "Search this ZIM" in the reader, or a question in "Ask".
 4. Tap a result. A PDF opens at the page, an EPUB at the chapter, and a video at the moment. The passage is highlighted or marked.
 
-To see the progress, press and hold the item in "Library", or tap "..." in the opened item. The menu starts with lines such as:
-- "Making PDFs searchable: 340 of 5,768", with a bar and "Pause";
-- "Waiting to make PDFs searchable";
-- "PDFs: searching ready";
-- "Making EPUBs searchable: 40 of 85";
-- "EPUBs: searching ready".
+At the top of "Library", a bar shows the progress of all of it, for example `Getting search ready · 3 of 9 done`. Under it is what Cache works on now, for example `Army Publishing · PDFs 340 of 5,768`. The number counts libraries and their parts (PDFs, EPUBs, captions). The bar also moves inside a big library, by the files it has read. When it is all done, the bar says `Search ready · 9 of 9` for a moment and goes. The same bar is at the foot of "Settings".
 
-While it runs, Cache pauses and says why:
-- "Waits for charging": a long job starts only on charge, or with the battery above half. Once it runs, it goes on until the battery is low;
-- "Paused, battery low": under 20% and not plugged in;
-- "Slowed down, phone is warm": the work eases off when the device is warm;
-- "Paused, not enough space": it needs room. Tap "Free space";
-- `Paused: Cache was closed · 340 of 5,768`: work runs only while Cache is open. Open it again and tap "Resume".
+Tap the bar to see the queue: "Running now" with its progress, "Next" in the order they run, and "Done". Each has its own small bar. Tap "Pause all" to stop it all yourself, and "Resume" to go on.
 
-Tap "Resume" on a paused line. Tap "Pause" to stop it yourself.
+Cache works on one thing at a time. Only that one says `Making PDFs searchable · 340 of 5,768` on its row in "Library". The others say "Waiting to make PDFs searchable" (or EPUBs, or captions) until their turn. Press and hold an item, or tap "..." in the opened item, to see its lines, for example "PDFs: searching ready" or "EPUBs: searching ready".
+
+When Cache waits, the bar, the row and the menu say why and what to do:
+- `Paused · battery low (12%) · plug in to continue`: under 20% and not plugged in. Plug in, and it goes on by itself;
+- "Waits for charging (long job)": a long job starts only on charge, or with the battery above half. Once it runs, it goes on until the battery is low;
+- "Slowed down · device is warm" or "Paused · device is warm": the work eases off when the device is warm;
+- "Slowed down · keeping the device cool" or "Paused · keeping the device cool": the device is not warm yet, but the system says it would get warm, so the work eases off first;
+- "Paused · while Ask answers": it waits while "Ask" writes an answer;
+- "Stuck · skipped for now · Retry": it made no progress for 5 minutes, so Cache went on with the rest. Tap it in the list to try again;
+- "Paused · Cache is in the background": work runs only while Cache is open;
+- `Needs 1.2 GB free · Free space`: it needs room. Tap "Free space";
+- "Paused by you · Resume": you paused it. Tap "Resume".
+
+Tap "Resume" on a paused line in the menu to start that one now. Tap "Pause" to stop it yourself.
 
 If a few PDFs can't be read, a small line says so, for example `12 could not be read`. A scanned PDF is pictures with no text, so search can't read it.
 
@@ -618,7 +621,7 @@ The player opens when you tap the picture on the video page.
 ![The player's settings sheet](shot:video-player)
 
 1. Tap the picture to show or hide the controls. While it plays they hide after 3 seconds. When it is paused they stay.
-2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
+2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". At the end of the video the button is "Replay". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
 3. Drag the bar to move through the video. The time shows as the time so far and the length.
 4. Tap "Full screen" for the video alone. A wide video turns landscape and the system bars hide. Tap "Leave full screen" or press Back to come out.
 5. Tap the gear ("Settings") for "Speed", "Quality" and "Captions".

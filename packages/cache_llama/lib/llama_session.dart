@@ -177,6 +177,12 @@ void _workerMain(SendPort toMain) {
           b.clFree(handle);
           handle = nullptr;
         }
+        // The app has one chat model at a time. A model an earlier Flutter engine of this process loaded (Android destroyed
+        // the window and made a new one, the process lived on) was never freed: free it before loading, or both stay in
+        // memory and Android kills the app.
+        final left = b.clFreeAll();
+        // ignore: avoid_print
+        if (left > 0) print('cache_llama: freed $left model(s) an earlier engine of this process left loaded');
         final p = (msg['path'] as String).toNativeUtf8();
         // 0 threads: the native layer picks the fast cores itself.
         handle = b.clLoad(p, msg['nCtx'] as int, 0, err, _kErrLen);

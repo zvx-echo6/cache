@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../video/token_store.dart';
 import 'app_settings.dart';
 import 'data_policy.dart';
+import '../platform/app_log.dart';
 
 /// The answer of checking a key with its provider.
 class KeyCheck {
@@ -189,7 +190,7 @@ class WebSearchSetup extends ChangeNotifier {
       final online = await probe.current() != ConnectionKind.none;
       await setWeb(provider, key, online);
     } catch (e) {
-      debugPrint('Web search setup: ${e.runtimeType}');
+      logError('Web search setup', error: e);
     }
   }
 

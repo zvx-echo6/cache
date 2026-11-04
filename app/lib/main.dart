@@ -54,6 +54,7 @@ import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
 import 'pdf/index/pdf_index_state.dart';
+import 'pdf/index/pdf_pages.dart' show pdfStepScale;
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
@@ -78,7 +79,11 @@ import 'search/pdf_index_work.dart';
 import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
+import 'platform/app_log.dart';
+import 'platform/app_log_io.dart';
+import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
+import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
@@ -95,6 +100,9 @@ import 'keyboard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
+  logDartErrors();
+  unawaited(openAppLog());
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
@@ -341,7 +349,17 @@ class _CacheAppState extends State<CacheApp> {
 
   void _kickIndexing() => unawaited(indexing.kick());
 
-  void _onChatForIndexing() => indexThrottle.setGenerating(chat.busy);
+  bool _modelRunning = false;
+
+  /// The model loading or writing an answer holds the index work: the scheduler stops what runs, so its memory is back first.
+  /// The memory is logged as the model starts, to see what each takes.
+  void _onChatForIndexing() {
+    final on = chat.busy || app.loading != null;
+    if (on && !_modelRunning) logInfo('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
+    if (!on && _modelRunning) logInfo('Model done; ${memoryNow()}');
+    _modelRunning = on;
+    indexThrottle.setGenerating(on);
+  }
 
   void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
 
@@ -395,6 +413,8 @@ class _CacheAppState extends State<CacheApp> {
         _beside(app.modelsDir, '.partial'),
         if (_tempPath != null) Directory(_tempPath!),
       ],
+      // A ZIM download a crash or a force stop left is a paused download (Resume carries on), not a leftover.
+      keep: () => browse.resumableParts,
       // Damaged downloads: the files whose published size and SHA-256 are kept (the off-road packs).
       manifests: () => regions.offroadManifests,
       busy: () =>
@@ -554,6 +574,15 @@ class _CacheAppState extends State<CacheApp> {
   void initState() {
     super.initState();
     ModelDownloads.shared = modelDownloads;
+    // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
+    // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
+    modelDownloads.nameOf = (f) {
+      if (modelDownloads.isSearchModel(f)) return 'Search model';
+      for (final r in RecommendedModels.shared.models) {
+        if (r.file == f.fileName) return r.name;
+      }
+      return f.fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
+    };
     // A model the recommended list names loads with the settings the list gives it (none today: the usual ones).
     app.settingsFor = (e) {
       for (final r in RecommendedModels.shared.models) {
@@ -579,14 +608,35 @@ class _CacheAppState extends State<CacheApp> {
     );
     indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    indexSchedulerShared = indexing;
+    // A PDF step may take longer in proportion as the throttle slows the work.
+    pdfStepScale = () {
+      final d = indexThrottle.duty;
+      return d.paused || d.share <= 0 ? 1 : 1 / d.share.clamp(0.05, 1.0);
+    };
+    // Several libraries of one name (the Project Gutenberg ZIMs): the queue tells them apart by the catalogue's summary.
+    indexItemDetail = (key) {
+      final z = sources.zimById(key.substring(key.indexOf('/') + 1));
+      if (z == null) return null;
+      final summary = sources.originOf(z)?.summary ?? '';
+      return summary.isNotEmpty ? summary : z.fileName.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
+    };
     coreIndexShared = coreIndexCalls;
     // The model generating an answer pauses background index work; the speed setting applies at once.
     chat.addListener(_onChatForIndexing);
+    app.addListener(_onChatForIndexing);
     settings.addListener(_onSettingsForIndexing);
     // iOS says when the thermal state changes: read it at once.
     kBatteryChannel.setMethodCallHandler((call) async {
       if (call.method == 'changed') await indexThrottle.read(fresh: true);
       return null;
+    });
+    // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
+    // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    listenMemoryTrim((level, reading) {
+      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
+      unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
     });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
@@ -757,6 +807,7 @@ class _CacheAppState extends State<CacheApp> {
     video.removeListener(_syncIndexesOnly);
     video.removeListener(_kickIndexing);
     chat.removeListener(_onChatForIndexing);
+    app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
     indexThrottle.dispose();
@@ -798,7 +849,18 @@ class _CacheAppState extends State<CacheApp> {
               onPointerDown: (_) => indexThrottle.noteActivity(),
               onPointerMove: (_) => indexThrottle.noteActivity(),
               onPointerSignal: (_) => indexThrottle.noteActivity(),
-              child: child!,
+              // While the log keeps everything, a line at the top says so on every screen.
+              child: ListenableBuilder(
+                listenable: appLog,
+                // one shape whether the banner shows or not, so the app below keeps its state when it comes and goes
+                builder: (context, _) => Column(
+                  children: [
+                    const LogEverythingBanner(),
+                    // the banner holds the status bar's room while it shows
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                  ],
+                ),
+              ),
             ),
             IgnorePointer(
               ignoring: app.started && _coreDone,

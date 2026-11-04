@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../platform/app_log.dart';
+import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
 import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
@@ -116,7 +118,7 @@ class _StoragePageState extends State<StoragePage> {
             ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'}',
+              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s))),
             ),
           ],
@@ -179,18 +181,23 @@ class _Bar extends StatelessWidget {
   }
 }
 
-/// Settings > Storage > Advanced: how fast search indexes are made in the background. Either way the work eases off when the
-/// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer.
+/// Settings > Storage > Advanced: how fast search indexes are made in the background (either way the work eases off when the
+/// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer), and Cache's
+/// own log: how much it keeps, Share log and Clear log.
 class IndexingSpeedPage extends StatelessWidget {
-  const IndexingSpeedPage({super.key, required this.settings});
+  const IndexingSpeedPage({super.key, required this.settings, this.log});
 
   final AppSettings settings;
+
+  /// The log (the app's own by default).
+  final AppLog? log;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final log = this.log ?? appLog;
     return ListenableBuilder(
-      listenable: settings,
+      listenable: Listenable.merge([settings, log]),
       builder: (context, _) {
         Widget choice(String key, String title, String status, bool normal) => SettingsRow(
               key: ValueKey(key),
@@ -208,6 +215,39 @@ class IndexingSpeedPage extends StatelessWidget {
               rows: [
                 choice('indexing-gentle', 'Gentle', 'Keeps the device cool and the battery longer', false),
                 choice('indexing-normal', 'Normal', 'Finishes sooner, uses more battery', true),
+              ],
+            ),
+            SettingsGroup(
+              label: 'Log level',
+              rows: [
+                for (final l in LogLevel.values)
+                  SettingsRow(
+                    key: ValueKey('log-${l.name}'),
+                    title: l == LogLevel.standard ? '${logLevelTitle(l)} (default)' : logLevelTitle(l),
+                    status: [Part(logLevelDetail(l))],
+                    trailing: log.level == l ? Icon(Icons.check, color: k.accent) : null,
+                    chevron: false,
+                    onTap: () => log.setLevel(l),
+                  ),
+              ],
+            ),
+            const NoteText('The log stays on this device. Nothing leaves it unless you tap Share log.'),
+            SettingsGroup(
+              rows: [
+                SettingsRow(
+                  key: const ValueKey('log-share'),
+                  icon: Icons.ios_share,
+                  title: 'Share log',
+                  status: [Part(log.dir == null ? 'No log yet' : appLogSize())],
+                  onTap: log.dir == null ? null : () => shareAppLog(context),
+                ),
+                SettingsRow(
+                  key: const ValueKey('log-clear'),
+                  icon: Icons.delete_outline,
+                  title: 'Clear log',
+                  chevron: false,
+                  onTap: log.dir == null ? null : log.clear,
+                ),
               ],
             ),
           ],

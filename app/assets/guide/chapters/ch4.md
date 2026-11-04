@@ -44,7 +44,7 @@ To get a key:
 One email address gets one key. To resend or change it, log in at the FIRMS download page.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
+1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
 2. Tap "Get key" on "Satellite fire detections near the place (NASA FIRMS)".
 3. Paste the key and tap "Check and save".
 

@@ -64,8 +64,26 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
+    // The log's header: the iPhone's model identifier ("iPhone17,1"). Free memory is not read here (the app's start does not
+    // wait for it on iPhone).
+    let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    memory.setMethodCallHandler { call, result in
+      guard call.method == "device" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      var info = utsname()
+      uname(&info)
+      let machine = withUnsafePointer(to: &info.machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+      }
+      result(machine)
+    }
     // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
     let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    // Monitoring is on from the start, so the first read already has the level (UIDevice reports -1 until it is on; the app
+    // then treats the battery as unknown and does not hold work for it).
+    UIDevice.current.isBatteryMonitoringEnabled = true
     battery.setMethodCallHandler { call, result in
       guard call.method == "read" else {
         result(FlutterMethodNotImplemented)
@@ -76,12 +94,13 @@ import workmanager_apple
       let level = device.batteryLevel
       let charging = device.batteryState == .charging || device.batteryState == .full
       let percent: Int = level < 0 ? -1 : Int((level * 100).rounded())
-      // How warm the iPhone is: background index work eases off as it warms and pauses when severe (serious is "severe").
+      // How warm the iPhone is: nominal and fair (where an iPhone sits under any steady work) run as usual, serious slows
+      // background index work down ("moderate"), only critical pauses it.
       let thermal: String
       switch ProcessInfo.processInfo.thermalState {
       case .nominal: thermal = "nominal"
       case .fair: thermal = "light"
-      case .serious: thermal = "severe"
+      case .serious: thermal = "moderate"
       case .critical: thermal = "critical"
       @unknown default: thermal = "unknown"
       }

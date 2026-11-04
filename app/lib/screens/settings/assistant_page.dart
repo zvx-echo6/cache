@@ -4,6 +4,7 @@ import '../../chat/answer_reports.dart';
 import '../../location/location_service.dart';
 import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
+import '../../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
 import '../../video/format.dart';
 import '../answer_reports_ui.dart';
 import '../history_drawer.dart';
@@ -119,11 +120,13 @@ class AssistantPage extends StatelessWidget {
     final app = deps.app;
     final web = deps.hub.webSearch;
     return ListenableBuilder(
-      listenable: Listenable.merge([app, web, deps.chat.historyRevision, reports]),
+      listenable: Listenable.merge([app, web, deps.chat.historyRevision, reports, ?ModelDownloads.shared]),
       builder: (context, _) {
         final m = app.active;
         final List<Part> modelStatus = app.loading != null
             ? const [Part('Loading…')]
+            : m == null && modelDownloadLine() != null
+            ? [Part(modelDownloadLine()!)]
             : m == null
             ? const [Part('No model chosen', Tone.warn)]
             : joinParts([

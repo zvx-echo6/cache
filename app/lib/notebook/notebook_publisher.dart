@@ -1,12 +1,11 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show debugPrint;
-
 import '../actions/action_registry.dart';
 import '../actions/notebook_actions.dart';
 import 'notebook_model.dart';
 import 'notebook_state.dart';
 import 'notebook_text.dart';
+import '../platform/app_log.dart';
 
 /// The generator's input for [log] (notebook_actions.py): the template object (visible fields only) with the last entry in local
 /// time, `{"date","time","values":{label: value}}`, or null. Private logs are passed like the rest: the app never marks a log
@@ -68,7 +67,7 @@ class NotebookPublisher {
       lines[defs[i]['id'] as String] = (f, summary) => _logLines(snapshot, f, summary);
     }
     final rejected = registry.publish('notebook', defs, handlers, cardLines: lines);
-    if (rejected.isNotEmpty) debugPrint('cache notebook: actions rejected $rejected');
+    if (rejected.isNotEmpty) logInfo('Notebook: actions rejected', detail: '$rejected');
   }
 
   // ---- notebook.add_journal_entry ----

@@ -18,6 +18,7 @@ import 'live_core.dart';
 import 'place_alerts.dart';
 import 'places.dart';
 import 'weather_state.dart';
+import '../platform/app_log.dart';
 
 /// The background task's name. On iPhone it is also the BGTaskScheduler identifier, so it is listed in Info.plist.
 const String kBackgroundTask = 'com.happylittle.cache.live-update';
@@ -92,7 +93,7 @@ void cacheBackgroundDispatcher() {
     try {
       await runBackgroundUpdate();
     } catch (e) {
-      debugPrint('Background update: $e');
+      logError('Background update', error: e);
     }
     // Always done: a failed run waits for the next turn rather than being retried at once.
     return true;
@@ -150,7 +151,7 @@ Future<bool> scheduleBackgroundUpdates({required bool anythingOn}) async {
     );
     return true;
   } catch (e) {
-    debugPrint('Background updates could not be scheduled: $e');
+    logError('Background updates could not be scheduled', error: e);
     return false;
   }
 }

@@ -285,6 +285,22 @@ CpuPlan plan_cpus() {
 
 }  // namespace
 
+// Every chat handle not freed yet, for cl_free_all: the process outlives the app's Dart side when Android destroys the
+// window and makes a new one (a new Flutter engine in the same process). The old engine's handle is never freed by it,
+// and its model would stay in memory beside the one the new engine loads.
+static std::mutex          g_live_mu;
+static std::set<Handle *>  g_live;
+
+static void free_handle(Handle * h) {
+    h->smpl.reset();
+    h->session.reset();
+    h->tmpls.reset();
+    if (h->ctx)   llama_free(h->ctx);
+    if (h->pool)  h->pool_free(h->pool);
+    if (h->model) llama_model_free(h->model);
+    delete h;
+}
+
 extern "C" {
 
 void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len) {
@@ -357,7 +373,12 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             llama_model_free(h->model);
             return nullptr;
         }
-        return h.release();
+        Handle * out = h.release();
+        {
+            std::lock_guard<std::mutex> lock(g_live_mu);
+            g_live.insert(out);
+        }
+        return out;
     } catch (const std::exception & e) {
         set_err(err, err_len, e.what());
         return nullptr;
@@ -609,13 +630,22 @@ void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
 void cl_free(void * hp) {
     auto * h = (Handle *) hp;
     if (!h) return;
-    h->smpl.reset();
-    h->session.reset();
-    h->tmpls.reset();
-    if (h->ctx)   llama_free(h->ctx);
-    if (h->pool)  h->pool_free(h->pool);
-    if (h->model) llama_model_free(h->model);
-    delete h;
+    {
+        std::lock_guard<std::mutex> lock(g_live_mu);
+        // already freed (by cl_free_all): nothing to do
+        if (g_live.erase(h) == 0) return;
+    }
+    free_handle(h);
+}
+
+int cl_free_all(void) {
+    std::set<Handle *> all;
+    {
+        std::lock_guard<std::mutex> lock(g_live_mu);
+        all.swap(g_live);
+    }
+    for (Handle * h : all) free_handle(h);
+    return (int) all.size();
 }
 
 // ---------------- embeddings ----------------

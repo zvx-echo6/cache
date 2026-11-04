@@ -246,6 +246,25 @@ void main() {
     expect(await directorySize(root), 4000);
   });
 
+  test('a partial file of a download that can be carried on is not a leftover: not counted, not cleaned up', () async {
+    final leftovers = Directory('${dir.path}/partial2')..createSync();
+    final resumable = File('${leftovers.path}/ready.zim.part')..writeAsBytesSync(List.filled(800, 1));
+    File('${leftovers.path}/junk.part').writeAsBytesSync(List.filled(200, 1));
+    final u = StorageUsage(
+      kinds: const [],
+      freeIn: () => dir,
+      leftovers: () => [leftovers],
+      keep: () => {resumable.path},
+      freeSpace: (_) => 1,
+      totalSpace: (_) => 1,
+    );
+    await u.measure();
+    expect(u.cleanupBytes, 200);
+    expect(await u.cleanUp(), 200);
+    expect(resumable.existsSync(), isTrue);
+    expect([for (final f in leftovers.listSync()) f.uri.pathSegments.last], ['ready.zim.part']);
+  });
+
   test('Clean up removes downloads that do not match their manifest (size or SHA-256), never a file without one', () async {
     final d = Directory('${dir.path}/packs')..createSync();
     File write(String name, List<int> bytes) => File('${d.path}/$name')..writeAsBytesSync(bytes);

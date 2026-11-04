@@ -523,6 +523,12 @@ fn saved_video_captions_build_publish_attach_search_cite_read_and_resume() {
     assert!(t1 > t0 && t1 - t0 <= 45.0, "{t0} {t1}");
     assert_eq!(c.lang.as_deref(), Some("en"));
     assert!(c.quote.as_ref().unwrap().contains("sandbag barriers"));
+    // the result itself carries where it opens, as the citation does (the app's Home search opens it with these)
+    assert_eq!(first["link"].as_str(), c.link.as_deref(), "{first}");
+    assert_eq!(first["time"].as_f64(), Some(t0), "{first}");
+    assert_eq!(first["time_end"].as_f64(), Some(t1), "{first}");
+    assert_eq!(first["lang"], "en");
+    assert_eq!(first["quote"].as_str(), c.quote.as_deref());
     assert_eq!(
         title,
         format!("Flood Safety Basics, at {:02}:{:02}", t0 as u64 / 60, t0 as u64 % 60)
@@ -792,6 +798,9 @@ fn zim_captions_skip_hls_pair_videos_and_cite_the_zim() {
     );
     assert_eq!(c.lang.as_deref(), Some("en"));
     assert!(c.time_end.is_some() && c.quote.as_ref().unwrap().contains("sandbag barriers"));
+    assert_eq!(first["link"].as_str(), c.link.as_deref(), "{first}");
+    assert_eq!(first["time"].as_f64(), c.time.as_ref().and_then(|t| t.as_f64()), "{first}");
+    assert_eq!(first["lang"], "en");
     // a caption without a video: the citation names the caption entry
     let r = search(&mut h, "generator safety", json!({"kinds": ["zim-captions"]}));
     let g = r["results"][0]["address"].as_str().unwrap().to_string();
@@ -849,6 +858,30 @@ fn zim_captions_skip_hls_pair_videos_and_cite_the_zim() {
 
 // ---------------------------------------------------------------------------------------------------------
 // zim-epub
+
+#[test]
+fn a_zim_with_no_caption_files_needs_no_captions_build_and_a_job_on_it_ends_at_once() {
+    const U0: &str = "0badc0de-0000-4000-8000-000000000a00";
+    let t = TempDir::new("zimcap0");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let zim = t.0.join("plain.zim");
+    let entries: Vec<(&str, &str, &str, Vec<u8>)> = vec![
+        ("Alpha", "Alpha", "text/html", b"<html><body><p>Alpha.</p></body></html>".to_vec()),
+        ("Media/clip.mp4", "", "video/mp4", b"not really a video".to_vec()),
+    ];
+    write_zim(&zim, U0, "plain_test", &entries);
+    let mut h = open(&[&zim], &idx, &vdir);
+    // the look through its entries finishes; with no caption files there is nothing to build: no key, never queued
+    let st = wait_status(&mut h, |v| v["sources"].as_array().is_some_and(|a| !a.is_empty()));
+    std::thread::sleep(Duration::from_millis(1500));
+    let st2: Value = serde_json::from_str(&h.status_json()).unwrap();
+    assert!(st2["sources"][0].get("captionsindex").is_none(), "{st} {st2}");
+    // a job asked for anyway ends at once, done, with nothing in it, and reports its look through the entries
+    let t0 = Instant::now();
+    let done = run(job_params(&idx, "zim-captions", U0));
+    assert!(t0.elapsed() < Duration::from_secs(10), "{done}");
+    assert_eq!(done["result"]["items"].as_u64(), Some(0), "{done}");
+}
 
 #[test]
 fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
@@ -934,6 +967,9 @@ fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
     assert!(frag.starts_with("cache-b"), "{frag}");
     assert!(c.quote.as_ref().unwrap().contains("wildfire"));
     assert!(c.time.is_none());
+    assert_eq!(first["link"].as_str(), Some(link.as_str()), "{first}");
+    assert_eq!(first["quote"].as_str(), c.quote.as_deref());
+    assert!(first.get("time").is_none() && first.get("lang").is_none(), "{first}");
     // read: the chapter around the passage, with its heading
     let read: Value = serde_json::from_str(&h.read(&addr, 6000).unwrap()).unwrap();
     assert_eq!(read["title"], "Field Guide, Wildfire");

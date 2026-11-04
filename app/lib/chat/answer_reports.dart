@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import '../platform/app_log.dart';
 
 /// Why someone reported an answer.
 enum ReportReason {
@@ -115,7 +116,7 @@ class AnswerReports extends ChangeNotifier {
         final raw = jsonDecode(await f.readAsString());
         if (raw is List) items = [for (final j in raw) ?AnswerReport.fromJson(j)];
       } catch (e) {
-        debugPrint('Reported answers could not be read: $e');
+        logError('Reported answers could not be read', error: e);
       }
     }
     items.sort((a, b) => b.at.compareTo(a.at));

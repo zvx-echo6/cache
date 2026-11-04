@@ -361,13 +361,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
         if (i >= 0 && _transcriptBeside(context)) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(i));
       }
     }
-    if (!c.value.isPlaying && c.value.isInitialized) {
+    if ((!c.value.isPlaying || _ended(c)) && c.value.isInitialized) {
       _remember();
-      // paused: the controls stay
+      // paused or at the end: the controls stay (at the end, Replay)
       if (!_overlay) _overlay = true;
     }
     setState(() {});
   }
+
+  /// The video played to its end. Some players then report the position back at 0:00 and still "playing" (Android): their
+  /// completed flag says it; else the position at the length.
+  static bool _ended(VideoPlayerController c) =>
+      c.value.isInitialized &&
+      (c.value.isCompleted || (c.value.duration > Duration.zero && c.value.position >= c.value.duration - const Duration(milliseconds: 250)));
 
   void _remember() {
     final c = _c;
@@ -435,7 +441,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _hide?.cancel();
     if (mounted) setState(() => _overlay = true);
     _hide = Timer(kControlsHide, () {
-      if (mounted && (_c?.value.isPlaying ?? false) && !_dragging) setState(() => _overlay = false);
+      final c = _c;
+      if (mounted && c != null && c.value.isPlaying && !_ended(c) && !_dragging) setState(() => _overlay = false);
     });
   }
 
@@ -750,7 +757,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _playPause() {
     final c = _c;
     if (c == null || !c.value.isInitialized) return;
-    c.value.isPlaying ? c.pause() : c.play();
+    if (_ended(c)) {
+      // Replay: from the start
+      unawaited(c.seekTo(Duration.zero).then((_) => c.play()));
+    } else {
+      c.value.isPlaying ? c.pause() : c.play();
+    }
     _showOverlay();
   }
 
@@ -1219,9 +1231,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             key: const ValueKey('player-play'),
             iconSize: big ? 52 : 34,
             color: k.onPrimary,
-            tooltip: _tip(context, c.value.isPlaying ? 'Pause' : 'Play', 'Space'),
+            tooltip: _tip(context, _ended(c) ? 'Replay' : (c.value.isPlaying ? 'Pause' : 'Play'), 'Space'),
             onPressed: _playPause,
-            icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
+            icon: Icon(_ended(c) ? Icons.replay : (c.value.isPlaying ? Icons.pause : Icons.play_arrow)),
           ),
         ),
         SizedBox(width: big ? 40 : 28),

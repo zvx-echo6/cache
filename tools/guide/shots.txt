@@ -13,7 +13,7 @@ settings | Settings, the top page, with the quiet line "Getting search ready: 3 
 settings-storage | Settings > Storage: what uses the device's space, with "Clean up", and "Advanced" (Background indexing: Gentle) at the foot
 settings-maps | Settings > Maps: one line per region, the layers and Advanced
 weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
-library | Library: two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
+library | Library: the "Getting search ready · 3 of 12 done" line with its bar at the top, two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
 library-add | Library > Add: a library from the list, a file or a download link
 guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
 notebooks | Notebooks: the list of notebooks
@@ -80,7 +80,7 @@ video-transcript | The video player on a wide window (960 by 640) with the trans
 video-sign-in | A video site's sheet: "Sign in (optional)" with two "Sign in with [name]" buttons, then the user name and password
 pdf-reader | The PDF reader at page 12: the title, "12 of 340", Find in this PDF, and the bar with Previous page, Fit page and Next page
 pdf-cited-passage | The PDF reader opened at a cited page: the "Cited passage" strip and the passage highlighted
-search-pdf-hits | Home search with passages from a ZIM's PDFs (title "[PDF], p. 47") among the Library results
+search-pdf-hits | Home search for "boil water": a passage from a ZIM's PDF ("Water and Shelter Handbook, p. 47"), words said in a ZIM's video ("..., at 02:15") and a page, under "Ask Cache"
 settings-indexing-speed | Settings > Storage > Advanced: "Background indexing speed" with Gentle (ticked) and Normal
 ask-no-model | Ask with no model: "Ask needs a model on this device." with "Choose a model", and the saved chats under it
 import-tag-row | Notebooks > Connections, the Obsidian part: the vault, the phones' line, "Import tag" with "Notes with this tag are added to Cache." and #cachesync, and the private hint

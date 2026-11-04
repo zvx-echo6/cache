@@ -4,13 +4,14 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../settings/data_policy.dart';
 import '../geo.dart';
 import 'layer_def.dart';
 import 'layer_engine.dart';
 import 'tile_math.dart';
+import '../../platform/app_log.dart';
 
 /// The layer engine in the Rust core (cs_layers_*, see packages/cache_search/DESIGN-LAYERS.md): the catalogue and
 /// the starter definitions, the tile server on 127.0.0.1 the map reads from, area downloads into one merged tile
@@ -115,7 +116,7 @@ class CoreLayerEngine extends LayerEngine {
       notifyListeners();
       unawaited(refreshCatalogue());
     } catch (e, st) {
-      debugPrint('CoreLayerEngine.start failed: $e\n$st');
+      logError('Map layers could not start', error: e, stack: st);
       final m = e.toString().toLowerCase();
       _blocked = m.contains('operation not permitted') || m.contains('permission denied') || m.contains('os error 1)');
       _problem = 'Layers are not available on this device';
@@ -210,7 +211,7 @@ class CoreLayerEngine extends LayerEngine {
       await _reload();
       notifyListeners();
     } catch (e) {
-      debugPrint('Layer catalogue refresh: $e');
+      logError('Layer catalogue refresh', error: e);
     }
   }
 
@@ -375,7 +376,7 @@ class CoreLayerEngine extends LayerEngine {
         if (s != null) _saved.putIfAbsent(e.key as String, () => s);
       }
     } catch (e) {
-      debugPrint('Unfinished downloads: $e');
+      logError('Unfinished map downloads', error: e);
     }
   }
 
@@ -386,7 +387,7 @@ class CoreLayerEngine extends LayerEngine {
       await f.parent.create(recursive: true);
       await f.writeAsString(jsonEncode({for (final e in _saved.entries) e.key: e.value.toJson()}));
     } catch (e) {
-      debugPrint('Unfinished downloads: $e');
+      logError('Unfinished map downloads', error: e);
     }
   }
 
@@ -423,7 +424,7 @@ class CoreLayerEngine extends LayerEngine {
     final open = openPlanner;
     if (open == null || !_online) return plan(_core!);
     final pf = _planner ??= open({...layersConfig(), 'online': true}).catchError((Object e) {
-      debugPrint('Layer size planner: $e');
+      logError('Layer size planner', error: e);
       return null;
     });
     _planning[pf] = (_planning[pf] ?? 0) + 1;

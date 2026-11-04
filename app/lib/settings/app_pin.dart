@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../video/token_store.dart';
+import '../platform/app_log.dart';
 
 /// The optional app PIN (project decision, 2026-10-29): when one is set, Cache asks for it when it opens. It only gates opening
 /// the app; nothing is encrypted with it and it hides nothing from Cache (the assistant) once Cache is open. The PIN itself is
@@ -58,7 +59,7 @@ class AppPin extends ChangeNotifier {
     try {
       _set = await _store.read(_key) != null;
     } catch (e) {
-      debugPrint('cache app pin: could not read ($e)');
+      logError('App lock could not be read', error: e);
       _set = false;
     }
     _locked = _set == true;

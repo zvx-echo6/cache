@@ -13,6 +13,7 @@ import 'navigation_action.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
+import '../platform/app_log.dart';
 
 /// One message in the Ask screen.
 class ChatMessage {
@@ -306,6 +307,7 @@ class ChatController extends ChangeNotifier {
     text = text.trim();
     final backend = _backend;
     if (text.isEmpty || backend == null || busy) return;
+    logContent('Ask: $text');
     busy = true;
     final epoch = _epoch;
     final turn = _turn = Object();
@@ -438,7 +440,7 @@ class ChatController extends ChangeNotifier {
     try {
       await actCore.install(_definitions);
     } catch (e) {
-      debugPrint('cache act: definitions not installed ($e)');
+      logError('Actions: definitions not installed', error: e);
     }
   }
 
@@ -446,7 +448,7 @@ class ChatController extends ChangeNotifier {
     try {
       return await actCore.outcome(numbering, outcome);
     } catch (e) {
-      debugPrint('cache act: outcome not numbered ($e)');
+      logError('Actions: outcome not numbered', error: e);
       return hostEventContent(outcome);
     }
   }

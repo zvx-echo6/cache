@@ -25,6 +25,13 @@ class PdfIndexWork implements IndexWorkSource {
               // Long until measured: a run measured short goes on any battery that is not low.
               long: state.estimateOf(z)?.long ?? true,
               bytesNeeded: state.estimateOf(z)?.needBytes ?? 0,
+              title: z.title,
+              progress: () => switch (state.partOf(z)) {
+                final p? when p.total > 0 => (p.handled, p.total),
+                _ => null,
+              },
+              pulse: () => (state.beats, state.stepsOf(z), state.partOf(z)?.phase, state.partOf(z)?.finishFraction),
+              step: () => state.stepOf(z),
               start: () async {
                 await state.start(z);
                 return PdfIndexRun(state, z);
@@ -39,7 +46,11 @@ PdfHold pdfHoldOf(IndexWait why) => switch (why) {
       IndexWait.heat => PdfHold.warm,
       IndexWait.battery => PdfHold.battery,
       IndexWait.storage => PdfHold.storage,
-      IndexWait.none || IndexWait.closed || IndexWait.model => PdfHold.waiting,
+      IndexWait.closed => PdfHold.closed,
+      IndexWait.model => PdfHold.model,
+      IndexWait.person => PdfHold.person,
+      IndexWait.stuck => PdfHold.stuck,
+      IndexWait.none => PdfHold.waiting,
     };
 
 /// One ZIM's PDF run as the scheduler sees it: finished when its PDFs are searchable (true) or the run stopped (paused, failed,
@@ -80,7 +91,7 @@ class PdfIndexRun implements IndexRun {
   void setDuty(IndexDuty duty) => state.slowed(zim, switch (duty.hold) {
         IndexHold.heat => PdfHold.warm,
         IndexHold.battery => PdfHold.battery,
-        IndexHold.model => PdfHold.waiting,
+        IndexHold.model => PdfHold.model,
         IndexHold.none => null,
       });
 }

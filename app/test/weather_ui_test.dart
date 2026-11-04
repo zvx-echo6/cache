@@ -24,6 +24,18 @@ void tall(WidgetTester tester) {
   addTearDown(tester.view.reset);
 }
 
+/// Taps the refresh button and lets its work run: the source list is read again (file work outside the test's clock), then
+/// the data.
+Future<void> _tapRefresh(WidgetTester tester) async {
+  await tester.runAsync(() async {
+    await tester.tap(find.byKey(const ValueKey('weather-refresh')));
+    for (var i = 0; i < 20; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+  });
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('Weather and alerts', () {
     testWidgets('one line for the age with a small refresh button; the catalogue\'s featured sources, the rest under More sources; places', (tester) async {
@@ -112,8 +124,7 @@ void main() {
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.tap(find.descendant(of: rowWith('Weather alerts (NWS, by point)'), matching: find.byType(Switch)));
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('weather-refresh')));
-      await tester.pumpAndSettle();
+      await _tapRefresh(tester);
       expect(find.text('Updated'), findsOneWidget, reason: 'the snack bar');
       expect(find.text('Updated just now'), findsOneWidget, reason: 'the status line');
       expect(r.liveCore.fetches.length, 1);
@@ -121,9 +132,25 @@ void main() {
       await tester.pumpAndSettle();
       r.probe.change(ConnectionKind.mobile);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('weather-refresh')));
-      await tester.pumpAndSettle();
+      await _tapRefresh(tester);
       expect(r.liveCore.fetches.length, 2, reason: 'updates use mobile data');
+      await r.dispose(tester);
+    });
+
+    testWidgets('the refresh button checks the source list too: a newly published source shows up', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      expect(find.text('Emergency alerts (FEMA IPAWS)'), findsNothing);
+      // the catalogue publishes a new source
+      r.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-alerts-point', 'alerts', 'Weather alerts (NWS, by point)', provider: 'NWS'),
+        entry('ipaws-alerts', 'alerts', 'Emergency alerts (FEMA IPAWS)', provider: 'FEMA IPAWS'),
+      ]));
+      final asked = r.web.requested.where((u) => u.path.endsWith('/catalogue.json')).length;
+      await _tapRefresh(tester);
+      expect(r.web.requested.where((u) => u.path.endsWith('/catalogue.json')).length, asked + 1, reason: 'the catalogue is read again');
+      expect(find.text('Emergency alerts (FEMA IPAWS)'), findsOneWidget);
       await r.dispose(tester);
     });
 

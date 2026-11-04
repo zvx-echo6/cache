@@ -15,6 +15,7 @@ import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
 import '../search/search_access.dart';
+import '../platform/app_log.dart';
 
 /// One ZIM file in the sources folder.
 class ZimFile {
@@ -172,7 +173,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         native: nativeFactory ?? _defaultNative,
       );
     } catch (e, stack) {
-      debugPrint('Search core startup failed: $e\n$stack');
+      logError('Search core startup failed', error: e, stack: stack);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -197,7 +198,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       await installIcuData(supportDir: support);
     } catch (e) {
-      debugPrint('ICU data: $e');
+      logError('ICU data', error: e);
     }
     final defs = Directory('${support.path}/layer-defs');
     await installStarterLayers(defs);
@@ -205,7 +206,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       await Directory('${files.path}/live-defs').create(recursive: true);
     } catch (e) {
-      debugPrint('Live sources: $e');
+      logError('Live sources', error: e);
     }
     return buildCoreExtras(
       filesDir: files,
@@ -462,11 +463,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         try {
           d.deleteSync(recursive: true);
         } catch (e) {
-          debugPrint('Could not remove the index $name: $e');
+          logError('Could not remove an index', error: e, detail: name);
         }
       }
     } catch (e) {
-      debugPrint('Could not read the indexes folder: $e');
+      logError('Could not read the indexes folder', error: e);
     }
   }
 
@@ -487,7 +488,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     // One line per change, for logcat: where each source's keyword search comes from (the ZIM's own Xapian index through libzim).
     for (final s in _status.values) {
       final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}';
-      if (_loggedStatus.add(line)) debugPrint(line);
+      if (_loggedStatus.add(line)) logInfo(line);
     }
   }
 
@@ -734,7 +735,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       try {
         return await e.vectorFor(m, query);
       } catch (err) {
-        debugPrint('Query embedding with $m: $err');
+        logError('Query embedding', error: err, detail: m);
         return null;
       }
     }

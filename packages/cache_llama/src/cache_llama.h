@@ -62,6 +62,11 @@ CL_API void cl_stop(void * h);
 
 CL_API void cl_free(void * h);
 
+// Frees every chat handle of the process not freed yet, and returns how many. The app calls it before it loads a model:
+// a handle left by an earlier Flutter engine of the same process (Android made a new window) is never freed by it.
+// Not while another handle of the process is generating. cl_free of a handle freed here does nothing.
+CL_API int cl_free_all(void);
+
 // ---- Embeddings (separate handle type: an app may hold a chat handle and an embedding handle at once) ----
 // Not thread-safe per handle: one cl_embed at a time on a given embedding handle.
 // Prefixes some models expect (e.g. "query: " / "passage: ", or an instruction line) are the caller's job:

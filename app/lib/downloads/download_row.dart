@@ -43,7 +43,7 @@ class DlState {
   /// 0 when the size is not known.
   final int total;
 
-  /// Bytes a second, once there are 5 seconds of data; null before.
+  /// Bytes a second, once there are 2 seconds of data; null before.
   final double? speed;
   final DlReason? reason;
 
@@ -95,7 +95,9 @@ String dlLine(DlState s, {String idle = '', String? done}) {
         if (s.speed != null && s.speed! > 0) ...[
           dlSpeed(s.speed!),
           if (s.total > s.done) '${dlTimeLeft(Duration(seconds: ((s.total - s.done) / s.speed!).round()))} left',
-        ],
+        ] else if (s.speed != null)
+          // measured for seconds and nothing came: the server is not sending
+          'Waiting for the server',
       ].join(' · '),
     DlPhase.pausing => 'Pausing…',
     DlPhase.paused => ['Paused', ?bytes].join(' · '),
@@ -107,7 +109,7 @@ String dlLine(DlState s, {String idle = '', String? done}) {
   };
 }
 
-/// Measures the speed of each download (by key), so every row of one item shows the same figure: a value only after 5 seconds
+/// Measures the speed of each download (by key), so every row of one item shows the same figure: a value only after 2 seconds
 /// of data, from the last 10 seconds.
 class DlMeter {
   DlMeter._();
@@ -116,7 +118,8 @@ class DlMeter {
   /// Clock for tests.
   static DateTime Function() now = DateTime.now;
 
-  /// Records [done] bytes for [key] and returns the speed, or null before 5 seconds of data.
+  /// Records [done] bytes for [key] and returns the speed, or null before 2 seconds of data (a small download, or one just
+  /// resumed, shows its speed almost at once).
   static double? speed(String key, int done) {
     final t = now();
     final list = _samples.putIfAbsent(key, () => []);
@@ -125,7 +128,7 @@ class DlMeter {
     list.removeWhere((s) => t.difference(s.$1).inSeconds > 10 && list.length > 2);
     final first = list.first;
     final secs = t.difference(first.$1).inMilliseconds / 1000;
-    if (secs < 5) return null;
+    if (secs < 2) return null;
     return (done - first.$2) / secs;
   }
 

@@ -30,6 +30,7 @@ class CacheLlamaBindings {
         clGeneratedTokens = lib.lookupFunction<_IntHC, _IntH>('cl_generated_tokens'),
         clStop = lib.lookupFunction<_VoidHC, _VoidH>('cl_stop'),
         clFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_free'),
+        clFreeAll = lib.lookupFunction<Int32 Function(), int Function()>('cl_free_all'),
         clEmbedLoad = lib.lookupFunction<_LoadC, _Load>('cl_embed_load'),
         clEmbedInfo = lib.lookupFunction<_BufC, _Buf>('cl_embed_info'),
         clEmbed = lib.lookupFunction<_EmbedC, _Embed>('cl_embed'),
@@ -60,6 +61,9 @@ class CacheLlamaBindings {
   final _IntH clGeneratedTokens;
   final _VoidH clStop;
   final _VoidH clFree;
+
+  /// Frees every chat handle of the process not freed yet (one an earlier engine of the process left); how many.
+  final int Function() clFreeAll;
   final _Load clEmbedLoad;
   final _Buf clEmbedInfo;
   final _Embed clEmbed;

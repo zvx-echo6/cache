@@ -33,8 +33,10 @@ enum PdfPartPhase { waiting, starting, running, pausing, finishing, paused, need
 /// Who paused it: the person, a low battery (the run's own check), Cache closing, or the app's index scheduler ([held]).
 enum PdfPause { person, battery, closed, held }
 
-/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words.
-enum PdfHold { waiting, charging, warm, battery, storage }
+/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words: queued behind other
+/// work, long work waiting for charging, the device warm, the battery low, not enough room, Cache in the background, Ask
+/// answering, or the person's Pause all.
+enum PdfHold { waiting, charging, warm, battery, storage, closed, model, person, stuck }
 
 /// What the PDFs part of one library shows.
 class PdfPart {
@@ -175,6 +177,10 @@ class PdfIndexState extends ChangeNotifier {
   /// The index scheduler's throttle (its permit call), awaited before each PDF and between pages; null never waits. Set by the
   /// app where the scheduler is made.
   PdfPermit? permit;
+
+  /// Steps the running loop has taken (before each PDF and between pages): its sign of life for the scheduler's watchdog, so a
+  /// long PDF read page by page is never taken for stuck.
+  int beats = 0;
 
   /// Shows a short message (a snackbar): set by the app shell.
   void Function(String text)? say;
@@ -450,6 +456,12 @@ class PdfIndexState extends ChangeNotifier {
   }
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
+  /// The step the run on [z] is on now ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when none runs on it.
+  String? stepOf(PdfZimRef z) => _runPath == z.path ? _run?.step : null;
+
+  /// Steps the run on [z] has taken (a sign of life for the watchdog).
+  int stepsOf(PdfZimRef z) => _runPath == z.path ? (_run?.steps ?? 0) : 0;
+
   PdfPart? partOf(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null || _indexes == null) return null;
     final total = _total(z);
@@ -648,7 +660,10 @@ class PdfIndexState extends ChangeNotifier {
       battery: battery,
       spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
       // This device's note of the PDF being extracted (never synced), beside its record.
-      permit: permit,
+      permit: () {
+        beats++;
+        return permit?.call() ?? Future<void>.value();
+      },
       attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
     );

@@ -10,6 +10,7 @@ import 'folder.dart';
 import 'folder_access.dart';
 import 'formats.dart';
 import 'sync_engine.dart';
+import '../../platform/app_log.dart';
 
 /// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").
 const String kNotebookShareDir = 'notebook-share';
@@ -149,7 +150,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       if (!await e.stopSyncing(entryId)) return unreachable;
       _links[t.id] = await NotebookSync.links(e.stateFile);
     } catch (x) {
-      debugPrint('cache notebook sync ${t.id}: stop syncing $x');
+      logError('Notebook sync stopped', error: x, detail: t.id);
       return unreachable;
     }
     notifyListeners();
@@ -192,7 +193,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
         if (j is Map && j['private_included'] is List) _privateBooks = {for (final x in j['private_included'] as List) '$x'};
       }
     } catch (e) {
-      debugPrint('cache notebook connections: $e');
+      logError('Notebook connections', error: e);
     }
     try {
       await _readLinks();
@@ -322,7 +323,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             _status[t.id] = (x.osError?.errorCode == 28 || x.osError?.errorCode == 112) ? "Can't write: storage is full." : "Can't reach the folder.";
           } catch (x) {
             _status[t.id] = "Can't reach the folder.";
-            debugPrint('cache notebook sync ${t.id}: $x');
+            logError('Notebook sync', error: x, detail: t.id);
           }
           notifyListeners();
         }

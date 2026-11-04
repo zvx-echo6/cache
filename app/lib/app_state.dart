@@ -11,7 +11,9 @@ import 'files.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/memory.dart';
 import 'theme.dart';
+import 'platform/app_log.dart';
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -52,7 +54,10 @@ LoadFailure loadFailureOf(String error) {
 const int kContextTokens = 8192;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride});
+  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
+
+  /// The device's free memory (a test hook; the system's reading by default).
+  final Future<MemoryReading?> Function() memory;
 
   /// Test hooks.
   final Directory? settingsDirOverride;
@@ -77,6 +82,10 @@ class AppState extends ChangeNotifier {
   ModelEntry? active;
   ModelInfo? activeInfo;
   ModelEntry? loading;
+
+  /// The chosen model, not in memory now so the phone has room: at start there was not enough free memory for it, or it was
+  /// let go when Android said memory was short. It loads again when Ask opens ([wake]); it stays the chosen model.
+  ModelEntry? resting;
   String? loadError;
 
   /// The model whose last load failed, and why; null once a model loads, is unloaded or that file is deleted.
@@ -148,7 +157,16 @@ class AppState extends ChangeNotifier {
     if (last != null) {
       for (final e in models) {
         if (e.fileName == last && !isUnsupported(e)) {
-          await activate(e);
+          // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
+          // room for it makes Android kill Cache (or everything else) while it answers.
+          final r = await memory();
+          if (r != null && modelMemoryNeed(e.size) > r.room) {
+            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+            resting = e;
+            notifyListeners();
+          } else {
+            await activate(e);
+          }
           break;
         }
       }
@@ -273,12 +291,16 @@ class AppState extends ChangeNotifier {
   Future<void> activate(ModelEntry entry) async {
     if (loading != null || isUnsupported(entry)) return;
     final previous = active;
+    resting = null;
     loading = entry;
     loadError = null;
     notifyListeners();
     try {
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
+      final sw = Stopwatch()..start();
+      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
+      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -304,6 +326,7 @@ class AppState extends ChangeNotifier {
       if (active?.path != previous?.path) modelGeneration++;
     } catch (e) {
       loadError = e.toString().replaceFirst('Bad state: ', '');
+      logError('Model did not load', error: e, detail: entry.fileName);
       failed = entry;
       failure = loadFailureOf(loadError!);
       active = null;
@@ -319,6 +342,7 @@ class AppState extends ChangeNotifier {
   /// one is chosen again.
   Future<void> unload() async {
     if (loading != null || active == null) return;
+    resting = null;
     active = null;
     activeInfo = null;
     loadError = null;
@@ -328,7 +352,28 @@ class AppState extends ChangeNotifier {
     modelGeneration++;
     notifyListeners();
     await session.unload();
+    logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
+  }
+
+  /// Lets the model go from memory, keeping it the chosen one ([resting]): Android said memory is short. It loads again when Ask
+  /// opens ([wake]). Not while one loads.
+  Future<void> release() async {
+    final a = active;
+    if (loading != null || a == null) return;
+    resting = a;
+    active = null;
+    activeInfo = null;
+    modelGeneration++;
+    notifyListeners();
+    await session.unload();
+  }
+
+  /// Loads the [resting] model again (Ask opened, or its question was sent).
+  Future<void> wake() async {
+    final r = resting;
+    if (r == null || active != null || loading != null) return;
+    await activate(r);
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.

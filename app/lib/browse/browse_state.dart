@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../downloads/download_row.dart' show DlMeter;
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
@@ -14,6 +15,7 @@ import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
 import '../net/fetch.dart';
+import '../platform/app_log.dart';
 
 enum TransferPhase {
   /// Waiting for Wi-Fi: the phone is on mobile data and mobile data downloads are off. It starts by itself on Wi-Fi.
@@ -133,6 +135,9 @@ class BrowseState extends ChangeNotifier {
         for (final e in ((j['replacements'] as Map?) ?? const {}).entries) {
           _replacements[e.key as String] = e.value as String;
         }
+        for (final e in ((j['downloads'] as Map?) ?? const {}).entries) {
+          if (e.value is Map) _pending[e.key as String] = (e.value as Map).cast<String, dynamic>();
+        }
       }
     } catch (_) {
       // A damaged file is ignored; defaults apply.
@@ -142,6 +147,7 @@ class BrowseState extends ChangeNotifier {
         _phoneLanguage ?? ui.PlatformDispatcher.instance.locale.languageCode,
       );
     }
+    _restorePending();
     notifyListeners();
   }
 
@@ -154,6 +160,7 @@ class BrowseState extends ChangeNotifier {
         jsonEncode({
           'language': language,
           'replacements': _replacements,
+          'downloads': _pending,
         }),
       );
     } catch (_) {}
@@ -213,12 +220,15 @@ class BrowseState extends ChangeNotifier {
   int _fetched = 0;
 
   /// An entry for the chosen language. Kiwix's `lang` filter also returns collections tagged with several languages that include
-  /// it ("eng,jpn" for the Japanese Stack Overflow, whose pages are Japanese), so with a language chosen only collections in that
-  /// language alone are listed; they stay under All languages.
+  /// it. A pair ("eng,jpn" for the Japanese Stack Overflow, whose pages are Japanese) is mostly the other language, so it is left
+  /// out; a truly multi-language collection (three or more languages, or "mul": the TED collections, "eng,ara,spa,fra,...") has
+  /// the chosen language among many and is listed. Everything stays under All languages.
   bool inLanguage(CatalogEntry e) {
     if (language.isEmpty || e.language.isEmpty) return true;
     final codes = [for (final c in e.language.split(',')) if (c.trim().isNotEmpty) c.trim()];
-    return codes.length == 1 && codes.single == language;
+    if (codes.contains('mul')) return true;
+    if (!codes.contains(language)) return false;
+    return codes.length == 1 || codes.length >= 3;
   }
 
   Future<void> loadFirstPage() async {
@@ -349,6 +359,132 @@ class BrowseState extends ChangeNotifier {
 
   final Map<String, ZimTransfer> transfers = {};
 
+  /// The downloads not finished, kept in browse.json (entry, and the ZIM an update replaces), so one stopped by a crash, a
+  /// force stop or the system comes back on the next start as a paused download with its partial file: Resume carries on.
+  final Map<String, Map<String, dynamic>> _pending = {};
+  bool _restored = false;
+
+  /// The partial files of the downloads that can be carried on: Storage never offers them as leftovers to clean up. With them
+  /// the partial files with no record that may still be (see [_adoptOrphans]).
+  Set<String> get resumableParts => sources.zimsDir == null
+      ? const {}
+      : {for (final t in transfers.values) '${sources.partialDir.path}/${t.entry.fileName}.part', ..._orphans};
+
+  /// Partial files with no record, not matched to the catalogue yet (it could not be reached): kept, tried again next start.
+  final Set<String> _orphans = {};
+
+  /// Brings back the downloads a stopped app left (once the ZIMs folder is known): each whose partial file is still there is a
+  /// paused download at its size so far; one whose file is gone is forgotten.
+  void _restorePending() {
+    if (_restored || sources.zimsDir == null) return;
+    _restored = true;
+    var changed = false;
+    for (final e in _pending.entries.toList()) {
+      try {
+        final entry = CatalogEntry.fromJson((e.value['entry'] as Map).cast<String, dynamic>());
+        final part = File('${sources.partialDir.path}/${entry.fileName}.part');
+        if (!part.existsSync()) {
+          _pending.remove(e.key);
+          changed = true;
+          continue;
+        }
+        if (transfers.containsKey(entry.id)) continue;
+        final replacesPath = e.value['replaces'] as String?;
+        final replaces = replacesPath == null ? null : sources.zims.where((z) => z.path == replacesPath).firstOrNull;
+        transfers[entry.id] = ZimTransfer(entry, replaces: replaces)
+          ..phase = TransferPhase.paused
+          ..done = part.lengthSync()
+          ..total = entry.size;
+      } catch (_) {
+        _pending.remove(e.key);
+        changed = true;
+      }
+    }
+    if (changed) unawaited(_save());
+    notifyListeners();
+    unawaited(_adoptOrphans());
+  }
+
+  /// Partial ZIM files with no download record (stopped by a crash in a build that did not keep one) are adopted: a file named
+  /// as Kiwix names its files ({name}_{flavour}_{YYYY-MM}.zim) is looked up in the catalogue by that name, and the entry of
+  /// exactly that file comes back as a paused download at the file's size; Resume carries on from there. A file the catalogue
+  /// no longer has (or not a Kiwix name) is a leftover for Storage's clean-up; while the catalogue cannot be reached it is kept.
+  Future<void> _adoptOrphans() async {
+    final Directory dir;
+    final List<File> parts;
+    try {
+      dir = sources.partialDir;
+      if (!dir.existsSync()) return;
+      final known = {for (final t in transfers.values) '${t.entry.fileName}.part'};
+      parts = [
+        for (final f in dir.listSync(followLinks: false).whereType<File>())
+          if (f.path.toLowerCase().endsWith('.zim.part') && !known.contains(f.uri.pathSegments.last)) f,
+      ];
+    } catch (_) {
+      return;
+    }
+    if (parts.isEmpty) return;
+    _orphans.addAll([for (final f in parts) f.path]);
+    final byName = <String, List<CatalogEntry>>{};
+    for (final f in parts) {
+      final fileName = f.uri.pathSegments.last.substring(0, f.uri.pathSegments.last.length - '.part'.length);
+      final o = ZimOrigin.fromFileName(fileName);
+      if (o == null) {
+        _orphans.remove(f.path);
+        continue;
+      }
+      try {
+        final list = byName[o.name] ??= (await catalog.entries(name: o.name, count: 30)).entries;
+        final e = list.where((e) => e.fileName == fileName).firstOrNull;
+        _orphans.remove(f.path);
+        if (e == null || transfers.containsKey(e.id) || !f.existsSync()) continue;
+        final installed = installedFor(e);
+        final o2 = installed == null ? null : sources.originOf(installed);
+        // the same release is already on the device: a leftover
+        if (installed != null && (o2 == null || o2.release.compareTo(e.release) >= 0)) continue;
+        transfers[e.id] = ZimTransfer(e, replaces: installed)
+          ..phase = TransferPhase.paused
+          ..done = f.lengthSync()
+          ..total = e.size;
+        _remember(e, installed);
+        logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
+      } on CatalogException catch (e) {
+        logInfo('A partial download is not matched yet (catalogue: ${e.message}); kept', detail: fileName);
+      } catch (e) {
+        logError('A partial download is not matched yet; kept', error: e, detail: fileName);
+      }
+    }
+    notifyListeners();
+  }
+
+  void _remember(CatalogEntry entry, ZimFile? replaces) {
+    _pending[entry.id] = {'entry': entry.toJson(), 'replaces': ?replaces?.path};
+    unawaited(_save());
+  }
+
+  /// While a download runs, its rows are drawn again every second even when no bytes come (a slow or stalled server sends
+  /// nothing for seconds): the speed and time left keep up instead of the row freezing at "1.7 of 73 MB".
+  Timer? _rowTicker;
+
+  void _tickRows() {
+    _rowTicker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      final running = [for (final t in transfers.values) if (t.phase == TransferPhase.downloading) t];
+      if (running.isEmpty) {
+        _rowTicker?.cancel();
+        _rowTicker = null;
+        return;
+      }
+      for (final t in running) {
+        DlMeter.speed('zim:${t.entry.id}', t.done);
+      }
+      notifyListeners();
+    });
+  }
+
+  void _forget(String id) {
+    if (_pending.remove(id) != null) unawaited(_save());
+  }
+
   /// How many downloads of each entry have been started, so a cancel can tell that a new one has taken over the file.
   final Map<String, int> _starts = {};
 
@@ -371,6 +507,7 @@ class BrowseState extends ChangeNotifier {
     final t = ZimTransfer(entry, replaces: replaces)..total = entry.size;
     transfers[entry.id] = t;
     _starts[entry.id] = (_starts[entry.id] ?? 0) + 1;
+    _remember(entry, replaces);
     notifyListeners();
     if (!allowMobile && policy != null && await policy!.blocksDownload()) {
       t.phase = TransferPhase.blockedByMobileData;
@@ -379,6 +516,9 @@ class BrowseState extends ChangeNotifier {
     }
     final token = t.token = CancelToken();
     final part = File('${sources.partialDir.path}/${entry.fileName}.part');
+    final from = part.existsSync() ? part.lengthSync() : 0;
+    final started = DateTime.now();
+    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${from >> 20} of ${entry.size >> 20} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
     final previous = _loops[entry.id];
     final loop = Completer<void>();
     _loops[entry.id] = t.loop = loop.future;
@@ -397,6 +537,10 @@ class BrowseState extends ChangeNotifier {
         onProgress: (d, tot) {
           t.done = d;
           t.total = tot;
+          // The speed is measured from the download's own reports (every quarter second), not only when a row happens to be on
+          // screen, so a row opened later shows its speed and time left at once.
+          DlMeter.speed('zim:${entry.id}', d);
+          _tickRows();
           notifyListeners();
         },
         onVerifying: () {
@@ -419,6 +563,9 @@ class BrowseState extends ChangeNotifier {
         fileName: entry.fileName,
       );
       if (transfers[entry.id] == t) transfers.remove(entry.id);
+      final secs = DateTime.now().difference(started).inSeconds;
+      logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
+      _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
       _onSources();
@@ -429,11 +576,13 @@ class BrowseState extends ChangeNotifier {
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
+        logError('Download failed: ${entry.title} (${e.code}, at ${t.done >> 20} MB)', error: e.message, job: 'download/${entry.id}');
       }
       notifyListeners();
     } catch (e) {
       t.phase = TransferPhase.failed;
       t.error = 'Could not finish the download: $e';
+      logError('Download failed: ${entry.title}', error: e, job: 'download/${entry.id}');
       notifyListeners();
     } finally {
       loop.complete();
@@ -446,6 +595,9 @@ class BrowseState extends ChangeNotifier {
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
+    logInfo('Download paused: ${entry.title} at ${t.done >> 20} of ${t.total >> 20} MB', job: 'download/${entry.id}');
+    // resumed later, the speed is measured afresh (not across the pause)
+    DlMeter.reset('zim:${entry.id}');
     t.token?.cancel();
     notifyListeners();
   }
@@ -465,6 +617,8 @@ class BrowseState extends ChangeNotifier {
     if (t == null) return;
     t.token?.cancel();
     transfers.remove(entry.id);
+    logInfo('Download cancelled: ${entry.title}', job: 'download/${entry.id}');
+    _forget(entry.id);
     notifyListeners();
     final started = _starts[entry.id];
     // The download loop notices the cancel and closes the file. The file goes once it has, and only if no new download of
@@ -491,6 +645,7 @@ class BrowseState extends ChangeNotifier {
 
   /// An update is finished when the new ZIM's index is ready: then the old file and its index are removed.
   void _onSources() {
+    _restorePending();
     if (_replacements.isEmpty || _removing) return;
     final done = <String>[];
     final toRemove = <ZimFile>[];
@@ -529,6 +684,7 @@ class BrowseState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _rowTicker?.cancel();
     _net?.cancel();
     policy?.settings.removeListener(_startWaiting);
     sources.removeListener(_onSources);

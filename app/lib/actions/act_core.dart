@@ -1,10 +1,10 @@
 import 'dart:convert';
 
 import 'package:cache_search/cache_search.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../chat/tool.dart';
 import '../search/core_numbering.dart';
+import '../platform/app_log.dart';
 
 /// What the app needs from the core's `act` tool (docs/ACTIONS.md): the core renders the tool description from the installed
 /// definitions and checks every call; a read or open call comes back to the host as host_run (run by [CoreToolHost], finished with
@@ -63,7 +63,7 @@ class CoreActCore implements ActCore {
     final rejected = report['rejected'];
     final notListed = report['not_listed'];
     if ((rejected is List && rejected.isNotEmpty) || (notListed is List && notListed.isNotEmpty)) {
-      debugPrint('cache act: rejected $rejected, not listed $notListed');
+      logInfo('Actions: rejected and not listed', detail: 'rejected $rejected, not listed $notListed');
     }
     return true;
   }

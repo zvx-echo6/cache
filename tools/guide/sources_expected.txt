@@ -1,0 +1,10 @@
+# Data sources the guide (docs/guide/ch*.md) and What's new (app/assets/whats_new.md) name, by their exact title in the
+# connector catalogue. Reviewed by hand: add a line when a chapter or What's new starts naming a source in "quotes", and
+# remove it when they stop. tools/guide/sources_check.py fails a push when a title here is not in the live catalogue
+# (https://data.cached.info/connectors/catalogue.json): a source promised to people whose data is not published.
+Emergency alerts
+Idaho 511 traffic events near the place
+Idaho 511 winter road conditions
+Road work zones near the place, Idaho (WZDx)
+Satellite fire detections near the place (NASA FIRMS)
+Traffic flow at the place (TomTom)

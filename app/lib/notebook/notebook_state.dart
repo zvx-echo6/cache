@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show CacheSearchException, Searc
 import 'package:flutter/foundation.dart';
 
 import 'notebook_model.dart';
+import '../platform/app_log.dart';
 
 /// The core's Notebook calls (cs_notebook): one op with its arguments, the answer as JSON. Tests use an in-memory one.
 abstract class NotebookBackend {
@@ -124,7 +125,7 @@ class NotebookState extends ChangeNotifier {
       _error = null;
     } catch (e) {
       _error = e;
-      debugPrint('cache notebooks: could not read ($e)');
+      logError('Notebooks could not be read', error: e);
     }
     _loading = false;
     notifyListeners();
