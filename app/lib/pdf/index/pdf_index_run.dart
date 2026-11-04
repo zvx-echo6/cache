@@ -10,6 +10,7 @@ import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
 import '../../platform/app_log.dart';
+import 'pdf_diagnostics.dart';
 
 /// Why a run stopped before the end.
 enum PdfRunStop { none, person, battery, cancel, superseded }
@@ -277,7 +278,10 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language);
+        _step('Opening PDF search index');
+        final s = await tracePdfOperation('Opening PDF search index',
+          () => core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language),
+          job: 'zim-pdf/${list.zimUuid}');
         for (final r in s.reusable) {
           reusable[r.path] = r.size;
         }
@@ -384,7 +388,8 @@ class PdfIndexRun extends ChangeNotifier {
       failure = e.failure;
       await _close(session);
       return PdfRunEnd.failed;
-    } catch (e) {
+    } catch (e, stack) {
+      logError('PDF indexing failed at ${step ?? 'startup'}', error: e, stack: stack, job: 'zim-pdf/${list.zimUuid}');
       failure = _failureOf(e);
       await _close(session);
       return PdfRunEnd.failed;
@@ -463,8 +468,9 @@ class PdfIndexRun extends ChangeNotifier {
     final Uint8List data;
     try {
       if (bytes == null) _step('Reading from the library · ${_which(pdf)}');
-      data = bytes ?? await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
-    } catch (e) {
+      data = bytes ?? await tracePdfOperation('Reading PDF entry', () => core.readEntry('zim:${list.zimUuid}/${pdf.path}'), job: 'zim-pdf/${list.zimUuid}');
+    } catch (e, stack) {
+      logError('PDF entry read failed', error: e, stack: stack, detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
       if (_isFull(e)) rethrow;
       row.readMs = -1;
       row.skipped = PdfSkipReason.damaged;

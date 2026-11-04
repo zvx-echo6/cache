@@ -1,4 +1,6 @@
 import Flutter
+import Darwin
+import os
 import UIKit
 import UniformTypeIdentifiers
 import UserNotifications
@@ -64,10 +66,13 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
-    // The log's header: the iPhone's model identifier ("iPhone17,1"). Free memory is not read here (the app's start does not
-    // wait for it on iPhone).
+    // The log's device identifier and fresh app memory readings for guards and PDF diagnostics.
     let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     memory.setMethodCallHandler { call, result in
+      if call.method == "read" {
+        result(cacheMemoryReading())
+        return
+      }
       guard call.method == "device" else {
         result(FlutterMethodNotImplemented)
         return
@@ -112,6 +117,28 @@ import workmanager_apple
       battery.invokeMethod("changed", arguments: nil)
     }
   }
+}
+
+/// App headroom is the current app limit minus its footprint, not system-wide free RAM.
+private func cacheMemoryReading() -> [String: Any] {
+  let available = os_proc_available_memory()
+  var answer: [String: Any] = [
+    "avail": Int64(available), "total": Int64(ProcessInfo.processInfo.physicalMemory),
+    "threshold": 0, "low": available == 0, "appScoped": true
+  ]
+  var info = task_vm_info_data_t()
+  var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+  let status = withUnsafeMutablePointer(to: &info) { pointer in
+    pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+      task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+    }
+  }
+  if status == KERN_SUCCESS {
+    answer["footprint"] = Int64(info.phys_footprint)
+    answer["resident"] = Int64(info.resident_size)
+    answer["compressed"] = Int64(info.compressed)
+  }
+  return answer
 }
 
 /// A folder the person picks (an Obsidian vault, a Logseq graph), kept across restarts as a security-scoped bookmark.

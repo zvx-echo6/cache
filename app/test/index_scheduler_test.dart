@@ -240,6 +240,33 @@ void main() {
     expect(work.started.where((k) => k == 'zim-captions/nhs'), hasLength(2));
   });
 
+  test('work that finishes and is listed again at once, over and over, is stopped as stuck; the rest runs', () async {
+    var now = DateTime(2026, 11, 4);
+    final s = IndexScheduler(
+      sources: [work],
+      space: () => space,
+      battery: () async => const BatteryReading(percent: 80, charging: true),
+      every: const Duration(hours: 1),
+      clock: () => now,
+    );
+    addTearDown(s.dispose);
+    work
+      ..add('zim-epub/naval', size: 1)
+      ..add('zim-pdf/wiki', size: 2);
+    s.setOpen(true);
+    await _settle();
+    // it ends done each time, but its source keeps listing it
+    for (var i = 0; i < 3; i++) {
+      expect(s.running, 'zim-epub/naval');
+      work.runs['zim-epub/naval']!.finish();
+      now = now.add(const Duration(seconds: 1));
+      await _settle();
+    }
+    expect(s.statusOf('zim-epub/naval')?.why, IndexWait.stuck);
+    expect(indexItemWords(s.statusOf('zim-epub/naval')!), 'Stuck at: finished, but asked to run again at once · Retry');
+    expect(s.running, 'zim-pdf/wiki', reason: 'the rest gets its turn');
+  });
+
   test('the app going to the back pauses the work; back to the front, it goes on', () async {
     work.add('zim/a');
     s.setOpen(true);

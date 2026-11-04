@@ -63,6 +63,7 @@ Duration get _stepTimeout => Duration(microseconds: (kPdfStepTimeout.inMicroseco
 /// Reads every page's text with PDFium (pdfrx), one page at a time. A PDF that needs a password is locked (the indexer has no
 /// password to give); one PDFium cannot open is damaged.
 Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {PdfPermit? betweenPages, void Function(String step)? onStep}) async {
+  onStep?.call('Preparing PDF reader');
   await pdfrxFlutterInitialize();
   final PdfDocument doc;
   Future<void> Function() removeFile = () async {};

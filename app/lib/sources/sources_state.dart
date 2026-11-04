@@ -487,8 +487,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     // One line per change, for logcat: where each source's keyword search comes from (the ZIM's own Xapian index through libzim).
     for (final s in _status.values) {
-      final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}';
-      if (_loggedStatus.add(line)) logInfo(line);
+      final problem = s.error;
+      final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}${problem == null ? '' : ' error=${problem.code}'}';
+      if (_loggedStatus.add(line)) {
+        logInfo(line);
+        if (problem != null) logError('Source opening failed (${problem.code})', error: problem, detail: s.path);
+      }
     }
   }
 

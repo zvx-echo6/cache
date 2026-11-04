@@ -59,8 +59,16 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     this.videoDir,
     this.duty,
     this.poll = const Duration(seconds: 1),
+    this.onJobDone,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
+
+  /// A job finished: the sources' status is read again (it says the index is built only once read again).
+  final void Function()? onJobDone;
+
+  /// Jobs that finished this session, by key: not listed again (the core published the index; a status read before that
+  /// still says "needs build", and listing it again ran the job, which found the index and ended at once, every second).
+  final Set<String> _built = {};
 
   final DateTime Function() _clock;
 
@@ -102,11 +110,11 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     if (indexesDir() == null) return const [];
     return [
       for (final s in statuses())
-        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}'))
+        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}') && !_built.contains('${i.kind}/${s.sourceId}'))
           CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir, title: s.title, pulse: () => pulse['${i.kind}/${s.sourceId}'], step: () => steps['${i.kind}/${s.sourceId}']),
       for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
-          if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null && !_waits('${sub.kind}/${sub.sourceId ?? s.sourceId}'))
+          if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null && !_waits('${sub.kind}/${sub.sourceId ?? s.sourceId}') && !_built.contains('${sub.kind}/${sub.sourceId ?? s.sourceId}'))
             CoreIndexNeed(
               kind: sub.kind!,
               sourceId: (sub.sourceId ?? s.sourceId)!,
@@ -118,7 +126,7 @@ class AppIndexCoreCalls implements IndexCoreCalls {
               step: () => steps['${sub.kind}/${sub.sourceId ?? s.sourceId}'],
             ),
       for (final v in videos())
-        if (v.captionsIndex case final c? when c.needsBuild && c.sourceId.isNotEmpty && !_waits('captions/${c.sourceId}'))
+        if (v.captionsIndex case final c? when c.needsBuild && c.sourceId.isNotEmpty && !_waits('captions/${c.sourceId}') && !_built.contains('captions/${c.sourceId}'))
           CoreIndexNeed(kind: 'captions', sourceId: c.sourceId, seal: false, size: c.files, title: v.title, progress: () => progress.value['captions/${c.sourceId}'], pulse: () => pulse['captions/${c.sourceId}'], step: () => steps['captions/${c.sourceId}']),
     ];
   }
@@ -152,7 +160,11 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     return CoreIndexRun(job, key, progress, pulse: pulse, steps: steps, poll: poll, onError: (code) {
       if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
       if (code == 'busy') _backOff(key);
-    }, onDone: () => _later.remove(key));
+    }, onDone: () {
+      _later.remove(key);
+      _built.add(key);
+      onJobDone?.call();
+    });
   }
 
   void _backOff(String key) {

@@ -263,7 +263,7 @@ void logError(String what, {Object? error, StackTrace? stack, String? detail, St
     if (detail != null && d) detail,
   ];
   appLog.add(LogLevel.minimal, 'ERROR', parts.join(': '), job: job);
-  if (stack != null && d) appLog.add(LogLevel.detailed, 'ERROR', '$stack');
+  if (stack != null && d) appLog.add(LogLevel.detailed, 'ERROR', '$stack', job: job);
 }
 
 /// What the app does (Standard): no file names or content. [detail] (names, links) is added from Detailed.

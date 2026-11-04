@@ -13,6 +13,9 @@ import '../platform/app_log.dart';
 /// state says).
 IndexScheduler? indexSchedulerShared;
 
+/// Work listed again this soon after it finished counts as a repeat; more than two repeats in a row and it is stuck.
+const Duration kIndexRedoWithin = Duration(seconds: 15);
+
 /// Running work with no progress at all for this long is stuck (see [IndexScheduler.stuckAfter]).
 const Duration kIndexStuckAfter = Duration(minutes: 5);
 
@@ -161,6 +164,10 @@ class IndexScheduler extends ChangeNotifier {
 
   /// The step stuck work was on when it stopped moving: what its row keeps showing.
   final Map<String, String> _stuckAt = {};
+
+  /// When each piece of work last finished, and how often it was listed again within [kIndexRedoWithin] of that.
+  final Map<String, DateTime> _finishedAt = {};
+  final Map<String, int> _redo = {};
   Timer? _watch;
   Object? _lastPulse;
 
@@ -419,6 +426,24 @@ class IndexScheduler extends ChangeNotifier {
       }
     }
     final keys = {for (final t in work) t.key};
+    // Work that finished and is listed again at once, over and over, is a loop (its source still says it needs doing): stuck,
+    // with the reason, never run again and again (it would hold every other piece of work up).
+    final now = _clock();
+    for (final k in keys) {
+      final at = _finishedAt.remove(k);
+      if (at == null || _stuck.contains(k)) continue;
+      if (now.difference(at) > kIndexRedoWithin) {
+        _redo.remove(k);
+        continue;
+      }
+      final n = _redo[k] = (_redo[k] ?? 0) + 1;
+      if (n > 2) {
+        logError('Index work $k finished but was listed again at once, $n times; stopped as stuck', job: k);
+        _stuck.add(k);
+        _stuckAt[k] = 'Finished, but asked to run again at once';
+        _redo.remove(k);
+      }
+    }
     _seen.addAll(keys);
     // Listed again is not done (a library that got more to index after it was done, or a job stopped and listed again): the
     // count and the rows say what is really left.
@@ -549,6 +574,7 @@ class IndexScheduler extends ChangeNotifier {
         if (ok) {
           _done.add(t.key);
           _order = [for (final k in _order) if (k != t.key) k];
+          _finishedAt[t.key] = _clock();
         }
         _current = null;
         _run = null;
