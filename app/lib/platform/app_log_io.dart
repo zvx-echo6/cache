@@ -21,7 +21,12 @@ Future<void> openAppLog() async {
     final dir = Directory('${(await getApplicationSupportDirectory()).path}/logs');
     await appLog.open(dir);
     final running = File('${dir.path}/running');
-    if (running.existsSync()) logError('Cache stopped unexpectedly the last time it was open');
+    // The mark of a run that stopped while open (a crash, or the system closed it): what it wrote last is in the file already,
+    // written through line by line; its very last line is named here, to find the place.
+    if (running.existsSync()) {
+      final tail = appLog.lastLines(1);
+      logError('Cache stopped unexpectedly the last time it was open${tail.isEmpty ? '' : '; its last line: ${tail.single}'}');
+    }
     _mark(running, true);
     AppLifecycleListener(
       onResume: () => _mark(running, true),

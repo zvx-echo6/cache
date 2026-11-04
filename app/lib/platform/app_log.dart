@@ -58,13 +58,8 @@ class AppLog extends ChangeNotifier {
   LogLevel _level = LogLevel.standard;
   LogLevel _before = LogLevel.standard;
   DateTime? _everythingUntil;
-  IOSink? _sink;
+  RandomAccessFile? _file;
   int _size = 0;
-  Future<void> _writing = Future<void>.value();
-  bool _turning = false;
-
-  /// Lines written while the file is being turned over: they go into the new file.
-  final List<List<int>> _held = [];
   final Map<String, ListQueue<String>> _jobs = {};
 
   /// The folder of the log files (null until [open]).
@@ -88,6 +83,10 @@ class AppLog extends ChangeNotifier {
 
   /// Opens the log in [dir] (made when missing) and reads the level.
   Future<void> open(Directory dir) async {
+    try {
+      _file?.closeSync();
+    } catch (_) {}
+    _file = null;
     await dir.create(recursive: true);
     _dir = dir;
     try {
@@ -98,9 +97,7 @@ class AppLog extends ChangeNotifier {
       _everythingUntil = until == null ? null : DateTime.tryParse(until);
     } catch (_) {}
     _expire();
-    final f = fileAt(0);
-    _size = f.existsSync() ? f.lengthSync() : 0;
-    _sink = f.openWrite(mode: FileMode.append);
+    _openFile();
     notifyListeners();
   }
 
@@ -163,32 +160,26 @@ class AppLog extends ChangeNotifier {
   void _write(String tag, String line) {
     final text = '${_clock().toIso8601String()} $tag $line';
     _echo(text);
-    if (_dir == null) return;
+    final f = _file;
+    if (f == null) return;
+    // Written through at once (a crash loses nothing written before it): a few lines a second at most.
     final bytes = utf8.encode('$text\n');
-    final sink = _sink;
-    if (sink == null || _turning) {
-      _held.add(bytes);
-      return;
-    }
-    _size += bytes.length;
-    sink.add(bytes);
-    if (_size >= fileBytes) {
-      _turning = true;
-      _writing = _writing.then((_) => _turnOver());
-    }
+    try {
+      f.writeFromSync(bytes);
+      _size += bytes.length;
+      if (_size >= fileBytes) _turnOver();
+    } catch (_) {}
   }
 
   static String _time(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
   /// The file is full: it becomes .1 (and .1 becomes .2 ...), the oldest goes, files older than [kLogKeepDays] go.
-  Future<void> _turnOver() async {
-    final old = _sink;
-    _sink = null;
-    _size = 0;
+  void _turnOver() {
     try {
-      await old?.flush();
-      await old?.close();
+      _file?.closeSync();
     } catch (_) {}
+    _file = null;
+    _size = 0;
     try {
       final last = fileAt(files - 1);
       if (last.existsSync()) last.deleteSync();
@@ -202,31 +193,44 @@ class AppLog extends ChangeNotifier {
         if (f.existsSync() && f.lastModifiedSync().isBefore(cutoff)) f.deleteSync();
       }
     } catch (_) {}
-    final sink = _sink = fileAt(0).openWrite(mode: FileMode.append);
-    for (final b in _held) {
-      sink.add(b);
-      _size += b.length;
-    }
-    _held.clear();
-    _turning = false;
+    _openFile();
   }
 
-  /// Everything written so far is on disk (before sharing).
-  Future<void> flush() async {
-    await _writing;
+  void _openFile() {
     try {
-      await _sink?.flush();
+      final f = fileAt(0);
+      _file = f.openSync(mode: FileMode.append);
+      _size = f.lengthSync();
+    } catch (_) {
+      _file = null;
+    }
+  }
+
+  /// Everything written so far is on disk (lines are written through; kept for callers that wait before sharing).
+  Future<void> flush() async {
+    try {
+      _file?.flushSync();
     } catch (_) {}
+  }
+
+  /// The last lines of the log as it was when the app started: what the app wrote just before it stopped.
+  List<String> lastLines(int n) {
+    try {
+      final f = fileAt(0);
+      if (!f.existsSync()) return const [];
+      final lines = f.readAsLinesSync();
+      return lines.length <= n ? lines : lines.sublist(lines.length - n);
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Removes every log file and starts an empty one.
   Future<void> clear() async {
-    await flush();
-    final old = _sink;
-    _sink = null;
     try {
-      await old?.close();
+      _file?.closeSync();
     } catch (_) {}
+    _file = null;
     for (final f in logFiles) {
       try {
         f.deleteSync();
@@ -234,14 +238,7 @@ class AppLog extends ChangeNotifier {
     }
     _jobs.clear();
     _size = 0;
-    if (_dir != null) {
-      final sink = _sink = fileAt(0).openWrite(mode: FileMode.append);
-      for (final b in _held) {
-        sink.add(b);
-        _size += b.length;
-      }
-      _held.clear();
-    }
+    if (_dir != null) _openFile();
     _write('LOG', 'Log cleared');
     notifyListeners();
   }

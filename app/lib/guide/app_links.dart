@@ -19,6 +19,7 @@ enum AppPlace {
   sharing,
   appearance,
   credits,
+  log,
   models,
 }
 
@@ -42,6 +43,7 @@ const Map<String, AppPlace> kAppLinks = {
   'settings/sharing': AppPlace.sharing,
   'settings/appearance': AppPlace.appearance,
   'settings/credits': AppPlace.credits,
+  'settings/log': AppPlace.log,
   'settings/models': AppPlace.models,
 };
 

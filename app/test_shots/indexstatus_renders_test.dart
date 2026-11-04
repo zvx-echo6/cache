@@ -12,8 +12,7 @@ import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
 import 'package:cache/platform/app_log.dart';
 import 'package:cache/platform/battery.dart';
-import 'package:cache/screens/settings/storage_page.dart';
-import 'package:cache/settings/app_settings.dart';
+import 'package:cache/screens/settings/log_page.dart';
 import 'package:cache/search/epub_index_row.dart';
 import 'package:cache/search/index_overview.dart';
 import 'package:cache/search/index_scheduler.dart';
@@ -199,17 +198,15 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('6: Storage > Advanced: the log level, Share log, Clear log (${_t(theme)})', (tester) async {
+    testWidgets('6: Settings > Log: the log level, Share log, Clear log (${_t(theme)})', (tester) async {
       final dir = Directory.systemTemp.createTempSync('log-renders');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final settings = AppSettings(settingsDirOverride: dir);
-      await tester.runAsync(settings.init);
       final log = AppLog(echo: (_) {});
       await tester.runAsync(() => log.open(Directory('${dir.path}/logs')));
       phone(tester);
-      await tester.pumpWidget(shotApp(IndexingSpeedPage(settings: settings, log: log), theme: theme));
+      await tester.pumpWidget(shotApp(LogPage(log: log), theme: theme));
       await tester.pump(const Duration(milliseconds: 300));
-      await _snap(tester, '6a-advanced-log', theme);
+      await _snap(tester, '6a-settings-log', theme);
       await tester.pumpWidget(const SizedBox());
     });
 

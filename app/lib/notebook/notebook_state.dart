@@ -192,8 +192,10 @@ class NotebookState extends ChangeNotifier {
     bool draft = false,
     bool private = false,
     Map<String, dynamic> props = const {},
-  }) =>
-      _change(() async => NbEntry.fromJson(await backend.call('entry_save', {
+  }) {
+    logInfo('Notebook entry saved (${body?.length ?? 0} characters, ${photos.length} photos)');
+    logContent('Note: ${[?title, ?body].join(' · ')}${place == null ? '' : ' @ ${place.lat}, ${place.lon}'}');
+    return _change(() async => NbEntry.fromJson(await backend.call('entry_save', {
             'id': ?id,
             'notebook_id': notebookId,
             'occurred_at': occurredAt,
@@ -207,6 +209,7 @@ class NotebookState extends ChangeNotifier {
             'private': private,
             if (props.isNotEmpty) 'props': props,
           })));
+  }
 
   final Set<String> _hidden = {};
 

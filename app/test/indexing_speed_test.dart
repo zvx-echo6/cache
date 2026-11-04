@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/platform/app_log.dart';
+import 'package:cache/screens/settings/log_page.dart';
 import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/theme.dart';
@@ -26,14 +27,14 @@ void main() {
     expect(again.indexingNormal, isTrue);
   });
 
-  testWidgets('Storage > Advanced: the log level (Standard by default), Share log and Clear log', (tester) async {
+  testWidgets('Settings > Log: the log level (Standard by default), Share log and Clear log', (tester) async {
     final dir = Directory.systemTemp.createTempSync('log-rows');
     addTearDown(() => dir.deleteSync(recursive: true));
     final settings = AppSettings(settingsDirOverride: dir);
     await tester.runAsync(settings.init);
     final log = AppLog(echo: (_) {});
     await tester.runAsync(() => log.open(Directory('${dir.path}/logs')));
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: IndexingSpeedPage(settings: settings, log: log)));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: LogPage(log: log)));
     await tester.scrollUntilVisible(find.byKey(const ValueKey('log-clear')), 200);
     expect(find.text('Standard (default)'), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('log-standard')), matching: find.byIcon(Icons.check)), findsOneWidget);
