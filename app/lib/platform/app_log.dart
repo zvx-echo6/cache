@@ -88,6 +88,7 @@ class AppLog extends ChangeNotifier {
 
   /// Opens the log in [dir] (made when missing) and reads the level.
   Future<void> open(Directory dir) async {
+    await close();
     await dir.create(recursive: true);
     _dir = dir;
     try {
@@ -217,6 +218,15 @@ class AppLog extends ChangeNotifier {
     try {
       await _sink?.flush();
     } catch (_) {}
+  }
+
+  /// Flushes and closes the current file. The logger may be opened again.
+  Future<void> close() async {
+    await flush();
+    final sink = _sink;
+    _sink = null;
+    _dir = null;
+    await sink?.close();
   }
 
   /// Removes every log file and starts an empty one.

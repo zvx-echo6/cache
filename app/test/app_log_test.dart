@@ -7,17 +7,26 @@ void main() {
   late Directory dir;
   late DateTime now;
   late List<String> echoed;
+  late List<AppLog> opened;
 
   setUp(() {
     dir = Directory.systemTemp.createTempSync('app-log');
     now = DateTime(2026, 11, 3, 12);
     echoed = [];
+    opened = [];
   });
-  tearDown(() => dir.deleteSync(recursive: true));
+  tearDown(() async {
+    for (final log in opened) {
+      await log.close();
+    }
+    await appLog.close();
+    dir.deleteSync(recursive: true);
+  });
 
   Future<AppLog> open({int fileBytes = kLogFileBytes, int files = kLogFiles}) async {
     final log = AppLog(clock: () => now, fileBytes: fileBytes, files: files, echo: echoed.add);
     await log.open(dir);
+    opened.add(log);
     return log;
   }
 
