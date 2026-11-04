@@ -8,7 +8,10 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 out=$here/native
 mkdir -p "$out"
-slice=$("$here/../native/zimx/fetch-libzim-ios.sh" "$1" | sed -n 's/^LIBZIM_DIR=//p')
+# Capture separately so a failed download exits here rather than being hidden
+# by the successful sed at the end of a pipeline.
+fetched=$("$here/../native/zimx/fetch-libzim-ios.sh" "$1")
+slice=$(printf '%s\n' "$fetched" | sed -n 's/^LIBZIM_DIR=//p')
 [ -f "$slice/merged.a" ] || { echo "no merged.a in $slice" >&2; exit 1; }
 cp "$slice/merged.a" "$out/libCoreKiwix.a"
 # Keep routing build products outside the checkout, alongside the Kiwix cache.

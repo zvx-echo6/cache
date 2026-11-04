@@ -1,4 +1,4 @@
-# Internal diagnostic IPA for registered test phones. Built on CI and installed over USB; no store upload.
+# Internal diagnostic IPA for registered test phones. USB only; interrupted dependency downloads retry with checksum verification.
 name: iOS USB Diagnostic
 
 on:

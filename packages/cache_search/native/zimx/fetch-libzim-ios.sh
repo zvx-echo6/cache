@@ -23,7 +23,10 @@ hash256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -
 hash5() { if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi; }
 ok() { [ -f "$tgz" ] && [ "$(hash5 "$tgz")" = "$md5" ] && [ "$(hash256 "$tgz")" = "$sha256" ]; }
 if ! ok; then
-  curl -fsSL -o "$tgz" "$url"
+  # Retry interrupted transfers from the official release server. Checksums
+  # below remain mandatory before any archive can be used.
+  curl -fsSL --retry 4 --retry-all-errors --retry-delay 5 \
+    --connect-timeout 30 --speed-limit 1024 --speed-time 120 -o "$tgz" "$url"
   ok || { rm -f "$tgz"; echo "checksum mismatch for $name (want md5 $md5, sha256 $sha256)" >&2; exit 1; }
 fi
 slice="$dest/lib/CoreKiwix.xcframework/ios-arm64"
