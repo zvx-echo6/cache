@@ -288,7 +288,9 @@ class SharingState extends ChangeNotifier {
     final c = _core;
     if (c == null) return;
     try {
+      final before = status;
       status = await c.call('status');
+      logSyncEvents(before, status);
       _noteShareChanges();
       notifyListeners();
     } catch (_) {}
@@ -642,4 +644,46 @@ class _RealCore implements SyncCoreLike {
 
   @override
   Future<void> close() => _c.close();
+}
+
+/// A device id as the log names it: its first 8 characters.
+String shortDeviceId(Object? id) {
+  final s = '${id ?? ''}';
+  return s.length <= 8 ? s : s.substring(0, 8);
+}
+
+/// Writes what changed in sync between two status reads (Standard): a linked device connected (directly or through a relay)
+/// or became unreachable, and files received into or sent from a shared folder. Devices by short id; their names only from
+/// Detailed.
+void logSyncEvents(Map<String, dynamic> before, Map<String, dynamic> now) {
+  Map<String, Map> byId(Object? list) => {
+        for (final p in (list as List?) ?? const [])
+          if (p is Map && p['id'] != null) '${p['id']}': p,
+      };
+  final was = byId(before['peers']), is_ = byId(now['peers']);
+  for (final e in is_.entries) {
+    final p = e.value, old = was[e.key];
+    final up = p['error'] == null && p['last_seen'] != null;
+    final upBefore = old != null && old['error'] == null && old['last_seen'] != null;
+    final who = 'device ${shortDeviceId(e.key)}';
+    if (up && !upBefore) {
+      logInfo('Sync: $who connected ${p['via'] == 'relay' ? 'through a relay' : 'directly'}', detail: '${p['name'] ?? ''}');
+    } else if (!up && upBefore) {
+      logInfo('Sync: $who not reachable', detail: '${p['error'] ?? ''}');
+    }
+  }
+  for (final k in was.keys) {
+    if (!is_.containsKey(k)) logInfo('Sync: device ${shortDeviceId(k)} unlinked');
+  }
+  final sharesBefore = byId(before['shares']);
+  for (final e in byId(now['shares']).entries) {
+    final sh = e.value, old = sharesBefore[e.key];
+    if (old == null) continue;
+    final files = ((sh['files'] as num?) ?? 0).toInt() - ((old['files'] as num?) ?? 0).toInt();
+    final bytes = ((sh['bytes'] as num?) ?? 0).toInt() - ((old['bytes'] as num?) ?? 0).toInt();
+    if (files != 0 || bytes != 0) logInfo('Sync: folder ${e.key}: ${files >= 0 ? '+' : ''}$files files, ${bytes >= 0 ? '+' : ''}${bytes >> 10} KB');
+  }
+  final t = now['transfer'], tb = before['transfer'];
+  if (t is Map && tb is! Map) logInfo('Sync: a transfer starts${t['peer'] == null ? '' : ' with device ${shortDeviceId(t['peer'])}'}');
+  if (t is! Map && tb is Map) logInfo('Sync: the transfer ends');
 }

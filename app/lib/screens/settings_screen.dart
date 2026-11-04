@@ -6,6 +6,7 @@ import '../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
 import '../search/index_overview.dart';
 
 import '../nav/units.dart';
+import '../platform/app_log.dart' show appLog, logLevelTitle;
 import '../layout/adaptive.dart';
 import '../theme.dart';
 import '../settings/app_settings.dart';
@@ -14,6 +15,7 @@ import '../video/format.dart';
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
+import 'settings/log_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/sharing_page.dart';
@@ -197,6 +199,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   status: [Part(d.app.theme.label)],
                   selected: isPaneSelected(context, 'settings-appearance'),
                   onTap: () => _open(context, 'settings-appearance', AppearancePage(app: d.app)),
+                ),
+                ListenableBuilder(
+                  listenable: appLog,
+                  builder: (context, _) => SettingsRow(
+                    key: const ValueKey('settings-log'),
+                    icon: Icons.receipt_long_outlined,
+                    title: 'Log',
+                    status: [Part('${logLevelTitle(appLog.level)} · stays on this device')],
+                    selected: isPaneSelected(context, 'settings-log'),
+                    onTap: () => _open(context, 'settings-log', const LogPage()),
+                  ),
                 ),
               ],
             ),

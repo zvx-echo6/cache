@@ -2,7 +2,7 @@
 
 ## Opening Settings
 
-Settings has seven rows, each with a one-line status.
+Settings has eight rows, each with a one-line status.
 
 ![The Settings page](shot:settings)
 
@@ -15,6 +15,7 @@ Settings has seven rows, each with a one-line status.
    - "Storage"
    - "Sharing and sync"
    - "Appearance"
+   - "Log"
 
 The status lines show the state without opening the row. For example, "Storage" shows how much Cache uses and what is free.
 
@@ -239,7 +240,7 @@ This page shows what Cache uses and lets you free space.
 3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather". "Videos and weather" opens the list "Saved videos".
 4. Remove an item. A pop-up shows what it frees. Confirm.
 
-The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows the background indexing speed and the log level, for example `Background indexing: Gentle · Log: Standard`. See Background indexing speed, and The log.
+The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows "Background indexing: Gentle" or "Background indexing: Normal". See Background indexing speed.
 
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
@@ -268,7 +269,7 @@ A note explains: "Each state's off-road data is downloaded once and kept while a
 Cache makes your PDFs, EPUBs, captions and libraries searchable in the background. You choose how fast.
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
-2. At the foot, tap "Advanced". It shows, for example, `Background indexing: Gentle · Log: Standard`.
+2. At the foot, tap "Advanced". It shows `Background indexing: Gentle` or `Background indexing: Normal`.
 3. Under "Background indexing speed", tap one:
    - "Gentle": "Keeps the device cool and the battery longer". This is the start setting;
    - "Normal": "Finishes sooner, uses more battery".
@@ -285,7 +286,7 @@ The bar at the top of "Library" and at the foot of "Settings" shows the progress
 
 Cache keeps a log on this device: what it does, and what goes wrong. It helps find a problem. Nothing leaves the device unless you share it.
 
-1. Go to ["Settings" > "Storage"](cache://settings/storage) and tap "Advanced".
+1. Go to ["Settings" > "Log"](cache://settings/log). Its row shows the level, for example `Standard · stays on this device`.
 2. Under "Log level", tap one:
    - "Minimal": "Only what goes wrong";
    - "Standard (default)": "What Cache does, without names or content";

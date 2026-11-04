@@ -60,6 +60,7 @@ import 'notebooks/notebooks_screen.dart';
 import 'notebooks/quick_add_sheet.dart';
 import 'notebooks/repeater_list_screen.dart';
 import 'settings/about_pages.dart' show AboutPage;
+import 'settings/log_page.dart' show LogPage;
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
@@ -426,6 +427,7 @@ class _ShellState extends State<Shell> {
       AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync),
       AppPlace.appearance => AppearancePage(app: widget.app),
       AppPlace.credits => const AboutPage(),
+      AppPlace.log => const LogPage(),
       AppPlace.models => ModelsScreen(app: widget.app),
       AppPlace.drawArea => null,
     };

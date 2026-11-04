@@ -443,6 +443,8 @@ class ChatController extends ChangeNotifier {
     } finally {
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
+      logInfo('Ask answered in ${clock.elapsedMilliseconds} ms${reply.error == null ? '' : ' (with an error)'}; ${reply.sources.length} sources');
+      logContent('Ask answer: ${reply.error ?? reply.text}');
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, actionDraft);
       }
@@ -604,6 +606,8 @@ class ChatController extends ChangeNotifier {
     } finally {
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
+      logInfo('Ask answered in ${clock.elapsedMilliseconds} ms${reply.error == null ? '' : ' (with an error)'}; ${reply.sources.length} sources');
+      logContent('Ask answer: ${reply.error ?? reply.text}');
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, null);
       }

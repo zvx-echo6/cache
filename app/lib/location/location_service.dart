@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 
 import '../app_fs.dart';
+import '../platform/app_log.dart';
 import 'position_source.dart';
 
 /// Why there is no position right now, for the one line shown under the coordinates.
@@ -91,6 +92,8 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// The one place a fix goes to the rest of the app: [fix], and the search core through [onFix].
   void _publish(Fix f) {
     if (_disposed || !enabled) return;
+    // where the device is: content (Everything only)
+    logContent('Location: ${f.lat.toStringAsFixed(5)}, ${f.lon.toStringAsFixed(5)} (±${f.accuracyM.round()} m)');
     fix = f;
     problem = null;
     onFix?.call(f);

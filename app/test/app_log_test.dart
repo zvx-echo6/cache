@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/platform/app_log.dart';
+import 'package:cache/sharing/sharing_state.dart' show logSyncEvents, shortDeviceId;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -131,5 +132,46 @@ void main() {
     expect(lines, hasLength(kLogJobLines));
     expect(lines.last, endsWith('PDF ${kLogJobLines + 4} of 37'));
     expect(await text(log), isNot(contains('PDF 3 of 37')), reason: 'Minimal writes none of them to the file');
+  });
+
+  test('sync events at Standard: connected, not reachable, files received, by short device id', () async {
+    await appLog.open(dir);
+    await appLog.setLevel(LogLevel.standard);
+    expect(shortDeviceId('ABCDEFGHIJKLMNOP'), 'ABCDEFGH');
+    final before = {
+      'peers': [
+        {'id': 'PEERONE123456', 'name': 'Kitchen tablet', 'error': 'timeout', 'last_seen': 1},
+      ],
+      'shares': [
+        {'id': 'library', 'files': 3, 'bytes': 3 << 20},
+      ],
+    };
+    final now = {
+      'peers': [
+        {'id': 'PEERONE123456', 'name': 'Kitchen tablet', 'via': 'relay', 'last_seen': 2},
+      ],
+      'shares': [
+        {'id': 'library', 'files': 5, 'bytes': 7 << 20},
+      ],
+      'transfer': {'peer': 'PEERONE123456'},
+    };
+    logSyncEvents(before, now);
+    logSyncEvents(now, {'peers': [], 'shares': now['shares']});
+    final t = await text(appLog);
+    expect(t, contains('Sync: device PEERONE1 connected through a relay'));
+    expect(t, isNot(contains('tablet')), reason: 'device names only from Detailed');
+    expect(t, contains('Sync: folder library: +2 files, +4096 KB'));
+    expect(t, contains('Sync: a transfer starts with device PEERONE1'));
+    expect(t, contains('Sync: the transfer ends'));
+    expect(t, contains('Sync: device PEERONE1 unlinked'));
+  });
+
+  test('a line is on disk the moment it is written; the last lines are found again on the next start', () async {
+    final log = await open();
+    log.add(LogLevel.standard, 'INFO', 'Reading page 12 of 300 · PDF 3 of 37');
+    // no flush: a crash right now would keep it
+    expect(log.fileAt(0).readAsStringSync(), contains('Reading page 12 of 300'));
+    final again = await open();
+    expect(again.lastLines(1).single, contains('Reading page 12 of 300'));
   });
 }

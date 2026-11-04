@@ -22,12 +22,13 @@ Switch switchIn(WidgetTester tester, String title) =>
 
 void main() {
   group('the Settings home: every row says its state, from the real state', () {
-    testWidgets('a fresh phone: seven rows, each with its state in one line', (tester) async {
+    testWidgets('a fresh phone: eight rows, each with its state in one line', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
       for (final title in [
         'Cache model and web search', 'Maps', 'Weather and alerts', 'Notifications', 'Storage', 'Sharing and sync', 'Appearance',
+        'Log',
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
@@ -42,6 +43,7 @@ void main() {
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
+      expect(find.text('Standard · stays on this device'), findsOneWidget, reason: 'Log');
       await r.dispose(tester);
     });
 
