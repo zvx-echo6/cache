@@ -125,6 +125,13 @@ impl Core {
         self.result(p)
     }
 
+    /// `cs_zim_pdfs` (diagnostic: how long listing a ZIM's PDFs takes).
+    pub fn zim_pdfs(&mut self, zim_id: &str) -> Result<String, ApiError> {
+        let z = cstring(zim_id, "zim_id")?;
+        let p = unsafe { cs_zim_pdfs(self.h, z.as_ptr()) };
+        self.result(p)
+    }
+
     pub fn read(&mut self, address: &str, max_chars: i32) -> Result<String, ApiError> {
         let a = cstring(address, "address")?;
         let p = unsafe { cs_read(self.h, a.as_ptr(), max_chars) };

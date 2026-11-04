@@ -351,6 +351,19 @@ pub fn read(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Diagnostic: times `cs_zim_pdfs` on one ZIM (`--zim` is its id as `status` shows it) and prints the list.
+pub fn zim_pdfs(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "zim", "open-timeout"], &[], false)?;
+    let t0 = std::time::Instant::now();
+    let mut e = open_engine(&a)?;
+    eprintln!("open took {} ms", t0.elapsed().as_millis());
+    let t1 = std::time::Instant::now();
+    let out = e.core.zim_pdfs(a.req("zim").map_err(usage_err)?)?;
+    eprintln!("zim_pdfs took {} ms", t1.elapsed().as_millis());
+    print(&out);
+    Ok(())
+}
+
 pub fn status(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "open-timeout"], &[], false)?;
     let mut e = open_engine(&a)?;
@@ -834,6 +847,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "guide-gate" => guide_gate(rest),
         "read" => read(rest),
         "status" => status(rest),
+        "zim-pdfs" => zim_pdfs(rest),
         "tool" => tool(rest),
         "tool-schemas" => tool_schemas(rest),
         "places" => places(rest),
