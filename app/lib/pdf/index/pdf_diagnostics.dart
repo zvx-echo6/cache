@@ -12,6 +12,7 @@ Future<T> tracePdfOperation<T>(
   Future<T> Function() action, {
   String? job,
   bool Function()? alive,
+  Set<Timer>? timers,
   Duration pendingEvery = const Duration(seconds: 30),
   Future<String> Function()? memory,
 }) async {
@@ -42,6 +43,7 @@ Future<T> tracePdfOperation<T>(
     logInfo('PDF $step still waiting after ${elapsed.elapsedMilliseconds} ms', job: job);
     unawaited(sample());
   });
+  timers?.add(pending);
   try {
     final result = await action();
     logInfo('PDF $step done in ${elapsed.elapsedMilliseconds} ms; ${memoryNow()}', job: job);
@@ -52,5 +54,6 @@ Future<T> tracePdfOperation<T>(
     rethrow;
   } finally {
     pending.cancel();
+    timers?.remove(pending);
   }
 }

@@ -209,6 +209,7 @@ class PdfIndexRun extends ChangeNotifier {
 
   /// Steps taken so far: a sign of life for the scheduler's watchdog (a page read, an entry read, a PDF added).
   int steps = 0;
+  final Set<Timer> _diagnosticTimers = {};
 
   void _step(String words) {
     step = words;
@@ -246,6 +247,10 @@ class PdfIndexRun extends ChangeNotifier {
   void stop(PdfRunStop why) {
     if (_stop != PdfRunStop.none || why == PdfRunStop.none) return;
     if (finishing && (why == PdfRunStop.person || why == PdfRunStop.battery)) return;
+    for (final timer in _diagnosticTimers) {
+      timer.cancel();
+    }
+    _diagnosticTimers.clear();
     _stop = why;
     if (finishing && _finishCancellable) unawaited(_job?.cancel());
     notifyListeners();
@@ -281,7 +286,7 @@ class PdfIndexRun extends ChangeNotifier {
         _step('Opening PDF search index');
         final s = await tracePdfOperation('Opening PDF search index',
           () => core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language),
-          job: 'zim-pdf/${list.zimUuid}');
+          job: 'zim-pdf/${list.zimUuid}', timers: _diagnosticTimers);
         for (final r in s.reusable) {
           reusable[r.path] = r.size;
         }
@@ -468,7 +473,7 @@ class PdfIndexRun extends ChangeNotifier {
     final Uint8List data;
     try {
       if (bytes == null) _step('Reading from the library · ${_which(pdf)}');
-      data = bytes ?? await tracePdfOperation('Reading PDF entry', () => core.readEntry('zim:${list.zimUuid}/${pdf.path}'), job: 'zim-pdf/${list.zimUuid}');
+      data = bytes ?? await tracePdfOperation('Reading PDF entry', () => core.readEntry('zim:${list.zimUuid}/${pdf.path}'), job: 'zim-pdf/${list.zimUuid}', timers: _diagnosticTimers);
     } catch (e, stack) {
       logError('PDF entry read failed', error: e, stack: stack, detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
       if (_isFull(e)) rethrow;

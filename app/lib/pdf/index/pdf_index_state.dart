@@ -196,6 +196,8 @@ class PdfIndexState extends ChangeNotifier {
   final Map<String, (DateTime, PdfSnapshot?)> _snaps = {};
   final Map<String, PdfEstimate> _estimates = {};
   final Map<String, PdfRunFailure> _failures = {};
+  final Set<Timer> _diagnosticTimers = {};
+  final Set<PdfIndexRun> _samples = {};
   final Map<String, String> _earlyStep = {};
   final Map<String, int> _earlySteps = {};
 
@@ -210,7 +212,7 @@ class PdfIndexState extends ChangeNotifier {
 
   Future<T> _trace<T>(PdfZimRef z, String step, Future<T> Function() action) {
     _startingStep(z, step);
-    return tracePdfOperation(step, action, job: _job(z), alive: () => !_disposed);
+    return tracePdfOperation(step, action, job: _job(z), alive: () => !_disposed, timers: _diagnosticTimers);
   }
 
   Future<ZimPdfList> _readList(PdfZimRef z) async {
@@ -248,7 +250,7 @@ class PdfIndexState extends ChangeNotifier {
   Future<void> init() async {
     if (_loaded) return;
     try {
-      await tracePdfOperation('Preparing PDF indexing', core.prepare, alive: () => !_disposed);
+      await tracePdfOperation('Preparing PDF indexing', core.prepare, alive: () => !_disposed, timers: _diagnosticTimers);
       _indexes = (await indexesDir()).path;
       final f = await recordFile();
       if (f.existsSync()) _record = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
@@ -275,6 +277,13 @@ class PdfIndexState extends ChangeNotifier {
     _disposed = true;
     changes?.removeListener(_onZims);
     _watch?.cancel();
+    for (final timer in _diagnosticTimers) {
+      timer.cancel();
+    }
+    _diagnosticTimers.clear();
+    for (final sample in _samples) {
+      sample.stop(PdfRunStop.person);
+    }
     _run?.stop(PdfRunStop.person);
     super.dispose();
   }
@@ -587,12 +596,14 @@ class PdfIndexState extends ChangeNotifier {
       void sampleStep() {
         if (run.step != null) _startingStep(z, 'Sample $sampleNumber of ${picks.length}: ${run.step}');
       }
+      _samples.add(run);
       run.addListener(sampleStep);
       try {
         final result = await _trace(z, 'Timing PDF sample $sampleNumber of ${picks.length}', run.run);
         logInfo('PDF sample $sampleNumber ended ${result.name}${run.failure == null ? '' : ': ${run.failure!.message}'}', job: _job(z));
       } finally {
         run.removeListener(sampleStep);
+        _samples.remove(run);
       }
       if (clock().difference(clockStart) > budget) break;
     }

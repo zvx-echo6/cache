@@ -17,7 +17,28 @@ class _BlockedListing extends FakePdfIndexCore {
   Future<ZimPdfList> zimPdfs(String zimId) => listed.future;
 }
 
+class _BlockedPrepare extends FakePdfIndexCore {
+  final ready = Completer<bool>();
+  @override
+  Future<bool> prepare() => ready.future;
+}
+
 void main() {
+  testWidgets('closing the app while core startup is blocked cancels diagnostic timers', (tester) async {
+    final root = Directory.systemTemp.createTempSync('pdf-startup-diagnostics');
+    final state = PdfIndexState(
+      core: _BlockedPrepare(),
+      zims: () => [],
+      indexesDir: () async => Directory('${root.path}/indexes'),
+      recordFile: () async => File('${root.path}/record.json'),
+    );
+    unawaited(state.init());
+    await tester.pump();
+    state.dispose();
+    await tester.pump();
+    root.deleteSync(recursive: true);
+  });
+
   test('a wait before the first PDF is visible in Details, and its timer stops when the call completes', () async {
     const job = 'zim-pdf/diagnostic-wait';
     final done = Completer<int>();
