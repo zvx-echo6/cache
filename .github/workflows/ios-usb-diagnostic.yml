@@ -1,4 +1,4 @@
-# Internal diagnostic IPA for registered test phones. USB only; interrupted dependency downloads retry with checksum verification.
+# Internal diagnostic IPA for registered test phones. USB only; large ZIMs use bounded mapping windows.
 name: iOS USB Diagnostic
 
 on:
@@ -113,7 +113,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: packages/cache_search/ios/native
-          key: core-routing-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/**/*.rs', 'packages/cache_search/native/**/Cargo.toml', 'packages/cache_search/native/Cargo.lock', 'packages/cache_search/native/zimx/**', 'packages/cache_search/ios/build-core.sh', 'packages/valhalla/**', '.github/workflows/ios-testflight.yml') }}
+          key: core-routing-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/**/*.rs', 'packages/cache_search/native/**/Cargo.toml', 'packages/cache_search/native/Cargo.lock', 'packages/cache_search/native/zimx/**', 'packages/cache_search/native/vendor/zim-0.5.0/**', 'packages/cache_search/ios/build-core.sh', 'packages/valhalla/**', '.github/workflows/ios-testflight.yml') }}
       - name: Cargo registry cache
         if: steps.out.outputs.cache-hit != 'true'
         uses: actions/cache@v4
@@ -129,7 +129,10 @@ jobs:
         with:
           path: packages/cache_search/native/target
           key: cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+          # Cargo validates individual fingerprints when reusing the same toolchain cache.
+          restore-keys: |
+            cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+            cargo-target-ios-${{ steps.toolchain.outputs.id }}-
       - name: CoreKiwix download cache
         if: steps.out.outputs.cache-hit != 'true'
         uses: actions/cache@v4

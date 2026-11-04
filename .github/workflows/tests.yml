@@ -64,6 +64,8 @@ jobs:
           cache-on-failure: true
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
+      - name: Windowed ZIM reader regressions (iOS path)
+        run: cargo test --manifest-path vendor/zim-0.5.0/Cargo.toml --target-dir target --lib --features windowed-mmap
       # The crates the build machine lints, with every target (tests too), as it runs them.
       - name: Clippy (the build machine's crates, all targets)
         if: ${{ !cancelled() }}

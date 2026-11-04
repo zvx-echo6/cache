@@ -8339,8 +8339,6 @@ dependencies = [
 [[package]]
 name = "zim"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63cffa116b0aaebeb94142acd0ad39c63ee9f6180a5729e5c02036b73b4b082e"
 dependencies = [
  "bitreader",
  "byteorder",
