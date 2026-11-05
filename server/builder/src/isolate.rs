@@ -5,7 +5,7 @@
 //!
 //! The PDF goes to the child in a temporary file and the extraction comes back in another (`Extracted::to_wire`), named by the
 //! environment, so nothing the child prints (MuPDF warnings, a test harness) can get mixed into the result. A child that crashes, runs
-//! past its time or exits with anything but a clean result makes this one PDF fail with a plain reason; the parent is never touched.
+//! past its time or exits with anything but a clean result fails extraction of this one PDF; the parent is never touched.\n//! Compression is optional: its timeout keeps the original PDF, which still has to pass extraction.
 //!
 //! On Linux the child also gets an address-space limit (RLIMIT_AS), so a PDF that makes MuPDF ask for runaway memory fails alone.
 
@@ -35,6 +35,12 @@ const ENV_MEM: &str = "CACHE_EXTRACT_MEM";
 const ENV_JOB: &str = "CACHE_EXTRACT_JOB";
 const ENV_ARG: &str = "CACHE_EXTRACT_ARG";
 const ENV_FAULT: &str = "CACHE_EXTRACT_FAULT";
+
+/// A timed-out optional compression step is different from an unreadable PDF.
+enum JobOutput {
+    Complete(Vec<u8>),
+    TimedOut,
+}
 
 /// How to run the reading child and what it may use.
 #[derive(Clone, Debug)]
@@ -73,20 +79,24 @@ impl ChildExtractor {
 
     /// [`extract_pdf`] in a child process. An ordinary error (encrypted, cannot be opened) comes back with the same text as in-process.
     pub fn extract(&self, pdf: &[u8]) -> Result<Extracted> {
-        let bytes = self.run_job("extract", "", pdf)?;
-        Extracted::from_wire(&bytes).map_err(|_| Error::new(CRASH_MSG))
+        match self.run_job("extract", "", pdf)? {
+            JobOutput::Complete(bytes) => Extracted::from_wire(&bytes).map_err(|_| Error::new(CRASH_MSG)),
+            JobOutput::TimedOut => Err(Error::new(TIMEOUT_MSG)),
+        }
     }
 
-    /// [`compress_pdf`] in a child process, with the same time and memory limits as reading. A PDF that crashes MuPDF, runs out of
-    /// time or memory makes this one book fail (the error text is the same as for reading); the parent is never touched.
+    /// [`compress_pdf`] in a child process, with the same time and memory limits as reading. A timeout keeps the original PDF
+    /// unchanged so ingestion can continue; extraction still has to succeed. Crashes and other child failures remain errors.
     pub fn compress(&self, pdf: &[u8], c: &Compression) -> Result<(Vec<u8>, CompressionOutcome)> {
         let arg = serde_json::to_string(c).map_err(|e| Error::ctx("compression settings", e))?;
-        let bytes = self.run_job("compress", &arg, pdf)?;
-        decode_compressed(&bytes).ok_or_else(|| Error::new(CRASH_MSG))
+        match self.run_job("compress", &arg, pdf)? {
+            JobOutput::Complete(bytes) => decode_compressed(&bytes).ok_or_else(|| Error::new(CRASH_MSG)),
+            JobOutput::TimedOut => Ok((pdf.to_vec(), CompressionOutcome::kept(c, pdf.len(), "timed out", None))),
+        }
     }
 
     /// Run `job` in the child on `pdf`; the bytes it wrote on success.
-    fn run_job(&self, job: &str, arg: &str, pdf: &[u8]) -> Result<Vec<u8>> {
+    fn run_job(&self, job: &str, arg: &str, pdf: &[u8]) -> Result<JobOutput> {
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let dir = self.tmp_dir.join(format!("extract-{}-{}-{nanos}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
@@ -115,7 +125,7 @@ impl ChildExtractor {
                 Ok(None) if Instant::now() >= deadline => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(Error::new(TIMEOUT_MSG));
+                    return Ok(JobOutput::TimedOut);
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                 Err(_) => {
@@ -126,7 +136,7 @@ impl ChildExtractor {
             }
         };
         if status.success() {
-            return std::fs::read(&output).map_err(|_| Error::new(CRASH_MSG));
+            return std::fs::read(&output).map(JobOutput::Complete).map_err(|_| Error::new(CRASH_MSG));
         }
         if status.code() == Some(EXIT_ERROR) {
             if let Ok(m) = std::fs::read_to_string(dir.join("out.err")) {

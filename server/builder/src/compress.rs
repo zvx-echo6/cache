@@ -161,7 +161,7 @@ pub struct CompressionOutcome {
 }
 
 impl CompressionOutcome {
-    fn kept(c: &Compression, size: usize, why: impl Into<String>, psnr: Option<f64>) -> CompressionOutcome {
+    pub(crate) fn kept(c: &Compression, size: usize, why: impl Into<String>, psnr: Option<f64>) -> CompressionOutcome {
         CompressionOutcome {
             original_size: size as u64,
             stored_size: size as u64,

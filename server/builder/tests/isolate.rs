@@ -108,3 +108,41 @@ fn the_time_and_memory_limits_scale_with_the_file() {
     assert!(e.memory_for(5 << 20) > (2u64 << 30));
     assert_eq!(e.memory_for(usize::MAX >> 4), 8u64 << 30);
 }
+
+#[test]
+fn compression_timeout_keeps_the_original_and_does_not_stop_the_next_book() {
+    for level in ["lossless", "smaller_scans", "smaller_scans:high", "smaller_scans:smallest"] {
+        let (mut e, tmp) = extractor(&format!("compress-timeout-{}", level.replace(':', "-")));
+        let settings = cache_builder::compress::Compression::parse(level).unwrap();
+        let pdf = sample();
+        e.fault = Some("hang".into());
+        e.timeout = Some(Duration::from_millis(500));
+        let started = Instant::now();
+        let (stored, outcome) = e.compress(&pdf, &settings).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(stored, pdf, "a timeout must preserve every original byte");
+        assert_eq!(outcome.original_size, pdf.len() as u64);
+        assert_eq!(outcome.stored_size, pdf.len() as u64);
+        assert!(outcome.kept_original);
+        assert_eq!(outcome.kept_reason.as_deref(), Some("timed out"));
+        assert_eq!(outcome.level, settings.level.name());
+        assert_eq!(outcome.preset.as_deref(), settings.effective_preset().map(|preset| preset.name()));
+        assert_eq!(outcome.psnr_min, None);
+        gone(&tmp);
+
+        e.fault = None;
+        e.timeout = None;
+        assert_eq!(e.extract(&stored).unwrap(), extract_pdf(&pdf).unwrap());
+        assert!(e.compress(&sample(), &settings).is_ok());
+        gone(&tmp);
+    }
+}
+
+#[test]
+fn compression_child_failure_is_not_mistaken_for_a_timeout() {
+    let (mut e, tmp) = extractor("compress-exit");
+    e.fault = Some("exit".into());
+    let settings = cache_builder::compress::Compression::LOSSLESS;
+    assert_eq!(e.compress(&sample(), &settings).unwrap_err().0, CRASH_MSG);
+    gone(&tmp);
+}

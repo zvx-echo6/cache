@@ -534,6 +534,34 @@ mod tests {
     }
 
     #[test]
+    fn reserved_and_future_events_do_not_hide_known_events_or_change_resolution() {
+        let expected = vec![
+            ev(1, "d1", place("x", "210")),
+            ev(2, "d1", assign("x", "210", 1)),
+            ev(10, "d1", Kind::Title { doc: "x".into(), title: "Water handbook".into() }),
+        ];
+        let mut text = format!("{}\n{}\n", expected[0].to_line(), expected[1].to_line());
+        for name in ["folder", "locate", "unlocate", "future_event"] {
+            let event = serde_json::json!({"v": 1, "at": 3, "dev": "d1", "ev": name, "doc": "x", "future": true});
+            text.push_str(&event.to_string());
+            text.push('\n');
+        }
+        text.push_str(&expected[2].to_line());
+        text.push('\n');
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("log");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("d1.jsonl"), text).unwrap();
+        let set = read_logs(&dir).unwrap();
+        assert_eq!(set.skipped, 4);
+        assert_eq!(set.events, expected);
+        let resolved = resolve(&set.events);
+        assert_eq!(call(&resolved, "x").as_deref(), Some("CDS 210-001"));
+        assert_eq!(resolved.doc("x").unwrap().title.as_deref(), Some("Water handbook"));
+    }
+
+    #[test]
     fn a_torn_last_line_is_skipped_and_the_next_append_does_not_glue_to_it() {
         let a = ev(1, "d1", place("x", "210")).to_line();
         let b = ev(2, "d1", assign("x", "210", 1)).to_line();

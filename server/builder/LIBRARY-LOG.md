@@ -70,6 +70,12 @@ The events:
 Removing a *file* from a device follows the offload rule (only when the person asks, and a live check confirms another device holds a verified copy). It is not a log
 event, because which files a device holds is per device.
 
+### Reserved event names
+
+`folder`, `locate` and `unlocate` are reserved for linked-folder support. They are not emitted or interpreted yet; their payloads will be
+specified with that feature. Readers skip these names and any other unknown `ev`, continue reading later known events, and leave the original
+log bytes intact. Unknown events must not hide known events or change their resolved shelves, call numbers or titles.
+
 ### Writing
 
 - **Atomic lines.** An append builds all its lines first and writes them in one `write` to a file opened for append, then flushes to disk (`fsync`).
