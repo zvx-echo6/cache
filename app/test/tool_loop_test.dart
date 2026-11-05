@@ -105,6 +105,20 @@ void main() {
       expect(backend.requests, baseline.requests);
     });
 
+    test('a cancelled handoff stays cancelled after another turn starts', () async {
+      final gate = Completer<void>();
+      var calls = 0;
+      final backend = FakeBackend([(_) => answer('Answer.')]);
+      final loop = ToolLoop(backend: backend, tools: const [], beforeGenerate: () => calls++ == 0 ? gate.future : Future<void>.value());
+      final first = loop.ask('first').toList();
+      await Future<void>.delayed(Duration.zero);
+      loop.stop();
+      await loop.ask('second').toList();
+      gate.complete();
+      await first;
+      expect(backend.requests, hasLength(1));
+    });
+
     test('cancellation during memory handoff prevents generation', () async {
       final gate = Completer<void>();
       final backend = FakeBackend([(_) => answer('Answer.')]);

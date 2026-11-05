@@ -131,6 +131,7 @@ class ToolLoop {
   /// training captures (the model's parser numbers each message from call_0, so the loop gives the ids).
   int _nextCall = 1;
   bool _stopped = false;
+  int _turnEpoch = 0;
 
   /// Every result returned in this conversation, by ID.
   Map<int, NumberedResult> get results => Map.unmodifiable(_results);
@@ -140,6 +141,7 @@ class ToolLoop {
 
   void stop() {
     _stopped = true;
+    _turnEpoch++;
     backend.stop();
   }
 
@@ -200,6 +202,7 @@ class ToolLoop {
 
   Stream<TurnUpdate> _turn({({String name, String arguments})? seed}) async* {
     _stopped = false;
+    final epoch = ++_turnEpoch;
     var rounds = 0;
     var modelRequests = 0;
     var promptTokens = 0, generatedTokens = 0;
@@ -221,7 +224,7 @@ class ToolLoop {
         final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
 
         await beforeGenerate?.call();
-        if (_stopped) return;
+        if (_stopped || epoch != _turnEpoch) return;
         final roundClock = Stopwatch()..start();
         final requestNumber = ++modelRequests;
         int? firstTextMs;
