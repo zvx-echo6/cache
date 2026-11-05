@@ -211,6 +211,8 @@ class _CompressionSettingsPageState extends State<CompressionSettingsPage> {
                 children: [
                   Text('These defaults are used when you add multiple PDFs or use the drop folder.', style: TextStyle(color: context.t.secondary)),
                   const SizedBox(height: 16),
+                  const Text('Cache checks file size and page quality. If smaller scans do not pass the checks, it tries keeping the pictures unchanged. If it cannot make a suitable smaller copy, it stores the original. Each book shows the result.'),
+                  const SizedBox(height: 16),
                   const Text('This setting applies to this device. Existing books are unchanged.', key: ValueKey('compression-footnote')),
                 ],
               ),

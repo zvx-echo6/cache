@@ -220,7 +220,7 @@ class _BuildPageState extends State<BuildPage> {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('A new library', style: TextStyle(fontSize: 15, color: k.text)),
-                    const Small('Give it a name you will recognise on your phone.'),
+                    const Small('Give it a name you will recognise.'),
                   ]),
                 ),
               ]),
@@ -322,8 +322,11 @@ class _BuildPageState extends State<BuildPage> {
           ],
           Small(_preparing ? 'Reading your default…' : _needsChoice ? 'Choose the setting for this book, then add it.' : _valid ? 'Adding them now.' : (_newLibrary ? 'Name the library, or choose one you built, and they are added.' : 'Choose where they go.')),
           Row(children: [
-            TextButton(key: const ValueKey('pending-start'), onPressed: _valid && !_starting && !_preparing ? () => _start(confirmed: true) : null, child: Text(_needsChoice ? 'Add to library' : n == 1 ? 'Add 1 PDF' : 'Add ${thousands(n)} PDFs')),
-            TextButton(key: const ValueKey('pending-clear'), onPressed: () => setState(() { ++_selection; _pending = const []; _needsChoice = false; _preparing = false; }), child: const Text('Not these')),
+            if (_needsChoice)
+              FilledButton(key: const ValueKey('pending-start'), onPressed: _valid && !_starting && !_preparing ? () => _start(confirmed: true) : null, child: const Text('Add to library'))
+            else
+              TextButton(key: const ValueKey('pending-start'), onPressed: _valid && !_starting && !_preparing ? () => _start(confirmed: true) : null, child: Text(_needsChoice ? 'Add to library' : n == 1 ? 'Add 1 PDF' : 'Add ${thousands(n)} PDFs')),
+            TextButton(key: const ValueKey('pending-clear'), onPressed: () => setState(() { ++_selection; _pending = const []; _needsChoice = false; _preparing = false; }), child: Text(_needsChoice ? 'Cancel' : 'Not these')),
           ]),
         ],
       ),
