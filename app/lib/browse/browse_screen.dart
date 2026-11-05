@@ -26,6 +26,7 @@ import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'reader_screen.dart';
+import 'library_passage_screen.dart';
 import 'web/build_common.dart' show buildBadge, builtLibraryLine;
 import 'web/build_library_page.dart' show BuiltLibraryPage;
 import 'web/build_page.dart' show BuildPage;
@@ -111,6 +112,14 @@ class _BrowseScreenState extends State<BrowseScreen> {
     ..showSnackBar(SnackBar(content: Text(text)));
 
   void _openAddress(String address, {String? quote}) {
+    if (address.startsWith('lib:')) {
+      openDetail(
+        _pane ?? context,
+        key: 'library-passage:$address',
+        builder: (_) => LibraryPassageScreen(sources: sources, address: address),
+      );
+      return;
+    }
     final id = zimIdOfAddress(address);
     final z = id == null ? null : sources.zimById(id);
     if (z == null) {
