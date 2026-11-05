@@ -360,6 +360,67 @@ class DropState {
       );
 }
 
+
+class CompressionChoice {
+  const CompressionChoice._(this.level, this.preset);
+
+  static const off = CompressionChoice._('off', null);
+  static const lossless = CompressionChoice._('lossless', null);
+  static const high = CompressionChoice._('smaller_scans', 'high');
+  static const balanced = CompressionChoice._('smaller_scans', 'balanced');
+  static const smallest = CompressionChoice._('smaller_scans', 'smallest');
+
+  final String level;
+  final String? preset;
+  String get label => switch (level) {
+        'off' => 'Off',
+        'lossless' => 'Smaller file, pages unchanged',
+        _ => 'Smaller scans',
+      };
+
+  String get summaryLabel => level == 'smaller_scans'
+      ? 'Smaller scans: ${switch (preset) { 'high' => 'High quality', 'smallest' => 'Smallest', _ => 'Balanced' }}'
+      : label;
+
+  Map<String, dynamic> toJson() => {'level': level, if (preset != null) 'preset': preset};
+
+  static CompressionChoice fromJson(Object? value) {
+    if (value is! Map) throw const FormatException('Invalid compression choice');
+    final level = value['level'];
+    final preset = value['preset'];
+    if (level == 'off') return off;
+    if (level == 'lossless') return lossless;
+    if (level == 'smaller_scans') {
+      return switch (preset) { 'high' => high, 'balanced' || null => balanced, 'smallest' => smallest, _ => throw const FormatException('Invalid compression preset') };
+    }
+    throw const FormatException('Invalid compression level');
+  }
+
+  @override
+  bool operator ==(Object other) => other is CompressionChoice && other.level == level && other.preset == preset;
+  @override
+  int get hashCode => Object.hash(level, preset);
+}
+
+class BuildCompressionSettings {
+  const BuildCompressionSettings({this.compression = CompressionChoice.lossless, this.askWhenOne = true});
+  final CompressionChoice compression;
+  final bool askWhenOne;
+
+  factory BuildCompressionSettings.fromJson(Map<String, dynamic> json) => BuildCompressionSettings(
+        compression: CompressionChoice.fromJson(json['compression']),
+        askWhenOne: json['ask_when_one'] == true,
+      );
+
+  Map<String, dynamic> toJson() => {'compression': compression.toJson(), 'ask_when_one': askWhenOne};
+}
+
+/// Optional settings API so existing BuildApi fakes do not need new methods.
+abstract interface class BuildCompressionApi implements BuildApi {
+  Future<BuildCompressionSettings> getCompressionSettings();
+  Future<BuildCompressionSettings> putCompressionSettings(BuildCompressionSettings settings);
+}
+
 /// What the browser can ask of the device about building libraries from PDFs (`/api/build/...`). A class so tests can answer for it.
 abstract class BuildApi {
   Future<List<BuildLibrary>> libraries();
@@ -415,7 +476,7 @@ class BuildClass {
 }
 
 /// The browser's [BuildApi]: Cache for Linux's `/api/build/...`, same origin, so the session goes along.
-class HttpBuildApi implements BuildFilingApi {
+class HttpBuildApi implements BuildFilingApi, BuildCompressionApi {
   HttpBuildApi({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
@@ -505,6 +566,28 @@ class HttpBuildApi implements BuildFilingApi {
 
   @override
   Future<BuildQueue> dismiss(String itemId) async => BuildQueue.fromJson(_map(await _call('DELETE', '/api/build/queue/${_id(itemId)}')));
+
+  @override
+  Future<BuildCompressionSettings> getCompressionSettings() async {
+    try {
+      return BuildCompressionSettings.fromJson(_map(await _call('GET', '/api/build/settings')));
+    } on DeviceException {
+      rethrow;
+    } catch (_) {
+      throw const DeviceException('failed', 'This device answered with something unexpected.');
+    }
+  }
+
+  @override
+  Future<BuildCompressionSettings> putCompressionSettings(BuildCompressionSettings settings) async {
+    try {
+      return BuildCompressionSettings.fromJson(_map(await _call('PUT', '/api/build/settings', body: settings.toJson())));
+    } on DeviceException {
+      rethrow;
+    } catch (_) {
+      throw const DeviceException('failed', 'This device answered with something unexpected.');
+    }
+  }
 
   @override
   Future<DropState> drop() async => DropState.fromJson(_map(await _call('GET', '/api/build/drop')));

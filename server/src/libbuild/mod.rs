@@ -1987,7 +1987,7 @@ impl BuildService {
                 }
             }
         }
-        let compression = compression_from_query(query)?;
+        let compression = Some(compression_from_query(query)?.unwrap_or_else(|| self.drop_compression()));
         let name = crate::fetch::query_param(query, "name").ok_or_else(|| err(400, "invalid_name", "A file name is needed."))?;
         let name = sanitize_name(&name, "pdf").map_err(|m| err(400, "invalid_name", m))?;
         let len = content_length.ok_or_else(|| err(411, "length_required", "The upload needs a Content-Length."))?;

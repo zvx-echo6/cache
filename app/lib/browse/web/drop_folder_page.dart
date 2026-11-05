@@ -9,6 +9,7 @@ import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_state.dart';
+import 'compression_default_link.dart';
 import 'build_text.dart';
 import 'device_api.dart' show DeviceException;
 
@@ -98,6 +99,7 @@ class _DropFolderPageState extends State<DropFolderPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        CompressionDefaultLink(build: c),
         if (err != null) _banner(context, err),
         PanelCard(
           key: const ValueKey('drop-status'),
@@ -245,6 +247,7 @@ class _DropFolderPageState extends State<DropFolderPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        CompressionDefaultLink(build: c),
         const GroupLabel('Folder on this device'),
         TextField(
           key: const ValueKey('drop-folder-field'),

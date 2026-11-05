@@ -10,6 +10,7 @@ import 'build_text.dart';
 import 'device_library.dart';
 import 'device_widgets.dart' show TransferCard;
 import 'drop_folder_page.dart';
+import 'compression_default_link.dart';
 
 /// What the building adds above the Library list: the PDFs going up, and a card for each library being built (its books done, the time
 /// left, Pause or Resume). A tap on a card opens the library.
@@ -112,6 +113,20 @@ List<Widget> buildAddRows(BuildContext context, DeviceLibrary device) {
       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DropFolderPage(build: b))),
     ),
     const Padding(padding: EdgeInsets.fromLTRB(6, 4, 6, 6), child: Small('Dropping PDFs anywhere on Library opens Build from your PDFs too.')),
+    if (b.api is BuildCompressionApi) ExpansionTile(
+      key: const ValueKey('library-build-advanced'),
+      title: const Text('Advanced'),
+      children: [
+        _AddRow(
+          rowKey: const ValueKey('compression-defaults'),
+          icon: Icons.picture_as_pdf_outlined,
+          title: 'Making PDFs smaller',
+          subtitle: 'Choose the default for books added to this device.',
+          onTap: () => openCompressionDefaults(context, b),
+        ),
+      ],
+    ),
+
   ];
 }
 

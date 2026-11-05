@@ -11,6 +11,8 @@ import 'build_api.dart';
 import 'build_common.dart';
 import 'build_library_page.dart';
 import 'build_state.dart';
+import 'compression_default_link.dart';
+import 'compression_settings_page.dart';
 import 'build_text.dart';
 import 'device_api.dart' show DeviceException;
 import 'local_files.dart';
@@ -55,6 +57,10 @@ class _BuildPageState extends State<BuildPage> {
   BuildUpload? _active;
   String? _error;
   bool _starting = false;
+  bool _preparing = false;
+  bool _needsChoice = false;
+  CompressionChoice? _compression;
+  int _selection = 0;
 
   BuildController get c => widget.build;
 
@@ -90,24 +96,43 @@ class _BuildPageState extends State<BuildPage> {
 
   bool get _valid => _newLibrary ? (_name.text.trim().isNotEmpty && _taken == null) : (_target != null);
 
-  void _take(List<LocalFile> files) {
+  void _take(List<LocalFile> files) => unawaited(_prepare(files));
+
+  Future<void> _prepare(List<LocalFile> files) async {
     if (!mounted || _active != null) return;
+    final selection = ++_selection;
     setState(() {
       _pending = files;
       _error = null;
+      _preparing = true;
+      _needsChoice = false;
+      _compression = null;
     });
-    if (_valid) unawaited(_start());
+    try {
+      if (c.api is BuildCompressionApi) {
+        final settings = await c.loadCompressionSettings();
+        if (!mounted || selection != _selection) return;
+        _compression = settings.compression;
+        _needsChoice = settings.askWhenOne && splitPdfs(files).pdfs.length == 1;
+      }
+      if (!mounted || selection != _selection) return;
+      setState(() => _preparing = false);
+      if (_valid && !_needsChoice) await _start();
+    } on DeviceException catch (e) {
+      if (mounted && selection == _selection) setState(() { _preparing = false; _error = callWords(e); });
+    }
   }
 
-  Future<void> _start() async {
-    if (_pending.isEmpty || !_valid || _starting) return;
+  Future<void> _start({bool confirmed = false}) async {
+    if (_pending.isEmpty || !_valid || _starting || _preparing || (_needsChoice && !confirmed)) return;
     final files = _pending;
+    if (c.api is BuildCompressionApi && _compression == null) { await _prepare(files); return; }
     setState(() {
       _starting = true;
       _error = null;
     });
     try {
-      final u = await c.addFiles(files, libraryId: _newLibrary ? null : _target, newTitle: _newLibrary ? _name.text.trim() : null);
+      final u = await c.addFiles(files, libraryId: _newLibrary ? null : _target, newTitle: _newLibrary ? _name.text.trim() : null, compression: _compression);
       if (!mounted) return;
       setState(() {
         _starting = false;
@@ -147,7 +172,7 @@ class _BuildPageState extends State<BuildPage> {
   // ---- the form
 
   Widget _form(BuildContext context) {
-    final left = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_where(context)]);
+    final left = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_where(context), CompressionDefaultLink(build: c)]);
     final right = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_blocked(context), _zone(context), const SizedBox(height: 14), _notes(context)]);
     return ScrollingTwoColumn(left: left, right: right);
   }
@@ -286,12 +311,19 @@ class _BuildPageState extends State<BuildPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('$n ${n == 1 ? 'PDF is' : 'PDFs are'} ready · ${formatBytes(totalBytes(split.pdfs))}', style: TextStyle(fontSize: 15, color: context.t.text)),
+          if (n == 1) Text(split.pdfs.single.name),
           if (split.leftOutWords != null) Small(split.leftOutWords!),
           const SizedBox(height: 4),
-          Small(_valid ? 'Adding them now.' : (_newLibrary ? 'Name the library, or choose one you built, and they are added.' : 'Choose where they go.')),
+          if (_needsChoice && _compression != null) ...[
+            const Text("Make this book's file smaller?", style: TextStyle(fontWeight: FontWeight.w600)),
+            const Small('For this book only.'),
+            CompressionChoiceControl(value: _compression!, onChanged: (value) => setState(() => _compression = value)),
+            if (c.compressionSettings?.compression != _compression) const Small('Different from your default'),
+          ],
+          Small(_preparing ? 'Reading your default…' : _needsChoice ? 'Choose the setting for this book, then add it.' : _valid ? 'Adding them now.' : (_newLibrary ? 'Name the library, or choose one you built, and they are added.' : 'Choose where they go.')),
           Row(children: [
-            TextButton(key: const ValueKey('pending-start'), onPressed: _valid && !_starting ? _start : null, child: Text(n == 1 ? 'Add 1 PDF' : 'Add ${thousands(n)} PDFs')),
-            TextButton(key: const ValueKey('pending-clear'), onPressed: () => setState(() => _pending = const []), child: const Text('Not these')),
+            TextButton(key: const ValueKey('pending-start'), onPressed: _valid && !_starting && !_preparing ? () => _start(confirmed: true) : null, child: Text(_needsChoice ? 'Add to library' : n == 1 ? 'Add 1 PDF' : 'Add ${thousands(n)} PDFs')),
+            TextButton(key: const ValueKey('pending-clear'), onPressed: () => setState(() { ++_selection; _pending = const []; _needsChoice = false; _preparing = false; }), child: const Text('Not these')),
           ]),
         ],
       ),
@@ -300,6 +332,14 @@ class _BuildPageState extends State<BuildPage> {
 
   Widget _zone(BuildContext context) {
     final k = context.t;
+    if (_needsChoice && _pending.isNotEmpty) return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('2 · Add your PDF'),
+        _pendingCard(context),
+        if (_error != null) Text(_error!, style: TextStyle(color: k.warning)),
+      ],
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

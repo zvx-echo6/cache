@@ -32,10 +32,15 @@ pub struct DropSettings {
     pub enabled: bool,
     #[serde(default)]
     pub library_id: Option<String>,
-    /// How files from the folder are compressed when they are stored (off unless chosen).
-    #[serde(default)]
+    /// Shared default compression for uploads and files from the drop folder.
+    #[serde(default = "default_compression")]
     pub compression: Compression,
+    #[serde(default = "default_ask_when_one")]
+    pub ask_when_one: bool,
 }
+
+fn default_compression() -> Compression { Compression::LOSSLESS }
+fn default_ask_when_one() -> bool { true }
 
 #[derive(Clone, Default)]
 struct Status {
@@ -57,7 +62,7 @@ pub struct DropState {
 
 impl DropState {
     pub fn load(data: &Path) -> DropState {
-        let default = DropSettings { folder: data.join("drop").to_string_lossy().into_owned(), enabled: false, library_id: None, compression: Compression::OFF };
+        let default = DropSettings { folder: data.join("drop").to_string_lossy().into_owned(), enabled: false, library_id: None, compression: Compression::LOSSLESS, ask_when_one: true };
         let settings = std::fs::read_to_string(data.join("build/drop.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(default);
         DropState {
             settings: Mutex::new(settings),
@@ -186,8 +191,40 @@ fn has_gzip_magic(p: &Path) -> bool {
 }
 
 impl BuildService {
-    pub(crate) fn drop_compression(&self) -> Compression {
-        self.drop_settings().compression
+    pub(crate) fn drop_compression(&self) -> Compression { self.drop_settings().compression }
+
+    pub fn settings_view(&self) -> Value {
+        let s = self.drop_settings();
+        json!({"compression": s.compression, "ask_when_one": s.ask_when_one})
+    }
+
+    pub fn settings_put(&self, body: &[u8]) -> Result<Value, ApiErr> {
+        let v: Value = serde_json::from_slice(body).map_err(|_| super::err(400, "bad_json", "the body is not JSON"))?;
+        let obj = v.as_object().ok_or_else(|| super::err(400, "invalid", "the body is an object of settings"))?;
+        if obj.keys().any(|k| !matches!(k.as_str(), "compression" | "ask_when_one")) {
+            return Err(super::err(400, "invalid", "only compression and ask_when_one can be updated"));
+        }
+        let mut guard = lock(&self.drop.settings);
+        let mut s = guard.clone();
+        if let Some(c) = obj.get("compression") {
+            let c_obj = c.as_object().ok_or_else(|| super::err(400, "invalid", "compression is an object"))?;
+            if !c_obj.get("level").is_some_and(Value::is_string) {
+                return Err(super::err(400, "invalid", "compression.level is required"));
+            }
+            if c_obj.keys().any(|k| !matches!(k.as_str(), "level" | "preset")) {
+                return Err(super::err(400, "invalid", "compression has only level and preset"));
+            }
+            s.compression = serde_json::from_value::<Compression>(c.clone()).ok()
+                .and_then(|c| Compression::from_parts(c.level, c.preset.map(|p| p.name())).ok())
+                .ok_or_else(|| super::err(400, "invalid", "invalid compression choice"))?;
+        }
+        if let Some(a) = obj.get("ask_when_one") {
+            s.ask_when_one = a.as_bool().ok_or_else(|| super::err(400, "invalid", "ask_when_one is true or false"))?;
+        }
+        super::write_json(&self.data.join("build/drop.json"), &s).map_err(|_| super::err(500, "server_error", "could not save the settings"))?;
+        *guard = s;
+        drop(guard);
+        Ok(self.settings_view())
     }
 
     fn drop_settings(&self) -> DropSettings {
@@ -230,7 +267,8 @@ impl BuildService {
     /// `PUT /api/build/drop {folder?, enabled?, library_id?}`: any of the three; the rest stay.
     pub fn drop_put(&self, body: &[u8]) -> Result<Value, ApiErr> {
         let v: Value = serde_json::from_slice(body).map_err(|_| super::err(400, "bad_json", "the body is not JSON"))?;
-        let mut s = self.drop_settings();
+        let mut guard = lock(&self.drop.settings);
+        let mut s = guard.clone();
         if let Some(f) = v.get("folder") {
             let f = f.as_str().ok_or_else(|| super::err(400, "invalid", "\"folder\" is a path"))?.trim();
             let p = Path::new(f);
@@ -256,8 +294,10 @@ impl BuildService {
                 .and_then(|c| Compression::from_parts(c.level, c.preset.map(|p| p.name())).ok())
                 .ok_or_else(|| super::err(400, "invalid", "\"compression\" is {\"level\": off|lossless|smaller_scans, \"preset\": high|balanced|smallest}"))?;
         }
+        if let Some(a) = v.get("ask_when_one") { s.ask_when_one = a.as_bool().ok_or_else(|| super::err(400, "invalid", "ask_when_one is true or false"))?; }
         super::write_json(&self.data.join("build/drop.json"), &s).map_err(|e| super::err(500, "server_error", format!("could not save the settings: {e}")))?;
-        *lock(&self.drop.settings) = s.clone();
+        *guard = s.clone();
+        drop(guard);
         if s.enabled {
             // The person chose this folder, so it is made; a failure shows in the status at the next check.
             let root = PathBuf::from(&s.folder);
@@ -448,7 +488,8 @@ impl BuildService {
                         no_library = true;
                         continue;
                     };
-                    let item = Item::new(random_hex(), lib, e.path.to_string_lossy().into_owned(), e.name.clone(), e.size, Origin::Drop);
+                    let mut item = Item::new(random_hex(), lib, e.path.to_string_lossy().into_owned(), e.name.clone(), e.size, Origin::Drop);
+                    item.compression = Some(s.compression);
                     // an older record of the same path (a file dropped again) goes
                     {
                         let mut st = lock(&self.st);

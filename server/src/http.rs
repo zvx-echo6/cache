@@ -292,6 +292,8 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             blocking(move || b.dismiss(&id)).await
         }
         ("GET", ["drop"]) => blocking(move || Ok(b.drop_view())).await,
+        ("GET", ["settings"]) => blocking(move || Ok(b.settings_view())).await,
+        ("PUT", ["settings"]) => blocking(move || b.settings_put(&body_owned)).await,
         ("PUT", ["drop"]) => blocking(move || b.drop_put(&body_owned)).await,
         ("POST", ["drop", "check"]) => blocking(move || Ok(b.drop_check())).await,
         ("POST", ["drop", "retry"]) => blocking(move || b.drop_retry(&body_owned)).await,

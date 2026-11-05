@@ -9,6 +9,7 @@ import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_compression.dart';
+import 'compression_default_link.dart';
 import 'build_state.dart';
 import 'build_text.dart';
 import 'build_shelves.dart';
@@ -81,7 +82,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
 
   Future<void> _add(List<LocalFile> files) async {
     try {
-      final u = await c.addFiles(files, libraryId: id);
+      final choice = await choosePdfCompression(context, c, files);
+      if (choice.cancelled || !mounted) return;
+      final u = await c.addFiles(files, libraryId: id, compression: choice.choice);
       if (u != null && mounted) say(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.');
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));
@@ -659,7 +662,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     c.sink = saved;
     if (file == null || !mounted) return;
     try {
-      final u = await c.replaceBook(lib.id, b, file);
+      final choice = await choosePdfCompression(context, c, [file]);
+      if (choice.cancelled || !mounted) return;
+      final u = await c.replaceBook(lib.id, b, file, compression: choice.choice);
       if (u != null && mounted) say(context, 'Uploading the new copy of ${b.title}. Keep this tab open.');
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));

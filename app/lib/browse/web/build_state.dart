@@ -14,7 +14,9 @@ const String kBuildSeenFile = 'build-library.json';
 
 /// One PDF in an upload.
 class UploadEntry {
-  UploadEntry(this.file) : size = file.size;
+  UploadEntry(this.file, {this.compression}) : size = file.size;
+
+  final CompressionChoice? compression;
 
   final LocalFile file;
   final int size;
@@ -117,6 +119,8 @@ class BuildController extends ChangeNotifier {
   List<BuildLibrary> libraries = const [];
   BuildQueue queue = const BuildQueue();
   bool loaded = false;
+
+  BuildCompressionSettings? compressionSettings;
 
   /// The problem to show about the device itself (it could not be reached), or null.
   String? problem;
@@ -266,6 +270,28 @@ class BuildController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<BuildCompressionSettings> loadCompressionSettings() async {
+    final apiWithSettings = api;
+    if (apiWithSettings is! BuildCompressionApi) {
+      throw const DeviceException('unsupported', 'PDF settings are not available on this device.');
+    }
+    final settings = await apiWithSettings.getCompressionSettings();
+    compressionSettings = settings;
+    if (!_disposed) notifyListeners();
+    return settings;
+  }
+
+  Future<BuildCompressionSettings> saveCompressionSettings(BuildCompressionSettings settings) async {
+    final apiWithSettings = api;
+    if (apiWithSettings is! BuildCompressionApi) {
+      throw const DeviceException('unsupported', 'PDF settings are not available on this device.');
+    }
+    final saved = await apiWithSettings.putCompressionSettings(settings);
+    compressionSettings = saved;
+    if (!_disposed) notifyListeners();
+    return saved;
+  }
+
   // ---- libraries and books
 
   BuildLibrary? library(String id) => libraries.where((l) => l.id == id).firstOrNull;
@@ -374,7 +400,8 @@ class BuildController extends ChangeNotifier {
   /// Sends [files] to the library [libraryId], or to a new library called [newTitle] (made first). Only PDFs go; the others are named
   /// in [BuildUpload.leftOut]. Returns the upload, or null when there was nothing to send (see [notice]). A name that is taken or other
   /// refusal of the device throws a [DeviceException].
-  Future<BuildUpload?> addFiles(List<LocalFile> files, {String? libraryId, String? newTitle}) async {
+  Future<BuildUpload?> addFiles(List<LocalFile> files, {String? libraryId, String? newTitle, CompressionChoice? compression}) async {
+    final choice = compression ?? compressionSettings?.compression;
     final up = uploader;
     if (up == null) return null;
     final split = splitPdfs(files);
@@ -387,7 +414,7 @@ class BuildController extends ChangeNotifier {
     final running = upload;
     if (running != null && running.running) {
       if (libraryId != null && running.libraryId == libraryId && running.replaceDocId == null) {
-        running.entries.addAll([for (final f in split.pdfs) UploadEntry(f)]);
+        running.entries.addAll([for (final f in split.pdfs) UploadEntry(f, compression: choice)]);
         _pump(running);
         notifyListeners();
         return running;
@@ -407,7 +434,7 @@ class BuildController extends ChangeNotifier {
       id = libraryId;
       title = library(libraryId)?.title ?? '';
     }
-    final u = upload = BuildUpload(libraryId: id, libraryTitle: title, newLibrary: fresh, entries: [for (final f in split.pdfs) UploadEntry(f)], leftOut: split.leftOut);
+    final u = upload = BuildUpload(libraryId: id, libraryTitle: title, newLibrary: fresh, entries: [for (final f in split.pdfs) UploadEntry(f, compression: choice)], leftOut: split.leftOut);
     _leaveWarning(true);
     notifyListeners();
     _pump(u);
@@ -415,7 +442,8 @@ class BuildController extends ChangeNotifier {
   }
 
   /// Sends one new copy of a book of [libraryId].
-  Future<BuildUpload?> replaceBook(String libraryId, BuildBook book, LocalFile file) async {
+  Future<BuildUpload?> replaceBook(String libraryId, BuildBook book, LocalFile file, {CompressionChoice? compression}) async {
+    final choice = compression ?? compressionSettings?.compression;
     final up = uploader;
     if (up == null) return null;
     notice = null;
@@ -433,7 +461,7 @@ class BuildController extends ChangeNotifier {
       libraryId: libraryId,
       libraryTitle: library(libraryId)?.title ?? '',
       newLibrary: false,
-      entries: [UploadEntry(file)],
+      entries: [UploadEntry(file, compression: choice)],
       replaceDocId: book.id,
       replaceTitle: book.title,
     );
@@ -464,7 +492,9 @@ class BuildController extends ChangeNotifier {
       final url = u.replaceDocId != null
           ? '/api/build/libraries/${Uri.encodeComponent(u.libraryId)}/books/${Uri.encodeComponent(u.replaceDocId!)}/replace?name=$name'
           : '/api/build/upload?library_id=${Uri.encodeComponent(u.libraryId)}&name=$name';
-      unawaited(_send(u, next, up, url));
+      final choice = next.compression;
+      final compressionQuery = choice == null ? '' : '&compression=${choice.level}${choice.preset == null ? '' : '&preset=${choice.preset}'}';
+      unawaited(_send(u, next, up, url + compressionQuery));
     }
     if (u.entries.every((e) => e.state == 'done' || e.state == 'failed')) _end(u);
   }

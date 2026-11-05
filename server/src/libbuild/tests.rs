@@ -1839,12 +1839,13 @@ fn a_book_is_compressed_before_it_is_hashed_and_stored() {
 }
 
 #[test]
-fn a_book_with_no_compression_chosen_is_stored_as_it_arrived() {
+fn a_book_with_compression_explicitly_off_is_stored_as_it_arrived() {
     let d = TempDir::new("cmp2");
     let (svc, _) = rig(&d);
     let lib = new_lib(&svc, "Water systems");
     let pdf = book("tank", 6, Some("Tanks"));
     let a = add(&svc, &lib, "tanks.pdf", &pdf);
+    update_compression(&svc, &a, Some(Compression::OFF));
     drain(&svc);
     assert_eq!(state(&svc, &a), S::Done);
     let b = lock(&svc.st).libs[0].books[0].clone();
@@ -1865,4 +1866,67 @@ fn the_upload_query_and_the_drop_setting_choose_compression() {
 
 fn update_compression(svc: &BuildService, id: &str, c: Option<Compression>) {
     svc.update_item(id, |it| it.compression = c);
+}
+
+#[test]
+fn shared_compression_settings_default_and_persist_with_drop_settings() {
+    let d = TempDir::new("settings-default");
+    let (svc, _) = rig(&d);
+    assert_eq!(svc.settings_view(), json!({"compression": Compression::LOSSLESS, "ask_when_one": true}));
+    svc.settings_put(br#"{"ask_when_one":false}"#).unwrap();
+    let changed = json!({"level":"smaller_scans","preset":"balanced"});
+    svc.settings_put(&json!({"compression": changed}).to_string().into_bytes()).unwrap();
+    let (svc2, _) = rig(&d);
+    assert_eq!(svc2.settings_view()["ask_when_one"], json!(false));
+    assert_eq!(svc2.settings_view()["compression"]["level"], json!("smaller_scans"));
+    assert_eq!(svc2.drop_view()["settings"]["compression"]["level"], json!("smaller_scans"));
+}
+
+#[test]
+fn legacy_off_is_preserved_and_missing_ask_flag_defaults_true() {
+    let d = TempDir::new("settings-legacy");
+    std::fs::create_dir_all(d.0.join("build")).unwrap();
+    let off = serde_json::to_value(Compression::OFF).unwrap();
+    std::fs::write(d.0.join("build/drop.json"), json!({"folder": d.0.join("drop"), "enabled": false, "library_id": null, "compression": off}).to_string()).unwrap();
+    let (svc, _) = rig(&d);
+    assert_eq!(svc.settings_view()["compression"]["level"], json!("off"));
+    assert_eq!(svc.settings_view()["ask_when_one"], json!(true));
+    svc.settings_put(br#"{"ask_when_one":false}"#).unwrap();
+    assert_eq!(svc.settings_view()["compression"]["level"], json!("off"));
+}
+
+#[test]
+fn invalid_shared_settings_do_not_mutate_persisted_state() {
+    let d = TempDir::new("settings-invalid");
+    let (svc, _) = rig(&d);
+    svc.settings_put(br#"{"ask_when_one":false}"#).unwrap();
+    let before = std::fs::read(d.0.join("build/drop.json")).unwrap();
+    let invalid: [&[u8]; 6] = [br#"{"compression":"off"}"#, br#"{"ask_when_one":"false"}"#, br#"{"compression":{"level":"lossless","preset":"smallest"}}"#, br#"{"compression":{}}"#, br#"{"compression":{"preset":"high"}}"#, br#"{"unknown":true}"#];
+    for body in invalid {
+        assert_eq!(svc.settings_put(body).unwrap_err().status, 400);
+        assert_eq!(std::fs::read(d.0.join("build/drop.json")).unwrap(), before);
+    }
+}
+
+#[test]
+fn upload_compression_is_snapshotted_at_intake_and_explicit_choice_wins() {
+    let d = TempDir::new("settings-upload");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let pdf = make_pdf(&[text_page("river", 1, 100)], Some("River"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let default_id = rt.block_on(async {
+        let body = http_body_util::Full::new(bytes::Bytes::from(pdf.clone()));
+        let out = svc.upload(&lib, None, "name=default.pdf", Some(pdf.len() as u64), body).await.unwrap();
+        out["id"].as_str().unwrap().to_string()
+    });
+    assert_eq!(item(&svc, &default_id).compression, Some(Compression::LOSSLESS));
+    svc.settings_put(br#"{"compression":{"level":"off","preset":null}}"#).unwrap();
+    assert_eq!(item(&svc, &default_id).compression, Some(Compression::LOSSLESS));
+    let override_id = rt.block_on(async {
+        let body = http_body_util::Full::new(bytes::Bytes::from(pdf.clone()));
+        let out = svc.upload(&lib, None, "name=override.pdf&compression=off", Some(pdf.len() as u64), body).await.unwrap();
+        out["id"].as_str().unwrap().to_string()
+    });
+    assert_eq!(item(&svc, &override_id).compression, Some(Compression::OFF));
 }
