@@ -226,9 +226,9 @@ void main() {
       expect(find.byKey(const ValueKey('library-facts')), findsOneWidget);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(tester.getCenter(find.byKey(ValueKey('book-'+bookA.id))));
+      await mouse.moveTo(tester.getCenter(find.byKey(ValueKey('book-${bookA.id}'))));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(ValueKey('book-menu-'+bookA.id)));
+      await tester.tap(find.byKey(ValueKey('book-menu-${bookA.id}')));
 
       await tester.pumpAndSettle();
       await tester.tap(find.text('Book details'));

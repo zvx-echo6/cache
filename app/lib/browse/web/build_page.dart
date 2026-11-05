@@ -332,7 +332,8 @@ class _BuildPageState extends State<BuildPage> {
 
   Widget _zone(BuildContext context) {
     final k = context.t;
-    if (_needsChoice && _pending.isNotEmpty) return Column(
+    if (_needsChoice && _pending.isNotEmpty) {
+      return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const GroupLabel('2 · Add your PDF'),
@@ -340,6 +341,7 @@ class _BuildPageState extends State<BuildPage> {
         if (_error != null) Text(_error!, style: TextStyle(color: k.warning)),
       ],
     );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

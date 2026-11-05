@@ -1916,7 +1916,7 @@ fn upload_compression_is_snapshotted_at_intake_and_explicit_choice_wins() {
     let pdf = make_pdf(&[text_page("river", 1, 100)], Some("River"));
     let rt = tokio::runtime::Runtime::new().unwrap();
     let default_id = rt.block_on(async {
-        let body = http_body_util::Full::new(bytes::Bytes::from(pdf.clone()));
+        let body = http_body_util::Full::new(Bytes::from(pdf.clone()));
         let out = svc.upload(&lib, None, "name=default.pdf", Some(pdf.len() as u64), body).await.unwrap();
         out["id"].as_str().unwrap().to_string()
     });
@@ -1924,7 +1924,7 @@ fn upload_compression_is_snapshotted_at_intake_and_explicit_choice_wins() {
     svc.settings_put(br#"{"compression":{"level":"off","preset":null}}"#).unwrap();
     assert_eq!(item(&svc, &default_id).compression, Some(Compression::LOSSLESS));
     let override_id = rt.block_on(async {
-        let body = http_body_util::Full::new(bytes::Bytes::from(pdf.clone()));
+        let body = http_body_util::Full::new(Bytes::from(pdf.clone()));
         let out = svc.upload(&lib, None, "name=override.pdf&compression=off", Some(pdf.len() as u64), body).await.unwrap();
         out["id"].as_str().unwrap().to_string()
     });
