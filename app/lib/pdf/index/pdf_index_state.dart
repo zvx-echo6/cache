@@ -814,6 +814,8 @@ class PdfIndexState extends ChangeNotifier {
   /// running for it, and the person has not paused it. Null while that is not known yet (not listed).
   bool? needsIndex(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null) return null;
+    // A failed run waits for the person's Retry; the scheduler must not clear its failure by starting it again.
+    if (_failures.containsKey(z.path)) return false;
     final total = _total(z);
     if (total == null) {
       _ensureList(z);

@@ -36,10 +36,15 @@ class PartialMessage {
     this.parseError,
     this.promptTokens = 0,
     this.generatedTokens = 0,
+    this.reusedTokens,
+    this.startMs,
+    this.firstTokenMs,
+    this.totalMs,
   });
 
   factory PartialMessage.fromJson(Map<String, dynamic> j,
-      {bool isFinal = false, int promptTokens = 0, int generatedTokens = 0}) {
+      {bool isFinal = false, int promptTokens = 0, int generatedTokens = 0,
+      int? reusedTokens, int? startMs, int? firstTokenMs, int? totalMs}) {
     final calls = <ToolCall>[];
     for (final c in (j['tool_calls'] as List? ?? const [])) {
       final f = (c as Map)['function'] as Map;
@@ -57,6 +62,10 @@ class PartialMessage {
       parseError: j['parse_error'] as String?,
       promptTokens: promptTokens,
       generatedTokens: generatedTokens,
+      reusedTokens: reusedTokens,
+      startMs: startMs,
+      firstTokenMs: firstTokenMs,
+      totalMs: totalMs,
     );
   }
 
@@ -67,6 +76,20 @@ class PartialMessage {
   final String? parseError;
   final int promptTokens;
   final int generatedTokens;
+
+  /// Prompt tokens already in the native KV cache; null for an older or remote backend.
+  final int? reusedTokens;
+
+  /// Native preparation, tokenization and prompt evaluation together.
+  final int? startMs;
+
+  /// Request start through its first generated token, including special tokens.
+  final int? firstTokenMs;
+
+  /// Native request start through its final parse.
+  final int? totalMs;
+
+  int? get evaluatedPromptTokens => reusedTokens == null ? null : promptTokens - reusedTokens!;
 
   bool get hasToolCalls => toolCalls.isNotEmpty;
 

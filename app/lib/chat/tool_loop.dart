@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cache_llama/cache_llama.dart';
 
 import '../actions/confirm.dart';
@@ -186,6 +188,7 @@ class ToolLoop {
   Stream<TurnUpdate> _turn({({String name, String arguments})? seed}) async* {
     _stopped = false;
     var rounds = 0;
+    var modelRequests = 0;
     var promptTokens = 0, generatedTokens = 0;
     final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
     var finalAnswer = false;
@@ -204,6 +207,12 @@ class ToolLoop {
         final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
         final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
 
+        final roundClock = Stopwatch()..start();
+        final requestNumber = ++modelRequests;
+        int? firstTextMs;
+        logInfo('Ask round $requestNumber starts: messages=${(request['messages'] as List).length}, '
+            'system_chars=${prompt.length}, tools_chars=${jsonEncode(request['tools'] ?? const []).length}, '
+            'thinking_requested=$enableThinking');
         PartialMessage? last;
         await for (final p in backend.generate(request)) {
           last = p;
@@ -211,7 +220,9 @@ class ToolLoop {
           if (p.hasToolCalls) {
             yield const TurnUpdate(phase: TurnPhase.searching);
           } else if (p.content.isNotEmpty) {
-            yield TurnUpdate(phase: TurnPhase.answering, text: _clean(p.content));
+            final text = _clean(p.content);
+            if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
+            yield TurnUpdate(phase: TurnPhase.answering, text: text);
           } else {
             yield const TurnUpdate(phase: TurnPhase.thinking);
           }
@@ -219,6 +230,16 @@ class ToolLoop {
         if (last == null || !last.isFinal) {
           throw StateError('The model stopped without an answer');
         }
+        if (!last.hasToolCalls && _clean(last.content).trim().isNotEmpty) {
+          firstTextMs ??= roundClock.elapsedMilliseconds;
+        }
+        logInfo('Ask round $requestNumber done: prompt=${last.promptTokens}, '
+            'reused=${last.reusedTokens ?? 'unknown'}, evaluated=${last.evaluatedPromptTokens ?? 'unknown'}, '
+            'start_ms=${last.startMs ?? 'unknown'}, first_token_ms=${last.firstTokenMs ?? 'unknown'}, '
+            'first_text_ms=${firstTextMs ?? 'none'}, generated=${last.generatedTokens}, '
+            'content_chars=${last.content.length}, reasoning_chars=${last.reasoning.length}, '
+            'tool_calls=${last.toolCalls.length}, parse_error=${last.parseError != null}, '
+            'native_ms=${last.totalMs ?? 'unknown'}, round_ms=${roundClock.elapsedMilliseconds}');
         promptTokens += last.promptTokens;
         generatedTokens += last.generatedTokens;
 
@@ -270,6 +291,16 @@ class ToolLoop {
 
   /// Runs one tool call and returns the tool message content: `[n] title — snippet`, one per line.
   Future<String> _runCall(ToolCall call) async {
+    final clock = Stopwatch()..start();
+    logInfo('Ask tool ${call.name} starts');
+    try {
+      return await _runCallInner(call);
+    } finally {
+      logInfo('Ask tool ${call.name} finished in ${clock.elapsedMilliseconds} ms');
+    }
+  }
+
+  Future<String> _runCallInner(ToolCall call) async {
     final host = this.host;
     if (host != null) {
       try {

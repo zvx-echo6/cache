@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/pdf/index/pdf_index_fake.dart';
+import 'package:cache/pdf/index/pdf_index_core.dart';
 import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
 import 'package:cache/platform/battery.dart';
@@ -21,6 +22,19 @@ FakeZim _zim() => FakeZim(
         FakePdf('A/two.pdf', pages: [_words(120, 'shelter')]),
       ],
     );
+
+class _BusyIndexCore extends FakePdfIndexCore {
+  _BusyIndexCore() : super(zims: {'u1': _zim()});
+  bool busy = true;
+  int opens = 0;
+
+  @override
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language}) async {
+    opens++;
+    if (busy) throw StateError('Synthetic index writer is busy');
+    return super.open(indexesDir: indexesDir, zimUuid: zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language);
+  }
+}
 
 /// The ZIMs' PDFs as the scheduler runs them: it decides when, the PDF state queues nothing by itself.
 void main() {
@@ -161,6 +175,46 @@ void main() {
     await pdf.start(z);
     expect(pdf.partOf(z)!.pause, isNot(PdfPause.held));
     await pdf.hold(z);
+  });
+
+  test('failed PDF work stays failed until an explicit retry, without scheduler churn', () async {
+    s.dispose();
+    pdf.dispose();
+    final core = _BusyIndexCore();
+    pdf = PdfIndexState(
+      core: core,
+      zims: () => zims,
+      changes: ValueNotifier(0),
+      indexesDir: () async => Directory('${dir.path}/shared-indexes'),
+      recordFile: () async => File('${dir.path}/pdf-index.json'),
+      readPages: readFakePdfPages,
+      battery: () async => battery,
+      space: (_) => const Space(free: 100 << 30, reserve: 0),
+      watchEvery: const Duration(hours: 1),
+    )..autoStart = null;
+    await pdf.init();
+    s = IndexScheduler(
+      sources: [PdfIndexWork(pdf, () => zims)],
+      space: () => const Space(free: 100 << 30, reserve: 0),
+      battery: () async => battery,
+      every: const Duration(hours: 1),
+    );
+    await until((p) => p != null);
+    await pdf.start(zims.single);
+    expect(await until((p) => p == PdfPartPhase.failed), PdfPartPhase.failed);
+    expect(core.opens, 1);
+    expect(await PdfIndexWork(pdf, () => zims).pending(), isEmpty);
+    s.setOpen(true);
+    for (var i = 0; i < 5; i++) {
+      await s.kick();
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    expect(core.opens, 1, reason: 'failed work must not be automatically restarted');
+    expect(pdf.partOf(zims.single)?.phase, PdfPartPhase.failed);
+    core.busy = false;
+    await pdf.resume(zims.single);
+    expect(await until((p) => p == PdfPartPhase.done), PdfPartPhase.done);
+    expect(core.opens, 2);
   });
 
   test('the words for each reason', () {

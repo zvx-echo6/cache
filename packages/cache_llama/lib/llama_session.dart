@@ -55,7 +55,11 @@ class LlamaSession {
         c?.add(PartialMessage.fromJson(jsonDecode(msg['json'] as String) as Map<String, dynamic>,
             isFinal: true,
             promptTokens: msg['promptTokens'] as int,
-            generatedTokens: msg['generatedTokens'] as int));
+            generatedTokens: msg['generatedTokens'] as int,
+            reusedTokens: msg['reusedTokens'] as int?,
+            startMs: msg['startMs'] as int?,
+            firstTokenMs: msg['firstTokenMs'] as int?,
+            totalMs: msg['totalMs'] as int?));
         c?.close();
       case 'error':
         final c = _gens.remove(id);
@@ -198,8 +202,10 @@ void _workerMain(SendPort toMain) {
           toMain.send({'type': 'error', 'id': id, 'error': 'No model is loaded'});
           break;
         }
+        final clock = Stopwatch()..start();
         final req = (msg['request'] as String).toNativeUtf8();
         final rc = b.clStart(handle, req, err, _kErrLen);
+        final startMs = clock.elapsedMilliseconds;
         malloc.free(req);
         if (rc != 0) {
           toMain.send({'type': 'error', 'id': id, 'error': err.toDartString()});
@@ -207,7 +213,9 @@ void _workerMain(SendPort toMain) {
         }
         final maxTokens = msg['maxTokens'] as int?;
         var n = 0;
+        int? firstTokenMs;
         while ((n = b.clNext(handle, tok, _kTokenBuf)) >= 0) {
+          firstTokenMs ??= clock.elapsedMilliseconds;
           // The cap: the answer is what was generated up to it (cl_finish parses it as after a stop).
           final capped = maxTokens != null && b.clGeneratedTokens(handle) >= maxTokens;
           if (n > 0) {
@@ -227,6 +235,10 @@ void _workerMain(SendPort toMain) {
           'json': readJson(fn),
           'promptTokens': b.clPromptTokens(handle),
           'generatedTokens': b.clGeneratedTokens(handle),
+          'reusedTokens': b.clReusedTokens?.call(handle),
+          'startMs': startMs,
+          'firstTokenMs': firstTokenMs,
+          'totalMs': clock.elapsedMilliseconds,
         });
       case 'free':
         if (handle != nullptr) {

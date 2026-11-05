@@ -100,7 +100,7 @@ void main() {
       final after = _prompt(backend.requests.last);
       expect(_fixed(after), _fixed(before));
       // The clock line is the current time, as on every turn.
-      expect(after.split('\n')[1], startsWith(_clockLine));
+      expect(after.split('\n').where((line) => line.startsWith(_clockLine)), hasLength(1));
     }
   });
 
