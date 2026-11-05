@@ -67,6 +67,12 @@ class BuildBook {
     this.size = 0,
     this.addedAt,
     this.status = 'ready',
+    this.division,
+    this.callNumber,
+    this.unsureReason,
+    this.suggestions = const [],
+    this.compression,
+
   });
 
   final String id;
@@ -82,6 +88,13 @@ class BuildBook {
 
   /// `ready` or `replacing`.
   final String status;
+  final String? division;
+  final String? callNumber;
+  final String? unsureReason;
+  final List<BuildSuggestion> suggestions;
+  final Map<String, dynamic>? compression;
+  bool get unsorted => division == null;
+
 
   bool get replacing => status == 'replacing';
 
@@ -100,6 +113,12 @@ class BuildBook {
         size: (j['size'] as num?)?.toInt() ?? 0,
         addedAt: DateTime.tryParse((j['added_at'] ?? '') as String),
         status: (j['status'] ?? 'ready') as String,
+        division: j['division'] as String?,
+        callNumber: j['call_number'] as String?,
+        unsureReason: j['unsure_reason'] as String?,
+        suggestions: [for (final v in (j['suggestions'] as List? ?? const [])) BuildSuggestion.fromJson((v as Map).cast<String, dynamic>())],
+        compression: (j['compression'] as Map?)?.cast<String, dynamic>(),
+
       );
 }
 
@@ -367,8 +386,36 @@ abstract class BuildApi {
   Future<DropState> retryDrop(String name);
 }
 
+/// Classification functions supported by the Linux library builder.
+abstract interface class BuildFilingApi {
+  Future<List<BuildClass>> classes(String libraryId);
+  Future<void> placeBook(String libraryId, String bookId, String division);
+}
+
+class BuildSuggestion {
+  const BuildSuggestion(this.division, this.name);
+  final String division;
+  final String name;
+  factory BuildSuggestion.fromJson(Map<String, dynamic> j) => BuildSuggestion(j['division'] as String, (j['name'] ?? '') as String);
+}
+
+class BuildDivision {
+  const BuildDivision({required this.number, required this.name, required this.classNumber, this.assigned = true});
+  final String number;
+  final String name;
+  final String classNumber;
+  final bool assigned;
+}
+
+class BuildClass {
+  const BuildClass(this.number, this.name, this.divisions);
+  final String number;
+  final String name;
+  final List<BuildDivision> divisions;
+}
+
 /// The browser's [BuildApi]: Cache for Linux's `/api/build/...`, same origin, so the session goes along.
-class HttpBuildApi implements BuildApi {
+class HttpBuildApi implements BuildApi, BuildFilingApi {
   HttpBuildApi({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
@@ -422,6 +469,23 @@ class HttpBuildApi implements BuildApi {
   @override
   Future<void> removeBook(String libraryId, String docId) async {
     await _call('DELETE', '/api/build/libraries/${_id(libraryId)}/books/${_id(docId)}');
+  }
+
+  @override
+  Future<List<BuildClass>> classes(String libraryId) async {
+    final j = _map(await _call('GET', '/api/build/classes?library_id=${_id(libraryId)}'));
+    return [
+      for (final c in j['classes'] as List)
+        BuildClass(c['number'] as String, c['name'] as String, [
+          for (final d in c['divisions'] as List)
+            BuildDivision(number: d['number'] as String, name: d['name'] as String, classNumber: c['number'] as String, assigned: d['assigned'] == true),
+        ]),
+    ];
+  }
+
+  @override
+  Future<void> placeBook(String libraryId, String bookId, String division) async {
+    await _call('POST', '/api/build/libraries/${_id(libraryId)}/books/${_id(bookId)}/place', body: {'division': division});
   }
 
   @override

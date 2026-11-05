@@ -10,6 +10,7 @@ import 'build_api.dart';
 import 'build_common.dart';
 import 'build_state.dart';
 import 'build_text.dart';
+import 'build_shelves.dart';
 import 'device_api.dart' show DeviceException;
 import 'device_widgets.dart' show HoverReveal;
 import 'local_files.dart';
@@ -30,6 +31,23 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
   String? _editing;
   final TextEditingController _title = TextEditingController();
   bool _showWaiting = false;
+  List<BuildClass>? _classes;
+  String? _classesError;
+  String? _division;
+  String? _bookNumber;
+  final TextEditingController _number = TextEditingController();
+
+  Future<void> _loadClasses() async {
+    final api = c.api;
+    if (api is! BuildFilingApi) return;
+    try {
+      final classes = await api.classes(id);
+      if (mounted) setState(() { _classes = classes; _classesError = null; });
+    } on DeviceException catch (e) {
+      if (mounted) setState(() => _classesError = callWords(e));
+    }
+  }
+
 
   BuildController get c => widget.build;
   String get id => widget.libraryId;
@@ -40,6 +58,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     c.watchBooks(id);
     c.sink = _drop;
     c.addListener(_onChange);
+    unawaited(_loadClasses());
   }
 
   @override
@@ -48,6 +67,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     if (c.sink == _drop) c.sink = null;
     c.removeListener(_onChange);
     _title.dispose();
+    _number.dispose();
     super.dispose();
   }
 
@@ -120,6 +140,21 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         if (c.notice != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(c.notice!, style: TextStyle(fontSize: 13, color: context.t.warning))),
         if (mine && up.running) _uploadCard(context, up),
         if (building || c.itemsOf(id).any((i) => i.needsAttention || i.skipped)) _queue(context, lib) else if (n > 0) _facts(context, lib),
+        if (_classes != null) ...[
+          const SizedBox(height: 16),
+          BuildShelves(
+            classes: _classes!,
+            books: books ?? const [],
+            selected: _division,
+            onSelect: (division) => setState(() { _division = division; _bookNumber = null; }),
+            number: _number,
+            onGo: _goToNumber,
+          ),
+        ],
+        if (_classesError != null) ...[
+          Small(_classesError!, warn: true),
+          TextButton(onPressed: _loadClasses, child: const Text('Try again')),
+        ],
         if (lib.publishError != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(lib.publishError!, style: TextStyle(fontSize: 12, color: context.t.warning))),
       ],
     );
@@ -303,7 +338,11 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
 
   Widget _right(BuildContext context, BuildLibrary lib) {
     final k = context.t;
-    final books = c.books[id];
+    final all = c.books[id];
+    final books = all == null ? null : ([
+      for (final b in all)
+        if ((_division == null || (_division == 'unsorted' ? b.unsorted : b.division == _division)) && (_bookNumber == null || b.callNumber == _bookNumber)) b,
+    ]..sort(compareShelfBooks));
     final building = c.isBuilding(id);
     if (books == null) return Padding(padding: const EdgeInsets.all(24), child: Small('One moment…', size: 13));
     if (books.isEmpty) {
@@ -312,9 +351,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         child: Column(children: [
           Icon(Icons.library_books, size: 40, color: k.secondary),
           const SizedBox(height: 12),
-          Text('No books in this library yet.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'No books in this library yet.' : 'No books in this division.', style: TextStyle(fontSize: 13, color: k.secondary)),
           const SizedBox(height: 2),
-          Text('Add PDFs and Cache builds them one at a time.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'Add PDFs and Cache builds them one at a time.' : 'Choose another division or add books to this one.', style: TextStyle(fontSize: 13, color: k.secondary)),
           Text('It keeps going if you close this tab.', style: TextStyle(fontSize: 13, color: k.secondary)),
         ]),
       );
@@ -324,6 +363,10 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_division != null) Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text('${lib.title} / ${shelfLabel(_division!, _classes ?? const [])}', style: TextStyle(color: k.secondary, fontSize: 12)),
+          ),
           GroupLabel('${building ? 'Finished books' : 'Books'} · ${thousands(books.length)}'),
           if (table)
             Padding(
@@ -338,7 +381,14 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
               ]),
             ),
           Divider(height: 1, color: k.secondary.withValues(alpha: 0.25)),
-          for (final b in books) _bookRow(context, lib, b, table),
+          SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.65,
+            child: ListView.builder(
+              key: ValueKey('shelf-${_division ?? 'all'}'),
+              itemCount: books.length,
+              itemBuilder: (context, index) => _bookRow(context, lib, books[index], table),
+            ),
+          ),
         ],
       );
     });
@@ -356,11 +406,13 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       icon: const Icon(Icons.more_horiz, size: 18),
       onSelected: (v) {
         if (v == 'replace') unawaited(_replace(lib, b));
+        if (v == 'place') unawaited(_placeBook(b));
         if (v == 'remove') unawaited(_remove(lib, b));
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'replace', child: Text('Replace with a newer edition')),
-        PopupMenuItem(value: 'remove', child: Text('Remove')),
+      itemBuilder: (_) => [
+        if (_classes != null) const PopupMenuItem(value: 'place', child: Text('Place it')),
+        const PopupMenuItem(value: 'replace', child: Text('Replace with a newer edition')),
+        const PopupMenuItem(value: 'remove', child: Text('Remove')),
       ],
     );
     // The buttons stay mounted while the pointer is away (only hidden): the menu that was opened from "..." is still waiting for its
@@ -389,7 +441,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(b.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+                      Text('${b.callNumber == null ? '' : '${b.callNumber} · '}${b.title}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+                      if (b.unsorted && _classes != null) TextButton(onPressed: () => _placeBook(b), child: const Text('Place it')),
+                      if (b.unsorted && b.unsureReason != null) Small(b.unsureReason!, size: 11),
                       if (b.replacing) Small('Replacing with a new copy', size: 11) else if (b.partial != null) Small(b.partial!, size: 11, warn: true),
                     ]),
                   ),
@@ -403,7 +457,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(b.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+                      Text('${b.callNumber == null ? '' : '${b.callNumber} · '}${b.title}', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
                       Small('${b.pages} pages · ${thousands(b.passages)} passages · added ${addedWords(b.addedAt)}${b.replacing ? ' · replacing' : ''}'),
                     ]),
                   ),
@@ -411,6 +465,39 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                 ]),
         );
     return table ? HoverReveal(builder: row) : row(false);
+  }
+
+  void _goToNumber() {
+    final text = _number.text.trim().toUpperCase();
+    final raw = text.startsWith('CDS ') ? text.substring(4) : text;
+    final division = raw.split('-').first;
+    if ((_classes ?? const <BuildClass>[]).expand((c) => c.divisions).any((d) => d.number == division)) {
+      final target = raw.contains('-') ? 'CDS $raw' : null;
+      if (target != null && !(c.books[id] ?? const <BuildBook>[]).any((b) => b.callNumber == target)) {
+        say(context, 'That book number is not in this library.');
+        return;
+      }
+      setState(() { _division = division; _bookNumber = target; });
+    } else {
+      say(context, 'There is no division with that number.');
+    }
+  }
+
+  Future<void> _placeBook(BuildBook book) async {
+    final api = c.api;
+    if (api is! BuildFilingApi || _classes == null) return;
+    final division = await showDialog<String>(
+      context: context,
+      builder: (_) => PlaceBookDialog(book: book, classes: _classes!),
+    );
+    if (division == null || !mounted) return;
+    try {
+      await api.placeBook(id, book.id, division);
+      await c.refresh();
+      if (mounted) say(context, 'Placed in ${shelfLabel(division, _classes!)}.');
+    } on DeviceException catch (e) {
+      if (mounted) say(context, callWords(e));
+    }
   }
 
   // ---- edit a title in place
