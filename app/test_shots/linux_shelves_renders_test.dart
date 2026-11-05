@@ -40,6 +40,7 @@ void main() {
             pages: 230,
             passages: 340,
             size: 41000000,
+            compression: {'original_size': 58000000, 'stored_size': 41000000, 'level': 'smaller_scans', 'preset': 'balanced', 'kept_original': false},
           ),
           BuildBook(
             id: 'b',
@@ -50,6 +51,7 @@ void main() {
             pages: 312,
             passages: 465,
             size: 28000000,
+            compression: {'original_size': 31000000, 'stored_size': 28000000, 'level': 'lossless', 'kept_original': false},
           ),
           BuildBook(
             id: 'c',
@@ -58,6 +60,7 @@ void main() {
             pages: 118,
             passages: 153,
             size: 15000000,
+            compression: {'original_size': 15000000, 'stored_size': 15000000, 'level': 'lossless', 'kept_original': true, 'kept_reason': 'timed out'},
             unsureReason: 'More than one subject could fit this book.',
             suggestions: [BuildSuggestion('210', 'First aid and emergency care'), BuildSuggestion('220', 'Anatomy and physiology')],
           ),

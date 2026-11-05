@@ -8,6 +8,7 @@ import '../../video/format.dart' show formatBytes;
 import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
+import 'build_compression.dart';
 import 'build_state.dart';
 import 'build_text.dart';
 import 'build_shelves.dart';
@@ -374,10 +375,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
               child: Row(children: [
                 const SizedBox(width: 38),
                 Expanded(child: _head(k, 'Title')),
-                SizedBox(width: 70, child: _head(k, 'Pages', end: true)),
-                SizedBox(width: 90, child: _head(k, 'Passages', end: true)),
+                SizedBox(width: 50, child: _head(k, 'Pages', end: true)),
+                SizedBox(width: 85, child: _head(k, 'Stored', end: true)),
                 SizedBox(width: 100, child: Padding(padding: const EdgeInsets.only(left: 12), child: _head(k, 'Added'))),
-                const SizedBox(width: 80),
               ]),
             ),
           Divider(height: 1, color: k.secondary.withValues(alpha: 0.25)),
@@ -400,6 +400,8 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
   Widget _bookRow(BuildContext context, BuildLibrary lib, BuildBook b, bool table) {
     final k = context.t;
     if (_editing == b.id) return _editRow(context, lib, b);
+    final outcome = compressionOutcomeWords(b);
+    final stored = storedBookBytes(b);
     final menu = PopupMenuButton<String>(
       key: ValueKey('book-menu-${b.id}'),
       tooltip: 'More',
@@ -442,16 +444,19 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      _bookTitle(context, b, lines: 1),
+                      _bookTitle(context, b, lines: 2),
+                      if (outcome != null) Text(outcome, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: k.secondary)),
                       if (b.unsorted && _classes != null) TextButton(onPressed: () => _placeBook(b), child: const Text('Place it')),
                       if (b.unsorted && b.unsureReason != null) Small(b.unsureReason!, size: 11),
                       if (b.replacing) Small('Replacing with a new copy', size: 11) else if (b.partial != null) Small(b.partial!, size: 11, warn: true),
                     ]),
                   ),
-                  SizedBox(width: 70, child: Text('${b.pages}', textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: k.secondary))),
-                  SizedBox(width: 90, child: Text(thousands(b.passages), textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: k.secondary))),
-                  SizedBox(width: 100, child: Padding(padding: const EdgeInsets.only(left: 12), child: Text(addedWords(b.addedAt), style: TextStyle(fontSize: 13, color: k.secondary)))),
-                  actions(hover),
+                  SizedBox(width: 50, child: Text('${b.pages}', textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: k.secondary))),
+                  SizedBox(width: 85, child: Text(stored == null ? 'Unknown' : formatBytes(stored), textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: k.secondary))),
+                  SizedBox(width: 100, child: Stack(alignment: Alignment.centerRight, children: [
+                    Opacity(opacity: hover ? 0 : 1, child: Padding(padding: const EdgeInsets.only(left: 12), child: Text(addedWords(b.addedAt), style: TextStyle(fontSize: 13, color: k.secondary)))),
+                    actions(hover),
+                  ])),
                 ])
               : Row(children: [
                   BookLetter(b.title),
@@ -459,6 +464,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       _bookTitle(context, b, lines: 2),
+                      if (outcome != null) Text(outcome, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: k.secondary)),
                       Small('${b.pages} pages · ${thousands(b.passages)} passages · added ${addedWords(b.addedAt)}${b.replacing ? ' · replacing' : ''}'),
                     ]),
                   ),
