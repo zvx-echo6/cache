@@ -1,5 +1,7 @@
 # Credits
 
+Copyright (C) 2026 Happy Little LLC. Cache is licensed AGPL-3.0-or-later.
+
 Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Settings > About and credits > Credits; the full licence text of every Flutter and Dart package is under Open-source licences.
 
 No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licences; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
