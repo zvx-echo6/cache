@@ -410,6 +410,11 @@ int cl_info(void * hp, char * out_json, int len) {
         j["n_ctx"]          = h->n_ctx;
         j["chat_format"]    = std::string(common_chat_format_name(probe.format));
         j["supports_tools"] = probe.format != COMMON_CHAT_FORMAT_CONTENT_ONLY;
+#if defined(CACHE_GEMMA4_PREFILL_OPT)
+        j["engine_build"] = "cache-gemma4-prefill-31356";
+#else
+        j["engine_build"] = "cache-llama-620d222";
+#endif
         return put(j.dump(), out_json, len);
     } catch (const std::exception &) {
         return -1;
