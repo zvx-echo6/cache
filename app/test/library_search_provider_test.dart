@@ -107,6 +107,27 @@ void main() {
     expect(rows.every((r) => r.module == 'Library'), isTrue);
   });
 
+  test('built library passages remain visible and open unchanged', () async {
+    final opened = <String>[];
+    final libraryHit = <String, dynamic>{
+      'address': 'lib:field-library/6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      'title': 'Field Manual, p. 47',
+      'snippet': 'Boil it.',
+      'source_id': 'field-library',
+      'source_kind': 'library',
+      'source_title': 'Field library',
+      'page': 47,
+    };
+    final unsupported = {...libraryHit, 'address': 'unsupported://abc'};
+    final p = LibrarySearchProvider(sources: _Searched(dir, [libraryHit, unsupported]), openZim: (_) {}, openAddress: opened.add);
+    final rows = await p.search('water');
+    expect(rows.length, 1);
+    expect(rows.single.title, 'Field Manual, p. 47');
+    expect(rows.single.detail, 'Field library');
+    rows.single.open();
+    expect(opened, [libraryHit['address']]);
+  });
+
   test('a page opens in the reader, a PDF passage at its real PDF page', () async {
     final opened = <String>[];
     final p = LibrarySearchProvider(sources: _Searched(dir, [page, pdf]), openZim: (_) {}, openAddress: opened.add);
