@@ -408,11 +408,13 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_horiz, size: 18),
       onSelected: (v) {
+        if (v == 'details') _bookFacts(b);
         if (v == 'replace') unawaited(_replace(lib, b));
         if (v == 'place') unawaited(_placeBook(b));
         if (v == 'remove') unawaited(_remove(lib, b));
       },
       itemBuilder: (_) => [
+        const PopupMenuItem(value: 'details', child: Text('Book details')),
         if (_classes != null) const PopupMenuItem(value: 'place', child: Text('Place it')),
         const PopupMenuItem(value: 'replace', child: Text('Replace with a newer edition')),
         const PopupMenuItem(value: 'remove', child: Text('Remove')),
@@ -445,7 +447,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       _bookTitle(context, b, lines: 2),
-                      if (outcome != null) Text(outcome, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: k.secondary)),
+                      if (outcome != null) CompressionOutcomeLine(book: b),
                       if (b.unsorted && _classes != null) TextButton(onPressed: () => _placeBook(b), child: const Text('Place it')),
                       if (b.unsorted && b.unsureReason != null) Small(b.unsureReason!, size: 11),
                       if (b.replacing) Small('Replacing with a new copy', size: 11) else if (b.partial != null) Small(b.partial!, size: 11, warn: true),
@@ -464,7 +466,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       _bookTitle(context, b, lines: 2),
-                      if (outcome != null) Text(outcome, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: k.secondary)),
+                      if (outcome != null) CompressionOutcomeLine(book: b),
                       Small('${b.pages} pages · ${thousands(b.passages)} passages · added ${addedWords(b.addedAt)}${b.replacing ? ' · replacing' : ''}'),
                     ]),
                   ),
@@ -472,6 +474,24 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                 ]),
         );
     return table ? HoverReveal(builder: row) : row(false);
+  }
+
+  void _bookFacts(BuildBook book) {
+    final stored = storedBookBytes(book);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(book.title),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (book.callNumber != null) Text(book.callNumber!),
+          Text('${thousands(book.pages)} pages'),
+          Text('${thousands(book.passages)} passages'),
+          Text(stored == null ? 'Stored size unknown' : 'Stored size: ${formatBytes(stored)}'),
+          if (compressionOutcomeWords(book) case final String outcome) Text(outcome),
+        ]),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+      ),
+    );
   }
 
   Widget _bookTitle(BuildContext context, BuildBook book, {int lines = 1}) => Text.rich(

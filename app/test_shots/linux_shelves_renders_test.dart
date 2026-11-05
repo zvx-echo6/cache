@@ -4,6 +4,7 @@ import 'package:cache/browse/web/build_shelves.dart';
 import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import '../test/browse/build_fakes.dart';
 import 'shot_kit.dart';
@@ -76,6 +77,13 @@ void main() {
       );
       await tester.pumpAndSettle();
       await snap(tester, 'linux-shelves', '1440-library-${theme.name}');
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(find.byKey(const ValueKey('book-a'))));
+      await tester.pumpAndSettle();
+      await snap(tester, 'linux-shelves', '1440-library-hover-${theme.name}');
+      await mouse.removePointer();
+
       await tester.pumpWidget(
         shotApp(
           const Scaffold(

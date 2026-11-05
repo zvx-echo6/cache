@@ -213,17 +213,28 @@ void main() {
       api.bookMap['lib1'] = [bookA, bookB];
     });
 
-    testWidgets('lists the books with pages, passages and when they were added, and the counts', (tester) async {
+    testWidgets('lists stored sizes and keeps per-book passages in details', (tester) async {
       await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
       expect(find.text('Hunting and field guides'), findsOneWidget);
       expect(find.text('2 books · 1,124 passages · built from your PDFs'), findsOneWidget);
       expect(find.text('BOOKS · 2'), findsOneWidget);
       expect(find.text('Field Manual 21-76 Survival'), findsOneWidget);
       expect(find.text('412'), findsOneWidget);
-      expect(find.text('480'), findsOneWidget);
+      expect(find.text('Stored'), findsOneWidget);
       expect(find.text('1 h ago'), findsWidgets);
       expect(find.text('Add PDFs'), findsOneWidget);
       expect(find.byKey(const ValueKey('library-facts')), findsOneWidget);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(find.byKey(ValueKey('book-'+bookA.id))));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ValueKey('book-menu-'+bookA.id)));
+
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Book details'));
+      await tester.pumpAndSettle();
+      expect(find.text('480 passages'), findsOneWidget);
+      expect(find.textContaining('Stored size:'), findsOneWidget);
     });
 
     testWidgets('an empty library says how to start', (tester) async {
