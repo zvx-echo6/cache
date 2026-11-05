@@ -1,4 +1,4 @@
-# Package the tested UI with verified native artifacts and send it to internal TestFlight.
+# Package the tested UI and matching guide with verified native artifacts for internal TestFlight.
 name: iOS TestFlight from verified native build
 
 on:
