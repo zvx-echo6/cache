@@ -56,7 +56,9 @@ class _LibraryPassageScreenState extends State<LibraryPassageScreen> {
                     const SizedBox(height: 12),
                     FilledButton.icon(
                       key: const ValueKey('retry-library-passage'),
-                      onPressed: () => setState(() => _page = _read()),
+                      onPressed: () => setState(() {
+                        _page = _read();
+                      }),
                       icon: const Icon(Icons.refresh),
                       label: const Text('Try again'),
                     ),
