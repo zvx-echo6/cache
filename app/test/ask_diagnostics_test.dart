@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import '../lib/platform/ask_diagnostics.dart';
+import 'package:cache/platform/ask_diagnostics.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
