@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
@@ -6,6 +8,7 @@ import 'package:cache/pdf/pdf_source.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../support/pdf_test_kit.dart';
 import '../support/pdfium_for_tests.dart';
@@ -50,6 +53,29 @@ void main() {
 
   PdfReaderScreen reader(String path, {int? page, String? quote}) =>
       PdfReaderScreen(source: PdfFileSource(path, title: 'Water and Shelter Handbook'), initialPage: page, quote: quote);
+
+  readerTest('closing during metadata reading keeps the native document alive until the read ends', (tester) async {
+    final reading = Completer<PdfDocument>();
+    final title = Completer<String?>();
+    await show(tester, PdfReaderScreen(
+      source: PdfFileSource(six, title: 'x'),
+      debugReadTitle: (document) {
+        reading.complete(document);
+        return title.future;
+      },
+    ));
+    await settleUntil(tester, () => reading.isCompleted);
+    expect(reading.isCompleted, isTrue);
+    final document = await reading.future;
+    var disposed = false;
+    final events = document.events.listen((_) {}, onDone: () => disposed = true);
+    addTearDown(events.cancel);
+    await tester.pumpWidget(const SizedBox());
+    expect(disposed, isFalse, reason: 'the pending metadata read still owns its handle');
+    title.complete('Handbook');
+    await settleUntil(tester, () => disposed);
+    expect(disposed, isTrue, reason: 'a closed reader releases its document after metadata completes');
+  });
 
   readerTest('opens at the asked page; the count opens Go to page, which refuses a page that is not there', (tester) async {
     await show(tester, reader(six, page: 3));
@@ -178,8 +204,12 @@ void main() {
 
   readerTest('a damaged file and a missing file', (tester) async {
     await show(tester, reader(junk));
-    await settleUntil(tester, () => _has(find.text("This PDF can't be opened. The file may be damaged.")));
-    expect(find.text('Try again'), findsOneWidget);
+    // pdfrx_engine 0.4.7 treats every Windows open error as a password error.
+    // Mobile and Darwin must still distinguish a damaged PDF from an encrypted one.
+    final damaged = Platform.isWindows ? 'This PDF is locked. Enter its password.' : "This PDF can't be opened. The file may be damaged.";
+    await settleUntil(tester, () => _has(find.text(damaged)));
+    expect(find.text(damaged), findsOneWidget);
+    if (!Platform.isWindows) expect(find.text('Try again'), findsOneWidget);
     await show(tester, reader('${dir.path}/missing.pdf'));
     await settleUntil(tester, () => _has(find.text('This file is no longer on this device.')));
     expect(find.text('This file is no longer on this device.'), findsOneWidget);

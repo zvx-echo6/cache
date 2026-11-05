@@ -270,6 +270,9 @@ jobs:
           unzip -p "$aab" base/lib/arm64-v8a/libcache_llama.so > "$RUNNER_TEMP/cache-llama-check.so"
           LC_ALL=C grep -aFq 'cache-gemma4-prefill-31356' "$RUNNER_TEMP/cache-llama-check.so" || { echo "::error::Optimized Gemma engine is missing from the bundle"; exit 1; }
           rm -f "$RUNNER_TEMP/cache-llama-check.so"
+          unzip -p "$aab" base/lib/arm64-v8a/libcache_search.so > "$RUNNER_TEMP/cache-core-check.so"
+          LC_ALL=C grep -aFq '.cache-search-index.guard' "$RUNNER_TEMP/cache-core-check.so" || { echo "::error::Crash-safe indexing core is missing"; exit 1; }
+          rm -f "$RUNNER_TEMP/cache-core-check.so"
           signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
           if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
             echo "::error::The bundle is not signed with the upload key (signer $signer)"; exit 1

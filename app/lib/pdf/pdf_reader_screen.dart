@@ -59,6 +59,7 @@ class PdfReaderScreen extends StatefulWidget {
     this.debugFindStallAfter,
     this.debugPlaceholders = false,
     this.debugBrowser = false,
+    this.debugReadTitle,
   });
 
   final PdfSource source;
@@ -87,6 +88,9 @@ class PdfReaderScreen extends StatefulWidget {
   /// Renders and tests: word the slow-opening line as in a browser.
   final bool debugBrowser;
 
+  /// Tests: hold metadata reading to verify that closing cannot dispose its document.
+  final Future<String?> Function(PdfDocument document)? debugReadTitle;
+
   @override
   State<PdfReaderScreen> createState() => PdfReaderScreenState();
 }
@@ -101,6 +105,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
   int? _fileBytes;
   bool _cancelled = false;
   PdfDocument? _doc;
+  bool _readingTitle = false;
   PdfDocumentRef? _ref;
 
   /// The PDF's own title (its metadata Title, cleaned as the search index cleans it), once read: the reader shows the title its
@@ -274,7 +279,24 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         await doc.dispose();
         return;
       }
+      // Keep ownership local until the metadata worker has finished. Publishing
+      // the viewer first lets its reference dispose the raw handle during this read.
+      _readingTitle = true;
+      String? ownTitle;
+      try {
+        ownTitle = await (widget.debugReadTitle?.call(doc) ?? _readOwnTitle(doc));
+      } catch (_) {
+        // Metadata is optional; a readable PDF still opens without a title.
+      } finally {
+        _readingTitle = false;
+      }
+      if (!mounted) {
+        await doc.dispose();
+        await _copy?.dispose();
+        return;
+      }
       _doc = doc;
+      _ownTitle = ownTitle;
       _pageCount = doc.pages.length;
       _ref = PdfDocumentRefDirect(doc);
       final start = widget.initialPage ?? 1;
@@ -285,7 +307,6 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         ..onCurrent = _goToMatch;
       _setPhase(_Phase.open, () => _wrongPassword = false);
       unawaited(_afterOpen(start));
-      unawaited(_readOwnTitle(doc));
     } on PdfPasswordException {
       _setPhase(_Phase.locked, () => _wrongPassword = password != null);
     } on PdfGone {
@@ -676,7 +697,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     // The viewer's document reference closes the document when the viewer goes; a document that never reached the viewer is
     // closed here.
     if (_ref == null) unawaited(_doc?.dispose());
-    unawaited(_copy?.dispose());
+    if (!_readingTitle) unawaited(_copy?.dispose());
     super.dispose();
   }
 
@@ -693,14 +714,15 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // ---- building
 
-  Future<void> _readOwnTitle(PdfDocument doc) async {
+  Future<String?> _readOwnTitle(PdfDocument doc) async {
     try {
-      // the handle only here; PDFium itself is called in pdfrx's worker (see readPdfMeta)
+      // PDFium stays on its own worker; the caller retains the document until
+      // this queued read completes, even if the reader is closed in the meantime.
       final handle = await doc.useNativeDocumentHandle((h) => h);
       final t = cleanPdfTitle((await readPdfMeta(handle, 0)).title);
-      if (mounted && _doc == doc && t.isNotEmpty) setState(() => _ownTitle = t);
+      return t.isEmpty ? null : t;
     } catch (_) {
-      // no title to read: the file name stays
+      return null;
     }
   }
 
