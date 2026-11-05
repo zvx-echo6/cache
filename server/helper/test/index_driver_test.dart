@@ -50,18 +50,6 @@ void main() {
 
   List<String> jobs() => fake.calls.where((c) => c.startsWith('jobStart:')).toList();
 
-  test('snapshot verification finishes before deciding whether to build', () {
-    status['lib'] = {..._st('lib', kind: 'library'), 'index': {'location': 'opening'}};
-    driver.useSources([_src('lib', kind: 'library')]);
-    driver.tick();
-    expect(jobs(), isEmpty);
-    expect(driver.running, isTrue);
-    status['lib'] = {..._st('lib', kind: 'library', indexed: true), 'index': {'location': 'snapshot'}};
-    driver.tick();
-    expect(jobs(), isEmpty, reason: 'a verified shared snapshot needs no rebuild');
-    expect(driver.running, isFalse);
-  });
-
   test('shared index root is used for builds and preserved after completion', () {
     driver.stop();
     driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/shared'});

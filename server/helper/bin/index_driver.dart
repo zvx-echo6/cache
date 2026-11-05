@@ -133,7 +133,7 @@ class IndexDriver {
       final s = status[path];
       if (s == null || s['error'] != null) continue;
       final settings = (src['settings'] as Map?)?.cast<String, dynamic>();
-      if (s['building'] == true || s['opening'] == true || s['updating'] == true || (s['index'] as Map?)?['location'] == 'opening') {
+      if (s['building'] == true || s['opening'] == true || s['updating'] == true) {
         // Not ready to look at yet; look again on the next tick (unless its keyword index is switched off).
         if (src['kind'] != 'library' || (settings?['keyword_index'] ?? 'auto') != 'off') _waiting = true;
         continue;
