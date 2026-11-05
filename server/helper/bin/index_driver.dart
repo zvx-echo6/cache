@@ -18,9 +18,12 @@ import '../../../packages/cache_search/lib/src/models.dart';
 ///
 /// The helper is single-threaded and answers one line at a time, so a timer tick never overlaps a request.
 class IndexDriver {
-  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1)});
+  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}});
 
   final CoreDispatcher dispatcher;
+
+  /// App configuration retained across source refreshes and shared-index builds.
+  final Map<String, dynamic> extra;
   final void Function(String message)? log;
   final Duration every;
 
@@ -116,7 +119,7 @@ class IndexDriver {
       log?.call('index of $path ${p.state.name}');
     }
     // A source whose index was being built is picked up again when the list is set again (SourcesState._pollJobs).
-    dispatcher.handle('setSources', {'sources': _sources});
+    dispatcher.handle('setSources', {'sources': _sources, 'extra': extra});
   }
 
   ({Map<String, dynamic> source, String kind, Map<String, dynamic> params})? _next() {
@@ -130,7 +133,7 @@ class IndexDriver {
       final s = status[path];
       if (s == null || s['error'] != null) continue;
       final settings = (src['settings'] as Map?)?.cast<String, dynamic>();
-      if (s['building'] == true || s['opening'] == true || s['updating'] == true) {
+      if (s['building'] == true || s['opening'] == true || s['updating'] == true || (s['index'] as Map?)?['location'] == 'opening') {
         // Not ready to look at yet; look again on the next tick (unless its keyword index is switched off).
         if (src['kind'] != 'library' || (settings?['keyword_index'] ?? 'auto') != 'off') _waiting = true;
         continue;
@@ -140,14 +143,19 @@ class IndexDriver {
         return (
           source: src,
           kind: 'index_library',
-          params: {'library_path': path, 'index_dir': src['index_dir'], 'heap_mb': 200, 'settings': ?settings},
+          params: {'library_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200, 'settings': ?settings},
         );
       }
       final searchable = s['id'] != null && s['indexed'] == true;
       if (searchable && s['stale'] != true) continue;
-      return (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], 'heap_mb': 200});
+      return (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200});
     }
     return null;
+  }
+
+  Map<String, dynamic> get _indexRoot {
+    final root = extra['indexes_dir'];
+    return root is String && root.isNotEmpty ? {'indexes_dir': root} : const {};
   }
 
   void _start(Map<String, dynamic> source, String kind, Map<String, dynamic> params) {

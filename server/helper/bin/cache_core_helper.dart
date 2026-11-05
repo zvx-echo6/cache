@@ -35,7 +35,7 @@ Future<void> main() async {
   }
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
-  final indexer = IndexDriver(dispatcher, log: log);
+  final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
   await serveLines(
     stdin,
     (line) async {

@@ -76,7 +76,7 @@ class RescanOp implements OpHandler {
     } else {
       sources = scanSources(dirs);
     }
-    dispatcher.handle('setSources', {'sources': sources});
+    dispatcher.handle('setSources', {'sources': sources, 'extra': serverCoreExtras(dirs)});
     indexer?.useSources(sources);
     log?.call('sources rescanned (${sources.length})');
     return {'sources': sources.length};

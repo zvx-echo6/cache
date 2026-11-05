@@ -50,6 +50,44 @@ void main() {
 
   List<String> jobs() => fake.calls.where((c) => c.startsWith('jobStart:')).toList();
 
+  test('snapshot verification finishes before deciding whether to build', () {
+    status['lib'] = {..._st('lib', kind: 'library'), 'index': {'location': 'opening'}};
+    driver.useSources([_src('lib', kind: 'library')]);
+    driver.tick();
+    expect(jobs(), isEmpty);
+    expect(driver.running, isTrue);
+    status['lib'] = {..._st('lib', kind: 'library', indexed: true), 'index': {'location': 'snapshot'}};
+    driver.tick();
+    expect(jobs(), isEmpty, reason: 'a verified shared snapshot needs no rebuild');
+    expect(driver.running, isFalse);
+  });
+
+  test('shared index root is used for builds and preserved after completion', () {
+    driver.stop();
+    driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/shared'});
+    status['lib'] = _st('lib', kind: 'library');
+    fake.progressScript.add(_done);
+    driver.useSources([_src('lib', kind: 'library')]);
+    driver.tick();
+    final params = jsonDecode(jobs().single.substring('jobStart:index_library:'.length)) as Map;
+    expect(params['indexes_dir'], '/shared');
+    status['lib'] = _st('lib', kind: 'library', indexed: true);
+    driver.tick();
+    final config = jsonDecode(fake.calls.lastWhere((c) => c.startsWith('setSources:')).substring('setSources:'.length)) as Map;
+    expect(config['indexes_dir'], '/shared');
+  });
+
+  test('rescan preserves the full app configuration, including shared indexes', () {
+    final temp = Directory.systemTemp.createTempSync('cache-rescan-');
+    addTearDown(() => temp.deleteSync(recursive: true));
+    final dirs = AppDirs(Directory('${temp.path}/support'), Directory('${temp.path}/docs'));
+    RescanOp(dirs, d).handle('sources.rescan', {'sources': [_src('lib', kind: 'library')]});
+    final config = jsonDecode(fake.calls.lastWhere((c) => c.startsWith('setSources:')).substring('setSources:'.length)) as Map;
+    expect(config['indexes_dir'], '${dirs.support.path}/shared-indexes');
+    expect(config['user'], isNotNull);
+    expect(config['regions'], isNotNull);
+  });
+
   test('a ZIM that is not indexed gets an index_zim job, with its progress; when it ends the core gets the list again', () {
     status['a.zim'] = _st('a.zim');
     fake.progressScript.addAll([_running(1), _done]);
