@@ -381,7 +381,7 @@ class DownloadRow extends StatelessWidget {
   final DlState state;
   final DlActions actions;
 
-  /// The item's own detail while not downloaded ("4.6 GB · May be tight on this device"), and its colour.
+  /// The item's own detail while not downloaded ("4.6 GB · May be tight on RAM"), and its colour.
   final String idleLine;
   final InlineSpan? idleSpan;
   final Color? idleLineColor;

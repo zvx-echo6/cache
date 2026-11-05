@@ -30,9 +30,9 @@ Future<int?> totalMemoryBytes() async {
 /// How well a model file of a given size suits a phone with [memory] bytes. The model's file is about what it needs in
 /// memory, plus room for its working memory (context) and the rest of the app and phone.
 enum ModelFit {
-  fits('Fits this device'),
-  tight('May be tight on this device'),
-  tooBig('Too big for this device'),
+  fits('Fits device RAM'),
+  tight('May be tight on RAM'),
+  tooBig('Too large for device RAM'),
   unknown('');
 
   const ModelFit(this.label);

@@ -61,6 +61,25 @@ void main() {
     await tester.pump();
   }
 
+
+  testWidgets('Models keeps bottom controls above visible Android navigation', (tester) async {
+    tester.view.padding = const FakeViewPadding(bottom: 90);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 90);
+    ModelDownloads.shared = _RecordingDownloads(app: app);
+    final recs = RecommendedModels(
+      builtIn: () async => _list([for (var i = 0; i < 12; i++) _entry('Model $i', 'm$i.gguf', _gb)]),
+      fetch: () async => throw const SocketException('offline'),
+    );
+    await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('choose-file')), 300);
+    final scroll = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    scroll.position.jumpTo(scroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    final button = tester.getBottomRight(find.byKey(const ValueKey('choose-file')));
+    expect(button.dy, lessThanOrEqualTo(932 - 30), reason: 'the navigation inset must not cover Choose a file');
+  });
+
   group('recommendations file', () {
     test('the built-in copy is docs/models-recommended.json: Recommended (E2B tuned for Cache, stock E4B) and Experimental (the two uncensored, and the E2B Q6 tuned for Cache)', () {
       final docs = File('../docs/models-recommended.json').readAsStringSync();
@@ -190,11 +209,11 @@ void main() {
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
     expect(find.text('RECOMMENDED'), findsOneWidget);
-    expect(find.text('The model is the AI that answers your questions. It runs on this device, so it works with no signal.'), findsOneWidget);
+    expect(find.text('The model is the AI that answers your questions. It runs on this device, so it works with no signal. File sizes use storage; fit labels refer to RAM (working memory).'), findsOneWidget);
     expect(find.text('Small'), findsOneWidget);
     expect(find.text('A note about Small.'), findsOneWidget);
-    expect(find.text('3.0 GB · Fits this device', findRichText: true), findsOneWidget);
-    expect(find.text('5.0 GB · May be tight on this device', findRichText: true), findsOneWidget);
+    expect(find.text('3.0 GB · Fits device RAM', findRichText: true), findsOneWidget);
+    expect(find.text('5.0 GB · May be tight on RAM', findRichText: true), findsOneWidget);
     expect(find.text('Works with Cache, not tuned'), findsNWidgets(2));
     expect(find.text('Search Hugging Face'), findsOneWidget);
     expect(find.text('Choose a file'), findsOneWidget);

@@ -70,7 +70,7 @@ If Cache can't get a position yet, chat still works. Go outdoors or near a windo
 
 On the Models screen (tap the model name in "Ask", then "Manage models"):
 - "Not supported: Cache needs a model that can use tools": pick another. Your current model stays loaded.
-- "Too big for this device": choose a smaller one. "May be tight on this device" may be slow or fail to load.
+- "Too large for device RAM": choose a smaller one. "May be tight on RAM" may be slow or fail to load.
 - "Can't read the models folder": restart Cache. Check free space.
 - "Could not copy the file: [reason]": check free space and try again.
 

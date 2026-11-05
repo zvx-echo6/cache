@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../platform/system_ui.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../layout/adaptive.dart';
@@ -422,7 +424,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _showOverlay();
     if (on) {
       final wide = c == null || !c.value.isInitialized || c.value.aspectRatio >= 1;
-      unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+      unawaited(setSystemBars(hideStatusBar: true));
       unawaited(SystemChrome.setPreferredOrientations(
         wide ? const [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight] : const [DeviceOrientation.portraitUp],
       ));
@@ -432,7 +434,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   static Future<void> _restoreSystem() async {
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    await setSystemBars();
     await SystemChrome.setPreferredOrientations(const []);
   }
 

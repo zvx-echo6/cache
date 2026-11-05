@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'platform/system_ui.dart';
 
 /// The colour tokens of one theme. Screens read colours from here (via `context.t`) and never
 /// hard-code them.
@@ -370,13 +374,11 @@ SystemUiOverlayStyle overlayFor(CacheThemeId id) {
   );
 }
 
-/// Tactical hides the system bars (their white icons would break night vision); swipe from the
-/// edge to bring them back for a moment. Other themes show them normally.
+/// Android hides navigation in every theme; Tactical also hides the status bar.
+/// The system makes the hidden bars available by swiping from the edge.
 void applySystemUi(CacheThemeId id) {
-  if (id == CacheThemeId.tactical) {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  } else {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  }
+  unawaited(setSystemBarTheme(hideStatusBar: id == CacheThemeId.tactical).catchError((Object error) {
+    debugPrint('System bars could not be configured: $error');
+  }));
   SystemChrome.setSystemUIOverlayStyle(overlayFor(id));
 }

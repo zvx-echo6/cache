@@ -1,4 +1,4 @@
-# Package the tested UI and matching guide with verified native artifacts for internal TestFlight.
+# Build 45 packages continuous answer progress, explicit RAM labels and system-bar fixes with verified native artifacts.
 name: iOS TestFlight from verified native build
 
 on:
@@ -19,7 +19,7 @@ on:
       whats_new:
         description: What to test
         type: string
-        default: 'Faster Gemma 4 prompt processing; continuous lookup, reading and answer progress; large Wikipedia PDF indexing fix.'
+        default: 'Faster Gemma 4 answers; continuous lookup and reading progress; clear model RAM warnings; Android navigation-bar handling; large Wikipedia PDF indexing fix.'
 
 permissions:
   contents: read
@@ -264,7 +264,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
-          WHATS_NEW_INPUT: ${{ inputs.whats_new || 'Faster Gemma 4 prompt processing; continuous lookup, reading and answer progress; large Wikipedia PDF indexing fix.' }}
+          WHATS_NEW_INPUT: ${{ inputs.whats_new || 'Faster Gemma 4 answers; continuous lookup and reading progress; clear model RAM warnings; Android navigation-bar handling; large Wikipedia PDF indexing fix.' }}
           GROUP: ${{ inputs.group || 'Family' }}
         run: |
           export WHATS_NEW="$WHATS_NEW_INPUT"

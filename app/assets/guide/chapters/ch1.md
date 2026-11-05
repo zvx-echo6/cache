@@ -31,7 +31,7 @@ The model is the AI that answers in "Ask". You pick it, and Cache runs it on you
 ![The Models screen](shot:models-screen)
 
 1. Tap the model name at the top of "Ask" and choose "Manage models". You can also go to ["Settings" > "Cache model and web search"](cache://settings/assistant) and tap the model row.
-2. Look under "Recommended". Each card says how well it fits your device: "Fits this device", "May be tight on this device" or "Too big for this device".
+2. Look under "Recommended". Each card says how well it fits your device: "Fits device RAM", "May be tight on RAM" or "Too large for device RAM".
 3. Pick one that fits. If you're unsure, take the smallest.
 4. Tap its download button, then "Download" in the pop-up.
 5. When it finishes, tap the model under "On this device". Its line says "Loading…", then "Active".

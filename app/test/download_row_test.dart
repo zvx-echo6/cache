@@ -10,7 +10,7 @@ void main() {
   group('the status line (UX-downloads-29 wording)', () {
     final total = (4.6 * _gb).round(), done = (1.7 * _gb).round();
     test('every state', () {
-      expect(dlLine(DlState(DlPhase.idle, total: total), idle: '4.6 GB · May be tight on this device'), '4.6 GB · May be tight on this device');
+      expect(dlLine(DlState(DlPhase.idle, total: total), idle: '4.6 GB · May be tight on RAM'), '4.6 GB · May be tight on RAM');
       expect(dlLine(DlState(DlPhase.starting, total: total)), 'Starting…');
       expect(dlLine(DlState(DlPhase.running, done: done, total: total, speed: 6.2 * _mb)), '1.7 of 4.6 GB · 6.2 MB/s · about 8 min left');
       expect(dlLine(DlState(DlPhase.running, done: done, total: total)), '1.7 of 4.6 GB', reason: 'no speed before 2 seconds of data');

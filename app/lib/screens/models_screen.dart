@@ -79,7 +79,9 @@ class _ModelsScreenState extends State<ModelsScreen> {
     final downloads = ModelDownloads.shared;
     return Scaffold(
       appBar: AppBar(title: const Text('Models')),
-      body: ListenableBuilder(
+      body: SafeArea(
+        top: false,
+        child: ListenableBuilder(
         listenable: Listenable.merge([app, _recommended, ?downloads]),
         builder: (context, _) {
           return Column(
@@ -93,7 +95,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
                         child: Text(
-                          'The model is the AI that answers your questions. It runs on this device, so it works with no signal.',
+                          'The model is the AI that answers your questions. It runs on this device, so it works with no signal. File sizes use storage; fit labels refer to RAM (working memory).',
                           style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
                       ),
@@ -169,6 +171,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
             ],
           );
         },
+        ),
       ),
     );
   }

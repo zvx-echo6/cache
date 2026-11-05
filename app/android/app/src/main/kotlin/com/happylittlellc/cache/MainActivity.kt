@@ -7,6 +7,11 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.Context
 import android.os.BatteryManager
+import android.os.Bundle
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.os.Build
 import android.os.PowerManager
 import io.flutter.embedding.android.FlutterActivity
@@ -14,6 +19,41 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var systemUiChannel: MethodChannel? = null
+    private var systemBarsConfigured = false
+    private var hideStatusBar = false
+    private var keyboardVisible = false
+    private val restoreSystemBars = Runnable { applySystemBars() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
+            val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
+            if (keyboardVisible && !keyboardNow) {
+                view.removeCallbacks(restoreSystemBars)
+                // Android prevents hiding navigation for one second after text input ends.
+                view.postDelayed(restoreSystemBars, 1100)
+            }
+            keyboardVisible = keyboardNow
+            insets
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) window.decorView.post(restoreSystemBars)
+    }
+
+    private fun applySystemBars() {
+        if (!systemBarsConfigured || keyboardVisible || isFinishing) return
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.navigationBars())
+        if (hideStatusBar) controller.hide(WindowInsetsCompat.Type.statusBars())
+        else controller.show(WindowInsetsCompat.Type.statusBars())
+    }
+
     private var memoryChannel: MethodChannel? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
@@ -23,6 +63,19 @@ class MainActivity : FlutterActivity() {
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "apply" -> {
+                        hideStatusBar = call.argument<Boolean>("hideStatusBar") == true
+                        systemBarsConfigured = true
+                        window.decorView.post(restoreSystemBars)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -72,6 +125,9 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        window.decorView.removeCallbacks(restoreSystemBars)
+        systemUiChannel?.setMethodCallHandler(null)
+        systemUiChannel = null
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
