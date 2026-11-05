@@ -168,9 +168,12 @@ jobs:
         run: |
           flutter --version
           flutter pub get
-          flutter build apk --release
+          flutter analyze
+          flutter test test/ask_diagnostics_test.dart test/tool_loop_test.dart
+          flutter test --dart-define=CACHE_ASK_DIAGNOSTICS=true test/ask_diagnostics_test.dart test/tool_loop_test.dart
+          flutter build apk --release --dart-define=CACHE_ASK_DIAGNOSTICS=true
           mkdir -p "$GITHUB_WORKSPACE/out"
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-diagnostic-${GITHUB_SHA::7}.apk"
       - name: Verify the APK
         run: |
           apk=$(ls out/*.apk)
@@ -196,11 +199,13 @@ jobs:
             echo "::error::The APK is not signed with the upload key (signer $signer)"; exit 1
           fi
           echo "signed with the upload key"
+          sha256sum out/*.apk > out/SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > out/SOURCE
       - name: Remove signing material
         if: always()
         run: rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/upload-cert.sha256" "$RUNNER_TEMP/apksigner.txt" app/android/key.properties
       - uses: actions/upload-artifact@v4
         with:
           name: Cache-test-apk
-          path: out/*.apk
-          retention-days: 7
+          path: out/
+          retention-days: 14

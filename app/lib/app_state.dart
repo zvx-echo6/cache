@@ -14,6 +14,7 @@ import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/memory.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
+import 'platform/ask_diagnostics.dart';
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -299,6 +300,7 @@ class AppState extends ChangeNotifier {
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
       logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
+      if (kAskDiagnostics) logInfo('Ask diagnostic model: file=${entry.fileName}, bytes=${entry.size}, context=${own.nCtx ?? kContextTokens}');
       final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
