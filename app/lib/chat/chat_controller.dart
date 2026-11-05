@@ -70,6 +70,7 @@ class ChatController extends ChangeNotifier {
     this.newHost,
     this.locationKnown,
     this.prepareTurn,
+    this.beforeModelRound,
     this.numberingState,
     this.actions,
     this.waitForCore,
@@ -104,6 +105,8 @@ class ChatController extends ChangeNotifier {
   /// Optional shared preparation before each inference, including restored chats.
   /// Cancellation must prevent late preparation from starting model generation.
   final Future<void> Function(bool Function() isCancelled)? prepareTurn;
+
+  final Future<void> Function()? beforeModelRound;
 
   /// Makes the numbering of a new chat in the search core; null (or returning null) numbers in Dart.
   final ResultNumbering? Function()? newNumbering;
@@ -284,6 +287,7 @@ class ChatController extends ChangeNotifier {
     }
     final loop = ToolLoop(
       backend: backend,
+      beforeGenerate: beforeModelRound,
       tools: tools,
       numbering: numbering,
       host: newHost?.call(numbering),

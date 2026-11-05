@@ -70,9 +70,16 @@ class SearchEmbedder {
   final String fileName;
   final CacheEmbedder Function(String path) _make;
   CacheEmbedder? _embedder;
+  final _inFlight = <Future<(String, List<double>)?>>{};
 
   /// The model id and vector of [text], or null when the model file is not there.
-  Future<(String, List<double>)?> embed(String text) async {
+  Future<(String, List<double>)?> embed(String text) {
+    final work = _embed(text);
+    _inFlight.add(work);
+    return work.whenComplete(() { _inFlight.remove(work); });
+  }
+
+  Future<(String, List<double>)?> _embed(String text) async {
     var e = _embedder;
     if (e == null) {
       final file = File('${(await modelsDir()).path}${Platform.pathSeparator}$fileName');
@@ -80,6 +87,14 @@ class SearchEmbedder {
       e = _embedder = _make(file.path);
     }
     return (e.modelId, await e.embed(text));
+  }
+
+  Future<void> release() async {
+    while (_inFlight.isNotEmpty) {
+      await Future.wait([for (final work in _inFlight.toList()) () async { try { await work; } catch (_) {} }()]);
+    }
+    final e = _embedder;
+    if (e != null) await e.free();
   }
 
   /// The map search's query vector.
@@ -168,6 +183,10 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
     }
     final v = await e.embed(text);
     return v == null ? null : QueryVector(v.$1, v.$2);
+  }
+
+  Future<void> releaseForChat() async {
+    await Future.wait([embedder.release(), for (final e in _others.values.toList()) e.release()]);
   }
 
   @override

@@ -80,6 +80,7 @@ import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
+import 'platform/ask_diagnostics.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
@@ -441,6 +442,12 @@ class _CacheAppState extends State<CacheApp> {
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => chatLocation.known,
     prepareTurn: chatLocation.prepare,
+    beforeModelRound: !kAskDiagnostics ? null : () async {
+      final clock = Stopwatch()..start();
+      logInfo('Ask memory handoff starts; ${memoryNow()}');
+      await searchModel.releaseForChat();
+      logInfo('Ask memory handoff done in ${clock.elapsedMilliseconds} ms; ${memoryNow()}');
+    },
     actions: actionRegistry,
     actCore: actCore,
   );

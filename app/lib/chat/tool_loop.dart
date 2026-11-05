@@ -77,6 +77,7 @@ class ToolLoop {
     required List<Tool> tools,
     this.systemPrompt,
     this.enableThinking = kEnableThinking,
+    this.beforeGenerate,
     this.numbering,
     this.host,
     List<Map<String, dynamic>> history = const [],
@@ -101,6 +102,9 @@ class ToolLoop {
   static final _callNumber = RegExp(r'^call_(\d+)$');
 
   final ModelBackend backend;
+
+  /// Memory handoff only: no request or tool changes.
+  final Future<void> Function()? beforeGenerate;
 
   /// Builds the system prompt for each turn (local time and location change); null: [kSystemPrompt].
   final String Function()? systemPrompt;
@@ -216,6 +220,8 @@ class ToolLoop {
         final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
         final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
 
+        await beforeGenerate?.call();
+        if (_stopped) return;
         final roundClock = Stopwatch()..start();
         final requestNumber = ++modelRequests;
         int? firstTextMs;

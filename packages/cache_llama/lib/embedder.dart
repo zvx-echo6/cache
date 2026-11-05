@@ -15,7 +15,10 @@ import 'cache_llama_bindings.dart';
 /// THE SETTINGS MATCH THE PACK BUILDER (cache_embed in the core): context 512, vectors normalised. The pooling comes from the
 /// model's own metadata. A query then gets the same vector here as `places_pack embed` gave the pack's texts.
 class CacheEmbedder {
-  CacheEmbedder({required this.modelPath, this.threads = 4, this.idleFor = const Duration(minutes: 2)});
+  CacheEmbedder({required this.modelPath, this.threads = 4, this.idleFor = const Duration(minutes: 2), void Function(SendPort)? workerEntry})
+      : _workerEntry = workerEntry ?? _embedWorker;
+
+  final void Function(SendPort) _workerEntry;
 
   /// Where the GGUF is.
   final String modelPath;
@@ -32,12 +35,15 @@ class CacheEmbedder {
   Isolate? _isolate;
   SendPort? _toWorker;
   ReceivePort? _fromWorker;
+  ReceivePort? _errors;
+  String? _workerError;
   Completer<void>? _ready;
   int _nextId = 1;
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};
   Timer? _idle;
 
   Future<void> _ensureWorker() async {
+    if (_workerError != null) throw StateError(_workerError!);
     if (_ready != null) return _ready!.future;
     _ready = Completer<void>();
     final rp = ReceivePort();
@@ -51,14 +57,16 @@ class CacheEmbedder {
       final msg = (m as Map).cast<String, dynamic>();
       _pending.remove(msg['id'])?.complete(msg);
     });
-    final errors = ReceivePort();
+    final errors = _errors = ReceivePort();
     errors.listen((dynamic e) {
+      _workerError = 'The embedding engine crashed: ${(e as List).first}';
+      if (!_ready!.isCompleted) _ready!.completeError(StateError(_workerError!));
       for (final c in _pending.values) {
         c.complete({'error': 'The embedding engine crashed: ${(e as List).first}'});
       }
       _pending.clear();
     });
-    _isolate = await Isolate.spawn(_embedWorker, rp.sendPort, debugName: 'cache_embed', onError: errors.sendPort);
+    _isolate = await Isolate.spawn(_workerEntry, rp.sendPort, debugName: 'cache_embed', onError: errors.sendPort);
     return _ready!.future;
   }
 
@@ -71,15 +79,28 @@ class CacheEmbedder {
     _idle?.cancel();
     _toWorker!.send({'type': 'embed', 'id': id, 'path': modelPath, 'threads': threads, 'text': text});
     final r = await c.future;
-    _idle = Timer(idleFor, free);
+    _idle = Timer(idleFor, () => unawaited(free().catchError((Object _) {})));
     if (r['error'] != null) throw StateError(r['error'] as String);
     return (r['vector'] as TransferableTypedData).materialize().asFloat32List().toList();
   }
 
-  /// Lets the model go (the next [embed] loads it again).
-  void free() {
+  /// Completes only after native embedding memory has actually been freed.
+  /// The next embed loads the same file with the same settings.
+  Future<void> free() async {
     _idle?.cancel();
-    _toWorker?.send({'type': 'free'});
+    final ready = _ready;
+    if (ready == null) return;
+    await ready.future;
+    if (_workerError != null) throw StateError(_workerError!);
+    final worker = _toWorker;
+    if (worker == null) return;
+    final id = _nextId++;
+    final done = Completer<Map<String, dynamic>>();
+    _pending[id] = done;
+    worker.send({'type': 'free', 'id': id});
+    final response = await done.future;
+    _idle?.cancel();
+    if (response['error'] != null) throw StateError(response['error'] as String);
   }
 
   /// Frees the model and ends the background isolate.
@@ -89,6 +110,9 @@ class CacheEmbedder {
     await Future<void>.delayed(const Duration(milliseconds: 100));
     _isolate?.kill(priority: Isolate.beforeNextEvent);
     _fromWorker?.close();
+    _errors?.close();
+    _errors = null;
+    _workerError = null;
     _isolate = null;
     _toWorker = null;
     _fromWorker = null;
@@ -147,6 +171,7 @@ void _embedWorker(SendPort toMain) {
           b.clEmbedFree(handle);
           handle = nullptr;
         }
+        if (msg['id'] != null) toMain.send({'id': msg['id'], 'freed': true});
     }
   });
 }

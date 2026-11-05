@@ -169,8 +169,8 @@ jobs:
           flutter --version
           flutter pub get
           flutter analyze
-          flutter test test/ask_diagnostics_test.dart test/tool_loop_test.dart
-          flutter test --dart-define=CACHE_ASK_DIAGNOSTICS=true test/ask_diagnostics_test.dart test/tool_loop_test.dart
+          flutter test test/ask_diagnostics_test.dart test/embedding_release_test.dart test/tool_loop_test.dart
+          flutter test --dart-define=CACHE_ASK_DIAGNOSTICS=true test/ask_diagnostics_test.dart test/embedding_release_test.dart test/tool_loop_test.dart
           flutter build apk --release --dart-define=CACHE_ASK_DIAGNOSTICS=true
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-diagnostic-${GITHUB_SHA::7}.apk"

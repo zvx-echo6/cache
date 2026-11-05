@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cache/chat/citations.dart';
 import 'package:cache/chat/model_backend.dart';
 import 'package:cache/chat/tool.dart';
@@ -81,6 +82,41 @@ void main() {
   });
 
   group('tool loop', () {
+    test('memory handoff completes before each native round without changing requests', () async {
+      final gates = [Completer<void>(), Completer<void>()];
+      var calls = 0;
+      final backend = FakeBackend([(_) => toolCall('compass'), (_) => answer('Answer [1].')]);
+      final loop = ToolLoop(
+        backend: backend,
+        tools: [FakeSearch([[r('Compass', 'North')]])],
+        beforeGenerate: () => gates[calls++].future,
+      );
+      final done = loop.ask('question').toList();
+      await Future<void>.delayed(Duration.zero);
+      expect(backend.requests, isEmpty);
+      gates[0].complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(backend.requests, hasLength(1));
+      expect(calls, 2);
+      gates[1].complete();
+      await done;
+      final baseline = FakeBackend([(_) => toolCall('compass'), (_) => answer('Answer [1].')]);
+      await ToolLoop(backend: baseline, tools: [FakeSearch([[r('Compass', 'North')]])]).ask('question').toList();
+      expect(backend.requests, baseline.requests);
+    });
+
+    test('cancellation during memory handoff prevents generation', () async {
+      final gate = Completer<void>();
+      final backend = FakeBackend([(_) => answer('Answer.')]);
+      final loop = ToolLoop(backend: backend, tools: const [], beforeGenerate: () => gate.future);
+      final done = loop.ask('question').toList();
+      await Future<void>.delayed(Duration.zero);
+      loop.stop();
+      gate.complete();
+      await done;
+      expect(backend.requests, isEmpty);
+    });
+
     test('tool preambles become retained work without changing model messages', () async {
       const preamble = 'I will look that up.';
       final backend = FakeBackend([
