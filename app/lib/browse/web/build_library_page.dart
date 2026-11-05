@@ -363,9 +363,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_division != null) Padding(
+          Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Text('${lib.title} / ${shelfLabel(_division!, _classes ?? const [])}', style: TextStyle(color: k.secondary, fontSize: 12)),
+            child: Text('${lib.title} / ${_division == null ? 'All books' : shelfLabel(_division!, _classes ?? const [])}', style: TextStyle(color: k.secondary, fontSize: 12)),
           ),
           GroupLabel('${building ? 'Finished books' : 'Books'} · ${thousands(books.length)}'),
           if (table)
@@ -385,6 +385,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
             height: MediaQuery.sizeOf(context).height * 0.65,
             child: ListView.builder(
               key: ValueKey('shelf-${_division ?? 'all'}'),
+              primary: false,
               itemCount: books.length,
               itemBuilder: (context, index) => _bookRow(context, lib, books[index], table),
             ),
@@ -441,7 +442,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('${b.callNumber == null ? '' : '${b.callNumber} · '}${b.title}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+                      _bookTitle(context, b, lines: 1),
                       if (b.unsorted && _classes != null) TextButton(onPressed: () => _placeBook(b), child: const Text('Place it')),
                       if (b.unsorted && b.unsureReason != null) Small(b.unsureReason!, size: 11),
                       if (b.replacing) Small('Replacing with a new copy', size: 11) else if (b.partial != null) Small(b.partial!, size: 11, warn: true),
@@ -457,7 +458,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('${b.callNumber == null ? '' : '${b.callNumber} · '}${b.title}', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+                      _bookTitle(context, b, lines: 2),
                       Small('${b.pages} pages · ${thousands(b.passages)} passages · added ${addedWords(b.addedAt)}${b.replacing ? ' · replacing' : ''}'),
                     ]),
                   ),
@@ -466,6 +467,19 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         );
     return table ? HoverReveal(builder: row) : row(false);
   }
+
+  Widget _bookTitle(BuildContext context, BuildBook book, {int lines = 1}) => Text.rich(
+    TextSpan(children: [
+      if (book.callNumber != null) TextSpan(
+        text: '${book.callNumber} · ',
+        style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: context.t.secondary),
+      ),
+      TextSpan(text: book.title),
+    ]),
+    maxLines: lines,
+    overflow: TextOverflow.ellipsis,
+    style: TextStyle(fontSize: 14, color: context.t.text),
+  );
 
   void _goToNumber() {
     final text = _number.text.trim().toUpperCase();

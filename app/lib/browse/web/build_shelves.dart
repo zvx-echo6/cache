@@ -60,7 +60,10 @@ class BuildShelves extends StatelessWidget {
       dense: true,
       selected: selected == value,
       selectedColor: colors.accent,
-      title: Text(label, style: TextStyle(fontSize: 13, color: empty ? colors.secondary.withValues(alpha: 0.55) : colors.text)),
+      selectedTileColor: colors.primary.withValues(alpha: 0.12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      leading: selected == value ? Icon(Icons.check, size: 16, color: colors.accent) : const SizedBox(width: 16),
+      title: Text(label, style: TextStyle(fontSize: 13, color: selected == value ? colors.accent : empty ? colors.secondary.withValues(alpha: 0.55) : colors.text)),
       trailing: Text('$count', style: TextStyle(color: colors.secondary, fontSize: 12)),
       onTap: () => onSelect(value),
     );
@@ -82,7 +85,7 @@ class BuildShelves extends StatelessWidget {
         row('Unsorted', 'unsorted', counts['unsorted'] ?? 0),
         for (final c in classes)
           ExpansionTile(
-            key: ValueKey('class-${c.number}'),
+            key: ValueKey('class-${c.number}-${c.divisions.any((d) => d.number == selected)}'),
             initiallyExpanded: c.divisions.any((d) => d.number == selected),
             tilePadding: const EdgeInsets.symmetric(horizontal: 16),
             title: Text('${c.number} ${c.name}', style: TextStyle(fontSize: 13, color: colors.text)),

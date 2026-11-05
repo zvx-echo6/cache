@@ -9,11 +9,11 @@ import '../test/browse/build_fakes.dart';
 import 'shot_kit.dart';
 
 const shelves = [
-  BuildClass('200', 'Medicine', [
-    BuildDivision(number: '210', name: 'First aid', classNumber: '200'),
-    BuildDivision(number: '220', name: 'Medical care', classNumber: '200'),
+  BuildClass('200', 'Medicine and Health', [
+    BuildDivision(number: '210', name: 'First aid and emergency care', classNumber: '200'),
+    BuildDivision(number: '220', name: 'Anatomy and physiology', classNumber: '200'),
   ]),
-  BuildClass('500', 'Water and food', [BuildDivision(number: '530', name: 'Water treatment', classNumber: '500')]),
+  BuildClass('500', 'Water and Energy', [BuildDivision(number: '530', name: 'Water treatment', classNumber: '500')]),
 ];
 
 class ShelfApi extends FakeBuildApi implements BuildFilingApi {
@@ -31,8 +31,9 @@ void main() {
       final api = ShelfApi()
         ..libs = [const BuildLibrary(id: 'sample', title: 'Field library', books: 3, passages: 958, pages: 660)]
         ..bookMap['sample'] = [
-          const BuildBook(
+          BuildBook(
             id: 'a',
+            addedAt: DateTime.utc(2026, 11, 5, 12),
             title: 'Wilderness First Aid',
             division: '210',
             callNumber: 'CDS 210-001',
@@ -40,8 +41,9 @@ void main() {
             passages: 340,
             size: 41000000,
           ),
-          const BuildBook(
+          BuildBook(
             id: 'b',
+            addedAt: DateTime.utc(2026, 11, 5, 12),
             title: 'The Water Purification Handbook',
             division: '530',
             callNumber: 'CDS 530-001',
@@ -49,14 +51,15 @@ void main() {
             passages: 465,
             size: 28000000,
           ),
-          const BuildBook(
+          BuildBook(
             id: 'c',
+            addedAt: DateTime.utc(2026, 11, 5, 12),
             title: 'Practical Medical Notes',
             pages: 118,
             passages: 153,
             size: 15000000,
             unsureReason: 'More than one subject could fit this book.',
-            suggestions: [BuildSuggestion('210', 'First aid'), BuildSuggestion('220', 'Medical care')],
+            suggestions: [BuildSuggestion('210', 'First aid and emergency care'), BuildSuggestion('220', 'Anatomy and physiology')],
           ),
         ];
       final controller = BuildController(api: api, poll: false);
@@ -78,7 +81,7 @@ void main() {
                 id: 'c',
                 title: 'Practical Medical Notes',
                 unsureReason: 'More than one subject could fit this book.',
-                suggestions: [BuildSuggestion('210', 'First aid'), BuildSuggestion('220', 'Medical care')],
+                suggestions: [BuildSuggestion('210', 'First aid and emergency care'), BuildSuggestion('220', 'Anatomy and physiology')],
               ),
               classes: shelves,
             ),
@@ -89,6 +92,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await snap(tester, 'linux-shelves', '1440-place-${theme.name}');
+      await tester.tap(find.widgetWithText(ChoiceChip, '210 First aid and emergency care'));
+      await tester.pumpAndSettle();
+      await snap(tester, 'linux-shelves', '1440-place-selected-${theme.name}');
+
       await tester.pumpWidget(const SizedBox());
       controller.dispose();
     });

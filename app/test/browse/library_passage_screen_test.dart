@@ -71,6 +71,34 @@ void main() {
     expect(find.text('Old selection'), findsNothing);
   });
 
+  testWidgets('the reader returns to the Library route', (tester) async {
+    final source = ReaderAccess((_) async => const ReadPage(title: 'Field Manual', text: 'Saved text.', truncated: false));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => LibraryPassageScreen(sources: source, address: 'lib:field/passage'),
+                ),
+              ),
+              child: const Text('Library'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Library'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved text.'), findsOneWidget);
+    await tester.tap(find.byTooltip('Back to Library'));
+    await tester.pumpAndSettle();
+    expect(find.text('Library'), findsOneWidget);
+    expect(find.byType(LibraryPassageScreen), findsNothing);
+  });
+
   testWidgets('changing the source backend reloads; truncated text is labelled', (tester) async {
     final old = ReaderAccess((_) async => const ReadPage(title: 'Old', text: 'Old text.', truncated: false));
     await tester.pumpWidget(screen(old, 'lib:field/passage'));
