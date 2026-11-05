@@ -1,0 +1,39 @@
+# Fast validation and a deployable x64 helper for Linux integration checks.
+# Full x64/ARM64 packages remain the responsibility of server-release.yml.
+name: Linux helper
+on:
+  push:
+    branches: [server, 'server-*']
+    paths: ['server/helper/**', '.github/workflows/server-helper.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  helper:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.2
+      - name: Resolve, analyze and test
+        working-directory: server/helper
+        run: |
+          dart pub get
+          dart analyze
+          dart test
+      - name: Compile helper
+        working-directory: server/helper
+        run: |
+          mkdir -p build
+          dart compile exe bin/cache_core_helper.dart -o build/cache-core-helper
+          printf '%s\\n' "$GITHUB_SHA" > build/SOURCE
+          cd build
+          sha256sum cache-core-helper > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cache-helper-linux-x86_64
+          path: server/helper/build/
+          retention-days: 7
+          if-no-files-found: error
