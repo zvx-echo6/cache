@@ -387,7 +387,7 @@ abstract class BuildApi {
 }
 
 /// Classification functions supported by the Linux library builder.
-abstract interface class BuildFilingApi {
+abstract interface class BuildFilingApi implements BuildApi {
   Future<List<BuildClass>> classes(String libraryId);
   Future<void> placeBook(String libraryId, String bookId, String division);
 }
@@ -415,7 +415,7 @@ class BuildClass {
 }
 
 /// The browser's [BuildApi]: Cache for Linux's `/api/build/...`, same origin, so the session goes along.
-class HttpBuildApi implements BuildApi, BuildFilingApi {
+class HttpBuildApi implements BuildFilingApi {
   HttpBuildApi({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
