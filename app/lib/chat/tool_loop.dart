@@ -43,6 +43,8 @@ class TurnUpdate {
     this.text = '',
     this.cited = const [],
     this.error,
+    this.activeTool,
+    this.completedToolText,
     this.promptTokens = 0,
     this.generatedTokens = 0,
   });
@@ -55,6 +57,12 @@ class TurnUpdate {
   /// Only set when [phase] is done: the valid cited results.
   final List<NumberedResult> cited;
   final String? error;
+
+  /// Machine tool name for the current progress label; never sent to the model.
+  final String? activeTool;
+
+  /// A completed tool round's commentary, retained in the visible work flow.
+  final String? completedToolText;
   final int promptTokens;
   final int generatedTokens;
 }
@@ -198,7 +206,7 @@ class ToolLoop {
         logDetail('Ask tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
       }
       if (seed != null) {
-        yield const TurnUpdate(phase: TurnPhase.searching);
+        yield TurnUpdate(phase: TurnPhase.searching, activeTool: seed.name);
         final call = _numbered(seed.name, seed.arguments);
         _messages.add({'role': 'assistant', 'content': null, 'tool_calls': [call.toJson()]});
         await _addResult(call);
@@ -218,7 +226,7 @@ class ToolLoop {
           last = p;
           if (p.isFinal) break;
           if (p.hasToolCalls) {
-            yield const TurnUpdate(phase: TurnPhase.searching);
+            yield TurnUpdate(phase: TurnPhase.searching, text: _clean(p.content), activeTool: p.toolCalls.first.name);
           } else if (p.content.isNotEmpty) {
             final text = _clean(p.content);
             if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
@@ -254,8 +262,9 @@ class ToolLoop {
         } else if (last.hasToolCalls && !_stopped) {
           final calls = [for (final c in last.toolCalls) _numbered(c.name, c.arguments)];
           _messages.add({...last.toMessage(), 'tool_calls': [for (final c in calls) c.toJson()]});
-          yield const TurnUpdate(phase: TurnPhase.searching);
+          yield TurnUpdate(phase: TurnPhase.searching, activeTool: calls.first.name, completedToolText: _clean(last.content).trim());
           for (final call in calls) {
+            yield TurnUpdate(phase: TurnPhase.searching, activeTool: call.name);
             await _addResult(call);
           }
           rounds++;

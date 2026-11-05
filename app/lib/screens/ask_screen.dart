@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
-import '../chat/answer_markdown.dart';
+import '../chat/answer_progress.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
-import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth;
@@ -647,20 +646,18 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   Widget build(BuildContext context) {
     final k = context.t;
     final m = widget.msg;
-    final showText =
-        m.phase == TurnPhase.answering || m.phase == TurnPhase.done;
-    final status = switch (m.phase) {
-      TurnPhase.starting => 'Starting…',
-      TurnPhase.thinking => 'Thinking…',
-      TurnPhase.searching => 'Searching your sources…',
-      _ => null,
-    };
     return Padding(
       padding: const EdgeInsets.only(top: 12, bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showText && m.text.isNotEmpty) AnswerMarkdown(m.text),
+          AnswerProgress(
+            phase: m.phase,
+            activeTool: m.activeTool,
+            notes: m.toolNotes,
+            text: m.text,
+            failed: m.error != null,
+          ),
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
@@ -689,28 +686,6 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                         label: const Text('Open navigation'),
                       ),
                     ),
-                ],
-              ),
-            ),
-          if (status != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: k.secondary,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    status,
-                    style: TextStyle(fontSize: 15, color: k.secondary),
-                  ),
                 ],
               ),
             ),

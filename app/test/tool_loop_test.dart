@@ -81,6 +81,24 @@ void main() {
   });
 
   group('tool loop', () {
+    test('tool preambles become retained work without changing model messages', () async {
+      const preamble = 'I will look that up.';
+      final backend = FakeBackend([
+        (_) => const PartialMessage(isFinal: true, content: preamble, toolCalls: [ToolCall(id: 'c1', name: 'search', arguments: '{"query":"compass"}')]),
+        (_) => answer('The answer [1].'),
+      ]);
+      final loop = ToolLoop(backend: backend, tools: [FakeSearch([[r('Compass', 'It points north.')]])]);
+      final updates = await loop.ask('compass?').toList();
+      final work = updates.singleWhere((u) => u.completedToolText != null);
+      expect(work.completedToolText, preamble);
+      expect(work.activeTool, 'search');
+      expect(work.phase, TurnPhase.searching);
+      expect(updates.last.text, 'The answer [1].');
+      final assistant = (backend.requests[1]['messages'] as List)[2] as Map;
+      expect(assistant['content'], preamble, reason: 'progress changes only presentation');
+      expect(assistant['tool_calls'], hasLength(1));
+    });
+
     test('numbers results conversation-wide and formats the tool message', () async {
       final search = FakeSearch([
         [r('WikiMed: Burn', 'Cool the burn.'), r('Manual p.142', 'Seek help.')],

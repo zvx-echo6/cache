@@ -43,6 +43,10 @@ class ChatMessage {
   final bool isUser;
   String text;
   TurnPhase phase;
+
+  /// Ephemeral work shown continuously above the final answer, not model history.
+  List<String> toolNotes = const [];
+  String? activeTool;
   List<NumberedResult> sources = const [];
   String? error;
   List<NavigationAction> navigationActions = const [];
@@ -402,11 +406,7 @@ class ChatController extends ChangeNotifier {
       await for (final u in loop.ask(text, seed: seeded)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
-        reply
-          ..phase = u.phase
-          ..error = u.error;
-        if (u.phase == TurnPhase.answering || u.phase == TurnPhase.done) reply.text = u.text;
-        if (u.phase == TurnPhase.done) reply.sources = u.cited;
+        _applyUpdate(reply, u);
         notifyListeners();
       }
     } catch (e) {
@@ -566,11 +566,7 @@ class ChatController extends ChangeNotifier {
       await for (final u in loop.resume()) {
         if (epoch != _epoch) return;
         last = u;
-        reply
-          ..phase = u.phase
-          ..error = u.error;
-        if (u.phase == TurnPhase.answering || u.phase == TurnPhase.done) reply.text = u.text;
-        if (u.phase == TurnPhase.done) reply.sources = u.cited;
+        _applyUpdate(reply, u);
         notifyListeners();
       }
     } catch (e) {
@@ -588,6 +584,21 @@ class ChatController extends ChangeNotifier {
       if (epoch == _epoch) busy = false;
       notifyListeners();
     }
+  }
+
+  void _applyUpdate(ChatMessage reply, TurnUpdate update) {
+    reply
+      ..phase = update.phase
+      ..error = update.error
+      ..activeTool = update.activeTool;
+    final note = update.completedToolText;
+    if (note != null) {
+      if (note.isNotEmpty) reply.toolNotes = [...reply.toolNotes, note];
+      reply.text = '';
+    } else if (update.phase == TurnPhase.answering || update.phase == TurnPhase.done || update.text.isNotEmpty) {
+      reply.text = update.text;
+    }
+    if (update.phase == TurnPhase.done) reply.sources = update.cited;
   }
 
   /// Stores what the turn added to the transcript from [start], with the shown answer, its citations and its stats.
