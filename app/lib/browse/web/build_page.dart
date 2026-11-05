@@ -291,7 +291,7 @@ class _BuildPageState extends State<BuildPage> {
             ],
           ),
         ),
-        if (_pending.isNotEmpty) ...[
+        if (_pending.isNotEmpty && !_needsChoice) ...[
           const SizedBox(height: 12),
           _pendingCard(context),
         ],

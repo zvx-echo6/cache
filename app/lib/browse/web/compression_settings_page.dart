@@ -6,9 +6,14 @@ import '../../theme.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_state.dart';
-import 'build_text.dart';
 import 'device_api.dart' show DeviceException;
 import 'two_column.dart';
+
+String _presetHelp(CompressionChoice choice) => switch (choice.preset) {
+  'high' => 'Pages look the same at normal reading size.',
+  'smallest' => 'Pages are noticeably softer. Saves the most.',
+  _ => 'Pages are a little softer when you zoom in.',
+};
 
 /// A reusable, network-free compression choice for a single PDF.
 class CompressionChoiceControl extends StatelessWidget {
@@ -77,6 +82,7 @@ class CompressionChoiceControl extends StatelessWidget {
               ),
           ],
         ),
+        Text(_presetHelp(value), style: TextStyle(fontSize: 12, color: context.t.secondary)),
       ],
     ],
   );
@@ -243,6 +249,7 @@ class _CompressionSettingsPageState extends State<CompressionSettingsPage> {
             ],
           ),
         ],
+        if (choice?.level == 'smaller_scans') Text(_presetHelp(choice!), style: TextStyle(fontSize: 12, color: context.t.secondary)),
         const SizedBox(height: 16),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,

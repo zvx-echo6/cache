@@ -1,4 +1,3 @@
-import 'package:cache/browse/web/build_api.dart';
 import 'package:cache/browse/web/build_page.dart';
 import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/browse/web/compression_settings_page.dart';
