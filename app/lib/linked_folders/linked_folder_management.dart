@@ -28,15 +28,46 @@ class _LinkedFolderManagementPageState
 
   String _count(int count, String singular) =>
       '$count $singular${count == 1 ? '' : 's'}';
+  int _watchRequest = 0;
+  bool _watchStarted = false;
+
   @override
   void initState() {
     super.initState();
-    c.watch(widget.libraryId);
+    _watchAfterFrame();
+  }
+
+  void _watchAfterFrame() {
+    final request = ++_watchRequest;
+    final controller = c;
+    final libraryId = widget.libraryId;
+    // The previous route may still be listening to the same controller.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || request != _watchRequest) return;
+      controller.watch(libraryId);
+      if (mounted && request == _watchRequest) {
+        setState(() => _watchStarted = true);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant LinkedFolderManagementPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, c) ||
+        oldWidget.libraryId != widget.libraryId) {
+      if (_watchStarted) {
+        oldWidget.controller.unwatch(oldWidget.libraryId, notify: false);
+      }
+      _watchStarted = false;
+      _watchAfterFrame();
+    }
   }
 
   @override
   void dispose() {
-    c.unwatch(widget.libraryId);
+    _watchRequest++;
+    if (_watchStarted) c.unwatch(widget.libraryId, notify: false);
     super.dispose();
   }
 
@@ -77,9 +108,9 @@ class _LinkedFolderManagementPageState
     listenable: c,
     builder: (context, _) {
       final k = context.t;
-      final snap = c.snapshot;
-      final job = c.activeJob;
-      final displayedJob = job ?? c.latestJob;
+      final snap = _watchStarted ? c.snapshot : null;
+      final job = _watchStarted ? c.activeJob : null;
+      final displayedJob = job ?? (_watchStarted ? c.latestJob : null);
       final left = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -87,7 +118,7 @@ class _LinkedFolderManagementPageState
             'Linked folders',
             style: TextStyle(fontWeight: FontWeight.w600),
           ),
-          if (c.busy && snap == null)
+          if ((!_watchStarted || c.busy) && snap == null)
             const Padding(
               padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator()),
@@ -99,13 +130,13 @@ class _LinkedFolderManagementPageState
               padding: const EdgeInsets.only(top: 10),
               child: _rootCard(context, r, displayedJob),
             ),
-          if (c.error != null)
+          if (_watchStarted && c.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(c.error!, style: TextStyle(color: k.warning)),
             ),
           OutlinedButton.icon(
-            onPressed: c.busy || c.actionBusy
+            onPressed: !_watchStarted || c.busy || c.actionBusy
                 ? null
                 : () => c.refresh(widget.libraryId),
             icon: const Icon(Icons.refresh),

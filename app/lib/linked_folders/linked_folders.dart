@@ -431,7 +431,7 @@ class LinkedFolderController extends ChangeNotifier {
     unawaited(refresh(libraryId));
   }
 
-  void unwatch(String libraryId) {
+  void unwatch(String libraryId, {bool notify = true}) {
     if (_disposed || _watching != libraryId) return;
     _watching = null;
     _generation++;
@@ -440,7 +440,7 @@ class LinkedFolderController extends ChangeNotifier {
     busy = false;
     actionBusy = false;
     _actionGeneration = null;
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   Future<void> _poll(String libraryId, int generation) async {

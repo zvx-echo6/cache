@@ -320,6 +320,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('link-folder')));
       await tester.pumpAndSettle();
+      expect(
+        tester.takeException(),
+        isNull,
+        reason:
+            'replacement navigation must notify shared listeners after build',
+      );
       expect(registrations, 1);
       expect(checksStarted, 1);
       expect(find.text('Linked folders'), findsWidgets);
@@ -329,6 +335,11 @@ void main() {
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'management cleanup must not notify during unmount',
+      );
       controller.dispose();
     },
   );
@@ -814,6 +825,65 @@ void main() {
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    },
+  );
+  testWidgets(
+    'shared listeners survive management navigation and back cleanup',
+    (tester) async {
+      var checkReads = 0;
+      final controller = LinkedFolderController(
+        pollEvery: const Duration(seconds: 1),
+        api: LinkedFolderApi(
+          client: MockClient((request) async {
+            if (request.url.path.endsWith('/checks')) {
+              checkReads++;
+              return _ok({'active': _job(), 'latest': null});
+            }
+            return _ok(_config());
+          }),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          home: ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) => Scaffold(
+              body: TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LinkedFolderManagementPage(
+                      controller: controller,
+                      libraryId: 'recon-library',
+                    ),
+                  ),
+                ),
+                child: const Text('Manage linked folder'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Manage linked folder'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(controller.activeJob?.active, isTrue);
+      Navigator.of(
+        tester.element(find.byType(LinkedFolderManagementPage)),
+      ).pop();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final readsAfterBack = checkReads;
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(
+        checkReads,
+        readsAfterBack,
+        reason: 'popping management stops hidden polling immediately',
+      );
+      await tester.pumpWidget(const SizedBox());
+      expect(tester.takeException(), isNull);
       controller.dispose();
     },
   );
