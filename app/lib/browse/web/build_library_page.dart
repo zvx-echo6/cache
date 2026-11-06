@@ -7,6 +7,7 @@ import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
 import 'two_column.dart';
 import 'build_api.dart';
+import '../../linked_folders/linked_folder_management.dart';
 import 'build_common.dart';
 import 'build_compression.dart';
 import 'compression_default_link.dart';
@@ -114,8 +115,11 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
           icon: const Icon(Icons.more_horiz),
           onSelected: (v) {
             if (v == 'rename') unawaited(_renameLibrary(lib));
+            if (v == 'linked-folders' && widget.build.linkedFolders != null) {
+              Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId)));
+            }
           },
-          itemBuilder: (_) => const [PopupMenuItem(value: 'rename', child: Text('Rename library'))],
+          itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library'))],
         ),
       ]),
       body: ScrollingTwoColumn(left: _left(context, lib), right: _right(context, lib)),

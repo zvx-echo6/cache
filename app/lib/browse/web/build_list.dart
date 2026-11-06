@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../theme.dart';
+import '../../layout/adaptive.dart' show openDetail;
 import '../../video/format.dart' show formatBytes;
 import 'build_api.dart';
 import 'build_common.dart';
@@ -11,6 +12,7 @@ import 'device_library.dart';
 import 'device_widgets.dart' show TransferCard;
 import 'drop_folder_page.dart';
 import 'compression_default_link.dart';
+import '../../linked_folders/linked_folder_setup.dart';
 
 /// What the building adds above the Library list: the PDFs going up, and a card for each library being built (its books done, the time
 /// left, Pause or Resume). A tap on a card opens the library.
@@ -103,6 +105,16 @@ List<Widget> buildAddRows(BuildContext context, DeviceLibrary device) {
       subtitle: 'Make a searchable library from PDF files on this computer.',
       onTap: () => openBuildPage(context, b),
     ),
+    if (b.linkedFolders != null) ...[
+      const SizedBox(height: 6),
+      _AddRow(
+        rowKey: const ValueKey('add-linked-folder'),
+        icon: Icons.link,
+        title: 'Link existing folder',
+        subtitle: 'Use PDFs in place without changing the originals.',
+        onTap: () => openDetail(context, key: 'linked-folder-setup', builder: (_) => LinkedFolderSetupPage(controller: b.linkedFolders!)),
+      ),
+    ],
     const SizedBox(height: 6),
     _AddRow(
       rowKey: const ValueKey('add-drop-folder'),

@@ -65,6 +65,7 @@ pub mod filing;
 pub mod linked_source;
 pub mod linked_registry;
 pub mod linked_api;
+pub mod linked_checks;
 pub mod removed;
 pub mod same;
 #[cfg(test)]

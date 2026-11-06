@@ -7,6 +7,7 @@ import '../../app_fs.dart';
 import 'build_api.dart';
 import 'build_text.dart';
 import 'device_api.dart' show DeviceException;
+import '../../linked_folders/linked_folders.dart' show LinkedFolderController;
 import 'local_files.dart';
 
 /// Where the app remembers how many books were done when this tab last looked, so a reopened tab can say what happened meanwhile.
@@ -94,6 +95,7 @@ class BuildController extends ChangeNotifier {
     this.slow = const Duration(seconds: 30),
     this.concurrency = 3,
     this.poll = true,
+    this.linkedFolders,
     void Function(bool)? leaveWarning,
     Future<List<LocalFile>> Function()? pickPdfs,
     Future<List<LocalFile>> Function()? pickFolder,
@@ -107,6 +109,9 @@ class BuildController extends ChangeNotifier {
   final Duration fast;
   final Duration slow;
   final int concurrency;
+
+  /// Linked folders on this Cache device, shared by Library entry points.
+  final LinkedFolderController? linkedFolders;
 
   /// False in a test that reads by hand: nothing is read on a timer.
   final bool poll;
@@ -600,6 +605,7 @@ class BuildController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    linkedFolders?.dispose();
     if (upload?.running == true) _leaveWarning(false);
     super.dispose();
   }

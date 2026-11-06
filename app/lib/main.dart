@@ -20,6 +20,7 @@ import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
 import 'chat/chat_controller.dart';
@@ -133,12 +134,13 @@ class _CacheAppState extends State<CacheApp> {
     final api = HttpDeviceApi();
     deviceFetchApi = api;
     final fs = createAppFs();
+    final linkedFolders = LinkedFolderController(api: LinkedFolderApi());
     final d = DeviceLibrary(
       api: api,
       fs: fs,
       uploader: createBrowserUploader(),
       onItemsChanged: () => sources.refresh(),
-      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs),
+      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs, linkedFolders: linkedFolders),
     );
     sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
     d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));

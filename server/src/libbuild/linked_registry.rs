@@ -1,5 +1,5 @@
 //! Device-local linked-folder registry. It never builds books or mutates library files.
-use super::linked_source::{scan_linked_root, PdfCandidate, ScanState};
+use super::linked_source::{PdfCandidate, ScanState};
 use serde::{Deserialize,Serialize};
 use std::{collections::{BTreeMap,BTreeSet},fs,io,path::{Component,Path,PathBuf},time::{SystemTime,UNIX_EPOCH}};
 #[derive(Clone,Copy,Debug,Default,Serialize,Deserialize,PartialEq,Eq)] #[serde(rename_all="snake_case")] pub enum BrowseMode { #[default] Keep, Cds, Both }
@@ -7,7 +7,7 @@ use std::{collections::{BTreeMap,BTreeSet},fs,io,path::{Component,Path,PathBuf},
 #[derive(Clone,Debug,Serialize,Deserialize)] pub struct Location { pub root_id:String, pub relative_path:String, pub blake3:String, pub available:bool }
 #[derive(Clone,Debug,Serialize,Deserialize)] pub struct LinkedBook { pub blake3:String, pub doc_id:Option<String>, #[serde(default)] pub doc_version:Option<u32>, pub title:Option<String>, pub pending_indexing:bool, #[serde(default)] pub pending_reason:Option<String>, pub locations:Vec<Location> }
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct RegistryData { pub roots:Vec<RootConfig>, pub books:Vec<LinkedBook> }
-#[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootReport { pub root_id:String, pub paused:bool, pub unavailable:bool, pub complete:bool, pub candidates:usize, pub pending:usize, pub errors:Vec<String> }
+#[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootReport { pub root_id:String, pub paused:bool, pub unavailable:bool, pub complete:bool, pub candidates:usize, pub pending:usize, pub errors:Vec<String>, #[serde(skip)] pub issues:Vec<super::linked_source::RootIssue> }
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct ScanReport { pub roots:Vec<RootReport>, pub books:Vec<LinkedBook> }
 pub struct LinkedRegistry { sidecar:PathBuf, library:PathBuf, data:RegistryData }
 fn safe_id(s:&str)->bool {!s.is_empty()&&s.len()<=80&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')}
@@ -45,13 +45,122 @@ impl LinkedRegistry {
 if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.exclusions!=exclusions{r.state=ScanState::new()}r.path=path;r.label=label;r.mode=mode;r.exclusions=exclusions;r.paused=false}else{self.data.roots.push(RootConfig{id:id.into(),label,mode,path,exclusions,paused:false,state:ScanState::new()})}self.persist()}
  pub fn pause(&mut self,id:&str)->io::Result<()>{let r=self.data.roots.iter_mut().find(|r|r.id==id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"root not found"))?;r.paused=true;self.persist()}
  pub fn resume(&mut self,id:&str)->io::Result<()>{let r=self.data.roots.iter_mut().find(|r|r.id==id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"root not found"))?;r.paused=false;self.persist()}
+ /// Merge future controls once, including roots outside the active job's scope.
+ pub fn reconcile_controls(&mut self, controls: &BTreeMap<String, bool>) -> io::Result<()> {
+     let mut changed = false;
+     for root in &mut self.data.roots {
+         if let Some(paused) = controls.get(&root.id) {
+             if root.paused != *paused {
+                 root.paused = *paused;
+                 changed = true;
+             }
+         }
+     }
+     if changed { self.persist()?; }
+     Ok(())
+ }
  /// Stop checking a root; retain its books and locations as unavailable. Originals are untouched.
  pub fn unlink(&mut self,id:&str)->io::Result<()>{let n=self.data.roots.len();self.data.roots.retain(|r|r.id!=id);if n==self.data.roots.len(){return Err(io::Error::new(io::ErrorKind::NotFound,"root not found"))}for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==id{l.available=false}}b.pending_indexing=b.doc_id.is_none()}self.persist()}
- pub fn scan(&mut self,settle_ms:u64)->io::Result<ScanReport>{let known=catalog(&self.library)?;let when=ms();let mut reports=vec![];for r in &mut self.data.roots{if r.paused{reports.push(RootReport{root_id:r.id.clone(),paused:true,unavailable:false,complete:true,candidates:0,pending:0,errors:vec![]});continue}let s=scan_linked_root(&r.path,&r.exclusions,&r.state,when,settle_ms);r.state=s.state;for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==r.id{l.available=false}}}for c in &s.candidates{adopt(&mut self.data.books,&known,&r.id,c)}for prefix in &s.inaccessible_prefixes{for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==r.id&&(prefix.is_empty()||l.relative_path==*prefix||l.relative_path.starts_with(&(prefix.clone()+"/"))){l.available=false}}}}
-if s.unavailable{for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==r.id{l.available=false}}}}let pending=r.state.values().filter(|v|v.blake3.is_none()).count();reports.push(RootReport{root_id:r.id.clone(),paused:false,unavailable:s.unavailable,complete:s.complete,candidates:s.candidates.len(),pending,errors:s.errors.into_iter().map(|e|format!("{}: {}",e.relpath,e.message)).collect()});}for b in &mut self.data.books{b.locations.sort_by(|a,b|(&a.root_id,&a.relative_path).cmp(&(&b.root_id,&b.relative_path)));b.locations.dedup_by(|a,b|a.root_id==b.root_id&&a.relative_path==b.relative_path);b.pending_indexing=b.doc_id.is_none()}self.persist()?;Ok(ScanReport{roots:reports,books:self.data.books.clone()})}
+ pub fn scan(&mut self,settle_ms:u64)->io::Result<ScanReport>{self.scan_scoped(None,settle_ms)}
+ pub fn scan_scoped(&mut self,root_id:Option<&str>,settle_ms:u64)->io::Result<ScanReport>{self.scan_scoped_progress(root_id,settle_ms,|_,_,_,_,_,_| {})}
+ pub fn scan_scoped_progress<F>(
+     &mut self,
+     root_id: Option<&str>,
+     settle_ms: u64,
+     mut progress: F,
+ ) -> io::Result<ScanReport>
+ where
+     F: FnMut(&str, usize, usize, u64, usize, &ScanState),
+ {
+     let known = catalog(&self.library)?;
+     let when = ms();
+     let mut reports = vec![];
+     for index in 0..self.data.roots.len() {
+         let root = self.data.roots[index].clone();
+         if root_id.is_some_and(|id| root.id != id) {
+             continue;
+         }
+         if root.paused {
+             reports.push(RootReport {
+                 root_id: root.id, paused: true, unavailable: false, complete: true,
+                 candidates: 0, pending: 0, errors: vec![], issues: vec![],
+             });
+             continue;
+         }
+         let scanned = super::linked_source::scan_linked_root_with_progress(
+             &root.path, &root.exclusions, &root.state, when, settle_ms,
+             |seen, hashed, bytes, settling, observed|
+                 progress(&root.id, seen, hashed, bytes, settling, observed),
+         );
+         self.data.roots[index].state = scanned.state;
+         for book in &mut self.data.books {
+             for location in &mut book.locations {
+                 if location.root_id == root.id {
+                     location.available = false;
+                 }
+             }
+         }
+         for candidate in &scanned.candidates {
+             adopt(&mut self.data.books, &known, &root.id, candidate);
+         }
+         // An inaccessible file cannot be served, but its book and hash history remain.
+         for prefix in &scanned.inaccessible_prefixes {
+             for book in &mut self.data.books {
+                 for location in &mut book.locations {
+                     if location.root_id == root.id && (prefix.is_empty()
+                         || location.relative_path == *prefix
+                         || location.relative_path.starts_with(&(prefix.clone() + "/")))
+                     {
+                         location.available = false;
+                     }
+                 }
+             }
+         }
+         if scanned.unavailable {
+             for book in &mut self.data.books {
+                 for location in &mut book.locations {
+                     if location.root_id == root.id {
+                         location.available = false;
+                     }
+                 }
+             }
+         }
+         let pending = self.data.roots[index].state.values()
+             .filter(|state| state.blake3.is_none()).count();
+         let errors = scanned.errors.iter()
+             .map(|issue| format!("{}: {}", issue.relpath, issue.message)).collect();
+         let issues = scanned.errors.into_iter().map(|issue| super::linked_source::RootIssue {
+             code: issue.code, path: issue.relpath, message: issue.message,
+         }).collect();
+         reports.push(RootReport {
+             root_id: root.id, paused: false, unavailable: scanned.unavailable,
+             complete: scanned.complete, candidates: scanned.candidates.len(), pending, errors, issues,
+         });
+         // Publish each completed root. Progress checkpoints merge only observed states
+         // and preserve unvisited records; only this final walk reconciles locations.
+         self.persist()?;
+     }
+     for book in &mut self.data.books {
+         book.locations.sort_by(|a, b| (&a.root_id, &a.relative_path).cmp(&(&b.root_id, &b.relative_path)));
+         book.locations.dedup_by(|a, b| a.root_id == b.root_id && a.relative_path == b.relative_path);
+         book.pending_indexing = book.doc_id.is_none();
+     }
+     self.persist()?;
+     Ok(ScanReport { roots: reports, books: self.data.books.clone() })
+ }
  /// Local configuration includes absolute roots; never expose this in a shared response.
  pub fn local_config(&self)->&RegistryData{&self.data}
 }
+pub fn checkpoint_state(path: &Path, root_id: &str, observed: &ScanState) -> io::Result<()> {
+    let mut data: RegistryData = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+    let root = data.roots.iter_mut().find(|root| root.id == root_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "root not found"))?;
+    for (path, state) in observed {
+        root.state.insert(path.clone(), state.clone());
+    }
+    save(path, &data)
+}
+
 fn adopt(books:&mut Vec<LinkedBook>,known:&Catalog,rid:&str,c:&PdfCandidate){let h=c.blake3.to_ascii_lowercase();let idx=books.iter().position(|b|b.blake3==h);let i=idx.unwrap_or_else(||{books.push(LinkedBook{blake3:h.clone(),doc_id:None,doc_version:None,title:None,pending_indexing:true,pending_reason:Some("not found in existing catalog".into()),locations:vec![]});books.len()-1});let b=&mut books[i];if b.doc_id.is_none(){if let Some(Some((id,version,title)))=known.get(&h){b.doc_id=Some(id.clone());b.doc_version=Some(*version);b.title=title.clone();b.pending_indexing=false;b.pending_reason=None}else if known.get(&h).is_some_and(|v|v.is_none()){b.pending_reason=Some("hash matches multiple existing document identities".into())}else if b.doc_id.is_none(){b.pending_reason=Some("not found in existing catalog".into())}}
 if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c.relpath){l.available=true;l.blake3=h}else{b.locations.push(Location{root_id:rid.into(),relative_path:c.relpath.clone(),blake3:h,available:true})}}
 #[cfg(test)]mod tests{use super::*;struct Temp(PathBuf);impl std::ops::Deref for Temp{type Target=Path;fn deref(&self)->&Path{&self.0}}impl Drop for Temp{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}fn temp()->Temp{let p=std::env::temp_dir().join(format!("linked-reg-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir_all(&p).unwrap();Temp(fs::canonicalize(p).unwrap())}
@@ -143,4 +252,36 @@ if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c
    assert!(error.to_string().contains(SOURCE_IDENTITIES_FILE));
   }
  }
+
+ #[test]fn scoped_check_does_not_mark_other_root_unavailable(){let t=temp();let(a,b,l,c)=(t.join("a"),t.join("b"),t.join("lib"),t.join("cache"));for p in [&a,&b,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();fs::write(a.join("a.pdf"),b"a").unwrap();fs::write(b.join("b.pdf"),b"b").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("a","A".into(),BrowseMode::Keep,&a,vec![]).unwrap();r.register_root("b","B".into(),BrowseMode::Keep,&b,vec![]).unwrap();r.scan(0).unwrap();let b_before=r.local_config().roots.iter().find(|x|x.id=="b").unwrap().state.clone();fs::remove_file(a.join("a.pdf")).unwrap();let report=r.scan_scoped(Some("a"),0).unwrap();assert_eq!(report.roots.len(),1);let b_after=r.local_config().roots.iter().find(|x|x.id=="b").unwrap();assert_eq!(b_after.state,b_before);assert!(r.local_config().books.iter().any(|book|book.locations.iter().any(|loc|loc.root_id=="b"&&loc.available)));}
+ #[test]fn interrupted_n_file_checkpoint_reuses_completed_hashes(){use std::panic::{catch_unwind,AssertUnwindSafe};let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();for name in ["one.pdf","two.pdf","three.pdf"]{fs::write(s.join(name),vec![name.as_bytes()[0];128*1024]).unwrap()}let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),BrowseMode::Keep,&s,vec![]).unwrap();let registry_path=c.join("linked-registry.json");let mut attempted=0usize;let interrupted=catch_unwind(AssertUnwindSafe(||super::super::linked_source::scan_linked_root_with_progress(&s,&[],&ScanState::new(),10,0,|_,hashed,_,_,state|{attempted=hashed;checkpoint_state(&registry_path,"r",state).unwrap();if state.values().filter(|entry|entry.blake3.is_some()).count()>=2{panic!("simulated interruption after two completed files")}})));assert!(interrupted.is_err());assert_eq!(attempted,2);let resumed=LinkedRegistry::open(&c,&l).unwrap();let prior=resumed.local_config().roots[0].state.clone();assert_eq!(prior.values().filter(|entry|entry.blake3.is_some()).count(),2);let mut attempted_after_restart=0usize;let scan=super::super::linked_source::scan_linked_root_with_progress(&s,&[],&prior,5000,0,|_,hashed,_,_,_|attempted_after_restart=hashed);assert_eq!(attempted_after_restart,1);assert_eq!(scan.candidates.len(),3);for name in ["one.pdf","two.pdf","three.pdf"]{assert_eq!(fs::read(s.join(name)).unwrap().len(),128*1024)}}
+ #[test]
+ fn checkpoints_keep_unvisited_state_and_location_history_until_final_walk() {
+     let temp = temp();
+     let source = temp.join("source");
+     let library = temp.join("lib");
+     let cache = temp.join("cache");
+     for path in [&source, &library, &cache] {
+         fs::create_dir_all(path).unwrap();
+     }
+     fs::write(library.join("documents.tsv"), "").unwrap();
+     fs::write(source.join("visited.pdf"), b"visited").unwrap();
+     fs::write(source.join("unvisited.pdf"), b"unvisited").unwrap();
+     let mut registry = LinkedRegistry::open(&cache, &library).unwrap();
+     registry.register_root("r", "Folder".into(), BrowseMode::Keep, &source, vec![]).unwrap();
+     registry.scan(0).unwrap();
+     let state = &registry.local_config().roots[0].state;
+     let observed = [("visited.pdf".into(), state["visited.pdf"].clone())].into_iter().collect();
+     fs::remove_file(source.join("unvisited.pdf")).unwrap();
+     checkpoint_state(&cache.join("linked-registry.json"), "r", &observed).unwrap();
+     let mut resumed = LinkedRegistry::open(&cache, &library).unwrap();
+     assert!(resumed.local_config().roots[0].state.contains_key("unvisited.pdf"));
+     assert!(resumed.local_config().books.iter().any(|book| book.locations.iter()
+         .any(|location| location.relative_path == "unvisited.pdf" && location.available)));
+     resumed.scan(0).unwrap();
+     assert!(!resumed.local_config().roots[0].state.contains_key("unvisited.pdf"));
+     assert!(resumed.local_config().books.iter().any(|book| book.locations.iter()
+         .any(|location| location.relative_path == "unvisited.pdf" && !location.available)));
+ }
+
 }

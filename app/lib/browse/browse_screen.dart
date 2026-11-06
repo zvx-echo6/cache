@@ -25,6 +25,7 @@ import 'browse_state.dart';
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
+import '../linked_folders/linked_folder_management.dart';
 import 'reader_screen.dart';
 import 'library_passage_screen.dart';
 import 'web/build_common.dart' show buildBadge, builtLibraryLine;
@@ -239,6 +240,10 @@ class _BrowseScreenState extends State<BrowseScreen> {
     },
     // The guide that ships in the app is always there.
     delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
+    linkedFolders: b.device?.build?.linkedFolders == null || libs!.isGuide(l) ? null : () async {
+      final controller = b.device!.build!.linkedFolders!;
+      openDetail(_pane ?? context, key: 'linked-folders:${l.folderName}', builder: (_) => LinkedFolderManagementPage(controller: controller, libraryId: l.folderName));
+    },
   );
 
   /// A library package the device downloaded is added by the app, with the usual prompts.

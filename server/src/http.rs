@@ -328,6 +328,11 @@ async fn embedder(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Re
 /// Linked roots are server-local; this route is reached only after the session gate.
 async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
     let rest = path.strip_prefix("/api/linked-folders/")?;
+    if method == "POST" && rest == "preview" {
+        let service = app.build.clone();
+        let bytes = body.to_vec();
+        return Some(blocking(move || crate::libbuild::linked_api::preview(&service, &bytes)).await);
+    }
     if method == "GET" && rest == "libraries" {
         let targets: Vec<Value> = app.library.items().await.into_iter()
             .filter(|item| item["kind"].as_str() == Some("library"))

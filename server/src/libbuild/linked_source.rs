@@ -15,8 +15,10 @@ pub struct FileState {
 pub type ScanState = BTreeMap<String, FileState>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PdfCandidate { pub relpath: String, pub length: u64, pub mtime_ms: u64, pub first_observed_ms: u64, pub blake3: String }
+#[derive(Clone,Debug,Serialize,Deserialize)]
+pub struct RootIssue { pub code:String, pub path:String, pub message:String }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScanError { pub relpath: String, pub message: String }
+pub struct ScanError { pub relpath: String, pub code: String, pub message: String }
 #[derive(Clone, Debug)]
 pub struct ScanResult { pub state: ScanState, pub candidates: Vec<PdfCandidate>, pub errors: Vec<ScanError>, pub unavailable: bool, pub complete: bool, pub inaccessible_prefixes: Vec<String> }
 
@@ -80,72 +82,219 @@ fn open_beneath(root: &Path, relative: &Path) -> io::Result<File> {
 type Fingerprint = (u64, u64);
 type HashedFile = (String, Fingerprint, Fingerprint);
 
-fn hash_opened(file: &mut File) -> io::Result<HashedFile> {
+fn hash_opened(file: &mut File) -> io::Result<HashedFile> { hash_opened_progress(file, |_| {}) }
+fn hash_opened_progress(file: &mut File, mut on_bytes:impl FnMut(u64)) -> io::Result<HashedFile> {
     let before=file.metadata()?;
     if !before.is_file() { return Err(io::Error::new(io::ErrorKind::InvalidInput,"source is not a regular file")); }
     let mut h=blake3::Hasher::new(); let mut buf=[0u8;65536];
-    loop { let n=file.read(&mut buf)?; if n==0 {break} h.update(&buf[..n]); }
+    loop { let n=file.read(&mut buf)?; if n==0 {break} h.update(&buf[..n]); on_bytes(n as u64); }
     let hash=h.finalize().to_hex().to_string();
     let after=file.metadata()?;
     Ok((hash,fingerprint(&before),fingerprint(&after)))
 }
-fn hash_beneath(root:&Path, relative:&Path) -> io::Result<HashedFile> { hash_opened(&mut open_beneath(root,relative)?) }
+fn issue_code(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::InvalidInput => "invalid_path",
+        io::ErrorKind::InvalidData => "invalid_state",
+        _ => "io_error",
+    }
+}
+fn hash_beneath_progress(root:&Path,relative:&Path,on_bytes:impl FnMut(u64))->io::Result<HashedFile>{hash_opened_progress(&mut open_beneath(root,relative)?,on_bytes)}
 
 /// Scan a canonical registered directory. Exclusions must be nonempty relative component paths.
-pub fn scan_linked_root(root: &Path, exclusions: &[PathBuf], previous: &ScanState, now_ms: u64, settle_ms: u64) -> ScanResult {
-    let mut result=ScanResult { state: ScanState::new(), candidates: vec![], errors: vec![], unavailable:false, complete:true, inaccessible_prefixes:vec![] };
-    if exclusions.iter().any(|e| !valid_relative(e)) {
-        result.unavailable=true; result.complete=false; result.errors.push(ScanError{relpath:String::new(),message:"invalid exclusion path".into()}); result.state=retained(previous,exclusions); return result;
+pub fn scan_linked_root(root: &Path, exclusions: &[PathBuf], previous: &ScanState, now_ms: u64, settle_ms: u64) -> ScanResult { scan_linked_root_with_progress(root, exclusions, previous, now_ms, settle_ms, |_,_,_,_,_| {}) }
+pub fn scan_linked_root_with_progress<F>(
+    root: &Path,
+    exclusions: &[PathBuf],
+    previous: &ScanState,
+    now_ms: u64,
+    settle_ms: u64,
+    mut progress: F,
+) -> ScanResult
+where
+    F: FnMut(usize, usize, u64, usize, &ScanState),
+{
+    let mut seen = 0usize;
+    let mut hashed = 0usize;
+    let mut bytes_hashed = 0u64;
+    let mut settling_count = 0usize;
+    let mut result = ScanResult {
+        state: ScanState::new(), candidates: vec![], errors: vec![],
+        unavailable: false, complete: true, inaccessible_prefixes: vec![],
+    };
+    if exclusions.iter().any(|path| !valid_relative(path)) {
+        result.unavailable = true;
+        result.complete = false;
+        result.errors.push(ScanError {
+            relpath: String::new(), code: "invalid_exclusion".into(),
+            message: "invalid exclusion path".into(),
+        });
+        result.state = retained(previous, exclusions);
+        return result;
     }
-    let canonical=match fs::canonicalize(root) { Ok(p) if p==root && fs::metadata(&p).map(|m|m.is_dir()).unwrap_or(false)=>p, _=> {
-        result.unavailable=true; result.complete=false; result.errors.push(ScanError{relpath:String::new(),message:"registered root unavailable or not canonical".into()}); result.state=retained(previous,exclusions); return result;
-    }};
-    let mut stack=vec![(PathBuf::new(),canonical.clone())];
-    while let Some((rel,abs))=stack.pop() {
-        let key=rel.to_string_lossy().replace('\\',"/");
-        let safe=fs::symlink_metadata(&abs).map(|m|m.is_dir() && !m.file_type().is_symlink()).unwrap_or(false)
-            && fs::canonicalize(&abs).map(|p|p.starts_with(&canonical)).unwrap_or(false);
-        if !safe { result.complete=false; result.inaccessible_prefixes.push(key.clone()); result.errors.push(ScanError{relpath:key,message:"directory changed or escaped registered root".into()}); continue; }
-
-        let entries=match fs::read_dir(&abs) { Ok(v)=>v, Err(e)=> {
-            let key=rel.to_string_lossy().replace('\\',"/"); result.complete=false; result.inaccessible_prefixes.push(key.clone()); result.errors.push(ScanError{relpath:key,message:e.to_string()}); continue;
-        }};
-        for entry in entries {
-            let entry=match entry { Ok(v)=>v, Err(e)=>{result.complete=false; let parent=rel.to_string_lossy().replace('\\',"/"); result.inaccessible_prefixes.push(parent.clone()); result.errors.push(ScanError{relpath:parent,message:e.to_string()});continue} };
-            let name=entry.file_name(); let child=rel.join(&name);
-            if hidden(&child) || excluded(&child,exclusions) { continue; }
-            let child_s=match child.to_str() { Some(s)=>s.replace('\\',"/"), None=>{result.errors.push(ScanError{relpath:String::new(),message:"non-UTF-8 path skipped".into()});continue} };
-            let md=match fs::symlink_metadata(entry.path()) { Ok(m)=>m, Err(e)=>{result.complete=false;result.inaccessible_prefixes.push(child_s.clone());result.errors.push(ScanError{relpath:child_s,message:e.to_string()});continue} };
-            if md.file_type().is_symlink() { continue; }
-            if md.is_dir() { stack.push((child,entry.path())); continue; }
-            if !md.is_file() || !name.to_string_lossy().to_ascii_lowercase().ends_with(".pdf") { continue; }
-            let (length,mtime_ms)=fingerprint(&md);
-            let old=previous.get(&child_s);
-            let (first_observed_ms,hash)=match old {
-                Some(p) if p.length==length && p.mtime_ms==mtime_ms => (p.first_observed_ms,p.blake3.clone()),
-                Some(_) => (now_ms,None), None=>(now_ms,None),
-            };
-            let mut state=FileState{length,mtime_ms,first_observed_ms,blake3:hash};
-            if state.blake3.is_none() && now_ms.saturating_sub(first_observed_ms)>=settle_ms {
-                match hash_beneath(&canonical,&child) {
-                    Ok((hash,before,after)) if before==(length,mtime_ms) && after==(length,mtime_ms)=>state.blake3=Some(hash),
-                    Ok(_)=>{state.first_observed_ms=now_ms; result.errors.push(ScanError{relpath:child_s.clone(),message:"file changed while hashing; pending".into()});},
-                    Err(e)=>{result.complete=false;result.inaccessible_prefixes.push(child_s.clone());result.errors.push(ScanError{relpath:child_s.clone(),message:e.to_string()}); if let Some(old)=old { state=old.clone(); }}
-                }
+    let checked_root = fs::canonicalize(root).and_then(|canonical| {
+        if canonical != root || !fs::metadata(&canonical)?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "registered root unavailable or not canonical"));
+        }
+        Ok(canonical)
+    });
+    let canonical = match checked_root {
+        Ok(path) => path,
+        Err(error) => {
+            result.unavailable = true;
+            result.complete = false;
+            result.errors.push(ScanError {
+                relpath: String::new(), code: issue_code(error.kind()).into(), message: error.to_string(),
+            });
+            result.state = retained(previous, exclusions);
+            return result;
+        }
+    };
+    let mut stack = vec![(PathBuf::new(), canonical.clone())];
+    while let Some((relative, absolute)) = stack.pop() {
+        let key = relative.to_string_lossy().replace('\\', "/");
+        let safe = fs::symlink_metadata(&absolute)
+            .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink()).unwrap_or(false)
+            && fs::canonicalize(&absolute).map(|path| path.starts_with(&canonical)).unwrap_or(false);
+        if !safe {
+            result.complete = false;
+            result.inaccessible_prefixes.push(key.clone());
+            result.errors.push(ScanError {
+                relpath: key, code: "unsafe_path".into(),
+                message: "directory changed or escaped registered root".into(),
+            });
+            continue;
+        }
+        let entries = match fs::read_dir(&absolute) {
+            Ok(entries) => entries,
+            Err(error) => {
+                result.complete = false;
+                result.inaccessible_prefixes.push(key.clone());
+                result.errors.push(ScanError {
+                    relpath: key, code: issue_code(error.kind()).into(), message: error.to_string(),
+                });
+                continue;
             }
-            if let Some(hash)=&state.blake3 { if !result.inaccessible_prefixes.iter().any(|p|p==&child_s) { result.candidates.push(PdfCandidate{relpath:child_s.clone(),length,mtime_ms,first_observed_ms,blake3:hash.clone()}); } }
-            result.state.insert(child_s,state);
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    result.complete = false;
+                    result.inaccessible_prefixes.push(key.clone());
+                    result.errors.push(ScanError {
+                        relpath: key.clone(), code: issue_code(error.kind()).into(), message: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let name = entry.file_name();
+            let child = relative.join(&name);
+            if hidden(&child) || excluded(&child, exclusions) {
+                continue;
+            }
+            let child_s = match child.to_str() {
+                Some(path) => path.replace('\\', "/"),
+                None => {
+                    result.complete = false;
+                    result.inaccessible_prefixes.push(key.clone());
+                    result.errors.push(ScanError {
+                        relpath: key.clone(), code: "path_encoding".into(), message: "non-UTF-8 path skipped".into(),
+                    });
+                    continue;
+                }
+            };
+            let metadata = match fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    result.complete = false;
+                    result.inaccessible_prefixes.push(child_s.clone());
+                    result.errors.push(ScanError {
+                        relpath: child_s, code: issue_code(error.kind()).into(), message: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push((child, entry.path()));
+                continue;
+            }
+            if !metadata.is_file() || !name.to_string_lossy().to_ascii_lowercase().ends_with(".pdf") {
+                continue;
+            }
+            let (length, mtime_ms) = fingerprint(&metadata);
+            let old = previous.get(&child_s);
+            let (first_observed_ms, hash) = match old {
+                Some(state) if state.length == length && state.mtime_ms == mtime_ms =>
+                    (state.first_observed_ms, state.blake3.clone()),
+                _ => (now_ms, None),
+            };
+            let mut state = FileState { length, mtime_ms, first_observed_ms, blake3: hash };
+            if state.blake3.is_none() && now_ms.saturating_sub(first_observed_ms) >= settle_ms {
+                hashed += 1;
+                let mut file_bytes = 0u64;
+                match hash_beneath_progress(&canonical, &child, |chunk| {
+                    file_bytes = file_bytes.saturating_add(chunk);
+                    progress(seen + 1, hashed, bytes_hashed.saturating_add(file_bytes), settling_count, &result.state);
+                }) {
+                    Ok((hash, before, after)) if before == (length, mtime_ms) && after == (length, mtime_ms) => {
+                        state.blake3 = Some(hash);
+                    }
+                    Ok(_) => {
+                        state.first_observed_ms = now_ms;
+                        result.errors.push(ScanError {
+                            relpath: child_s.clone(), code: "file_changing".into(),
+                            message: "file changed while hashing; pending".into(),
+                        });
+                    }
+                    Err(error) => {
+                        result.complete = false;
+                        result.inaccessible_prefixes.push(child_s.clone());
+                        result.errors.push(ScanError {
+                            relpath: child_s.clone(), code: issue_code(error.kind()).into(), message: error.to_string(),
+                        });
+                        if let Some(old) = old {
+                            state = old.clone();
+                        }
+                    }
+                }
+                bytes_hashed = bytes_hashed.saturating_add(file_bytes);
+            }
+            if let Some(hash) = &state.blake3 {
+                if !result.inaccessible_prefixes.iter().any(|prefix| prefix == &child_s) {
+                    result.candidates.push(PdfCandidate {
+                        relpath: child_s.clone(), length, mtime_ms, first_observed_ms, blake3: hash.clone(),
+                    });
+                }
+            } else if now_ms.saturating_sub(state.first_observed_ms) < settle_ms {
+                settling_count += 1;
+            }
+            result.state.insert(child_s, state);
+            seen += 1;
+            progress(seen, hashed, bytes_hashed, settling_count, &result.state);
         }
     }
     // Preserve prior records beneath unreadable prefixes; a partial walk cannot confirm absence there.
-    for (key,value) in previous {
-        let p=Path::new(key);
-        if !valid_relative(p) || hidden(p) || excluded(p,exclusions) { continue; }
-        if result.inaccessible_prefixes.iter().any(|prefix| prefix.is_empty() || key==prefix || key.starts_with(&(prefix.clone()+"/"))) {
-            result.state.entry(key.clone()).or_insert_with(||value.clone());
+    for (key, value) in previous {
+        let path = Path::new(key);
+        if !valid_relative(path) || hidden(path) || excluded(path, exclusions) {
+            continue;
+        }
+        if result.inaccessible_prefixes.iter().any(|prefix|
+            prefix.is_empty() || key == prefix || key.starts_with(&(prefix.clone() + "/")))
+        {
+            result.state.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
-    result.candidates.sort_by(|a,b|a.relpath.cmp(&b.relpath)); result.inaccessible_prefixes.sort(); result.inaccessible_prefixes.dedup(); result
+    result.candidates.sort_by(|a, b| a.relpath.cmp(&b.relpath));
+    result.inaccessible_prefixes.sort();
+    result.inaccessible_prefixes.dedup();
+    result
 }
 
 /// Open and validate a stored source immediately before use. Returns the same read-only handle
