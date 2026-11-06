@@ -165,6 +165,7 @@ jobs:
         working-directory: app
         env:
           ORG_GRADLE_PROJECT_cacheTestApk: 'true'
+          CACHE_LLAMA_GEMMA4_PREFILL_OPT: 'ON'
         run: |
           flutter --version
           flutter pub get
@@ -190,6 +191,9 @@ jobs:
           for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
             unzip -l "$apk" "lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from lib/arm64-v8a"; exit 1; }
           done
+          unzip -p "$apk" lib/arm64-v8a/libcache_llama.so > "$RUNNER_TEMP/cache-llama-check.so"
+          LC_ALL=C grep -aFq 'cache-gemma4-prefill-31356' "$RUNNER_TEMP/cache-llama-check.so" || { echo "::error::Optimized Gemma engine is missing from the diagnostic APK"; exit 1; }
+          rm -f "$RUNNER_TEMP/cache-llama-check.so"
           # minSdk 28: APK Signature Scheme v2/v3 only (no JAR signature), so apksigner, not keytool -jarfile.
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
           "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/apksigner.txt" 2>&1 || { cat "$RUNNER_TEMP/apksigner.txt"; echo "::error::apksigner verify failed"; exit 1; }
