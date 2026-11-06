@@ -70,11 +70,21 @@ The events:
 Removing a *file* from a device follows the offload rule (only when the person asks, and a live check confirms another device holds a verified copy). It is not a log
 event, because which files a device holds is per device.
 
-### Reserved event names
+### Linked-folder events
 
-`folder`, `locate` and `unlocate` are reserved for linked-folder support. They are not emitted or interpreted yet; their payloads will be
-specified with that feature. Readers skip these names and any other unknown `ev`, continue reading later known events, and leave the original
-log bytes intact. Unknown events must not hide known events or change their resolved shelves, call numbers or titles.
+The linked-folder events are additive `v: 1` events. Older readers skip them as unknown events and keep reading later known events.
+
+```json
+{"v":1,"at":1793600600000,"dev":"linux-a","ev":"folder","folder_id":"books","label":"Books","mode":"keep"}
+{"v":1,"at":1793600600001,"dev":"linux-a","ev":"locate","doc":"b3f1","folder_id":"books","relpath":"Firearms/Gunsmithing.pdf","version":2,"source_blake3":"<64 hex characters>"}
+{"v":1,"at":1793600600002,"dev":"linux-a","ev":"unlocate","doc":"b3f1","folder_id":"books","relpath":"Old Name.pdf"}
+```
+
+- `folder` has no `doc`; it carries `folder_id`, display `label`, and `mode` (`keep`, `cds`, `both`). Folder state is keyed by `(dev, folder_id)` and the latest event by the normal event stamp wins.
+- `locate` and `unlocate` require a nonempty normalized relative `relpath` using `/`. Absolute roots, drive/ADS syntax, backslashes, empty path components, `.` and `..` components are rejected on read and append. The absolute folder path, URI, or bookmark stays in that device's `.local/` and is never serialized.
+- `version` (the numeric document version) and `source_blake3` are optional on `locate`; the hash, when supplied, is 64 hexadecimal characters. They anchor a source version without changing document identity.
+- A location is keyed by `(dev, folder_id, doc, relpath)`. The latest locate/unlocate stamp for that key wins; a move is unlocate-old plus locate-new. Locations from two folders remain two locations for one document. Results are deterministic by device, folder id, and relative path.
+- The resolved location reports the device and relative path. Availability is always device-local and is not synchronized or inferred from these events. Linked-folder events do not rebuild `.local/docs.json`: some imported libraries do not have local packs, so calling `rebuild_view` from this log alone is unsafe.
 
 ### Writing
 

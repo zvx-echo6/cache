@@ -62,6 +62,9 @@ pub mod booklog;
 pub mod classify;
 pub mod dropdir;
 pub mod filing;
+pub mod linked_source;
+pub mod linked_registry;
+pub mod linked_api;
 pub mod removed;
 pub mod same;
 #[cfg(test)]

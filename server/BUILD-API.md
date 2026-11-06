@@ -244,3 +244,16 @@ reading order. The build service's own PDF path (`cache-build pdf`, and the serv
 its layout step, so the same pages give the same passages. A phone, or any OCR engine, hands its text in the same way (one `body`
 block per page is enough). The shape of `pages.json`, the pack fields it sets (`text_source_ocr_pages`, `book.ocr`,
 `extractor.layout_version`) and the `LAYOUT_VERSION` rule are in builder/PACK-FORMAT.md ("Pages in, pack out", "Layout version").
+
+## Linked-folder adoption foundation
+
+These authenticated /api/linked-folders/ endpoints are separate from builder uploads and the drop folder. They read linked PDFs in place and write only device-local registry state under the target library's .local/. They never invoke builder publication, rewrite existing text/vectors/indexes, compress originals, or move/delete source files.
+
+- GET /api/linked-folders/libraries: installed targets, including imported libraries.
+- GET /api/linked-folders/<library>: local configuration, locations and capability flags. Contains local absolute paths; do not sync or publish this response.
+- POST /api/linked-folders/<library> with {id,label,mode,root,exclusions}: register a readable server folder. Mode is keep (default), cds, or both. Exclusions are relative subfolder paths.
+- POST /api/linked-folders/<library>/check: match stable PDF hashes to existing identities. New or changed files must remain unchanged for two seconds before a later check hashes them.
+- POST /api/linked-folders/<library>/<folder>/pause or /resume: persist whether checks include that root.
+- DELETE /api/linked-folders/<library>/<folder>: unlink, retain indexed books, mark its locations unavailable.
+
+This is a backend foundation, not the complete feature. Capability flags explicitly report that indexing unmatched PDFs, automatic checks, synced locations, and original-PDF opening are not enabled. Browse mode is retained as configuration; the folder/subject browsing interface is not supplied yet. Unknown or ambiguous hashes are not counted as reused books. Unavailable roots retain records and search data; availability is local and must be rechecked before source opening.

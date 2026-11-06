@@ -41,6 +41,14 @@ impl By {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderMode { Keep, Cds, Both }
+
+impl FolderMode {
+    fn as_str(self) -> &'static str { match self { Self::Keep => "keep", Self::Cds => "cds", Self::Both => "both" } }
+    fn parse(s: &str) -> Option<Self> { match s { "keep" => Some(Self::Keep), "cds" => Some(Self::Cds), "both" => Some(Self::Both), _ => None } }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     /// The book goes on the shelf of division `div`.
@@ -55,12 +63,19 @@ pub enum Kind {
     /// Hides the book on every device; deletes no files.
     Remove { doc: String },
     Restore { doc: String },
+    /// A device-local linked folder. This event deliberately has no document id.
+    Folder { folder_id: String, label: String, mode: FolderMode },
+    /// A document is present at a relative path in a linked folder.
+    Locate { doc: String, folder_id: String, relpath: String, version: Option<u32>, source_blake3: Option<String> },
+    /// A document is no longer present at a relative path in a linked folder.
+    Unlocate { doc: String, folder_id: String, relpath: String },
 }
 
 impl Kind {
-    pub fn doc(&self) -> &str {
+    pub fn doc(&self) -> Option<&str> {
         match self {
-            Kind::Place { doc, .. } | Kind::Unsort { doc, .. } | Kind::Assign { doc, .. } | Kind::Retire { doc, .. } | Kind::Title { doc, .. } | Kind::Remove { doc } | Kind::Restore { doc } => doc,
+            Kind::Place { doc, .. } | Kind::Unsort { doc, .. } | Kind::Assign { doc, .. } | Kind::Retire { doc, .. } | Kind::Title { doc, .. } | Kind::Remove { doc } | Kind::Restore { doc } | Kind::Locate { doc, .. } | Kind::Unlocate { doc, .. } => Some(doc),
+            Kind::Folder { .. } => None,
         }
     }
 }
@@ -92,9 +107,12 @@ impl Event {
             Kind::Title { .. } => "title",
             Kind::Remove { .. } => "remove",
             Kind::Restore { .. } => "restore",
+            Kind::Folder { .. } => "folder",
+            Kind::Locate { .. } => "locate",
+            Kind::Unlocate { .. } => "unlocate",
         };
         m.insert("ev".into(), json!(ev));
-        m.insert("doc".into(), json!(self.kind.doc()));
+        if let Some(doc) = self.kind.doc() { m.insert("doc".into(), json!(doc)); }
         match &self.kind {
             Kind::Place { div, by, .. } => {
                 m.insert("div".into(), json!(div));
@@ -109,6 +127,21 @@ impl Event {
             }
             Kind::Title { title, .. } => {
                 m.insert("title".into(), json!(title));
+            }
+            Kind::Folder { folder_id, label, mode } => {
+                m.insert("folder_id".into(), json!(folder_id));
+                m.insert("label".into(), json!(label));
+                m.insert("mode".into(), json!(mode.as_str()));
+            }
+            Kind::Locate { folder_id, relpath, version, source_blake3, .. } => {
+                m.insert("folder_id".into(), json!(folder_id));
+                m.insert("relpath".into(), json!(relpath));
+                if let Some(v) = version { m.insert("version".into(), json!(v)); }
+                if let Some(h) = source_blake3 { m.insert("source_blake3".into(), json!(h)); }
+            }
+            Kind::Unlocate { folder_id, relpath, .. } => {
+                m.insert("folder_id".into(), json!(folder_id));
+                m.insert("relpath".into(), json!(relpath));
             }
             Kind::Remove { .. } | Kind::Restore { .. } => {}
         }
@@ -128,20 +161,37 @@ impl Event {
             return None;
         }
         let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
-        let doc = text("doc").filter(|d| !d.is_empty())?;
+        let doc = || text("doc").filter(|d| !d.is_empty());
         let seq = || v.get("seq").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+        let folder_id = || text("folder_id").filter(|s| !s.is_empty());
+        let relpath = || text("relpath").filter(|s| valid_relpath(s));
         let kind = match v.get("ev")?.as_str()? {
-            "place" => Kind::Place { doc, div: text("div")?, by: By::parse(&text("by")?)? },
-            "unsort" => Kind::Unsort { doc, by: By::parse(&text("by")?)? },
-            "assign" => Kind::Assign { doc, div: text("div")?, seq: seq()? },
-            "retire" => Kind::Retire { doc, div: text("div")?, seq: seq()? },
-            "title" => Kind::Title { doc, title: text("title")? },
-            "remove" => Kind::Remove { doc },
-            "restore" => Kind::Restore { doc },
+            "place" => Kind::Place { doc: doc()?, div: text("div")?, by: By::parse(&text("by")?)? },
+            "unsort" => Kind::Unsort { doc: doc()?, by: By::parse(&text("by")?)? },
+            "assign" => Kind::Assign { doc: doc()?, div: text("div")?, seq: seq()? },
+            "retire" => Kind::Retire { doc: doc()?, div: text("div")?, seq: seq()? },
+            "title" => Kind::Title { doc: doc()?, title: text("title")? },
+            "remove" => Kind::Remove { doc: doc()? },
+            "restore" => Kind::Restore { doc: doc()? },
+            "folder" => Kind::Folder { folder_id: folder_id()?, label: text("label")?, mode: FolderMode::parse(&text("mode")?)? },
+            "locate" => {
+                let version = v.get("version").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+                let source_blake3 = text("source_blake3").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+                if v.get("version").is_some() && version.is_none() || v.get("source_blake3").is_some() && source_blake3.is_none() { return None; }
+                Kind::Locate { doc: doc()?, folder_id: folder_id()?, relpath: relpath()?, version, source_blake3 }
+            }
+            "unlocate" => Kind::Unlocate { doc: doc()?, folder_id: folder_id()?, relpath: relpath()? },
             _ => return None,
         };
         Some(Event { at, dev, kind })
     }
+}
+
+/// A portable normalized relative path using `/` separators. Absolute roots, traversal, drive/ADS syntax,
+/// empty components, and backslashes are rejected before a location can enter a synced log.
+pub fn valid_relpath(path: &str) -> bool {
+    !path.is_empty() && !path.starts_with('/') && !path.contains('\\') && !path.contains(':') &&
+        !path.chars().any(|c| c.is_control()) && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// A device id is used in a file name: letters, digits, `.`, `_` and `-`, at most 64, not starting with a dot.
@@ -182,6 +232,22 @@ impl LogWriter {
         }
         if let Some(e) = events.iter().find(|e| e.dev != self.dev) {
             return Err(Error::new(format!("the log of {} takes no events from {}", self.dev, e.dev)));
+        }
+        for e in events {
+            match &e.kind {
+                Kind::Locate { doc, folder_id, relpath, source_blake3, .. } => {
+                    if doc.is_empty() || folder_id.is_empty() || !valid_relpath(relpath) || source_blake3.as_ref().is_some_and(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit())) {
+                        return Err(Error::new("invalid linked-folder location; paths must be safe relative paths"));
+                    }
+                }
+                Kind::Unlocate { doc, folder_id, relpath } => {
+                    if doc.is_empty() || folder_id.is_empty() || !valid_relpath(relpath) {
+                        return Err(Error::new("invalid linked-folder location; paths must be safe relative paths"));
+                    }
+                }
+                Kind::Folder { folder_id, .. } if folder_id.is_empty() => return Err(Error::new("linked-folder id must not be empty")),
+                _ => {}
+            }
         }
         let mut buf = String::new();
         for e in events {
@@ -295,10 +361,23 @@ pub struct DocState {
 }
 
 /// The same answer on every device, from all the events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderState { pub label: String, pub mode: FolderMode }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub dev: String, pub folder_id: String, pub relpath: String,
+    pub version: Option<u32>, pub source_blake3: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Resolved {
     /// Only books some event mentions.
     pub docs: BTreeMap<String, DocState>,
+    /// Latest folder metadata, keyed by (device id, folder id). Paths/URIs are never stored here.
+    pub folders: BTreeMap<(String, String), FolderState>,
+    /// Active source locations per document, sorted by device, folder and relative path.
+    pub locations: BTreeMap<String, Vec<Location>>,
     /// For each division, the numbers that were retired.
     pub retired: BTreeMap<String, BTreeSet<u32>>,
     /// For each division, the highest number ever assigned or retired.
@@ -319,6 +398,8 @@ impl Resolved {
 /// Order of events: (at, dev), then position, so two events of one device at the same millisecond keep their file order.
 type Stamp = (u64, String, usize);
 
+type LocationEventMap = BTreeMap<(String, String, String, String), (Stamp, Option<Location>)>;
+
 /// Resolves the events (in any order of devices; the result does not depend on it, except that two events of one device with the
 /// same `at` count in the order given).
 ///
@@ -333,6 +414,8 @@ pub fn resolve(events: &[Event]) -> Resolved {
     let mut shelf: BTreeMap<&str, (Stamp, Option<&str>, By)> = BTreeMap::new();
     let mut title: BTreeMap<&str, (Stamp, &str)> = BTreeMap::new();
     let mut removed: BTreeMap<&str, (Stamp, bool)> = BTreeMap::new();
+    let mut folder_events: BTreeMap<(String, String), (Stamp, FolderState)> = BTreeMap::new();
+    let mut location_events: LocationEventMap = BTreeMap::new();
     // every assign: (div, seq) -> [(at, doc)]
     let mut claims: BTreeMap<(&str, u32), BTreeSet<(u64, &str)>> = BTreeMap::new();
     // each book's assigns, and the retired (doc, div, seq)
@@ -347,45 +430,67 @@ pub fn resolve(events: &[Event]) -> Resolved {
     for (i, e) in events.iter().enumerate() {
         let stamp: Stamp = (e.at, e.dev.clone(), i);
         let doc = e.kind.doc();
-        let _ = r.docs.entry(doc.to_string()).or_default();
+        if let Some(doc) = doc { let _ = r.docs.entry(doc.to_string()).or_default(); }
         match &e.kind {
-            Kind::Place { div, by, .. } => {
-                if shelf.get(doc).is_none_or(|(s, _, _)| *s < stamp) {
-                    shelf.insert(doc, (stamp, Some(div.as_str()), *by));
+            Kind::Place { doc, div, by } => {
+                if shelf.get(doc.as_str()).is_none_or(|(s, _, _)| *s < stamp) {
+                    shelf.insert(doc.as_str(), (stamp, Some(div.as_str()), *by));
                 }
             }
-            Kind::Unsort { by, .. } => {
-                if shelf.get(doc).is_none_or(|(s, _, _)| *s < stamp) {
-                    shelf.insert(doc, (stamp, None, *by));
+            Kind::Unsort { doc, by } => {
+                if shelf.get(doc.as_str()).is_none_or(|(s, _, _)| *s < stamp) {
+                    shelf.insert(doc.as_str(), (stamp, None, *by));
                 }
             }
-            Kind::Assign { div, seq, .. } => {
+            Kind::Assign { doc, div, seq } => {
                 bump(&mut r.max_seq, div, *seq);
                 claims.entry((div.as_str(), *seq)).or_default().insert((e.at, doc));
                 assigns.entry(doc).or_default().push((stamp, div.as_str(), *seq));
             }
-            Kind::Retire { div, seq, .. } => {
+            Kind::Retire { doc, div, seq } => {
                 bump(&mut r.max_seq, div, *seq);
                 r.retired.entry(div.clone()).or_default().insert(*seq);
                 retires.insert((doc, div.as_str(), *seq));
             }
-            Kind::Title { title: t, .. } => {
-                if title.get(doc).is_none_or(|(s, _)| *s < stamp) {
-                    title.insert(doc, (stamp, t.as_str()));
+            Kind::Title { doc, title: t } => {
+                if title.get(doc.as_str()).is_none_or(|(s, _)| *s < stamp) {
+                    title.insert(doc.as_str(), (stamp, t.as_str()));
                 }
             }
-            Kind::Remove { .. } => {
-                if removed.get(doc).is_none_or(|(s, _)| *s < stamp) {
+            Kind::Remove { doc } => {
+                if removed.get(doc.as_str()).is_none_or(|(s, _)| *s < stamp) {
                     removed.insert(doc, (stamp, true));
                 }
             }
-            Kind::Restore { .. } => {
-                if removed.get(doc).is_none_or(|(s, _)| *s < stamp) {
+            Kind::Restore { doc } => {
+                if removed.get(doc.as_str()).is_none_or(|(s, _)| *s < stamp) {
                     removed.insert(doc, (stamp, false));
                 }
             }
+            Kind::Folder { folder_id, label, mode } => {
+                let key = (e.dev.clone(), folder_id.clone());
+                if folder_events.get(&key).is_none_or(|(s, _)| *s < stamp) {
+                    folder_events.insert(key, (stamp, FolderState { label: label.clone(), mode: *mode }));
+                }
+            }
+            Kind::Locate { doc, folder_id, relpath, version, source_blake3 } => {
+                let key = (e.dev.clone(), folder_id.clone(), doc.clone(), relpath.clone());
+                if location_events.get(&key).is_none_or(|(s, _)| *s < stamp) {
+                    location_events.insert(key, (stamp, Some(Location { dev: e.dev.clone(), folder_id: folder_id.clone(), relpath: relpath.clone(), version: *version, source_blake3: source_blake3.clone() })));
+                }
+            }
+            Kind::Unlocate { doc, folder_id, relpath } => {
+                let key = (e.dev.clone(), folder_id.clone(), doc.clone(), relpath.clone());
+                if location_events.get(&key).is_none_or(|(s, _)| *s < stamp) { location_events.insert(key, (stamp, None)); }
+            }
         }
     }
+    for ((dev, folder_id), (_, folder)) in folder_events { r.folders.insert((dev, folder_id), folder); }
+    for ((dev, folder_id, doc, relpath), (_, location)) in location_events {
+        if let Some(location) = location { r.locations.entry(doc).or_default().push(location); }
+        let _ = (dev, folder_id, relpath);
+    }
+    // BTreeMap iteration already fixes folder/path order; availability is device-local and intentionally absent.
     for (doc, st) in r.docs.iter_mut() {
         let doc = doc.as_str();
         if let Some((_, div, by)) = shelf.get(doc) {
@@ -820,6 +925,42 @@ mod tests {
         };
         let c = corrections(&e, &suggested);
         assert_eq!(c.iter().map(|c| (c.doc.as_str(), c.from.as_deref(), c.to.as_str())).collect::<Vec<_>>(), [("a", Some("210"), "320"), ("c", None, "100")]);
+    }
+
+    #[test]
+    fn old_events_keep_their_wire_shape_and_folder_events_have_no_doc() {
+        let old = r#"{"v":1,"at":7,"dev":"d","ev":"remove","doc":"book"}"#;
+        let old_event = Event::from_line(old).unwrap();
+        assert_eq!(old_event.kind, Kind::Remove { doc: "book".into() });
+        assert_eq!(serde_json::from_str::<Value>(&old_event.to_line()).unwrap()["v"], 1);
+        let folder = Event::new(8, "d", Kind::Folder { folder_id: "f".into(), label: "Books".into(), mode: FolderMode::Keep });
+        let line = folder.to_line();
+        assert!(serde_json::from_str::<Value>(&line).unwrap().get("doc").is_none());
+        assert_eq!(Event::from_line(&line), Some(folder));
+    }
+
+    #[test]
+    fn location_duplicates_moves_and_unlocates_resolve_by_stamp() {
+        let locate = |at, path: &str| ev(at, "device", Kind::Locate { doc: "b3".into(), folder_id: "f".into(), relpath: path.into(), version: Some(2), source_blake3: Some("a".repeat(64)) });
+        let events = vec![locate(1, "old/book.pdf"), locate(2, "new/book.pdf"), ev(3, "device", Kind::Unlocate { doc: "b3".into(), folder_id: "f".into(), relpath: "old/book.pdf".into() }), locate(4, "new/book.pdf")];
+        let a = resolve(&events); let mut reversed = events.clone(); reversed.reverse(); let b = resolve(&reversed);
+        assert_eq!(a.locations, b.locations);
+        assert_eq!(a.locations["b3"].len(), 1);
+        assert_eq!(a.locations["b3"][0].relpath, "new/book.pdf");
+        let mut gone = events; gone.push(ev(5, "device", Kind::Unlocate { doc: "b3".into(), folder_id: "f".into(), relpath: "new/book.pdf".into() }));
+        assert!(resolve(&gone).locations.get("b3").is_none());
+        assert!(!resolve(&gone).docs.contains_key(""));
+    }
+
+    #[test]
+    fn unsafe_relative_paths_are_rejected_and_absolute_roots_never_serialize() {
+        for path in ["", "/etc/passwd", "C:/Users/a.pdf", r"\\server\share\a.pdf", "../secret", "a/../../secret", r"a\b.pdf", "./a.pdf", "a//b.pdf"] { assert!(!valid_relpath(path), "accepted {path:?}"); }
+        assert!(valid_relpath("Books/Firearms/Gunsmithing.pdf"));
+        assert!(Event::from_line(r#"{"v":1,"at":1,"dev":"d","ev":"locate","doc":"x","folder_id":"f","relpath":"C:/secret.pdf"}"#).is_none());
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = LogWriter::open(&tmp.path().join("log"), "d").unwrap();
+        let invalid = Kind::Locate { doc: "x".into(), folder_id: "f".into(), relpath: "C:/secret.pdf".into(), version: None, source_blake3: None };
+        assert!(writer.append(&[ev(1, "d", invalid)]).is_err());
     }
 
     #[test]
