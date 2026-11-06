@@ -7,6 +7,7 @@ use crate::embed::DIMS;
 use crate::error::{Error, Result};
 use crate::log::{read_logs, resolve, By, Event, Kind, LogWriter, LOG_DIR};
 use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
+use crate::source_identity::{write_source_identities, SourceIdentity, SOURCE_IDENTITIES_FILE};
 use crate::view::{view_value, write_view, BookFacts};
 use edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
@@ -68,6 +69,8 @@ pub struct LibDoc {
     pub doc_version: u32,
     /// BLAKE3 (hex) of the source PDF.
     pub source_blake3: String,
+    /// Arrival hash when the pack records a source before compression or OCR.
+    pub original_blake3: Option<String>,
     /// The `link` payload value (empty when the document has no address).
     pub link: String,
     /// The `author` payload value (unmapped), when known.
@@ -91,6 +94,7 @@ impl LibDoc {
             doc_id: h.doc_id.clone(),
             doc_version: h.doc_version,
             source_blake3: h.source.blake3.clone(),
+            original_blake3: h.book.as_ref().map(|b| b.original_blake3.clone()),
             link: h.source.https.clone().unwrap_or_default(),
             author: None,
             zim: None,
@@ -260,6 +264,7 @@ pub struct LibraryWriter {
     points: usize,
     ids: std::collections::HashSet<String>,
     rows: Vec<String>,
+    identities: Vec<SourceIdentity>,
     facts: BTreeMap<String, BookFacts>,
 }
 
@@ -294,7 +299,7 @@ impl LibraryWriter {
             }
         };
         let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), vector_datatype: opts.vector_datatype, archive: opts.archive, built_at: opts.built_at };
-        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), facts: BTreeMap::new() })
+        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), identities: Vec::new(), facts: BTreeMap::new() })
     }
 
     /// Add one document's pieces.
@@ -341,6 +346,14 @@ impl LibraryWriter {
         if !batch.is_empty() {
             up(batch)?;
         }
+        if let Some(original) = &doc.original_blake3 {
+            self.identities.push(SourceIdentity {
+                doc_id: doc.doc_id.clone(),
+                version: doc.doc_version,
+                source_blake3: doc.source_blake3.clone(),
+                original_blake3: original.clone(),
+            });
+        }
         self.points += doc.pieces.len();
         let mut facts = doc.entry.clone().unwrap_or_else(|| BookFacts::new(&doc.title, None));
         if facts.effective_title() != doc.title {
@@ -362,7 +375,7 @@ impl LibraryWriter {
     /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS`, the seed log `log/builder-<library_id>.jsonl` and the local view `.local/docs.json` (and the
     /// archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
-        let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, .. } = self;
+        let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, identities, .. } = self;
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
@@ -377,6 +390,7 @@ impl LibraryWriter {
         }
         let tsv_path = out.join(DOCUMENTS_FILE);
         std::fs::write(&tsv_path, tsv).map_err(|e| Error::ctx(&format!("writing {}", tsv_path.display()), e))?;
+        write_source_identities(&out, identities).map_err(|e| Error::ctx("writing source identities", e))?;
         // The seed log (synced, so it is in SHA256SUMS), then the local view made from it (never synced, in no list).
         let dev = seed_device_id(&opts.id);
         let seed = seed_events(&facts, &dev, opts.built_at);
@@ -389,7 +403,7 @@ impl LibraryWriter {
         let archive = if opts.archive {
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
             let path = out.with_file_name(format!("{name}.cache-library"));
-            write_archive(&shard_dir, &text, &path)?;
+            write_archive(&shard_dir, &text, &out, &path)?;
             Some(path)
         } else {
             None
@@ -585,8 +599,8 @@ fn sort_book(model: &cache_classify::Model, pack: &Pack, names: &std::collection
 }
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's
-/// snapshot packer writes only the shard; this appends one more tar entry before the end-of-archive marker).
-fn write_archive(shard_dir: &Path, settings: &str, out: &Path) -> Result<()> {
+/// snapshot packer writes only the shard; this appends settings, the document table and source identities).
+fn write_archive(shard_dir: &Path, settings: &str, library: &Path, out: &Path) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let tmp = out.with_file_name(format!(".{}.tmp", out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
     cache_search::libadd::pack_snapshot(shard_dir, &tmp).map_err(|e| Error::ctx("packing the library", e.message))?;
@@ -609,6 +623,16 @@ fn write_archive(shard_dir: &Path, settings: &str, out: &Path) -> Result<()> {
     h.set_mtime(0);
     h.set_cksum();
     b.append_data(&mut h, SETTINGS_FILE, settings.as_bytes()).map_err(|e| Error::ctx("adding the settings file", e))?;
+    // The catalog and its aliases travel together, beside the settings in the shard snapshot.
+    for name in [DOCUMENTS_FILE, SOURCE_IDENTITIES_FILE] {
+        let bytes = std::fs::read(library.join(name)).map_err(|e| Error::ctx(&format!("reading {name}"), e))?;
+        let mut h = tar::Header::new_gnu();
+        h.set_size(bytes.len() as u64);
+        h.set_mode(0o644);
+        h.set_mtime(0);
+        h.set_cksum();
+        b.append_data(&mut h, name, bytes.as_slice()).map_err(|e| Error::ctx(&format!("archiving {name}"), e))?;
+    }
     b.finish().map_err(|e| Error::ctx("finishing the archive", e))?;
     drop(b);
     f.sync_all().map_err(|e| Error::ctx("snapshot", e))?;

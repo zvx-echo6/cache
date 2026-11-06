@@ -147,6 +147,9 @@ class _LibNative implements CsNative {
         final shard = p['dir'] as String;
         Directory(shard).createSync(recursive: true);
         File('$shard/fake.json').writeAsStringSync(jsonEncode(fake));
+        for (final entry in ((fake['metadata'] as Map?) ?? const {}).entries) {
+          File('$shard/${entry.key}').writeAsStringSync(entry.value as String);
+        }
         final given = (p['settings'] as Map?)?.cast<String, dynamic>();
         final archive = (fake['settings'] as Map?)?.cast<String, dynamic>();
         result = done(_check(shard, given ?? archive, source: given != null ? 'given' : (archive != null ? 'archive' : null)));
@@ -300,6 +303,36 @@ void main() {
       expect(c['path'], endsWith('shard'));
       expect(c['index_dir'], endsWith('index'));
       expect((c['settings'] as Map)['library_id'], 'manuals');
+    });
+
+    test('archive catalog and original identities are installed beside settings', () async {
+      await setUpLibs();
+      const catalog = 'doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n';
+      final identities = jsonEncode({'version': 1, 'entries': []});
+      final archive = (jsonDecode(_lib()) as Map).cast<String, dynamic>()
+        ..['metadata'] = {'documents.tsv': catalog, 'source-identities.json': identities};
+      await libs.addFile(libFile('manuals.cache-library', jsonEncode(archive)),
+          confirmUpdate: never, askSettings: noSettings);
+      final library = libs.libraries.single;
+      expect(libs.phaseOf(library), LibraryPhase.ready);
+      expect(File('${library.path}/documents.tsv').readAsStringSync(), catalog);
+      expect(File('${library.path}/source-identities.json').readAsStringSync(), identities);
+      for (final name in ['documents.tsv', 'source-identities.json']) {
+        expect(File('${library.shardPath}/$name').existsSync(), isFalse);
+      }
+      expect(folders(), ['manuals']);
+    });
+
+    test('legacy archives without portable identity metadata still install', () async {
+      await setUpLibs();
+      await libs.addFile(libFile('legacy.cache-library', _lib()),
+          confirmUpdate: never, askSettings: noSettings);
+      final library = libs.libraries.single;
+      expect(libs.phaseOf(library), LibraryPhase.ready);
+      for (final name in ['documents.tsv', 'source-identities.json']) {
+        expect(File('${library.path}/$name').existsSync(), isFalse);
+        expect(File('${library.shardPath}/$name').existsSync(), isFalse);
+      }
     });
 
     test('with an indexes folder the keyword index is built there, as a snapshot that syncs, not in the library', () async {

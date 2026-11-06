@@ -19,6 +19,7 @@ pub mod pack;
 pub mod pagewriter;
 pub mod samebook;
 pub mod sorter;
+pub mod source_identity;
 pub mod text;
 pub mod view;
 pub mod zim;

@@ -32,6 +32,7 @@ fn doc(id: &str) -> LibDoc {
         doc_id: id.into(),
         doc_version: 1,
         source_blake3: "ab".repeat(32),
+        original_blake3: None,
         link: String::new(),
         author: None,
         zim: None,
@@ -335,4 +336,37 @@ fn bad_input_is_refused() {
     assert!(write_library(&tmp.path().join("b"), &opts(), vec![bad]).is_err());
     assert!(write_library(&tmp.path().join("c"), &opts(), Vec::<LibDoc>::new()).is_err());
     assert!(write_library(&tmp.path().join("d"), &opts(), vec![doc("bad id")]).is_err());
+}
+
+#[test]
+fn original_identity_survives_pack_export_archive_and_core_unpack() {
+    use cache_builder::source_identity::{read_source_identities, SOURCE_IDENTITIES_FILE};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut pack = pack_of("compressed", vec![piece(0, "Existing passage", "1", Some(1))]);
+    pack.header.book = Some(cache_builder::pack::BookBlock {
+        title: pack.header.title.clone(), source_title: None,
+        original_blake3: "ef".repeat(32), compression: None, ocr: None, suggested: None,
+    });
+    let doc = LibDoc::from_pack(&read_pack_bytes(&pack_bytes(&pack).unwrap()).unwrap());
+    assert_eq!(doc.original_blake3.as_deref(), Some("ef".repeat(32).as_str()));
+    assert_ne!(doc.source_blake3, doc.original_blake3.clone().unwrap());
+    let out = tmp.path().join("library");
+    let report = write_library(&out, &LibraryOptions { archive: true, ..opts() }, vec![doc]).unwrap();
+    let entries = read_source_identities(&out).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!((&entries[0].doc_id, entries[0].version), (&"compressed".to_string(), 1));
+    assert_eq!(entries[0].source_blake3, "cd".repeat(32));
+    assert_eq!(entries[0].original_blake3, "ef".repeat(32));
+    let sums = std::fs::read_to_string(out.join(SUMS_FILE)).unwrap();
+    let expected = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}  {SOURCE_IDENTITIES_FILE}", Sha256::digest(std::fs::read(out.join(SOURCE_IDENTITIES_FILE)).unwrap()))
+    };
+    assert!(sums.lines().any(|line| line == expected));
+    let archive = report.archive.unwrap();
+    let target = tmp.path().join("unpacked-shard");
+    let req = cache_search::libadd::prepare_unpack(archive.to_str().unwrap(), target.to_str().unwrap(), None, None).unwrap();
+    assert!(matches!(cache_search::libadd::run_unpack(&req, &|_, _| {}, &|_| {}, &|| false).unwrap(), cache_search::index::Outcome::Done));
+    assert_eq!(read_source_identities(&target).unwrap(), entries);
+    assert_eq!(std::fs::read(target.join(DOCUMENTS_FILE)).unwrap(), std::fs::read(out.join(DOCUMENTS_FILE)).unwrap());
 }

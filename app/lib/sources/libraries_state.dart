@@ -878,6 +878,18 @@ class LibrariesState extends ChangeNotifier {
         return false;
       }
       if (p == null) return false;
+      // Snapshot metadata is unpacked into shard/; keep the catalog and its aliases at the library root.
+      for (final name in ['documents.tsv', 'source-identities.json']) {
+        final from = '$shard$_pathSep$name';
+        final to = '$stagePath$_pathSep$name';
+        final dev = _dev;
+        if (dev != null) {
+          if (await dev.exists(from)) await dev.rename(from, to);
+        } else {
+          final file = File(from);
+          if (await file.exists()) await file.rename(to);
+        }
+      }
       var detail = p.detail ?? const {};
       var settings = (detail['settings'] as Map?)?.cast<String, dynamic>();
       // Only what the core cannot work out is asked: a settings file, when guessing from the entries did not work.
