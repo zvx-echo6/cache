@@ -77,7 +77,10 @@ fn open_beneath(root: &Path, relative: &Path) -> io::Result<File> {
     File::open(canonical)
 }
 
-fn hash_opened(file: &mut File) -> io::Result<(String,(u64,u64),(u64,u64))> {
+type Fingerprint = (u64, u64);
+type HashedFile = (String, Fingerprint, Fingerprint);
+
+fn hash_opened(file: &mut File) -> io::Result<HashedFile> {
     let before=file.metadata()?;
     if !before.is_file() { return Err(io::Error::new(io::ErrorKind::InvalidInput,"source is not a regular file")); }
     let mut h=blake3::Hasher::new(); let mut buf=[0u8;65536];
@@ -86,7 +89,7 @@ fn hash_opened(file: &mut File) -> io::Result<(String,(u64,u64),(u64,u64))> {
     let after=file.metadata()?;
     Ok((hash,fingerprint(&before),fingerprint(&after)))
 }
-fn hash_beneath(root:&Path, relative:&Path) -> io::Result<(String,(u64,u64),(u64,u64))> { hash_opened(&mut open_beneath(root,relative)?) }
+fn hash_beneath(root:&Path, relative:&Path) -> io::Result<HashedFile> { hash_opened(&mut open_beneath(root,relative)?) }
 
 /// Scan a canonical registered directory. Exclusions must be nonempty relative component paths.
 pub fn scan_linked_root(root: &Path, exclusions: &[PathBuf], previous: &ScanState, now_ms: u64, settle_ms: u64) -> ScanResult {
