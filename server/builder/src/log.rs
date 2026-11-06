@@ -948,7 +948,7 @@ mod tests {
         assert_eq!(a.locations["b3"].len(), 1);
         assert_eq!(a.locations["b3"][0].relpath, "new/book.pdf");
         let mut gone = events; gone.push(ev(5, "device", Kind::Unlocate { doc: "b3".into(), folder_id: "f".into(), relpath: "new/book.pdf".into() }));
-        assert!(resolve(&gone).locations.get("b3").is_none());
+        assert!(!resolve(&gone).locations.contains_key("b3"));
         assert!(!resolve(&gone).docs.contains_key(""));
     }
 
