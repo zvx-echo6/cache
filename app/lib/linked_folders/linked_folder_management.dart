@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../video/format.dart' show formatBytes;
 import '../browse/web/build_common.dart' show pageBar, PanelCard, Small;
 import 'linked_folders.dart';
 import '../browse/web/two_column.dart';
@@ -20,6 +21,13 @@ class LinkedFolderManagementPage extends StatefulWidget {
 class _LinkedFolderManagementPageState
     extends State<LinkedFolderManagementPage> {
   LinkedFolderController get c => widget.controller;
+  static const _permissionHelp =
+      'Cache cannot read this folder. Restore access, then check again.';
+  static const _unavailableHelp =
+      'This folder cannot be reached right now. Existing books remain searchable.';
+
+  String _count(int count, String singular) =>
+      '$count $singular${count == 1 ? '' : 's'}';
   @override
   void initState() {
     super.initState();
@@ -114,7 +122,9 @@ class _LinkedFolderManagementPageState
           ),
           if (snap != null) ...[
             Text(
-              '${snap.books.where((b) => !b.pendingIndexing).map((b) => b.id).toSet().length} matched books · ${snap.books.expand((b) => b.locations).where((x) => x.available).length} available locations · ${snap.books.expand((b) => b.locations).where((x) => !x.available).length} unavailable locations',
+              '${_count(snap.books.where((b) => !b.pendingIndexing).map((b) => b.id).toSet().length, 'matched book')}\n'
+              '${_count(snap.books.expand((b) => b.locations).where((x) => x.available).length, 'available location')} · '
+              '${_count(snap.books.expand((b) => b.locations).where((x) => !x.available).length, 'unavailable location')}',
               style: TextStyle(color: k.text),
             ),
             for (final b in snap.books.where((x) => x.pendingIndexing).take(12))
@@ -171,6 +181,21 @@ class _LinkedFolderManagementPageState
         job?.active == true &&
         (job?.rootId == r.id || (job?.rootId == null && rootStatus != null));
     final rootJob = job?.rootId == r.id ? job : null;
+    final futurePaused = job?.active == true && job?.rootId == r.id
+        ? job!.pausedForFuture
+        : r.paused;
+    final shownErrors = <String>{
+      if (permissionLost) _permissionHelp,
+      if (unavailableRoot) _unavailableHelp,
+      for (final issue in issues)
+        if (issue['message'] is String) issue['message'] as String,
+    };
+    final visibleIssues = issues.where((issue) {
+      final path = issue['path']?.toString() ?? '';
+      return path.isNotEmpty ||
+          !((permissionLost && issue['message'] == _permissionHelp) ||
+              (unavailableRoot && issue['message'] == _unavailableHelp));
+    });
     final rootLocations =
         c.snapshot?.books
             .expand((b) => b.locations)
@@ -208,27 +233,25 @@ class _LinkedFolderManagementPageState
             style: TextStyle(color: k.secondary, fontSize: 12),
           ),
           Small(
-            '${r.paused
-                ? 'Paused'
+            active
+                ? 'Checking files'
                 : permissionLost
                 ? 'Permission needed'
                 : unavailableRoot
                 ? 'Folder unavailable'
-                : active
-                ? 'Checking files'
+                : futurePaused
+                ? 'Paused'
                 : rootStatus?['complete'] == true && job?.state == 'done'
                 ? 'Check finished'
-                : 'Linked'} · $rootBooks matched books · $rootLocations available locations${unavailable > 0 ? ' · $unavailable unavailable' : ''}',
+                : 'Linked',
           ),
-          if (permissionLost)
-            const Small(
-              'Cache cannot read this folder. Restore access, then check again.',
-            ),
-          if (unavailableRoot)
-            const Small(
-              'This folder cannot be reached right now. Existing books remain searchable.',
-            ),
-          for (final issue in issues)
+          Small(
+            '${_count(rootBooks, 'matched book')} · ${_count(rootLocations, 'available location')}'
+            '${unavailable > 0 ? ' · ${_count(unavailable, 'unavailable location')}' : ''}',
+          ),
+          if (permissionLost) const Small(_permissionHelp),
+          if (unavailableRoot) const Small(_unavailableHelp),
+          for (final issue in visibleIssues)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Row(
@@ -251,11 +274,13 @@ class _LinkedFolderManagementPageState
                 ],
               ),
             ),
-          if (r.paused)
-            const Small(
-              'Future checks are paused. Existing books remain searchable.',
+          if (futurePaused)
+            Small(
+              active
+                  ? 'Future checks paused. The current check will finish.'
+                  : 'Future checks are paused. Existing books remain searchable.',
             ),
-          if (rootJob != null) _jobCard(rootJob),
+          if (rootJob != null) _jobCard(rootJob, shownErrors: shownErrors),
           Wrap(
             spacing: 4,
             children: [
@@ -268,10 +293,10 @@ class _LinkedFolderManagementPageState
               TextButton(
                 onPressed: c.actionBusy
                     ? null
-                    : () => r.paused
+                    : () => futurePaused
                           ? c.resume(widget.libraryId, r.id)
                           : c.pause(widget.libraryId, r.id),
-                child: Text(r.paused ? 'Resume' : 'Pause'),
+                child: Text(futurePaused ? 'Resume' : 'Pause'),
               ),
               TextButton(
                 onPressed: job?.active == true || c.actionBusy
@@ -297,15 +322,32 @@ class _LinkedFolderManagementPageState
     return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
   }
 
-  Widget _jobCard(LinkedJob j) {
+  Widget _jobCard(LinkedJob j, {Set<String> shownErrors = const {}}) {
     final n = j.counts;
     final active = j.active;
+    final errorsAlreadyShown = <String>{
+      ...shownErrors,
+      if (j.rootId == null)
+        for (final root in j.roots)
+          if (root['errors'] is List)
+            for (final issue in (root['errors'] as List).whereType<Map>()) ...[
+              if (issue['message'] is String) issue['message'] as String,
+              if (issue['code'] == 'permission_denied') _permissionHelp,
+              if (issue['code'] == 'root_unavailable') _unavailableHelp,
+            ],
+    };
+    final settling =
+        (n.settlingFileCount ?? 0) > 0 ||
+        j.roots.any(
+          (root) => root['pending'] is num && (root['pending'] as num) > 0,
+        );
     final values = <String>[
       if (n.filesSeen != null) '${n.filesSeen} files seen',
       if (n.filesHashed != null) '${n.filesHashed} checked',
-      if (n.bytesHashed != null) '${n.bytesHashed} bytes checked',
-      if (n.matchedUniqueIds != null) '${n.matchedUniqueIds} matched books',
-      if (n.matchedLocations != null) '${n.matchedLocations} locations',
+      if (n.bytesHashed != null) '${formatBytes(n.bytesHashed!)} checked',
+      if (n.matchedUniqueIds != null)
+        _count(n.matchedUniqueIds!, 'matched book'),
+      if (n.matchedLocations != null) _count(n.matchedLocations!, 'location'),
       if (n.unmatchedIdentity != null && n.unmatchedIdentity! > 0)
         '${n.unmatchedIdentity} not added to search yet',
       if (n.settlingFileCount != null && n.settlingFileCount! > 0)
@@ -332,9 +374,16 @@ class _LinkedFolderManagementPageState
           if (values.isNotEmpty) Small(values.join(' · ')),
           if (active && values.isEmpty)
             const Small('Progress counts are not available yet.'),
-          if (j.pausedForFuture && active)
-            const Small('Future checks paused. The current check will finish.'),
-          if (j.error != null) Small(j.error!),
+          if (j.pausedForFuture && active && j.rootId == null)
+            const Small(
+              'Future checks are paused for one or more folders. The current check will finish.',
+            ),
+          if (!active && settling)
+            const Small(
+              'Still being copied or changed. Check again after the files stop changing.',
+            ),
+          if (j.error != null && !errorsAlreadyShown.contains(j.error))
+            Small(j.error!),
           if (!active && j.lastSuccessfulAt != null)
             Small('Last successful check: ${_date(j.lastSuccessfulAt)}'),
         ],

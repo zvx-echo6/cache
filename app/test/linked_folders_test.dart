@@ -4,6 +4,7 @@ import 'package:cache/linked_folders/linked_folders.dart';
 import 'package:cache/linked_folders/linked_folder_management.dart';
 import 'package:cache/linked_folders/linked_folder_setup.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/browse/web/build_common.dart' show PanelCard;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -227,6 +228,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.text('Not available yet'), findsNWidgets(3));
+      for (final title in ['Keep my folders', 'Sort with CDS', 'Both']) {
+        final card = tester.widget<PanelCard>(
+          find.ancestor(of: find.text(title), matching: find.byType(PanelCard)),
+        );
+        expect(card.onTap, isNull);
+        expect(card.selected, isFalse);
+      }
       await tester.enterText(
         find.byKey(const ValueKey('linked-folder-path')),
         '/cache/docs',
@@ -235,6 +244,7 @@ void main() {
         find.byKey(const ValueKey('linked-folder-exclusions')),
         'private',
       );
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('linked-folder-library')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Recon library').last);
@@ -243,6 +253,7 @@ void main() {
         find.byKey(const ValueKey('linked-folder-path')),
         'relative/folder',
       );
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-linked-folder')));
       await tester.pumpAndSettle();
       expect(previews, 0);
@@ -272,6 +283,16 @@ void main() {
       await tester.enterText(
         find.byKey(const ValueKey('linked-folder-exclusions')),
         'private',
+      );
+      await tester.pump();
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const ValueKey('check-linked-folder')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: 'valid exclusions enable the folder check after rebuilding',
       );
       await tester.tap(find.byKey(const ValueKey('check-linked-folder')));
       await tester.pumpAndSettle();
@@ -339,14 +360,14 @@ void main() {
     var checking = false;
     var paused = false;
     var checkRequests = 0;
-    var pauseRequests = 0;
+    var pauseRequests = 0, resumeRequests = 0;
     final client = MockClient((request) async {
       final path = request.url.path;
       if (request.method == 'GET' &&
           path == '/api/linked-folders/recon-library') {
         final config = _config();
         final local = config['local_config'] as Map<String, dynamic>;
-        (local['roots'] as List)[0] = {..._root(), 'paused': paused};
+        (local['roots'] as List)[0] = {..._root(), 'paused': false};
         return _ok(config);
       }
       if (request.method == 'GET' && path.endsWith('/checks')) {
@@ -391,6 +412,15 @@ void main() {
           'current_check_finishes': true,
         });
       }
+      if (request.method == 'POST' && path.endsWith('/resume')) {
+        resumeRequests++;
+        paused = false;
+        return _ok({
+          'paused': false,
+          'paused_for_future': true,
+          'current_check_finishes': true,
+        });
+      }
       return _ok({});
     });
     final controller = LinkedFolderController(
@@ -423,6 +453,23 @@ void main() {
           .onPressed,
       isNull,
     );
+    expect(
+      controller.snapshot!.roots.single.paused,
+      isFalse,
+      reason: 'the config response intentionally trails compact job status',
+    );
+    expect(find.text('Resume'), findsOneWidget);
+    expect(find.text('Checking files'), findsNWidgets(2));
+    await tester.tap(find.text('Resume'));
+    await tester.pumpAndSettle();
+    expect(resumeRequests, 1);
+    expect(pauseRequests, 1, reason: 'Resume must not send Pause again');
+    expect(find.text('Pause'), findsOneWidget);
+    expect(
+      find.text('Future checks paused. The current check will finish.'),
+      findsNothing,
+    );
+    expect(controller.activeJob?.active, isTrue);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });
@@ -637,4 +684,137 @@ void main() {
     await loading;
     expect(controller.targets, isEmpty);
   });
+  testWidgets('global pause status keeps each folders own control state', (
+    tester,
+  ) async {
+    final controller = LinkedFolderController(
+      api: LinkedFolderApi(
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/checks')) {
+            return _ok({
+              'active': {
+                ..._job(),
+                'scope': {'root_id': null},
+                'paused_for_future': true,
+                'roots': [
+                  {'root_id': 'root-a', 'paused': false},
+                  {'root_id': 'root-b', 'paused': false},
+                ],
+              },
+              'latest': null,
+            });
+          }
+          return _ok({
+            'local_config': {
+              'roots': [
+                _root(),
+                {..._root(), 'id': 'root-b', 'paused': true},
+              ],
+              'books': [],
+            },
+          });
+        }),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: LinkedFolderManagementPage(
+          controller: controller,
+          libraryId: 'recon-library',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final first = find.byKey(const ValueKey('linked-root-root-a'));
+    final second = find.byKey(const ValueKey('linked-root-root-b'));
+    expect(
+      find.descendant(of: first, matching: find.text('Pause')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: first, matching: find.text('Resume')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: second, matching: find.text('Resume')),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets(
+    'terminal copy uses readable sizes, singular counts and one permission recovery message',
+    (tester) async {
+      const recovery =
+          'Cache cannot read this folder. Restore access, then check again.';
+      final controller = LinkedFolderController(
+        api: LinkedFolderApi(
+          client: MockClient((request) async {
+            if (request.url.path.endsWith('/checks')) {
+              return _ok({
+                'active': null,
+                'latest': {
+                  ..._job(state: 'failed'),
+                  'counts': {
+                    ...(_job()['counts'] as Map),
+                    'matched_unique_ids': 1,
+                  },
+                  'error': {'code': 'permission_denied', 'message': recovery},
+                  'roots': [
+                    {
+                      'root_id': 'root-a',
+                      'complete': false,
+                      'pending': 4,
+                      'errors': [
+                        {
+                          'code': 'permission_denied',
+                          'path': '',
+                          'message': recovery,
+                        },
+                        {
+                          'code': 'io_error',
+                          'path': 'manuals/broken.pdf',
+                          'message': 'A different file could not be read.',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              });
+            }
+            return _ok(_config());
+          }),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          home: LinkedFolderManagementPage(
+            controller: controller,
+            libraryId: 'recon-library',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(recovery), findsOneWidget);
+      expect(
+        find.textContaining('A different file could not be read.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('89.6 MB checked'), findsOneWidget);
+      expect(find.textContaining('94000000 bytes'), findsNothing);
+      expect(find.textContaining('1 matched book'), findsWidgets);
+      expect(find.textContaining('1 matched books'), findsNothing);
+      expect(
+        find.text(
+          'Still being copied or changed. Check again after the files stop changing.',
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    },
+  );
 }

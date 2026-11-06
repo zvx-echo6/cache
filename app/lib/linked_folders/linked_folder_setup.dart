@@ -347,33 +347,36 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Browsing preference',
+              'Future browsing views',
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const Small(
-              'Folder and subject browsing views are not available yet. These choices cannot change how books appear today.',
+              'These planned views are not available in this release. Linking a folder keeps the current library view.',
             ),
             for (final entry in const [
-              ('Keep my folders', 'Folders become shelves.'),
-              ('Sort with CDS', 'Browse by subject and call number.'),
-              ('Both', 'Use folders and browse by subject.'),
+              ('Keep my folders', 'Shelves from folders'),
+              ('Sort with CDS', 'Subjects and call numbers'),
+              ('Both', 'Folders and subjects'),
             ])
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: PanelCard(
-                  selected: false,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry.$1,
-                        style: TextStyle(
-                          color: k.secondary,
-                          fontWeight: FontWeight.w600,
+                child: Opacity(
+                  opacity: 0.6,
+                  child: PanelCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entry.$1,
+                          style: TextStyle(
+                            color: k.secondary,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      Small(entry.$2),
-                    ],
+                        Small(entry.$2),
+                        const Small('Not available yet'),
+                      ],
+                    ),
                   ),
                 ),
               ),

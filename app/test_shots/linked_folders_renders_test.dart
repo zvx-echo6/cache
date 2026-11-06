@@ -31,7 +31,7 @@ MockClient _client({
     'mode': 'keep',
     'path': '/library/field',
     'exclusions': ['private'],
-    'paused': false,
+    'paused': !complete && !unavailable,
     'state': unavailable ? 'permission_lost' : 'ready',
   };
   final job = {
