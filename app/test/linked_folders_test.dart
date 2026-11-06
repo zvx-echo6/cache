@@ -132,12 +132,13 @@ void main() {
       final api = LinkedFolderApi(
         client: MockClient((request) async {
           calls.add(request);
-          if (request.url.path == '/api/linked-folders/libraries')
+          if (request.url.path == '/api/linked-folders/libraries') {
             return _ok([
               {'id': 'recon-library', 'title': 'Recon library'},
               {'id': 'built-library', 'title': 'Built library'},
             ]);
-          if (request.url.path == '/api/linked-folders/preview')
+          }
+          if (request.url.path == '/api/linked-folders/preview') {
             return _ok({
               'readable': true,
               'root': '/cache/docs',
@@ -145,9 +146,11 @@ void main() {
               'counts': null,
               'warnings': [],
             });
+          }
           if (request.method == 'POST' &&
-              request.url.path == '/api/linked-folders/recon-library')
+              request.url.path == '/api/linked-folders/recon-library') {
             registrations++;
+          }
           return _ok({});
         }),
       );
@@ -166,14 +169,19 @@ void main() {
   testWidgets(
     'setup requires a fresh path check and selected library before linking',
     (tester) async {
+      tester.view.physicalSize = const Size(1440, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       var previews = 0, registrations = 0, checksStarted = 0;
       final client = MockClient((request) async {
         final path = request.url.path;
-        if (request.method == 'GET' && path == '/api/linked-folders/libraries')
+        if (request.method == 'GET' &&
+            path == '/api/linked-folders/libraries') {
           return _ok([
             {'id': 'recon-library', 'title': 'Recon library'},
             {'id': 'builder-target', 'title': 'Builder target'},
           ]);
+        }
         if (request.method == 'POST' && path == '/api/linked-folders/preview') {
           previews++;
           final body = jsonDecode(request.body);
@@ -200,11 +208,13 @@ void main() {
           checksStarted++;
           return _ok(_job());
         }
-        if (request.method == 'GET' && path.endsWith('/checks'))
+        if (request.method == 'GET' && path.endsWith('/checks')) {
           return _ok({'active': _job(), 'latest': _job()});
+        }
         if (request.method == 'GET' &&
-            path == '/api/linked-folders/recon-library')
+            path == '/api/linked-folders/recon-library') {
           return _ok(_config());
+        }
         return _ok({});
       });
       final controller = LinkedFolderController(
@@ -297,6 +307,7 @@ void main() {
         find.text('Available location · unmatched/field-notes.pdf'),
         findsOneWidget,
       );
+      await tester.pumpWidget(const SizedBox());
       controller.dispose();
     },
   );
@@ -339,11 +350,12 @@ void main() {
         return _ok(config);
       }
       if (request.method == 'GET' && path.endsWith('/checks')) {
-        if (checking)
+        if (checking) {
           return _ok({
             'active': {..._job(), 'paused_for_future': paused},
             'latest': _job(),
           });
+        }
         return _ok({
           'active': null,
           'latest': {
@@ -545,4 +557,84 @@ void main() {
       controller.dispose();
     },
   );
+  testWidgets('a late action for A cannot cancel polling for B', (
+    tester,
+  ) async {
+    final delayedAction = Completer<http.Response>();
+    var checksForB = 0, libraryReadsForB = 0;
+    final controller = LinkedFolderController(
+      pollEvery: const Duration(seconds: 1),
+      api: LinkedFolderApi(
+        client: MockClient((request) async {
+          final path = request.url.path;
+          if (request.method == 'POST' &&
+              path == '/api/linked-folders/library-a/checks') {
+            return delayedAction.future;
+          }
+          if (request.method == 'GET' && path.endsWith('/checks')) {
+            if (path.contains('/library-b/')) {
+              checksForB++;
+              return _ok({
+                'active': {..._job(), 'job_id': 'job-b'},
+                'latest': null,
+              });
+            }
+            return _ok({'active': null, 'latest': null});
+          }
+          if (request.method == 'GET' &&
+              path == '/api/linked-folders/library-b') {
+            libraryReadsForB++;
+            return _ok({
+              'local_config': {
+                'roots': [
+                  {..._root(), 'id': 'root-b'},
+                ],
+                'books': [],
+              },
+            });
+          }
+          return _ok(_config());
+        }),
+      ),
+    );
+    controller.watch('library-a');
+    await tester.pumpAndSettle();
+    final action = controller.checkNow('library-a', rootId: 'root-a');
+    await tester.pump();
+    expect(controller.actionBusy, isTrue);
+    controller.watch('library-b');
+    await tester.pumpAndSettle();
+    delayedAction.complete(_ok(_job()));
+    await action;
+    await tester.pumpAndSettle();
+    expect(controller.snapshot?.roots.single.id, 'root-b');
+    expect(controller.activeJob?.id, 'job-b');
+    expect(controller.actionBusy, isFalse);
+    final previousReads = checksForB;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(checksForB, previousReads + 1);
+    expect(
+      libraryReadsForB,
+      1,
+      reason: 'active checks still poll compact status only',
+    );
+    controller.dispose();
+  });
+
+  test('late library targets do not update a disposed controller', () async {
+    final response = Completer<http.Response>();
+    final controller = LinkedFolderController(
+      api: LinkedFolderApi(client: MockClient((_) => response.future)),
+    );
+    final loading = controller.loadTargets();
+    controller.dispose();
+    response.complete(
+      _ok([
+        {'id': 'late', 'title': 'Late library'},
+      ]),
+    );
+    await loading;
+    expect(controller.targets, isEmpty);
+  });
 }

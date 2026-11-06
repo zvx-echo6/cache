@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../browse/web/build_common.dart' show pageBar, PanelCard, Small;
 import 'linked_folders.dart';
+import 'linked_folder_management.dart';
 import '../browse/web/two_column.dart';
 
 class LinkedFolderSetupPage extends StatefulWidget {
@@ -48,13 +49,14 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
   }
 
   void _edited() {
-    if (mounted)
+    if (mounted) {
       setState(
         () => _checked =
             _checked &&
             _path.text.trim() == _checkedPath &&
             listEquals(_exclusions, _checkedExclusions),
       );
+    }
   }
 
   @override
@@ -77,7 +79,11 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
       );
       return;
     }
-    setState(() => {_checking = true, _error = null, _checked = false});
+    setState(() {
+      _checking = true;
+      _error = null;
+      _checked = false;
+    });
     try {
       final result = await c.preview(testedPath, testedExclusions);
       if (!mounted) return;
@@ -88,22 +94,21 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
         );
         return;
       }
-      setState(
-        () => {
-          _checked =
-              testedPath == _path.text.trim() &&
-              listEquals(testedExclusions, _exclusions),
-          _checkedPath = testedPath,
-          _checkedExclusions = testedExclusions,
-        },
-      );
+      setState(() {
+        _checked =
+            testedPath == _path.text.trim() &&
+            listEquals(testedExclusions, _exclusions);
+        _checkedPath = testedPath;
+        _checkedExclusions = testedExclusions;
+      });
     } on DeviceException catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error = e.message.isEmpty
               ? 'Cache could not check that folder. Check the path and try again.'
               : e.message,
         );
+      }
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -114,6 +119,7 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
         _checkedPath != _path.text.trim() ||
         !listEquals(_checkedExclusions, _exclusions) ||
         _libraryId == null ||
+        !c.targets.any((target) => target.id == _libraryId) ||
         _linking) {
       return;
     }
@@ -193,11 +199,15 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
       builder: (context, _) {
         final k = context.t;
         final targets = c.targets;
+        final selectedLibraryId =
+            targets.any((target) => target.id == _libraryId)
+            ? _libraryId
+            : null;
         final ready =
             _checked &&
             _checkedPath == _path.text.trim() &&
             listEquals(_checkedExclusions, _exclusions) &&
-            _libraryId != null &&
+            selectedLibraryId != null &&
             !_linking;
         final left = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -231,20 +241,23 @@ class _LinkedFolderSetupPageState extends State<LinkedFolderSetupPage> {
               ),
             ),
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
+            KeyedSubtree(
               key: const ValueKey('linked-folder-library'),
-              value: targets.any((x) => x.id == _libraryId) ? _libraryId : null,
-              decoration: const InputDecoration(labelText: 'Add to library'),
-              items: [
-                for (final x in targets)
-                  DropdownMenuItem(
-                    value: x.id,
-                    child: Text(x.title, overflow: TextOverflow.ellipsis),
-                  ),
-              ],
-              onChanged: _linking
-                  ? null
-                  : (v) => setState(() => _libraryId = v),
+              child: DropdownButtonFormField<String>(
+                key: ValueKey(selectedLibraryId),
+                initialValue: selectedLibraryId,
+                decoration: const InputDecoration(labelText: 'Add to library'),
+                items: [
+                  for (final x in targets)
+                    DropdownMenuItem(
+                      value: x.id,
+                      child: Text(x.title, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: _linking
+                    ? null
+                    : (v) => setState(() => _libraryId = v),
+              ),
             ),
             if (c.loading) const LinearProgressIndicator(),
             if (c.error != null)

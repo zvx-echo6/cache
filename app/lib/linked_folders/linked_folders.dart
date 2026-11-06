@@ -245,24 +245,26 @@ class LinkedFolderApi {
         'This device could not be reached.',
       );
     }
-    if (response.statusCode == 401)
+    if (response.statusCode == 401) {
       throw const DeviceException(
         'unauthorized',
         'Sign in again.',
         status: 401,
       );
+    }
     Object? json;
     try {
       json = jsonDecode(utf8.decode(response.bodyBytes));
     } catch (_) {}
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final error = json is Map ? json['error'] : null;
-      if (error is Map)
+      if (error is Map) {
         throw DeviceException(
           (error['code'] ?? 'failed').toString(),
           (error['message'] ?? '').toString(),
           status: response.statusCode,
         );
+      }
       throw DeviceException(
         'failed',
         'This device answered ${response.statusCode}.',
@@ -318,7 +320,7 @@ class LinkedFolderApi {
           await _call(
             'POST',
             '/api/linked-folders/${_id(l)}/checks',
-            body: {if (rootId != null) 'root_id': rootId},
+            body: {'root_id': ?rootId},
           ),
         ),
       );
@@ -349,24 +351,9 @@ class LinkedFolderController extends ChangeNotifier {
   LinkedJob? activeJob, latestJob;
   List<LinkedLibraryTarget> targets = const [];
   String? error;
-  bool loading = false, busy = false;
+  bool loading = false, busy = false, actionBusy = false;
   Timer? _timer;
   String? _watching;
-  Future<void> loadTargets() async {
-    if (_disposed) return;
-    loading = true;
-    error = null;
-    notifyListeners();
-    try {
-      targets = await api.libraries();
-    } on DeviceException catch (e) {
-      error = _words(e);
-    } finally {
-      loading = false;
-      if (!_disposed) notifyListeners();
-    }
-  }
-
   bool _disposed = false;
   int _generation = 0;
   int _targetGeneration = 0;
@@ -398,7 +385,11 @@ class LinkedFolderController extends ChangeNotifier {
   }
 
   Future<void> refresh(String libraryId) async {
-    if (_disposed || (_watching != null && _watching != libraryId)) return;
+    if (_disposed ||
+        actionBusy ||
+        (_watching != null && _watching != libraryId)) {
+      return;
+    }
     final generation = ++_generation;
     busy = true;
     error = null;
@@ -423,6 +414,7 @@ class LinkedFolderController extends ChangeNotifier {
   }
 
   void watch(String libraryId) {
+    if (_disposed) return;
     _timer?.cancel();
     if (_watching != libraryId) {
       _generation++;
@@ -440,21 +432,21 @@ class LinkedFolderController extends ChangeNotifier {
   }
 
   void unwatch(String libraryId) {
-    if (_watching != libraryId) return;
+    if (_disposed || _watching != libraryId) return;
     _watching = null;
     _generation++;
     _timer?.cancel();
     _timer = null;
     busy = false;
-    _busyLibraryId = null;
     actionBusy = false;
     _actionGeneration = null;
     notifyListeners();
   }
 
   Future<void> _poll(String libraryId, int generation) async {
-    if (!_current(libraryId, generation) || _pollingGeneration == generation)
+    if (!_current(libraryId, generation) || _pollingGeneration == generation) {
       return;
+    }
     _pollingGeneration = generation;
     final wasActive = activeJob?.active == true;
     try {
@@ -478,10 +470,9 @@ class LinkedFolderController extends ChangeNotifier {
   }
 
   void _schedule(String libraryId, int generation) {
+    if (!_current(libraryId, generation) || _watching != libraryId) return;
     _timer?.cancel();
-    if (_current(libraryId, generation) &&
-        _watching == libraryId &&
-        activeJob?.active == true) {
+    if (activeJob?.active == true) {
       _timer = Timer(pollEvery, () => _poll(libraryId, generation));
     }
   }
@@ -499,9 +490,12 @@ class LinkedFolderController extends ChangeNotifier {
   Future<void> checkNow(String libraryId, {String? rootId}) async {
     if (actionBusy ||
         _disposed ||
-        (_watching != null && _watching != libraryId))
+        (_watching != null && _watching != libraryId)) {
       return;
-    final generation = _generation;
+    }
+    final generation = ++_generation;
+    _timer?.cancel();
+    busy = false;
     actionBusy = true;
     _actionGeneration = generation;
     error = null;
@@ -539,9 +533,12 @@ class LinkedFolderController extends ChangeNotifier {
   Future<void> _control(String libraryId, Future<void> Function() call) async {
     if (actionBusy ||
         _disposed ||
-        (_watching != null && _watching != libraryId))
+        (_watching != null && _watching != libraryId)) {
       return;
-    final generation = _generation;
+    }
+    final generation = ++_generation;
+    _timer?.cancel();
+    busy = false;
     actionBusy = true;
     _actionGeneration = generation;
     error = null;
@@ -561,6 +558,7 @@ class LinkedFolderController extends ChangeNotifier {
     if (_current(libraryId, generation)) {
       if (failed) {
         notifyListeners();
+        _schedule(libraryId, generation);
       } else {
         await refresh(libraryId);
       }

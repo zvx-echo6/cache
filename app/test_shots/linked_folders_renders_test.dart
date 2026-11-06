@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:cache/linked_folders/linked_folders.dart';
 import 'package:cache/linked_folders/linked_folder_management.dart';
 import 'package:cache/linked_folders/linked_folder_setup.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cache/theme.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'shot_kit.dart';
@@ -12,7 +14,7 @@ MockClient _client({
   bool complete = false,
 }) => MockClient((request) async {
   if (request.method == 'GET' &&
-      request.url.path == '/api/linked-folders/libraries')
+      request.url.path == '/api/linked-folders/libraries') {
     return http.Response(
       jsonEncode({
         'ok': true,
@@ -22,6 +24,7 @@ MockClient _client({
       }),
       200,
     );
+  }
   final root = {
     'id': 'root-a',
     'label': 'Field manuals',
@@ -96,7 +99,7 @@ MockClient _client({
           }
         : null,
   };
-  if (request.method == 'GET' && request.url.path.endsWith('/checks'))
+  if (request.method == 'GET' && request.url.path.endsWith('/checks')) {
     return http.Response(
       jsonEncode({
         'ok': true,
@@ -107,7 +110,8 @@ MockClient _client({
       }),
       200,
     );
-  if (request.method == 'GET')
+  }
+  if (request.method == 'GET') {
     return http.Response(
       jsonEncode({
         'ok': true,
@@ -156,6 +160,7 @@ MockClient _client({
       }),
       200,
     );
+  }
   return http.Response('{"ok":true,"result":{}}', 200);
 });
 void main() {

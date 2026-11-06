@@ -56,10 +56,11 @@ class _LinkedFolderManagementPageState
     );
     if (ok == true) {
       await c.unlink(widget.libraryId, r.id);
-      if (mounted && c.error != null)
+      if (mounted && c.error != null) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(c.error!)));
+      }
     }
   }
 
@@ -96,7 +97,9 @@ class _LinkedFolderManagementPageState
               child: Text(c.error!, style: TextStyle(color: k.warning)),
             ),
           OutlinedButton.icon(
-            onPressed: () => c.refresh(widget.libraryId),
+            onPressed: c.busy || c.actionBusy
+                ? null
+                : () => c.refresh(widget.libraryId),
             icon: const Icon(Icons.refresh),
             label: const Text('Refresh'),
           ),
