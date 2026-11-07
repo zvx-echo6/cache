@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Sign in</title>
+<style>
+/* Tokens copied from the Cache app (app/lib/theme.dart): Light and Dark. */
+:root{
+  --bg:#F3EBD9; --surface:#FFFDF8; --text:#1A1D1F; --secondary:#55594F; --accent:#9C5320;
+  --primary:#3B4D3A; --onprimary:#F3EBD9; --bad:#B3281E; --warn:#7A5200; --ok:#3F6B2E;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1A1D1F; --surface:#2A3036; --text:#DCC9A3; --secondary:#B0A58A; --accent:#DB8A4B;
+    --primary:#CB7A3C; --onprimary:#1A1D1F; --bad:#FF7A6E; --warn:#E0B45A; --ok:#8FB36A;
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);display:grid;place-items:center;
+  font:17px/1.4 Roboto,system-ui,-apple-system,"Segoe UI",sans-serif;transition:opacity .25s}
+body.leaving{opacity:0}
+#app{width:min(360px,calc(100vw - 32px));display:flex;flex-direction:column;align-items:center;gap:28px}
+.brand{height:100px;display:block}
+form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
+#app.loading form{visibility:hidden}
+.row{display:flex;gap:10px;align-items:center;width:100%}
+.hid{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* password pill: app input = filled surface, 28 radius, 1.5px primary focus, plus a 1px edge. */
+.pill{flex:1;height:56px;position:relative;border-radius:28px}
+.pill input{width:100%;height:100%;border:1px solid var(--secondary);border-radius:28px;background:var(--surface);
+  color:var(--text);font:inherit;font-size:18px;letter-spacing:.1em;padding:0 48px 0 20px;outline:none;transition:border-color .15s,box-shadow .15s,opacity .2s}
+.pill input:focus{border:1.5px solid var(--primary);padding-left:19.5px;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 28%,transparent)}
+.pill .ico{position:absolute;right:16px;top:16px;width:24px;height:24px;color:var(--warn);display:none}
+/* round buttons */
+.btn{width:56px;height:56px;flex:none;border-radius:50%;border:0;display:grid;place-items:center;cursor:pointer;
+  background:var(--primary);color:var(--onprimary);position:relative;transition:background .2s,color .2s,transform .1s}
+.btn:active{transform:scale(.96)}
+.btn:focus-visible,.key:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.btn svg{width:26px;height:26px}
+.btn .spin{display:none;position:absolute;inset:8px;border-radius:50%;border:3px solid color-mix(in srgb,var(--onprimary) 30%,transparent);border-top-color:var(--onprimary);animation:rot .8s linear infinite}
+.btn .tick{display:none}
+.busy .btn .arrow,.busy .btn .tick{display:none}.busy .btn .spin{display:block}
+.ok .btn{background:var(--ok);color:#fff}.ok .btn .arrow{display:none}.ok .btn .tick{display:block}
+@keyframes rot{to{transform:rotate(360deg)}}
+/* key buttons */
+.keys{display:none;gap:20px;justify-content:center}
+.key{width:64px;height:64px;border-radius:50%;border:1.5px solid var(--secondary);background:var(--surface);color:var(--accent);
+  display:grid;place-items:center;cursor:pointer;position:relative;transition:border-color .2s,opacity .2s,transform .1s}
+.key:hover{border-color:var(--primary)}
+.key svg{width:30px;height:30px}
+.key .ring{position:absolute;inset:-7px;border-radius:50%;border:2px solid var(--primary);opacity:0;pointer-events:none}
+.key .spin{display:none;position:absolute;inset:-7px;border-radius:50%;border:3px solid transparent;border-top-color:var(--primary);animation:rot .8s linear infinite}
+/* touch your key: button lit, ring pulses, others dim */
+.waiting .key.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 14%,var(--surface))}
+.waiting .key.on .ring{opacity:1;animation:pulse 1.4s ease-out infinite}
+.waiting .key:not(.on){opacity:.35;pointer-events:none}
+@keyframes pulse{0%{transform:scale(.92);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+/* key read or checked */
+.reading .key.on{border-color:var(--primary)}
+.reading .key.on .spin{display:block}
+.reading .key:not(.on){opacity:.35;pointer-events:none}
+/* wrong key */
+.keywrong .key.on{border-color:var(--bad);color:var(--bad);animation:shake .4s}
+.keywrong .key.on::after{content:"";position:absolute;right:-2px;top:-2px;width:20px;height:20px;border-radius:50%;background:var(--bad)
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 6l8 8M14 6l-8 8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")}
+/* modes */
+#app[data-mode="either"] .keys{display:flex}
+#app[data-mode="either"] .key{width:56px;height:56px}
+#app[data-mode="either"] .key svg{width:26px;height:26px}
+#app[data-mode="key"] form .row{display:none}
+#app[data-mode="key"] .keys{display:flex}
+#app[data-mode="key"] .key{width:80px;height:80px}
+#app[data-mode="key"] .key svg{width:36px;height:36px}
+#app[data-mode="both"][data-step="2"] form .row{display:none}
+#app[data-mode="both"][data-step="2"] .keys{display:flex}
+/* step dots: both mode only */
+.dots{display:none;gap:10px;align-items:center;height:20px}
+#app[data-mode="both"] .dots{display:flex}
+.dot{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--secondary);display:grid;place-items:center;transition:all .2s}
+.dot.cur{border-color:var(--primary);background:var(--primary)}
+.dot.done{width:20px;height:20px;border:0;background:var(--ok);color:#fff}
+.dot svg{width:12px;height:12px;display:none}.dot.done svg{display:block}
+/* wrong / offline / success on pill */
+.wrong .pill input{border-color:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 26%,transparent)}
+.shake .pill{animation:shake .4s cubic-bezier(.36,.07,.19,.97)}
+@keyframes shake{10%,90%{transform:translateX(-2px)}20%,80%{transform:translateX(4px)}30%,50%,70%{transform:translateX(-8px)}40%,60%{transform:translateX(8px)}}
+.offline .pill input{border-style:dashed;border-color:var(--warn);opacity:.9}
+.offline .pill .ico{display:block}
+.offline .key{border-style:dashed;border-color:var(--warn)}
+.okpill input{border-color:var(--ok)}
+/* a security key signs in: nothing of ours but the background and the logo, until the key is cancelled or times out */
+#app.auto form{display:none}
+#app.auto .brand{opacity:.9}
+@media (prefers-reduced-motion:reduce){
+  .shake .pill,.keywrong .key.on{animation:none}
+  .waiting .key.on .ring{animation:none;opacity:1;border-width:3px;transform:scale(1.12)}
+  .btn .spin,.key .spin{animation:none;border-color:var(--primary)}
+  .btn .spin{border-color:var(--onprimary)}
+  body{transition:none}
+}
+</style>
+</head>
+<body>
+<div id="app" class="loading" data-mode="password" data-step="1">
+  <img class="brand" alt="" src="{{LOGO}}">
+  <form id="f" autocomplete="on" novalidate>
+    <input class="hid" type="text" name="username" value="cache" autocomplete="username" tabindex="-1" aria-hidden="true">
+    <div class="row">
+      <div class="pill">
+        <input id="pw" type="password" name="password" autocomplete="current-password" enterkeyhint="go"
+               aria-label="Password" autofocus spellcheck="false" autocapitalize="off">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0"/><path d="M3 3l18 18"/></svg>
+      </div>
+      <button class="btn" id="go" type="submit" aria-label="Sign in">
+        <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        <span class="spin"></span>
+      </button>
+    </div>
+    <div class="dots" aria-hidden="true">
+      <span class="dot cur" id="d1"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.6 2.6L10 3.5"/></svg></span>
+      <span class="dot" id="d2"></span>
+    </div>
+    <div class="keys" id="keys">
+      <button class="key" id="k-sec" type="button" aria-label="Use a security key">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="M11.3 11.7L20 3M16 7l3 3M13.5 9.5l2 2"/></svg>
+        <span class="ring"></span><span class="spin"></span>
+      </button>
+      <button class="key" id="k-file" type="button" aria-label="Use a key file">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7.5" y="9" width="9" height="12" rx="2"/><path d="M9.5 9V3h5v6"/><path d="M11 5.5h.01M13 5.5h.01" stroke-width="2.4"/><circle cx="12" cy="16.5" r="1.3"/></svg>
+        <span class="ring"></span><span class="spin"></span>
+      </button>
+      <input id="file" class="hid" type="file" tabindex="-1" aria-hidden="true">
+    </div>
+  </form>
+  <div class="sr" id="live" role="status" aria-live="assertive"></div>
+</div>
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  var app=$('app'), f=$('f'), pw=$('pw'), live=$('live'), kS=$('k-sec'), kF=$('k-file'), file=$('file'), d1=$('d1'), d2=$('d2');
+  var S=null, mode='password', step=1, busy=false, abort=null;
+  var MAXFILE=4096;
+
+  function say(s){live.textContent='';setTimeout(function(){live.textContent=s},30)}
+  function flag(n,on){f.classList.toggle(n,!!on)}
+  function clearAll(){['busy','wrong','shake','ok','offline','waiting','reading','keywrong','okpill'].forEach(function(n){f.classList.remove(n)});
+    kS.classList.remove('on');kF.classList.remove('on');kS.setAttribute('aria-label','Use a security key')}
+  function setStep(n){step=n;app.dataset.step=n;
+    d1.className='dot '+(n===1?'cur':'done'); d2.className='dot '+(n===2?'cur':'');}
+  function b64(buf){var b=new Uint8Array(buf),s='';for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);
+    return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+  function unb64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+    var t=atob(s),b=new Uint8Array(t.length);for(var i=0;i<t.length;i++)b[i]=t.charCodeAt(i);return b.buffer}
+  function post(url,body,type){
+    return fetch(url,{method:'POST',credentials:'same-origin',cache:'no-store',headers:type?{'Content-Type':type}:{},body:body});
+  }
+  function canSec(){return !!(S&&S.security_key_available&&window.PublicKeyCredential&&navigator.credentials)}
+  // A security key signs in at once: in Key only, in Password or key unless the person asked to start with the password
+  // box, and at the second step of Password and key.
+  function wantAuto(){
+    if(!canSec())return false;
+    return mode==='key'||(mode==='both'&&step===2)||(mode==='either'&&!S.start_with_password);
+  }
+  function focusFirst(){
+    if(mode==='key'||(mode==='both'&&step===2)){ if(!kS.hidden)kS.focus(); else kF.focus() } else pw.focus();
+  }
+  function show(){
+    mode=S.mode; app.dataset.mode=mode; kS.hidden=!canSec();
+    app.classList.toggle('auto',wantAuto());
+    app.classList.remove('loading');
+  }
+  function init(){ show(); if(wantAuto())startSec(true); else focusFirst(); }
+  // The server's setting changed under us, or the password step expired: learn the state again and start over.
+  function relearn(){
+    return fetch('/auth/state',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(s){
+      S=s; busy=false; clearAll(); setStep(1); pw.value=''; init();
+    },function(){busy=false;clearAll();flag('offline',1);say('This device is unreachable')});
+  }
+  function offline(){ busy=false; pw.readOnly=false; clearAll(); app.classList.remove('auto'); flag('offline',1); say('This device is unreachable'); }
+
+  function success(){
+    clearAll(); flag('ok',1); flag('okpill',1); say('Signed in'); busy=true;
+    setTimeout(function(){document.body.classList.add('leaving')},350);
+    setTimeout(function(){location.reload()},650);
+  }
+  function wrong(){
+    pw.value=''; busy=false; flag('wrong',1); flag('shake',1); say('Wrong password'); pw.focus();
+    setTimeout(function(){flag('shake',0)},420); setTimeout(function(){flag('wrong',0)},900);
+  }
+  function keyWrong(btn){
+    clearAll(); app.classList.remove('auto'); btn.classList.add('on'); flag('keywrong',1); busy=false; say('Key not recognised');
+    setTimeout(function(){clearAll()},1000);
+  }
+
+  function submit(){
+    if(busy||mode==='key'||!pw.value)return;
+    busy=true; clearAll(); pw.readOnly=true;
+    var slow=setTimeout(function(){flag('busy',1)},200);
+    post('/auth/login',JSON.stringify({password:pw.value}),'application/json').then(function(r){
+      clearTimeout(slow); flag('busy',0); pw.readOnly=false;
+      if(r.status===204)success();
+      else if(r.status===200){ clearAll(); pw.value=''; setStep(2); busy=false; if(wantAuto()){app.classList.add('auto');startSec(true)} else focusFirst() }
+      else if(r.status===403){ relearn() }
+      else wrong();
+    },function(){clearTimeout(slow);flag('busy',0);offline()});
+  }
+
+  // Security key
+  function startSec(auto){
+    if(busy&&!kS.classList.contains('on'))return;
+    clearAll(); busy=true; kS.classList.add('on'); flag('waiting',1); app.classList.toggle('auto',!!auto);
+    kS.setAttribute('aria-label','Cancel security key'); say('Touch your key');
+    abort=new AbortController(); var touched=false;
+    post('/auth/webauthn/start').then(function(r){
+      if(r.status!==200)throw {code:r.status};
+      return r.json();
+    }).then(function(o){
+      var pk=o.options.publicKey; pk.challenge=unb64(pk.challenge);
+      (pk.allowCredentials||[]).forEach(function(c){c.id=unb64(c.id)});
+      return navigator.credentials.get({publicKey:pk,signal:abort.signal}).then(function(c){return {id:o.id,cred:c}});
+    }).then(function(x){
+      touched=true; f.classList.remove('waiting'); flag('reading',1);
+      var c=x.cred, r=c.response;
+      return post('/auth/webauthn/finish',JSON.stringify({id:x.id,credential:{id:c.id,rawId:b64(c.rawId),type:c.type,extensions:{},
+        response:{authenticatorData:b64(r.authenticatorData),clientDataJSON:b64(r.clientDataJSON),signature:b64(r.signature),
+        userHandle:r.userHandle?b64(r.userHandle):null}}}),'application/json');
+    }).then(function(r){
+      if(r.status===204)success();
+      else if(r.status===403||r.status===409)relearn();
+      else keyWrong(kS);
+    }).catch(function(e){
+      if(e&&(e.code===403||e.code===409))relearn();
+      else if(touched)offline();
+      else fallBack();
+    });
+  }
+  // Cancelled (Esc, the browser's Cancel) or timed out: show the page's own controls.
+  function fallBack(){
+    if(abort){try{abort.abort()}catch(e){}}
+    clearAll(); app.classList.remove('auto'); busy=false; focusFirst();
+  }
+  kS.addEventListener('click',function(){ if(kS.classList.contains('on')&&f.classList.contains('waiting'))fallBack(); else startSec(false) });
+
+  // Key file
+  kF.addEventListener('click',function(){ if(busy)return; file.value=''; file.click() });
+  file.addEventListener('change',function(){
+    var fl=file.files&&file.files[0]; if(!fl)return;
+    if(fl.size>MAXFILE){ keyWrong(kF); return }
+    clearAll(); busy=true; kF.classList.add('on'); flag('reading',1); say('Checking key file');
+    fl.arrayBuffer().then(function(buf){return post('/auth/keyfile',buf,'application/octet-stream')}).then(function(r){
+      if(r.status===204)success();
+      else if(r.status===403||r.status===409)relearn();
+      else keyWrong(kF);
+    }).catch(offline);
+  });
+
+  // Enter: an explicit handler as well as the real submit button
+  pw.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();submit()}});
+  f.addEventListener('submit',function(e){e.preventDefault();submit()});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&f.classList.contains('waiting'))fallBack()});
+  pw.addEventListener('input',function(){flag('wrong',0);flag('offline',0)});
+
+  fetch('/auth/state',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(s){S=s;init()},function(){
+    S={mode:'password',start_with_password:false,security_key_available:false,key_file_available:false};
+    init(); flag('offline',1); say('This device is unreachable');
+  });
+})();
+</script>
+</body>
+</html>

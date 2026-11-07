@@ -73,6 +73,10 @@ dependencies:
   # Both BSD-3-Clause; approved 2026-10-30. Pinned (published 2026-09-30 and 2026-10-21).
   saf_util: 3.1.1
   saf_stream: 4.0.3
+  # Cache Server's Library in a browser: the calls to the device (http, already used by cache_search) and the file chooser, drag and
+  # drop and upload (web, the browser bindings). Both were already in the lock file; versions match it.
+  http: ^1.6.0
+  web: ^1.1.1
   # The PDF viewer (PDF entries in ZIM libraries, notebook files): pdfrx (MIT) on PDFium (BSD-3-Clause). Pinned to 2.4.8
   # (published 2026-08-26): the newest release at least two weeks old that runs on the app's Flutter 3.44 (2.5 and later need
   # Flutter 3.47). Approved 2026-11-01.

@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cache Build from PDFs mock</title>
+<style>
+/* Tokens copied from app/lib/theme.dart (cacheTokens). */
+:root{--bg:#1A1D1F;--surface:#2A3036;--text:#DCC9A3;--secondary:#B0A58A;--accent:#DB8A4B;--primary:#CB7A3C;--onprimary:#1A1D1F;--emergency:#FF7A6E;--warning:#E0B45A;--ok:#8FB36A;--scrim:rgba(0,0,0,.55)}
+:root[data-theme=light]{--bg:#F3EBD9;--surface:#FFFDF8;--text:#1A1D1F;--secondary:#55594F;--accent:#9C5320;--primary:#3B4D3A;--onprimary:#F3EBD9;--emergency:#B3281E;--warning:#7A5200;--ok:#3F6B2E;--scrim:rgba(26,29,31,.4)}
+:root[data-theme=parchment]{--bg:#DCC9A3;--surface:#E8DBBC;--text:#1A1D1F;--secondary:#4A4638;--accent:#7E4416;--primary:#3B4D3A;--onprimary:#F3EBD9;--emergency:#9A1F16;--warning:#6E4A00;--ok:#2F5A22;--scrim:rgba(26,29,31,.4)}
+:root[data-theme=tactical]{--bg:#000;--surface:#120404;--text:#E0473C;--secondary:#8E2B24;--accent:#FF5A4A;--primary:#FF5A4A;--onprimary:#000;--emergency:#FF2D1F;--warning:#C24A1E;--ok:#B23A2E;--scrim:rgba(0,0,0,.7)}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#000;overflow:hidden}
+body{font-family:Roboto,"Segoe UI",system-ui,sans-serif;color:var(--text)}
+svg{display:block;fill:currentColor}
+#stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;background:var(--bg);display:flex;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* rail */
+.rail{width:80px;background:var(--surface);display:flex;flex-direction:column;align-items:center;padding-top:8px;flex:none}
+.rail .lead{width:48px;height:48px;display:grid;place-items:center;color:var(--secondary);margin-bottom:8px}
+.rail .dest{width:80px;height:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:600;color:var(--secondary)}
+.rail .dest .pill{width:56px;height:32px;border-radius:16px;display:grid;place-items:center}
+.rail .dest.sel{color:var(--accent)}
+.rail .dest.sel .pill{background:color-mix(in srgb,var(--primary) 28%,transparent)}
+
+/* panes */
+.list{width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid color-mix(in srgb,var(--secondary) 25%,transparent);min-height:0}
+.detail{flex:1;min-width:0;display:flex;justify-content:center;position:relative;min-height:0}
+.detail>.page{width:640px;max-width:100%;display:flex;flex-direction:column;min-height:0}
+.bar{height:56px;display:flex;align-items:center;padding:0 8px 0 16px;font-size:20px;font-weight:500;flex:none}
+.bar .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ib{width:48px;height:48px;display:grid;place-items:center;border-radius:24px;color:var(--text)}
+.scroll{flex:1;overflow:hidden;padding:4px 12px 16px}
+.hint{font-size:12px;color:var(--secondary);padding:0 4px 8px;line-height:1.4}
+.center{text-align:center;padding:24px 8px;font-size:14px;color:var(--secondary);line-height:1.45}
+
+/* rows */
+.row{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 12px;border-radius:14px;margin-bottom:6px;position:relative}
+.row.sel{background:var(--surface)}
+.row .tx{flex:1;min-width:0}
+.row .ti{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .de{font-size:12px;color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .more{display:none;width:32px;height:32px;border-radius:16px;place-items:center;color:var(--secondary)}
+.row.hov .more{display:grid;background:color-mix(in srgb,var(--secondary) 18%,transparent)}
+.lt{width:32px;height:32px;border-radius:8px;background:var(--bg);display:grid;place-items:center;font-weight:700;font-size:13px;color:var(--accent);flex:none}
+.sel .lt{background:var(--bg)}
+.badge{font-size:12px;border:1px solid;border-radius:10px;padding:2px 8px;white-space:nowrap;flex:none}
+.card{background:var(--surface);border-radius:14px;padding:8px 4px 8px 12px;margin-bottom:6px}
+.card .top{display:flex;align-items:center}
+.card .tx{flex:1;min-width:0}
+.card .ti{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .de{font-size:12px;color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .de.w{color:var(--warning)}
+.card .de.wrap{white-space:normal}
+.nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bartrack{height:3px;margin:4px 8px 2px 0;background:color-mix(in srgb,var(--primary) 25%,transparent);border-radius:2px;overflow:hidden}
+.bartrack i{display:block;height:100%;background:var(--primary)}
+.tbtn{font-size:14px;font-weight:500;color:var(--accent);padding:0 12px;height:40px;display:inline-flex;align-items:center;border-radius:20px}
+.notice{border-left:3px solid var(--accent)}
+.notice .ti{margin-bottom:4px}
+.notice li{font-size:13px;color:var(--text);margin:2px 0 2px 16px;line-height:1.4}
+.notice .acts{display:flex;justify-content:flex-start;margin-left:-12px}
+
+/* footer storage */
+.foot{flex:none;padding:12px 16px 14px;border-top:1px solid color-mix(in srgb,var(--secondary) 25%,transparent)}
+.foot .l1{display:flex;justify-content:space-between;font-size:12px;color:var(--secondary);margin-bottom:6px}
+.foot .l1 b{font-weight:500;color:var(--text)}
+.sbar{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;display:flex;border:1px solid color-mix(in srgb,var(--secondary) 30%,transparent);position:relative}
+.sbar .a{background:var(--accent)}.sbar .o{background:var(--secondary);opacity:.55}
+.sbar .r{position:absolute;right:0;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent 0 3px,color-mix(in srgb,var(--warning) 60%,transparent) 3px 5px)}
+.foot .l2{font-size:11px;color:var(--secondary);margin-top:6px;line-height:1.35}
+.addwrap{padding:8px 4px 0}
+.fbtn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 20px 0 16px;border-radius:20px;background:var(--primary);color:var(--onprimary);font-size:14px;font-weight:500}
+
+/* add page */
+.pg{padding:8px 16px 16px;overflow:hidden;flex:1}
+.gl{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--secondary);margin:12px 4px 6px;text-transform:none}
+.drop{border:2px dashed color-mix(in srgb,var(--secondary) 55%,transparent);border-radius:14px;padding:22px 20px;display:flex;align-items:center;gap:16px;background:color-mix(in srgb,var(--surface) 60%,transparent)}
+.drop .tx{flex:1}.drop .ti{font-size:15px;font-weight:500}.drop .de{font-size:12px;color:var(--secondary);margin-top:2px;line-height:1.4}
+.drop.err{border-color:var(--warning)}
+.drop.busy{opacity:.7}
+.errline{font-size:13px;color:var(--warning);padding:8px 4px 0;line-height:1.4}
+.opt{display:flex;align-items:center;gap:12px;background:var(--surface);border-radius:14px;padding:10px 12px;margin-top:6px}
+.opt .tx{flex:1}.opt .ti{font-size:15px;font-weight:500}.opt .de{font-size:12px;color:var(--secondary)}
+.search{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:24px;height:44px;padding:0 14px;color:var(--secondary);font-size:15px}
+.chips{display:flex;gap:8px;margin:10px 0 8px}
+.chip{border:1px solid color-mix(in srgb,var(--secondary) 55%,transparent);border-radius:8px;padding:5px 12px;font-size:13px;color:var(--text)}
+.chip.on{background:color-mix(in srgb,var(--primary) 28%,transparent);border-color:transparent;color:var(--accent)}
+.entry{display:flex;align-items:center;gap:12px;background:var(--surface);border-radius:14px;min-height:52px;padding:6px 4px 6px 12px;margin-bottom:6px}
+.entry .tx{flex:1;min-width:0}.entry .ti{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.entry .de{font-size:12px;color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dl{width:30px;height:30px;border-radius:15px;border:1.5px solid var(--accent);color:var(--accent);display:grid;place-items:center;margin:7px}
+.ring{width:44px;height:44px;display:grid;place-items:center}
+.phold{flex:1;display:grid;place-items:center;font-size:15px;color:var(--secondary)}
+.kv{display:flex;padding:4px 0;font-size:14px}.kv span:first-child{width:120px;color:var(--secondary)}
+
+/* overlays */
+.scrim{position:absolute;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:5}
+.dlg{width:400px;background:var(--surface);border-radius:28px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.dlg h2{font-size:20px;font-weight:500;margin-bottom:14px;line-height:1.25}
+.dlg p{font-size:15px;line-height:1.4}
+.dlg .sz{display:flex;justify-content:space-between;font-size:14px;padding:2px 0}
+.dlg .sm{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--secondary);margin-top:8px}
+.dlg .sm span:last-child{text-align:right}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
+.dlg .acts .tbtn{height:40px}
+.dlg .fill{background:var(--primary);color:var(--onprimary);border-radius:20px;padding:0 24px}
+.dlg .fill.red{background:var(--emergency);color:var(--bg)}
+.dlg .note{font-size:13px;color:var(--secondary);margin-top:8px;line-height:1.4}
+.dragov{position:absolute;left:80px;right:0;top:0;bottom:0;z-index:4;background:var(--scrim);display:grid;place-items:center;padding:48px}
+.dragov .box{width:100%;height:100%;border:3px dashed var(--accent);border-radius:24px;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 62%,transparent)}
+.dragov .in{text-align:center;max-width:560px}
+.dragov .in .big{font-size:28px;font-weight:500;margin:16px 0 8px}
+.dragov .in .sub{font-size:15px;color:var(--secondary);line-height:1.45}
+.snack{position:absolute;left:50%;transform:translateX(-50%);bottom:28px;background:var(--text);color:var(--bg);font-size:14px;padding:14px 20px;border-radius:8px;z-index:3;max-width:560px;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.tag{position:absolute;right:12px;top:8px;font-size:11px;color:var(--secondary);opacity:.8}
+.pgs{padding:4px 16px 16px;overflow:hidden;flex:1;display:flex;flex-direction:column;min-height:0}
+.inp{display:flex;align-items:center;gap:8px;height:44px;border-radius:10px;border:1.5px solid color-mix(in srgb,var(--secondary) 55%,transparent);padding:0 12px;font-size:15px;background:var(--bg)}
+.inp.focus{border-color:var(--accent)}
+.inp .caret{display:inline-block;width:1.5px;height:20px;background:var(--accent);margin-left:1px}
+.inp .sfx{margin-left:auto;font-size:12px;color:var(--secondary)}
+.choice{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border-radius:14px;padding:12px;margin-bottom:6px;border:1.5px solid transparent}
+.choice.on{border-color:var(--accent)}
+.choice.off{opacity:.55}
+.radio{width:20px;height:20px;border-radius:10px;border:2px solid var(--secondary);flex:none;margin-top:2px;display:grid;place-items:center}
+.on .radio{border-color:var(--accent)}.on .radio i{width:10px;height:10px;border-radius:5px;background:var(--accent)}
+.choice .tx{flex:1;min-width:0}.choice .ti{font-size:15px;font-weight:500}.choice .de{font-size:12px;color:var(--secondary);line-height:1.4}
+.drop.off{opacity:.5}
+.btn2{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 16px;border-radius:20px;border:1px solid color-mix(in srgb,var(--secondary) 55%,transparent);font-size:14px;font-weight:500;color:var(--accent);flex:none}
+.btn2.dis,.fbtn.dis{opacity:.45}
+.note2{font-size:13px;color:var(--secondary);line-height:1.45;padding:8px 4px 0}
+.prop{font-size:11px;font-weight:500;color:var(--warning);border:1px dashed var(--warning);border-radius:6px;padding:1px 6px;white-space:nowrap}
+.stat{font-size:13px;color:var(--secondary);padding:0 4px 8px}
+.acts2{display:flex;gap:8px;align-items:center;margin:2px 0 8px}
+.acts2 .search{flex:1;height:44px}
+.panel{background:var(--surface);border-radius:14px;padding:12px 12px 4px;margin-bottom:8px}
+.panel .hd{display:flex;align-items:center;gap:8px}
+.panel .hd .tx{flex:1;min-width:0}.panel .hd .ti{font-size:15px;font-weight:500}.panel .hd .de{font-size:12px;color:var(--secondary);line-height:1.4}
+.pbar{height:6px;border-radius:3px;margin:10px 0 6px;background:color-mix(in srgb,var(--primary) 25%,transparent);overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--primary)}
+.pbar.paused i{background:var(--warning)}
+.eta{font-size:12px;color:var(--secondary);line-height:1.4;padding-bottom:8px}
+.q{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid color-mix(in srgb,var(--secondary) 20%,transparent)}
+.q .tx{flex:1;min-width:0}.q .ti{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.q .de{font-size:12px;color:var(--secondary);line-height:1.35}
+.q .de.w{color:var(--warning)}
+.q .mb{height:3px;border-radius:2px;margin-top:5px;background:color-mix(in srgb,var(--primary) 25%,transparent);overflow:hidden}.q .mb i{display:block;height:100%;background:var(--primary)}
+.q .mb.paused i{background:var(--warning)}
+.q .lt{width:28px;height:28px;font-size:11px}
+.q .st{font-size:12px;color:var(--secondary);white-space:nowrap}
+.brow{display:flex;align-items:center;gap:12px;min-height:52px;padding:7px 12px;border-radius:14px;margin-bottom:4px;position:relative}
+.brow.hov{background:var(--surface)}
+.brow .tx{flex:1;min-width:0}.brow .ti{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brow .de{font-size:12px;color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brow .acts3{display:none;gap:2px}.brow.hov .acts3{display:flex}
+.sm32{width:32px;height:32px;border-radius:16px;display:grid;place-items:center;color:var(--secondary);background:color-mix(in srgb,var(--secondary) 18%,transparent)}
+.phones{border:1px dashed color-mix(in srgb,var(--secondary) 45%,transparent);border-radius:14px;padding:10px 12px;display:flex;gap:12px;align-items:flex-start;margin-top:8px}
+.phones .tx{flex:1}.phones .ti{font-size:14px;font-weight:500;color:var(--secondary);display:flex;gap:8px;align-items:center}.phones .de{font-size:12px;color:var(--secondary);line-height:1.4;margin-top:2px}
+.hit{background:var(--surface);border-radius:14px;padding:10px 12px;margin-bottom:6px}
+.hit .m{font-size:12px;color:var(--secondary);margin-bottom:4px}
+.hit .m b{font-weight:500;color:var(--text)}
+.hit p{font-size:14px;line-height:1.5}
+.hit mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+.fl{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid color-mix(in srgb,var(--secondary) 20%,transparent);font-size:13px}
+.fl .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.fl .s{color:var(--secondary);font-size:12px;width:64px;text-align:right}.fl .b{width:110px}
+.ok{color:var(--ok)}
+.dlg.wide{width:460px}
+.dlg .drop{padding:14px;margin-top:10px}
+#stage{position:absolute!important;left:0;top:0;right:0;bottom:0;width:auto!important;height:auto!important;transform:none!important}
+.desk .list{width:380px}
+.desk .detail>.page.wide{width:100%;max-width:1400px}
+.desk .detail>.page:not(.wide){width:640px}
+.cols{display:grid;grid-template-columns:minmax(380px,36%) 1fr;gap:28px;padding:4px 24px 16px;flex:1;min-height:0;overflow:hidden}
+.cl,.cr{min-width:0;min-height:0;overflow:hidden}
+.cr{display:flex;flex-direction:column}
+.desk .bar.pb{padding-left:24px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:6px}
+.grid2 .entry{margin:0}
+.dz{border:2px dashed color-mix(in srgb,var(--secondary) 55%,transparent);border-radius:14px;background:color-mix(in srgb,var(--surface) 60%,transparent);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;padding:28px 24px}
+.dz .ti{font-size:17px;font-weight:500}.dz .de{font-size:13px;color:var(--secondary);line-height:1.45;max-width:46ch}
+.prose{max-width:70ch;font-size:14px;line-height:1.55;color:var(--secondary)}
+.th,.tr{display:grid;grid-template-columns:minmax(0,1fr) 72px 92px 112px 76px;gap:12px;align-items:center;padding:0 12px}
+.th{height:32px;font-size:12px;font-weight:600;color:var(--secondary);border-bottom:1px solid color-mix(in srgb,var(--secondary) 25%,transparent)}
+.tr{height:46px;border-radius:10px;font-size:14px}
+.tr.hov{background:var(--surface)}
+.tr .c{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tr .n{display:flex;align-items:center;gap:10px;min-width:0;font-weight:500}.tr .n span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr .s{color:var(--secondary)}.tr .num,.th .num{text-align:right}
+.tr .a{display:flex;gap:2px;justify-content:flex-end;visibility:hidden}.tr.hov .a{visibility:visible}
+.lt.sm{width:26px;height:26px;font-size:11px;border-radius:7px}
+.hits{max-width:72ch}
+.chip{white-space:nowrap}.chips{flex-wrap:wrap}
+.sw{width:44px;height:26px;border-radius:13px;background:var(--primary);position:relative;flex:none}.sw i{position:absolute;right:3px;top:3px;width:20px;height:20px;border-radius:10px;background:var(--onprimary)}
+.tr3{display:grid;grid-template-columns:minmax(0,1.5fr) 110px minmax(0,1.7fr);gap:12px;align-items:center;padding:8px 12px;font-size:13px;border-top:1px solid color-mix(in srgb,var(--secondary) 18%,transparent)}
+.tr3.h{font-size:12px;font-weight:600;color:var(--secondary);padding:0 12px;height:32px;border-top:0;border-bottom:1px solid color-mix(in srgb,var(--secondary) 25%,transparent)}
+.tr3 .s{color:var(--secondary)}.tr3 .f{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.banner{border-radius:14px;padding:10px 12px;margin-bottom:8px;border-left:3px solid var(--warning);background:var(--surface);font-size:13px;line-height:1.45}
+.banner b{display:block;font-size:15px;font-weight:500;margin-bottom:2px}
+.fld{margin:2px 0 4px}
+.frow{display:flex;align-items:center;gap:12px;background:var(--surface);border-radius:14px;padding:10px 12px;margin-bottom:6px}
+.frow .tx{flex:1;min-width:0}.frow .ti{font-size:15px;font-weight:500}.frow .de{font-size:12px;color:var(--secondary);line-height:1.4;word-break:break-all}
+.crumb{font-size:13px;color:var(--secondary);padding:4px 0 8px}
+.dlg.wide{width:480px}
+.tree{background:var(--surface);border-radius:14px;padding:8px 12px;margin-top:8px;font-size:13px}
+.tree div{display:flex;gap:10px;padding:3px 0;line-height:1.4}.tree b{font-family:ui-monospace,monospace;font-weight:500;width:84px;flex:none;color:var(--accent)}.tree span{color:var(--secondary)}
+.tr4{display:grid;grid-template-columns:34px minmax(0,1.5fr) 96px minmax(0,2fr) 84px;gap:12px;align-items:center;padding:7px 12px;font-size:13px;border-top:1px solid color-mix(in srgb,var(--secondary) 18%,transparent)}
+.tr4.h{font-size:12px;font-weight:600;color:var(--secondary);height:32px;padding-top:0;padding-bottom:0;border-top:0;border-bottom:1px solid color-mix(in srgb,var(--secondary) 25%,transparent)}
+.tr4 .tbtn{white-space:nowrap}.tr4 .s{color:var(--secondary)}.tr4 .f{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tr4 .num{text-align:right}
+.flow{display:flex;align-items:center;gap:6px}.flow .fb{background:var(--surface);border-radius:10px;padding:8px 14px;font-family:ui-monospace,monospace;font-size:13px;display:flex;flex-direction:column}.flow .fb small{font-family:Roboto,sans-serif;font-size:11px;color:var(--secondary)}.flow .fb.w{border-left:3px solid var(--warning)}.flow .ar{color:var(--secondary)}
+.art{padding:8px 32px 24px;overflow:hidden;flex:1;font-size:16px;line-height:1.6}
+.art h1{font-size:32px;font-weight:500;margin:8px 0 12px;font-family:Georgia,serif}.art h2{font-size:22px;font-weight:500;margin:18px 0 6px;font-family:Georgia,serif;border-bottom:1px solid color-mix(in srgb,var(--secondary) 30%,transparent)}
+.art .ib2{float:right;width:320px;margin:0 0 12px 24px;background:var(--surface);border-radius:10px;padding:12px;font-size:13px;line-height:1.5}
+.art p{margin:0 0 10px}
+.tree2{margin:2px 0 8px 10px;padding-left:6px;border-left:1px solid color-mix(in srgb,var(--secondary) 30%,transparent)}
+.tn{display:flex;align-items:center;gap:6px;height:32px;border-radius:10px;padding-right:10px;font-size:14px}
+.tn.sel{background:var(--surface)}
+.tn .ch{width:18px;color:var(--secondary);display:grid;place-items:center;flex:none}
+.tn .no{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--secondary);width:30px;flex:none}
+.tn .nm2{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn .ct{font-size:12px;color:var(--secondary)}
+.call{font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:400;color:var(--secondary);width:78px;flex:none}
+.dlg.xl{width:760px}
+.pkwrap{height:250px;overflow:hidden;columns:2;column-gap:20px;border-top:1px solid color-mix(in srgb,var(--secondary) 25%,transparent);padding-top:8px;mask-image:linear-gradient(#000 85%,transparent)}
+.pk{break-inside:avoid;margin-bottom:10px}.pkh{font-size:12px;font-weight:600;color:var(--secondary);margin-bottom:2px}.pkd{font-size:13px;padding:2px 0 2px 10px}
+.treef{background:var(--surface);border-radius:14px;padding:10px 14px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.65;white-space:pre;overflow:hidden}
+.treef i{font-style:normal;color:var(--secondary)}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+const P = {
+ close:'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+ add:'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+ dl:'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
+ pause:'M6 19h4V5H6v14zm8-14v14h4V5h-4z',
+ play:'M8 5v14l11-7z',
+ more:'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
+ menuopen:'M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z',
+ home:'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+ chat:'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z',
+ book:'M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1zm0 13.5c-1.1-.35-2.3-.5-3.5-.5-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5 1.2 0 2.4.15 3.5.5v11.5z',
+ map:'M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z',
+ note:'M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z',
+ apps:'M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z',
+ search:'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
+ folder:'M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z',
+ link:'M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z',
+  back:"M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z",
+  edit:"M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  retry:"M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z",
+  pdf:"M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z",
+  check:"M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+  swap:"M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z",
+  del:"M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  chev:"M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z",
+  upload:'M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z'
+};
+const Q = new URLSearchParams(location.search);
+const THEME = Q.get('theme') || 'dark';
+const STATE = Q.get('state') || 'entry';
+document.documentElement.dataset.theme = THEME;
+const ic = (n, s=24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;
+const DESK = innerWidth>=1280 && Q.get('class')!=='tablet';
+document.getElementById('stage').classList.toggle('desk',DESK);
+const GB = n => n.toFixed(1) + ' GB';
+const LIBNAME = 'Hunting and field guides';
+const PROP = '<span class="prop">Proposed, not approved</span>';
+
+/* ---------- device list (as approved) ---------- */
+let disk = {total:500, other:331.3, reserve:20};
+const base = [
+ {t:'Wikipedia (English)', d:'All articles, no images', s:'98.2 GB', k:'zim'},
+ {t:'WikiMed', d:'Medical encyclopedia', s:'2.1 GB', k:'zim'},
+ {t:'Survival and preparedness guides', d:'Appropedia and field manuals', s:'4.8 GB', k:'zim'},
+ {t:'Field Notes Library', d:'Your own · 212 entries', s:'612 MB', k:'own'},
+ {t:'Cache Field Guide', d:'Built in · 96 entries', s:'18 MB', k:'own'}
+];
+let libSize = 98.2+2.1+4.8+.612+.018;
+
+const row = (r, o={}) => {
+ let badge = r.badge ? `<span class="badge" style="color:${r.bc||'var(--secondary)'}">${r.badge}</span>` : '';
+ const detail=[r.d,r.s].filter(Boolean).join(' · ');
+ return `<div class="row ${o.sel?'sel':''} ${o.hov?'hov':''}"><div class="lt">${r.t[0].toUpperCase()}</div><div class="tx"><div class="ti">${r.t}</div><div class="de">${detail}</div></div>${badge}<div class="more">${ic('more',20)}</div></div>`;
+};
+const bar = f => `<div class="bartrack"><i style="width:${f*100}%"></i></div>`;
+const card = (title, line, o={}) => `<div class="card"><div class="top"><div class="tx"><div class="ti">${title}</div><div class="de ${o.warn?'w':''}" style="${o.wrap?'white-space:normal':''}">${line}</div></div>${o.btn||''}${o.noX?'':`<div class="ib" style="width:44px;height:44px">${ic('close',22)}</div>`}</div>${o.f!=null?bar(o.f):''}</div>`;
+const pauseBtn = `<div class="ib" style="width:44px;height:44px">${ic('pause',22)}</div>`;
+const playBtn = `<div class="ib" style="width:44px;height:44px;color:var(--accent)">${ic('play',22)}</div>`;
+
+function footer(o={}){
+ const free = disk.total - disk.other - libSize + (o.freeAdj||0);
+ const aw = libSize/disk.total*100, ow = disk.other/disk.total*100, rw = disk.reserve/disk.total*100;
+ return `<div class="foot"><div class="l1"><span>Device storage</span><span><b>${GB(free)}</b> free of ${disk.total} GB</span></div>
+ <div class="sbar"><span class="a" style="width:${aw}%"></span><span class="o" style="width:${ow}%"></span><span class="r" style="width:${rw}%"></span></div>
+ <div class="l2">Library ${GB(libSize)} · Other files ${GB(disk.other)}<br>Cache keeps ${disk.reserve} GB free for the device${o.pending?`<br><span style="color:var(--warning)">${o.pending}</span>`:''}</div></div>`;
+}
+function listPane({hint, top='', rows, sel, hov, pending, adjFree, rowsHtml}){
+ const items = rowsHtml!==undefined ? rowsHtml : rows.map((r,i)=>row(r,{sel:sel===i,hov:hov===i})).join('');
+ return `<div class="list"><div class="bar"><span class="t">Library</span><div class="ib">${ic('menuopen',24)}</div></div>
+ <div class="scroll">${hint?`<div class="hint">${hint}</div>`:''}${top}${items}
+ <div class="addwrap"><button class="fbtn">${ic('add',18)}Add to Library</button></div></div>${footer({pending, freeAdj:adjFree})}</div>`;
+}
+/* the built library as a row in the device list; position 3 so the list reads like the approved one */
+const built = (badge, bc, d='Built from your PDFs · 214 books', s='1.9 GB') => ({t:LIBNAME, d, s, badge, bc, k:'own'});
+const withBuilt = (b, at=3) => { const r=[...base]; r.splice(at,0,b); return r; };
+
+/* ---------- detail: shared pieces ---------- */
+const barTitle = (t, o={}) => `<div class="bar">${o.back?`<div class="ib" style="margin-left:-8px">${ic('back',24)}</div>`:''}<span class="t">${t}</span>${o.more?`<div class="ib">${ic('more',24)}</div>`:''}</div>`;
+const dropBox = ({off, text, sub}) => `<div class="drop ${off?'off':''}"><div style="color:var(--accent)">${ic('upload',32)}</div><div class="tx"><div class="ti">${text||'Drop PDFs or a folder here'}</div><div class="de">${sub||'Folders are searched for PDFs, including inside other folders. You can add more at any time.'}</div></div>
+ <div style="display:flex;flex-direction:column;gap:6px;flex:none"><span class="btn2 ${off?'dis':''}">Choose PDFs</span><span class="btn2 ${off?'dis':''}">Choose a folder</span></div></div>`;
+
+/* ---------- ENTRY: Add to Library ---------- */
+function addPage({model=true}){
+ if(DESK) return deskAddPage({model});
+ const sub = model ? 'Make a searchable library from PDF files on this computer.' : 'Needs the search model first (630 MB).';
+ return `<div class="page">${barTitle('Add to Library')}<div class="pg">
+ <div class="gl">From this computer</div>
+ <div class="drop"><div style="color:var(--accent)">${ic('upload',32)}</div><div class="tx"><div class="ti">Drop a file here</div><div class="de">A .zim file, a .cache-library file or a library snapshot. Files of several GB are fine.</div></div><button class="fbtn" style="flex:none">Choose a file</button></div>
+ <div class="gl">Your own</div>
+ <div class="opt"><div style="color:var(--text)">${ic('book',22)}</div><div class="tx"><div class="ti">Your own library</div><div class="de">From a file or a download link</div></div><div style="color:var(--secondary)">${ic('chev',24)}</div></div>
+ <div class="opt" style="border:1.5px solid var(--accent)"><div style="color:var(--text)">${ic('pdf',22)}</div><div class="tx"><div class="ti">Build from your PDFs</div><div class="de">${sub}</div></div>${model?'':'<span class="badge" style="color:var(--warning)">Needs search model</span>'}<div style="color:var(--secondary)">${ic('chev',24)}</div></div>
+ <div class="note2" style="padding-top:6px">Dropping PDFs anywhere on Library opens this too.</div>
+ ${dropRow(STATE==='ingest-active')}
+ <div class="gl">Ready-made collections · free from Kiwix</div>
+ <div class="search">${ic('search',20)}Search the catalogue</div>
+ <div class="chips"><span class="chip">All languages</span><span class="chip on">All</span><span class="chip">Medicine</span><span class="chip">Preparedness</span></div>
+ <div class="entry"><div class="lt">W</div><div class="tx"><div class="ti">Wikipedia (English)</div><div class="de">All articles, no images · 98.2 GB</div></div><span class="badge" style="color:var(--ok);margin-right:8px">On this device</span></div>
+ </div></div>`;
+}
+
+/* ---------- BUILD page ---------- */
+function destination({pick='new', name='', focus=true, nameErr}){
+ const n = pick==='new';
+ return `<div class="gl">1 · Where should the books go?</div>
+ <div class="choice ${n?'on':''}"><div class="radio">${n?'<i></i>':''}</div><div class="tx"><div class="ti">A new library</div><div class="de" style="margin-bottom:8px">Give it a name you will recognise on your phone.</div>
+  ${n?`<div class="inp ${focus?'focus':''}">${name?`<span>${name}</span>`:'<span style="color:var(--secondary)">Library name</span>'}${focus?'<span class="caret"></span>':''}</div>${nameErr?`<div class="errline" style="padding:6px 0 0">${nameErr}</div>`:''}`:''}</div></div>
+ <div class="choice ${!n?'on':''}"><div class="radio">${!n?'<i></i>':''}</div><div class="tx"><div class="ti">A library you built</div><div class="de">${n?'Add to one you made from PDFs earlier.':''}</div>
+  ${!n?`<div class="inp" style="margin-top:8px"><span>${LIBNAME}</span><span class="sfx">214 books</span></div>`:`<div class="de" style="margin-top:2px">${LIBNAME} · 214 books<br>Garden and homestead · 38 books</div>`}</div></div>`;
+}
+function buildPage({mode, model=true, name=''}){
+ if(DESK) return deskBuildPage({name});
+ const body = `${destination({name, focus: !!name && mode!=='gated'})}
+ <div class="gl">2 · Add your PDFs</div>${dropBox({off: !name})}
+ <div class="note2">Each PDF is cut into passages of about 200 words, keeping the real page and heading, so answers can quote the book. Building takes about a second per passage on a desktop computer and longer on a small device: a 300-page book is roughly 8 to 10 minutes. Scanned pages are read as images and take longer. It keeps going if you close this tab.</div>`;
+ return `<div class="page">${barTitle('Build from your PDFs',{back:true})}<div class="pg">${body}</div></div>`;
+}
+function gatedPage(kind){ // kind: 'idle' | 'downloading' | 'failed'
+ let card;
+ if(kind==='idle') card = `<div class="panel" style="padding-bottom:12px;border-left:3px solid var(--accent)"><div class="ti" style="font-size:15px;font-weight:500">Building needs the search model</div>
+  <div class="de" style="font-size:13px;color:var(--secondary);line-height:1.45;margin:4px 0 10px">Cache uses it to read each passage so your phone can find it later. Download it once, 630 MB. It stays on this device and works with no internet.</div>
+  <div class="sm" style="display:flex;justify-content:space-between;font-size:12px;color:var(--secondary);margin-bottom:12px"><span>Device storage</span><span>58.4 GB free, needs 630 MB</span></div>
+  <div style="display:flex;gap:8px;align-items:center"><span class="fbtn">${ic('dl',18)}Download search model</span><span class="note2" style="padding:0">It keeps downloading if you close this tab.</span></div></div>`;
+ else if(kind==='downloading') card = `<div class="panel" style="padding-bottom:10px;border-left:3px solid var(--accent)"><div class="hd"><div class="tx"><div class="ti">Downloading the search model</div><div class="de">412 MB of 630 MB · 38 MB/s · about 6 seconds left</div></div>${pauseBtn}<div class="ib" style="width:44px;height:44px">${ic('close',22)}</div></div>
+  <div class="pbar"><i style="width:65%"></i></div><div class="eta">You can pick a library name and choose PDFs while this finishes. Building starts as soon as it is done.</div></div>`;
+ else card = `<div class="panel" style="padding-bottom:12px;border-left:3px solid var(--warning)"><div class="ti" style="font-size:15px;font-weight:500">The search model did not download</div>
+  <div class="de" style="font-size:13px;color:var(--warning);line-height:1.45;margin:4px 0 10px">The connection failed: reset by peer. 412 MB of 630 MB were kept.</div>
+  <div style="display:flex;gap:8px;align-items:center"><span class="fbtn">${ic('retry',18)}Try again</span></div></div>`;
+ const gate = kind==='downloading';
+ return `<div class="page">${barTitle('Build from your PDFs',{back:true})}<div class="pg">${card}
+  <div style="${gate?'':'opacity:.5'}">${destination({name: gate?LIBNAME:'', focus:gate})}
+  <div class="gl">2 · Add your PDFs</div>${dropBox({off:!gate, text: gate?'Drop PDFs or a folder here':'Drop PDFs or a folder here', sub: gate?'They upload now. Building waits for the search model.':'Available once the search model is on this device.'})}</div></div></div>`;
+}
+function uploadingPage(){
+ const files = [
+  ['Edible Wild Plants of the Intermountain West.pdf','48.2 MB',1],
+  ['Field Manual 21-76 Survival.pdf','12.9 MB',1],
+  ['Wilderness Medicine Handbook, 7th ed.pdf','63.0 MB',.62],
+  ['Backcountry Navigation Basics.pdf','21.4 MB',.18],
+ ];
+ const fl = files.map(f=>`<div class="fl"><span class="${f[2]===1?'ok':''}" style="width:20px">${f[2]===1?ic('check',18):''}</span><span class="n">${f[0]}</span><span class="b"><div class="bartrack" style="margin:0;${f[2]===1?'opacity:.4':''}"><i style="width:${f[2]*100}%"></i></div></span><span class="s">${f[1]}</span></div>`).join('');
+ return `<div class="page">${barTitle('Build from your PDFs',{back:true})}<div class="pg">
+ <div class="kv"><span>Going to</span><span>${LIBNAME} (new library)</span></div>
+ <div class="panel" style="margin-top:8px"><div class="hd"><div class="tx"><div class="ti">Uploading 214 PDFs</div><div class="de">63 of 214 done · 1.9 GB of 3.1 GB · 52 MB/s · about 4 min left</div></div><span class="tbtn">Cancel</span></div>
+  <div class="pbar"><i style="width:61%"></i></div>
+  <div class="eta">Keep this tab open until the upload ends. Building starts on the first book and carries on without this tab.</div></div>
+ <div class="gl">Uploading now</div><div class="panel" style="padding:2px 12px 4px">${fl.replace('border-top','border-top:0;x')}</div>
+ <div class="note2">Found in the folder: 214 PDFs. 2 other files were left out (notes.txt, cover.jpg).</div>
+ </div></div>`;
+}
+
+/* ---------- LIBRARY page ---------- */
+const BOOKS = [
+ ['Field Manual 21-76 Survival','412 pages','480 passages','just now'],
+ ['Edible Wild Plants of the Intermountain West','236 pages','311 passages','12 min ago'],
+ ['Where There Is No Doctor','512 pages','702 passages','1 h ago'],
+ ['mushrooms_demystified_2nd_ed_OCR','560 pages','644 passages','1 h ago'],
+ ['Knots, Splices and Rope Work','188 pages','203 passages','2 h ago'],
+ ['Idaho Hunting Regulations 2025','96 pages','141 passages','2 h ago'],
+];
+function booksList({n=5, hov=-1, edit=-1, show=BOOKS}){
+ return show.slice(0,n).map((b,i)=>{
+  if(i===edit) return `<div class="brow hov" style="background:var(--surface);flex-wrap:wrap;align-items:flex-start;padding:10px 12px"><div class="lt" style="margin-top:2px">${b[0][0]}</div><div class="tx" style="flex:1">
+   <div class="inp focus" style="height:40px"><span>Mushrooms Demystified</span><span class="caret"></span></div>
+   <div class="de" style="margin-top:6px;white-space:normal;line-height:1.4">This PDF has no title inside it, so the file name is used: mushrooms_demystified_2nd_ed_OCR.pdf</div>
+   <div style="display:flex;gap:4px;margin:8px 0 0 -12px;align-items:center"><span class="tbtn">Use file name</span><span style="flex:1"></span><span class="tbtn">Cancel</span><span class="tbtn" style="background:var(--primary);color:var(--onprimary)">Save</span></div>
+   <div class="de" style="margin-top:2px">Only this title changes. The passages are not rebuilt.</div></div></div>`;
+  return `<div class="brow ${hov===i?'hov':''}"><div class="lt">${b[0][0]}</div><div class="tx"><div class="ti">${b[0]}</div><div class="de">${b[1]} · ${b[2]} · added ${b[3]}</div></div>
+  <div class="acts3"><div class="sm32" title="Edit title">${ic('edit',18)}</div><div class="sm32" title="More">${ic('more',18)}</div></div></div>`; }).join('');
+}
+const qrow = (o) => `<div class="q"><div class="lt">${o.t[0]}</div><div class="tx"><div class="ti">${o.t}</div><div class="de ${o.warn?'w':''}">${o.line}</div>${o.f!=null?`<div class="mb ${o.paused?'paused':''}"><i style="width:${o.f*100}%"></i></div>`:''}</div>${o.btn||''}</div>`;
+const RET = `<span class="tbtn">${''}Retry</span>`;
+const DISM = `<span class="tbtn" style="color:var(--secondary)">Dismiss</span>`;
+
+function queuePanel(kind){
+ // kind: run | paused | failed | reopened
+ const paused = kind==='paused';
+ const active = paused
+  ? qrow({t:'Wilderness Medicine Handbook, 7th ed', line:'Paused · building passages · 212 of 480', f:.44, paused:true})
+  : qrow({t:'Wilderness Medicine Handbook, 7th ed', line:'Building passages · 212 of 480', f:.44});
+ const ocr = qrow({t:'Backcountry Navigation Basics', line:'Scanned book. Reading the pages as images (OCR) · page 118 of 340', f:.35});
+ const rows = [];
+ if(kind==='failed'){
+  rows.push(active);
+  rows.push(qrow({t:'Trapping Fur-bearers, 1952 scan.pdf', line:'This PDF is protected with a password. Remove the password and add it again, or retry.', warn:true, btn:RET+DISM}));
+  rows.push(qrow({t:'ch03_final_v2.pdf', line:'The file is damaged and could not be opened.', warn:true, btn:RET+DISM}));
+  rows.push(qrow({t:'Plant Identification Key', line:'Skipped. The same content is already in this library as "Edible Wild Plants of the Intermountain West".', btn:DISM}));
+ } else if(kind==='reopened'){
+  rows.push(qrow({t:'Wilderness Medicine Handbook, 7th ed', line:'Building passages · 212 of 480 · started yesterday 22:10', f:.44}));
+  rows.push(qrow({t:'Trapping Fur-bearers, 1952 scan.pdf', line:'This PDF is protected with a password. Remove the password and add it again, or retry.', warn:true, btn:RET+DISM}));
+  rows.push(qrow({t:'Plant Identification Key', line:'Skipped. The same content is already in this library.', btn:DISM}));
+ } else { rows.push(active); rows.push(ocr); }
+ const waiting = kind==='failed'?189: kind==='reopened'? 120 : 196;
+ const wait = `<div class="q"><div class="lt" style="background:transparent"></div><div class="tx"><div class="de">${waiting} more waiting</div></div><span class="tbtn">Show</span></div>`;
+ const done = kind==='failed'?22: kind==='reopened'?93:18;
+ const total = 214;
+ const f = done/total;
+ const head = paused
+  ? {t:'Building is paused', l:`${done} of ${total} books done. Finished books are kept.`}
+  : {t:`Building ${LIBNAME}`, l:`${done} of ${total} books done` + (kind==='failed'?' · 2 need attention · 1 skipped':'')};
+ const eta = paused ? 'Time left is not counted while paused.'
+  : (kind==='reopened' ? 'Roughly 5 to 7 hours left. This is an estimate from the last 30 minutes; scanned books take longer.' : 'Roughly 9 to 13 hours left. This is an estimate and gets better as books finish; scanned books take longer.');
+ return `<div class="panel"><div class="hd"><div class="tx"><div class="ti">${head.t}</div><div class="de">${head.l}</div></div>
+  ${paused?`<span class="fbtn" style="height:36px">${ic('play',18)}Resume</span>`:`<span class="btn2" style="height:36px">${ic('pause',18)}Pause</span>`}<span class="btn2" style="height:36px;color:var(--secondary)">Stop</span></div>
+  <div class="pbar ${paused?'paused':''}"><i style="width:${f*100}%"></i></div><div class="eta">${eta}</div>
+  ${rows.join('')}${wait}</div>`;
+}
+function libPage({mode, n=5}){
+ if(DESK) return deskLibPage({mode});
+ const queue = ['run','paused','failed','reopened'].includes(mode);
+ const empty = mode==='empty';
+ const stat = empty ? 'No books yet' : `${queue?(mode==='failed'?22:mode==='reopened'?93:18):214} books · ${queue?'8,740':'98,430'} passages · built from your PDFs`;
+ const actions = `<div class="acts2"><span class="fbtn">${ic('add',18)}Add PDFs</span><div class="search">${ic('search',20)}<span>${mode==='search'?'splint a broken forearm':'Search this library'}</span></div></div>`;
+ let mid='';
+ if(mode==='search'){
+  mid = `<div class="gl">3 passages in ${LIBNAME}</div>
+  <div class="hit"><div class="m"><b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting</div><p>"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilise the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."</p></div>
+  <div class="hit"><div class="m"><b>Field Manual 21-76 Survival</b> · page 204 · Improvised splints</div><p>"A <mark>broken forearm</mark> can be <mark>splinted</mark> with two straight sticks, one on each side, padded with cloth and tied above and below the injury."</p></div>
+  <div class="hit"><div class="m"><b>Where There Is No Doctor</b> · page 76 · Broken bones</div><p>"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for colour and warmth."</p></div>
+  <div class="note2">These are the books' own words with their pages. Results come from this device only.</div>`;
+ } else if(empty){
+  mid = `<div class="center" style="padding:40px 16px"><div style="color:var(--secondary);display:grid;place-items:center;margin-bottom:12px">${ic('pdf',40)}</div>No books in this library yet.<br>Add PDFs and Cache builds them one at a time. It keeps going if you close this tab.<div style="margin-top:16px"><span class="fbtn">${ic('add',18)}Add PDFs</span></div></div>`;
+ } else {
+  mid = (queue?queuePanel(mode):'') + `<div class="gl">${queue?'Finished books':'Books'}</div>` + booksList({n, hov: mode==='edit'?-1:2, edit: mode==='edit'?3:-1, show: BOOKS});
+ }
+ const phones = '';
+ return `<div class="page">${barTitle(LIBNAME,{more:true})}<div class="pgs"><div class="stat">${stat}</div>${actions}${mid}${phones}</div></div>`;
+}
+
+/* ---------- dialogs ---------- */
+const dlg = (inner, w='') => `<div class="scrim"><div class="dlg ${w}">${inner}</div></div>`;
+const snack = t => `<div class="snack">${t}</div>`;
+
+const rail = `<div class="rail"><div class="lead">${ic('menuopen',24)}</div>
+ ${[['home','Home'],['chat','Ask'],['book','Library',1],['map','Maps'],['note','Notebooks'],['apps','Modules']].map(d=>`<div class="dest ${d[2]?'sel':''}"><div class="pill">${ic(d[0],26)}</div>${d[1]}</div>`).join('')}</div>`;
+
+/* ===== Desktop width class (proposed): two columns in the detail pane ===== */
+const deskBar = (t, o={}) => `<div class="bar pb">${o.back?`<div class="ib" style="margin-left:-8px">${ic('back',24)}</div>`:''}<span class="t">${t}</span>${o.more?`<div class="ib">${ic('more',24)}</div>`:''}</div>`;
+const deskShell = (bar, left, right) => `<div class="page wide">${bar}<div class="cols"><div class="cl">${left}</div><div class="cr">${right}</div></div></div>`;
+const CAT = [
+ ['Wikipedia (English)','All articles, no images · 98.2 GB','on'],['WikiMed','Medical encyclopedia · 2.1 GB','on'],
+ ['Wikipedia (Simple English)','Simplified articles · 3.6 GB','get'],['Where There Is No Doctor','Village health care guide · 24 MB','get'],
+ ['Survival and preparedness guides','Appropedia and field manuals · 4.8 GB','on'],['Outdoors Stack Exchange','Questions and answers · 1.4 GB','on'],
+ ['Wikibooks (English)','Open textbooks · 2.9 GB','get'],['Wikivoyage (English)','Travel guides · 1.1 GB','get'],
+ ['Gardening Stack Exchange','Questions and answers · 0.9 GB','get'],['Cooking Stack Exchange','Questions and answers · 0.6 GB','get'],
+ ['Electronics Stack Exchange','Questions and answers · 4.2 GB','get'],['iFixit repair guides','Step-by-step repairs · 1.7 GB','get'],
+ ['Project Gutenberg','Public-domain books · 68.0 GB','get'],['Khan Academy lessons','Video-free lessons · 12.6 GB','get'],
+ ['Wiktionary (English)','Dictionary · 7.8 GB','get'],['Wikisource (English)','Source texts · 11.3 GB','get']];
+const catHtml = (ring) => CAT.map(e=>{
+ let d=e[1], act;
+ if(ring===e[0]){ d='Downloading 41.3 GB of 98.2 GB'; act=`<div class="ring"><svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="none" stroke="color-mix(in srgb,var(--primary) 25%,transparent)" stroke-width="2.5"/><circle cx="15" cy="15" r="12" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-dasharray="31.7 80" transform="rotate(-90 15 15)"/></svg></div>`; }
+ else if(e[2]==='on') act=`<span class="badge" style="color:var(--ok);margin-right:8px">On this device</span>`;
+ else act=`<div class="dl">${ic('dl',17)}</div>`;
+ return `<div class="entry"><div class="lt">${e[0][0]}</div><div class="tx"><div class="ti">${e[0]}</div><div class="de">${d}</div></div>${act}</div>`;
+}).join('');
+function deskAddPage({model=true, ring=null}={}){
+ const sub = model ? 'Make a searchable library from PDF files on this computer.' : 'Needs the search model first (630 MB).';
+ const left = `<div class="gl" style="margin-top:4px">From this computer</div>
+  <div class="dz"><div style="color:var(--accent)">${ic('upload',36)}</div><div class="ti">Drop a file here</div><div class="de">A .zim file, a .cache-library file or a library snapshot. Files of several GB are fine.</div><span class="fbtn" style="margin-top:8px">Choose a file</span></div>
+  <div class="gl">Your own</div>
+  <div class="opt"><div style="color:var(--text)">${ic('book',22)}</div><div class="tx"><div class="ti">Your own library</div><div class="de">From a file or a download link</div></div><div style="color:var(--secondary)">${ic('chev',24)}</div></div>
+  <div class="opt" style="border:1.5px solid var(--accent)"><div style="color:var(--text)">${ic('pdf',22)}</div><div class="tx"><div class="ti">Build from your PDFs</div><div class="de">${sub}</div></div>${model?'':'<span class="badge" style="color:var(--warning)">Needs search model</span>'}<div style="color:var(--secondary)">${ic('chev',24)}</div></div>
+  <div class="note2" style="padding-top:6px">Dropping PDFs anywhere on Library opens this too.</div>
+  ${dropRow(false)}
+  <div class="opt" style="margin-top:12px"><div style="color:var(--text)">${ic('link',22)}</div><div class="tx"><div class="ti">From a download link</div><div class="de">A link to a library file</div></div><div style="color:var(--secondary)">${ic('chev',24)}</div></div>`;
+ const right = `<div class="gl" style="margin-top:4px">Ready-made collections · free from Kiwix</div>
+  <div class="search">${ic('search',20)}Search the catalogue</div>
+  <div class="chips"><span class="chip">All languages</span><span class="chip on">All</span><span class="chip">Medicine</span><span class="chip">Preparedness</span><span class="chip">Reference</span><span class="chip">Q&amp;A</span></div>
+  <div class="grid2">${catHtml(ring)}</div>`;
+ return deskShell(deskBar('Add to Library'), left, right);
+}
+function deskBuildPage({name=''}){
+ const left = destination({name, focus:!!name});
+ const right = `<div class="gl" style="margin-top:12px">2 · Add your PDFs</div>
+  <div class="dz" style="min-height:300px"><div style="color:var(--accent)">${ic('upload',44)}</div><div class="ti" style="font-size:20px">Drop PDFs or a folder here</div><div class="de">Folders are searched for PDFs, including inside other folders. You can add more at any time.</div>
+   <div style="display:flex;gap:8px;margin-top:10px"><span class="fbtn">Choose PDFs</span><span class="btn2">Choose a folder</span></div></div>
+  <div class="gl" style="margin-top:20px">What happens next</div>
+  <div class="prose"><p>Each PDF is cut into passages of about 200 words, keeping the real page and heading, so answers can quote the book.</p>
+  <p style="margin-top:8px">Building takes about a second per passage on a desktop computer and longer on a small device: a 300-page book is roughly 8 to 10 minutes. Scanned pages are read as images and take longer. It keeps going if you close this tab.</p></div>`;
+ return deskShell(deskBar('Build from your PDFs',{back:true}), left, right);
+}
+const MORE_BOOKS = [['Backcountry Water Purification','74 pages','96 passages','3 h ago'],['Ham Radio License Manual','388 pages','521 passages','3 h ago'],['Home Canning and Preserving','244 pages','330 passages','4 h ago'],['Basic Wilderness First Aid','132 pages','176 passages','4 h ago'],['Reading the Weather','210 pages','262 passages','5 h ago'],['Small Engine Repair','302 pages','410 passages','5 h ago'],['Beekeeping for Beginners','156 pages','208 passages','6 h ago'],['Gardening in Short Seasons','220 pages','289 passages','6 h ago']];
+function deskTable({n=14, hov=2, edit=-1}){
+ const all = BOOKS.concat(MORE_BOOKS).slice(0,n);
+ const head = `<div class="th"><span>Title</span><span class="num">Pages</span><span class="num">Passages</span><span>Added</span><span></span></div>`;
+ const rows = all.map((b,i)=>{
+  if(i===edit) return `<div class="tr hov" style="height:auto;padding:8px 12px;display:block"><div style="display:flex;gap:10px;align-items:center"><div class="inp focus" style="height:38px;flex:1"><span>Mushrooms Demystified</span><span class="caret"></span></div><span class="tbtn">Use file name</span><span class="tbtn">Cancel</span><span class="tbtn" style="background:var(--primary);color:var(--onprimary)">Save</span></div><div class="de" style="font-size:12px;color:var(--secondary);margin-top:4px">This PDF has no title inside it, so the file name is used: mushrooms_demystified_2nd_ed_OCR.pdf. Only this title changes; the passages are not rebuilt.</div></div>`;
+  const num = s => s.split(' ')[0];
+  return `<div class="tr ${hov===i?'hov':''}"><div class="n"><div class="lt sm">${b[0][0]}</div><span>${b[0]}</span></div><span class="s num">${num(b[1])}</span><span class="s num">${num(b[2])}</span><span class="s c">${b[3]}</span><div class="a"><div class="sm32" title="Edit title">${ic('edit',18)}</div><div class="sm32" title="More">${ic('more',18)}</div></div></div>`;
+ }).join('');
+ return head+rows;
+}
+function deskHits(){
+ const h=(m,p)=>`<div class="hit"><div class="m">${m}</div><p>${p}</p></div>`;
+ return `<div class="hits">${h('<b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting','"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilise the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."')}
+ ${h('<b>Field Manual 21-76 Survival</b> · page 204 · Improvised splints','"A <mark>broken forearm</mark> can be <mark>splinted</mark> with two straight sticks, one on each side, padded with cloth and tied above and below the injury."')}
+ ${h('<b>Where There Is No Doctor</b> · page 76 · Broken bones','"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for colour and warmth."')}
+ ${h('<b>Basic Wilderness First Aid</b> · page 52 · Arm injuries','"If the <mark>forearm</mark> is <mark>broken</mark>, support it across the chest in a sling after <mark>splinting</mark>. Recheck the hand every fifteen minutes."')}
+ ${h('<b>Backcountry Navigation Basics</b> · page 301 · When someone is hurt','"Mark your position before you leave an injured person to get help, and write down how to find them."')}
+ <div class="note2">These are the books\' own words with their pages. Results come from this device only.</div></div>`;
+}
+function deskLibPage({mode, n=14}){
+ const queue = ['run','paused','failed','reopened'].includes(mode), empty = mode==='empty';
+ const done = mode==='failed'?22: mode==='reopened'?93: queue?18:214;
+ const stat = empty ? 'No books yet' : `${done} books · ${queue?'8,740':'98,430'} passages · built from your PDFs`;
+ let left = `<div class="stat" style="padding-top:4px">${stat}</div><div class="acts2"><span class="fbtn">${ic('add',18)}Add PDFs</span></div>`;
+ if(queue) left += queuePanel(mode);
+ else if(!empty) left += `<div class="panel" style="padding-bottom:10px"><div class="kv"><span>Books</span><span>214</span></div><div class="kv"><span>Passages</span><span>98,430</span></div><div class="kv"><span>Size on this device</span><span>1.9 GB</span></div><div class="kv"><span>Search model</span><span>cache-embed-small</span></div><div class="kv"><span>Started</span><span>14 Aug</span></div></div>`;
+ const q = mode==='search';
+ let right = `<div class="search" style="margin-top:4px;margin-bottom:8px">${ic('search',20)}<span>${q?'splint a broken forearm':'Search this library'}</span></div>`;
+ if(q) right += `<div class="gl" style="margin-top:6px">5 passages in ${LIBNAME}</div>`+deskHits();
+ else if(empty) right += `<div class="center" style="padding:60px 16px"><div style="color:var(--secondary);display:grid;place-items:center;margin-bottom:12px">${ic('pdf',44)}</div>No books in this library yet.<br>Add PDFs and Cache builds them one at a time.<br>It keeps going if you close this tab.</div>`;
+ else right += `<div class="gl" style="margin-top:6px">${queue?'Finished books':'Books'} · ${done}</div>`+deskTable({n: queue?Math.min(done,12):n, hov: mode==='edit'?-1:2, edit: mode==='edit'?3:-1});
+ return deskShell(deskBar(LIBNAME,{more:true}), left, right);
+}
+
+/* ===== Drop folder: one device-wide folder, every supported type ===== */
+const DF_PATH = '/srv/cache/ingest';
+const dropRow = (on) => `<div class="opt"><div style="color:var(--text)">${ic('folder',22)}</div><div class="tx"><div class="ti">Drop folder</div><div class="de">${on?'On · checked 2 min ago · PDFs go into '+LIBNAME:'Files you copy into a folder on this device are added automatically.'}</div></div>${on?'<span class="badge" style="color:var(--ok);margin-right:4px">On</span>':''}<div style="color:var(--secondary)">${ic('chev',24)}</div></div>`;
+const radio = (on,t,d) => `<div class="choice ${on?'on':''}" style="padding:10px 12px"><div class="radio">${on?'<i></i>':''}</div><div class="tx"><div class="ti">${t}</div><div class="de">${d}</div></div></div>`;
+function dropFolderPage(kind){ // setup | active | missing | denied
+ const setup = kind==='setup', err = kind==='missing'||kind==='denied';
+ let left='';
+ if(err) left += `<div class="banner"><b>${kind==='missing'?'The drop folder is missing':'Cache can not read the drop folder'}</b>${kind==='missing'?'It may be on a USB disk that is not connected. Nothing is lost: files stay where they are and Cache looks again at the next check, or check now.':'Cache is not allowed to open this folder. Change who can read it on this device, or choose another folder.'}<div style="display:flex;gap:4px;margin:6px 0 0 -12px"><span class="tbtn">${kind==='missing'?'Check now':'Choose another folder'}</span>${kind==='missing'?'<span class="tbtn">Choose another folder</span>':''}</div></div>`;
+ if(!setup) left += `<div class="frow"><div class="tx"><div class="ti">${kind==='active'?'On':'Waiting for the folder'}</div><div class="de" style="word-break:normal">${kind==='active'?'Last checked 2 min ago':'Last checked 4 min ago. Last good check: yesterday 22:10.'}</div></div>${kind==='active'?'<span class="btn2" style="height:34px">Check now</span>':''}<div class="sw" title="Turn off"><i></i></div></div>`;
+ left += `<div class="gl" style="margin-top:8px">Folder on this device</div>`;
+ left += setup
+  ? `<div class="inp focus fld"><span>${DF_PATH}</span><span class="caret"></span></div><div class="note2" style="padding-top:2px">Suggested: the ingest folder inside Cache's data folder. Cache creates it if it does not exist.</div><div style="margin:8px 0 0 -12px"><span class="tbtn">${ic('folder',18)}&nbsp;Choose from this device</span></div>`
+  : `<div class="frow"><div class="tx"><div class="de" style="font-size:14px;color:var(--text)">${DF_PATH}</div></div><span class="tbtn">Change</span></div>`;
+ left += `<div class="tree"><div><b>ingest/</b><span>Drop files here. This is the queue.</span></div><div><b>complete/</b><span>Added or built, filed by subject. Duplicates too, they are already in the library.</span></div><div><b>failed/</b><span>Could not be used, with a note saying why.</span></div></div>`;
+ left += `<div class="gl">PDFs go into</div>`;
+ left += `<div class="frow"><div class="tx"><div class="ti">${LIBNAME}</div><div class="de" style="word-break:normal">214 books</div></div>${setup?`<div style="color:var(--secondary)">${ic('chev',24)}</div>`:'<span class="tbtn">Change</span>'}</div>
+  <div class="frow" style="opacity:.9"><div class="tx"><div class="ti" style="font-weight:400">A new library for each subfolder of ingest/</div><div class="de" style="word-break:normal">The subfolder's name becomes the library's name. <span class="prop">Proposed, not approved</span></div></div><div class="sw" style="background:color-mix(in srgb,var(--secondary) 45%,transparent)"><i style="right:auto;left:3px"></i></div></div>`;
+ if(setup) left += `<div style="display:flex;gap:8px;align-items:center;margin-top:12px"><span class="fbtn">Turn on drop folder</span><span class="tbtn">Cancel</span></div>`;
+ else left += `<div style="margin:10px 0 0 -12px"><span class="tbtn" style="color:var(--secondary)">Turn off drop folder</span></div>`;
+ let right;
+ if(setup){
+  right = `<div class="gl" style="margin-top:4px">What the drop folder does with each file</div><div class="tr3 h"><span>File</span><span>Type</span><span>What happens</span></div>
+  ${[['name.pdf','PDF','Built into a library, with the page and heading of each passage'],['name.zim','Library file','Added to the Library, like a download'],['name.cache-library, name.gz','Library file','Added or updated, like an upload'],['Anything else','','Moved to failed/ with a note: not a file Cache can use']].map(r=>`<div class="tr3"><span class="f">${r[0]}</span><span class="s">${r[1]}</span><span>${r[2]}</span></div>`).join('')}
+  <div class="gl" style="margin-top:20px">How a file travels</div>
+  <div class="flow"><div class="fb">ingest/<small>waiting, in order</small></div><div class="ar">${ic('chev',22)}</div><div class="fb">complete/<small>added or built</small></div></div>
+  <div class="flow" style="margin-top:6px"><div class="fb">ingest/<small>working</small></div><div class="ar">${ic('chev',22)}</div><div class="fb w">failed/<small>name.why.txt beside it</small></div><div class="ar" style="margin-left:12px;font-size:12px;color:var(--secondary)">Retry moves it back to ingest/</div></div>
+  <div class="gl" style="margin-top:20px">How complete/ is filed</div>
+  <div class="treef"><i>complete/</i>
+  500 Water and Energy/
+    530 Water treatment/
+      CDS 530-001  The Water Purification Handbook.pdf
+  800 Outdoors and Navigation/
+    830 Foraging and wild edibles/
+      CDS 830-001  Edible Wild Plants of the Intermountain West.pdf
+  Unsorted/
+    Collected Pamphlets, Vol 3.pdf   <i>(waits for you to place it)</i>
+  ZIM files/
+  Library files/</div>
+  <div class="gl" style="margin-top:20px">Filling it</div>
+  <div class="prose"><p>Copy files into ingest/ over the network with scp, or plug in a USB disk and copy them across. Subfolders are included. A file that is still being copied waits for a later check, once it stops changing.</p><p style="margin-top:8px">A PDF is handled the way an upload is: duplicates are skipped by content, every book shows its own progress, and one bad file never stops the rest.</p></div>`;
+ } else {
+  const dim = err ? 'opacity:.55' : '';
+  const chip = (t,n,on) => `<span class="chip ${on?'on':''}">${t} · ${n}</span>`;
+  const r4 = (p,f,t,st,o={}) => `<div class="tr4"><span class="s num">${p}</span><span class="f">${f}</span><span class="s">${t}</span><span style="${o.c||''}">${st}</span><span>${o.btn||''}</span></div>`;
+  const sec = t => `<div class="gl" style="margin:14px 0 4px">${t}</div>`;
+  const head = `<div class="tr4 h"><span class="num">#</span><span>File</span><span>Type</span><span>State</span><span></span></div>`;
+  right = (typeof DF_DECIDE!=='undefined' && DF_DECIDE ? decideCard() : '') + `<div class="chips" style="margin-top:4px">${chip('All',44,1)}${chip('Queue in ingest/',4)}${chip('complete/',38)}${chip('failed/',2)}</div>
+  <div class="stat" style="padding:0 4px 4px">${err?'Last known state. Nothing has been checked since the folder went missing.':'Last check 2 min ago: 2 new files found.'}</div>
+  <div style="${dim}">${head}${sec('Queue · in the order Cache takes them')}
+  ${r4(1,'Edible Plants of Idaho.pdf','PDF','Working · building passages 212 of 480')}
+  ${r4(2,'wikivoyage_en_all.zim','Library file','Queued')}
+  ${r4(3,'Backcountry Navigation Basics.pdf','PDF','Queued')}
+  ${r4(4,'field-notes-2026.cache-library','Library file','Queued')}
+  ${(typeof DF_DECIDE!=='undefined' && DF_DECIDE) ? r4('!','Where There Is No Doctor, 2nd ed.pdf','PDF','Waiting for your decision (see above)',{c:'color:var(--warning)'}) : ''}
+  ${sec('Failed · in failed/')}
+  ${r4('','Trapping 1952 scan.pdf','PDF','Protected with a password. Note: Trapping 1952 scan.pdf.why.txt',{c:'color:var(--warning)',btn:'<span class="tbtn">Retry</span>'})}
+  ${r4('','backup-2026-10.tar','Other','Not a file Cache can use. Note: backup-2026-10.tar.why.txt',{c:'color:var(--secondary)'})}
+  ${sec('Complete · in complete/, filed by subject, newest first')}
+  ${r4('','Water_Purification_Handbook_scan2.pdf','PDF','Replaced: the new copy has 312 text pages vs 298. Rebuilt in place as CDS 530-001, "The Water Purification Handbook"',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','pamphlets-vol3.pdf','PDF','Not sure where it goes. Filed in Unsorted',{c:'color:var(--warning)',btn:'<span class=\"tbtn\">Place it</span>'})}
+  ${r4('','farm_notes_14.pdf','PDF','Placed by you in 310 Gardening · CDS 310-001 (moved from Unsorted)')}
+  ${r4('','Where There Is No Doctor.pdf','PDF','Filed in 230 Diseases and treatment · CDS 230-001')}
+  ${r4('','wilderness_med_7e.pdf','PDF','Exact copy of Wilderness Medicine Handbook, 7th ed (CDS 210-001)',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','idaho_regs_2025_lowres.pdf','PDF','Already have a better copy (CDS 840-001)',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','survival-guides-extra.zim','Library file','Added to the Library. Filed in ZIM files/')}</div>
+  <div class="prose" style="margin-top:14px"><p>Retry moves a file back into ingest/, at the end of the queue.</p></div><div style="margin:6px 0 0 -12px"><span class="tbtn" style="color:var(--secondary)">Removed · 3</span></div>`;
+ }
+ const bar = (DESK?deskBar:barTitle)('Drop folder',{back:true});
+ if(DESK) return deskShell(bar, left, right);
+ return `<div class="page">${bar}<div class="pgs" style="overflow:hidden">${left}${right}</div></div>`;
+}
+const pickDlg = () => dlg(`<h2>Choose a folder on this device</h2><div class="crumb">/ srv / cache</div>
+ ${[['ingest','Current suggestion',1],['libraries','',0],['media','USB disks mount here',0],['backups','',0]].map(f=>`<div class="frow" style="${f[2]?'border:1.5px solid var(--accent)':''}"><div style="color:var(--secondary)">${ic('folder',22)}</div><div class="tx"><div class="ti" style="font-size:14px">${f[0]}</div>${f[1]?`<div class="de" style="word-break:normal">${f[1]}</div>`:''}</div></div>`).join('')}
+ <div class="acts"><span class="tbtn" style="margin-right:auto">New folder</span><span class="tbtn">Cancel</span><span class="tbtn fill">Choose this folder</span></div>`,'wide');
+const stopDlg = () => dlg(`<h2>Stop building ${LIBNAME}?</h2><p>The 196 books still waiting are taken off the list. The 18 finished books and the one being built now stay. You can add the PDFs again later.</p>
+ <div class="frow" style="margin-top:12px"><div class="tx"><div class="ti" style="font-size:14px">Also turn off the drop folder</div><div class="de" style="word-break:normal">Otherwise PDFs in it are picked up again at the next check.</div></div><div class="radio" style="border-radius:4px"></div></div>
+ <div class="acts"><span class="tbtn">Keep building</span><span class="tbtn fill red">Stop building</span></div>`);
+
+/* ===== Cache Decimal System (CDS) (vault/projects/cache-classification.md) ===== */
+const CLS = [
+ ['000','Knowledge and Reference','Encyclopedias and almanacs|General manuals and guides|Preparedness planning|Education and homeschooling|Language and writing|(unassigned)|Philosophy and religion|Literature and fiction|Arts, music and games','1,3,4,1,1,0,1,2,1'],
+ ['100','Science','Mathematics and measurement|Physics|Chemistry|Earth science and geology|Weather and climate|Astronomy and timekeeping|Biology and ecology|Plants and botany|Animals and insects','2,1,1,2,3,1,2,3,2'],
+ ['200','Medicine and Health','First aid and emergency care|Anatomy and physiology|Diseases and treatment|Medicines and pharmacology|Herbal and traditional medicine|Childbirth, women\'s and children\'s health|Nursing and long-term care|Mental health|Hygiene and public health','11,2,4,2,3,1,1,1,2'],
+ ['300','Agriculture','Gardening|Field crops, seeds and soil|Orchards, forestry and woodlots|Livestock, poultry and veterinary care|Beekeeping|Aquaculture and aquaponics|Permaculture and composting|Pests and plant disease|Farm tools and buildings','12,3,3,6,3,1,2,2,1'],
+ ['400','Food','Cooking and recipes|Baking and grains|Nutrition|Canning|Drying, smoking and curing|Fermentation, brewing and wine|Food storage and root cellars|Butchering and meat|Food safety','3,2,1,9,2,2,2,1,1'],
+ ['500','Water and Energy','Water sources and wells|Rainwater harvesting|Water treatment|Pumping, storage and plumbing|Sanitation and waste|Solar power|Wind, hydro and biogas|Batteries, generators and fuels|Heating, cooling and lighting','3,1,4,2,1,5,1,1,1'],
+ ['600','Building, Making and Repair','Construction and carpentry|Masonry and concrete|Shelters and fallout shelters|Woodworking|Metalworking, welding and blacksmithing|Electrical and electronics|Engines and machines|Textiles, leather and crafts|Vehicles: cars, bikes and boats','2,1,1,3,1,2,3,2,1'],
+ ['700','Communication','Radio fundamentals|Amateur radio operating|Antennas and propagation|Mesh and digital radio|Networks and the internet|Computing and programming|Signals, codes and sign language|Encryption and secure comms|Emergency communications','2,5,2,2,1,2,1,1,2'],
+ ['800','Outdoors and Navigation','Bushcraft and camping|Fire, knots, cordage and primitive tools|Foraging and wild edibles|Hunting, trapping and archery|Fishing and fly tying|Tracking and observation|Maps and land navigation|Celestial and marine navigation|Climbing, caving and water travel','5,3,4,6,3,2,3,1,2'],
+ ['900','Security and Society','Firearms and marksmanship|Firearm maintenance and reloading|Self-defense and martial arts|Security, OPSEC and threats|Military science and tactics|Chemical, biological and radiation hazards|Leadership, organization and logistics|Law, government and economics|History and biography','3,2,3,2,1,1,1,1,1'],
+].map(c=>{ const n=+c[0]; const names=c[2].split('|'), cnt=c[3].split(',').map(Number);
+ return {no:c[0], name:c[1], divs:names.map((d,i)=>({no:String(n+(i+1)*10).padStart(3,'0'), name:d, n:cnt[i]})), n:cnt.reduce((a,b)=>a+b,0)}; });
+CLS.forEach(c=>{ c.divs.forEach((d,i)=>{ d.no = String(+c.no + (i+1)*10).padStart(3,'0'); }); });
+const divName = no => { for(const c of CLS) for(const d of c.divs) if(d.no===no) return no+' '+d.name; return no; };
+const clsName = no => { const c=CLS.find(c=>c.no===no); return c.no+' '+c.name; };
+const classOf = no => String(Math.floor(+no/100)*100).padStart(3,'0');
+/* sample books: [call, title, pages, passages, added] */
+const CB = [
+ ['CDS 150-001','Reading the Weather','210','262','5 h ago'],['CDS 210-002','Basic Wilderness First Aid','132','176','4 h ago'],['CDS 210-001','Wilderness Medicine Handbook, 7th ed','412','480','just now'],
+ ['CDS 230-001','Where There Is No Doctor','512','702','1 h ago'],['CDS 310-002','Gardening in Short Seasons','220','289','6 h ago'],['CDS 350-001','Beekeeping for Beginners','156','208','6 h ago'],
+ ['CDS 440-001','Home Canning and Preserving','244','330','4 h ago'],['CDS 530-001','The Water Purification Handbook','298','372','3 h ago'],['CDS 670-001','Small Engine Repair','302','410','5 h ago'],
+ ['CDS 720-001','Ham Radio License Manual','388','521','3 h ago'],['CDS 810-001','Field Manual 21-76 Survival','412','480','12 min ago'],['CDS 820-001','Knots, Splices and Rope Work','188','203','2 h ago'],
+ ['CDS 830-001','Edible Wild Plants of the Intermountain West','236','311','12 min ago'],['CDS 830-002','Foraging the Mountain West','272','358','2 d ago'],['CDS 830-003','Mushrooms Demystified','560','644','1 h ago'],['CDS 830-004','Wild Berries of the Northern Rockies','148','201','2 d ago'],['CDS 840-001','Idaho Hunting Regulations 2025','96','141','2 h ago'],['CDS 870-001','Backcountry Navigation Basics','340','412','yesterday']];
+const B830 = CB.filter(b=>b[0].startsWith('830'));
+const UNS = [['Collected Pamphlets, Vol 3','126','171','Close between three divisions','today 03:40'],['Farm and Home Notes, Bulletin 14','64','88','Not enough text to tell (mostly tables)','today 03:40'],['Untitled scan 2019-08','210','0','Scanned; the first pages were hard to read','yesterday 22:10']];
+const UNS_N = 3;
+
+const tn = (o) => `<div class="tn ${o.sel?'sel':''}" style="padding-left:${o.ind||8}px"><span class="ch" style="${o.open?'transform:rotate(90deg)':''};${o.nochev?'visibility:hidden':''}">${ic('chev',18)}</span><span class="no">${o.no}</span><span class="nm2">${o.name}</span>${o.badge||`<span class="ct">${o.n}</span>`}</div>`;
+function classTree({open=null, sel=null, uns=false}){
+ let h = `<div class="tree2">`;
+ h += tn({no:'',name:'Unsorted',nochev:true,sel:uns,badge:`<span class="badge" style="color:var(--warning);padding:0 8px">${UNS_N} to place</span>`,ind:8});
+ CLS.forEach(c=>{
+  h += tn({no:c.no,name:c.name,n:c.n,open:open===c.no,sel:sel===c.no});
+  if(open===c.no) c.divs.forEach(d=>{ h += tn({no:d.no,name:d.name,n:d.n,ind:34,nochev:true,sel:sel===d.no}); });
+ });
+ h += `<div class="tn" style="padding-left:8px;color:var(--secondary)"><span class="ch" style="visibility:hidden">${ic('chev',18)}</span><span style="font-size:13px;color:var(--accent)">Edit classes</span><span class="prop" style="margin-left:8px">Proposed, not approved</span></div></div>`;
+ return h;
+}
+function clsListPane(o){
+ const libRow = row(built('1 to decide','var(--warning)'), {sel:true});
+ const others = base.map(r=>row(r)).join('');
+ return listPane({hint:normalHint, rows:[], rowsHtml: libRow + classTree(o) + others});
+}
+const callTable = (books, o={}) => {
+ const head = `<div class="th"><span>Title</span><span class="num">Pages</span><span class="num">Passages</span><span>Added</span><span></span></div>`;
+ return head + books.map((b,i)=>`<div class="tr ${o.hov===i?'hov':''}"><div class="n"><span class="call">${b[0]}</span><span>${b[1]}</span></div><span class="s num">${b[2]}</span><span class="s num">${b[3]}</span><span class="s c">${b[4]}</span><div class="a"><div class="sm32">${ic('edit',18)}</div><div class="sm32">${ic('more',18)}</div></div></div>`).join('');
+};
+const editClassesRow = () => `<div class="opt" style="margin-top:8px"><div style="color:var(--text)">${ic('edit',22)}</div><div class="tx"><div class="ti">Edit classes</div><div class="de">Rename, add or move divisions. <span class="prop">Proposed, not approved</span></div></div><div style="color:var(--secondary)">${ic('chev',24)}</div></div>`;
+function clsLeft(extra=''){
+ return `<div class="stat" style="padding-top:4px">214 books · 98,430 passages · built from your PDFs</div><div class="acts2"><span class="fbtn">${ic('add',18)}Add PDFs</span></div>
+ <div class="panel" style="padding-bottom:10px"><div class="kv"><span>Books</span><span>214</span></div><div class="kv"><span>Sorted</span><span>211 in 10 classes</span></div><div class="kv"><span>To place</span><span style="color:var(--warning)">${UNS_N} in Unsorted</span></div><div class="kv"><span>Size on this device</span><span>1.9 GB</span></div></div>${extra}${editClassesRow()}`;
+}
+function clsPage(mode){
+ const crumb = (parts) => `<div class="crumb" style="padding:4px 4px 6px;font-size:13px">${parts.join(' <span style="opacity:.5">/</span> ')}</div>`;
+ let right;
+ if(mode==='classes') right = `<div class="search" style="margin-top:4px;margin-bottom:8px">${ic('search',20)}<span>Search this library</span></div><div class="gl" style="margin-top:6px">All books · by call number</div>${callTable(CB,{hov:7})}<div class="note2">Showing 18 of 214. Pick a class on the left to narrow it.</div>`;
+ else if(mode==='division') right = `${crumb([LIBNAME,clsName('800'),'<b style="color:var(--text);font-weight:500">'+divName('830')+'</b>'])}<div class="search" style="margin-bottom:8px">${ic('search',20)}<span>Search this library</span></div><div class="gl" style="margin-top:6px">${divName('830')} · 4 books</div>${callTable(B830,{hov:0})}`;
+ else right = `${crumb([LIBNAME,'<b style="color:var(--text);font-weight:500">Unsorted</b>'])}<div class="gl" style="margin-top:6px">Unsorted · ${UNS_N} books</div><div class="prose" style="margin-bottom:8px"><p>Cache was not sure where these belong. Place each one; its file moves to the right folder with it.</p></div>
+  <div class="th" style="grid-template-columns:minmax(0,1fr) 230px 110px"><span>Title</span><span>Why it is here</span><span></span></div>
+  ${UNS.map((u,i)=>`<div class="tr" style="grid-template-columns:minmax(0,1fr) 230px 110px;height:56px;${i===0?'background:var(--surface)':''}"><div class="n" style="flex-direction:column;align-items:flex-start;gap:0"><span>${u[0]}</span><span style="font-size:12px;color:var(--secondary);font-weight:400">${u[1]} pages · added ${u[4]}</span></div><span class="s" style="white-space:normal;font-size:12px">${u[3]}</span><span style="text-align:right"><span class="btn2" style="height:34px;${i===0?'border-color:var(--accent)':''}">Place it</span></span></div>`).join('')}`;
+ const extra = `<div class="banner"><b>1 possible new edition</b>Where There Is No Doctor, 2nd ed. <span class="tbtn" style="margin-left:4px">Decide</span></div>` + (mode==='unsorted' ? `<div class="banner"><b>${UNS_N} books need a place</b>They stay searchable while they wait.</div>` : '');
+ return deskShell(deskBar(LIBNAME,{more:true}), clsLeft(extra), right);
+}
+function placeDlg(){
+ const sug=[['020','General manuals and guides','000 Knowledge and Reference'],['030','Preparedness planning','000 Knowledge and Reference'],['310','Gardening','300 Agriculture']];
+ const all = CLS.map(c=>`<div class="pk"><div class="pkh">${c.no} ${c.name}</div>${c.divs.filter(d=>d.name!=='(unassigned)').map(d=>`<div class="pkd">${d.no} ${d.name}</div>`).join('')}</div>`).join('');
+ return dlg(`<h2>Place "Collected Pamphlets, Vol 3"</h2>
+ <div class="gl" style="margin:0 0 6px">Cache's best guesses, from the book's opening pages</div>
+ ${sug.map((s,i)=>`<div class="choice ${i===0?'on':''}" style="padding:8px 12px;margin-bottom:4px"><div class="radio">${i===0?'<i></i>':''}</div><div class="tx"><div class="ti" style="font-size:14px"><span class="call" style="margin-right:6px">${s[0]}</span>${s[1]}</div><div class="de">${s[2]}${i===0?' · best match':''}</div></div></div>`).join('')}
+ <div class="gl" style="margin:12px 0 6px">Or choose any division</div>
+ <div class="inp" style="height:38px;margin-bottom:8px">${ic('search',18)}<span style="color:var(--secondary);font-size:14px">Find a division</span></div>
+ <div class="pkwrap">${all}</div>
+ <p class="note">The file moves to complete/000 Knowledge and Reference/020 General manuals and guides/ and gets its call number. You can move it again later.</p>
+ <div class="acts"><span class="tbtn">Cancel</span><span class="tbtn fill">Place it in 020</span></div>`,'xl');
+}
+
+
+let DF_DECIDE = false;
+function decideCard(){
+ const col = (h,t,rows) => `<div style="flex:1;min-width:0;background:var(--bg);border-radius:10px;padding:10px 12px"><div style="font-size:11px;font-weight:600;color:var(--secondary);margin-bottom:4px">${h}</div><div style="font-size:14px;font-weight:500;margin-bottom:4px">${t}</div>${rows.map(r=>`<div class="de" style="font-size:12px;color:var(--secondary);line-height:1.5">${r}</div>`).join('')}</div>`;
+ return `<div class="card notice" style="padding:12px 14px;margin:4px 0 10px"><div class="ti" style="font-size:15px;font-weight:500">Possible new edition</div>
+ <div class="de" style="font-size:13px;color:var(--secondary);margin:2px 0 10px;white-space:normal;line-height:1.4">A file in ingest/ looks like a book you already have, but its content differs. Cache will not choose for you.</div>
+ <div style="display:flex;gap:10px">${col('IN YOUR LIBRARY','Where There Is No Doctor',['512 pages · 498 with text','2010 edition','Filed in CDS 230-001'])}${col('NEW FILE','Where There Is No Doctor, 2nd ed.pdf',['548 pages · 540 with text','2019 edition','Still in ingest/'])}</div>
+ <div class="de" style="font-size:13px;color:var(--text);margin:10px 0 8px;white-space:normal;line-height:1.45"><b style="font-weight:500">What differs:</b> most of the text matches. About 1 passage in 5 is new or changed, and 36 pages were added.</div>
+ <div style="display:flex;gap:8px;align-items:center"><span class="btn2">Keep both</span><span class="fbtn">Replace the older one</span><span class="de" style="font-size:12px;color:var(--secondary);margin-left:6px;white-space:normal;flex:1">Replacing moves the older copy to Removed for 30 days and rebuilds the book in place.</span></div></div>`;
+}
+function removedDlg(){
+ const rows=[['wilderness_med_7e.pdf','Exact copy of Wilderness Medicine Handbook, 7th ed','1 Nov',29],['Water_Purification_Handbook_v1.pdf','Replaced by a better copy: 312 text pages vs 298','1 Nov',29],['idaho_regs_2025_lowres.pdf','Already have a better copy','30 Oct',27]];
+ return dlg(`<h2>Removed</h2><div class="de" style="font-size:13px;color:var(--secondary);margin:-6px 0 10px;line-height:1.4">Copies Cache did not keep. Each is deleted after 30 days. Restore puts it back in ingest/ to be looked at again.</div>
+ <div class="tr3 h" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) 62px 100px 74px"><span>File</span><span>Why</span><span>Date</span><span>Deleted in</span><span></span></div>
+ ${rows.map(r=>`<div class="tr3" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) 62px 100px 74px"><span class="f" style="font-size:13px">${r[0]}</span><span>${r[1]}</span><span class="s">${r[2]}</span><span class="s">${r[3]} days</span><span class="tbtn" style="height:32px;padding:0 8px">Restore</span></div>`).join('')}
+ <div class="acts"><span class="tbtn">Close</span></div>`,'xl');
+}
+
+let L='', D='', over='';
+const normalHint = "Icons come from each source's website; change one from the item's menu.";
+const run = (extra) => withBuilt(built('Building 8%'));
+libSize = 98.2+2.1+4.8+.612+.018;
+
+switch(STATE){
+ case 'entry':
+  L = listPane({hint:normalHint, rows:base}); D = addPage({}); break;
+ case 'new-library':
+  L = listPane({hint:normalHint, rows:base}); D = buildPage({mode:'new', name:LIBNAME}); break;
+ case 'uploading': {
+  const t = card('Uploading 214 PDFs', '63 of 214 · 1.9 GB of 3.1 GB · 52 MB/s · about 4 min left', {f:.61, wrap:true});
+  libSize += .3;
+  L = listPane({hint:'Keep this tab open until the upload ends. Building carries on without it.', top:t, rows:withBuilt(built('Building 0%', 'var(--secondary)', 'Built from your PDFs · 1 book', '48 MB')), adjFree:-1.9, pending:'1.2 GB still to upload'});
+  D = uploadingPage(); over = snack('Uploading 214 PDFs. Keep this tab open.'); break; }
+ case 'queue': {
+  libSize += 1.9*18/214;
+  const t = card(`Building ${LIBNAME}`, '18 of 214 books · roughly 9 to 13 h left', {f:18/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('Building 8%','var(--secondary)','Built from your PDFs · 18 books','160 MB'))});
+  D = libPage({mode:'run', n:4}); break; }
+ case 'queue-paused': {
+  libSize += .3;
+  const t = card(`Building ${LIBNAME}`, 'Paused · 18 of 214 books', {f:18/214, btn:playBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('Paused','var(--warning)','Built from your PDFs · 18 books','160 MB'))});
+  D = libPage({mode:'paused', n:4}); over = snack('Building paused. Resume it any time; finished books are kept.'); break; }
+ case 'failed-item': {
+  libSize += .4;
+  const t = card(`Building ${LIBNAME}`, '22 of 214 books · 2 need attention', {f:22/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('2 failed','var(--warning)','Built from your PDFs · 22 books','190 MB'))});
+  D = libPage({mode:'failed', n:3}); break; }
+ case 'tab-reopened': {
+  libSize += .9;
+  const notice = `<div class="card notice" style="padding:10px 8px 6px 12px"><div class="ti" style="font-size:15px;font-weight:500">While this tab was closed</div>
+   <ul style="padding:0;list-style:disc"><li>75 books were built.</li><li>${LIBNAME} is still building.</li><li>1 book couldn't be built.</li><li>1 book was skipped as a duplicate.</li></ul>
+   <div class="acts"><span class="tbtn">Dismiss</span></div></div>`;
+  const t = card(`Building ${LIBNAME}`, '93 of 214 books · roughly 5 to 7 h left<br>started yesterday 22:10', {f:93/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:notice+t, rows:withBuilt(built('Building 43%','var(--secondary)','Built from your PDFs · 93 books','820 MB'))});
+  D = libPage({mode:'reopened', n:3}); break; }
+ case 'ingest-setup':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null))}); D = dropFolderPage('setup'); break;
+ case 'ingest-pick':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null))}); D = dropFolderPage('setup'); over = pickDlg(); break;
+ case 'ingest-active': {
+  const t = card('Building '+LIBNAME, '2 PDFs from the drop folder · 18 of 214 books · roughly 9 to 13 h left', {f:18/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('Building 8%','var(--secondary)','Built from your PDFs · 18 books','160 MB'))}); D = dropFolderPage('active'); break; }
+ case 'ingest-error':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null))}); D = dropFolderPage(Q.get('err')==='denied'?'denied':'missing'); break;
+ case 'stop-confirm': {
+  const t = card('Building '+LIBNAME, '18 of 214 books · roughly 9 to 13 h left', {f:18/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('Building 8%','var(--secondary)','Built from your PDFs · 18 books','160 MB'))});
+  D = libPage({mode:'run', n:4}); over = stopDlg(); break; }
+ case 'drop-anywhere':
+  L = listPane({hint:normalHint, rows:base}); D = addPage({});
+  over = `<div class="dragov"><div class="box"><div class="in"><div style="color:var(--accent);display:grid;place-items:center">${ic('pdf',64)}</div><div class="big">Drop PDFs to build a library</div><div class="sub">Release to choose where they go. A folder works too. A .zim or .cache-library file is added to the Library as usual.</div></div></div></div>`; break;
+ case 'reader-full-window': {
+  const bar = `<div class="bar" style="height:56px;padding:0 16px 0 8px"><div class="ib">${ic('back',24)}</div><span class="t" style="margin-left:4px">Water purification</span><span class="de" style="font-size:13px;color:var(--secondary);margin-right:16px">Wikipedia (English)</span><div class="search" style="width:320px;height:40px;font-size:14px">${ic('search',18)}Find in this article</div><div class="ib" title="Close">${ic('close',24)}</div></div>`;
+  const p = 'Water purification is the process of removing undesirable chemicals, biological contaminants, suspended solids and gases from water. The goal is to produce water fit for a specific purpose, most commonly drinking water, but also for medical, pharmacological, chemical and industrial uses. ';
+  D = `<div class="page wide" style="max-width:none;width:100%">${bar}<div class="art"><div class="ib2"><b>Methods at a glance</b><br>Boiling: kills most pathogens<br>Filtration: removes particles and some microbes<br>Chemical: chlorine or iodine tablets<br>Ultraviolet: inactivates microbes in clear water</div><h1>Water purification</h1><p>${p}${p}</p><h2>Boiling</h2><p>Bringing water to a rolling boil for one minute kills the pathogens that cause most waterborne illness. At altitudes above about 2,000 metres, boil for three minutes. Let the water cool without adding ice made from untreated water.</p><p>${p}</p><h2>Filtration</h2><p>Portable filters with a pore size of 0.2 micrometres remove protozoa and bacteria but not viruses. Pre-filter cloudy water through cloth first so that the filter does not clog.</p><p>${p}${p}</p><h2>Chemical treatment</h2><p>Chlorine dioxide tablets act on bacteria, viruses and protozoa; follow the contact time on the packet, and double it for cold or cloudy water.</p></div></div>`;
+  L=''; break; }
+ case 'edition-decision': {
+  DF_DECIDE = true;
+  const t = card('Building '+LIBNAME, '2 PDFs from the drop folder · 18 of 214 books · roughly 9 to 13 h left', {f:18/214, btn:pauseBtn, wrap:true, noX:true});
+  L = listPane({hint:'Building keeps going if you close this tab.', top:t, rows:withBuilt(built('1 to decide','var(--warning)','Built from your PDFs · 18 books','160 MB'))}); D = dropFolderPage('active'); break; }
+ case 'removed':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null))}); D = dropFolderPage('active'); over = removedDlg(); break;
+ case 'library-classes':
+  L = clsListPane({}); D = clsPage('classes'); break;
+ case 'library-division':
+  L = clsListPane({open:'800', sel:'830'}); D = clsPage('division'); break;
+ case 'unsorted-place':
+  L = clsListPane({uns:true}); D = clsPage('unsorted'); over = placeDlg(); break;
+ case 'library-page':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null)), sel:3}); D = libPage({mode:'ready', n:6}); break;
+ case 'library-search':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null)), sel:3}); D = libPage({mode:'search'}); break;
+ case 'library-empty':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null,null,'Built from your PDFs · 0 books','0 MB')), sel:3}); D = libPage({mode:'empty'}); break;
+ case 'edit-title':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null)), sel:3}); D = libPage({mode:'edit', n:5}); break;
+ case 'replace':
+  L = listPane({hint:normalHint, rows:withBuilt(built(null)), sel:3}); D = libPage({mode:'remove', n:6});
+  over = dlg(`<h2>Replace Where There Is No Doctor with a newer edition?</h2>
+   <p>Choose the new PDF. Only this book is rebuilt. The current one stays searchable until the new one is ready, then it is swapped in.</p>
+   ${dropBox({text:'Drop the new PDF here', sub:'One PDF.'}).replace(/<div style="display:flex;flex-direction:column[^]*$/,'<span class="btn2" style="flex:none">Choose a PDF</span></div>')}
+   <div class="acts"><span class="tbtn">Cancel</span></div>`, 'wide'); break;
+ case 'remove-confirm': {
+  L = listPane({hint:normalHint, rows:withBuilt(built(null)), sel:3, hov:3}); D = libPage({mode:'remove', n:6});
+  const f = disk.total-disk.other-libSize-1.9;
+  over = dlg(`<h2>Remove Where There Is No Doctor from ${LIBNAME}?</h2><div class="sz"><span>Frees</span><span>38 MB · 702 passages</span></div>
+   <div class="sm"><span>Device storage</span><span>${GB(f)} free now, ${GB(f+.038)} after</span></div>
+   <p class="note">Only this book is removed. The rest of the library is not touched. Your PDF on this computer is not deleted. To get it back, add the PDF again.</p>
+   <div class="acts"><span class="tbtn">Cancel</span><span class="tbtn fill red">Remove</span></div>`); break; }
+ case 'no-model':
+  L = listPane({hint:normalHint, rows:base}); D = gatedPage('idle'); break;
+ case 'model-downloading': {
+  const t = card('Search model', 'Downloading · 412 MB of 630 MB', {f:.65, btn:pauseBtn});
+  L = listPane({hint:'Downloads keep going if you close this tab.', top:t, rows:base, adjFree:-.4});
+  D = gatedPage('downloading'); over = snack('Download started. It keeps downloading if you close this tab.'); break; }
+ case 'model-failed':
+  L = listPane({hint:normalHint, rows:base}); D = gatedPage('failed'); break;
+}
+const stage = document.getElementById('stage');
+stage.innerHTML = rail + L + `<div class="detail" style="${STATE==='reader-full-window'?'justify-content:stretch':''}">${D}</div>` + over;
+function fit(){ const s=Math.min(innerWidth/1920, innerHeight/1080); stage.style.transform = `scale(${s})`; }
+addEventListener('resize', fit); fit();
+</script>
+</body>
+</html>

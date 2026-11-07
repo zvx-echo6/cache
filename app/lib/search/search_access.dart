@@ -2,11 +2,12 @@ import '../chat/tool.dart';
 
 /// A page of text from the core.
 class ReadPage {
-  const ReadPage({required this.title, required this.text, required this.truncated});
+  const ReadPage({required this.title, required this.text, required this.truncated, this.page});
 
   final String title;
   final String text;
   final bool truncated;
+  final int? page;
 }
 
 /// What the search and read tools need from the search core, so they can be tested without it.

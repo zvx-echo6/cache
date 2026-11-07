@@ -19,6 +19,7 @@ import 'place_alerts.dart';
 import 'places.dart';
 import 'weather_state.dart';
 import '../platform/app_log.dart';
+import '../platform.dart' as plat;
 
 /// The background task's name. On iPhone it is also the BGTaskScheduler identifier, so it is listed in Info.plist.
 const String kBackgroundTask = 'com.happylittle.cache.live-update';
@@ -104,7 +105,7 @@ void cacheBackgroundDispatcher() {
 /// It opens its own search core with only the saved places and live data (no library, maps or routing), so it is light.
 Future<void> runBackgroundUpdate() async {
   final support = await getApplicationSupportDirectory();
-  final files = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
+  final files = (plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
   final settings = AppSettings();
   await settings.init();
   if (settings.liveSourcesOn.isEmpty) return;
@@ -135,7 +136,7 @@ Future<void> runBackgroundUpdate() async {
 
 /// Schedules the background run when anything is switched on, and cancels it when nothing is. Safe to call often.
 Future<bool> scheduleBackgroundUpdates({required bool anythingOn}) async {
-  if (!(Platform.isAndroid || Platform.isIOS)) return false;
+  if (!(plat.isAndroid || plat.isIOS)) return false;
   try {
     await backgroundReady;
     if (!anythingOn) {

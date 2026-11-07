@@ -1,0 +1,332 @@
+# Builds and tests Cache for Linux (x86_64 and aarch64, each on a native runner, no cross-compiling) and uploads the install
+# tarball as a workflow artifact. It makes no GitHub Release.
+#
+# The tarball is what server/packaging/install.sh unpacks: cache (the program), helper/cache-core-helper (the Dart helper
+# that hosts the core, compiled with `dart compile exe` on each architecture's own runner), lib/libcache_search.so (the core
+# library the helper loads), lib/libzim.so.9 (the libzim the core links), web/ (the real Flutter web build), VERSION and cache.service, with install.sh beside them.
+#
+# The web build bundles canvaskit (--no-web-resources-cdn) and serves its fonts from web/fontfallback, so Cache for Linux works with no internet.
+#
+# The web build is architecture-independent, so the `web` job builds it once on x64 and both `build` jobs take it as an artifact.
+# Flutter 3.44.8 has no Linux arm64 SDK, so the `build` jobs use the plain Dart SDK (setup-dart, which has arm64) pinned to the
+# version Flutter 3.44.8 bundles (3.12.2); the helper imports only Flutter-free sources, so it needs nothing more. No cross-compiling.
+#
+# The text embedder: lib/libcache_llama.so is packages/cache_llama (llama.cpp at the pinned submodule commit behind cl_embed) built
+# here for each architecture with CMake (x86_64 with AVX2/FMA/F16C, aarch64 at the baseline Armv8-A so it runs on a Raspberry Pi 4)
+# and cached by the submodule commit. The server loads it at run time (server/src/embed.rs). A step then downloads bge-m3 (cached by
+# its sha256), embeds three fixed texts with cache_embed's own example (the program the places pack builder uses) and through the
+# server, requires cosine >= 0.9999 between them, and prints load time, memory and texts/s.
+#
+# The core is built with libzim and the C++ shim over it (the `xapian` feature, build.rs), as on the phone: Kiwix's official prebuilt
+# libzim 9.8.2-1 (pinned by sha256 in packages/cache_search/native/zimx/fetch-libzim-linux.sh, fetched by the composite action
+# .github/actions/libzim-prebuilt, which sets LIBZIM_DIR), so a ZIM's own Xapian index is searched exactly as on the phone. libzim.so.9
+# (Xapian and ICU inside) ships in lib/ next to libcache_search.so, which finds it through RPATH $ORIGIN. The native-libs workflow
+# (native-libs.yml) builds and tests the same two libraries on their own.
+#
+# The build jobs run inside an ubuntu:22.04 container (on the same native runners) so the binaries need glibc 2.35 or older and
+# run on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after the build fails the job if any of the
+# binaries needs a newer glibc. (libzim.so.9 also needs GCC 12's libstdc++, GLIBCXX_3.4.30: Ubuntu 22.04+, Debian 12+, bookworm+.)
+name: Linux build
+
+on:
+  push:
+    branches: [server, 'server-*']
+    paths:
+      - 'server/**'
+      - 'app/**'
+      - 'packages/cache_search/lib/**'
+      - 'packages/cache_search/native/**'
+      - 'packages/cache_llama/**'
+      - '.github/workflows/server-release.yml'
+      - '.github/actions/libzim-prebuilt/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+      - name: Build web
+        working-directory: app
+        run: |
+          flutter --version
+          flutter build web --release --no-tree-shake-icons --no-web-resources-cdn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: app/build/web
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            rustflags: ''
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            rustflags: '-C link-arg=-fuse-ld=lld'
+    runs-on: ${{ matrix.runner }}
+    # Building on the oldest supported distribution keeps the glibc requirement at 2.35.
+    container: ubuntu:22.04
+    timeout-minutes: 90
+    env:
+      # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        # A job container defaults to sh; the steps use bash features.
+        shell: bash
+        working-directory: packages/cache_search/native
+    steps:
+      # The bare container has no git, and checkout only fetches submodules with one: install it first. (The folder the other
+      # steps default to does not exist yet, hence the working directory.)
+      - name: Git for the checkout
+        working-directory: /
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update -q && apt-get install -y -q git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build tools
+        working-directory: .
+        # The container is a bare ubuntu:22.04 with no sudo; everything the core and the actions need is installed here
+        # (aws-lc-sys, ring, lzma-sys, zstd-sys and the bundled SQLite build C code; vendored OpenSSL needs perl and make).
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -q
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip lld
+          # mupdf-sys (cache_builder) generates its bindings with bindgen, which needs libclang.
+          apt-get install -y -q libclang-dev clang
+          ld.lld --version
+          gcc --version | sed -n 1p
+          ldd --version | sed -n 1p
+      - name: Rust
+        id: rust
+        working-directory: .
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
+          echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      # The official prebuilt libzim for this architecture; sets LIBZIM_DIR for the core's build below.
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: ${{ matrix.arch }}
+      # The Dart SDK Flutter 3.44.8 bundles; setup-dart has Linux x64 and arm64 builds of it.
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.2
+      - name: Helper tests
+        working-directory: server/helper
+        run: |
+          dart --version
+          dart pub get
+          dart test
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-server-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-server-${{ matrix.arch }}-
+      - name: Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      # libcache_llama.so for this architecture (see the top of the file). Cached by the llama.cpp commit and the cache_llama sources.
+      - name: cache_llama key
+        id: llama
+        working-directory: .
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "rev=$(git rev-parse HEAD:packages/cache_llama/third_party/llama.cpp)" >> "$GITHUB_OUTPUT"
+      - name: cache_llama cache
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: build-llama/libcache_llama.so
+          key: libcache-llama-${{ matrix.arch }}-${{ steps.llama.outputs.rev }}-${{ hashFiles('packages/cache_llama/src/**', 'packages/cache_llama/scripts/build-linux.sh') }}-g2235-2
+      - name: Build libcache_llama
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        working-directory: .
+        # The same script native-libs.yml uses: CMake (AVX2 on x86_64, baseline Armv8-A on aarch64), libstdc++ and libgcc linked in,
+        # stripped, and the cl_embed symbols checked.
+        run: bash packages/cache_llama/scripts/build-linux.sh "$PWD/build-llama"
+      - name: Check libcache_llama
+        working-directory: .
+        run: |
+          ls -l build-llama/libcache_llama.so
+          ldd build-llama/libcache_llama.so || true
+          echo "max glibc: $(objdump -T build-llama/libcache_llama.so | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"
+      # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
+      - name: Embedding model cache
+        uses: actions/cache@v4
+        with:
+          path: bge-model
+          key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+      - name: Embedding model
+        working-directory: .
+        run: |
+          mkdir -p bge-model
+          f=bge-model/bge-m3-Q8_0.gguf
+          sha=c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+          if [[ ! -f "$f" ]]; then
+            curl -fL --retry 8 --retry-delay 5 --retry-all-errors -C - -o "$f.part" \
+              "https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf"
+            mv "$f.part" "$f"
+          fi
+          echo "$sha  $f" | sha256sum -c -
+          test "$(stat -c %s "$f")" = 634553856
+      - name: Embedding exactness and speed
+        env:
+          CACHE_EMBED_LIB: ${{ github.workspace }}/build-llama/libcache_llama.so
+          CACHE_EMBED_MODEL: ${{ github.workspace }}/bge-model/bge-m3-Q8_0.gguf
+          CACHE_EMBED_REF: ${{ runner.temp }}/embed-ref.f32
+        run: |
+          # The reference: cache_embed's own example, the program the places pack builder and the evaluation use.
+          cargo run -p cache_embed --example embed_texts -- --model "$CACHE_EMBED_MODEL" --lib "$CACHE_EMBED_LIB" \
+            --in ../../../server/tests/data/embed_texts.jsonl --out "$CACHE_EMBED_REF" --meta "$RUNNER_TEMP/embed-ref.meta.json"
+          cat "$RUNNER_TEMP/embed-ref.meta.json"
+          cargo test -p cache_server --test embed_exact -- --ignored --nocapture --test-threads=1 | tee "$RUNNER_TEMP/embed-test.log"
+          {
+            echo "### Embedder (${{ matrix.arch }}, $(nproc) cores, $(grep -m1 -E 'model name|Model' /proc/cpuinfo || true))"
+            echo '```'
+            grep -E 'cosine|PERF' "$RUNNER_TEMP/embed-test.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The release version is <Cargo version>+<short git sha>; cache embeds it at build time (CACHE_SERVER_VERSION) and
+      # prints it at start-up and for --version. The tarball name carries the Cargo version and the sha.
+      - name: Version
+        working-directory: .
+        run: |
+          cargo_version=$(grep -m 1 -E '^version[[:space:]]*=' server/Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [[ ! "$cargo_version" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "::error::No usable version in server/Cargo.toml: $cargo_version"; exit 1; fi
+          sha="${GITHUB_SHA::7}"
+          echo "CACHE_SERVER_CARGO_VERSION=$cargo_version" >> "$GITHUB_ENV"
+          echo "CACHE_SERVER_SHA=$sha" >> "$GITHUB_ENV"
+          echo "CACHE_SERVER_VERSION=${cargo_version}+${sha}" >> "$GITHUB_ENV"
+          echo "version: ${cargo_version}+${sha}"
+      - name: Memory
+        run: |
+          free -m
+          nproc
+      - name: Clippy (cache_server)
+        run: cargo clippy -p cache_server --all-targets -- -D warnings
+      # The library builder core builds MuPDF from source (mupdf-sys); the aarch64 build of it is checked here on its native runner.
+      - name: Clippy (cache_builder)
+        run: cargo clippy -p cache_builder --all-targets -- -D warnings
+      # Tests do not need the release profile's fat LTO.
+      - name: Test
+        run: cargo test -p cache_server
+      - name: Test (cache_builder)
+        run: cargo test -p cache_builder
+      # The arm runner gets killed during the fat-LTO link, so aarch64 uses thin LTO; the x86_64 build is unchanged.
+      - name: Build (aarch64)
+        if: matrix.arch == 'aarch64'
+        env:
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+        run: cargo build -p cache_server -p cache_search --release
+      - name: Build (x86_64)
+        if: matrix.arch != 'aarch64'
+        run: cargo build -p cache_server -p cache_search --release
+      # The library builder's program, uploaded on its own (below) so a build of a PDF can be run from this exact commit.
+      - name: Build (cache-build)
+        if: matrix.arch != 'aarch64'
+        run: cargo build -p cache_builder --bin cache-build --release
+      - name: Compile the helper
+        working-directory: server/helper
+        run: |
+          mkdir -p "$RUNNER_TEMP/helper"
+          dart compile exe bin/cache_core_helper.dart -o "$RUNNER_TEMP/helper/cache-core-helper"
+      # Fails the job if any binary needs a glibc newer than 2.35 (Ubuntu 22.04, the oldest supported system).
+      - name: Check the glibc requirement
+        working-directory: .
+        run: |
+          limit="2.35"
+          fail=0
+          zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
+          for f in packages/cache_search/native/target/release/cache packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib"; do
+            max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+            echo "$f: max GLIBC_${max:-none}"
+            if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
+              echo "::error::$f needs GLIBC_$max, newer than $limit"
+              fail=1
+            fi
+          done
+          exit $fail
+      - name: Download the web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: ${{ runner.temp }}/web-build
+      - name: Package
+        id: pack
+        working-directory: .
+        run: |
+          version="$CACHE_SERVER_VERSION"
+          if [[ ! "$version" =~ ^[A-Za-z0-9._-]+\+[0-9a-f]+$ ]]; then echo "::error::Unexpected version: $version"; exit 1; fi
+          name="cache-${CACHE_SERVER_CARGO_VERSION}-${CACHE_SERVER_SHA}-linux-${{ matrix.arch }}"
+          stage="$RUNNER_TEMP/pack/$name"
+          mkdir -p "$stage/web" "$stage/helper" "$stage/lib"
+          install -m 755 packages/cache_search/native/target/release/cache "$stage/cache"
+          install -m 755 "$RUNNER_TEMP/helper/cache-core-helper" "$stage/helper/cache-core-helper"
+          install -m 644 packages/cache_search/native/target/release/libcache_search.so "$stage/lib/libcache_search.so"
+          install -m 644 build-llama/libcache_llama.so "$stage/lib/libcache_llama.so"
+          # libzim (Xapian and ICU inside): the core finds it next to itself (RPATH $ORIGIN); the real file under the soname the core needs.
+          cp -L "$LIBZIM_DIR"/lib/*/libzim.so.9 "$stage/lib/libzim.so.9"
+          chmod 644 "$stage/lib/libzim.so.9"
+          readelf -d "$stage/lib/libcache_search.so" | grep -q 'NEEDED.*\[libzim.so.9\]' || { echo "::error::libcache_search.so was built without libzim"; exit 1; }
+          if env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep 'not found'; then echo "::error::the core has a missing library"; exit 1; fi
+          env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep libzim
+          cp -R "$RUNNER_TEMP/web-build/." "$stage/web/"
+          if [[ ! -f "$stage/web/index.html" ]]; then echo "::error::the web build has no index.html"; exit 1; fi
+          printf '%s\n' "$version" > "$stage/VERSION"
+          install -m 644 server/packaging/cache.service "$stage/cache.service"
+          install -m 755 server/packaging/install.sh "$stage/install.sh"
+          # install.sh unpacks the tarball into an empty folder and expects VERSION and cache at its top level, so the files
+          # sit at the root of the archive (no wrapping folder); the file name carries the version and architecture.
+          tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$RUNNER_TEMP/$name.tar.gz" .
+          tar -tzvf "$RUNNER_TEMP/$name.tar.gz"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "path=$RUNNER_TEMP/$name.tar.gz" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.path }}
+          retention-days: 14
+          if-no-files-found: error
+      - name: Stage cache-build
+        if: matrix.arch != 'aarch64'
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/cache-build"
+          install -m 755 packages/cache_search/native/target/release/cache-build "$RUNNER_TEMP/cache-build/cache-build"
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch != 'aarch64'
+        with:
+          name: cache-build-x86_64-${{ github.sha }}
+          path: ${{ runner.temp }}/cache-build/cache-build
+          retention-days: 14
+          if-no-files-found: error

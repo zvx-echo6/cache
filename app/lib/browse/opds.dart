@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:xml/xml.dart';
 
 import '../net/fetch.dart' show kUserAgent;
+import '../platform.dart' as plat;
+import 'web/device_api.dart' show DeviceApi, DeviceException;
+import 'web/device_fetch.dart';
 
 /// Kiwix's public catalogue, read through its documented OPDS API (library.kiwix.org, "catalog/v2").
 /// The catalogue is Atom XML: `entries` (filter with lang, category, tag, name, q, count, start),
@@ -285,6 +288,9 @@ typedef CatalogFetch = Future<String> Function(Uri url);
 
 /// Kiwix's feed keeps its own client: it follows redirects itself and says each failure in the words the guide quotes.
 Future<String> httpFetchText(Uri url) async {
+  // In a browser this device reads the catalogue (a page may not read other sites) and hands the answer on.
+  final viaDevice = deviceFetchApi;
+  if (plat.isWeb && viaDevice != null) return fetchCatalogueViaDevice(viaDevice, url);
   final client = HttpClient()
     ..userAgent = kUserAgent
     ..connectionTimeout = const Duration(seconds: 15);
@@ -329,6 +335,21 @@ Future<String> httpFetchText(Uri url) async {
     throw const CatalogException('The Kiwix library took too long to answer.');
   } finally {
     client.close(force: true);
+  }
+}
+
+/// [httpFetchText] in a browser: through [api], in the same words for each failure.
+Future<String> fetchCatalogueViaDevice(DeviceApi api, Uri url) async {
+  try {
+    return utf8.decode(await api.fetch(url), allowMalformed: true);
+  } on DeviceException catch (e) {
+    throw CatalogException(switch (e.code) {
+      'unreachable' => 'Cannot reach the Kiwix library. Check the connection.',
+      'upstream_status' => 'The library answered ${e.message.replaceAll(RegExp(r'[^0-9]'), '')}.',
+      'too_large' => 'The library answered with something that is not a catalogue.',
+      'unauthorized' => 'Sign in again to read the Kiwix library.',
+      _ => 'The library could not be read.',
+    });
   }
 }
 

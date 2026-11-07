@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sign-in and keys</title>
+<style>
+:root{--bg:#F3EBD9;--surface:#FFFDF8;--text:#1A1D1F;--secondary:#55594F;--accent:#9C5320;--primary:#3B4D3A;--onprimary:#F3EBD9;--bad:#B3281E;--warn:#7A5200;--ok:#3F6B2E;--line:#E2D8C0}
+@media (prefers-color-scheme:dark){:root{--bg:#1A1D1F;--surface:#2A3036;--text:#DCC9A3;--secondary:#B0A58A;--accent:#DB8A4B;--primary:#CB7A3C;--onprimary:#1A1D1F;--bad:#FF7A6E;--warn:#E0B45A;--ok:#8FB36A;--line:#3A4249}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.4 Roboto,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{height:64px;display:flex;align-items:center;gap:16px;padding:0 24px}
+header h1{font-size:22px;font-weight:600;margin:0}
+header a{color:inherit;display:grid;place-items:center;width:40px;height:40px;border-radius:50%}
+header a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+header svg{width:24px;height:24px}
+main{max-width:760px;margin:16px auto 80px;padding:0 24px}
+h2{font-size:14px;font-weight:600;color:var(--accent);margin:36px 0 8px;letter-spacing:.02em}
+.card{background:var(--surface);border-radius:20px;overflow:hidden}
+.item{display:flex;align-items:center;gap:16px;padding:14px 20px;min-height:64px}
+.item+.item{border-top:1px solid var(--line)}
+.item .t{flex:1;min-width:0}.item .t b{font-weight:500;display:block;overflow-wrap:anywhere}.item .t small{display:block;font-size:15px;color:var(--secondary)}
+.item .t small.why{color:var(--warn)}
+[role=radio],[role=switch]{cursor:pointer}
+[role=radio]:focus-visible,[role=switch]:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+.radio{width:22px;height:22px;border-radius:50%;border:2px solid var(--secondary);flex:none;display:grid;place-items:center}
+.sel .radio{border-color:var(--primary)}.sel .radio::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--primary)}
+.off{opacity:.55}.off[role=radio],.off[role=switch]{cursor:not-allowed}
+.switch{width:44px;height:26px;border-radius:13px;border:2px solid var(--secondary);flex:none;position:relative;transition:background .15s,border-color .15s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--secondary);transition:transform .15s,background .15s}
+.on .switch{background:var(--primary);border-color:var(--primary)}.on .switch::after{transform:translateX(18px);background:var(--onprimary)}
+.ico{width:40px;height:40px;border-radius:50%;background:color-mix(in srgb,var(--primary) 14%,var(--surface));color:var(--accent);display:grid;place-items:center;flex:none}
+.ico svg{width:22px;height:22px}
+button{font:inherit;font-size:16px;font-weight:600;cursor:pointer;min-height:48px;padding:0 22px;border-radius:24px;border:0}
+.fill{background:var(--primary);color:var(--onprimary)}
+.out{background:transparent;color:var(--accent);border:1px solid var(--secondary)}
+.text{background:transparent;color:var(--accent);padding:0 14px}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.actions{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.actions small{color:var(--secondary);font-size:15px}
+.actions small.bad{color:var(--bad)}
+.name{flex:1;min-width:160px;height:48px;border:1px solid var(--secondary);border-radius:24px;background:var(--bg);color:var(--text);font:inherit;padding:0 18px;outline:none}
+.name:focus{border:1.5px solid var(--primary);padding:0 17.5px;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 28%,transparent)}
+.empty{padding:18px 20px;color:var(--secondary)}
+.note{display:flex;gap:14px;padding:16px 20px;margin-top:36px;border-radius:20px;border:1px solid var(--secondary);color:var(--text)}
+.note svg{width:24px;height:24px;flex:none;color:var(--ok)}
+.note small{display:block;color:var(--secondary);font-size:15px;margin-top:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<header>
+  <a href="/" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></a>
+  <h1>Sign-in and keys</h1>
+</header>
+<main id="m"></main>
+<div class="sr" id="live" role="status" aria-live="polite"></div>
+<script>
+(function(){
+  var focusName=false, K=null, sel='password', swp=false, form=null, nameVal='', msg={}, busy=false;
+  var MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var secIco='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.5"/><path d="M11.3 11.7L20 3M16 7l3 3M13.5 9.5l2 2"/></svg>';
+  var fileIco='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7.5" y="9" width="9" height="12" rx="2"/><path d="M9.5 9V3h5v6"/><path d="M11 5.5h.01M13 5.5h.01" stroke-width="2.4"/><circle cx="12" cy="16.5" r="1.3"/></svg>';
+  var OPTS=[['password','Password only','Sign in with the password.',0],
+            ['either','Password or key','Either one signs you in.',1],
+            ['both','Password and key','The password first, then a key.',1],
+            ['key','Key only','No password box on the sign-in page.',1]];
+  var NEED_HOST='Needs a hostname with a trusted certificate';
+  var NO_KEY='Register a key first.';
+  var LAST_KEY='The last key is needed for this sign-in setting.';
+
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function say(s){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=s},30)}
+  function day(ts){var d=new Date(ts*1000);return d.getDate()+' '+MONTHS[d.getMonth()]+' '+d.getFullYear()}
+  function same(ts){var a=new Date(ts*1000),b=new Date();return a.toDateString()===b.toDateString()}
+  function when(verb,k){return verb+' '+day(k.added)+'. '+(k.last_used?(same(k.last_used)?'Last used today':'Last used '+day(k.last_used)):'Never used')+'.'}
+  function b64(buf){var b=new Uint8Array(buf),s='';for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);
+    return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+  function unb64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+    var t=atob(s),b=new Uint8Array(t.length);for(var i=0;i<t.length;i++)b[i]=t.charCodeAt(i);return b.buffer}
+
+  function api(method,url,body){
+    return fetch(url,{method:method,credentials:'same-origin',cache:'no-store',
+      headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined}).then(function(r){
+      if(r.status===401){location.reload();throw {handled:true}}
+      return r;
+    });
+  }
+  function errText(r){return r.json().then(function(v){return (v&&v.error&&v.error.message)||'Something went wrong.'},function(){return 'Something went wrong.'})}
+
+  function load(){
+    return api('GET','/api/settings/signin').then(function(r){return r.json()}).then(function(v){
+      K=v.result; sel=K.mode; swp=K.start_with_password; render();
+    });
+  }
+
+  function row(k,ico,kind,verb){
+    var counts=kind==='file'||K.webauthn_available;
+    var lock=(K.mode==='key'||K.mode==='both')&&K.usable_keys<=1&&counts;
+    return '<div class="item"><span class="ico">'+ico+'</span><span class="t"><b>'+esc(k.name)+'</b><small>'+when(verb,k)+'</small>'+
+      (lock?'<small class="why">'+LAST_KEY+'</small>':'')+'</span>'+
+      '<button class="text" data-act="remove" data-kind="'+kind+'" data-id="'+esc(k.id)+'"'+(lock?' disabled':'')+' aria-label="Remove '+esc(k.name)+'">Remove</button></div>';
+  }
+  function opt(o){
+    var dis=o[3]&&K.usable_keys===0, on=o[0]===sel;
+    return '<div class="item'+(on?' sel':'')+(dis?' off':'')+'" role="radio" aria-checked="'+on+'" aria-disabled="'+dis+'" tabindex="0" data-act="mode" data-mode="'+o[0]+'">'+
+      '<span class="radio"></span><span class="t"><b>'+o[1]+'</b><small>'+(dis?NO_KEY:o[2])+'</small></span></div>';
+  }
+  function addRow(kind,label,hint,disabled){
+    if(form===kind){
+      return '<div class="actions"><input class="name" id="name" type="text" maxlength="64" aria-label="Name" autocomplete="off" value="'+esc(nameVal)+'">'+
+        '<button class="fill" data-act="go" '+(busy?'disabled':'')+'>Add</button><button class="text" data-act="cancel">Cancel</button>'+
+        (msg[kind]?'<small class="bad">'+esc(msg[kind])+'</small>':'')+'</div>';
+    }
+    return '<div class="actions"><button class="out" data-act="open" data-kind="'+kind+'"'+(disabled?' disabled':'')+'>'+label+'</button>'+
+      '<small'+(msg[kind]?' class="bad"':'')+'>'+esc(msg[kind]||hint)+'</small></div>';
+  }
+  function render(){
+    var changed=sel!==K.mode||swp!==K.start_with_password;
+    var h='<h2>HOW YOU SIGN IN</h2><div class="card" role="radiogroup" aria-label="How you sign in">'+OPTS.map(opt).join('')+
+      '<div class="item'+(swp&&sel==='either'?' on':'')+(sel!=='either'?' off':'')+'" role="switch" aria-checked="'+(swp&&sel==='either')+'" aria-disabled="'+(sel!=='either')+'" tabindex="0" data-act="swp">'+
+      '<span class="t"><b>Start with the password box</b><small>Password or key only.</small></span><span class="switch"></span></div>'+
+      '<div class="actions"><button class="fill" data-act="save"'+(changed&&!busy?'':' disabled')+'>Save</button>'+
+      (msg.save?'<small'+(msg.saveBad?' class="bad"':'')+'>'+esc(msg.save)+'</small>':'')+'</div></div>';
+    h+='<h2>SECURITY KEYS</h2><div class="card">'+(K.security_keys.length?K.security_keys.map(function(k){return row(k,secIco,'sec','Added')}).join(''):'<div class="empty">No security keys registered.</div>')+
+      addRow('sec','Register a security key',K.webauthn_available?'Plug it in, then touch it when it blinks.':NEED_HOST,!K.webauthn_available)+'</div>';
+    h+='<h2>KEY FILES</h2><div class="card">'+(K.key_files.length?K.key_files.map(function(k){return row(k,fileIco,'file','Made')}).join(''):'<div class="empty">No key files made.</div>')+
+      addRow('file','Make a key file','Downloads a file. Save it on a USB stick and keep it safe.',false)+'</div>';
+    h+='<div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>You cannot lock yourself out</b><small>The reset command on this device always works and puts sign-in back to password only. Key only needs at least one key. Your last key cannot be removed while a key is required.</small></div></div>';
+    document.getElementById('m').innerHTML=h;
+    var n=document.getElementById('name');
+    if(n&&focusName){focusName=false;n.focus();n.setSelectionRange(n.value.length,n.value.length)}
+  }
+
+  function setMode(m){
+    var o=OPTS.filter(function(x){return x[0]===m})[0];
+    if(o[3]&&K.usable_keys===0)return;
+    sel=m; if(m!=='either')swp=false; msg.save=''; render();
+  }
+  function save(){
+    busy=true; msg.save=''; render();
+    api('PUT','/api/settings/signin',{mode:sel,start_with_password:swp&&sel==='either'}).then(function(r){
+      if(r.ok)return load().then(function(){msg.save='Saved';msg.saveBad=false;say('Saved');render()});
+      return errText(r).then(function(t){msg.save=t;msg.saveBad=true;say(t)});
+    }).catch(function(e){if(!e||!e.handled){msg.save='Could not reach this device.';msg.saveBad=true}}).then(function(){busy=false;render()});
+  }
+  function remove(kind,id){
+    var url='/api/settings/'+(kind==='sec'?'security-keys/':'key-files/')+encodeURIComponent(id);
+    api('DELETE',url).then(function(r){
+      if(r.ok)return load();
+      return errText(r).then(function(t){msg[kind]=t;render()});
+    }).catch(function(){});
+  }
+  function fail(kind,t){msg[kind]=t;busy=false;say(t);render()}
+  function go(){
+    var kind=form, name=(document.getElementById('name').value||'').trim(); nameVal=name;
+    if(!name){fail(kind,'A name is needed.');return}
+    busy=true; msg[kind]=''; render();
+    if(kind==='sec')registerKey(name); else makeFile(name);
+  }
+  function done(kind){form=null;nameVal='';busy=false;msg[kind]='';load()}
+  function registerKey(name){
+    api('POST','/api/settings/security-keys/start',{name:name}).then(function(r){
+      if(!r.ok)return errText(r).then(function(t){throw {text:t}});
+      return r.json();
+    }).then(function(v){
+      var pk=v.result.options.publicKey; pk.challenge=unb64(pk.challenge); pk.user.id=unb64(pk.user.id);
+      (pk.excludeCredentials||[]).forEach(function(c){c.id=unb64(c.id)});
+      return navigator.credentials.create({publicKey:pk}).then(function(c){return {id:v.result.id,cred:c}});
+    }).then(function(x){
+      var c=x.cred, r=c.response;
+      return api('POST','/api/settings/security-keys/finish',{id:x.id,credential:{id:c.id,rawId:b64(c.rawId),type:c.type,extensions:{},
+        response:{attestationObject:b64(r.attestationObject),clientDataJSON:b64(r.clientDataJSON)}}});
+    }).then(function(r){
+      if(r.ok)return done('sec');
+      return errText(r).then(function(t){throw {text:t}});
+    }).catch(function(e){
+      if(e&&e.handled)return;
+      if(e&&e.text)return fail('sec',e.text);
+      fail('sec','The key was not added.');
+    });
+  }
+  function makeFile(name){
+    api('POST','/api/settings/key-files',{name:name}).then(function(r){
+      if(!r.ok)return errText(r).then(function(t){throw {text:t}});
+      var cd=r.headers.get('Content-Disposition')||'', m=/filename="([^"]+)"/.exec(cd), fn=m?m[1]:'cache-key.key';
+      return r.blob().then(function(b){
+        var a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=fn; document.body.appendChild(a); a.click();
+        setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},1000);
+        done('file');
+      });
+    }).catch(function(e){
+      if(e&&e.handled)return;
+      fail('file',(e&&e.text)||'The file was not made.');
+    });
+  }
+
+  document.getElementById('m').addEventListener('click',function(e){
+    var t=e.target.closest('[data-act]'); if(!t||t.disabled||t.getAttribute('aria-disabled')==='true')return;
+    var a=t.dataset.act;
+    if(a==='mode')setMode(t.dataset.mode);
+    else if(a==='swp'){swp=!swp;msg.save='';render()}
+    else if(a==='save')save();
+    else if(a==='remove')remove(t.dataset.kind,t.dataset.id);
+    else if(a==='open'){form=t.dataset.kind;nameVal='';msg[form]='';focusName=true;render()}
+    else if(a==='cancel'){msg[form]='';form=null;render()}
+    else if(a==='go')go();
+  });
+  document.getElementById('m').addEventListener('keydown',function(e){
+    var t=e.target;
+    if(t.id==='name'){
+      if(e.key==='Enter'){e.preventDefault();go()}
+      else if(e.key==='Escape'){msg[form]='';form=null;render()}
+      return;
+    }
+    if(t.getAttribute&&(t.getAttribute('role')==='radio'||t.getAttribute('role')==='switch')&&(e.key===' '||e.key==='Enter')){e.preventDefault();t.click()}
+  });
+  document.getElementById('m').addEventListener('input',function(e){if(e.target.id==='name')nameVal=e.target.value});
+  load().catch(function(){});
+})();
+</script>
+</body>
+</html>

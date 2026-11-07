@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
-import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -12,14 +12,23 @@ import 'actions/act_core.dart';
 import 'actions/action_registry.dart';
 import 'actions/app_actions.dart';
 import 'actions/setup_reader.dart';
+import 'app_fs.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
+import 'browse/web/device_api.dart';
+import 'browse/web/device_fetch.dart';
+import 'browse/web/device_library.dart';
+import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
+import 'browse/web/build_state.dart' show BuildController;
+import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
+import 'history/store_open.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
@@ -97,6 +106,7 @@ import 'screens/shell.dart';
 import 'screens/videos/library_screen.dart' as videos show LibraryScreen;
 import 'theme.dart';
 import 'keyboard.dart';
+import 'platform.dart' as plat;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -108,7 +118,7 @@ void main() {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
-  if (Platform.isAndroid || Platform.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
   runApp(const CacheApp());
 }
 
@@ -122,11 +132,33 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
-  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries);
+  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
+  // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
+  // with the tab closed) and the uploads from this computer. Null on a phone.
+  late final DeviceLibrary? device = _makeDevice();
+
+  DeviceLibrary? _makeDevice() {
+    if (!plat.isWeb) return null;
+    final api = HttpDeviceApi();
+    deviceFetchApi = api;
+    final fs = createAppFs();
+    final linkedFolders = LinkedFolderController(api: LinkedFolderApi());
+    final d = DeviceLibrary(
+      api: api,
+      fs: fs,
+      uploader: createBrowserUploader(),
+      onItemsChanged: () => sources.refresh(),
+      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs, linkedFolders: linkedFolders),
+    );
+    sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
+    d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));
+    return d;
+  }
   // Libraries (Qdrant collections the core searches): added from a file or a link, in their own folder beside the ZIMs.
   late final LibrariesState libraries = LibrariesState(
     sources: sources,
     policy: policy,
+    device: device,
     // The setup guide ships compressed in the assets; it is copied out to be added like any library file.
     bundledGuide: () async {
       try {
@@ -159,7 +191,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SearchModel searchModel = SearchModel(
     app: app,
     downloads: modelDownloads,
-    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+    modelsDir: () async => Directory('${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
   );
   late final PdfIndexState pdfIndex = appPdfIndex(sources: sources);
   late final MapsState maps = MapsState(
@@ -297,7 +329,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SharingState sharing = SharingState(
     policy: policy,
     supportDir: getApplicationSupportDirectory,
-    deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
+    deviceName: plat.isAndroid ? 'Android device' : (plat.isIOS ? 'iPhone' : plat.hostName),
     kinds: dataKinds,
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
     // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
@@ -336,7 +368,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
   /// using Cache and the model generating, applied to core jobs (cs_job_set) and to the PDF loop (indexPermit).
   late final IndexThrottle indexThrottle = IndexThrottle(
-    mobile: Platform.isAndroid || Platform.isIOS,
+    mobile: !plat.isWeb && (Platform.isAndroid || Platform.isIOS),
     speed: settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle,
   );
 
@@ -349,7 +381,9 @@ class _CacheAppState extends State<CacheApp> {
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
 
-  void _kickIndexing() => unawaited(indexing.kick());
+  void _kickIndexing() {
+    if (!plat.isWeb) unawaited(indexing.kick());
+  }
 
   bool _modelRunning = false;
 
@@ -367,6 +401,7 @@ class _CacheAppState extends State<CacheApp> {
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
   void _syncIndexesOnly() {
+    if (plat.isWeb) return;
     unawaited(sharing.setOnly(
       kIndexesShareId,
       indexesFetchOnly(sources.statuses, savedVideos: [for (final v in video.saved) v.captionsIndex?.sourceId ?? '${v.instance}/${v.uuid}']),
@@ -601,14 +636,17 @@ class _CacheAppState extends State<CacheApp> {
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(
       onResume: () {
+        device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
-        unawaited(connections.syncAll());
-        indexing.setOpen(true);
+        if (!plat.isWeb) unawaited(connections.syncAll());
+        if (!plat.isWeb) indexing.setOpen(true);
       },
-      // Automatic index work runs only while the app is open.
-      onHide: () => indexing.setOpen(false),
+      // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
+      onHide: () {
+        if (!plat.isWeb) indexing.setOpen(false);
+      },
     );
-    indexing.setOpen(true);
+    if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
@@ -650,32 +688,41 @@ class _CacheAppState extends State<CacheApp> {
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
-    final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
-    getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
+    final Future<void> supportRead = plat.isWeb ? Future.value() : getApplicationSupportDirectory().then((d) => _supportPath = d.path);
+    if (!plat.isWeb) getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
     // Once the core is open: at the first start, or after Try again in Ask started it again.
     settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
-      await webSearch.apply();
-      await LocalAlertNotifier.instance.init();
-      await weather.start();
-      weather.addListener(_onWeather);
-      _onWeather();
-      unawaited(weather.updateIfDue(kBackgroundEvery));
-      await appActions.publishAll();
+      // In a browser a part that cannot start (it needs a phone feature) is logged and the rest still starts; on a phone nothing changes.
+      await _soft('web search', webSearch.apply);
+      await _soft('alert notifier', LocalAlertNotifier.instance.init);
+      await _soft('weather', () async {
+        await weather.start();
+        weather.addListener(_onWeather);
+        _onWeather();
+        unawaited(weather.updateIfDue(kBackgroundEvery));
+      });
+      await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
-      await notebooks.start();
-      notebookActions.start();
+      await _soft('notebooks', () async {
+        await notebooks.start();
+        notebookActions.start();
+      });
       unawaited(userLayers.reload());
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
       notebooks.onChanged = () {
         before?.call();
-        connections.changed();
+        if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
-      unawaited(connections.syncAll());
-      _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
-        if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
-      });
+      // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
+      if (!plat.isWeb) {
+        unawaited(connections.syncAll());
+        _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
+          if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
+        });
+      }
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
@@ -710,17 +757,30 @@ class _CacheAppState extends State<CacheApp> {
     // Saved videos came or went: their captions' indexes are fetched and built too.
     video.addListener(_syncIndexesOnly);
     video.addListener(_kickIndexing);
-    settingsRead.then((_) => sharing.init());
-    settingsRead.then((_) => regions.init());
+    if (!plat.isWeb) {
+      settingsRead.then((_) => sharing.init());
+      settingsRead.then((_) => regions.init());
+    }
     layout.init();
     sources.init();
-    unawaited(pdfIndex.init());
+    if (!plat.isWeb) unawaited(pdfIndex.init());
+    if (device != null) unawaited(device!.start());
     libraries.init();
     browse.init();
     video.init();
     location.init();
     maps.init();
     _openHistory();
+  }
+
+  /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
+  Future<void> _soft(String what, Future<void> Function() step) async {
+    try {
+      await step();
+    } catch (e, stack) {
+      if (!plat.isWeb) rethrow;
+      debugPrint('Start-up step "$what" skipped: $e\n$stack');
+    }
   }
 
   ConversationStore? _store;
@@ -767,9 +827,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      final dir = await getApplicationSupportDirectory();
-      await dir.create(recursive: true);
-      _store = ConversationStore.open('${dir.path}/conversations.db');
+      _store = await openHistoryStore();
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
@@ -816,6 +874,7 @@ class _CacheAppState extends State<CacheApp> {
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
+    device?.dispose();
     sources.dispose();
     video.dispose();
     layout.dispose();

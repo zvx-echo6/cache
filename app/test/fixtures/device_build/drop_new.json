@@ -1,0 +1,70 @@
+{
+ "ok": true,
+ "result": {
+  "settings": {
+   "folder": "/var/lib/cache-app/drop",
+   "enabled": true,
+   "library_id": "hunting-and-field-guides-3bc5df",
+   "library_title": "Hunting and field guides"
+  },
+  "status": {
+   "state": "ok",
+   "last_check": "2026-11-01T23:23:59Z",
+   "found": 0,
+   "counts": {
+    "all": 4,
+    "queue": 4,
+    "complete": 0,
+    "failed": 0
+   },
+   "error": null,
+   "stale": false
+  },
+  "files": [
+   {
+    "name": "Expatriates.pdf",
+    "folder": "ingest",
+    "state": "new",
+    "position": null,
+    "size": 389922,
+    "progress": null,
+    "item_id": null,
+    "reason": null,
+    "can_retry": false
+   },
+   {
+    "name": "backup-2026-10.tar",
+    "folder": "ingest",
+    "state": "new",
+    "position": null,
+    "size": 6,
+    "progress": null,
+    "item_id": null,
+    "reason": null,
+    "can_retry": false
+   },
+   {
+    "name": "newer-edition.pdf",
+    "folder": "ingest",
+    "state": "new",
+    "position": null,
+    "size": 396907,
+    "progress": null,
+    "item_id": null,
+    "reason": null,
+    "can_retry": false
+   },
+   {
+    "name": "truncated.pdf",
+    "folder": "ingest",
+    "state": "new",
+    "position": null,
+    "size": 150000,
+    "progress": null,
+    "item_id": null,
+    "reason": null,
+    "can_retry": false
+   }
+  ]
+ }
+}

@@ -1,0 +1,11 @@
+name: Valhalla source
+description: Pinned Valhalla 3.7.0 checkout (submodules) with the Cache patch set applied; the pin lives in packages/valhalla/scripts/fetch-source.sh.
+inputs:
+  dir:
+    description: Where to put the source tree
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bash "$GITHUB_WORKSPACE/packages/valhalla/scripts/fetch-source.sh" "${{ inputs.dir }}"

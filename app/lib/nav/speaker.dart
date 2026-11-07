@@ -1,6 +1,6 @@
-import 'dart:io';
 
 import 'package:flutter_tts/flutter_tts.dart';
+import '../platform.dart' as plat;
 
 /// Speaks the guidance prompts. The real one is the phone's own text-to-speech (flutter_tts: Android's TextToSpeech and iOS's
 /// AVSpeechSynthesizer), which runs on the phone with the voices it has installed. Tests give a recorder.
@@ -15,7 +15,7 @@ abstract class Speaker {
 /// flutter_tts. Prompts queue behind each other, the voice ducks other audio like a navigation app's, and nothing is sent
 /// anywhere.
 class FlutterTtsSpeaker implements Speaker {
-  FlutterTtsSpeaker({FlutterTts? tts, bool? isIOS}) : _tts = tts ?? FlutterTts(), _isIOS = isIOS ?? Platform.isIOS;
+  FlutterTtsSpeaker({FlutterTts? tts, bool? isIOS}) : _tts = tts ?? FlutterTts(), _isIOS = isIOS ?? plat.isIOS;
 
   final FlutterTts _tts;
   final bool _isIOS;

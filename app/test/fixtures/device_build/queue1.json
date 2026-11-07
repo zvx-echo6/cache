@@ -1,0 +1,143 @@
+{
+ "ok": true,
+ "result": {
+  "paused": false,
+  "blocked": null,
+  "counts": {
+   "total": 5,
+   "waiting": 2,
+   "working": 1,
+   "done": 1,
+   "skipped": 1,
+   "failed": 0,
+   "ocr_needed": 0
+  },
+  "eta": {
+   "low_seconds": 14,
+   "high_seconds": 29
+  },
+  "pieces_per_second": 2.5708910897815107,
+  "items": [
+   {
+    "id": "d364e51432d995b3",
+    "library_id": "hunting-and-field-guides-3bc5df",
+    "file_name": "dup-of-prepper-101.pdf",
+    "title": null,
+    "state": "done",
+    "size": 465011,
+    "progress": {
+     "pages": 21,
+     "pieces": 16,
+     "pieces_total": 16,
+     "ocr_pages": 0
+    },
+    "error": null,
+    "note": null,
+    "replace": null,
+    "doc_id": "893c960784e6d1bd089b3ced900d8518bbaaf2c659a9165e75ef5f8fd6b2c953",
+    "duplicate_of": null,
+    "drop": false,
+    "position": null,
+    "created_at": "2026-11-01T23:22:20Z",
+    "started_at": "2026-11-01T23:22:20Z",
+    "finished_at": "2026-11-01T23:22:26Z"
+   },
+   {
+    "id": "9af9b833a7216b21",
+    "library_id": "hunting-and-field-guides-3bc5df",
+    "file_name": "Prepper 101.pdf",
+    "title": null,
+    "state": "skipped_duplicate",
+    "size": 465011,
+    "progress": {
+     "pages": null,
+     "pieces": 0,
+     "pieces_total": null,
+     "ocr_pages": 0
+    },
+    "error": null,
+    "note": null,
+    "replace": null,
+    "doc_id": null,
+    "duplicate_of": "Prepper 101",
+    "drop": false,
+    "position": null,
+    "created_at": "2026-11-01T23:22:27Z",
+    "started_at": "2026-11-01T23:22:27Z",
+    "finished_at": "2026-11-01T23:22:27Z"
+   },
+   {
+    "id": "cacfbbf78d8b4eb5",
+    "library_id": "hunting-and-field-guides-3bc5df",
+    "file_name": "Prepping Survival Basics.pdf",
+    "title": null,
+    "state": "building",
+    "size": 500309,
+    "progress": {
+     "pages": 47,
+     "pieces": 16,
+     "pieces_total": 55,
+     "ocr_pages": 2
+    },
+    "error": null,
+    "note": null,
+    "replace": null,
+    "doc_id": null,
+    "duplicate_of": null,
+    "drop": false,
+    "position": null,
+    "created_at": "2026-11-01T23:22:27Z",
+    "started_at": "2026-11-01T23:22:27Z",
+    "finished_at": null
+   },
+   {
+    "id": "47c36c8c219f5a15",
+    "library_id": "hunting-and-field-guides-3bc5df",
+    "file_name": "Survival Kit Cold Climate.pdf",
+    "title": null,
+    "state": "queued",
+    "size": 221458,
+    "progress": {
+     "pages": null,
+     "pieces": 0,
+     "pieces_total": null,
+     "ocr_pages": 0
+    },
+    "error": null,
+    "note": null,
+    "replace": null,
+    "doc_id": null,
+    "duplicate_of": null,
+    "drop": false,
+    "position": 1,
+    "created_at": "2026-11-01T23:22:27Z",
+    "started_at": null,
+    "finished_at": null
+   },
+   {
+    "id": "50185e9fa47b23fb",
+    "library_id": "hunting-and-field-guides-3bc5df",
+    "file_name": "truncated.pdf",
+    "title": null,
+    "state": "queued",
+    "size": 150000,
+    "progress": {
+     "pages": null,
+     "pieces": 0,
+     "pieces_total": null,
+     "ocr_pages": 0
+    },
+    "error": null,
+    "note": null,
+    "replace": null,
+    "doc_id": null,
+    "duplicate_of": null,
+    "drop": false,
+    "position": 2,
+    "created_at": "2026-11-01T23:22:27Z",
+    "started_at": null,
+    "finished_at": null
+   }
+  ]
+ }
+}

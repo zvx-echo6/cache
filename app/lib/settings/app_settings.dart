@@ -2,9 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 
 /// Where connectors are published: the catalogue the app starts with (configurable in Advanced).
 const String kDefaultCatalogueUrl = 'https://data.cached.info/connectors/catalogue.json';
@@ -95,7 +94,7 @@ class AppSettings extends ChangeNotifier {
   Set<String> _defaultsSeen = {};
   String? _catalogueUrl;
   List<String> _extraCatalogues = [];
-  File? _file;
+  AppFs? _fs;
 
   /// Which alerts near the person's places pop up.
   PopUpFor get popUpFor => _popUpFor;
@@ -148,11 +147,13 @@ class AppSettings extends ChangeNotifier {
   /// Catalogues the person added from a link, in the order added.
   List<String> get extraCatalogues => List.unmodifiable(_extraCatalogues);
 
+  static const String _name = 'preferences.json';
+
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/preferences.json');
-    _read();
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
+    await _read();
     notifyListeners();
   }
 
@@ -168,15 +169,16 @@ class AppSettings extends ChangeNotifier {
   /// Each setting is read on its own: one that cannot be read keeps its default and the rest are still read (one bad value used
   /// to leave every setting after it at its default, and the next save wrote those defaults over the person's choices). A file
   /// that is not readable at all is kept beside it (preferences.json.unreadable) before anything is written over it.
-  void _read() {
-    final f = _file!;
-    if (!f.existsSync()) return;
+  Future<void> _read() async {
+    final fs = _fs!;
+    final bytes = await fs.readBytes(AppRoot.support, _name);
+    if (bytes == null) return;
     Map<String, dynamic> j;
     try {
-      j = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+      j = (jsonDecode(utf8.decode(bytes)) as Map).cast<String, dynamic>();
     } catch (_) {
       try {
-        f.copySync('${f.path}.unreadable');
+        await fs.copy(AppRoot.support, _name, '$_name.unreadable');
       } catch (_) {}
       return;
     }
@@ -233,9 +235,9 @@ class AppSettings extends ChangeNotifier {
   void _save() {
     notifyListeners();
     try {
-      final f = _file;
-      if (f == null) return;
-      writeStringAtomicSync(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      fs.writeStringAtomicSync(AppRoot.support, _name, jsonEncode({
         ..._other,
         'popUpFor': _popUpFor.name,
         if (_toldNoPopUps) 'toldNoPopUps': true,

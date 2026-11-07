@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../browse/web/device_api.dart' show DeviceApi, DeviceException;
+import '../browse/web/device_fetch.dart';
+import '../platform.dart' as plat;
 import '../version.dart';
 
 /// The one name the app gives the servers it reads from.
@@ -54,6 +57,9 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024, bool http
   if (httpsOnly ? !isFetchAllowed(url) : !(url.scheme == 'https' || url.scheme == 'http')) {
     throw FetchException(FetchFailure.notAllowed, url.host);
   }
+  // In a browser the page may not read other sites: this device reads the catalogue and hands the answer on.
+  final viaDevice = deviceFetchApi;
+  if (plat.isWeb && viaDevice != null) return fetchBytesViaDevice(viaDevice, url, maxBytes: maxBytes);
   final client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15)
     ..userAgent = kUserAgent;
@@ -82,6 +88,27 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024, bool http
     throw FetchException(FetchFailure.unreadable, url.host);
   } finally {
     client.close(force: true);
+  }
+}
+
+/// [fetchBytes] in a browser: through [api] (Cache Server's `/api/fetch`, which only reads the catalogue hosts the app uses).
+Future<List<int>> fetchBytesViaDevice(DeviceApi api, Uri url, {int maxBytes = 4 * 1024 * 1024}) async {
+  try {
+    final body = await api.fetch(url);
+    if (body.length > maxBytes) throw FetchException(FetchFailure.tooLarge, url.host);
+    return body;
+  } on DeviceException catch (e) {
+    throw FetchException(
+      switch (e.code) {
+        'host_not_allowed' || 'invalid' => FetchFailure.notAllowed,
+        'unreachable' => FetchFailure.unreachable,
+        'upstream_status' => FetchFailure.status,
+        'too_large' => FetchFailure.tooLarge,
+        _ => FetchFailure.unreadable,
+      },
+      url.host,
+      status: e.code == 'upstream_status' ? e.status : null,
+    );
   }
 }
 
