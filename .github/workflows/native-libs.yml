@@ -29,7 +29,7 @@ name: Native libs
 
 on:
   push:
-    branches: [server, 'server-*']
+    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
     paths:
       - 'packages/cache_llama/**'
       - 'packages/cache_search/native/**'

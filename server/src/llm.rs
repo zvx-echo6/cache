@@ -753,6 +753,81 @@ mod tests {
         assert_eq!(sent, req);
     }
 
+    /// Replays recorded native outputs (cl_partial / cl_finish text) from the parity fixture.
+    struct Replay {
+        partials: Vec<String>,
+        finish: Option<String>,
+        prompt_tokens: i32,
+        generated_tokens: i32,
+        fail: bool,
+        made: AtomicI32,
+    }
+
+    impl ChatBackend for Replay {
+        fn start(&self, _r: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn next(&self) -> i32 {
+            let k = self.made.fetch_add(1, Ordering::SeqCst) as usize;
+            if k < self.partials.len() {
+                1
+            } else if self.fail {
+                -2
+            } else {
+                -1
+            }
+        }
+        fn partial(&self) -> Option<String> {
+            Some(self.partials[self.made.load(Ordering::SeqCst) as usize - 1].clone())
+        }
+        fn finish(&self) -> Option<String> {
+            self.finish.clone()
+        }
+        fn prompt_tokens(&self) -> i32 {
+            self.prompt_tokens
+        }
+        fn generated_tokens(&self) -> i32 {
+            self.generated_tokens
+        }
+        fn stop(&self) {}
+    }
+
+    /// The same fixture the Dart test (app/test/llm_remote_parity_test.dart) reads: these native outputs must make exactly these
+    /// events, and the Dart side must make from the events what llama_session_io.dart makes from the native outputs.
+    #[test]
+    fn native_outputs_make_the_events_of_the_parity_fixture() {
+        let fx: Value = serde_json::from_str(include_str!("../../packages/cache_llama/test/fixtures/llm-remote-parity.json")).unwrap();
+        let cases = fx["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let n = &case["native"];
+            let replay = Arc::new(Replay {
+                partials: n["partials"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect(),
+                finish: n["finish"].as_str().map(str::to_string),
+                prompt_tokens: n["prompt_tokens"].as_i64().unwrap() as i32,
+                generated_tokens: n["generated_tokens"].as_i64().unwrap() as i32,
+                fail: n["fail_after_partials"].as_bool().unwrap(),
+                made: AtomicI32::new(0),
+            });
+            let d = TempDir::new("llm-parity");
+            let models = d.0.join("models");
+            std::fs::create_dir_all(&models).unwrap();
+            std::fs::write(models.join("chat-a.gguf"), b"0123").unwrap();
+            let r = replay.clone();
+            let s = LlmService::with_loader(
+                d.0.clone(),
+                "bge-m3-Q8_0.gguf".into(),
+                Box::new(move |_p, _n| Ok((r.clone() as Arc<dyn ChatBackend>, r#"{"description":"fake","n_ctx":8192,"chat_format":"x","supports_tools":true}"#.to_string()))),
+            );
+            s.load("chat-a.gguf", 8192).unwrap();
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            s.run_generation(None, json!({"messages": []}), tx);
+            let got = collect(rx);
+            let want: Vec<Value> = case["events"].as_array().unwrap().clone();
+            assert_eq!(got, want, "case {}", case["name"]);
+        }
+    }
+
     #[test]
     fn max_tokens_ends_the_generation_like_the_app() {
         let d = TempDir::new("llm-cap");

@@ -1,0 +1,147 @@
+{
+ "comment": "Native outputs of the chat engine (cl_partial / cl_finish JSON as text) and the /api/llm v1 events the server must make from them. Read by server/src/llm.rs (Rust test) and app/test/llm_remote_parity_test.dart (the Dart test must make from the events the PartialMessages that llama_session_io.dart makes from the native outputs).",
+ "cases": [
+  {
+   "name": "reasoning_then_tool_call",
+   "native": {
+    "partials": [
+     "{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"I should look\"}",
+     "{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"I should look it up\"}",
+     "{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"I should look it up\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"fire\\\"}\"}}]}"
+    ],
+    "finish": "{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"I should look it up\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"fire\\\"}\"}}]}",
+    "prompt_tokens": 412,
+    "generated_tokens": 3,
+    "fail_after_partials": false
+   },
+   "events": [
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "",
+     "reasoning_content": "I should look"
+    },
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "",
+     "reasoning_content": "I should look it up"
+    },
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "",
+     "reasoning_content": "I should look it up",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "type": "function",
+       "function": {
+        "name": "search",
+        "arguments": "{\"q\":\"fire\"}"
+       }
+      }
+     ]
+    },
+    {
+     "type": "done",
+     "role": "assistant",
+     "content": "",
+     "reasoning_content": "I should look it up",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "type": "function",
+       "function": {
+        "name": "search",
+        "arguments": "{\"q\":\"fire\"}"
+       }
+      }
+     ],
+     "prompt_tokens": 412,
+     "generated_tokens": 3
+    }
+   ]
+  },
+  {
+   "name": "plain_text_unicode",
+   "native": {
+    "partials": [
+     "{\"role\":\"assistant\",\"content\":\"Café\"}",
+     "{\"role\":\"assistant\",\"content\":\"Café — 日本\"}",
+     "{\"role\":\"assistant\",\"content\":\"Café — 日本 😀\",\"parse_error\":\"bad tool syntax\"}"
+    ],
+    "finish": "{\"role\":\"assistant\",\"content\":\"Café — 日本 😀\",\"parse_error\":\"bad tool syntax\"}",
+    "prompt_tokens": 9,
+    "generated_tokens": 3,
+    "fail_after_partials": false
+   },
+   "events": [
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "Café"
+    },
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "Café — 日本"
+    },
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "Café — 日本 😀",
+     "parse_error": "bad tool syntax"
+    },
+    {
+     "type": "done",
+     "role": "assistant",
+     "content": "Café — 日本 😀",
+     "parse_error": "bad tool syntax",
+     "prompt_tokens": 9,
+     "generated_tokens": 3
+    }
+   ]
+  },
+  {
+   "name": "model_error_midway",
+   "native": {
+    "partials": [
+     "{\"role\":\"assistant\",\"content\":\"Half\"}",
+     "{\"role\":\"assistant\",\"content\":\"Half an\"}"
+    ],
+    "finish": null,
+    "prompt_tokens": 5,
+    "generated_tokens": 2,
+    "fail_after_partials": true
+   },
+   "events": [
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "Half"
+    },
+    {
+     "type": "partial",
+     "role": "assistant",
+     "content": "Half an"
+    },
+    {
+     "type": "error",
+     "code": "generation_failed",
+     "message": "The model stopped with an error while answering"
+    }
+   ]
+  }
+ ],
+ "queued_events": [
+  {
+   "type": "queued",
+   "position": 2
+  },
+  {
+   "type": "queued",
+   "position": 1
+  }
+ ]
+}

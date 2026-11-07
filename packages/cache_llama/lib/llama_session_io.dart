@@ -25,6 +25,9 @@ class LlamaSession {
 
   bool get isLoaded => _handleAddress != 0;
 
+  /// Where a generation waits on a server; the phone runs the model itself, so it never waits: always null.
+  Stream<int?> get queuePosition => const Stream<int?>.empty();
+
   Future<void> _ensureWorker() async {
     if (_ready != null) return _ready!.future;
     _ready = Completer<void>();

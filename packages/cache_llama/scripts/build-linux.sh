@@ -17,7 +17,7 @@ build="$1"
 avx2=""
 if [ "$(uname -m)" = "x86_64" ]; then avx2="-DCACHE_LLAMA_X86_AVX2=ON"; fi
 # libstdc++ and libgcc are linked in, so the installed library needs nothing but libc.
-cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release $avx2 \
+cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release $avx2 -DCACHE_LLAMA_GEMMA4_PREFILL_OPT=ON \
   -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 cmake --build "$build" --target cache_llama -j "$(nproc)"
 strip --strip-unneeded "$build/libcache_llama.so"
