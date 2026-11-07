@@ -36,8 +36,8 @@
 //!                                              model is not there (the download is started), 503 embed_unavailable if it cannot load
 //!   GET  /api/llm/models                    -> {v,models:[{id,size,loaded,info?,n_ctx?}]}: the chat models (.gguf files) in <data>/models/, not the embedder
 //!   POST /api/llm/load {v:1,model,n_ctx?}   -> the loaded model's ModelInfo {description,n_ctx,chat_format,supports_tools}; by id only, never a path
-//!   POST /api/llm/generate {v:1,model?,request} -> application/x-ndjson, one event per line: queued {position}, partial {...}, done {...}, error {code,message}
-//!   POST /api/llm/stop {v:1}                -> {stopped}: ends the running generation early (its `done` still arrives)
+//!   POST /api/llm/generate {v:1,model?,request} -> application/x-ndjson, one event per line: queued {position}, started {id}, partial {...}, done {...}, error {code,message}
+//!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
@@ -375,10 +375,11 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             }
         }
         ("POST", "stop") => {
-            if let Err(e) = llm::parse_version_only(body) {
-                return Some(api_error(e));
-            }
-            ok(json!({"stopped": svc.stop()}))
+            let id = match llm::parse_stop(body) {
+                Ok(i) => i,
+                Err(e) => return Some(api_error(e)),
+            };
+            ok(json!({"stopped": svc.stop(id.as_deref())}))
         }
         _ => return None,
     })

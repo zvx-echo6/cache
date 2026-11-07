@@ -65,6 +65,8 @@ void main() {
               expect(message, 'The model stopped with an error while answering');
             case LlmQueued():
               fail('no queued event in this case');
+            case LlmStarted(:final id):
+              expect(id, 'ID');
           }
         }
         expect(events.last is LlmError, failed);
@@ -73,6 +75,29 @@ void main() {
       }
     });
   }
+
+  test('stop acts by what the stream has shown, and the final message comes after it', () async {
+    final c = (fx['cases'] as List).cast<Map<String, dynamic>>().firstWhere((c) => c['stop_after_events'] != null);
+    final events = await parseLlmEvents(_chunked(_ndjson(c['events'] as List), 9)).toList();
+    final run = LlmRunState();
+    expect(run.stopAction, LlmStopAction.abort, reason: 'nothing seen yet: close the request');
+    final after = c['stop_after_events'] as int;
+    for (var i = 0; i < after; i++) {
+      run.see(events[i]);
+    }
+    expect(run.stopAction, LlmStopAction.requestStop);
+    expect(run.id, 'ID');
+    // the client stopped here and went on reading: the rest of the stream still ends with the final message
+    final rest = [for (final e in events.skip(after)) if (e is LlmPartial) e.message else if (e is LlmDone) e.message];
+    final io = _ioMessages(c['native'] as Map<String, dynamic>);
+    expect(rest.last.isFinal, isTrue);
+    expect(_flat(rest.last), _flat(io.last));
+  });
+
+  test('a queued stream has no id yet: stop closes the request', () {
+    final run = LlmRunState()..see(const LlmQueued(2));
+    expect(run.stopAction, LlmStopAction.abort);
+  });
 
   test('queued events carry the position; blank lines and unknown types are skipped', () async {
     final text = '${_ndjson(fx['queued_events'] as List)}\n{"type":"future","x":1}\n';

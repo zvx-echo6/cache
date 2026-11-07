@@ -192,9 +192,19 @@ pub fn valid_model_id(id: &str) -> bool {
         && id.to_ascii_lowercase().ends_with(".gguf")
 }
 
-/// The body of `POST /api/llm/stop`: just `{"v":1}`.
+/// The body of `POST /api/llm/load` or `stop`: `{"v":1}`.
 pub fn parse_version_only(body: &[u8]) -> Result<(), ApiErr> {
     parse_body(body).map(|_| ())
+}
+
+/// The body of `POST /api/llm/stop`: `{"v":1}`, with the `id` of one generation when only that one is to be stopped.
+pub fn parse_stop(body: &[u8]) -> Result<Option<String>, ApiErr> {
+    let v = parse_body(body)?;
+    match v.get("id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(err(400, "bad_json", "id must be a string")),
+    }
 }
 
 /// `POST /api/llm/load` body: the model id and `n_ctx` (default 8192, as `LlamaSession.load`).
@@ -244,6 +254,11 @@ pub fn queued_event(position: usize) -> Value {
     json!({"type": "queued", "position": position})
 }
 
+/// The first event of a generation that has its turn and has been started: the id that `POST /api/llm/stop` takes.
+pub fn started_event(id: &str) -> Value {
+    json!({"type": "started", "id": id})
+}
+
 pub fn error_event(code: &str, message: &str) -> Value {
     json!({"type": "error", "code": code, "message": message})
 }
@@ -290,8 +305,8 @@ pub struct LlmService {
     is_loaded: AtomicBool,
     /// How long one event may wait for a client that is not reading before the client is treated as gone (milliseconds).
     send_timeout_ms: AtomicU64,
-    /// The model of the generation that is running now (what `stop` stops).
-    running: Mutex<Option<Arc<dyn ChatBackend>>>,
+    /// The id (sent to its client in the `started` event) and the model of the generation that is running now (what `stop` stops).
+    running: Mutex<Option<(String, Arc<dyn ChatBackend>)>>,
 }
 
 impl LlmService {
@@ -405,15 +420,16 @@ impl LlmService {
         Ok(info)
     }
 
-    /// `POST /api/llm/stop`: ends the running generation early (its `done` still arrives). The server has one shared model and one
-    /// generation at a time, so this is the current generation; it returns whether there was one.
-    pub fn stop(&self) -> bool {
+    /// `POST /api/llm/stop`: ends the running generation early (its `done` still arrives). With an `id` (from the `started` event) only
+    /// that generation is stopped, and `false` comes back when it is not the running one. Without, the current generation is, whose
+    /// ever it is. It returns whether one was stopped.
+    pub fn stop(&self, id: Option<&str>) -> bool {
         match self.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            Some(b) => {
+            Some((rid, b)) if id.is_none_or(|i| i == rid) => {
                 b.stop();
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
@@ -448,8 +464,9 @@ impl LlmService {
             send(error_event("model_changed", "The model on the server is not the one this answer was asked of; load it again"));
             return;
         }
-        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = Some(backend.clone());
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_loop(backend.as_ref(), &request, &send)));
+        let gen_id = crate::auth::hex(&crate::auth::random_bytes::<16>().unwrap_or([0; 16]));
+        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = Some((gen_id.clone(), backend.clone()));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_loop(backend.as_ref(), &gen_id, &request, &send)));
         *self.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if r.is_err() {
             send(error_event("internal", "The model engine crashed while answering"));
@@ -478,14 +495,19 @@ fn send_event(tx: &tokio::sync::mpsc::Sender<std::io::Result<Bytes>>, ev: Value,
 }
 
 /// The worker of llama_session_io.dart (`case 'generate'`), call for call. `send` returns false once the client is gone.
-fn generate_loop(b: &dyn ChatBackend, request: &Value, send: &dyn Fn(Value) -> bool) {
+fn generate_loop(b: &dyn ChatBackend, gen_id: &str, request: &Value, send: &dyn Fn(Value) -> bool) {
     // jsonEncode(request): the whole map goes to the native layer ("max_tokens" is ignored there).
     if let Err(m) = b.start(&request.to_string()) {
         send(error_event("start_failed", &m));
         return;
     }
     let max_tokens = max_tokens_of(request);
+    // cl_start has cleared the stop flag by now, so a stop that comes for this id from here on is not lost.
     let mut gone = false;
+    if !send(started_event(gen_id)) {
+        gone = true;
+        b.stop();
+    }
     let n = loop {
         let n = b.next();
         if n < 0 {
@@ -745,9 +767,10 @@ mod tests {
         let req = json!({"messages": [{"role": "user", "content": "hi"}], "enable_thinking": false});
         s.run_generation(None, req.clone(), tx);
         let evs = collect(rx);
-        assert_eq!(types(&evs), ["partial", "partial", "partial", "done"]);
-        assert_eq!(evs[0]["content"], "t1");
-        assert_eq!((evs[3]["content"].clone(), evs[3]["prompt_tokens"].clone(), evs[3]["generated_tokens"].clone()), (json!("all3"), json!(7), json!(3)));
+        assert_eq!(types(&evs), ["started", "partial", "partial", "partial", "done"]);
+        assert!(evs[0]["id"].as_str().is_some_and(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())));
+        assert_eq!(evs[1]["content"], "t1");
+        assert_eq!((evs[4]["content"].clone(), evs[4]["prompt_tokens"].clone(), evs[4]["generated_tokens"].clone()), (json!("all3"), json!(7), json!(3)));
         // the native layer got the request whole
         let sent: Value = serde_json::from_str(&fake.last_request.lock().unwrap()).unwrap();
         assert_eq!(sent, req);
@@ -822,7 +845,11 @@ mod tests {
             s.load("chat-a.gguf", 8192).unwrap();
             let (tx, rx) = tokio::sync::mpsc::channel(64);
             s.run_generation(None, json!({"messages": []}), tx);
-            let got = collect(rx);
+            let mut got = collect(rx);
+            // the generation id is random: it must be 32 hex digits, and the fixture holds the placeholder "ID"
+            assert_eq!(got[0]["type"], "started");
+            assert!(got[0]["id"].as_str().is_some_and(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())));
+            got[0]["id"] = json!("ID");
             let want: Vec<Value> = case["events"].as_array().unwrap().clone();
             assert_eq!(got, want, "case {}", case["name"]);
         }
@@ -838,8 +865,8 @@ mod tests {
         s.run_generation(None, json!({"messages": [], "max_tokens": 2}), tx);
         let evs = collect(rx);
         // the app emits the partial of the token that reached the cap, then breaks and finishes
-        assert_eq!(types(&evs), ["partial", "partial", "done"]);
-        assert_eq!(evs[2]["generated_tokens"], 2);
+        assert_eq!(types(&evs), ["started", "partial", "partial", "done"]);
+        assert_eq!(evs[3]["generated_tokens"], 2);
         // the cap is also in the request the native layer got (it ignores it)
         assert!(fake.last_request.lock().unwrap().contains("max_tokens"));
     }
@@ -858,8 +885,8 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         s.run_generation(None, json!({"messages": []}), tx);
         let evs = collect(rx);
-        assert_eq!(types(&evs), ["partial", "partial", "error"]);
-        assert_eq!((evs[2]["code"].clone(), evs[2]["message"].clone()), (json!("generation_failed"), json!(GENERATION_FAILED)));
+        assert_eq!(types(&evs), ["started", "partial", "partial", "error"]);
+        assert_eq!((evs[3]["code"].clone(), evs[3]["message"].clone()), (json!("generation_failed"), json!(GENERATION_FAILED)));
         // cl_start refusing
         let d2 = TempDir::new("llm-err2");
         let mut f2 = Fake::new(5);
@@ -917,7 +944,7 @@ mod tests {
         *fake.hold.lock().unwrap() = Some(hold_rx);
         let s = service(&d, fake.clone());
         s.load("chat-a.gguf", 8192).unwrap();
-        assert!(!s.stop(), "nothing is running");
+        assert!(!s.stop(None), "nothing is running");
         let (tx, rx) = tokio::sync::mpsc::channel(1 << 20);
         let s2 = s.clone();
         let t = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
@@ -925,14 +952,48 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         // start() is holding the generation open
-        while !s.stop() {
+        while !s.stop(None) {
             std::thread::sleep(Duration::from_millis(5));
         }
         hold_tx.send(()).unwrap();
         t.join().unwrap();
         let evs = collect(rx);
         assert_eq!(types(&evs).last(), Some(&"done"));
-        assert!(!s.stop(), "the generation is over");
+        assert!(!s.stop(None), "the generation is over");
+    }
+
+    #[test]
+    fn stop_with_an_id_stops_only_that_generation() {
+        let d = TempDir::new("llm-stop-id");
+        let fake = Fake::new(1_000_000);
+        let s = service(&d, fake.clone());
+        s.load("chat-a.gguf", 8192).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1 << 20);
+        let s2 = s.clone();
+        let t = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
+        // the first event is `started`, with the id
+        let first = rx.blocking_recv().unwrap().unwrap();
+        let ev: Value = serde_json::from_slice(&first).unwrap();
+        assert_eq!(ev["type"], "started");
+        let id = ev["id"].as_str().unwrap().to_string();
+        assert!(!s.stop(Some("0123456789abcdef0123456789abcdef")), "another id stops nothing");
+        assert_eq!(fake.stops.load(Ordering::SeqCst), 0);
+        assert!(s.stop(Some(&id)));
+        t.join().unwrap();
+        let mut evs = vec![];
+        while let Ok(Ok(b)) = rx.try_recv() {
+            evs.push(serde_json::from_slice::<Value>(&b).unwrap());
+        }
+        assert_eq!(evs.last().unwrap()["type"], "done", "the final message still comes");
+        assert!(!s.stop(Some(&id)), "that generation is over");
+    }
+
+    #[test]
+    fn the_stop_body_takes_an_optional_string_id() {
+        assert_eq!(parse_stop(br#"{"v":1}"#).unwrap(), None);
+        assert_eq!(parse_stop(br#"{"v":1,"id":"ab"}"#).unwrap(), Some("ab".to_string()));
+        assert!(parse_stop(br#"{"v":1,"id":5}"#).is_err());
+        assert!(parse_stop(br#"{"id":"ab"}"#).is_err());
     }
 
     #[test]
@@ -959,8 +1020,8 @@ mod tests {
         hold_tx.send(()).unwrap();
         t1.join().unwrap();
         t2.join().unwrap();
-        assert_eq!(types(&collect(rx1)), ["partial", "partial", "done"]);
-        assert_eq!(types(&collect(rx2)), ["partial", "partial", "done"]);
+        assert_eq!(types(&collect(rx1)), ["started", "partial", "partial", "done"]);
+        assert_eq!(types(&collect(rx2)), ["started", "partial", "partial", "done"]);
         assert_eq!(s.queue_waiting(), 0);
     }
 

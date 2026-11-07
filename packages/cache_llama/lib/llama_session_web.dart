@@ -46,7 +46,7 @@ class LlamaSession {
     _run = run;
     late StreamController<PartialMessage> c;
     c = StreamController<PartialMessage>(onCancel: () {
-      if (!run.finished) _end(run);
+      if (!run.finished) _abort(run);
     });
     unawaited(_pump(run, id, request, c));
     return c.stream;
@@ -71,11 +71,13 @@ class LlamaSession {
       var ended = false;
       await for (final e in parseLlmEvents(_chunks(body))) {
         if (c.isClosed) return;
+        run.state.see(e);
         switch (e) {
+          case LlmStarted():
+            _queue.add(null);
           case LlmQueued(:final position):
             _queue.add(position);
           case LlmPartial(:final message):
-            run.gotPartial = true;
             _queue.add(null);
             c.add(message);
           case LlmDone(:final message):
@@ -101,18 +103,34 @@ class LlamaSession {
     }
   }
 
-  /// Ends the running generation early. The stream is closed (no final message: the browser has cut the connection).
+  /// Ends the running generation early; the final message still arrives, as on the phone. Once the server has said the generation
+  /// started, this asks it to stop that generation (by its id, so nobody else's) and goes on reading. Before that (still waiting in
+  /// the queue, or being prepared) there is no id to stop, so the request is closed and the stream ends with no message.
   void stop() {
     final run = _run;
-    if (run != null) _end(run);
+    if (run == null || run.aborted || run.stopping) return;
+    switch (run.state.stopAction) {
+      case LlmStopAction.abort:
+        _abort(run);
+      case LlmStopAction.requestStop:
+        run.stopping = true;
+        unawaited(_requestStop(run));
+    }
   }
 
-  void _end(_Run run) {
+  Future<void> _requestStop(_Run run) async {
+    try {
+      final r = await _post('/api/llm/stop', {'v': 1, 'id': run.state.id});
+      if (r.ok) return;
+    } catch (_) {}
+    // The server could not be told: close the request, which frees the server's turn all the same.
+    _abort(run);
+  }
+
+  /// Closes the request. The server takes this generation out of the queue or stops it, and nobody else's is touched.
+  void _abort(_Run run) {
     if (run.aborted) return;
     run.aborted = true;
-    // Closing the request frees our place or our turn on the server. POST /stop stops whatever runs, so only once a partial
-    // proved that this stream is the running one.
-    if (run.gotPartial) unawaited(_post('/api/llm/stop', {'v': 1}).then((_) {}, onError: (Object _) {}));
     run.abort.abort();
   }
 
@@ -131,7 +149,8 @@ class LlamaSession {
 
 class _Run {
   final web.AbortController abort = web.AbortController();
-  bool gotPartial = false;
+  final LlmRunState state = LlmRunState();
+  bool stopping = false;
   bool aborted = false;
   bool finished = false;
 }

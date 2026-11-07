@@ -16,6 +16,12 @@ class LlmQueued extends LlmRemoteEvent {
   final int position;
 }
 
+/// The generation has its turn and is running: [id] is what `POST /api/llm/stop` takes to stop this generation and no other.
+class LlmStarted extends LlmRemoteEvent {
+  const LlmStarted(this.id);
+  final String id;
+}
+
 /// The message so far: what the phone's worker sends after each token that produced text.
 class LlmPartial extends LlmRemoteEvent {
   const LlmPartial(this.message);
@@ -44,6 +50,8 @@ LlmRemoteEvent? parseLlmEventLine(String line) {
   switch (j['type']) {
     case 'queued':
       return LlmQueued((j['position'] as num?)?.toInt() ?? 0);
+    case 'started':
+      return LlmStarted((j['id'] ?? '') as String);
     case 'partial':
       return LlmPartial(PartialMessage.fromJson(j));
     case 'done':
@@ -78,4 +86,24 @@ String llmErrorMessage(String body, String fallback) {
     }
   } catch (_) {}
   return fallback;
+}
+
+/// What a client does to stop its generation.
+enum LlmStopAction {
+  /// Not started yet (still waiting in the queue, or being prepared): close the request. The stream then ends with no message.
+  abort,
+
+  /// Started: ask the server to stop this generation by its id and go on reading; the final message still comes, as on the phone.
+  requestStop,
+}
+
+/// What one generation stream has shown so far, to decide what [stop] does.
+class LlmRunState {
+  String? id;
+
+  void see(LlmRemoteEvent e) {
+    if (e is LlmStarted) id = e.id;
+  }
+
+  LlmStopAction get stopAction => id == null ? LlmStopAction.abort : LlmStopAction.requestStop;
 }

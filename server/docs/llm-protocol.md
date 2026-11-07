@@ -66,6 +66,7 @@ Before the stream starts: 400 (`bad_json`, `unsupported_version`), 409 `no_model
 | `type` | when | fields |
 |---|---|---|
 | `queued` | the generation has to wait for another; again whenever its place changes | `position`: how many are ahead (the running one counts), so 1 is next |
+| `started` | the generation has its turn and the native call `cl_start` has returned (the prompt is ready); sent once, before the first `partial` | `id`: a random 128-bit id (32 hex digits), new for every generation; `POST /api/llm/stop` takes it |
 | `partial` | after each token that produced text | the `cl_partial` message: `role`, `content` (visible answer only), `reasoning_content`, `tool_calls` (`[{id,type:"function",function:{name,arguments}}]`), maybe `parse_error`; feed it to `PartialMessage.fromJson(json)` |
 | `done` | the end | the `cl_finish` message (same fields) plus `prompt_tokens` and `generated_tokens`; feed it to `PartialMessage.fromJson(json, isFinal: true, promptTokens: ..., generatedTokens: ...)` |
 | `error` | something failed | `code`, `message` |
@@ -98,13 +99,19 @@ the Dart stream does (`stop()` in `onCancel`).
 
 ## `POST /api/llm/stop`
 
-    {"v":1}   ->   {"ok":true,"result":{"stopped":true}}
+    {"v":1,"id":"<id from started>"}   ->   {"ok":true,"result":{"stopped":true}}
 
-Calls `cl_stop` on the generation that is running now; its stream still ends with `done`. `stopped` is false when none is
-running. The server has one shared model and one generation at a time, and `stop` does not say whose generation it is, so it
-stops **whatever is running**, which with several browsers signed in may be someone else's.
+Calls `cl_stop` on the generation with that id; its stream still ends with `done`, carrying the answer so far, exactly as
+`LlamaSession.stop()` on the phone ends with the final message. `id` is optional but must be a string when given. `stopped` is
+false when that generation is not the one running (it ended, or never started): nothing is stopped then, and nobody else's
+generation can be hit with an id.
 
-- **To cancel your own answer, close your `generate` request** (abort the fetch). That stops it if it is running, takes it out of
-  the queue if it is waiting, and touches nobody else's.
-- Call `POST /stop` only after you have received a `partial` on your own stream, which proves your generation is the one running.
-  Never call it while your stream is only `queued` or before its first event: it would stop the generation ahead of you.
+- **Without `id`**, the current behaviour: `cl_stop` on **whatever is running**, which with several browsers signed in may be
+  someone else's. Clients should always send the id.
+- **The `started` event is sent after `cl_start` returns**, and `cl_start` clears the model's stop flag. So a stop sent once the
+  client has seen `started` is never lost; a stop sent earlier (the client has no id before it) would be.
+- **Before `started`** (waiting in the queue, or the prompt being prepared) a client has no id. To cancel then, **close your
+  `generate` request** (abort the fetch). That takes it out of the queue if it is waiting, or stops it at its first event if it is
+  running, and touches nobody else's. The stream ends with no message.
+- Closing the request after `started` also stops it, but the client then gets no final message. The browser's `LlamaSession.stop()` sends
+  `POST /stop` with the id and goes on reading until `done`.
