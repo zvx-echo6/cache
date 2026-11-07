@@ -36,7 +36,7 @@
 //!                                              model is not there (the download is started), 503 embed_unavailable if it cannot load
 //!   GET  /api/llm/models                    -> {v,models:[{id,size,loaded,info?,n_ctx?}]}: the chat models (.gguf files) in <data>/models/, not the embedder
 //!   POST /api/llm/load {v:1,model,n_ctx?}   -> the loaded model's ModelInfo {description,n_ctx,chat_format,supports_tools}; by id only, never a path
-//!   POST /api/llm/generate {v:1,request}    -> application/x-ndjson, one event per line: queued {position}, partial {...}, done {...}, error {code,message}
+//!   POST /api/llm/generate {v:1,model?,request} -> application/x-ndjson, one event per line: queued {position}, partial {...}, done {...}, error {code,message}
 //!   POST /api/llm/stop {v:1}                -> {stopped}: ends the running generation early (its `done` still arrives)
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
@@ -356,20 +356,17 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             blocking(move || svc.load(&id, n_ctx)).await
         }
         ("POST", "generate") => {
-            let request = match llm::parse_generate(body) {
+            let (model, request) = match llm::parse_generate(body) {
                 Ok(r) => r,
                 Err(e) => return Some(api_error(e)),
             };
             if !svc.is_loaded() {
                 return Some(Reply::error(409, "no_model", "No model is loaded"));
             }
-            if svc.queue_waiting() >= llm::MAX_WAITING {
-                return Some(Reply::error(429, "busy", "too many answers are waiting for the model; try again shortly"));
-            }
             // The events go out as they are made. If the client goes away the receiver is dropped, the write fails and the worker
             // stops the generation.
             let (tx, rx) = tokio::sync::mpsc::channel(64);
-            tokio::task::spawn_blocking(move || svc.run_generation(request, tx));
+            tokio::task::spawn_blocking(move || svc.run_generation(model, request, tx));
             Reply {
                 status: 200,
                 headers: vec![("Content-Type", "application/x-ndjson".into()), ("X-Accel-Buffering", "no".into())],

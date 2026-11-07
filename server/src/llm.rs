@@ -14,7 +14,7 @@ use hyper::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -24,6 +24,8 @@ pub const PROTOCOL_VERSION: i64 = 1;
 pub const MAX_WAITING: usize = 8;
 /// The largest `generate` body, in bytes (a long conversation with tool results).
 pub const MAX_GENERATE_BODY: usize = 16 << 20;
+/// How long one event may wait for a client that has stopped reading (but keeps the connection open) before it counts as gone.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// The range of `n_ctx` a client may ask for.
 pub const N_CTX_RANGE: std::ops::RangeInclusive<i64> = 256..=262_144;
 /// The message the app shows when `cl_next` fails (llama_session_io.dart).
@@ -90,6 +92,15 @@ pub struct GenQueue {
     next_id: AtomicU64,
 }
 
+/// Why [`GenQueue::acquire`] gave no turn.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Denied {
+    /// The caller went away while waiting (or before it started).
+    Cancelled,
+    /// [`MAX_WAITING`] generations are already waiting.
+    Busy,
+}
+
 /// The right to run; dropping it passes the turn on.
 pub struct Turn<'a>(&'a GenQueue);
 
@@ -114,23 +125,28 @@ impl GenQueue {
     }
 
     /// Wait for the turn. `on_position(n)` is called when the caller has to wait, and again whenever its place changes; n is the
-    /// number of generations ahead of it (the running one counts), so 1 means "next". `cancelled` is polled while waiting: when it
-    /// says true the caller leaves the queue and gets `None`.
-    pub fn acquire(&self, mut on_position: impl FnMut(usize), cancelled: impl Fn() -> bool) -> Option<Turn<'_>> {
+    /// number of generations ahead of it (the running one counts), so 1 means "next". `cancelled` is polled while waiting, and
+    /// first of all on every pass (under the queue lock, right before a turn would be handed out): when it says true the caller
+    /// leaves the queue and gets [`Denied::Cancelled`], even from the front. When [`MAX_WAITING`] are already waiting, a caller
+    /// that would have to wait gets [`Denied::Busy`]; the check is made under the queue lock.
+    pub fn acquire(&self, mut on_position: impl FnMut(usize), cancelled: impl Fn() -> bool) -> Result<Turn<'_>, Denied> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut st = self.st.lock().unwrap_or_else(|e| e.into_inner());
+        if (st.running || !st.waiting.is_empty()) && st.waiting.len() >= MAX_WAITING {
+            return Err(Denied::Busy);
+        }
         st.waiting.push_back(id);
         let mut told: Option<usize> = None;
         loop {
-            if !st.running && st.waiting.front() == Some(&id) {
-                st.waiting.pop_front();
-                st.running = true;
-                return Some(Turn(self));
-            }
             if cancelled() {
                 st.waiting.retain(|w| *w != id);
                 self.cv.notify_all();
-                return None;
+                return Err(Denied::Cancelled);
+            }
+            if !st.running && st.waiting.front() == Some(&id) {
+                st.waiting.pop_front();
+                st.running = true;
+                return Ok(Turn(self));
             }
             let ahead = st.waiting.iter().position(|w| *w == id).unwrap_or(0) + usize::from(st.running);
             if told != Some(ahead) {
@@ -195,11 +211,17 @@ pub fn parse_load(body: &[u8]) -> Result<(String, i32), ApiErr> {
     Ok((id.to_string(), n_ctx as i32))
 }
 
-/// `POST /api/llm/generate` body: the request map exactly as `LlamaSession.generate` takes it.
-pub fn parse_generate(body: &[u8]) -> Result<Value, ApiErr> {
+/// `POST /api/llm/generate` body: the request map exactly as `LlamaSession.generate` takes it, and the optional `model` id
+/// (beside `v` and `request`) the client believes is loaded.
+pub fn parse_generate(body: &[u8]) -> Result<(Option<String>, Value), ApiErr> {
     let v = parse_body(body)?;
+    let model = match v.get("model") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(m)) => Some(m.clone()),
+        Some(_) => return Err(err(400, "bad_json", "\"model\" must be a model id")),
+    };
     match v.get("request") {
-        Some(r) if r.is_object() => Ok(r.clone()),
+        Some(r) if r.is_object() => Ok((model, r.clone())),
         _ => Err(err(400, "bad_json", "\"request\" (the generate request object) is required")),
     }
 }
@@ -264,6 +286,10 @@ pub struct LlmService {
     loader: Box<Loader>,
     queue: GenQueue,
     loaded: Mutex<Option<Loaded>>,
+    /// Whether `loaded` holds a model; readable from async code without taking any lock a load may be holding.
+    is_loaded: AtomicBool,
+    /// How long one event may wait for a client that is not reading before the client is treated as gone (milliseconds).
+    send_timeout_ms: AtomicU64,
     /// The model of the generation that is running now (what `stop` stops).
     running: Mutex<Option<Arc<dyn ChatBackend>>>,
 }
@@ -286,7 +312,12 @@ impl LlmService {
     }
 
     pub fn with_loader(data: PathBuf, embed_file: String, loader: Box<Loader>) -> Arc<LlmService> {
-        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(), loaded: Mutex::new(None), running: Mutex::new(None) })
+        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(),
+            loaded: Mutex::new(None),
+            is_loaded: AtomicBool::new(false),
+            send_timeout_ms: AtomicU64::new(SEND_TIMEOUT.as_millis() as u64),
+            running: Mutex::new(None),
+        })
     }
 
     fn models_dir(&self) -> PathBuf {
@@ -337,8 +368,14 @@ impl LlmService {
         self.queue.waiting()
     }
 
+    /// Whether a model is loaded. Never blocks (a load in progress counts as not loaded).
     pub fn is_loaded(&self) -> bool {
-        self.loaded.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        self.is_loaded.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn set_send_timeout(&self, d: Duration) {
+        self.send_timeout_ms.store(d.as_millis() as u64, Ordering::SeqCst);
     }
 
     /// `POST /api/llm/load`: blocking. Waits for a running generation to end, then loads. The same model at the same `n_ctx` again is
@@ -350,15 +387,21 @@ impl LlmService {
         if !self.list_models().iter().any(|(n, _)| n == id) {
             return Err(err(404, "model_not_found", "no such model on this server"));
         }
-        let _turn = self.queue.acquire(|_| {}, || false).ok_or_else(|| err(500, "internal", "no turn"))?;
-        let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(l) = slot.as_ref().filter(|l| l.id == id && l.n_ctx == n_ctx) {
-            return Ok(l.info.clone());
-        }
-        *slot = None; // cl_free the old one before the new one takes its memory
+        // The turn serialises loads and generations; the `loaded` lock is only held for the swaps, never across the native load.
+        let _turn = self.queue.acquire(|_| {}, || false).map_err(|_| err(429, "busy", "too many requests are waiting for the model; try again shortly"))?;
+        let old = {
+            let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(l) = slot.as_ref().filter(|l| l.id == id && l.n_ctx == n_ctx) {
+                return Ok(l.info.clone());
+            }
+            self.is_loaded.store(false, Ordering::SeqCst);
+            slot.take()
+        };
+        drop(old); // cl_free the old one before the new one takes its memory
         let (backend, info) = (self.loader)(&self.models_dir().join(id), n_ctx).map_err(|m| err(503, "load_failed", m))?;
         let info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
-        *slot = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
+        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
+        self.is_loaded.store(true, Ordering::SeqCst);
         Ok(info)
     }
 
@@ -374,28 +417,62 @@ impl LlmService {
         }
     }
 
-    /// `POST /api/llm/generate`: blocking, run on a worker thread. Writes the NDJSON events to `tx`; a failed write means the client
-    /// went away, which stops the generation.
-    pub fn run_generation(&self, request: Value, tx: tokio::sync::mpsc::Sender<std::io::Result<Bytes>>) {
-        let send = |ev: Value| tx.blocking_send(Ok(event_line(&ev))).is_ok();
-        let Some(_turn) = self.queue.acquire(
+    /// `POST /api/llm/generate`: blocking, run on a worker thread. Writes the NDJSON events to `tx`; a failed write (or one that
+    /// waits longer than the send timeout for a client that is not reading) means the client went away, which stops the generation.
+    /// `model`, when given, must be the id loaded when the turn starts, or the answer is a `model_changed` error.
+    pub fn run_generation(&self, model: Option<String>, request: Value, tx: tokio::sync::mpsc::Sender<std::io::Result<Bytes>>) {
+        let timeout = Duration::from_millis(self.send_timeout_ms.load(Ordering::SeqCst));
+        let send = |ev: Value| send_event(&tx, ev, timeout);
+        let _turn = match self.queue.acquire(
             |pos| {
                 let _ = send(queued_event(pos));
             },
             || tx.is_closed(),
-        ) else {
-            return;
+        ) {
+            Ok(t) => t,
+            Err(Denied::Cancelled) => return,
+            Err(Denied::Busy) => {
+                send(error_event("busy", "too many answers are waiting for the model; try again shortly"));
+                return;
+            }
         };
-        let backend = self.loaded.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.backend.clone());
+        let (backend, id) = {
+            let l = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            (l.as_ref().map(|l| l.backend.clone()), l.as_ref().map(|l| l.id.clone()))
+        };
         let Some(backend) = backend else {
             send(error_event("no_model", "No model is loaded"));
             return;
         };
+        if model.as_deref().is_some_and(|m| Some(m) != id.as_deref()) {
+            send(error_event("model_changed", "The model on the server is not the one this answer was asked of; load it again"));
+            return;
+        }
         *self.running.lock().unwrap_or_else(|e| e.into_inner()) = Some(backend.clone());
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate_loop(backend.as_ref(), &request, &send)));
         *self.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if r.is_err() {
             send(error_event("internal", "The model engine crashed while answering"));
+        }
+    }
+}
+
+/// Queue one event for the client. False when the client is gone: the stream was dropped, or it has not made room for `timeout`.
+fn send_event(tx: &tokio::sync::mpsc::Sender<std::io::Result<Bytes>>, ev: Value, timeout: Duration) -> bool {
+    use tokio::sync::mpsc::error::TrySendError;
+    let started = std::time::Instant::now();
+    let mut item = Ok(event_line(&ev));
+    loop {
+        match tx.try_send(item) {
+            Ok(()) => return true,
+            Err(TrySendError::Closed(_)) => return false,
+            Err(TrySendError::Full(back)) => {
+                if started.elapsed() >= timeout {
+                    return false;
+                }
+                item = back;
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }
     }
 }
@@ -581,7 +658,9 @@ mod tests {
         assert_eq!(parse_generate(br#"{"v":1}"#).unwrap_err().status, 400);
         assert_eq!(parse_generate(br#"{"v":1,"request":[]}"#).unwrap_err().status, 400);
         assert_eq!(parse_generate(b"nope").unwrap_err().code, "bad_json");
-        assert_eq!(parse_generate(br#"{"v":1,"request":{"messages":[]}}"#).unwrap(), json!({"messages": []}));
+        assert_eq!(parse_generate(br#"{"v":1,"request":{"messages":[]}}"#).unwrap(), (None, json!({"messages": []})));
+        assert_eq!(parse_generate(br#"{"v":1,"model":"a.gguf","request":{}}"#).unwrap().0.as_deref(), Some("a.gguf"));
+        assert_eq!(parse_generate(br#"{"v":1,"model":7,"request":{}}"#).unwrap_err().status, 400);
     }
 
     #[test]
@@ -664,7 +743,7 @@ mod tests {
         s.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let req = json!({"messages": [{"role": "user", "content": "hi"}], "enable_thinking": false});
-        s.run_generation(req.clone(), tx);
+        s.run_generation(None, req.clone(), tx);
         let evs = collect(rx);
         assert_eq!(types(&evs), ["partial", "partial", "partial", "done"]);
         assert_eq!(evs[0]["content"], "t1");
@@ -681,7 +760,7 @@ mod tests {
         let s = service(&d, fake.clone());
         s.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        s.run_generation(json!({"messages": [], "max_tokens": 2}), tx);
+        s.run_generation(None, json!({"messages": [], "max_tokens": 2}), tx);
         let evs = collect(rx);
         // the app emits the partial of the token that reached the cap, then breaks and finishes
         assert_eq!(types(&evs), ["partial", "partial", "done"]);
@@ -698,11 +777,11 @@ mod tests {
         let s = service(&d, f);
         // no model loaded yet
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        s.run_generation(json!({"messages": []}), tx);
+        s.run_generation(None, json!({"messages": []}), tx);
         assert_eq!(collect(rx), vec![error_event("no_model", "No model is loaded")]);
         s.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        s.run_generation(json!({"messages": []}), tx);
+        s.run_generation(None, json!({"messages": []}), tx);
         let evs = collect(rx);
         assert_eq!(types(&evs), ["partial", "partial", "error"]);
         assert_eq!((evs[2]["code"].clone(), evs[2]["message"].clone()), (json!("generation_failed"), json!(GENERATION_FAILED)));
@@ -713,7 +792,7 @@ mod tests {
         let s2 = service(&d2, f2);
         s2.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        s2.run_generation(json!({"messages": []}), tx);
+        s2.run_generation(None, json!({"messages": []}), tx);
         assert_eq!(collect(rx), vec![error_event("start_failed", "bad template")]);
     }
 
@@ -721,17 +800,38 @@ mod tests {
     fn a_client_that_goes_away_stops_the_generation() {
         let d = TempDir::new("llm-gone");
         let fake = Fake::new(1000);
+        let (hold_tx, hold_rx) = mpsc::channel();
+        *fake.hold.lock().unwrap() = Some(hold_rx);
         let s = service(&d, fake.clone());
         s.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let s2 = s.clone();
+        let t = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
+        while fake.starts.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // the generation is under way (the prompt is being read) when the client leaves
         drop(rx);
-        s.run_generation(json!({"messages": []}), tx);
+        hold_tx.send(()).unwrap();
+        t.join().unwrap();
         assert_eq!(fake.stops.load(Ordering::SeqCst), 1);
         assert!(fake.made.load(Ordering::SeqCst) < 5, "it ran on after the client left");
         // the turn was given back: the next generation runs
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        s.run_generation(json!({"messages": [], "max_tokens": 1}), tx);
+        s.run_generation(None, json!({"messages": [], "max_tokens": 1}), tx);
         assert_eq!(types(&collect(rx)).last(), Some(&"done"));
+    }
+
+    #[test]
+    fn a_client_that_left_before_its_turn_never_runs() {
+        let d = TempDir::new("llm-gone-early");
+        let fake = Fake::new(1000);
+        let s = service(&d, fake.clone());
+        s.load("chat-a.gguf", 8192).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        drop(rx);
+        s.run_generation(None, json!({"messages": []}), tx);
+        assert_eq!(fake.starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -745,7 +845,7 @@ mod tests {
         assert!(!s.stop(), "nothing is running");
         let (tx, rx) = tokio::sync::mpsc::channel(1 << 20);
         let s2 = s.clone();
-        let t = std::thread::spawn(move || s2.run_generation(json!({"messages": []}), tx));
+        let t = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
         while fake.starts.load(Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -770,13 +870,13 @@ mod tests {
         s.load("chat-a.gguf", 8192).unwrap();
         let (tx1, rx1) = tokio::sync::mpsc::channel(64);
         let s1 = s.clone();
-        let t1 = std::thread::spawn(move || s1.run_generation(json!({"messages": []}), tx1));
+        let t1 = std::thread::spawn(move || s1.run_generation(None, json!({"messages": []}), tx1));
         while fake.starts.load(Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(5));
         }
         let (tx2, mut rx2) = tokio::sync::mpsc::channel(64);
         let s2 = s.clone();
-        let t2 = std::thread::spawn(move || s2.run_generation(json!({"messages": []}), tx2));
+        let t2 = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx2));
         // the second one sees queued, position 1 (the running one is ahead of it)
         let first = rx2.blocking_recv().unwrap().unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&first).unwrap(), json!({"type": "queued", "position": 1}));
@@ -792,17 +892,116 @@ mod tests {
     #[test]
     fn a_waiting_client_that_leaves_gives_up_its_place() {
         let q = Arc::new(GenQueue::default());
-        let t1 = q.acquire(|_| {}, || false).unwrap();
+        let t1 = q.acquire(|_| {}, || false).ok().unwrap();
         let gone = Arc::new(AtomicBool::new(false));
         let (q2, g2) = (q.clone(), gone.clone());
-        let h = std::thread::spawn(move || q2.acquire(|_| {}, || g2.load(Ordering::SeqCst)).is_none());
+        let h = std::thread::spawn(move || q2.acquire(|_| {}, || g2.load(Ordering::SeqCst)).err());
         while q.waiting() == 0 {
             std::thread::sleep(Duration::from_millis(5));
         }
         gone.store(true, Ordering::SeqCst);
-        assert!(h.join().unwrap(), "it left without a turn");
+        assert_eq!(h.join().unwrap(), Some(Denied::Cancelled), "it left without a turn");
         assert_eq!(q.waiting(), 0);
         drop(t1);
-        assert!(q.acquire(|_| {}, || false).is_some());
+        assert!(q.acquire(|_| {}, || false).is_ok());
+    }
+
+    #[test]
+    fn a_cancelled_waiter_is_never_handed_the_turn() {
+        // nobody is running and it would be first in line, but it has already gone
+        let q = GenQueue::default();
+        assert_eq!(q.acquire(|_| {}, || true).err(), Some(Denied::Cancelled));
+        assert_eq!(q.waiting(), 0);
+        // and the queue still works
+        assert!(q.acquire(|_| {}, || false).is_ok());
+    }
+
+    #[test]
+    fn the_waiting_cap_is_enforced_under_the_queue_lock() {
+        let q = Arc::new(GenQueue::default());
+        let _running = q.acquire(|_| {}, || false).ok().unwrap();
+        let stay = Arc::new(AtomicBool::new(false));
+        let mut hs = vec![];
+        for _ in 0..MAX_WAITING {
+            let (q2, s2) = (q.clone(), stay.clone());
+            hs.push(std::thread::spawn(move || q2.acquire(|_| {}, || s2.load(Ordering::SeqCst)).err()));
+        }
+        while q.waiting() < MAX_WAITING {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(q.acquire(|_| {}, || false).err(), Some(Denied::Busy));
+        assert_eq!(q.waiting(), MAX_WAITING);
+        stay.store(true, Ordering::SeqCst);
+        for h in hs {
+            assert_eq!(h.join().unwrap(), Some(Denied::Cancelled));
+        }
+    }
+
+    #[test]
+    fn a_client_that_stops_reading_is_treated_as_gone() {
+        let d = TempDir::new("llm-stall");
+        let fake = Fake::new(1000);
+        let s = service(&d, fake.clone());
+        s.load("chat-a.gguf", 8192).unwrap();
+        s.set_send_timeout(Duration::from_millis(100));
+        // room for one event and nobody reads: the connection is open, the client is not there
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let started = std::time::Instant::now();
+        s.run_generation(None, json!({"messages": []}), tx);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(fake.stops.load(Ordering::SeqCst), 1);
+        drop(rx);
+        // the turn was given back
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        s.run_generation(None, json!({"messages": [], "max_tokens": 1}), tx);
+        assert_eq!(types(&collect(rx)).last(), Some(&"done"));
+    }
+
+    #[test]
+    fn a_generation_asked_of_another_model_is_refused() {
+        let d = TempDir::new("llm-changed");
+        let fake = Fake::new(2);
+        let s = service(&d, fake.clone());
+        s.load("chat-a.gguf", 8192).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        s.run_generation(Some("other.gguf".into()), json!({"messages": []}), tx);
+        let evs = collect(rx);
+        assert_eq!(types(&evs), ["error"]);
+        assert_eq!(evs[0]["code"], "model_changed");
+        assert_eq!(fake.starts.load(Ordering::SeqCst), 0, "the model was not run");
+        // the right id runs
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        s.run_generation(Some("chat-a.gguf".into()), json!({"messages": []}), tx);
+        assert_eq!(types(&collect(rx)).last(), Some(&"done"));
+    }
+
+    #[test]
+    fn a_load_in_progress_blocks_nothing_that_reads_the_state() {
+        let d = TempDir::new("llm-slowload");
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models").join("chat-a.gguf"), b"0123").unwrap();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let fake = Fake::new(1);
+        let s = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(move |_, _| {
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.lock().unwrap().recv();
+                Ok((fake.clone() as Arc<dyn ChatBackend>, "{}".to_string()))
+            }),
+        );
+        let s2 = s.clone();
+        let t = std::thread::spawn(move || s2.load("chat-a.gguf", 8192).unwrap());
+        entered_rx.recv().unwrap();
+        // the native load is running: these must answer at once
+        assert!(!s.is_loaded());
+        assert_eq!(s.models_json()["models"][0]["loaded"], false);
+        assert_eq!(s.queue_waiting(), 0);
+        release_tx.send(()).unwrap();
+        t.join().unwrap();
+        assert!(s.is_loaded());
     }
 }
