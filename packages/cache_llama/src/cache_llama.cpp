@@ -354,7 +354,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_model_params mp = llama_model_default_params();
 #if defined(CACHE_NO_REPACK)
         // Diagnostic: no CPU weight repacking (CPU_REPACK copies the weights into anonymous memory), so the
-        // weights stay in the file-backed mmap. use_mmap stays at its default (true).
+        // weights stay in the file-backed mmap. load_mode stays at its default (AUTO: mmap on the CPU).
         mp.use_extra_bufts = false;
         {
             std::lock_guard<std::mutex> lock(g_load_log_mu);
@@ -362,7 +362,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             g_load_log.clear();
         }
         llama_log_set(capture_load_log, nullptr);
-        cl_logi("diagnostic cache-no-repack-1: use_extra_bufts=false use_mmap=%d", (int) mp.use_mmap);
+        cl_logi("diagnostic cache-no-repack-1: use_extra_bufts=false load_mode=%s", llama_load_mode_name(mp.load_mode));
 #endif
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
