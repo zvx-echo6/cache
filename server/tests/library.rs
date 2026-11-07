@@ -282,8 +282,9 @@ async fn rig(tag: &str, setup: Setup) -> Rig {
     let auth = Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&dir.0.join("sessions.json")), false);
     let library = Library::with_options(dir.0.clone(), Some(helper.clone()), setup.options);
     let embed = cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so"));
+    let llm = cache_server::llm::LlmService::new(dir.0.clone(), dir.0.join("none.so"), "bge-m3-Q8_0.gguf".into());
     let build = cache_server::libbuild::BuildService::new(dir.0.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
-    let app = App { auth: Arc::new(auth), helper: Some(helper), web: dir.0.join("web"), library, embed, build };
+    let app = App { auth: Arc::new(auth), helper: Some(helper), web: dir.0.join("web"), library, embed, llm, build };
     let r = route(&app, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
     assert_eq!(r.status, 204);
     let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.split(';').next().unwrap().to_string();

@@ -198,6 +198,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
         let helper = Helper::start(helper_cfg).await;
         let library = Library::new(data.clone(), Some(helper.clone()));
         // The text embedder (bge-m3): the model is fetched on first need; a loaded model is let go when idle.
+        let llm = cache_server::llm::LlmService::new(data.clone(), embed_lib.clone(), cache_server::embed::ModelSpec::bge_m3().file_name);
         let embed = cache_server::embed::EmbedService::new(data.clone(), embed_lib);
         let reaper = embed.clone();
         tokio::spawn(async move {
@@ -210,7 +211,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
         // The library builder: books from PDFs, one at a time, and the drop folder. Its threads keep going with no browser open.
         let build = cache_server::libbuild::BuildService::new(data.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
         build.start();
-        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed, build });
+        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed, llm, build });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
         let scheme = if use_tls { "https" } else { "http" };
         eprintln!("listening on {scheme}://{listen}/");

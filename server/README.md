@@ -35,6 +35,15 @@ Both need a signed-in session. The loaded model takes about 700 MB and is let go
 the library uses AVX2, FMA and F16C; a CPU without them gets `embed_unavailable`. In Rust, the builder calls
 `EmbedService::embed_batch(&[String])`.
 
+### The chat model (Ask in the browser)
+
+The browser build of Ask runs the whole loop (prompt, tools, citations) in the page; only the model runs on the server, through the
+same `libcache_llama.so` (`cl_load`, `cl_start`, `cl_next`, ...). The routes are `GET /api/llm/models`, `POST /api/llm/load`,
+`POST /api/llm/generate` (an NDJSON stream) and `POST /api/llm/stop`, protocol version 1, all behind the sign-in. Chat models are
+the `.gguf` files in `<data>/models/` other than the embedder; they are loaded by file name only. One model is loaded for the
+whole server and one answer is generated at a time (others wait and are told their place). The protocol mirrors the app's own
+session, `packages/cache_llama/lib/llama_session_io.dart`. Every route, field and event: [docs/llm-protocol.md](docs/llm-protocol.md).
+
 Security keys use OpenSSL (through webauthn-rs). On Linux it is built from source and linked statically, so the installed
 server needs no libssl; the build needs `perl` and `make`. On Windows the build links a static OpenSSL from vcpkg instead:
 `vcpkg install openssl:x64-windows-static-md`, then set `OPENSSL_DIR` to `<vcpkg>\installed\x64-windows-static-md`,
