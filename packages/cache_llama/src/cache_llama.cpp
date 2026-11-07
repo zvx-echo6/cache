@@ -59,6 +59,9 @@ struct Handle {
     int                                  n_generated = 0;
     bool                                 finished    = true;
     std::atomic<bool>                    stop{false};
+#if defined(CACHE_NO_REPACK)
+    std::vector<std::string>             load_log;  // diagnostic: llama.cpp's load lines about buffers, mmap and KV
+#endif
 };
 
 void cl_logi(const char * fmt, ...);
@@ -182,6 +185,33 @@ void quiet_log(enum ggml_log_level level, const char * text, void *) {
         fputs(text, stderr);
     }
 }
+
+#if defined(CACHE_NO_REPACK)
+// Diagnostic build only: while the chat model loads, keep llama.cpp's lines that say where its memory goes
+// (model/KV/compute buffer sizes, REPACK, mmap), for cl_info to hand to the app log.
+std::mutex               g_load_log_mu;
+std::string              g_load_line;
+std::vector<std::string> g_load_log;
+
+void capture_load_log(enum ggml_log_level level, const char * text, void * ud) {
+    quiet_log(level, text, ud);
+    if (!text) return;
+    std::lock_guard<std::mutex> lock(g_load_log_mu);
+    g_load_line += text;
+    size_t nl;
+    while ((nl = g_load_line.find('\n')) != std::string::npos) {
+        std::string line = g_load_line.substr(0, nl);
+        g_load_line.erase(0, nl + 1);
+        if (g_load_log.size() >= 64) continue;
+        for (const char * k : { "buffer size", "REPACK", "mmap", "KV" }) {
+            if (line.find(k) != std::string::npos) {
+                g_load_log.push_back(line.substr(0, 300));
+                break;
+            }
+        }
+    }
+}
+#endif
 
 #if defined(__ANDROID__)
 // Used while the CPU backend variants are loaded: lets the "loaded CPU backend from ..." line through.
@@ -322,8 +352,23 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
 
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
+#if defined(CACHE_NO_REPACK)
+        // Diagnostic: no CPU weight repacking (CPU_REPACK copies the weights into anonymous memory), so the
+        // weights stay in the file-backed mmap. use_mmap stays at its default (true).
+        mp.use_extra_bufts = false;
+        {
+            std::lock_guard<std::mutex> lock(g_load_log_mu);
+            g_load_line.clear();
+            g_load_log.clear();
+        }
+        llama_log_set(capture_load_log, nullptr);
+        cl_logi("diagnostic cache-no-repack-1: use_extra_bufts=false use_mmap=%d", (int) mp.use_mmap);
+#endif
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
+#if defined(CACHE_NO_REPACK)
+            llama_log_set(quiet_log, nullptr);
+#endif
             set_err(err, err_len, std::string("cannot load model: ") + model_path);
             return nullptr;
         }
@@ -336,6 +381,15 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
         h->ctx = llama_init_from_model(h->model, cp);
+#if defined(CACHE_NO_REPACK)
+        llama_log_set(quiet_log, nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_load_log_mu);
+            h->load_log = std::move(g_load_log);
+            g_load_log.clear();
+            g_load_line.clear();
+        }
+#endif
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
             llama_model_free(h->model);
@@ -414,6 +468,10 @@ int cl_info(void * hp, char * out_json, int len) {
         j["engine_build"] = "cache-gemma4-prefill-31356";
 #else
         j["engine_build"] = "cache-llama-620d222";
+#endif
+#if defined(CACHE_NO_REPACK)
+        j["diagnostic_build"] = "cache-no-repack-1";
+        j["load_log"]         = h->load_log;
 #endif
         return put(j.dump(), out_json, len);
     } catch (const std::exception &) {

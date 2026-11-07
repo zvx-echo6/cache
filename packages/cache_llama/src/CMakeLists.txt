@@ -10,6 +10,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(CACHE_LLAMA_TEST_CLI "Build the cl_test command line test" OFF)
 option(CACHE_LLAMA_GEMMA4_PREFILL_OPT "Test the isolated Gemma 4 prefill optimization" OFF)
+option(CACHE_LLAMA_NO_REPACK "Diagnostic: load the chat model without CPU weight repacking" OFF)
 # Desktop/server x86_64 only (not Android): let ggml use AVX2/FMA/F16C. Off = baseline x86-64, runs anywhere, slower.
 option(CACHE_LLAMA_X86_AVX2 "Enable AVX2/FMA/F16C on non-Android x86_64 builds" OFF)
 
@@ -115,6 +116,10 @@ endif()
 target_link_libraries(cache_llama PRIVATE llama llama-common)
 if (CACHE_LLAMA_GEMMA4_PREFILL_OPT)
   target_compile_definitions(cache_llama PRIVATE CACHE_GEMMA4_PREFILL_OPT=1)
+endif()
+if (CACHE_LLAMA_NO_REPACK)
+  target_compile_definitions(cache_llama PRIVATE CACHE_NO_REPACK=1)
+  message(STATUS "Cache engine: cache-no-repack-1")
 endif()
 # common/ does not export its include path, so add it (chat.h, common.h, sampling.h, json.h ...)
 target_include_directories(cache_llama PRIVATE

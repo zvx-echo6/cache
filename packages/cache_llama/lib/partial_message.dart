@@ -108,6 +108,9 @@ class ModelInfo {
     required this.nCtx,
     required this.chatFormat,
     required this.supportsTools,
+    this.engineBuild = '',
+    this.diagnosticBuild = '',
+    this.loadLog = const [],
   });
 
   factory ModelInfo.fromJson(Map<String, dynamic> j) => ModelInfo(
@@ -115,10 +118,22 @@ class ModelInfo {
         nCtx: (j['n_ctx'] ?? 0) as int,
         chatFormat: (j['chat_format'] ?? '') as String,
         supportsTools: (j['supports_tools'] ?? false) as bool,
+        engineBuild: (j['engine_build'] ?? '') as String,
+        diagnosticBuild: (j['diagnostic_build'] ?? '') as String,
+        loadLog: [for (final l in (j['load_log'] as List? ?? const [])) '$l'],
       );
 
   final String description;
   final int nCtx;
   final String chatFormat;
   final bool supportsTools;
+
+  /// Which native engine is in the app (e.g. cache-gemma4-prefill-31356).
+  final String engineBuild;
+
+  /// Set only by a diagnostic native build (e.g. cache-no-repack-1).
+  final String diagnosticBuild;
+
+  /// Diagnostic native builds only: llama.cpp's load lines about buffer sizes, REPACK, mmap and KV.
+  final List<String> loadLog;
 }

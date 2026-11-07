@@ -17,6 +17,20 @@ class AskDiagnostics {
   final Stopwatch _clock = Stopwatch()..start();
   Timer? _timer;
   static AskDiagnostics? start(int round) => kAskDiagnostics ? AskDiagnostics._(round) : null;
+
+  /// Once right after a chat model loads: the native build, llama.cpp's load lines (buffer sizes, REPACK, mmap, KV), and a
+  /// memory sample that separates anonymous (RssAnon) from file-backed (RssFile) memory and swap.
+  static void modelLoaded({required String engineBuild, required String diagnosticBuild, required List<String> loadLog}) {
+    if (!kAskDiagnostics) return;
+    try {
+      logInfo('Ask diagnostic engine: build=$engineBuild, diagnostic=${diagnosticBuild.isEmpty ? 'none' : diagnosticBuild}');
+      for (final line in loadLog) {
+        logInfo('Ask diagnostic load: ${line.trim()}');
+      }
+      logInfo('Ask diagnostic ${jsonEncode(_counters({'round': 0, 'phase': 'loaded'}))}');
+    } catch (_) {}
+  }
+
   void stop() {
     _timer?.cancel();
     _timer = null;
@@ -26,28 +40,28 @@ class AskDiagnostics {
 
   void _sample(String phase) {
     try {
-      final counters = <String, Object?>{
-        'round': round,
-        'phase': phase,
-        'elapsed_ms': _clock.elapsedMilliseconds,
-        'lifecycle': WidgetsBinding.instance.lifecycleState?.name,
-      };
-      if (Platform.isAndroid || Platform.isLinux) {
-        void read(String path, void Function(String) consume) {
-          try {
-            consume(File(path).readAsStringSync());
-          } catch (_) {}
-        }
-
-        read('/proc/self/status', (s) => counters.addAll(procMemoryCounters(s)));
-        read('/proc/meminfo', (s) => counters.addAll(procMemoryCounters(s)));
-        read('/proc/self/stat', (s) => counters.addAll(procProcessCounters(s)));
-        read('/proc/pressure/memory', (s) => counters['memory_pressure'] = s.trim());
-      }
+      final counters = _counters({'round': round, 'phase': phase, 'elapsed_ms': _clock.elapsedMilliseconds});
       logInfo('Ask diagnostic ${jsonEncode(counters)}');
     } catch (_) {
       // Diagnostics must never interrupt generation.
     }
+  }
+
+  static Map<String, Object?> _counters(Map<String, Object?> head) {
+    final counters = <String, Object?>{...head, 'lifecycle': WidgetsBinding.instance.lifecycleState?.name};
+    if (Platform.isAndroid || Platform.isLinux) {
+      void read(String path, void Function(String) consume) {
+        try {
+          consume(File(path).readAsStringSync());
+        } catch (_) {}
+      }
+
+      read('/proc/self/status', (s) => counters.addAll(procMemoryCounters(s)));
+      read('/proc/meminfo', (s) => counters.addAll(procMemoryCounters(s)));
+      read('/proc/self/stat', (s) => counters.addAll(procProcessCounters(s)));
+      read('/proc/pressure/memory', (s) => counters['memory_pressure'] = s.trim());
+    }
+    return counters;
   }
 }
 

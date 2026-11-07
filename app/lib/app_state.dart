@@ -303,6 +303,7 @@ class AppState extends ChangeNotifier {
       if (kAskDiagnostics) logInfo('Ask diagnostic model: file=${entry.fileName}, bytes=${entry.size}, context=${own.nCtx ?? kContextTokens}');
       final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
+      AskDiagnostics.modelLoaded(engineBuild: info.engineBuild, diagnosticBuild: info.diagnosticBuild, loadLog: info.loadLog);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
