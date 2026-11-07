@@ -138,8 +138,9 @@ fn rig(tag: &str, origin: Option<&str>) -> Rig {
     let auth = Auth::load(&dir.0, true).unwrap().with_webauthn(wa);
     let library = Library::new(dir.0.clone(), None);
     let embed = cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so"));
+    let llm = cache_server::llm::LlmService::new(dir.0.clone(), dir.0.join("none.so"), "bge-m3-Q8_0.gguf".into());
     let build = cache_server::libbuild::BuildService::new(dir.0.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
-    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library, embed, build }, dir }
+    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library, embed, llm, build }, dir }
 }
 
 fn cookie(r: &Reply, name: &str) -> String {
