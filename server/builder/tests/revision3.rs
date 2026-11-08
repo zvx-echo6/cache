@@ -380,6 +380,72 @@ fn the_library_writes_a_seed_log_and_the_local_view_and_a_rebuild_is_byte_identi
 }
 
 #[test]
+fn the_library_writes_copies_jsonl_that_reads_like_its_packs_and_travels_in_the_archive() {
+    use cache_builder::bookshelves::header_line;
+    use cache_builder::library::COPIES_FILE;
+    use cache_shelves::library::{copy_key, load_library, LibraryRef};
+    let tmp = tempfile::tempdir().unwrap();
+    let packs = tmp.path().join("packs");
+    let (a, b) = two_packs(&packs);
+    let lib = tmp.path().join("lib");
+    let r = build_library(&packs, &lib, &library_opts()).unwrap();
+
+    // one line per document, sorted by doc_id, no line break inside a line, listed in SHA256SUMS
+    let text = std::fs::read_to_string(lib.join(COPIES_FILE)).unwrap();
+    let ids: Vec<String> = text.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["doc_id"].as_str().unwrap().to_string()).collect();
+    let mut want = vec![a.header.doc_id.clone(), b.header.doc_id.clone()];
+    want.sort();
+    assert_eq!(ids, want);
+    assert!(text.ends_with('\n'));
+    let sums = std::fs::read_to_string(lib.join(SUMS_FILE)).unwrap();
+    assert!(sums.lines().any(|l| l.ends_with("  copies.jsonl")), "{sums}");
+
+    // the library read through copies.jsonl (it has no packs folder) is the library read through the packs
+    assert!(!lib.join("packs").exists());
+    let from_file = load_library(&LibraryRef::new("r3", &lib), &header_line).unwrap();
+    let from_packs = load_library(&LibraryRef::new("r3", tmp.path()), &header_line).unwrap();
+    assert_eq!(from_packs.copies.len(), 2);
+    assert_eq!(from_file.copies, from_packs.copies, "key, hash, title, quality, samebook facts, book facts and suggestion");
+    assert_eq!(from_file.unreadable, 0);
+    for c in &from_file.copies {
+        assert_eq!(c.copy, copy_key(c.original_blake3.as_deref(), &c.doc_id));
+        assert_ne!(c.copy, c.doc_id, "a built pack's key is its original hash");
+        assert!(c.same.is_some());
+    }
+    let ca = from_file.copies.iter().find(|c| c.doc_id == a.header.doc_id).unwrap();
+    assert_eq!(ca.suggested.as_ref().map(|s| s.div.as_str()), Some("440"));
+    assert_eq!(ca.copy, a.header.book.as_ref().unwrap().original_blake3);
+    // the encodings are the pack's own
+    let sb = a.header.samebook.as_ref().unwrap();
+    assert_eq!(ca.same.as_ref().unwrap().mean_vector, sb.mean_vector);
+    assert_eq!(ca.same.as_ref().unwrap().minhash, sb.minhash);
+    assert_eq!(cache_shelves::same::f32_to_f16(0.3), f32_to_f16(0.3));
+    assert_eq!(cache_shelves::same::mean_vector_to(&sb.mean_vector), cache_builder::pack::encode_vector_f16(&sb.mean_vector));
+
+    // a rebuild is byte-identical
+    let lib2 = tmp.path().join("lib2");
+    build_library(&packs, &lib2, &library_opts()).unwrap();
+    assert_eq!(std::fs::read(lib2.join(COPIES_FILE)).unwrap(), text.as_bytes());
+
+    // the .cache-library carries it like documents.tsv and source-identities.json: it unpacks beside them
+    let target = tmp.path().join("unpacked");
+    let req = cache_search::libadd::prepare_unpack(r.archive.unwrap().to_str().unwrap(), target.to_str().unwrap(), None, None).unwrap();
+    assert!(matches!(cache_search::libadd::run_unpack(&req, &|_, _| {}, &|_| {}, &|| false).unwrap(), cache_search::index::Outcome::Done));
+    assert_eq!(std::fs::read(target.join(COPIES_FILE)).unwrap(), text.as_bytes());
+    assert!(target.join("documents.tsv").exists());
+    // and a library folder made from the archive's files, with no packs, reads the same copies
+    let rebuilt = tmp.path().join("downloaded");
+    std::fs::create_dir_all(&rebuilt).unwrap();
+    std::fs::copy(target.join(COPIES_FILE), rebuilt.join(COPIES_FILE)).unwrap();
+    assert_eq!(load_library(&LibraryRef::new("r3", &rebuilt), &header_line).unwrap().copies, from_packs.copies);
+    // left in shard/ (before the app moves it), it is found there too
+    let shard_only = tmp.path().join("shard-only");
+    std::fs::create_dir_all(shard_only.join("shard")).unwrap();
+    std::fs::copy(target.join(COPIES_FILE), shard_only.join("shard").join(COPIES_FILE)).unwrap();
+    assert_eq!(load_library(&LibraryRef::new("r3", &shard_only), &header_line).unwrap().copies, from_packs.copies);
+}
+
+#[test]
 fn seed_numbers_run_from_1_in_title_then_doc_id_order_within_a_division() {
     let sug = |d: &str| Some(Suggested { div: d.into(), label: "x".into(), score: None, classifier_version: None, source: "label".into(), second_div: None });
     let mut facts = BTreeMap::new();

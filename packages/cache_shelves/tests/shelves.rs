@@ -2,7 +2,7 @@
 
 use cache_shelves::events::{valid_relpath, FolderMode};
 use cache_shelves::import::import_own;
-use cache_shelves::library::{load_library, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv};
+use cache_shelves::library::{copies_path, copy_key, load_library, read_copies, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv};
 use cache_shelves::resolve::{resolve, TitleFrom};
 use cache_shelves::store::{parse_log, read_logs, LogWriter};
 use cache_shelves::view::{build_view, view_bytes, view_value};
@@ -66,8 +66,10 @@ fn pf(copy: &str, doc: &str, title: &str, text_pages: u32) -> PackFacts {
         title: s(title),
         suggested: None,
         blake3: None,
+        original_blake3: None,
+        source_blake3: None,
         fields: Default::default(),
-        same: Some(SameInfo { minhash: vec![], mean_vector: vec![], text_pages, pages: text_pages, ppi: Some(150), source_size: 1000 }),
+        same: Some(SameInfo { minhash: vec![], mean_vector: vec![], text_pages, pages: text_pages, ppi: Some(150), source_size: 1000, words: None }),
     }
 }
 
@@ -599,7 +601,7 @@ fn the_ops_take_and_give_json() {
     let direct = build_view(&shelves, &[lref.clone()], &reader).unwrap();
     assert_eq!(direct, view);
 
-    let det = ops::detect(&json!({"copy": {"copy": "a", "blake3": "h"}, "against": [{"copy": "b", "blake3": "h"}, {"copy": "c", "blake3": "x"}]}).to_string()).unwrap();
+    let det = ops::detect(&json!({"copy": {"copy": "a", "blake3": "h"}, "against": [{"copy": "b", "blake3": "h"}, {"copy": "c", "blake3": "x"}]}).to_string(), &reader).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&det).unwrap(), json!([{"with": "b", "how": "blake3", "score": 1.0}]));
 
     let imp: Value = serde_json::from_str(&ops::import(&json!({"dir": dir, "dev": "phone-1", "libraries": libs}).to_string(), &reader).unwrap()).unwrap();
@@ -763,4 +765,223 @@ fn an_unmapped_event_maps_once_its_pack_appears() {
     let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
     assert_eq!(rep.events, 0);
     assert!(rep.files[0].already);
+}
+
+
+// ------------------------------------------------------------------------------------- copies.jsonl, the batch detect, the view file
+
+/// Writes `<dir>/copies.jsonl` from a loaded library, the way the builder does (one line per document, sorted by doc_id).
+fn write_copies(dir: &Path, input: &LibraryInput) {
+    let mut text = String::new();
+    for c in &input.copies {
+        text.push_str(&c.to_copies_line());
+        text.push('\n');
+    }
+    std::fs::write(dir.join("copies.jsonl"), text).unwrap();
+}
+
+#[test]
+fn a_library_with_copies_and_no_packs_gives_the_same_keys_and_the_same_view_as_one_with_packs() {
+    let tmp = Tmp::new("copies");
+    let books = [("wm", "WM", "Wilderness Medicine"), ("ps", "PS", "Pocket Survival"), ("old", "", "Stone")];
+    let with_packs = make_library(tmp.path(), "L", &books, &[]);
+    let from_packs = load_library(&with_packs, &reader).unwrap();
+    assert_eq!(from_packs.copies.len(), 3);
+    // the book without an original hash is keyed by its doc id, the others by the original hash
+    let keys: Vec<&str> = from_packs.copies.iter().map(|c| c.copy.as_str()).collect();
+    assert_eq!(keys, ["old", "PS", "WM"]);
+    for c in &from_packs.copies {
+        assert_eq!(c.copy, copy_key(c.original_blake3.as_deref(), &c.doc_id));
+    }
+
+    // the same library with no packs at all, only the copies file
+    let dir = tmp.path().join("packless");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_copies(&dir, &from_packs);
+    let packless = LibraryRef::new("L", &dir);
+    assert!(!dir.join("packs").exists());
+    let from_file = load_library(&packless, &reader).unwrap();
+    assert_eq!(from_file.copies, from_packs.copies, "the keys, hashes, titles, quality and samebook facts come out the same");
+    assert_eq!(from_file.unreadable, 0);
+    let events = [ev(1, "d", place("WM", "610")), ev(2, "d", assign("WM", "610", 1))];
+    let (a, b) = (resolve(&events, &[from_packs.clone()]), resolve(&events, &[from_file.clone()]));
+    let bytes = |r: &Resolved, l: &LibraryInput| view_bytes(&view_value(r, std::slice::from_ref(l), &[])).unwrap();
+    assert_eq!(bytes(&a, &from_packs), bytes(&b, &from_file));
+    assert_eq!(b.book_of("WM").unwrap().call.as_ref().map(|c| c.text.as_str()), Some("CDS 610-001"));
+    assert_eq!(b.book_of("old").map(|x| x.title.as_str()), Some("Stone"));
+
+    // the copies file wins over packs that are there, and the file may sit in shard/ (where unpacking an archive leaves it)
+    let both = tmp.path().join("both");
+    std::fs::create_dir_all(both.join("shard")).unwrap();
+    std::fs::create_dir_all(both.join("packs")).unwrap();
+    std::fs::write(both.join("packs").join("zz@1.cdoc"), header_line("zz", "ZZ", "Only a pack", "210")).unwrap();
+    write_copies(&both.join("shard"), &from_packs);
+    assert_eq!(copies_path(&both), Some(both.join("shard").join("copies.jsonl")));
+    let l = load_library(&LibraryRef::new("L", &both), &reader).unwrap();
+    assert_eq!(l.copies, from_packs.copies);
+    // and without it the packs are read
+    std::fs::remove_file(both.join("shard").join("copies.jsonl")).unwrap();
+    assert_eq!(copies_path(&both), None);
+    assert_eq!(load_library(&LibraryRef::new("L", &both), &reader).unwrap().copies.len(), 1);
+
+    // an unreadable line is counted and skipped; the highest version of a doc wins
+    let junk = tmp.path().join("junk.jsonl");
+    let (mut v1, mut v2) = (from_packs.copies[0].clone(), from_packs.copies[0].clone());
+    (v1.version, v1.title) = (1, "one".into());
+    (v2.version, v2.title) = (2, "two".into());
+    std::fs::write(&junk, format!("{}\nnot json\n\n{}\n{{\"title\":\"no doc id\"}}\n", v2.to_copies_line(), v1.to_copies_line())).unwrap();
+    let (copies, bad) = read_copies(&junk).unwrap();
+    assert_eq!((copies.len(), bad, copies[0].title.as_str()), (1, 2, "two"));
+}
+
+#[test]
+fn the_ops_import_and_resolve_read_copies_when_there_are_no_packs() {
+    let tmp = Tmp::new("packlessops");
+    let src = make_library(tmp.path(), "src", &[("wm", "WM", "Wilderness Medicine")], &[]);
+    let input = load_library(&src, &reader).unwrap();
+    let dir = tmp.path().join("L");
+    std::fs::create_dir_all(dir.join("log")).unwrap();
+    write_copies(&dir, &input);
+    // an old log of this device, imported through the copies file
+    std::fs::write(dir.join("log").join("me.jsonl"), legacy(1, "me", "place", "wm", ",\"div\":\"610\",\"by\":\"user\"")).unwrap();
+    let shelves = tmp.path().join("bookshelves");
+    let libs = json!([{"library_id": "L", "dir": dir.to_str().unwrap()}]);
+    let imp: Value = serde_json::from_str(&ops::import(&json!({"dir": shelves.to_str().unwrap(), "dev": "me", "libraries": libs}).to_string(), &reader).unwrap()).unwrap();
+    assert_eq!(imp["events"], json!(1));
+    assert_eq!(imp["files"][0]["unmapped"], json!(0));
+    let view: Value = serde_json::from_str(&ops::resolve_view(&json!({"dir": shelves.to_str().unwrap(), "libraries": libs}).to_string(), &reader).unwrap()).unwrap();
+    assert_eq!(view["books"]["WM"]["title"], json!("Wilderness Medicine"));
+    assert_eq!(view["books"]["WM"]["shelf"], json!("610"));
+    assert_eq!(view["books"]["WM"]["suggested"]["div"], json!("210"));
+    assert_eq!(view["built_from"]["libraries"]["L"]["packs"], json!(1));
+}
+
+#[test]
+fn resolve_writes_the_view_atomically_and_still_returns_it() {
+    let tmp = Tmp::new("viewfile");
+    let shelves = tmp.path().join("bookshelves");
+    let lref = make_library(tmp.path(), "L", &[("wm", "WM", "Wilderness Medicine")], &[]);
+    let libs = json!([{"library_id": "L", "dir": lref.dir.to_str().unwrap()}]);
+    let args = json!({"dir": shelves.to_str().unwrap(), "libraries": libs}).to_string();
+    let path = shelves.join(".local").join("view.json");
+    assert!(!path.exists());
+    let out = ops::resolve_view(&args, &reader).unwrap();
+    let returned: Value = serde_json::from_str(&out).unwrap();
+    let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(written, returned, "the file is the view the call returned");
+    assert_eq!(written["books"]["WM"]["title"], json!("Wilderness Medicine"));
+    // temp file plus rename: nothing else is left in .local
+    let left: Vec<String> = std::fs::read_dir(shelves.join(".local")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, ["view.json"]);
+    // the same inputs give the same bytes; a change in the log is in the next file
+    let first = std::fs::read(&path).unwrap();
+    ops::resolve_view(&args, &reader).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), first);
+    ops::append(&json!({"dir": shelves.to_str().unwrap(), "dev": "d", "events": [{"ev": "place", "copy": "WM", "div": "610", "by": "user"}]}).to_string()).unwrap();
+    ops::resolve_view(&args, &reader).unwrap();
+    let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["books"]["WM"]["shelf"], json!("610"));
+    // a view that cannot be written fails the call (the folder name is taken by a file)
+    let blocked = tmp.path().join("blocked");
+    std::fs::create_dir_all(&blocked).unwrap();
+    std::fs::write(blocked.join(".local"), "x").unwrap();
+    assert!(ops::resolve_view(&json!({"dir": blocked.to_str().unwrap(), "libraries": libs}).to_string(), &reader).is_err());
+}
+
+fn minhash_like(changed: usize) -> Vec<u32> {
+    (0..128u32).map(|i| if (i as usize) < changed { i + 5000 } else { i }).collect()
+}
+
+fn fp_copy(copy: &str, doc: &str, original: Option<&str>, source: &str, changed: Option<usize>, vector: Vec<f32>) -> PackFacts {
+    PackFacts {
+        copy: copy_key(original, doc),
+        doc_id: s(doc),
+        version: 1,
+        title: s(copy),
+        blake3: Some(original.map(s).unwrap_or_else(|| s(source))),
+        original_blake3: original.map(s),
+        source_blake3: Some(s(source)),
+        same: changed.map(|c| SameInfo { minhash: minhash_like(c), mean_vector: vector, text_pages: 10, pages: 10, ppi: None, source_size: 1, words: None }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_batch_detect_reads_the_libraries_and_equals_the_union_of_the_single_calls() {
+    let tmp = Tmp::new("batch");
+    let v = vec![1.0f32, 0.0];
+    // library A: a book and its near copy; library B: the same file under another doc id, an unrelated book, a book with no fingerprint
+    let a = vec![fp_copy("A1", "a1", Some("ORIG-A1"), "s1", Some(0), v.clone()), fp_copy("A2", "a2", Some("ORIG-A2"), "s2", Some(6), v.clone())];
+    let b = vec![
+        fp_copy("A1", "a1-again", Some("ORIG-A1"), "s1", Some(0), v.clone()),
+        fp_copy("B3", "b3", Some("ORIG-B3"), "s3", Some(50), v.clone()),
+        fp_copy("B4", "b4", None, "s1", None, vec![]),
+        fp_copy("B6", "b6", None, "s1", None, vec![]),
+        fp_copy("B5", "b5", Some("ORIG-B5"), "s5", Some(2), vec![0.0, 1.0]),
+    ];
+    let mut dirs = Vec::new();
+    for (id, copies) in [("A", &a), ("B", &b)] {
+        let dir = tmp.path().join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text: String = copies.iter().map(|c| format!("{}\n", c.to_copies_line())).collect();
+        std::fs::write(dir.join("copies.jsonl"), text).unwrap();
+        dirs.push(json!({"library_id": id, "dir": dir.to_str().unwrap()}));
+    }
+    let run = |extra: Value| -> Vec<Value> {
+        let mut req = json!({"libraries": dirs});
+        for (k, val) in extra.as_object().unwrap() {
+            req[k] = val.clone();
+        }
+        serde_json::from_str(&ops::detect(&req.to_string(), &reader).unwrap()).unwrap()
+    };
+    let all = run(json!({}));
+    assert!(!all.is_empty());
+
+    // the union of single-copy calls over the visible copies (one entry per copy key)
+    let mut visible: Vec<PackFacts> = Vec::new();
+    for c in a.iter().chain(b.iter()) {
+        if !visible.iter().any(|x| x.copy == c.copy) {
+            visible.push(c.clone());
+        }
+    }
+    let facts_json = |c: &PackFacts| {
+        let f = c.detect_facts();
+        json!({"copy": f.copy, "blake3": f.blake3, "minhash": f.minhash, "mean_vector": f.mean_vector})
+    };
+    let mut union: Vec<(String, String, String, f64)> = Vec::new();
+    for c in &visible {
+        let against: Vec<Value> = visible.iter().map(facts_json).collect();
+        let got: Vec<Value> = serde_json::from_str(&ops::detect(&json!({"copy": facts_json(c), "against": against}).to_string(), &reader).unwrap()).unwrap();
+        for m in got {
+            let w = m["with"].as_str().unwrap().to_string();
+            let (hi, lo) = if c.copy > w { (c.copy.clone(), w) } else { (w, c.copy.clone()) };
+            if !union.iter().any(|u| u.0 == hi && u.1 == lo) {
+                union.push((hi, lo, m["how"].as_str().unwrap().to_string(), m["score"].as_f64().unwrap()));
+            }
+        }
+    }
+    union.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+    let shaped: Vec<(String, String, String, f64)> = all.iter().map(|m| (m["copy"].as_str().unwrap().into(), m["with"].as_str().unwrap().into(), m["how"].as_str().unwrap().into(), m["score"].as_f64().unwrap())).collect();
+    assert_eq!(shaped, union);
+    // the file seen in two libraries is one copy (no pair with itself); b4 and b6 are two keys with one source hash; B3 is an
+    // edition at best and B5 has another meaning
+    let text_pair = ("A2".to_string(), "A1".to_string(), "text".to_string(), 122.0 / 128.0);
+    let hash_pair = ("b6".to_string(), "b4".to_string(), "blake3".to_string(), 1.0);
+    assert_eq!(shaped, [text_pair.clone(), hash_pair.clone()]);
+
+    // checking one copy, and skipping what is known
+    let pairs = |v: &[Value]| v.iter().map(|m| (m["copy"].as_str().unwrap().to_string(), m["with"].as_str().unwrap().to_string())).collect::<Vec<_>>();
+    assert_eq!(pairs(&run(json!({"copies": ["A1"]}))), [("A2".to_string(), "A1".to_string())]);
+    assert_eq!(pairs(&run(json!({"copies": ["b4"]}))), [("b6".to_string(), "b4".to_string())]);
+    assert!(run(json!({"copies": ["B3", "nobody"]})).is_empty());
+    assert_eq!(pairs(&run(json!({"copies": ["A1", "A2", "b4", "b6"]}))).len(), 2, "pairs among the checked copies count once");
+    assert_eq!(pairs(&run(json!({"known": ["A1", "A2"]}))), [("b6".to_string(), "b4".to_string())]);
+    assert_eq!(pairs(&run(json!({"known": ["A1"]}))).len(), 2, "a pair with one new copy is not skipped");
+    assert!(ops::detect(&json!({"libraries": dirs, "known": "A1"}).to_string(), &reader).is_err());
+    assert!(ops::detect(&json!({"libraries": [{"dir": "x"}]}).to_string(), &reader).is_err());
+
+    // the same through packs: a library with packs and no copies file gives the same pairs
+    let packs = make_library(tmp.path(), "P", &[("p1", "ORIG-P", "P1"), ("p2", "ORIG-P", "P2")], &[]);
+    let got: Vec<Value> = serde_json::from_str(&ops::detect(&json!({"libraries": [{"library_id": "P", "dir": packs.dir.to_str().unwrap()}]}).to_string(), &reader).unwrap()).unwrap();
+    assert!(got.is_empty(), "two packs with one original hash are one copy");
 }
