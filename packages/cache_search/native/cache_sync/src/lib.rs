@@ -138,6 +138,13 @@ pub struct Config {
     /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
+    /// What this device has switched off in a shared folder, by share id (patterns as for `exclude`): the person's choice of
+    /// items in one share (a library, a map layer, a model). Such a path is neither fetched here nor offered to the others, and
+    /// its deletes stay here, but this device keeps listing it with its history, so switching it on again carries on where it
+    /// left off (and a copy deleted here meanwhile comes back from the devices that kept theirs). `set_off` replaces a share's
+    /// list later.
+    #[serde(default)]
+    pub off: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -220,6 +227,40 @@ struct RemoteShare {
 struct RemoteIndex {
     name: String,
     shares: Vec<RemoteShare>,
+    /// The free space on the device that sent it (older versions do not say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    free_bytes: Option<u64>,
+}
+
+/// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
+/// one linked device, some shared folders, and within them the paths `paths` covers (patterns as for [`Config::exclude`]).
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    peer: Option<String>,
+    shares: Option<Vec<String>>,
+    paths: Option<Vec<String>>,
+}
+
+impl Scope {
+    fn whole(&self) -> bool {
+        self.peer.is_none() && self.shares.is_none() && self.paths.is_none()
+    }
+
+    fn has_share(&self, id: &str) -> bool {
+        self.shares.as_ref().map(|s| s.iter().any(|x| x == id)).unwrap_or(true)
+    }
+
+    fn has_peer(&self, id: &str) -> bool {
+        self.peer.as_deref().map(|p| p == id).unwrap_or(true)
+    }
+
+    /// `remote` narrowed to the paths of the scope.
+    fn narrow(&self, remote: &Index) -> Index {
+        match &self.paths {
+            None => remote.clone(),
+            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect() },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -307,6 +348,8 @@ struct Inner {
     hidden: BTreeMap<String, Vec<String>>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::off`], as `set_off` last left it.
+    off: Mutex<BTreeMap<String, Vec<String>>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
@@ -523,7 +566,12 @@ impl Inner {
     /// This device fetches `rel` in `share` from the others ([`Config::only`], [`Config::never_fetch`]).
     fn wants(&self, share: &str, rel: &str) -> bool {
         let only = self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true);
-        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
+        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false) && !self.is_off(share, rel)
+    }
+
+    /// `rel` in `share` is switched off on this device ([`Config::off`]): neither fetched nor offered.
+    fn is_off(&self, share: &str, rel: &str) -> bool {
+        self.off.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
     }
 
     /// What this device takes from a peer's list of `share`: not what never syncs, not what it does not fetch, and not a delete
@@ -540,14 +588,19 @@ impl Inner {
         }
     }
 
-    /// What this device offers the others of `share`: not what never syncs, and not its deletes that stay here.
+    /// What this device offers the others of `share`: not what never syncs, not what is switched off here, and not its deletes
+    /// that stay here.
+    /// A delete waiting to be forgotten because its item was switched on again ([`Inner::refetch`]) is not offered either, so
+    /// the other devices never take it meanwhile.
     fn offered(&self, share: &str, idx: &Index) -> Index {
         let skip = self.skip(share);
+        let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
+        let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
         Index {
             files: idx
                 .files
                 .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
         }
@@ -790,6 +843,11 @@ impl Inner {
                 refetched = true;
             }
         }
+        // Stored at once: no longer held back from what is offered ([`Inner::offered`]), these deletes must not be listed while
+        // the rest of the folder is scanned.
+        if refetched {
+            self.store_index(&share.id, &idx, &seen)?;
+        }
         if !share.path.is_dir() {
             bail!("{} is missing", share.path.display());
         }
@@ -896,6 +954,7 @@ impl Inner {
     fn our_index(&self) -> RemoteIndex {
         let s = self.saved.lock().unwrap().clone();
         RemoteIndex {
+            free_bytes: Self::free_bytes(&self.dir),
             name: s.name.clone(),
             shares: s
                 .shares
@@ -936,13 +995,19 @@ impl Inner {
 
     /// One round: rescan every shared folder, then for every linked device fetch its index and apply what is newer there.
     async fn round(self: &Arc<Self>) {
+        self.round_with(&Scope::default()).await
+    }
+
+    /// A round over what `scope` covers only (Sync now for one device, one kind or one item); the same steps as [`Inner::round`].
+    async fn round_with(self: &Arc<Self>, scope: &Scope) {
         let _one = self.round.lock().await;
-        let shares = self.saved.lock().unwrap().shares.clone();
+        let all = self.saved.lock().unwrap().shares.clone();
         if !self.recovered.swap(true, Ordering::Relaxed) {
-            for sh in &shares {
+            for sh in &all {
                 self.recover(sh).await;
             }
         }
+        let shares: Vec<Share> = all.into_iter().filter(|s| scope.has_share(&s.id)).collect();
         for sh in &shares {
             if let Err(e) = self.rescan(sh).await {
                 self.note(format!("{}: {e}", sh.name));
@@ -952,7 +1017,7 @@ impl Inner {
             self.run.lock().unwrap().paused = Some("Sync is paused: no network it may use".into());
             return;
         }
-        let peers = self.saved.lock().unwrap().peers.clone();
+        let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
@@ -981,7 +1046,7 @@ impl Inner {
             };
             for rs in &remote.shares {
                 let Some(sh) = shares.iter().find(|s| s.id == rs.id) else { continue };
-                match self.apply(sh, &rs.index, &p.id).await {
+                match self.apply(sh, &scope.narrow(&rs.index), &p.id).await {
                     Ok(()) => {}
                     Err(e) => {
                         let msg = format!("{e:#}");
@@ -996,8 +1061,10 @@ impl Inner {
         }
         let mut run = self.run.lock().unwrap();
         run.paused = if self.network.load(Ordering::Relaxed) { paused } else { Some("Sync is paused: no network it may use".into()) };
-        run.rounds += 1;
-        run.last_round = Some(now_ms());
+        if scope.whole() {
+            run.rounds += 1;
+            run.last_round = Some(now_ms());
+        }
     }
 
     async fn fetch_index(&self, peer: &str) -> Result<(RemoteIndex, String)> {
@@ -1449,6 +1516,7 @@ impl SyncEngine {
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
             hidden: cfg.hidden.clone(),
+            off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
         });
         inner.save()?;
@@ -1652,7 +1720,124 @@ impl SyncEngine {
                 Ok(json!({"ok": true}))
             }
             "sync_now" => {
+                // With no scope, a round of everything now. With one, a round of just that (one device, some shared folders,
+                // some paths in them) on its own, after any round running now: what Sync now on a device, a kind or an item does.
+                let list = |k: &str| -> Result<Option<Vec<String>>> {
+                    match args.get(k) {
+                        None | Some(Value::Null) => Ok(None),
+                        Some(Value::Array(a)) => Ok(Some(a.iter().filter_map(|v| v.as_str().map(String::from)).collect())),
+                        Some(_) => bail!("{k} must be a list"),
+                    }
+                };
+                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")? };
+                if scope.whole() {
+                    inner.wake.notify_one();
+                    return Ok(json!({"ok": true}));
+                }
+                {
+                    let sv = inner.saved.lock().unwrap();
+                    if let Some(p) = &scope.peer {
+                        if !sv.peers.iter().any(|x| x.id == *p) {
+                            bail!("that device is not linked");
+                        }
+                    }
+                    for id in scope.shares.iter().flatten() {
+                        if !sv.shares.iter().any(|x| x.id == *id) {
+                            bail!("{id} is not shared");
+                        }
+                    }
+                }
+                let inner2 = inner.clone();
+                self.rt.spawn(async move { inner2.round_with(&scope).await });
+                Ok(json!({"ok": true}))
+            }
+            "set_off" => {
+                // What this device has switched off in a share from now on (null or []: nothing). Deletes made here under paths
+                // switched on again are forgotten, so the copies the other devices kept come back.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let list: Vec<String> = match args.get("off") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("off must be a list of patterns or null"),
+                };
+                let was = inner.off.lock().unwrap().get(&id).cloned().unwrap_or_default();
+                let back: Vec<String> = inner
+                    .load_index(&id)
+                    .files
+                    .iter()
+                    .filter(|(p, e)| e.deleted && excluded(&was, p) && !excluded(&list, p))
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if !back.is_empty() {
+                    inner.refetch.lock().unwrap().entry(id.clone()).or_default().extend(back.iter().cloned());
+                }
+                {
+                    let mut off = inner.off.lock().unwrap();
+                    if list.is_empty() {
+                        off.remove(&id);
+                    } else {
+                        off.insert(id.clone(), list);
+                    }
+                }
                 inner.wake.notify_one();
+                Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "share_items" => {
+                // A share's items: its paths grouped by their first `depth` segments (a library's folder, a ZIM, a map layer's
+                // file), with what this device holds of each and what each linked device offers, so the person can choose items
+                // a device has not fetched yet.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1).clamp(1, 16) as usize;
+                let key = |p: &str| p.split('/').take(depth).collect::<Vec<_>>().join("/");
+                #[derive(Default)]
+                struct Item {
+                    files: u64,
+                    bytes: u64,
+                    peers: BTreeMap<String, (u64, u64)>,
+                }
+                let saved = inner.saved.lock().unwrap().clone();
+                let mut items: BTreeMap<String, Item> = BTreeMap::new();
+                if saved.shares.iter().any(|x| x.id == id) {
+                    for (p, e) in inner.load_index(&id).files.iter().filter(|(p, e)| !e.deleted && !excluded(inner.skip(&id), p)) {
+                        let it = items.entry(key(p)).or_default();
+                        it.files += 1;
+                        it.bytes += e.size;
+                    }
+                }
+                {
+                    let run = inner.run.lock().unwrap();
+                    for p in &saved.peers {
+                        let Some(rs) = run.peers.get(&p.id).and_then(|st| st.index.as_ref()).and_then(|i| i.shares.iter().find(|x| x.id == id)) else {
+                            continue;
+                        };
+                        for (path, e) in inner.without_excluded(&id, &rs.index).files.iter().filter(|(_, e)| !e.deleted) {
+                            let c = items.entry(key(path)).or_default().peers.entry(p.id.clone()).or_default();
+                            c.0 += 1;
+                            c.1 += e.size;
+                        }
+                    }
+                }
+                let peer_name = |id: &str| saved.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+                let out: Vec<Value> = items
+                    .iter()
+                    .map(|(name, it)| {
+                        let peers: Vec<Value> =
+                            it.peers.iter().map(|(pid, (n, b))| json!({"peer": pid, "peer_name": peer_name(pid), "files": n, "bytes": b})).collect();
+                        json!({"name": name, "files": it.files, "bytes": it.bytes, "peers": peers})
+                    })
+                    .collect();
+                Ok(json!({"items": out}))
+            }
+            "set_peer_name" => {
+                // What this device calls a linked device (its own name for itself stays its own).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let name = s("name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).ok_or_else(|| anyhow!("name is required"))?;
+                {
+                    let mut sv = inner.saved.lock().unwrap();
+                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
+                    p.name = name;
+                }
+                inner.save()?;
                 Ok(json!({"ok": true}))
             }
             "set_policy" => {
@@ -1697,7 +1882,8 @@ impl SyncEngine {
                         }
                     }
                 }
-                json!({"id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error})
+                let free = st.index.as_ref().and_then(|i| i.free_bytes);
+                json!({"id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error, "free_bytes": free})
             })
             .collect();
         let shares: Vec<Value> = saved
@@ -1725,6 +1911,7 @@ impl SyncEngine {
                     "pending_files": pending, "pending_bytes": pending_bytes,
                     "only": inner.only.lock().unwrap().get(&sh.id).cloned(),
                     "never_fetch": inner.never_fetch.lock().unwrap().get(&sh.id).cloned(),
+                    "off": inner.off.lock().unwrap().get(&sh.id).cloned(),
                 })
             })
             .collect();
