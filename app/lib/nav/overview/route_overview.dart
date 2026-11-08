@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:cache_search/cache_search.dart' show MapRoute;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapRoute;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -128,17 +128,34 @@ String overviewStyleJson(String styleJson, MapRoute route) {
 
 /// The position on the whole-route picture: a halo, a ring and an arrow turned to the heading (or a dot without one).
 class PositionDotPainter extends CustomPainter {
-  PositionDotPainter({required this.at, required this.heading, required this.palette, this.scale = 1});
+  PositionDotPainter({required this.at, required this.heading, required this.palette, this.scale = 1, this.done = const []});
 
   final Offset? at;
   final double? heading;
   final MapPalette palette;
+
+  /// The part of the route already travelled, greyed over the picture (moved with the dot).
+  final List<Offset> done;
 
   /// 1 on the corner picture, bigger on the full-screen one.
   final double scale;
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (done.length > 1) {
+      final path = Path()..moveTo(done.first.dx, done.first.dy);
+      for (final q in done.skip(1)) {
+        path.lineTo(q.dx, q.dy);
+      }
+      canvas.drawPath(
+          path,
+          Paint()
+            ..color = palette['routeAlternate'].withValues(alpha: 0.9)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 4 * scale
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round);
+    }
     final p = at;
     if (p == null) return;
     final s = 7.0 * scale;
@@ -169,13 +186,16 @@ class PositionDotPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(PositionDotPainter old) => old.at != at || old.heading != heading || old.scale != scale || old.palette != palette;
+  bool shouldRepaint(PositionDotPainter old) => old.at != at || old.heading != heading || old.scale != scale || old.palette != palette || old.done != done;
 }
 
 /// The whole-route picture with the position dot over it. The picture is drawn once; only the dot moves, by the distance rule
 /// ([RedrawGate]): when it has moved about two pixels at this picture's scale or the heading turned, at most twice a second.
 class RouteOverview extends StatefulWidget {
-  const RouteOverview({super.key, required this.picture, required this.palette, required this.position, this.dotScale = 1, this.clock, this.onDotDrawn});
+  const RouteOverview({super.key, required this.picture, required this.palette, required this.position, this.route = const [], this.dotScale = 1, this.clock, this.onDotDrawn});
+
+  /// The route's line, for greying the part already travelled.
+  final List<GeoPoint> route;
 
   /// The rendered picture; null while it is made (the land colour shows, with the dot).
   final OverviewPicture? picture;
@@ -198,7 +218,7 @@ class RouteOverview extends StatefulWidget {
 
 class _RouteOverviewState extends State<RouteOverview> {
   final RedrawGate _gate = RedrawGate();
-  final ValueNotifier<(Offset, double?)?> _dot = ValueNotifier(null);
+  final ValueNotifier<(Offset, double?, List<Offset>)?> _dot = ValueNotifier(null);
   Timer? _wait;
   OverviewCamera? _camera;
 
@@ -237,7 +257,7 @@ class _RouteOverviewState extends State<RouteOverview> {
     if (due == Duration.zero) {
       _wait?.cancel();
       _wait = null;
-      _draw(at, pos.heading);
+      _draw(at, pos.heading, pos.lat, pos.lon);
     } else {
       // Too soon: draw the newest position when the wait is over.
       _wait ??= Timer(due, () {
@@ -246,15 +266,34 @@ class _RouteOverviewState extends State<RouteOverview> {
         final c = _camera;
         if (!mounted || p == null || c == null) return;
         final a = c.project(p.lat, p.lon);
-        if (_gate.differs(a, p.heading)) _draw(a, p.heading);
+        if (_gate.differs(a, p.heading)) _draw(a, p.heading, p.lat, p.lon);
       });
     }
   }
 
-  void _draw(Offset at, double? heading) {
+  void _draw(Offset at, double? heading, double lat, double lon) {
     _gate.drawn(at, heading, _now());
-    _dot.value = (at, heading);
+    _dot.value = (at, heading, _travelled(at, lat, lon));
     widget.onDotDrawn?.call();
+  }
+
+  /// The route from its start to the point nearest the position, and the position, on the picture.
+  List<Offset> _travelled(Offset at, double lat, double lon) {
+    final cam = _camera;
+    final r = widget.route;
+    if (cam == null || r.length < 2) return const [];
+    var best = 0;
+    var bestD = double.infinity;
+    final k = math.cos(lat * math.pi / 180);
+    for (var i = 0; i < r.length; i++) {
+      final dy = r[i].lat - lat, dx = (r[i].lon - lon) * k;
+      final d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return [for (var i = 0; i <= best; i++) cam.project(r[i].lat, r[i].lon), at];
   }
 
   @override
@@ -280,10 +319,10 @@ class _RouteOverviewState extends State<RouteOverview> {
           ColoredBox(color: widget.palette['land']),
           if (pic != null) RawImage(image: pic.image, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
           RepaintBoundary(
-            child: ValueListenableBuilder<(Offset, double?)?>(
+            child: ValueListenableBuilder<(Offset, double?, List<Offset>)?>(
               valueListenable: _dot,
               builder: (context, d, _) => CustomPaint(
-                painter: PositionDotPainter(at: d?.$1, heading: d?.$2, palette: widget.palette, scale: widget.dotScale),
+                painter: PositionDotPainter(at: d?.$1, heading: d?.$2, palette: widget.palette, scale: widget.dotScale, done: d?.$3 ?? const []),
               ),
             ),
           ),

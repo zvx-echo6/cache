@@ -1071,7 +1071,7 @@ class _MapsScreenState extends State<MapsScreen> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (!_swapped) RouteOverview(key: const ValueKey('route-overview-inset'), picture: _insetPicture, palette: _palette, position: _overviewPosition),
+                  if (!_swapped) RouteOverview(key: const ValueKey('route-overview-inset'), picture: _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const []),
                   Positioned(
                     left: 5,
                     top: 5,
@@ -1179,7 +1179,7 @@ class _MapsScreenState extends State<MapsScreen> {
         if (swapped)
           Positioned.fill(
             key: const ValueKey('route-overview-full'),
-            child: RouteOverview(picture: _fullPicture ?? _insetPicture, palette: _palette, position: _overviewPosition, dotScale: 1.6),
+            child: RouteOverview(picture: _fullPicture ?? _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const [], dotScale: 1.6),
           ),
         Positioned(
           key: const ValueKey('live-map'),
