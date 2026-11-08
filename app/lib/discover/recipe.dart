@@ -158,8 +158,8 @@ class RecipeItem {
 }
 
 /// The settings a recipe may change, by key. A recipe that names another key is refused (only these are known to restore).
-///   home:<block>     a Home block shown (true) or hidden: home:weather
-///   watch:here       weather and alerts watch where the device is
+/// - `home:<block>`: a Home block shown (true) or hidden, such as `home:weather`;
+/// - `watch:here`: weather and alerts watch where the device is.
 /// Live sources are switched on by their items (key `live:<id>`), not listed here.
 bool isKnownSettingKey(String key) => key == 'watch:here' || RegExp(r'^home:(weather|shortcuts|ask)$').hasMatch(key);
 

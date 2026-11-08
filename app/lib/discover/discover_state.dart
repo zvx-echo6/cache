@@ -109,11 +109,10 @@ class DiscoverState extends ChangeNotifier {
     required this.device,
     this.settingsDirOverride,
     Future<String> Function()? bundled,
-    Future<String> Function()? fetch,
+    this.fetch,
     this.now,
     this.persist = true,
-  }) : _bundled = bundled ?? (() => rootBundle.loadString(kDiscoverAsset)),
-       _fetch = fetch {
+  }) : _bundled = bundled ?? (() => rootBundle.loadString(kDiscoverAsset)) {
     device.changes.addListener(notifyListeners);
   }
 
@@ -124,7 +123,9 @@ class DiscoverState extends ChangeNotifier {
   final DiscoverDevice device;
   final Directory? settingsDirOverride;
   final Future<String> Function() _bundled;
-  final Future<String> Function()? _fetch;
+
+  /// Reads the published file; null: only the copy in the app.
+  final Future<String> Function()? fetch;
   final int Function()? now;
 
   /// Keeps discover.json (false: in memory only, for widget tests and renders).
@@ -214,7 +215,7 @@ class DiscoverState extends ChangeNotifier {
 
   /// Fetches the published file and keeps it when it is newer and this build reads it; then looks up the live sizes.
   Future<void> refresh() async {
-    final f = _fetch;
+    final f = fetch;
     if (f != null) {
       try {
         final text = await f();
