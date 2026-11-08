@@ -156,6 +156,16 @@ class WebSearchSetup extends ChangeNotifier {
     return r;
   }
 
+  /// Keeps a key a linked device sent (it was checked there) and uses it at once; the switch stays as the settings say.
+  Future<void> keepKey(String raw) async {
+    final key = raw.trim();
+    if (key.isEmpty) return;
+    await secrets.write(keyName, key);
+    _hasKey = true;
+    notifyListeners();
+    await apply();
+  }
+
   /// Forgets the key and switches web search off.
   Future<void> removeKey() async {
     try {

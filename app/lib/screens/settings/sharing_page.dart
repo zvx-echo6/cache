@@ -4,15 +4,20 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../maps/ui/format.dart';
 import '../../settings/data_kinds.dart';
+import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
+import 'settings_link_pages.dart';
 import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing});
+  const SharingPage({super.key, required this.sharing, this.settingsSync});
 
   final SharingState sharing;
+
+  /// Settings between linked devices (each device's page); null where the app has none (tests).
+  final SettingsSync? settingsSync;
 
   @override
   State<SharingPage> createState() => _SharingPageState();
@@ -132,7 +137,7 @@ class _SharingPageState extends State<SharingPage> {
   }
 
   Future<void> _peer(Map<String, dynamic> p) =>
-      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: s, peer: p['id'] as String)));
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: s, peer: p['id'] as String, settingsSync: widget.settingsSync)));
 
   Future<void> _kind(DataKind k) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingKindPage(sharing: s, kind: k)));
 
@@ -466,11 +471,14 @@ class _ItemRow extends StatelessWidget {
 }
 
 /// Settings > Sharing and sync > a linked device: how it is connected and when it was last seen, its free space when it says,
-/// Sync now with it alone, Rename (what this device calls it) and Unlink.
+/// how settings go between the two (Settings), Sync now with it alone, Rename (what this device calls it) and Unlink.
 class SharingDevicePage extends StatefulWidget {
-  const SharingDevicePage({super.key, required this.sharing, required this.peer});
+  const SharingDevicePage({super.key, required this.sharing, required this.peer, this.settingsSync});
 
   final SharingState sharing;
+
+  /// Settings between linked devices; null where the app has none (tests).
+  final SettingsSync? settingsSync;
 
   /// The device's key.
   final String peer;
@@ -544,6 +552,16 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 ),
               ),
             ),
+            if (widget.settingsSync != null)
+              DeviceSettingsSection(
+                key: const ValueKey('device-settings'),
+                sync: widget.settingsSync!,
+                peer: widget.peer,
+                name: name,
+                // Known once it has answered: an older version never says it keeps links.
+                known: p['link_known'] == true || p['last_seen'] == null,
+                busy: _busy,
+              ),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [

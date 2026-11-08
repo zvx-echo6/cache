@@ -222,6 +222,53 @@ class LayoutState extends ChangeNotifier {
     } catch (_) {}
   }
 
+  // ---- settings from a linked device ---------------------------------------------------------------------
+
+  /// The bar, Home's blocks and the Shortcuts as JSON, the way a linked device takes them (Settings > Sharing and sync).
+  List<String> get pinnedNames => [for (final m in _pinned) m.name];
+  Map<String, Object?> get blocksJson => {'order': [for (final b in _order) b.name], 'off': [for (final b in _off) b.name]..sort()};
+  List<Map<String, dynamic>> get shortcutsJson => [for (final s in _shortcuts) s.toJson()];
+
+  /// The bar as a linked device has it; modules this version does not know are left out.
+  void applyPinned(Object? names) {
+    final next = <ModuleId>[];
+    for (final n in (names is List ? names : const [])) {
+      final m = ModuleId.byName(n is String ? n : null);
+      if (m != null && !next.contains(m) && next.length < kMaxPinned) next.add(m);
+    }
+    _pinned = next;
+    _save();
+  }
+
+  /// Home's blocks, their order and which are off, as a linked device has them; a block this version has and the other does
+  /// not keeps its default place.
+  void applyBlocks(Object? j) {
+    final m = j is Map ? j : const {};
+    final order = <HomeBlock>[];
+    for (final n in (m['order'] as List? ?? const [])) {
+      final b = HomeBlock.byName(n is String ? n : null);
+      if (b != null && !order.contains(b)) order.add(b);
+    }
+    for (final b in defaultBlocks) {
+      if (!order.contains(b)) b == HomeBlock.setup ? order.insert(0, b) : order.add(b);
+    }
+    _order = order;
+    _off
+      ..clear()
+      ..addAll([for (final n in (m['off'] as List? ?? const [])) ?HomeBlock.byName(n is String ? n : null)]);
+    _save();
+  }
+
+  /// The Shortcuts as a linked device has them.
+  void applyShortcuts(Object? list) {
+    _shortcuts.clear();
+    for (final s in (list is List ? list : const [])) {
+      final sc = Shortcut.fromJson(s);
+      if (sc != null && !_shortcuts.any((x) => x.key == sc.key)) _shortcuts.add(sc);
+    }
+    _save();
+  }
+
   // ---- the bottom bar ----------------------------------------------------------------------------------------
 
   /// Pins [m] at the end of the bar. False when the bar is full (nothing changes) or [m] is already pinned.

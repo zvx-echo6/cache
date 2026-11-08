@@ -61,6 +61,7 @@ import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
+import 'models/hf_hub.dart' show HfFile;
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
@@ -72,7 +73,9 @@ import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/share_items.dart';
+import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
+import 'sharing/synced_settings.dart';
 import 'video/token_store.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -356,6 +359,42 @@ class _CacheAppState extends State<CacheApp> {
         hidden: kIndexesHidden,
       ),
     ],
+    // Kept only with some linked devices and never listed: the settings log (Match and Send mine, governed by each device's page)
+    // and the person's Bookshelves log (their own devices: Match only).
+    linkShares: [
+      LinkShare(id: kSettingsShareId, name: 'Settings', dir: () => _support(kSettingsShareDir), modes: kSettingsShareModes),
+      LinkShare(id: kBookshelvesShareId, name: 'Bookshelves', dir: () => _support(kBookshelvesDir), modes: kBookshelvesShareModes),
+    ],
+  );
+
+  late final PlaceNameCache _placeNames = PlaceNameCache(weather, settings);
+
+  /// Settings between linked devices, per setting (each linked device's page in Sharing and sync): what goes is
+  /// sharing/synced_settings.dart; the keys ticked for a device go to it alone, held by the sync engine in memory.
+  late final SettingsSync settingsSync = SettingsSync(
+    sharing: sharing,
+    settings: appSyncedSettings(
+      app: app,
+      layout: layout,
+      settings: settings,
+      maps: maps,
+      weather: weather,
+      placeNames: () => _placeNames.names,
+      recommended: () => RecommendedModels.shared.models,
+    ),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
+    dir: () async => _support(kSettingsShareDir),
+    // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
+    downloadModel: (d) => modelDownloads.start(HfFile(
+      repo: d['repo'] as String? ?? '',
+      path: d['path'] as String? ?? '',
+      size: (d['size'] as num?)?.toInt() ?? 0,
+      sha256: d['sha256'] as String?,
+      revision: d['revision'] as String? ?? 'main',
+      url: d['url'] is String ? Uri.tryParse(d['url'] as String) : null,
+    )),
+    placesHere: () async => {for (final p in await weather.placeChoices()) if (p.id.startsWith('place:')) p.id.substring(6)},
   );
 
   /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
@@ -450,6 +489,7 @@ class _CacheAppState extends State<CacheApp> {
     webSearch: webSearch,
     weather: weather,
     sharing: sharing,
+    settingsSync: settingsSync,
     regions: regions,
     indexing: indexing,
     storage: StorageUsage(
@@ -697,7 +737,7 @@ class _CacheAppState extends State<CacheApp> {
     });
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
-    app.init();
+    _appRead = app.init();
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
@@ -723,6 +763,13 @@ class _CacheAppState extends State<CacheApp> {
         notebookActions.start();
       });
       unawaited(userLayers.reload());
+      // Settings between linked devices, once every setting it watches has been read.
+      if (!plat.isWeb) {
+        await _soft('settings sync', () async {
+          await Future.wait([_appRead, _layoutRead, _mapsRead]);
+          await settingsSync.start();
+        });
+      }
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
       notebooks.onChanged = () {
@@ -764,6 +811,8 @@ class _CacheAppState extends State<CacheApp> {
         unawaited(sources.refresh());
         unawaited(indexing.kick());
       }
+      // A linked device's settings changes arrived: applied at once.
+      if (ids.contains(kSettingsShareId) && settingsSync.started) unawaited(settingsSync.pull());
     };
     sources.addListener(_syncIndexesOnly);
     // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
@@ -772,10 +821,11 @@ class _CacheAppState extends State<CacheApp> {
     video.addListener(_syncIndexesOnly);
     video.addListener(_kickIndexing);
     if (!plat.isWeb) {
-      settingsRead.then((_) => sharing.init());
+      // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
+      Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
       settingsRead.then((_) => regions.init());
     }
-    layout.init();
+    _layoutRead = layout.init();
     sources.init();
     if (!plat.isWeb) unawaited(pdfIndex.init());
     if (device != null) unawaited(device!.start());
@@ -783,7 +833,7 @@ class _CacheAppState extends State<CacheApp> {
     browse.init();
     video.init();
     location.init();
-    maps.init();
+    _mapsRead = maps.init();
     _openHistory();
   }
 
@@ -796,6 +846,10 @@ class _CacheAppState extends State<CacheApp> {
       debugPrint('Start-up step "$what" skipped: $e\n$stack');
     }
   }
+
+  Future<void> _appRead = Future.value();
+  Future<void> _layoutRead = Future.value();
+  Future<void> _mapsRead = Future.value();
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
@@ -891,6 +945,8 @@ class _CacheAppState extends State<CacheApp> {
     device?.dispose();
     sources.dispose();
     video.dispose();
+    // Settings sync listens to the states below: it lets go of them first.
+    settingsSync.dispose();
     layout.dispose();
     location.dispose();
     regions.dispose();
