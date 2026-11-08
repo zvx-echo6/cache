@@ -1,0 +1,51 @@
+# TEMPORARY (removed before merging): runs cache_sync's item_selection test "an_item_switched_off..." 200 times (4 jobs of 50,
+# 5 at a time) on the fixed code and on the old code.
+name: Repeat sync item selection
+
+on:
+  push:
+    branches: [flaky-sync-select]
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: 1.99.1
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  repeat:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [fixed, old]
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.code == 'old' && '0a4f6e38bd3f27b88fe5685b6833dfb411715c43' || github.sha }}
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          save-if: false
+      - name: Build the test
+        run: cargo test --locked -p cache_sync --test item_selection --no-run
+      - name: 50 runs, 5 at a time
+        run: |
+          bin=$(ls -t target/debug/deps/item_selection-* | grep -v '\.d$' | head -n 1)
+          mkdir -p "$RUNNER_TEMP/runs"
+          seq 1 50 | xargs -P 5 -I{} sh -c "\"$bin\" --exact an_item_switched_off_neither_comes_nor_goes_and_comes_back_when_switched_on > \"$RUNNER_TEMP/runs/{}.txt\" 2>&1 || true"
+          ok=$(grep -l 'test result: ok. 1 passed' "$RUNNER_TEMP"/runs/*.txt | wc -l)
+          bad=$(grep -L 'test result: ok. 1 passed' "$RUNNER_TEMP"/runs/*.txt | wc -l)
+          for f in $(grep -L 'test result: ok. 1 passed' "$RUNNER_TEMP"/runs/*.txt | head -n 2); do grep -E 'panicked|timed out|deleted|A:|B:' "$f" | cut -c 1-400; done
+          echo "RESULT ${{ matrix.code }} shard ${{ matrix.shard }}: passed $ok, failed $bad of 50" | tee -a "$GITHUB_STEP_SUMMARY"
