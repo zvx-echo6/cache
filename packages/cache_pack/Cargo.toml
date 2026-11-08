@@ -10,6 +10,8 @@ workspace = "../cache_search/native"
 # Pure Rust: no PDF engine, no model, no native library, so phones link it.
 [dependencies]
 cache_chunk = { path = "../cache_chunk" }
+# The MinHash Jaccard and the vector cosine the same-book decision uses (fingerprint.rs): one definition.
+cache_shelves = { path = "../cache_shelves" }
 serde.workspace = true
 serde_json.workspace = true
 # Packs are gzip-compressed JSON Lines; the same pure-Rust flate2 as cache_search (already in the lockfile).

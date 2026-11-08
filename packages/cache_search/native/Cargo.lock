@@ -921,6 +921,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "cache_chunk",
+ "cache_shelves",
  "flate2",
  "serde",
  "serde_json",
