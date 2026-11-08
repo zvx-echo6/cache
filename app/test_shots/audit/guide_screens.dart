@@ -11,14 +11,11 @@ import 'package:cache/settings/data_policy.dart' show ConnectionKind;
 import 'package:cache/settings/location_access.dart' show LocationAccess;
 import 'package:cache/theme.dart' show CacheThemeId;
 import 'package:cache/browse/zim_download.dart';
-import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/maps/ui/ring_menu.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng, MapLibreMap, MapLibrePlatform;
-import 'package:cache/browse/browse_state.dart';
-import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/places.dart';
@@ -27,7 +24,6 @@ import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
 import 'package:cache/notebook/sync/sync_engine.dart' show SyncKind;
 import 'package:cache/screens/notebooks/entry_editor.dart' show EntryEditor;
 import 'package:cache/notebook/templates.dart';
-import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/screens/notebooks/connections_screen.dart';
 import 'package:cache/screens/notebooks/notebook_editor.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
@@ -39,7 +35,6 @@ import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/screens/videos/videos_screen.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
-import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart';
 import 'package:cache/video/token_store.dart';
 import 'package:cache/video/video_prefs.dart';
@@ -77,9 +72,6 @@ import 'package:cache/search/app_search.dart';
 import 'package:cache/search/app_search_providers.dart' show LibrarySearchProvider;
 import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/settings/hub.dart';
-import 'package:cache/pdf/index/pdf_index_app.dart' show pdfIndexShared;
-import 'package:cache/pdf/index/pdf_index_core.dart' show PdfIndexCoreMissing;
-import 'package:cache/pdf/index/pdf_index_state.dart' show PdfIndexState, PdfPart, PdfPartPhase, PdfZimRef;
 import 'package:cache/pdf/pdf_reader_screen.dart' show PdfReaderScreen;
 import 'package:cache/pdf/pdf_source.dart' show PdfFileSource;
 import 'package:cache/settings/space.dart';
@@ -102,7 +94,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import '../../test/browse/fakes.dart' show FakeSources, catalogWith, fixture;
+import '../../test/browse/fakes.dart' show FakeSources;
 import '../../test/chat_fakes.dart' show ScriptedBackend, say;
 import '../../test/nav_fakes.dart' show FakeBackend, FakeNavPosition, FakeSpeaker, fakeProgressJson, fakeRouteJson, fixAt;
 import '../../test/navigation_camera_test.dart' show NoSurface;
@@ -1717,12 +1709,12 @@ class _MemFolder implements SyncFolder {
 
 /// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
 class _ShotIndexing extends IndexScheduler {
-  _ShotIndexing(this._line, {this.shown = const []}) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
+  _ShotIndexing(this._line) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
 
   final String _line;
 
-  /// The work the picture shows (the rows and the overview read it); none: only the line.
-  final List<IndexItem> shown;
+  /// The work the picture shows: none, only the line.
+  final List<IndexItem> shown = const [];
 
   @override
   String? get line => _line;
@@ -1735,23 +1727,6 @@ class _ShotIndexing extends IndexScheduler {
 
   @override
   double get fraction => 0.3;
-}
-
-/// The Library's PDF indexing as the rows read it: each ZIM's PDFs part (by file name), set by the picture (no work is run).
-class _ShotPdfIndex extends PdfIndexState {
-  _ShotPdfIndex(Directory dir, this.parts)
-    : super(
-        core: const PdfIndexCoreMissing(),
-        zims: () => const [],
-        indexesDir: () async => dir,
-        recordFile: () async => File('${dir.path}/pdf-index.json'),
-        autoStart: null,
-      );
-
-  final Map<String, PdfPart> parts;
-
-  @override
-  PdfPart? partOf(PdfZimRef z) => parts[z.path.split(Platform.pathSeparator).last];
 }
 
 /// Sources whose search core answers every search with [hits] (the core's own JSON for each hit).
@@ -1920,36 +1895,6 @@ class _Included implements PrivateSharing {
       ids.remove(notebookId);
     }
   }
-}
-
-/// Sources whose search core is up (the add buttons of "Your own library" work only then).
-class _ReadySources extends FakeSources {
-  _ReadySources(super.dir);
-
-  @override
-  bool get coreReady => true;
-}
-
-/// The libraries on the phone, as the picture names them (no search core): the guide that ships in the app, and one the person added.
-class _Libs extends LibrariesState {
-  _Libs(SourcesState s) : super(sources: s);
-
-  bool _guide(LibraryItem l) => l.folderName == 'cache-guide';
-
-  @override
-  String titleOf(LibraryItem l) => _guide(l) ? 'Cache guide' : 'Field manuals';
-
-  @override
-  String? idOf(LibraryItem l) => _guide(l) ? kGuideLibraryId : 'field-manuals';
-
-  @override
-  int docsOf(LibraryItem l) => _guide(l) ? 214 : 38;
-
-  @override
-  LibraryPhase phaseOf(LibraryItem l) => LibraryPhase.ready;
-
-  @override
-  double? indexFraction(LibraryItem l) => null;
 }
 
 /// The video connector's stand-in, with the sample video named for the guide.

@@ -71,10 +71,13 @@ class DirectionsHeader extends StatelessWidget {
 
 /// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// The most the panel may take (the map's side column); null: the choices take up to half the window, as a bottom panel.
+  final double? maxHeight;
 
   static const _modes = [('drive', Icons.directions_car, 'Drive'), ('walk', Icons.directions_walk, 'Walk'), ('bike', Icons.directions_bike, 'Bike')];
   static const _offroadModes = [('offroad_foot', 'On foot'), ('offroad_vehicle', 'Vehicle')];
@@ -94,7 +97,7 @@ class RoutePanel extends StatelessWidget {
           children: [
             // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices).
             ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+              constraints: BoxConstraints(maxHeight: maxHeight == null ? MediaQuery.sizeOf(context).height * 0.5 : (maxHeight! - 82).clamp(120.0, double.infinity)),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

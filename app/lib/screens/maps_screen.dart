@@ -1069,11 +1069,12 @@ class _MapsScreenState extends State<MapsScreen> {
   }
 
   /// The place card, the way to go, the guidance bar or a repeater's card; null when none shows.
-  Widget? _panel(bool searching) {
+  /// [maxHeight]: the room in the map's side column, which the card or the way to go fills before it scrolls.
+  Widget? _panel(bool searching, {double? maxHeight}) {
     final sel = nav.selected;
     if (nav.guiding) return GuidanceBar(nav: nav, fmt: nav.fmt);
-    if (nav.phase == NavPhase.previewing) return RoutePanel(nav: nav, fmt: nav.fmt);
-    if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about);
+    if (nav.phase == NavPhase.previewing) return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight);
+    if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight);
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;
   }
@@ -1109,9 +1110,11 @@ class _MapsScreenState extends State<MapsScreen> {
                     if (panel != null) ...[
                       const SizedBox(height: 8),
                       Expanded(
-                        child: Align(
-                          alignment: guiding ? Alignment.bottomCenter : Alignment.topCenter,
-                          child: SingleChildScrollView(child: SizedBox(width: double.infinity, child: panel)),
+                        child: LayoutBuilder(
+                          builder: (context, room) => Align(
+                            alignment: guiding ? Alignment.bottomCenter : Alignment.topCenter,
+                            child: SingleChildScrollView(child: SizedBox(width: double.infinity, child: _panel(searching, maxHeight: room.maxHeight))),
+                          ),
                         ),
                       ),
                     ],
@@ -1152,7 +1155,7 @@ class _MapsScreenState extends State<MapsScreen> {
     );
   }
 
-  /// "From <place>: choose where to go", with the way back to starting from where you are.
+  /// "From (a place): choose where to go", with the way back to starting from where you are.
   Widget _fromChip(BuildContext context) => Container(
       key: const ValueKey('from-chip'),
       padding: const EdgeInsets.only(left: 14),
