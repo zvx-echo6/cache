@@ -44,7 +44,7 @@ Map<String, Object?>? waitingModelDownload(SettingsEvent ev) {
 enum SettingsGroupId {
   appearance('Appearance', 'Theme, module icons, dark PDF pages'),
   home('Home screen', 'Layout and shortcuts'),
-  weather('Weather and alerts', 'Sources on, what weather watches, your own sources'),
+  weather('Weather and alerts', 'Sources on, what weather watches'),
   notifications('Notifications', 'Which alerts pop up, quiet hours'),
   maps('Map layers', 'Which layers are on'),
   ask('Ask', 'Model, web search');

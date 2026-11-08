@@ -66,7 +66,7 @@ settings-credits | Library > Cache Documentation > Credits and licences: Version
 settings-location-blocked | Settings > Cache model and web search, Location group: "Use my location" row reading "Blocked in the phone's settings" with the "Phone settings" button
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
-settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks ticked under "Shared with linked devices", with their files and size
+settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks switched on under "Shared with linked devices", Models off, each with its line
 settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, one with "Get key", and "More sources (9 more)"
 source-page | A data source's page: "Use this source", "Replace", "Remove the key" and the About this source facts
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
