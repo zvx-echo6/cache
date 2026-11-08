@@ -198,7 +198,7 @@ pub fn apply_manifest(
 
 /// Open the library read-only once and hand that shard to every handle's cell the job closed (see `libreg`).
 /// This open is the job's check that the library opens; there is no second open.
-fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
+pub(crate) fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
     let shard = library::open_shard_for_handoff(library, &entry.vectors())?;
     entry.hand_back(&shard);
     Ok(())
@@ -208,7 +208,7 @@ fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
 /// Retry a file-system change that Windows refuses for a moment (`Access is denied` / sharing violation while
 /// a virus scanner, the indexer or a just-closed mmap still holds the folder). Bounded: about 5 s, then the last
 /// error is returned. Other errors (not found, ...) are returned at once.
-fn retry_fs<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(crate) fn retry_fs<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     let mut wait = 10u64;
     for _ in 0..30 {
         match f() {
@@ -519,7 +519,7 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<u64> {
 
 /// Flush every file and folder under `dir` to disk, so the renames that follow cannot make a half-written copy
 /// the library after a crash.
-fn sync_tree(dir: &Path) -> Result<()> {
+pub(crate) fn sync_tree(dir: &Path) -> Result<()> {
     let rd = std::fs::read_dir(dir).map_err(|e| op(&format!("reading {}", dir.display()), e))?;
     for ent in rd {
         let ent = ent.map_err(|e| op(&format!("reading {}", dir.display()), e))?;
@@ -546,12 +546,12 @@ fn sync_file(path: &Path) -> std::io::Result<()> {
 /// Flush a folder's entries (renames and creations in it). Windows cannot open a folder as a file and NTFS
 /// journals its metadata, so there it does nothing.
 #[cfg(not(windows))]
-fn sync_dir(dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     std::fs::File::open(dir).and_then(|f| f.sync_all()).map_err(|e| op(&format!("flushing {}", dir.display()), e))
 }
 
 #[cfg(windows)]
-fn sync_dir(_dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
 

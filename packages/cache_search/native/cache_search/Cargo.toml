@@ -43,12 +43,17 @@ cache_sync = { path = "../cache_sync" }
 cache_regions = { path = "../cache_regions" }
 # The Bookshelves log (shelves, call numbers, same-book groups, linked-folder locations): cs_shelves_*.
 cache_shelves = { path = "../../../cache_shelves" }
+# The Add PDF job (cs_ingest_*): the job logic, and the embedder it runs on (loaded at run time, like the places builder).
+cache_ingest = { path = "../../../cache_ingest" }
+cache_embed = { path = "../cache_embed" }
 # Syncable index snapshots (layout, manifest, verify, pick, gc, stage, publish): re-exported as crate::snapshot.
 cache_snapshot = { path = "../cache_snapshot" }
 # The Notebook (Journal and Logbook) in notebook.sqlite, from the "notebook" section of the config: cs_notebook.
 cache_notebook = { path = "../cache_notebook" }
 serde.workspace = true
 serde_json.workspace = true
+# Point ids of the Add PDF job arrive as text (UUIDv5, docs/LIBRARY-FORMAT.md).
+uuid = "1"
 thiserror = "1"
 tantivy = "0.27"
 html-escape = "0.3"
