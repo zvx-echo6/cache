@@ -1,0 +1,49 @@
+# TEMPORARY (removed before merging): app_log_test's 24-hour test and browse_state_test's gone-partial test, 200 times each,
+# fixed and old code, with load on the machine as when the whole suite runs.
+name: Repeat two flaky tests
+
+on:
+  push:
+    branches: [flaky-applog-browse]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  flutter:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [fixed]
+        test: [applog]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.code == 'old' && 'e07a41fa0eaa12d262897e4198aa319d2dff3865' || github.sha }}
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      - name: 200 runs
+        working-directory: app
+        run: |
+          if [ "${{ matrix.test }}" = applog ]; then imp=app_log_test.dart; name='Everything goes back to the level before it after 24 hours'; out=test/repeat_test.dart; else imp=browse_state_test.dart; name='a record whose partial file is gone is forgotten'; out=test/browse/repeat_test.dart; fi
+          printf "import 'package:flutter_test/flutter_test.dart';\n\nimport '%s' as t;\n\nvoid main() {\n  for (var i = 0; i < 200; i++) {\n    group('run \$i', t.main);\n  }\n}\n" "$imp" > "$out"
+          cat "$out"
+          for c in $(seq 1 "$(nproc)"); do (while :; do :; done) & done
+          (while :; do dd if=/dev/zero of="$RUNNER_TEMP/load" bs=1M count=64 conv=fsync status=none; done) &
+          flutter test --no-pub -r expanded "$out" --plain-name "$name" > out.txt 2>&1 || true
+          kill $(jobs -p) 2>/dev/null || true
+          tail -n 3 out.txt
+          failed=$(grep -E "run [0-9]+ .*\[E\]$" out.txt | wc -l)
+          grep -E -m 3 "Expected|Actual|Exception" out.txt || true
+          echo "RESULT ${{ matrix.code }} ${{ matrix.test }}: failed runs $failed of 200; last: $(grep -oE '\+[0-9]+( -[0-9]+)?' out.txt | tail -n 1)" | tee -a "$GITHUB_STEP_SUMMARY"
