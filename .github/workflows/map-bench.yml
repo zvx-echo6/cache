@@ -105,7 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKM" --install "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /dev/null
+          # (yes ends with a broken pipe once the licences are taken; that is not a failure)
+          { yes 2> /dev/null || true; } | "$SDKM" --install "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /dev/null
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n bench -k "system-images;android-34;google_apis;x86_64" -d pixel_6 --force
           nohup "$ANDROID_HOME/emulator/emulator" -avd bench -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 4096 -cores 4 > "$RUNNER_TEMP/emulator.log" 2>&1 &
           ADB="$ANDROID_HOME/platform-tools/adb"
