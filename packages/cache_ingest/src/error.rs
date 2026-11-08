@@ -17,6 +17,8 @@ pub enum Code {
     NoSpace,
     /// The embedder failed.
     Embed,
+    /// No page of the book has any text (OCR off, or every OCR'd page empty).
+    NoText,
 }
 
 impl Code {
@@ -32,6 +34,7 @@ impl Code {
             Code::Damaged => "damaged",
             Code::NoSpace => "no_space",
             Code::Embed => "embed",
+            Code::NoText => "no_text",
         }
     }
 }

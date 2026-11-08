@@ -218,8 +218,12 @@ fn a_book_is_read_embedded_and_written() {
     let committed = rig.store.0.committed.lock().unwrap();
     assert_eq!(committed.len(), 1);
     assert_eq!(committed[0].1.len() as u64, pieces);
+    let docs = std::fs::read_to_string(lib.join("documents.tsv")).unwrap();
+    assert_eq!(docs.lines().next(), Some("doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages"));
+    assert_eq!(docs.lines().nth(1).unwrap(), format!("{copy}\t1\tWilderness Medicine\t{copy}\t{pieces}\t8"));
+    assert!(!lib.join("source-identities.json").exists());
     let sums = std::fs::read_to_string(lib.join("SHA256SUMS")).unwrap();
-    assert!(sums.contains(&format!("packs/{copy}@1.cdoc")) && sums.contains("copies.jsonl"));
+    assert!(sums.contains(&format!("packs/{copy}@1.cdoc")) && sums.contains("copies.jsonl") && sums.contains("documents.tsv"));
     // no temporary files are left in the library
     assert!(std::fs::read_dir(lib.join("packs")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')));
     assert!(std::fs::read_dir(&lib).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
@@ -511,7 +515,7 @@ fn a_book_with_no_text_at_all_fails_and_writes_nothing() {
     let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("s"), json!({"ocr": "off"}))))["job"].as_u64().unwrap();
     let (s, _) = run(&svc, job, &[]);
     assert_eq!(s["state"], "failed");
-    assert_eq!(s["error"]["code"], "damaged");
+    assert_eq!(s["error"]["code"], "no_text");
     assert!(rig.job_dir("s").exists(), "the job folder is kept for the reason to be shown");
     assert!(!lib.join("packs").exists() && !lib.join("copies.jsonl").exists());
     // cancel removes it
@@ -739,20 +743,27 @@ fn a_new_book_is_placed_and_numbered_and_a_copy_of_it_is_detected() {
 }
 
 #[test]
-fn libraries_in_the_same_folder_are_compared() {
+fn only_the_listed_libraries_and_the_target_are_compared() {
     let mut rig = Rig::new();
     rig.classifier = Some(medicine());
     let svc = rig.service();
     let one = rig.lib("one");
     let two = rig.lib("two");
-    // the same file under two doc ids is not possible here, so the second library holds the same text as another file
     let a = rig.pdf_file("a.pdf", Some("A"), Kind::Ok, &book("harvest", 6));
     let ja = ok(svc.start(&with_shelves(&one, &a, &rig.job_dir("a"), &rig)))["job"].as_u64().unwrap();
     run(&svc, ja, &[]);
+    // not listed: the sibling folder is not looked at
     let b = rig.pdf_file("b.pdf", Some("B"), Kind::Ok, &book("harvest", 6));
     let jb = ok(svc.start(&with_shelves(&two, &b, &rig.job_dir("b"), &rig)))["job"].as_u64().unwrap();
     let (db, _) = run(&svc, jb, &[]);
-    assert_eq!(db["result"]["same"].as_array().unwrap().len(), 1, "libraries in the same folder are compared");
+    assert_eq!(db["result"]["same"], json!([]));
+    // listed: it is compared
+    let c = rig.pdf_file("c.pdf", Some("C"), Kind::Ok, &book("harvest", 6));
+    let params = json!({"library_dir": two, "pdf_path": c, "job_dir": rig.job_dir("c"),
+        "bookshelves": {"dir": rig.root.path().join("bookshelves"), "dev": "phone-1", "libraries": [{"library_id": "one", "dir": one}]}}).to_string();
+    let jc = ok(svc.start(&params))["job"].as_u64().unwrap();
+    let (dc, _) = run(&svc, jc, &[]);
+    assert!(!dc["result"]["same"].as_array().unwrap().is_empty());
 }
 
 #[test]

@@ -36,6 +36,7 @@ fn to_core(e: IngestError) -> Error {
         IngestCode::Damaged => ErrorCode::Damaged,
         IngestCode::NoSpace => ErrorCode::NoSpace,
         IngestCode::Embed => ErrorCode::Embed,
+        IngestCode::NoText => ErrorCode::NoText,
     };
     Error { code, message: e.message, space: e.space }
 }
@@ -395,4 +396,38 @@ pub fn cancel(args: &str) -> Result<String> {
 /// A service on the core's store with the given engines, for the tests.
 pub fn service_with(provider: cache_ingest::EnvProvider) -> Service {
     Service::new(provider)
+}
+
+/// `cs_ingest_probe`: tries to load PDFium and the embedder with the paths of `engines` and reports; keeps nothing loaded and writes
+/// nothing. Only malformed JSON is an error.
+pub fn probe(args: &str) -> Result<String> {
+    use serde_json::json;
+    let v: Value = serde_json::from_str(args).map_err(|e| Error::bad_json(format!("the request is not JSON: {e}")))?;
+    let engines = v.get("engines").cloned().unwrap_or(Value::Null);
+    let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
+    let pdfium = match cache_ingest::pdfium::probe(text(&engines, "pdfium_lib").as_deref()) {
+        Ok(from) => json!({"ok": true, "version": text(&engines, "pdfium_version"), "from": from}),
+        Err(e) => json!({"ok": false, "version": null, "from": null, "error": e.message}),
+    };
+    let (lib, model, expected) = (text(&engines, "embed_lib"), text(&engines, "embed_model"), text(&engines, "embed_sha256"));
+    let embedder = match (&lib, &model) {
+        (Some(l), Some(m)) => match cache_embed::Embedder::load(l, m, None, None, 1) {
+            Ok(_) => json!({"ok": true}),
+            Err(e) => json!({"ok": false, "error": e.to_string()}),
+        },
+        _ => json!({"ok": false, "error": "engines.embed_lib and engines.embed_model are not both given"}),
+    };
+    let model_report = match &model {
+        None => json!({"ok": false, "sha256": null, "expected": expected, "matches": null, "error": "engines.embed_model is not given"}),
+        Some(m) if !Path::new(m).is_file() => json!({"ok": false, "sha256": null, "expected": expected, "matches": null, "error": format!("{m} is not a file")}),
+        Some(_) if !hash_model => json!({"ok": true, "sha256": null, "expected": expected, "matches": null}),
+        Some(m) => match cache_embed::sha256_file(m) {
+            Ok(h) => {
+                let matches = expected.as_ref().map(|e| e.trim().eq_ignore_ascii_case(&h));
+                json!({"ok": matches != Some(false), "sha256": h, "expected": expected, "matches": matches})
+            }
+            Err(e) => json!({"ok": false, "sha256": null, "expected": expected, "matches": null, "error": e.to_string()}),
+        },
+    };
+    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report}).to_string())
 }

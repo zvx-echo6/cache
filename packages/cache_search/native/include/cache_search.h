@@ -34,6 +34,7 @@
  *   "not_pdf"        (cs_ingest_*) the file is not a PDF
  *   "locked"         (cs_ingest_*) the PDF is password-protected
  *   "embed"          (cs_ingest_*) the embedder failed or is not configured
+ *   "no_text"        (cs_ingest_*) no page of the PDF has any text (OCR off, or every OCR'd page empty)
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -679,15 +680,17 @@ char *cs_shelves_import(const char *args_json);
  * batch, so cs_ingest_start with the same "job_dir" after a kill carries on (same BLAKE3 of the file) or starts fresh (another file).
  * One job per "job_dir"; several jobs may run with different job_dirs, but only one writes a given library at a time. All four calls
  * are handle-less, take one JSON object and return JSON, or NULL with cs_last_error(NULL): "bad_json", "io", "not_found" (no such
- * job), "busy", "cancelled", "not_pdf", "locked", "damaged", "no_space" (with "needed" and "available"), "embed".
+ * job), "busy", "cancelled", "not_pdf", "locked", "damaged", "no_space" (with "needed" and "available"), "embed", "no_text" (a failed status only).
  *
- * cs_ingest_start({"library_dir","pdf_path","job_dir","bookshelves"?:{"dir","dev"},"opts"?:{"title","ocr":"host"|"off","ocr_batch":8,
+ * cs_ingest_start({"library_dir","pdf_path","job_dir","bookshelves"?:{"dir","dev","libraries"?:[{"library_id","dir","packs_dir"?}]},"opts"?:{"title","ocr":"host"|"off","ocr_batch":8,
  *   "ocr_dpi":300,"embed_batch":8,"embed_threads":2},"engines"?:{...}}) -> {"job","resumed","copy","pages"}
  *   "library_dir" is the library's folder (its shard/, index/, packs/, copies.jsonl). Without "bookshelves" no Bookshelves events are
- *   written. Defaults: title = the PDF's metadata title, else the file name without ".pdf"; ocr "host" (the app does the OCR; "off":
+ *   written. "bookshelves.libraries" (the shape cs_shelves_resolve takes) lists the libraries whose copies the new book is compared with, besides
+ *   the target library; without it only the target library is compared. Defaults: title = the PDF's metadata title, else the file name without ".pdf"; ocr "host" (the app does the OCR; "off":
  *   pages without text are skipped and counted); ocr_batch pages per needs_ocr; ocr_dpi the resolution of the page images;
  *   embed_batch passages per embed call; embed_threads for the model. "copy" is the file's BLAKE3 (the copy key). The PDF is never
- *   modified. Errors at start: "not_pdf", "locked", "damaged" (cannot be read, or no pages), "io".
+ *   modified. The library gets the pack, points, keyword index, a copies.jsonl line, a documents.tsv row and SHA256SUMS (source-identities.json
+ *   is not touched). Errors at start: "not_pdf", "locked", "damaged" (cannot be read, or no pages), "io".
  *   "engines" (optional, not part of INGEST-API.md): where the host's engines are. {"pdfium_lib": path of libpdfium (default: the
  *   usual library name, then this process), "pdfium_version": text recorded in the pack, "embed_lib": the built libcache_llama,
  *   "embed_model": the bge-m3 GGUF, "embed_sha256"?: its expected sha256}. Without embed_lib and embed_model the embedding step
@@ -715,6 +718,13 @@ char *cs_ingest_start(const char *params_json);
 char *cs_ingest_step(const char *params_json);
 char *cs_ingest_ocr(const char *params_json);
 char *cs_ingest_cancel(const char *params_json);
+/* cs_ingest_probe({"engines":{...as cs_ingest_start...},"hash_model"?:true}) -> {"pdfium":{"ok","version","from":"path"|"name"|"process"|null,"error"?},
+ *   "embedder":{"ok","error"?},"model":{"ok","sha256","expected","matches","error"?}}
+ *   Tries to load PDFium and the embedder (the model is loaded, then released) with those paths; writes nothing and keeps nothing
+ *   loaded. A missing engine is reported in the result, never an error: only malformed JSON returns NULL ("bad_json"). "model"
+ *   reads the whole GGUF file (about 600 MB) to give its sha256 (reported even without "embed_sha256"; "matches" is null then),
+ *   which takes seconds on a phone: pass "hash_model":false at app start to skip it (sha256 and matches are then null). */
+char *cs_ingest_probe(const char *params_json);
 
 /* --- the user's map layers and repeater lists (user.sqlite; logic in cache_user's mapdata) ---
  *

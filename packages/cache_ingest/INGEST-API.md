@@ -19,7 +19,7 @@ platform has one ingest path.
   OCR text goes into the pieces and the indexes only.
 - All calls take and return one JSON object (UTF-8, NUL-terminated). Returned strings are freed with `cs_free_string`. On failure a
   call returns NULL and `cs_last_error(NULL)` gives `{code, message}`. Codes: `bad_json`, `io`, `not_found` (no such job),
-  `busy`, `cancelled`, `not_pdf`, `locked` (password-protected), `damaged`, `no_space`, `embed` (the embedder failed).
+  `busy`, `cancelled`, `not_pdf`, `locked` (password-protected), `damaged`, `no_space`, `embed` (the embedder failed or is not configured), `no_text` (no page has any text: OCR off, or every OCR'd page empty; a `failed` status).
 
 ## The four calls
 
@@ -30,7 +30,8 @@ platform has one ingest path.
   "library_dir": ".../libraries/my-books",
   "pdf_path": ".../Inbox/Wilderness Medicine.pdf",
   "job_dir": ".../ingest/7f3a",
-  "bookshelves": {"dir": ".../bookshelves", "dev": "<device id>"},
+  "bookshelves": {"dir": ".../bookshelves", "dev": "<device id>", "libraries": [{"library_id": "...", "dir": "...", "packs_dir": "..."}]},
+  "engines": {"pdfium_lib": "...", "pdfium_version": "...", "embed_lib": "...", "embed_model": "...", "embed_sha256": "..."},
   "opts": {
     "title": "Wilderness Medicine",
     "ocr": "host",
@@ -42,7 +43,15 @@ platform has one ingest path.
 }
 ```
 
-- `bookshelves` is optional; without it no Bookshelves events are written.
+- `bookshelves` is optional; without it no Bookshelves events are written. `bookshelves.libraries` (optional; the shape `cs_shelves_resolve` takes)
+  names the libraries whose copies the new book is compared with, besides the target library. Without it only the target library is compared.
+- `engines` is optional and says where the host's engines are. All keys are optional; what fails without them:
+  - `pdfium_lib`: path of the app's own `libpdfium` (the copy pdfrx ships). PDFium is loaded at run time: by this path, else by the usual
+    library name, else from the process itself (iOS links it into the app). If none works, `cs_ingest_start` fails with `damaged`.
+  - `pdfium_version`: recorded in the pack's `extractor.version` (`unknown` without it).
+  - `embed_lib`, `embed_model` (both needed): the built `libcache_llama` and the bge-m3 GGUF. Without them reading works, but embedding
+    fails with `embed`.
+  - `embed_sha256`: the model's expected SHA-256; a different file fails with `embed`.
 - `opts` and each key in it are optional. Defaults:
   - `title`: the PDF's own title metadata, else the file name without `.pdf`.
   - `ocr`: `"host"`. The app does the OCR. With `"off"`, pages without text are skipped and counted.
@@ -148,7 +157,8 @@ platform has one ingest path.
 - **Bookshelves** (when given): same-book detection against the visible copies.
   - Matches are written as `same by:auto`.
   - A new book gets `place` (classifier when confident, else none) and `assign` the next free number, through `cache_shelves` in
-    process.
+    process. **Phones pass no classifier** (the core loads none), so a new book is not placed: it goes to Unsorted and `shelf` is null.
+    When `same` is not empty the book is not placed either and `shelf` is null.
 
 ## OCR engines (host side)
 
@@ -157,3 +167,22 @@ The core renders each page that needs OCR to a grayscale PNG at `ocr_dpi`. The a
 lowercase, for example `apple-vision` and `mlkit`, and `version` is the engine's own version string.
 
 A page needs OCR when its text layer has fewer than 20 non-space characters.
+
+## `cs_ingest_probe(params) -> report`
+
+Checks the engines without starting a job. `params` is `{"engines": {...as in cs_ingest_start...}, "hash_model": true}`. It writes nothing and
+keeps nothing loaded (the model is loaded to prove it loads, then released). A missing engine is reported, never an error; only malformed JSON
+returns NULL with `bad_json`.
+
+```json
+{"pdfium": {"ok": true, "version": "chromium/7811", "from": "path"},
+ "embedder": {"ok": true},
+ "model": {"ok": true, "sha256": "<actual>", "expected": "<engines.embed_sha256>", "matches": true}}
+```
+
+- `pdfium.from` is `path`, `name` or `process`; `version` is `engines.pdfium_version` (null when not given); on failure `ok` is false, `from` is
+  null and `error` says why.
+- `model.sha256` is the SHA-256 of the file, read in full and reported even when no `embed_sha256` was given (`expected` and `matches` are then
+  null). `ok` is false when the file is missing or `matches` is false.
+- Hashing a model of about 600 MB takes seconds on a phone, so do not do it at every app start: pass `"hash_model": false` to skip it
+  (`sha256` and `matches` are then null; `ok` only says the file exists).

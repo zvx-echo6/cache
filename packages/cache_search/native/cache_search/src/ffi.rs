@@ -730,6 +730,13 @@ pub unsafe extern "C" fn cs_ingest_cancel(params_json: *const c_char) -> *mut c_
     string_call(|| crate::ingest::cancel(arg_str(params_json, "params_json")?))
 }
 
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_probe(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::probe(arg_str(params_json, "params_json")?))
+}
+
 // ---- the Notebook (logic in cache_notebook; see ext.rs) ----
 
 /// # Safety

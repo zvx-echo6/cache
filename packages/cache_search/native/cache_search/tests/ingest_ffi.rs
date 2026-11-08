@@ -215,3 +215,36 @@ fn a_library_folder_without_a_shard_is_not_found_and_nothing_is_created() {
     assert_eq!(e.code, Code::NotFound);
     assert!(!lib.join("shard").exists());
 }
+
+fn probe(v: Value) -> Value {
+    serde_json::from_str(&cache_search::ingest::probe(&v.to_string()).unwrap()).unwrap()
+}
+
+#[test]
+fn probe_reports_missing_engines_and_hashes_the_model_without_failing() {
+    let tmp = TempDir::new("probe");
+    let model = tmp.0.join("model.gguf");
+    std::fs::write(&model, b"abc").unwrap();
+    // the SHA-256 of "abc"
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let r = probe(json!({"engines": {"pdfium_lib": tmp.0.join("none.so"), "embed_lib": tmp.0.join("none-llama.so"), "embed_model": model, "embed_sha256": abc}}));
+    assert_eq!(r["pdfium"]["ok"], false);
+    assert!(r["pdfium"]["error"].as_str().unwrap().contains("PDFium"));
+    assert_eq!(r["embedder"]["ok"], false);
+    assert_eq!(r["model"], json!({"ok": true, "sha256": abc, "expected": abc, "matches": true}));
+    // a wrong expected hash, and the hash reported with none expected
+    let r = probe(json!({"engines": {"embed_model": model, "embed_sha256": "00"}}));
+    assert_eq!((r["model"]["ok"].clone(), r["model"]["matches"].clone(), r["model"]["sha256"].clone()), (json!(false), json!(false), json!(abc)));
+    let r = probe(json!({"engines": {"embed_model": model}}));
+    assert_eq!((r["model"]["ok"].clone(), r["model"]["matches"].clone(), r["model"]["sha256"].clone()), (json!(true), Value::Null, json!(abc)));
+    // hashing can be skipped
+    let r = probe(json!({"engines": {"embed_model": model}, "hash_model": false}));
+    assert_eq!((r["model"]["ok"].clone(), r["model"]["sha256"].clone()), (json!(true), Value::Null));
+    // a missing model, and no engines at all: reported, not an error
+    let r = probe(json!({"engines": {"embed_model": tmp.0.join("gone.gguf")}}));
+    assert_eq!(r["model"]["ok"], false);
+    assert!(r["model"]["error"].is_string());
+    let r = probe(json!({}));
+    assert_eq!((r["embedder"]["ok"].clone(), r["model"]["ok"].clone()), (json!(false), json!(false)));
+    assert!(cache_search::ingest::probe("not json").is_err());
+}

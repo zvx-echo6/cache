@@ -381,7 +381,7 @@ impl Job {
 
     fn prepare_now(&mut self) -> Result<()> {
         let prep = prepare_pack(&self.pages_source(), &self.page_ins(), &self.build_options())?;
-        prep.check_not_empty().map_err(|e| Error::new(Code::Damaged, e.0))?;
+        prep.check_not_empty().map_err(|e| Error::new(Code::NoText, e.0))?;
         self.texts = prep.texts();
         self.prepared = Some(prep);
         Ok(())
@@ -673,53 +673,47 @@ impl Job {
         let sums_final = lib.join(files::SUMS_FILE);
         let old_sums = std::fs::read_to_string(&sums_final).ok();
 
+        let docs_final = lib.join(files::DOCUMENTS_FILE);
+        let old_docs = std::fs::read_to_string(files::documents_file(&lib)).ok();
+        let new_docs = files::documents_with(old_docs.as_deref(), &doc_id, version, &pack.header.title, &pack.header.source.blake3, pack.pieces.len(), pack.header.page_count);
+
         // 1: the shard and keyword index, prepared beside the library (the library is `updating` until `staged` is dropped)
         let mut staged = self.env.store.begin(&lib, &points)?;
         // 2: the plain files, under temporary names
-        let pack_tmp = files::write_tmp(&pack_final, &bytes)?;
-        let copies_tmp = match files::write_tmp(&copies_final, new_copies.as_bytes()) {
-            Ok(t) => t,
-            Err(e) => {
-                let _ = std::fs::remove_file(&pack_tmp);
-                return Err(e);
+        let mut tmps: Vec<PathBuf> = Vec::new();
+        let mut parts: Vec<(PathBuf, PathBuf, Option<String>)> = Vec::new();
+        for (fin, bytes, old) in [(&pack_final, bytes.as_slice(), None), (&copies_final, new_copies.as_bytes(), old_copies.clone()), (&docs_final, new_docs.as_bytes(), old_docs.clone())] {
+            match files::write_tmp(fin, bytes) {
+                Ok(t) => {
+                    tmps.push(t.clone());
+                    parts.push((fin.clone(), t, old));
+                }
+                Err(e) => {
+                    for t in &tmps {
+                        let _ = std::fs::remove_file(t);
+                    }
+                    return Err(e);
+                }
             }
-        };
-        let cleanup = |tmps: &[&PathBuf]| {
-            for t in tmps {
-                let _ = std::fs::remove_file(t);
-            }
-        };
+        }
         // 3: the point of no return for the shard; from here a failure puts everything back
         if let Err(e) = staged.commit() {
-            cleanup(&[&pack_tmp, &copies_tmp]);
+            for t in &tmps {
+                let _ = std::fs::remove_file(t);
+            }
             return Err(e);
         }
         let had_pack = pack_final.exists();
-        let undo = |staged: &mut Box<dyn crate::engine::Staged>, pack_done: bool, copies_done: bool, e: Error| -> Error {
-            cleanup(&[&pack_tmp, &copies_tmp]);
-            if copies_done {
-                match &old_copies {
-                    Some(t) => {
-                        let _ = std::fs::write(&copies_final, t);
-                    }
-                    None => {
-                        let _ = std::fs::remove_file(&copies_final);
-                    }
-                }
+        let mut done = 0usize;
+        let mut failure: Option<Error> = None;
+        for (fin, tmp, _) in &parts {
+            if let Err(e) = std::fs::rename(tmp, fin) {
+                failure = Some(io(&format!("writing {}", fin.display()), e));
+                break;
             }
-            if pack_done && !had_pack {
-                let _ = std::fs::remove_file(&pack_final);
-            }
-            staged.undo();
-            e
-        };
-        if let Err(e) = std::fs::rename(&pack_tmp, &pack_final) {
-            return Err(undo(&mut staged, false, false, io(&format!("writing {}", pack_final.display()), e)));
+            done += 1;
         }
-        if let Err(e) = std::fs::rename(&copies_tmp, &copies_final) {
-            return Err(undo(&mut staged, true, false, io(&format!("writing {}", copies_final.display()), e)));
-        }
-        if old_sums.is_some() {
+        if failure.is_none() && old_sums.is_some() {
             let r = files::sha256sums_text(&lib).and_then(|t| {
                 let tmp = files::write_tmp(&sums_final, t.as_bytes())?;
                 std::fs::rename(&tmp, &sums_final).map_err(|e| {
@@ -728,8 +722,34 @@ impl Job {
                 })
             });
             if let Err(e) = r {
-                return Err(undo(&mut staged, true, true, e));
+                failure = Some(e);
             }
+        }
+        if let Some(e) = failure {
+            for t in &tmps {
+                let _ = std::fs::remove_file(t);
+            }
+            for (i, (fin, _, old)) in parts.iter().enumerate().take(done) {
+                if i == 0 {
+                    if !had_pack {
+                        let _ = std::fs::remove_file(fin);
+                    }
+                } else {
+                    match old {
+                        Some(t) => {
+                            let _ = std::fs::write(fin, t);
+                        }
+                        None => {
+                            let _ = std::fs::remove_file(fin);
+                        }
+                    }
+                }
+            }
+            if let Some(t) = &old_sums {
+                let _ = std::fs::write(&sums_final, t);
+            }
+            staged.undo();
+            return Err(e);
         }
         drop(staged);
 

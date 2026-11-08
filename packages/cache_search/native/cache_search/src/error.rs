@@ -26,6 +26,7 @@ pub enum ErrorCode {
     NotPdf,
     Locked,
     Embed,
+    NoText,
     Internal,
 }
 
@@ -55,6 +56,7 @@ impl ErrorCode {
             ErrorCode::NotPdf => "not_pdf",
             ErrorCode::Locked => "locked",
             ErrorCode::Embed => "embed",
+            ErrorCode::NoText => "no_text",
             ErrorCode::Internal => "internal",
         }
     }
@@ -209,6 +211,7 @@ mod tests {
             (ErrorCode::NotPdf, "not_pdf"),
             (ErrorCode::Locked, "locked"),
             (ErrorCode::Embed, "embed"),
+            (ErrorCode::NoText, "no_text"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub const PACKS_DIR: &str = "packs";
 pub const SUMS_FILE: &str = "SHA256SUMS";
+pub const DOCUMENTS_FILE: &str = "documents.tsv";
 
 /// UTC milliseconds as `YYYY-MM-DDTHH:MM:SSZ`.
 pub fn utc_text(ms: u64) -> String {
@@ -79,6 +80,45 @@ pub fn copies_with(existing: Option<&str>, facts: &PackFacts) -> String {
     out
 }
 
+/// Where `documents.tsv` is written: where the library has one (the root, else `shard/`), else the root.
+pub fn documents_file(library_dir: &Path) -> PathBuf {
+    [library_dir.join(DOCUMENTS_FILE), library_dir.join("shard").join(DOCUMENTS_FILE)].into_iter().find(|p| p.is_file()).unwrap_or_else(|| library_dir.join(DOCUMENTS_FILE))
+}
+
+fn tsv_field(s: &str) -> String {
+    s.chars().map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c }).collect()
+}
+
+/// `documents.tsv` with the book's row added, in the format the library builder writes (a header row, then `doc_id`, `version`,
+/// `title`, source BLAKE3, pieces, pages). A row of the same `doc_id` and version is replaced in place.
+pub fn documents_with(existing: Option<&str>, doc_id: &str, version: u32, title: &str, source_blake3: &str, pieces: usize, pages: usize) -> String {
+    let row = format!("{doc_id}\t{version}\t{}\t{source_blake3}\t{pieces}\t{pages}", tsv_field(title));
+    let mut out = String::new();
+    let mut replaced = false;
+    let mut lines = existing.unwrap_or("").lines().filter(|l| !l.trim().is_empty()).peekable();
+    if lines.peek().is_none() {
+        out.push_str("doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n");
+    }
+    for l in lines {
+        let mut f = l.split('\t');
+        if f.next() == Some(doc_id) && f.next() == Some(&version.to_string()) {
+            if !replaced {
+                out.push_str(&row);
+                out.push('\n');
+                replaced = true;
+            }
+        } else {
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    if !replaced {
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}
+
 /// Whether the library already lists this copy (the same `doc_id` and version in its copies file).
 pub fn lists_copy(library_dir: &Path, doc_id: &str, version: u32) -> bool {
     let Some(p) = copies_path(library_dir) else { return false };
@@ -132,6 +172,17 @@ mod tests {
         assert_eq!(utc_text(0), "1970-01-01T00:00:00Z");
         assert_eq!(utc_text(1_700_000_000_000), "2023-11-14T22:13:20Z");
         assert_eq!(utc_text(951_782_400_000), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn a_documents_row_is_added_with_the_header_and_replaced_in_place() {
+        let t1 = documents_with(None, "a", 1, "A\tbook", "h1", 3, 10);
+        assert_eq!(t1, "doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\na\t1\tA book\th1\t3\t10\n");
+        let t2 = documents_with(Some(&t1), "b", 1, "B", "h2", 4, 11);
+        assert_eq!(t2.lines().count(), 3);
+        let t3 = documents_with(Some(&t2), "a", 1, "A2", "h1", 5, 10);
+        assert_eq!(t3.lines().nth(1), Some("a\t1\tA2\th1\t5\t10"));
+        assert_eq!(t3.lines().count(), 3);
     }
 
     #[test]

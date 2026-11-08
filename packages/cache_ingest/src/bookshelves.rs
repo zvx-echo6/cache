@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 pub struct Bookshelves {
     pub dir: PathBuf,
     pub dev: String,
+    /// The libraries to compare with besides the target library; `None`: the target library only.
+    pub libraries: Option<Vec<LibraryRef>>,
 }
 
 /// What the job will write to the log, and what it reports.
@@ -50,25 +52,12 @@ fn library_id(dir: &Path) -> String {
         .unwrap_or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
 }
 
-fn looks_like_library(dir: &Path) -> bool {
-    dir.join("copies.jsonl").is_file() || dir.join("shard").join("copies.jsonl").is_file() || dir.join(crate::files::PACKS_DIR).is_dir()
-}
-
-/// The libraries whose copies are visible to the new book: the target library and the other libraries in the same folder (the
-/// app keeps every library as a folder under one `libraries` folder). A folder with neither a copies file nor packs has nothing
-/// to compare with.
-pub fn visible_libraries(library_dir: &Path) -> Vec<LibraryRef> {
+/// The libraries whose copies the new book is compared with: the target library, and the `bookshelves.libraries` the app named.
+pub fn visible_libraries(library_dir: &Path, listed: Option<&[LibraryRef]>) -> Vec<LibraryRef> {
     let mut out = vec![LibraryRef::new(&library_id(library_dir), library_dir)];
-    if let Some(parent) = library_dir.parent() {
-        let mut siblings: Vec<PathBuf> = std::fs::read_dir(parent)
-            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-            .unwrap_or_default();
-        siblings.sort();
-        for p in siblings {
-            let hidden = p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(true);
-            if p != library_dir && !hidden && p.is_dir() && looks_like_library(&p) {
-                out.push(LibraryRef::new(&library_id(&p), &p));
-            }
+    for l in listed.unwrap_or(&[]) {
+        if l.dir != library_dir {
+            out.push(l.clone());
         }
     }
     out
@@ -82,7 +71,7 @@ fn load_all(refs: &[LibraryRef]) -> Vec<LibraryInput> {
 /// Decides the events for a new copy. `header_json` is the pack's header; `mean_vector` is the book's mean vector.
 pub fn plan(bs: &Bookshelves, library_dir: &Path, header_json: &str, placement: Option<&Placement>, at: u64) -> Result<Plan> {
     let facts = PackFacts::from_header_line(header_json).map_err(|e| Error::bad_json(e.to_string()))?;
-    let refs = visible_libraries(library_dir);
+    let refs = visible_libraries(library_dir, bs.libraries.as_deref());
     let libs = load_all(&refs);
     let against: Vec<_> = libs.iter().flat_map(|l| l.copies.iter().map(|c| c.detect_facts())).collect();
     let found = detect(&facts.detect_facts(), &against, &Tuning::default());

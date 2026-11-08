@@ -2,6 +2,7 @@
 
 use crate::bookshelves::Bookshelves;
 use crate::error::{Error, Result};
+use cache_shelves::library::LibraryRef;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -46,7 +47,24 @@ impl Params {
     pub fn parse(v: &Value) -> Result<Params> {
         let bookshelves = match v.get("bookshelves") {
             None | Some(Value::Null) => None,
-            Some(b) => Some(Bookshelves { dir: PathBuf::from(text(b, "dir")?), dev: text(b, "dev")? }),
+            Some(b) => {
+                let libraries = match b.get("libraries") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Array(a)) => Some(
+                        a.iter()
+                            .map(|l| {
+                                Ok(LibraryRef {
+                                    library_id: text(l, "library_id")?,
+                                    dir: PathBuf::from(text(l, "dir")?),
+                                    packs_dir: l.get("packs_dir").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from),
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    ),
+                    Some(_) => return Err(Error::bad_json("bookshelves.libraries must be a list")),
+                };
+                Some(Bookshelves { dir: PathBuf::from(text(b, "dir")?), dev: text(b, "dev")?, libraries })
+            }
         };
         let mut opts = Opts::default();
         if let Some(o) = v.get("opts").filter(|o| !o.is_null()) {

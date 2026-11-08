@@ -67,7 +67,7 @@ fn this_process() -> Option<Library> {
     None
 }
 
-fn open_library(path: Option<&str>) -> Result<Library> {
+fn open_library(path: Option<&str>) -> Result<(Library, &'static str)> {
     let mut tried: Vec<String> = Vec::new();
     let mut names: Vec<String> = Vec::new();
     if let Some(p) = path.filter(|p| !p.is_empty()) {
@@ -78,13 +78,13 @@ fn open_library(path: Option<&str>) -> Result<Library> {
     for n in &names {
         // SAFETY: loading a shared library runs its initialisers; the host chose the path (or it is PDFium's usual name).
         match unsafe { Library::new(n) } {
-            Ok(l) => return Ok(l),
+            Ok(l) => return Ok((l, if path.is_some_and(|p| !p.is_empty()) { "path" } else { "name" })),
             Err(e) => tried.push(format!("{n}: {e}")),
         }
     }
     if path.is_none_or(str::is_empty) {
         if let Some(l) = this_process() {
-            return Ok(l);
+            return Ok((l, "process"));
         }
     }
     Err(Error::new(Code::Damaged, format!("PDFium could not be loaded ({})", tried.join("; "))))
@@ -98,7 +98,17 @@ fn get<T: Copy>(lib: &Library, name: &str) -> Result<T> {
 
 impl Lib {
     fn load(path: Option<&str>) -> Result<Lib> {
-        let lib = open_library(path)?;
+        let (l, _) = Lib::bind(path)?;
+        let init: unsafe extern "C" fn() = get(&l._lib, "FPDF_InitLibrary")?;
+        let _g = lock();
+        // SAFETY: FPDF_InitLibrary takes no arguments; calling it again when the host already did is allowed.
+        unsafe { init() };
+        Ok(l)
+    }
+
+    /// Finds the library and every function the job uses, without initialising PDFium. Returns where it was found.
+    fn bind(path: Option<&str>) -> Result<(Lib, &'static str)> {
+        let (lib, from) = open_library(path)?;
         let init: unsafe extern "C" fn() = get(&lib, "FPDF_InitLibrary")?;
         let l = Lib {
             load_document: get(&lib, "FPDF_LoadDocument")?,
@@ -123,11 +133,14 @@ impl Lib {
             render: get(&lib, "FPDF_RenderPageBitmap")?,
             _lib: lib,
         };
-        let _g = lock();
-        // SAFETY: FPDF_InitLibrary takes no arguments; calling it again when the host already did is allowed.
-        unsafe { init() };
-        Ok(l)
+        let _ = init;
+        Ok((l, from))
     }
+}
+
+/// Whether PDFium can be loaded with these settings, and from where (`path`, `name` or `process`). Nothing stays initialised.
+pub fn probe(path: Option<&str>) -> Result<&'static str> {
+    Lib::bind(path).map(|(_, from)| from)
 }
 
 /// PDFium, found when the first PDF is opened.
