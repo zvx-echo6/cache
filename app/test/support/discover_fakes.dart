@@ -96,7 +96,7 @@ class FakeDiscoverDevice extends ChangeNotifier implements DiscoverDevice {
 
   @override
   String? providerOf(RecipeItem item) => switch (item.kind) {
-    ItemKind.liveSource => providers[item.id] ?? item.id,
+    ItemKind.liveSource => item.provider.isNotEmpty ? item.provider : providers[item.id] ?? item.id,
     ItemKind.library => 'Kiwix',
     _ => null,
   };

@@ -54,7 +54,7 @@ appears in (same `kind` and id), so it is downloaded once.
 |---|---|---|
 | `library` | `name`, `flavour`?, `title`, `subtitle`?, `approx_bytes` | A ZIM from the Kiwix catalogue, by Kiwix's machine name (`wikipedia_en_medicine`) and variant (`maxi`, `nopic`, `mini` or none). It downloads the newest release through the Library's own downloads. `approx_bytes` is shown until the live catalogue gives the real size. |
 | `map_region` | `parts` (`map`, `routing`, `places`, `offroad`), `title`? | The catalogue region for the person's place (the smallest region at the place, as Regions finds it), downloaded through Regions. Another activity's region gets the parts it is missing. |
-| `live_source` | `id`, `title`?, `default_on`? | A source from the connector catalogue or a built-in one (`nws-alerts-point`). Turning it on is a setting (`live:<id>`). |
+| `live_source` | `id`, `title`?, `provider`?, `default_on`? | A source from the connector catalogue or a built-in one (`nws-alerts-point`). Turning it on is a setting (`live:<id>`). `title` ("Weather alerts") and `provider` ("National Weather Service") are the plain words Discover shows; without them it shows the connector's own title and provider. |
 | `notebook` | `id`, `title`? | A notebook made from one of the app's starter logs or notebook templates (`assets/notebook/starters.json`, `templates.json`), by id. |
 | `checklist` | `id`, `title`, `lines` | A Notes notebook with one entry made of Markdown task lines. Supported, but Cache's own file ships none yet. |
 | `ask_starters` | `id`, `lines` | Ask starter questions, kept with the activity. Supported, but Cache's own file ships none yet, and Ask doesn't show them yet. |

@@ -292,13 +292,14 @@ class AppDiscoverDevice implements DiscoverDevice {
   @override
   String? titleOf(RecipeItem i) => switch (i.kind) {
     ItemKind.library when i.title.isEmpty => _entries[i.key]?.title,
-    ItemKind.liveSource => weather.sourceById(i.id)?.title,
+    ItemKind.liveSource when i.title.isEmpty => weather.sourceById(i.id)?.title,
     ItemKind.mapRegion => _home == null ? null : '${_home!.name} map and routes',
     _ => null,
   };
 
   @override
   String? providerOf(RecipeItem i) => switch (i.kind) {
+    ItemKind.liveSource when i.provider.isNotEmpty => i.provider,
     ItemKind.liveSource => switch (weather.sourceById(i.id)?.provider) {
       final p? when p.isNotEmpty => p,
       _ => i.id,
@@ -309,7 +310,7 @@ class AppDiscoverDevice implements DiscoverDevice {
 
   @override
   String providerDetail(RecipeItem i) => switch (i.kind) {
-    ItemKind.liveSource => weather.sourceById(i.id)?.title ?? 'Live data',
+    ItemKind.liveSource => i.title.isNotEmpty ? i.title : weather.sourceById(i.id)?.title ?? 'Live data',
     ItemKind.library => 'Library downloads',
     _ => '',
   };

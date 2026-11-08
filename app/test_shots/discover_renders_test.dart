@@ -56,6 +56,7 @@ class _Weather extends WeatherState {
 /// A device with nothing on it yet (the wizard's frames).
 Future<(FakeDiscoverDevice, DiscoverState)> _fresh() async {
   final dev = FakeDiscoverDevice();
+  dev.sizes['region:here'] = 420 << 20;
   final d = await makeDiscover(dev, firstRunDone: false);
   return (dev, d);
 }
@@ -142,6 +143,10 @@ void main() {
         }
         final (_, fresh) = await _fresh();
         await _shot(tester, size, theme, '1c-wizard-summary-see-everything', DiscoverWizard(discover: fresh, links: const DiscoverLinks(), initialStep: 5, startDetailsOpen: true));
+
+        // Settings' Run setup again: the wizard with what is added now picked (Ready)
+        final (_, again) = await _sample();
+        await _shot(tester, size, theme, '10-setup-again', DiscoverWizard(discover: again, links: const DiscoverLinks(), initialStep: 3, initialPicked: const {'ready'}, again: true));
 
         // 2: Home after first run, the Discover card in the Set up card's place
         final (_, home) = await _sample();

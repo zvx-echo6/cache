@@ -47,14 +47,12 @@ class ActivityListing extends StatelessWidget {
     final d = discover, a = activity;
     final status = d.status(a);
     final chosen = [for (final i in a.items) if (!d.leftOutOf(a).contains(i.key)) i];
-    final added = status != ActivityStatus.notAdded;
-    final bytes = added ? d.totalBytes(a) : null;
     final connects = d.connectsTo([for (final i in chosen) if (i.kind == ItemKind.liveSource) i]);
-    return Computed<InstallPlan?>(
+    return Computed<int>(
       listenable: d,
-      compute: () async => added ? null : await d.plan(a),
-      builder: (context, plan) {
-        final size = bytes ?? (plan == null ? d.totalBytes(a) : d.addsBytes(plan));
+      compute: () => d.sizeOf(a),
+      builder: (context, sized) {
+        final size = sized ?? d.totalBytes(a);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
