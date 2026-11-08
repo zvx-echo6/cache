@@ -913,6 +913,7 @@ class _CacheAppState extends State<CacheApp> {
       chat.setBackend(
         app.active == null ? null : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
         modelName: app.active == null ? '' : app.displayName(app.active!),
+        queuePosition: app.active == null ? null : app.session.queuePosition,
       );
     }
   }
