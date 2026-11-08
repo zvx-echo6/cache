@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../discover/discover_state.dart';
+import '../discover/ui/home_card.dart';
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart' show ModuleId;
@@ -38,7 +40,15 @@ class HomeScreen extends StatefulWidget {
     this.onOpenWeatherSettings,
     this.askOn = true,
     this.onChooseModel,
+    this.discover,
+    this.onOpenDiscover,
   });
+
+  /// Discover: once its first run is done, its card takes the Set up card's place (the same Home block); null keeps Set up Cache.
+  final DiscoverState? discover;
+
+  /// Opens Discover from its card.
+  final VoidCallback? onOpenDiscover;
 
   /// Ask is available (a chat model is on this device). False: search only.
   final bool askOn;
@@ -130,14 +140,17 @@ class _HomeScreenState extends State<HomeScreen> {
     r.open();
   }
 
-  /// "Hide" on Set up Cache: the block is switched off (Edit Home switches it on again), with Undo.
+  /// Discover's card is in the Set up card's place.
+  bool get _discoverCard => widget.discover?.firstRunDone ?? false;
+
+  /// "Hide" on Set up Cache (or Discover, in its place): the block is switched off (Edit Home switches it on again), with Undo.
   void _hideSetup() {
     widget.layout.setBlockOn(HomeBlock.setup, false);
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
     m.showSnackBar(SnackBar(
       key: const ValueKey('setup-hidden'),
-      content: const Text('Set up Cache hidden. Bring it back in Edit Home.'),
+      content: Text('${_discoverCard ? 'Discover' : 'Set up Cache'} hidden. Bring it back in Edit Home.'),
       action: SnackBarAction(label: 'Undo', onPressed: () => widget.layout.setBlockOn(HomeBlock.setup, true)),
     ));
   }
@@ -163,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
         listenable: layout,
         builder: (context, _) {
           final blocks = layout.visibleBlocks;
-          final setupShown = widget.setup != null && blocks.contains(HomeBlock.setup);
+          final setupShown = widget.setup != null && blocks.contains(HomeBlock.setup) && !_discoverCard;
           return LayoutBuilder(builder: (context, cts) => ListView(
             padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
             children: [
@@ -175,7 +188,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox.shrink()
                 else
                   switch (b) {
-                    HomeBlock.setup => widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup),
+                    HomeBlock.setup => widget.discover == null
+                        ? (widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup))
+                        : ListenableBuilder(
+                            listenable: widget.discover!,
+                            builder: (context, _) => _discoverCard
+                                ? DiscoverCard(discover: widget.discover!, onOpen: widget.onOpenDiscover ?? () {}, onHide: _hideSetup)
+                                : widget.setup == null
+                                ? const SizedBox.shrink()
+                                : SetupCard(setup: widget.setup!, onHide: _hideSetup),
+                          ),
                     HomeBlock.ask => Padding(key: const ValueKey('home-ask-block'), padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
                     HomeBlock.weather => Padding(
                       padding: const EdgeInsets.only(bottom: 12),

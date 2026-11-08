@@ -14,6 +14,10 @@ import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
+import '../discover/discover_device.dart';
+import '../discover/discover_state.dart';
+import '../discover/ui/discover_screen.dart';
+import '../discover/ui/place_page.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
@@ -60,6 +64,7 @@ import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
+import 'settings/own_source_pages.dart' show OwnSourceFormPage;
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -90,7 +95,15 @@ class Shell extends StatefulWidget {
     required this.hub,
     this.notebooks,
     this.railPrefs,
+    this.firstRunWizard = false,
+    this.discoverFetch,
   });
+
+  /// On a device set up for the first time, Discover's wizard opens by itself once (the app sets it; tests leave it off).
+  final bool firstRunWizard;
+
+  /// Reads the published Discover file (the app's fetch of kDiscoverUrl); null: only the copy in the app.
+  final Future<String> Function()? discoverFetch;
 
   /// Where the rail's hidden-in-portrait choice is kept (the app's support folder when null).
   final RailPrefs? railPrefs;
@@ -205,7 +218,71 @@ class _ShellState extends State<Shell> {
     _railPrefs.hidden().then((h) {
       if (mounted && h != _railHidden) setState(() => _railHidden = h);
     });
+    DiscoverState.shared = _discover;
+    discoverLinks = _discoverLinks;
+    unawaited(_startDiscover());
   }
+
+  /// Discover: what activities added, and whether first run is done. A device with a model, a library or a region on it already
+  /// was set up before Discover came: its first run counts as done (no wizard).
+  late final DiscoverState _discover = DiscoverState(
+    device: AppDiscoverDevice(
+      browse: widget.browse,
+      settings: widget.hub.settings,
+      weather: widget.hub.weather,
+      layout: widget.layout,
+      regions: widget.hub.regions,
+      notebooks: widget.notebooks?.notebook,
+      location: widget.location,
+      indexing: widget.hub.indexing,
+    ),
+    fetch: widget.discoverFetch,
+  );
+
+  Future<void> _startDiscover() async {
+    final app = widget.app;
+    if (!app.started) {
+      final started = Completer<void>();
+      void on() {
+        if (app.started && !started.isCompleted) started.complete();
+      }
+
+      app.addListener(on);
+      await started.future;
+      app.removeListener(on);
+    }
+    final libs = widget.browse.libraries;
+    final setUpBefore = app.models.isNotEmpty ||
+        widget.sources.zims.isNotEmpty ||
+        (widget.hub.regions?.local.isNotEmpty ?? false) ||
+        (libs != null && libs.libraries.any((l) => !libs.isGuide(l)));
+    await _discover.init(setUpBefore: setUpBefore);
+    if (widget.firstRunWizard && !_discover.firstRunDone && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(openDiscover(context, _discover));
+      });
+    }
+  }
+
+  /// Where Discover's links go.
+  DiscoverLinks get _discoverLinks => DiscoverLinks(
+    allLibraries: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse))),
+    allMaps: widget.hub.regions == null ? null : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: widget.hub.regions!))),
+    ownSource: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => OwnSourceFormPage(deps: _settingsDeps))),
+    linkDevice: widget.hub.sharing == null
+        ? null
+        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync))),
+    searchLibraries: (c, q) {
+      unawaited(widget.browse.setFilter(query: q));
+      Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse)));
+    },
+    askLocation: (c) async {
+      await widget.location.request(explain: () async => true);
+    },
+    choosePlace: widget.hub.regions == null
+        ? null
+        : (c) => Navigator.of(c).push<DiscoverPlace>(MaterialPageRoute<DiscoverPlace>(builder: (_) => PlacePage(catalogue: widget.hub.regions!.catalogue))),
+  );
 
   late final AppUpdates? _updates = plat.isIOS || plat.isAndroid
       ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: plat.isAndroid, dismissed: DismissedUpdate())
@@ -248,6 +325,7 @@ class _ShellState extends State<Shell> {
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     if (askCacheInstead == _askFromGuide) askCacheInstead = null;
+    if (DiscoverState.shared == _discover) DiscoverState.shared = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -691,6 +769,8 @@ class _ShellState extends State<Shell> {
     onOpenShortcut: _openShortcut,
     updates: _updates,
     onOpenWeatherSettings: _openWeatherSettings,
+    discover: _discover,
+    onOpenDiscover: () => openDiscover(context, _discover),
   );
 
   @override

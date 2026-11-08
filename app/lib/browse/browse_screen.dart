@@ -34,6 +34,8 @@ import '../theme.dart';
 import '../video/format.dart';
 import 'catalogue_screen.dart' show AddToLibraryScreen;
 import 'browse_state.dart';
+import '../discover/discover_state.dart';
+import '../discover/ui/discover_screen.dart';
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
@@ -403,21 +405,28 @@ class _BrowseScreenState extends State<BrowseScreen> {
   void _add() {
     final pane = _pane;
     if (pane != null && pane.mounted && isDesktop(context)) {
-      openDetail(pane, key: _kAddKey, builder: (_) => AddToLibraryScreen(browse: b));
+      openDetail(pane, key: _kAddKey, builder: (_) => _addPage());
       return;
     }
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _addPage()));
   }
 
   static const _kAddKey = 'add-to-library';
 
+  /// What Add to Library opens: Discover's Resources (libraries, maps and collections, the one place to get things), keeping the
+  /// name Add to Library; the catalogue's own page where the app has no Discover (tests).
+  Widget _addPage() {
+    final d = DiscoverState.shared;
+    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources);
+  }
+
   /// The 1.1 Library's Add to Library: in the detail on a desktop window, else a page of its own.
   void _addFrom(BuildContext from) {
     if (isDesktop(from) && !LibraryNav.of(from).compact) {
-      LibraryNav.of(from).goTo(from, [LibraryPageSpec(_kAddKey, (_) => AddToLibraryScreen(browse: b), leaf: true)]);
+      LibraryNav.of(from).goTo(from, [LibraryPageSpec(_kAddKey, (_) => _addPage(), leaf: true)]);
       return;
     }
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _addPage()));
   }
 
   /// A library built from PDFs (a browser): its own page beside the list, or a page of its own.
@@ -444,7 +453,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     if (_structured) {
       return LibraryPanes(
         // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
-        desktopInitial: widget.active ? (_) => AddToLibraryScreen(browse: b) : null,
+        desktopInitial: widget.active ? (_) => _addPage() : null,
         root: (c) {
           _root = c;
           return LibraryRootPage(deps: _deps);
@@ -455,7 +464,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       id: 'library',
       listName: 'Library',
       // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
-      desktopInitial: widget.active ? (_) => AddToLibraryScreen(browse: b) : null,
+      desktopInitial: widget.active ? (_) => _addPage() : null,
       list: Builder(
         builder: (c) {
           _pane = c;

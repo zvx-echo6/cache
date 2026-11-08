@@ -135,6 +135,8 @@ flutter:
     # Notebooks: the notebook templates and the starter logs (a copy of specs/notebook-starters.json; a test keeps them equal).
     - assets/notebook/templates.json
     - assets/notebook/starters.json
+    # Discover's activities and collections built into the app (a copy of docs/discover-catalogue.json; a test keeps them equal).
+    - assets/discover/catalogue.json
 
   # The Library's own faces (SIL Open Font License 1.1; the licences are beside them and in CREDITS.md): call numbers in Roboto
   # Mono, the book page's catalogue card in Libre Baskerville (a variable font: its weight is set with the wght axis).
