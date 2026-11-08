@@ -72,8 +72,12 @@ pub enum TileOut {
     Tile { bytes: Vec<u8>, mime: &'static str, from: &'static str },
     /// The source has no tile here.
     Empty,
-    /// Not downloaded, not viewed before, and no connection.
+    /// Not downloaded, not viewed before, and no connection. Temporary: the tile server answers 503 with Retry-After, so the
+    /// map asks again (it never asks again after a 404), and the map reloads its sources when the connection comes back.
     Miss,
+    /// Not answered this time: the source was too slow (the upstream timeout), or the layer's queue was full or the request
+    /// waited in it too long. Temporary, like `Miss`: 503 with Retry-After.
+    Busy,
     /// An online-only layer with no connection.
     NeedsConnection,
 }
@@ -565,10 +569,11 @@ impl Inner {
     }
 
     /// The tile from the source, as the tile server asks for it: one attempt with the upstream timeout. A source that
-    /// is too slow or has no free connection is a clean `Miss` (not an error), so the map simply asks again later.
+    /// is too slow or has no free connection is `Busy` (not an error): the server answers 503 with Retry-After, which the
+    /// map retries (a 404 it never asks for again, and the tile stayed blank: build 46).
     pub fn tile_upstream(&self, id: &str, z: u8, x: u32, y: u32) -> Result<TileOut> {
         match http::with_policy(http::Policy::Interactive(http::upstream_timeout()), || self.tile(id, z, x, y)) {
-            Err(e) if e.code == "upstream_timeout" => Ok(TileOut::Miss),
+            Err(e) if e.code == "upstream_timeout" => Ok(TileOut::Busy),
             r => r,
         }
     }
@@ -652,7 +657,7 @@ impl Inner {
                 Ok(Some(g))
             }
             TileOut::Empty => Ok(None),
-            TileOut::Miss | TileOut::NeedsConnection => {
+            TileOut::Miss | TileOut::Busy | TileOut::NeedsConnection => {
                 missed.set(true);
                 Ok(None)
             }

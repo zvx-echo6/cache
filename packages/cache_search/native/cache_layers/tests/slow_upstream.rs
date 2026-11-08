@@ -41,31 +41,33 @@ struct Get {
     status: u16,
     body: Vec<u8>,
     cache: Option<String>,
+    retry_after: Option<String>,
     took: Duration,
 }
 
 fn get(base: &str, path: &str) -> Get {
     let t = Instant::now();
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
-    let (status, body, cache) = match agent.get(&format!("{base}{path}")).call() {
+    let (status, body, cache, retry_after) = match agent.get(&format!("{base}{path}")).call() {
         Ok(r) => {
             let (st, h) = (r.status(), r.header("X-Cache-Status").map(String::from));
             let mut b = Vec::new();
             std::io::Read::read_to_end(&mut r.into_reader(), &mut b).unwrap();
-            (st, b, h)
+            (st, b, h, None)
         }
         Err(ureq::Error::Status(c, r)) => {
             let h = r.header("X-Cache-Status").map(String::from);
+            let ra = r.header("Retry-After").map(String::from);
             let mut b = Vec::new();
             let _ = std::io::Read::read_to_end(&mut r.into_reader(), &mut b);
-            if c >= 500 {
+            if c >= 500 && c != 503 {
                 eprintln!("{path}: {c} {}", String::from_utf8_lossy(&b));
             }
-            (c, b, h)
+            (c, b, h, ra)
         }
         Err(e) => panic!("{path}: {e}"),
     };
-    Get { status, body, cache, took: t.elapsed() }
+    Get { status, body, cache, retry_after, took: t.elapsed() }
 }
 
 /// (Fetch limits are kept per layer id for the whole process, so each test uses ids of its own.)
@@ -121,18 +123,20 @@ fn a_slow_layer_does_not_starve_the_others() {
     eprintln!("slow upstream running: worst answer for the other layer / local hits / health = {worst:?}");
     assert!(worst < Duration::from_millis(750), "other layers and local hits must not wait behind the slow one: {worst:?}");
 
-    // the slow layer itself: clean misses once the upstream timeout has passed, never more than max_parallel in flight
+    // the slow layer itself: "busy, ask again" (503 with Retry-After, never a 404 the map would not ask for again) once the
+    // upstream timeout has passed, never more than max_parallel in flight
     let mut misses = 0;
     for h in flood {
         let g = h.join().unwrap();
-        if g.status == 404 && g.cache.as_deref() == Some("miss") {
+        if g.status == 503 && g.cache.as_deref() == Some("busy") {
             misses += 1;
+            assert!(g.retry_after.is_some(), "a busy answer says when to ask again");
             assert!(g.took < Duration::from_secs(12), "a miss comes soon: {:?}", g.took);
         } else {
             assert_eq!(g.status, 200, "{}", g.took.as_millis());
         }
     }
-    assert!(misses > 0, "slow tiles answered as clean misses");
+    assert!(misses > 0, "slow tiles answered as busy");
 }
 
 #[test]
@@ -158,7 +162,7 @@ fn a_layers_upstream_fetches_stay_within_its_max_parallel() {
 }
 
 #[test]
-fn an_upstream_timeout_is_a_clean_miss_that_is_retried_later() {
+fn an_upstream_timeout_is_a_busy_answer_that_is_retried_later() {
     let sc = Scratch::new("timeout");
     let slow = Arc::new(AtomicBool::new(true));
     let s2 = slow.clone();
@@ -173,7 +177,7 @@ fn an_upstream_timeout_is_a_clean_miss_that_is_retried_later() {
     layers.inner.save_user_def(&xyz_def("timing", host.port, "l", json!({}))).unwrap();
     let base = layers.serve().unwrap()["base_url"].as_str().unwrap().to_string();
     let g = get(&base, "/layers/timing/5/3/3");
-    assert_eq!((g.status, g.cache.as_deref()), (404, Some("miss")));
+    assert_eq!((g.status, g.cache.as_deref(), g.retry_after.as_deref()), (503, Some("busy"), Some("1")));
     assert!(g.took >= Duration::from_millis(1200) && g.took < Duration::from_millis(3500), "gave up at the timeout: {:?}", g.took);
     // the miss is not remembered: when the upstream recovers the tile comes
     slow.store(false, Ordering::SeqCst);
@@ -206,4 +210,52 @@ fn requests_for_the_same_tile_share_one_fetch() {
         assert_eq!((g.status, g.body), (200, body(7, 20, 30)));
     }
     assert_eq!(host.stats.per_url.lock().unwrap().get("/l/7/20/30").copied(), Some(1), "one upstream request for eight identical ones");
+}
+
+/// GET with the retries a map makes: a 503 is asked again after its Retry-After (shortened here, at most 300 ms), up to `tries`.
+fn get_retrying(base: &str, path: &str, tries: usize) -> (Get, usize) {
+    let mut retries = 0;
+    loop {
+        let g = get(base, path);
+        if g.status != 503 || retries + 1 >= tries {
+            return (g, retries);
+        }
+        let secs: u64 = g.retry_after.as_deref().and_then(|s| s.parse().ok()).expect("503 with Retry-After");
+        std::thread::sleep(Duration::from_millis((secs * 1000).min(300)));
+        retries += 1;
+    }
+}
+
+/// build 46: 150 parallel requests of a fast pan gave 59 x 404 that MapLibre never asked for again (blank tiles). The queue
+/// overflow and the queue wait now answer 503 with Retry-After, and after retries every tile is served.
+#[test]
+fn a_burst_of_150_tiles_is_all_served_after_retries() {
+    let sc = Scratch::new("burst");
+    let host = fake_host_n(16, 40, |url, _| match parse(url) {
+        Some((_, z, x, y)) => (200, body(z, x, y)),
+        None => (404, vec![]),
+    });
+    let layers = layers(&sc);
+    layers.inner.save_user_def(&xyz_def("burst", host.port, "l", json!({"offline": {"allowed": true, "max_parallel": 2}}))).unwrap();
+    let base = layers.serve().unwrap()["base_url"].as_str().unwrap().to_string();
+    let gate = Arc::new(Barrier::new(150));
+    let hs: Vec<_> = (0..150u32)
+        .map(|i| {
+            let (base, gate) = (base.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                let (x, y) = (i % 15, i / 15);
+                (i, get_retrying(&base, &format!("/layers/burst/10/{x}/{y}"), 60))
+            })
+        })
+        .collect();
+    let mut retried = 0;
+    for h in hs {
+        let (i, (g, retries)) = h.join().unwrap();
+        let (x, y) = (i % 15, i / 15);
+        assert_eq!((g.status, g.body), (200, body(10, x, y)), "tile 10/{x}/{y} after {retries} retries");
+        retried += usize::from(retries > 0);
+    }
+    eprintln!("burst of 150: {retried} tiles needed a retry, all served");
+    assert!(retried > 0, "the burst overflowed the queue (64), so some tiles were answered busy first");
 }
