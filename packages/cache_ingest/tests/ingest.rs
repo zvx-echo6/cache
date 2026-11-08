@@ -254,6 +254,8 @@ fn a_step_does_one_unit_over_a_zero_budget_and_the_batch_and_threads_are_honoure
     for i in 1..=10u64 {
         let s = step(&svc, job, 0);
         assert_eq!(s["progress"]["pages_done"], i, "one page per step");
+        // the pieces are known once reading is finished, and not before
+        assert_eq!(s["progress"]["pieces"].as_u64().unwrap() > 0, i == 10);
     }
     let mut last = 0;
     let mut steps = 0;

@@ -341,17 +341,25 @@ fn text(engines: &Value, k: &str) -> Option<String> {
     engines.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+/// The embedder of the engines named, kept for the next job (loading the model takes seconds and memory).
+fn embedder_for(engines: &Value) -> Arc<CoreEmbedder> {
+    static KEPT: Mutex<Vec<Arc<CoreEmbedder>>> = Mutex::new(Vec::new());
+    let (lib, model, sha256) = (text(engines, "embed_lib"), text(engines, "embed_model"), text(engines, "embed_sha256"));
+    let mut g = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(e) = g.iter().find(|e| e.lib == lib && e.model == model && e.sha256 == sha256) {
+        return e.clone();
+    }
+    let e = Arc::new(CoreEmbedder { lib, model, sha256, loaded: Mutex::new(None) });
+    g.clear();
+    g.push(e.clone());
+    e
+}
+
 fn production_env(engines: &Value) -> cache_ingest::Result<Env> {
     let pdf = Arc::new(PdfiumEngine::new(text(engines, "pdfium_lib"), text(engines, "pdfium_version")));
-    let embedder = Arc::new(CoreEmbedder {
-        lib: text(engines, "embed_lib"),
-        model: text(engines, "embed_model"),
-        sha256: text(engines, "embed_sha256"),
-        loaded: Mutex::new(None),
-    });
     Ok(Env {
         pdf,
-        embedder,
+        embedder: embedder_for(engines),
         store: Arc::new(CoreStore),
         // The core does not load cache_classify on a device (no classifier weights are shipped to it), so nothing is placed.
         classifier: None,

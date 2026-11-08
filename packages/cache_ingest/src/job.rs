@@ -368,8 +368,28 @@ impl Job {
         self.pages.iter().enumerate().filter(|(_, p)| p.st == St::Pending).map(|(i, _)| i).collect()
     }
 
+    /// The pieces are cut as soon as every page has its text, so `progress.pieces` is known when reading is finished. A book with
+    /// no text fails here.
+    fn try_prepare(&mut self) {
+        if self.prepared.is_some() || self.failed.is_some() || self.pages.len() < self.page_count || self.pages.iter().any(|p| p.st == St::Pending) {
+            return;
+        }
+        if let Err(e) = self.prepare_now() {
+            self.failed = Some(e);
+        }
+    }
+
+    fn prepare_now(&mut self) -> Result<()> {
+        let prep = prepare_pack(&self.pages_source(), &self.page_ins(), &self.build_options())?;
+        prep.check_not_empty().map_err(|e| Error::new(Code::Damaged, e.0))?;
+        self.texts = prep.texts();
+        self.prepared = Some(prep);
+        Ok(())
+    }
+
     /// The app is told about the pages waiting when a batch is full, or when all the pages have been read.
     fn settle(&mut self) {
+        self.try_prepare();
         if self.asked.is_empty() {
             let pending = self.pending();
             if !pending.is_empty() && (pending.len() >= self.p.opts.ocr_batch || self.pages.len() == self.page_count) {
@@ -580,10 +600,7 @@ impl Job {
 
     fn embed_unit(&mut self) -> Result<()> {
         if self.prepared.is_none() {
-            let prep = prepare_pack(&self.pages_source(), &self.page_ins(), &self.build_options())?;
-            prep.check_not_empty().map_err(|e| Error::new(Code::Damaged, e.0))?;
-            self.texts = prep.texts();
-            self.prepared = Some(prep);
+            self.prepare_now()?;
         }
         let n = self.texts.len();
         let done = self.vectors.len();
