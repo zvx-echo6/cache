@@ -25,7 +25,7 @@ These are the divisions and their drafted descriptions (Cache Decimal System, CD
 - **160 Astronomy and timekeeping**: Stars, planets, the moon, the sun, telescopes, calendars, clocks and time.
 - **170 Biology and ecology**: Living things in general, cells, genetics, evolution, ecosystems, habitats and the natural environment.
 - **180 Plants and botany**: Plant identification and biology: trees, shrubs, flowers, grasses, ferns, mushrooms and how plants grow.
-- **190 Animals and insects**: Animal identification and biology: mammals, birds, reptiles, fish, insects, spiders and their behaviour.
+- **190 Animals and insects**: Animal identification and biology: mammals, birds, reptiles, fish, insects, spiders and their behavior.
 
 ## 200 Medicine and Health
 
@@ -69,7 +69,7 @@ These are the divisions and their drafted descriptions (Cache Decimal System, CD
 - **520 Rainwater harvesting**: Collecting rainwater, roofs, cisterns, rain barrels and catchment.
 - **530 Water treatment**: Making water safe to drink: purification, filtration, disinfection, boiling and chlorination, water quality.
 - **540 Pumping, storage and plumbing**: Pumps, pipes, plumbing, tanks, gravity-fed water systems, valves and water storage.
-- **550 Sanitation and waste**: Toilets, latrines, septic systems, sewage, greywater, garbage and waste disposal.
+- **550 Sanitation and waste**: Toilets, latrines, septic systems, sewage, graywater, garbage and waste disposal.
 - **560 Solar power**: Solar panels, photovoltaic systems, solar water heating, charge controllers and inverters, and off-grid solar.
 - **570 Wind, hydro and biogas**: Wind turbines, micro-hydro, water wheels, biogas digesters and other renewable energy.
 - **580 Batteries, generators and fuels**: Batteries, generators, fuel storage, gasoline, diesel, propane, charcoal, ethanol and power backup.
@@ -89,7 +89,7 @@ These are the divisions and their drafted descriptions (Cache Decimal System, CD
 
 ## 700 Communication
 
-- **710 Radio fundamentals**: How radio works: radio theory, receivers, transmitters, licences, bands, CB, FRS, GMRS and shortwave listening.
+- **710 Radio fundamentals**: How radio works: radio theory, receivers, transmitters, licenses, bands, CB, FRS, GMRS and shortwave listening.
 - **720 Amateur radio operating**: Ham radio operating: call signs, nets, procedures, contesting, Morse code and operating practice.
 - **730 Antennas and propagation**: Antenna design and building, feed lines, grounding, propagation, HF, VHF and UHF reach.
 - **740 Mesh and digital radio**: Mesh networking and digital radio: Meshtastic, MeshCore, LoRa, packet radio, APRS and off-grid text messaging.
@@ -109,7 +109,7 @@ These are the divisions and their drafted descriptions (Cache Decimal System, CD
 - **860 Tracking and observation**: Animal tracking, reading sign, nature observation, awareness, observation skills and wildlife watching.
 - **870 Maps and land navigation**: Reading maps, compass, orienteering, GPS use, topographic maps and finding your way on land.
 - **880 Celestial and marine navigation**: Navigating by the stars, sun and moon, celestial navigation, sailing, charts and navigation at sea.
-- **890 Climbing, caving and water travel**: Climbing, mountaineering, caving, rope work, canoeing, kayaking and travelling by river.
+- **890 Climbing, caving and water travel**: Climbing, mountaineering, caving, rope work, canoeing, kayaking and traveling by river.
 
 ## 900 Security and Society
 
