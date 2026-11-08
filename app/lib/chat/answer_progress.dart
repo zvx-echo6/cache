@@ -14,6 +14,7 @@ class AnswerProgress extends StatelessWidget {
     this.notes = const [],
     this.text = '',
     this.failed = false,
+    this.queuePosition,
   });
 
   final TurnPhase phase;
@@ -22,11 +23,17 @@ class AnswerProgress extends StatelessWidget {
   final String text;
   final bool failed;
 
+  /// How many answers are ahead of this one on the server (1 is next); null when it runs or does not wait.
+  final int? queuePosition;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     final done = phase == TurnPhase.done;
-    final status = switch (phase) {
+    final ahead = done ? null : queuePosition;
+    final status = ahead != null
+        ? (ahead > 1 ? 'Waiting for $ahead answers ahead to finish' : 'Waiting for another answer to finish')
+        : switch (phase) {
       TurnPhase.starting => 'Starting…',
       TurnPhase.searching => switch (activeTool) {
         'search' => 'Looking this up…',
