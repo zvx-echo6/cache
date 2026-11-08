@@ -263,7 +263,10 @@ void main() {
       // The model got the earlier transcript exactly as it saw it, then the new question.
       final sent = (backend.requests.first['messages'] as List).skip(1).toList();
       expect(sent.take(4), s.transcript(id).take(4));
-      expect(sent[4], {'role': 'user', 'content': 'And dirty water?'});
+      expect(sent[4]['role'], 'user');
+      expect(sent[4]['content'], matches(RegExp(r'^Local time: \d\d:\d\d\n\nAnd dirty water\?$')));
+      // The question is stored as the model read it, its time line included.
+      expect(s.transcript(id)[4], sent[4]);
       // The new tool message continues the numbering: Burn keeps [1], Water is [3].
       final toolMsg = (backend.requests[1]['messages'] as List).last as Map;
       expect(toolMsg['content'], '[3] Water — Boil it.\n[1] Burn — Cool it, again.');

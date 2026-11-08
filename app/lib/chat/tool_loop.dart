@@ -8,6 +8,7 @@ import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
+import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_call_text.dart';
 import '../platform/app_log.dart';
@@ -76,6 +77,7 @@ class ToolLoop {
     required this.backend,
     required List<Tool> tools,
     this.systemPrompt,
+    this.timeLine,
     this.enableThinking = kEnableThinking,
     this.numbering,
     this.host,
@@ -104,6 +106,10 @@ class ToolLoop {
 
   /// Builds the system prompt for each turn (local time and location change); null: [kSystemPrompt].
   final String Function()? systemPrompt;
+
+  /// Builds the local time line of a new question, put at the start of its user message ([withTimeLine]); null: the question
+  /// goes alone.
+  final String Function()? timeLine;
   final bool enableThinking;
   final Map<String, Tool> _tools;
 
@@ -184,10 +190,18 @@ class ToolLoop {
 
   String _clean(String s) => checkCitations(stripToolCalls(s), _results.keys.toSet()).text;
 
-  /// Asks [userText]. With [seed], the turn starts with that tool call (its arguments as JSON text) and its real result, as if the
-  /// model had made it (Ask about this); the seed is not one of the turn's tool rounds.
-  Stream<TurnUpdate> ask(String userText, {({String name, String arguments})? seed}) {
-    _messages.add({'role': 'user', 'content': userText});
+  /// The user message for [userText] as the model reads it: the question's time line ([timeLine]) first, then the question.
+  /// The conversation keeps this message as it is, so later turns render it the same way.
+  Map<String, dynamic> userMessage(String userText) {
+    final line = timeLine?.call();
+    return {'role': 'user', 'content': line == null ? userText : withTimeLine(line, userText)};
+  }
+
+  /// Asks [userText] ([message]: its user message from [userMessage], when the caller stored it already). With [seed], the turn
+  /// starts with that tool call (its arguments as JSON text) and its real result, as if the model had made it (Ask about this);
+  /// the seed is not one of the turn's tool rounds.
+  Stream<TurnUpdate> ask(String userText, {({String name, String arguments})? seed, Map<String, dynamic>? message}) {
+    _messages.add(message ?? userMessage(userText));
     return _turn(seed: seed);
   }
 
