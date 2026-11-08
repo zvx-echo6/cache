@@ -419,13 +419,24 @@ class ElevationPanel extends StatelessWidget {
               children: [
                 key,
                 const SizedBox(width: 8),
-                Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary))),
-                Text.rich(
-                  TextSpan(children: [
-                    TextSpan(text: value, style: const TextStyle(fontWeight: FontWeight.w700)),
-                    TextSpan(text: rest),
-                  ]),
-                  style: TextStyle(fontSize: 14, color: k.text),
+                Flexible(flex: 2, child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary))),
+                const SizedBox(width: 8),
+                // Large text shrinks the value to fit rather than running off the card.
+                Expanded(
+                  flex: 3,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: value, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          TextSpan(text: rest),
+                        ]),
+                        style: TextStyle(fontSize: 14, color: k.text),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -543,24 +554,36 @@ class RouteElevationSummary extends StatelessWidget {
       ));
     } else {
       final total = TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: k.text);
-      head.addAll([
-        Icon(Icons.arrow_upward, size: 16, color: k.accent),
-        const SizedBox(width: 3),
-        Text(elevationText(fmt, p.climbM), style: total),
-        const SizedBox(width: 10),
-        Icon(Icons.arrow_downward, size: 16, color: k.accent),
-        const SizedBox(width: 3),
-        Text(elevationText(fmt, p.descentM), style: total),
-      ]);
+      head.add(Flexible(
+        flex: 2,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerRight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.arrow_upward, size: 16, color: k.accent),
+              const SizedBox(width: 3),
+              Text(elevationText(fmt, p.climbM), style: total),
+              const SizedBox(width: 10),
+              Icon(Icons.arrow_downward, size: 16, color: k.accent),
+              const SizedBox(width: 3),
+              Text(elevationText(fmt, p.descentM), style: total),
+            ],
+          ),
+        ),
+      ));
       children
         ..add(ElevationChart(key: const ValueKey('preview-elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 92, full: false))
         ..add(Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Row(
             children: [
-              if (p.highest case final h?) Text('Highest ${elevationText(fmt, h.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+              if (p.highest case final h?)
+                Flexible(child: Text('Highest ${elevationText(fmt, h.elevM)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
               const Spacer(),
-              if (p.lowest case final lw?) Text('Lowest ${elevationText(fmt, lw.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+              if (p.lowest case final lw?)
+                Flexible(child: Text('Lowest ${elevationText(fmt, lw.elevM)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
             ],
           ),
         ));
