@@ -28,3 +28,9 @@ A section can show a picture of the screen it talks about: `![caption](shot:<id>
 screen state each one shows are in [shots.txt](shots.txt). `split.py` takes the markup out, caption and all, so the library the
 assistant searches never holds it, and `verify.py` fails if any is left. `ci_check.py` fails on a screenshot with no caption, an
 id not in `shots.txt`, or an id with no picture.
+
+Making the pictures: run the **Renders** workflow by hand with `guide=true` on the branch,
+`gh workflow run renders.yml --ref <branch> -f guide=true`. It draws `app/test_shots/guide_shots_test.dart`, cuts the pictures
+with `make_shots.py` and uploads them as the artifact `guide-shots-<sha>`; fetch it with
+`gh run download <run id> -n guide-shots-<sha> -D app/assets/guide/shots` and commit the pictures that changed.
+`regions-sheet.png` is made by hand and is never redrawn.
