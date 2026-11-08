@@ -16,8 +16,9 @@ import 'dart:math' as math;
 ///    from its low point to its high point, once the height has turned back from the high point by 3 m (and the same for a
 ///    fall), so wobbles smaller than that add nothing. They are counted separately on each stretch that has data, never across
 ///    a gap.
-/// 4. **Climbs.** The smoothed profile is simplified into straight stretches (Douglas-Peucker, the line may stray
-///    [kSimplifyM] (6 m) up or down), so a long climb that steepens is split where its grade changes. Each uphill stretch at
+/// 4. **Climbs.** The heights, smoothed more lightly for this ([kClimbSigmaM], 20 m, so a climb's ends stay sharp), are
+///    simplified into straight stretches (Douglas-Peucker, the line may stray [kSimplifyM] (6 m) up or down), so a long climb
+///    that steepens is split where its grade changes. Each uphill stretch at
 ///    least [kMinClimbRiseM] (10 m) high and [kMinClimbLengthM] (200 m) long is a climb; its grade is its rise over its length.
 ///    The steepest climb ahead is the climb with the highest grade that ends ahead of the position (one the position is on
 ///    counts from the position).
@@ -74,6 +75,27 @@ class ElevationProfile {
   /// Metres of the route with no elevation data.
   double get missingM => math.max(0, totalM - coveredM);
 
+  /// The heights climbs are found on: smoothed lightly ([kClimbSigmaM]), so a climb's ends stay where they are.
+  late final List<double> _climbElev = smoothProfile(distM, rawM, sigmaM: kClimbSigmaM);
+
+  double? _climbElevAt(double atM) {
+    if (distM.isEmpty) return null;
+    var lo = 0, hi = distM.length - 1;
+    if (atM <= distM[lo]) return _climbElev[lo].isNaN ? null : _climbElev[lo];
+    if (atM >= distM[hi]) return _climbElev[hi].isNaN ? null : _climbElev[hi];
+    while (hi - lo > 1) {
+      final mid = (lo + hi) >> 1;
+      if (distM[mid] <= atM) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    final a = _climbElev[lo], b = _climbElev[hi];
+    if (a.isNaN || b.isNaN) return null;
+    return a + (b - a) * (atM - distM[lo]) / (distM[hi] - distM[lo]);
+  }
+
   void _measure() {
     final r = <(int, int)>[];
     var start = -1;
@@ -100,7 +122,7 @@ class ElevationProfile {
         if (hi == null || e > hi.elevM) hi = (distM: distM[i], elevM: e);
         if (lo == null || e < lo.elevM) lo = (distM: distM[i], elevM: e);
       }
-      found.addAll(findClimbs(distM.sublist(a, b + 1), elevM.sublist(a, b + 1)));
+      found.addAll(findClimbs(distM.sublist(a, b + 1), _climbElev.sublist(a, b + 1)));
     }
     climbM = up;
     descentM = down;
@@ -146,7 +168,7 @@ class ElevationProfile {
       if (c.endM <= fromM) continue;
       var ahead = c;
       if (c.startM < fromM) {
-        final e = elevationAt(fromM);
+        final e = _climbElevAt(fromM);
         if (e == null) continue;
         ahead = Climb(startM: fromM, endM: c.endM, startElevM: e, endElevM: c.endElevM);
         if (ahead.riseM < kMinClimbRiseM || ahead.lengthM < kMinClimbLengthM) continue;
@@ -181,6 +203,9 @@ const double kProfileStepM = 40;
 
 /// The Gaussian's sigma for smoothing, metres along the route.
 const double kSmoothSigmaM = 60;
+
+/// The lighter smoothing climbs are found on, metres: enough to take out pixel noise, little enough to keep a climb's ends sharp.
+const double kClimbSigmaM = 20;
 
 /// The dead band for counting climb and descent, metres.
 const double kClimbThresholdM = 3;
