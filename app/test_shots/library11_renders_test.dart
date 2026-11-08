@@ -50,10 +50,10 @@ class _Sources extends FakeSources {
   String? libraryShard;
 
   /// The core Bookshelves asks for (the Library builds its own shelf source over these sources).
-  SearchCore? core;
+  SearchCore? shelvesCore;
 
   @override
-  Future<SearchCore?> whenCoreReady() async => core;
+  Future<SearchCore?> whenCoreReady() async => shelvesCore;
 
   @override
   SourceStatus? statusAt(String path) => path == libraryShard
@@ -187,7 +187,7 @@ class _Rig {
     layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
     final libsDir = Directory('${r.dir.path}/libraries')..createSync();
-    sources = _Sources(Directory('${r.dir.path}/zims11')..createSync())..core = _ShelvesCore();
+    sources = _Sources(Directory('${r.dir.path}/zims11')..createSync())..shelvesCore = _ShelvesCore();
     // the app support folder (Bookshelves keeps its log in bookshelves/ there)
     support = Directory('${r.dir.path}/support11')..createSync();
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_pathProvider, (call) async => support.path);
