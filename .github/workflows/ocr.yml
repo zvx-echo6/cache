@@ -134,12 +134,11 @@ jobs:
         run: |
           xcodebuild -version
           xcrun simctl list runtimes
-          # The newest iOS 18 runtime when there is one (the run on iOS 26 sat after the build with no output), else the newest.
+          # the newest iPhone simulator
           udid=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
           d = json.load(sys.stdin)["devices"]
           ios = sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
-          ios = [k for k in ios if "iOS-18-" in k] or ios
           for k in reversed(ios):
               for dev in d[k]:
                   if dev["name"].startswith("iPhone"):
@@ -150,27 +149,44 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      # Not `flutter test -d <simulator>`: on the runner's iOS 26 simulators the tool sat at "Waiting for VM Service port to be
+      # available" until the time limit, twice. The test app is built with the test as its entry point and launched on its
+      # own; the test prints OCR-RESULT when it is done, and its output is read from the app's console.
+      - name: Build the test app for the simulator
+        run: flutter build ios --simulator --debug -t integration_test/ocr_test.dart
       - name: Real OCR on the simulator
         timeout-minutes: 30
         run: |
-          set -o pipefail
-          # the app's own log, for when the test sits with no output
-          xcrun simctl spawn "${{ steps.sim.outputs.udid }}" log stream --level debug \
-            --predicate 'process == "Runner" OR subsystem CONTAINS "flutter"' > "$RUNNER_TEMP/sim-app.log" 2>&1 &
-          flutter test integration_test/ocr_test.dart -d "${{ steps.sim.outputs.udid }}" --reporter expanded -v \
-            > "$RUNNER_TEMP/ocr-ios.log" 2>&1 || { tail -n 80 "$RUNNER_TEMP/ocr-ios.log"; exit 1; }
-          grep -E 'OCR-|\[[0-9.]+ s\]|tests? passed|Some tests failed' "$RUNNER_TEMP/ocr-ios.log" || true
+          udid="${{ steps.sim.outputs.udid }}"
+          xcrun simctl install "$udid" build/ios/iphonesimulator/Runner.app
+          # Dart's print reaches the console and the unified log (either may carry it); both are kept.
+          xcrun simctl spawn "$udid" log stream --style compact --predicate 'processImagePath ENDSWITH "Runner"' \
+            > "$RUNNER_TEMP/ocr-ios-oslog.log" 2>&1 &
+          sleep 3
+          xcrun simctl launch --console-pty --terminate-running-process "$udid" co.cache.cacheOcrExample \
+            > "$RUNNER_TEMP/ocr-ios-console.log" 2>&1 &
+          both() { cat "$RUNNER_TEMP/ocr-ios-console.log" "$RUNNER_TEMP/ocr-ios-oslog.log" 2>/dev/null; }
+          end=$((SECONDS + 1500))
+          until both | grep -q 'OCR-RESULT'; do
+            [ "$SECONDS" -lt "$end" ] || { echo 'no OCR-RESULT in 25 min'; tail -n 80 "$RUNNER_TEMP/ocr-ios-console.log"; exit 1; }
+            sleep 10
+          done
+          sleep 5
+          xcrun simctl terminate "$udid" co.cache.cacheOcrExample || true
+          { cat "$RUNNER_TEMP/ocr-ios-console.log"; grep -E 'OCR-|\[[0-9.]+ s\]' "$RUNNER_TEMP/ocr-ios-oslog.log"; } > "$RUNNER_TEMP/ocr-ios.log"
+          grep -v -E '^\s*$' "$RUNNER_TEMP/ocr-ios-console.log" | tail -n 120
+          both | grep -q 'OCR-RESULT pass'
       - name: Logs when it fails
         if: failure() || cancelled()
         run: |
-          echo '--- flutter test -v (last 150 lines)'; tail -n 150 "$RUNNER_TEMP/ocr-ios.log" || true
-          echo '--- the app on the simulator (last 150 lines)'; tail -n 150 "$RUNNER_TEMP/sim-app.log" || true
+          echo '--- the app console (last 150 lines)'; tail -n 150 "$RUNNER_TEMP/ocr-ios-console.log" || true
+          echo '--- unified log, OCR lines'; grep -E 'OCR-|\[[0-9.]+ s\]' "$RUNNER_TEMP/ocr-ios-oslog.log" | tail -n 80 || true
       - name: Measurements
         if: always()
         run: |
           {
             echo '### iOS (Apple Vision), simulator'
             echo '```'
-            grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' "$RUNNER_TEMP/ocr-ios.log" | sed 's/^.*OCR-/OCR-/' || true
+            cat "$RUNNER_TEMP"/ocr-ios-console.log "$RUNNER_TEMP"/ocr-ios-oslog.log 2>/dev/null | grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' | sed 's/^.*OCR-/OCR-/' | sort -u || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

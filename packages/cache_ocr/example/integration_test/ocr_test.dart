@@ -58,82 +58,95 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('real OCR on grayscale 300 dpi page images', (tester) async {
-    final engine = _Timed((await deviceOcrEngine())!);
-    expect(engine.engine, Platform.isIOS ? 'apple-vision' : 'mlkit');
-    // ignore: avoid_print
-    print('OCR-ENGINE ${jsonEncode({'engine': engine.engine, 'version': engine.version, 'os': Platform.operatingSystemVersion})}');
-
-    final spec = (jsonDecode(await rootBundle.loadString('assets/fixtures/expected.json')) as Map)['pages'] as List;
-    final dir = await Directory.systemTemp.createTemp('ocrtest');
-    final pages = <OcrPageImage>[];
-    final expected = <int, Map>{};
-    for (final p in spec.cast<Map>()) {
-      final bytes = await rootBundle.load('assets/fixtures/${p['file']}');
-      final path = '${dir.path}/${p['file']}';
-      await File(path).writeAsBytes(bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes), flush: true);
-      pages.add(OcrPageImage(page: p['page'] as int, imagePath: path, width: p['width'] as int, height: p['height'] as int, dpi: p['dpi'] as int));
-      expected[p['page'] as int] = p;
-    }
-    log('${pages.length} page images written');
-    final before = await ocrMemory();
-
-    // The core's way: one needs_ocr batch through the entry point; then pages 1 and 2 again, warm.
-    final sw = Stopwatch()..start();
-    final wall = <int, double>{};
-    var last = 0.0;
-    final batch = await ocrForIngest(7, [for (final p in pages) p.toJson()], engine, onPage: (p) {
-      final now = sw.elapsedMicroseconds / 1000;
-      wall[p.page] = now - last;
-      last = now;
-      log('page ${p.page} done: ${p.text.length} chars');
-    });
-    expect(batch.failed, isEmpty, reason: '${batch.failed}');
-    expect(batch.ingestParams['engine'], engine.engine);
-    final warm = [for (final p in pages.take(2)) await engine.recognize(p)];
-
-    void report(String run, OcrPageText r, double? wallMs) {
-      final p = expected[r.page]!;
-      final text = p['text'] as String;
+    // OCR-RESULT is what the iOS job waits for: it runs the app without the flutter tool attached (see ocr.yml).
+    try {
+      await _run();
       // ignore: avoid_print
-      print('OCR-MEASURE ${jsonEncode({
-        'run': run,
-        'page': r.page,
-        'dpi': p['dpi'],
-        'pt': p['pt'],
-        'px': '${p['width']}x${p['height']}',
-        'wall_ms': wallMs?.round(),
-        ...?r.stats?.toJson().map((k, v) => v is double ? MapEntry(k, v.round()) : MapEntry(k.replaceAll('_bytes', '_mb'), (v as int) ~/ 1048576)),
-        'confidence': double.parse(r.confidence.toStringAsFixed(3)),
-        'recall': text.isEmpty ? null : double.parse(wordRecall(text, r.text).toStringAsFixed(3)),
-        'chars': r.text.length,
-      })}');
+      print('OCR-RESULT pass');
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('OCR-RESULT fail: $e\n$st');
+      rethrow;
     }
-
-    for (final r in batch.pages) {
-      report('cold', r, wall[r.page]);
-    }
-    for (final r in warm) {
-      report('warm', r, null);
-    }
-    final after = await ocrMemory();
-    // ignore: avoid_print
-    print('OCR-MEMORY ${jsonEncode({'start_mb': before.currentBytes ~/ 1048576, 'end_mb': after.currentBytes ~/ 1048576, 'peak_mb': after.peakBytes ~/ 1048576})}');
-    for (final r in batch.pages) {
-      log('page ${r.page} text:\n${r.text}');
-    }
-
-    final byPage = {for (final r in batch.pages) r.page: r};
-    for (final n in [1, 2, 4]) {
-      expect(norm(byPage[n]!.text), contains(norm(expected[n]!['phrase'] as String)), reason: 'page $n');
-      expect(wordRecall(expected[n]!['text'] as String, byPage[n]!.text), greaterThanOrEqualTo(0.95), reason: 'page $n');
-      expect(byPage[n]!.confidence, greaterThan(0.3), reason: 'page $n');
-      expect(byPage[n]!.stats, isNotNull);
-    }
-    // lines joined by \n
-    expect(byPage[1]!.text, contains('\n'));
-    // the blank page: nothing, or at most a stray mark read from the speckle
-    expect(byPage[3]!.text.length, lessThanOrEqualTo(3), reason: 'blank page read as "${byPage[3]!.text}"');
-
-    await dir.delete(recursive: true);
   }, timeout: const Timeout(Duration(minutes: 20)));
+}
+
+Future<void> _run() async {
+  final engine = _Timed((await deviceOcrEngine())!);
+  expect(engine.engine, Platform.isIOS ? 'apple-vision' : 'mlkit');
+  // ignore: avoid_print
+  print('OCR-ENGINE ${jsonEncode({'engine': engine.engine, 'version': engine.version, 'os': Platform.operatingSystemVersion})}');
+
+  final spec = (jsonDecode(await rootBundle.loadString('assets/fixtures/expected.json')) as Map)['pages'] as List;
+  final dir = await Directory.systemTemp.createTemp('ocrtest');
+  final pages = <OcrPageImage>[];
+  final expected = <int, Map>{};
+  for (final p in spec.cast<Map>()) {
+    final bytes = await rootBundle.load('assets/fixtures/${p['file']}');
+    final path = '${dir.path}/${p['file']}';
+    await File(path).writeAsBytes(bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes), flush: true);
+    pages.add(OcrPageImage(page: p['page'] as int, imagePath: path, width: p['width'] as int, height: p['height'] as int, dpi: p['dpi'] as int));
+    expected[p['page'] as int] = p;
+  }
+  log('${pages.length} page images written');
+  final before = await ocrMemory();
+
+  // The core's way: one needs_ocr batch through the entry point; then pages 1 and 2 again, warm.
+  final sw = Stopwatch()..start();
+  final wall = <int, double>{};
+  var last = 0.0;
+  final batch = await ocrForIngest(7, [for (final p in pages) p.toJson()], engine, onPage: (p) {
+    final now = sw.elapsedMicroseconds / 1000;
+    wall[p.page] = now - last;
+    last = now;
+    log('page ${p.page} done: ${p.text.length} chars');
+  });
+  expect(batch.failed, isEmpty, reason: '${batch.failed}');
+  expect(batch.ingestParams['engine'], engine.engine);
+  final warm = [for (final p in pages.take(2)) await engine.recognize(p)];
+
+  void report(String run, OcrPageText r, double? wallMs) {
+    final p = expected[r.page]!;
+    final text = p['text'] as String;
+    // ignore: avoid_print
+    print('OCR-MEASURE ${jsonEncode({
+      'run': run,
+      'page': r.page,
+      'dpi': p['dpi'],
+      'pt': p['pt'],
+      'px': '${p['width']}x${p['height']}',
+      'wall_ms': wallMs?.round(),
+      ...?r.stats?.toJson().map((k, v) => v is double ? MapEntry(k, v.round()) : MapEntry(k.replaceAll('_bytes', '_mb'), (v as int) ~/ 1048576)),
+      'confidence': double.parse(r.confidence.toStringAsFixed(3)),
+      'recall': text.isEmpty ? null : double.parse(wordRecall(text, r.text).toStringAsFixed(3)),
+      'chars': r.text.length,
+    })}');
+  }
+
+  for (final r in batch.pages) {
+    report('cold', r, wall[r.page]);
+  }
+  for (final r in warm) {
+    report('warm', r, null);
+  }
+  final after = await ocrMemory();
+  // ignore: avoid_print
+  print('OCR-MEMORY ${jsonEncode({'start_mb': before.currentBytes ~/ 1048576, 'end_mb': after.currentBytes ~/ 1048576, 'peak_mb': after.peakBytes ~/ 1048576})}');
+  for (final r in batch.pages) {
+    log('page ${r.page} text:\n${r.text}');
+  }
+
+  final byPage = {for (final r in batch.pages) r.page: r};
+  for (final n in [1, 2, 4]) {
+    expect(norm(byPage[n]!.text), contains(norm(expected[n]!['phrase'] as String)), reason: 'page $n');
+    expect(wordRecall(expected[n]!['text'] as String, byPage[n]!.text), greaterThanOrEqualTo(0.95), reason: 'page $n');
+    expect(byPage[n]!.confidence, greaterThan(0.3), reason: 'page $n');
+    expect(byPage[n]!.stats, isNotNull);
+  }
+  // lines joined by \n
+  expect(byPage[1]!.text, contains('\n'));
+  // the blank page: nothing, or at most a stray mark read from the speckle
+  expect(byPage[3]!.text.length, lessThanOrEqualTo(3), reason: 'blank page read as "${byPage[3]!.text}"');
+
+  await dir.delete(recursive: true);
 }
