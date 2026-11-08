@@ -3,7 +3,7 @@
 # and its position dot (the app's distance rule, app/lib/nav/overview/overview_camera.dart). The bench app is tools/map_bench; the
 # workflow makes a Flutter project around it, copies the app's snapshotter and camera code in, builds it in profile mode and runs
 # it. The emulator draws with SwiftShader (software), so absolute frame and CPU numbers are worse than a phone's; the comparison
-# between the modes is what it is for. Runs on a push to a branch named map-bench-* (a new workflow cannot be run by hand until it
+# between the modes is what it is for. A second job builds the iOS snapshotter against the app's pinned MapLibre pod. Runs on a push to a branch named map-bench-* (a new workflow cannot be run by hand until it
 # is on the default branch), or by hand once it is. No secrets are used.
 name: Map bench
 
@@ -152,3 +152,37 @@ jobs:
             ${{ runner.temp }}/emulator.log
           if-no-files-found: warn
           retention-days: 14
+
+  # The app's iOS snapshotter (RouteSnapshot in app/ios/Runner/AppDelegate.swift) built against the MapLibre pod the app pins, in a
+  # small project of its own: the full iOS build needs the native core, which takes longer than one job may run.
+  ios-snapshot-compile:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build it
+        run: |
+          set -euo pipefail
+          B="$RUNNER_TEMP/snapcheck"
+          flutter create --org co.cache.check --project-name snapcheck --platforms ios "$B" > /dev/null
+          cd "$B"
+          V=$(awk '/^  maplibre_gl:/{f=1;next} f&&/version:/{gsub(/"/,"",$2);print $2;exit}' "$GITHUB_WORKSPACE/app/pubspec.lock")
+          flutter pub add "maplibre_gl:$V"
+          # The class exactly as the app has it, at the end of AppDelegate.swift, with the app's import.
+          sed -n '/^\/\/\/ The whole-route picture during guidance (lib\/nav\/overview/,$p' "$GITHUB_WORKSPACE/app/ios/Runner/AppDelegate.swift" > "$RUNNER_TEMP/snapshot.swift"
+          grep -q 'final class RouteSnapshot' "$RUNNER_TEMP/snapshot.swift"
+          { echo 'import MapLibre'; cat ios/Runner/AppDelegate.swift; echo; cat "$RUNNER_TEMP/snapshot.swift"; echo 'let routeSnapshotForTheBuild = RouteSnapshot()'; } > "$RUNNER_TEMP/AppDelegate.swift"
+          cp "$RUNNER_TEMP/AppDelegate.swift" ios/Runner/AppDelegate.swift
+          flutter build ios --config-only --simulator --debug
+          # The app's Podfile settings: iOS 16.3, static frameworks, and the MapLibre pod at the app's pinned version.
+          POD=$(grep -E "^\s*pod 'MapLibre'" "$GITHUB_WORKSPACE/app/ios/Podfile")
+          sed -i '' "s/^# platform :ios.*/platform :ios, '16.3'/" ios/Podfile
+          sed -i '' "s/^  use_frameworks!$/  use_frameworks! :linkage => :static/" ios/Podfile
+          awk -v pod="$POD" '{print} /flutter_install_all_ios_pods/{print pod}' ios/Podfile > "$RUNNER_TEMP/Podfile" && cp "$RUNNER_TEMP/Podfile" ios/Podfile
+          cat ios/Podfile
+          flutter build ios --simulator --debug
