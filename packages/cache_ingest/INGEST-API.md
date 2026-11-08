@@ -151,8 +151,8 @@ platform has one ingest path.
     difference between a phone-built and a Linux-built pack of the same PDF.
 - **Pieces:** the shared chunker (`cache_chunk`, as `cs_pdf_chunk`): about 200 words, each with page, PDF page and heading path.
 - **Vectors:** bge-m3 through `cache_embed` with the phone's settings (n_ctx 512, CLS, normalized), so they match query vectors.
-- **Library:** points added to the library's shard and keyword index, a line appended to `copies.jsonl`, and the library's
-  `SHA256SUMS` updated. While `writing`, an open handle treats the library as it does during an `update_library` job: it is
+- **Library:** points added to the library's shard and keyword index, a line appended to `copies.jsonl`,
+  a row added to (or replaced in) `documents.tsv` as the builder writes it, and `SHA256SUMS` updated (`source-identities.json` is not touched). While `writing`, an open handle treats the library as it does during an `update_library` job: it is
   `updating`, search skips it, and it reopens when the write is done.
 - **Bookshelves** (when given): same-book detection against the visible copies.
   - Matches are written as `same by:auto`.
