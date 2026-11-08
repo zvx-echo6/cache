@@ -32,12 +32,12 @@ String markerText(Fmt fmt, double m) =>
 String routeLengthText(Fmt fmt, double m) =>
     fmt.units == UnitSystem.imperial ? '${(m / _mPerMile).toStringAsFixed(1)} mi' : '${(m / 1000).toStringAsFixed(1)} km';
 
-/// A "nice" step (1, 2, 2.5 or 5 times a power of ten) nearest to [raw].
-double niceStep(double raw) {
+/// A "nice" step (1, 2, 2.5 or 5 times a power of ten; without 2.5 when [quarter] is false) nearest to [raw].
+double niceStep(double raw, {bool quarter = true}) {
   if (raw <= 0 || raw.isNaN) return 1;
   final p = math.pow(10, (math.log(raw) / math.ln10).floor()).toDouble();
   var best = p;
-  for (final m in const [1.0, 2.0, 2.5, 5.0, 10.0]) {
+  for (final m in quarter ? const [1.0, 2.0, 2.5, 5.0, 10.0] : const [1.0, 2.0, 5.0, 10.0]) {
     if ((math.log(m * p) - math.log(raw)).abs() < (math.log(best) - math.log(raw)).abs()) best = m * p;
   }
   return best;
@@ -138,8 +138,11 @@ class ElevationChartPainter extends CustomPainter {
     final grid = Paint()
       ..color = colors.secondary.withValues(alpha: 0.28)
       ..strokeWidth = 1;
-    final gStep = niceStep(span / (full ? 2.2 : 1.1));
-    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep) {
+    // The small chart labels every other line of the big one's.
+    final gStep = niceStep(span / 2.2);
+    var line = 0;
+    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
+      if (!full && line.isOdd) continue;
       final gy = t + (yMax - g) / (yMax - yMin) * ph;
       for (var gx = l; gx < size.width - r; gx += 7) {
         canvas.drawLine(Offset(gx, gy), Offset(math.min(gx + 3, size.width - r), gy), grid);
@@ -225,7 +228,7 @@ class ElevationChartPainter extends CustomPainter {
     }
 
     // Distance labels along the foot, and the unit.
-    final xStep = niceStep(total / (full ? 5.5 : 2.2));
+    final xStep = niceStep(total / (full ? 5.5 : 2.2), quarter: false);
     final unit = _text(_us ? 'mi' : 'km', 11, colors.secondary);
     final unitX = size.width - r - unit.width;
     unit.paint(canvas, Offset(unitX, size.height - 4 - unit.height + 2));

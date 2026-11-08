@@ -42,7 +42,7 @@ class OverviewCamera {
 
   /// Where ([lat], [lon]) falls on the picture, in logical pixels from its top left.
   Offset project(double lat, double lon) =>
-      Offset(size.width / 2 + (_mx(lon) - _mx(this.lat)) * _scale, size.height / 2 + (_my(lat) - _my(this.lat)) * _scale);
+      Offset(size.width / 2 + (_mx(lon) - _mx(this.lon)) * _scale, size.height / 2 + (_my(lat) - _my(this.lat)) * _scale);
 
   /// Metres per logical pixel at the picture's centre.
   double get metresPerPixel => 2 * math.pi * 6378137 * math.cos(lat * math.pi / 180) / _scale;
