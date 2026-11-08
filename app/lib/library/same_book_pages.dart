@@ -39,6 +39,7 @@ Future<void> openSameBook(BuildContext context, LibraryDeps d, ShelfBook b) asyn
         body: SameBookPanel(
           deps: d,
           bookId: b.id,
+          heading: false,
           onDone: (joined) {
             final now = joined ?? d.shelves.book(b.id);
             if (now != null) LibraryNav.of(ctx).goTo(ctx, bookPath(d, now));
@@ -53,7 +54,10 @@ Future<void> openSameBook(BuildContext context, LibraryDeps d, ShelfBook b) asyn
 /// Pick the book this one is the same as: a search over the person's books, then a tap joins the two into one book (one number,
 /// the other file kept as a spare), with Undo.
 class SameBookPanel extends StatefulWidget {
-  const SameBookPanel({super.key, required this.deps, required this.bookId, required this.onDone});
+  const SameBookPanel({super.key, required this.deps, required this.bookId, required this.onDone, this.heading = true});
+
+  /// The panel's own "Same book as…" heading (a sheet); the pane's top bar already says it.
+  final bool heading;
 
   final LibraryDeps deps;
   final String bookId;
@@ -121,8 +125,10 @@ class _SameBookPanelState extends State<SameBookPanel> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
             children: [
-              Text('Same book as…', key: const ValueKey('same-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-              const SizedBox(height: 4),
+              if (widget.heading) ...[
+                Text('Same book as…', key: const ValueKey('same-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                const SizedBox(height: 4),
+              ],
               Text(b.title, key: const ValueKey('same-book'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
               const SizedBox(height: 6),
               Text(
