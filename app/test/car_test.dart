@@ -98,7 +98,7 @@ void main() {
       expect(t.containsKey('step'), isFalse);
     });
 
-    test('while guiding: the next maneuver, the one after, what is left and the arrival time', () async {
+    test('while guiding: the next maneuver, the one after, and what is left', () async {
       await preview();
       backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
       await nav.start();
@@ -113,7 +113,7 @@ void main() {
       expect(step['distanceM'], greaterThan(0));
       expect((t['then'] as Map)['turn'], 'right');
       expect(t['remainingM'], closeTo((routeJson['distance_m'] as num) * 0.9, 1));
-      expect(t['etaMs'], isNotNull);
+      expect(t['remainingS'], isNotNull);
       expect(t['currentRoad'], 'Road 0');
     });
 

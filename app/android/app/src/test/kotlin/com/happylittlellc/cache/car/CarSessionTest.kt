@@ -70,6 +70,11 @@ class CarSessionTest {
 
     private fun start(intent: Intent = Intent()): SessionController {
         val c = SessionController(CarSession(startEngine = {}), car, intent)
+        // The test library drives the Session's public lifecycle only; the car context's own (which the ScreenManager follows,
+        // as the host's does) is moved here too, so screens pushed later are created and started as on a real host.
+        car.lifecycleOwner.registry.currentState = Lifecycle.State.CREATED
+        c.moveToState(Lifecycle.State.CREATED)
+        car.lifecycleOwner.registry.currentState = Lifecycle.State.RESUMED
         c.moveToState(Lifecycle.State.RESUMED)
         shadowOf(Looper.getMainLooper()).idle()
         return c

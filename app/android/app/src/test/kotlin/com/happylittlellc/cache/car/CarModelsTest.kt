@@ -97,7 +97,9 @@ class CarModelsTest {
         assertEquals("Turn left onto Road 1.", info.currentStep!!.cue.toString())
         assertEquals(Maneuver.TYPE_TURN_NORMAL_LEFT, info.currentStep!!.maneuver!!.type)
         assertNotNull(info.currentStep!!.maneuver!!.icon)
-        assertEquals(Distance.UNIT_FEET, info.currentDistance!!.displayUnit)
+        // 400 m is 1,312 ft: over 528 ft the phone says miles (0.2 mi).
+        assertEquals(Distance.UNIT_MILES_P1, info.currentDistance!!.displayUnit)
+        assertEquals(0.2, info.currentDistance!!.displayDistance, 0.0)
         assertEquals("Turn right onto Road 2.", info.nextStep!!.cue.toString())
         val loading = CarModels.routingInfo(t.copy(step = null, then = null)) { null }
         assertTrue(loading.isLoading)
