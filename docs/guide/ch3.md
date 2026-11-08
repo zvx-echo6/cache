@@ -333,11 +333,11 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 4. Tap "Copy code" and get the text to the other device.
 5. On the other device, tap "Enter a link code", then "Paste", then "Link".
 6. Each device then asks once, for example "Sync Cache settings with Desk?". Choose:
-   - "Both ways": "Changes on either device go to both." This is "Match" on the device's page;
+   - "Match": "Changes on either device go to both.";
    - "Send mine": for example "Desk follows my settings.";
-   - "Not now": for example "Each keeps its own. You can change this on Desk's page."
+   - "Off": for example "Each keeps its own. You can change this on Desk's page."
 
-Closing the question is the same as "Not now". Until one device answers, no settings go between the two. If the other device has already answered, "Not now" keeps its answer.
+Closing the question is the same as "Off", except that it keeps the other device's answer if that device has already answered. Until one device answers, no settings go between the two.
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 

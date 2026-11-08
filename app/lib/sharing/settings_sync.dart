@@ -337,11 +337,11 @@ class SettingsSync extends ChangeNotifier {
     }
   }
 
-  /// The answer to the question asked right after linking: Both ways (Match), Send mine, or Not now (Off; dismissing it too).
-  /// Not now keeps what the other device answered meanwhile; Both ways and Send mine are chosen here, as on the device's page.
-  Future<void> answer(String peer, SettingsLink to) async {
-    if (to == SettingsLink.off && !unanswered(peer)) return;
-    await setLink(peer, to);
+  /// The answer to the question asked right after linking: Match, Send mine or Off, chosen here as on the device's page; null
+  /// when it was closed, which is Off while neither device has answered and keeps what the other device answered meanwhile.
+  Future<void> answer(String peer, SettingsLink? to) async {
+    if (to == null && !unanswered(peer)) return;
+    await setLink(peer, to ?? SettingsLink.off);
   }
 
   bool _sendsTo(String peer) => const {SettingsLink.match, SettingsLink.sending}.contains(linkWith(peer));

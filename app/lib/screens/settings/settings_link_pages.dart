@@ -91,7 +91,7 @@ class DeviceSettingsSection extends StatelessWidget {
 }
 
 /// Asked once, right after a new link: how settings go between this device and [name] ([SettingsSync.answer]). Until it is
-/// answered nothing goes; dismissing it is Not now.
+/// answered nothing goes; closing it is Off, unless the other device has answered meanwhile.
 Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String peer, String name) async {
   final to = await showDialog<SettingsLink>(
     context: context,
@@ -114,9 +114,9 @@ Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String pee
           child: SingleChildScrollView(
             child: SettingsGroup(
               rows: [
-                choice('match', SettingsLink.match, Icons.sync, 'Both ways', 'Changes on either device go to both.'),
+                choice('match', SettingsLink.match, Icons.sync, 'Match', 'Changes on either device go to both.'),
                 choice('send', SettingsLink.sending, Icons.north_east, 'Send mine', '$name follows my settings.'),
-                choice('off', SettingsLink.off, Icons.schedule, 'Not now', "Each keeps its own. You can change this on $name's page."),
+                choice('off', SettingsLink.off, Icons.block, 'Off', "Each keeps its own. You can change this on $name's page."),
               ],
             ),
           ),
@@ -125,7 +125,7 @@ Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String pee
     },
   );
   try {
-    await sync.answer(peer, to ?? SettingsLink.off);
+    await sync.answer(peer, to);
   } catch (e) {
     if (context.mounted) say(context, '$e');
   }

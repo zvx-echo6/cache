@@ -1,5 +1,4 @@
-// Sharing and sync (1.1.0): the question right after a new link ("Sync Cache settings with Desk?": Both ways, Send mine, Not
-// now), reached as the app does (Settings > Sharing and sync > Enter a link code > Link), at 390 and 1440 points wide, light
+// Sharing and sync (1.1.0): the question right after a new link ("Sync Cache settings with Desk?": Match, Send mine, Off), reached as the app does (Settings > Sharing and sync > Enter a link code > Link), at 390 and 1440 points wide, light
 // and dark.
 // flutter test test_shots/link_ask_renders_test.dart --update-goldens  (pictures in test_shots/link_ask/)
 

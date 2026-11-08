@@ -668,20 +668,22 @@ void main() {
     }
   });
 
-  test('Not now keeps what the other device answered meanwhile', () async {
+  test('closing the question keeps what the other device answered meanwhile; Off chosen replaces it', () async {
     final (a, b) = await pairNew();
     await a.sync.markNew('B');
     await b.sync.markNew('A');
     await b.sync.answer('A', SettingsLink.sending);
     await a.takeLink(b);
     expect(a.sync.linkWith('B'), SettingsLink.receiving);
+    await a.sync.answer('B', null);
+    expect(a.sync.linkWith('B'), SettingsLink.receiving, reason: 'closing it is no choice');
     await a.sync.answer('B', SettingsLink.off);
-    expect(a.sync.linkWith('B'), SettingsLink.receiving, reason: 'Not now is no choice');
+    expect(a.sync.linkWith('B'), SettingsLink.off, reason: 'Off, chosen, is a choice as on the device page');
     a.dispose();
     b.dispose();
   });
 
-  testWidgets('Enter a link code: the question right after, and dismissing it is Not now', (tester) async {
+  testWidgets('Enter a link code: the question right after, and closing it is Off', (tester) async {
     tall(tester);
     final a = Dev('me', 'peer1', linked: false);
     await tester.runAsync(a.start);
@@ -697,7 +699,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Sync Cache settings with Desk?'), findsOneWidget);
-    expect(find.text('Both ways'), findsOneWidget);
+    expect(find.text('Match'), findsOneWidget);
+    expect(find.text('Send mine'), findsOneWidget);
+    expect(find.text('Off'), findsOneWidget);
     expect(find.text('Changes on either device go to both.'), findsOneWidget);
     expect(find.text('Desk follows my settings.'), findsOneWidget);
     expect(find.text("Each keeps its own. You can change this on Desk's page."), findsOneWidget);
@@ -711,7 +715,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Sync Cache settings with Desk?'), findsNothing);
-    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me'}, reason: 'dismissed: Not now');
+    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me'}, reason: 'closed: Off');
     expect(a.sync.linkWith('peer1'), SettingsLink.off);
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async => a.dispose());
