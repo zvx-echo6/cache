@@ -413,19 +413,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
   }
 
   Future<void> _rename(OwnValue v) async {
-    final ctl = TextEditingController(text: _names[v.path] ?? v.label);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Name'),
-        content: TextField(key: const ValueKey('own-rename'), controller: ctl, autofocus: true, textCapitalization: TextCapitalization.sentences),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(key: const ValueKey('own-rename-save'), onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('Save')),
-        ],
-      ),
-    );
-    ctl.dispose();
+    final name = await showDialog<String>(context: context, builder: (_) => _RenameDialog(initial: _names[v.path] ?? v.label));
     if (name != null && name.isNotEmpty && mounted) setState(() => _names[v.path] = name);
   }
 
@@ -653,4 +641,34 @@ class _OwnImportPageState extends State<OwnImportPage> {
       ],
     );
   }
+}
+
+/// Asks for a value's name. Answers the name, or nothing when cancelled. It owns its text field, which lives as long as the dialog.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _ctl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Name'),
+    content: TextField(key: const ValueKey('own-rename'), controller: _ctl, autofocus: true, textCapitalization: TextCapitalization.sentences),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      TextButton(key: const ValueKey('own-rename-save'), onPressed: () => Navigator.pop(context, _ctl.text.trim()), child: const Text('Save')),
+    ],
+  );
 }
