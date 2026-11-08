@@ -56,6 +56,9 @@ LoadFailure loadFailureOf(String error) {
 /// The model's context window, in tokens. Set on every load (the default of the native layer is the same).
 const int kContextTokens = 8192;
 
+/// The folder under app support where the native layer keeps the saved prompt prefix (at most two files).
+const String kPromptPrefixDir = 'prompt-prefix';
+
 class AppState extends ChangeNotifier {
   AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
 
@@ -332,8 +335,9 @@ class AppState extends ChangeNotifier {
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
       logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
-      final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
+      final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
+      if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -343,7 +347,7 @@ class AppState extends ChangeNotifier {
         activeInfo = null;
         if (previous != null) {
           try {
-            activeInfo = await session.load(previous.path, nCtx: kContextTokens);
+            activeInfo = await _loadModel(previous.path, kContextTokens);
             active = previous;
           } catch (_) {}
         }
@@ -369,6 +373,26 @@ class AppState extends ChangeNotifier {
       loading = null;
       notifyListeners();
     }
+  }
+
+  /// Loads [path] into the session. On Android the native layer is told the memory the system can still give the app, so it
+  /// repacks the CPU weights only when the copy fits (else they stay file-backed in the mmap); it is also given the folder where
+  /// the fixed prompt start is saved between runs (app support/[kPromptPrefixDir]).
+  Future<ModelInfo> _loadModel(String path, int nCtx) async {
+    int? room;
+    String? prefixDir;
+    if (!kIsWeb) {
+      try {
+        if (Platform.isAndroid) {
+          final m = await memory();
+          if (m != null && !m.appScoped && m.room > 0) room = m.room;
+        }
+        prefixDir = '${(await getApplicationSupportDirectory()).path}/$kPromptPrefixDir';
+      } catch (_) {
+        // Without a reading or a folder the model loads as before.
+      }
+    }
+    return session.load(path, nCtx: nCtx, memoryRoomBytes: room, prefixDir: prefixDir);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
