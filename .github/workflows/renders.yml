@@ -67,6 +67,7 @@ jobs:
       - name: Cut the guide pictures
         if: ${{ github.event.inputs.guide == 'true' }}
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends python3-pil
           python3 -I tools/guide/make_shots.py
           git status --short app/assets/guide/shots
