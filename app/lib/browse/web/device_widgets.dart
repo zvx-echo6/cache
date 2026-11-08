@@ -217,7 +217,7 @@ class WhileClosedCard extends StatelessWidget {
     return switch (j.state) {
       'done' => '$name finished$end.',
       'failed' => '$name stopped$end.',
-      'cancelled' => '$name was cancelled.',
+      'cancelled' => '$name was canceled.',
       _ => '$name is still downloading$begin.',
     };
   }

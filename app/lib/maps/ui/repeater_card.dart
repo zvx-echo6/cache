@@ -12,7 +12,7 @@ String? repeaterDistance(Repeater r, Fmt fmt, {required double fromLat, required
   if (!r.located) return null;
   final d = RepeaterNotebookSource.metresBetween(fromLat, fromLon, r.lat!, r.lon!);
   final words = '${fmt.distance(d)} ${compass8(bearingBetween(fromLat, fromLon, r.lat!, r.lon!))}';
-  return fromMapCentre ? '$words from map centre' : words;
+  return fromMapCentre ? '$words from map center' : words;
 }
 
 /// What the core says for a setting the imported list did not have (cache_user's repeater words).

@@ -51,7 +51,7 @@ It is used for:
 - answering questions about places near you;
 - weather, alerts and fires for "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
-When your location is used for weather, your coordinates go to the source's provider in each request, so it can send data for that spot. Background updates use the last position Cache saved while open, rounded to about 100 metres. The same goes for every place you watch.
+When your location is used for weather, your coordinates go to the source's provider in each request, so it can send data for that spot. Background updates use the last position Cache saved while open, rounded to about 100 meters. The same goes for every place you watch.
 
 When you search a place in an area you haven't downloaded, Cache's data server sees the area, in squares about 100 km across. It doesn't see your exact position.
 

@@ -62,7 +62,7 @@ regions-select | Regions sheet in Select mode: two regions ticked and the "Downl
 regions-updates-tab | Regions sheet, Updates tab: "Road routing" and "Places" up to date, one map with its date, "Update all" and "Check for updates"
 settings-appearance | Settings > Appearance: the four themes, Module icons Small and Large, and "Dark pages" for PDF pages
 settings-assistant | Settings > Cache model and web search: the model row, "Search service" with "Set up", "Search the web when online", "Use my location" and Conversations
-settings-credits | Library > Cache Documentation > Credits and licences: Version, Licence, Source code, Credits, Open-source licences
+settings-credits | Library > Cache Documentation > Credits and licenses: Version, License, Source code, Credits, Open-source licenses
 settings-location-blocked | Settings > Cache model and web search, Location group: "Use my location" row reading "Blocked in the phone's settings" with the "Phone settings" button
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row

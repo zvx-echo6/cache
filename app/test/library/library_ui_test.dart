@@ -469,7 +469,7 @@ void main() {
     });
   });
 
-  testWidgets('Cache Documentation: the guide, What\'s new and Credits and licences', (tester) async {
+  testWidgets('Cache Documentation: the guide, What\'s new and Credits and licenses', (tester) async {
     size(tester, const Size(390, 844));
     await tester.runAsync(() => setUpAll0(books: false));
     await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
@@ -478,8 +478,8 @@ void main() {
     await tapKey(tester, 'library-docs');
     expect(find.text('The Cache guide'), findsOneWidget);
     expect(find.text("What's new in 1.1.0"), findsOneWidget);
-    expect(find.text('Credits and licences'), findsOneWidget);
+    expect(find.text('Credits and licenses'), findsOneWidget);
     await tapKey(tester, 'docs-credits');
-    expect(find.text('Licence'), findsOneWidget);
+    expect(find.text('License'), findsOneWidget);
   });
 }

@@ -31,8 +31,8 @@ void main() {
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
-      // What's new and Credits and licences moved to Library > Cache Documentation (1.1).
-      for (final gone in ['Library', 'Videos', 'Set up Cache', 'Assistant', 'Credits and licences', "What's new in $kAppVersion"]) {
+      // What's new and Credits and licenses moved to Library > Cache Documentation (1.1).
+      for (final gone in ['Library', 'Videos', 'Set up Cache', 'Assistant', 'Credits and licenses', "What's new in $kAppVersion"]) {
         expect(find.text(gone), findsNothing, reason: '$gone is not a Settings row');
       }
       expect(find.text('Choose a model · web search off'), findsOneWidget);

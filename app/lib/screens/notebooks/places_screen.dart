@@ -763,7 +763,7 @@ class _PlaceFormState extends State<PlaceForm> {
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
-            Text('Marker colour', style: TextStyle(fontSize: 14, color: k.secondary)),
+            Text('Marker color', style: TextStyle(fontSize: 14, color: k.secondary)),
             Wrap(
               children: [
                 for (final c in kMarkerColors)

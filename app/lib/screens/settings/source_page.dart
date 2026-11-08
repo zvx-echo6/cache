@@ -107,7 +107,7 @@ class _SourcePageState extends State<SourcePage> {
                 if (c.coverage.isNotEmpty) _fact('Covers', c.coverage),
                 _fact('Updates', '${everyWords(c.refreshMinutes)[0].toUpperCase()}${everyWords(c.refreshMinutes).substring(1)}'),
                 if (c.attribution.isNotEmpty) _fact('Credit', c.attribution),
-                if (c.license.isNotEmpty) _fact('Licence', c.license),
+                if (c.license.isNotEmpty) _fact('License', c.license),
                 _fact('From', c.origin.catalogueTitle),
               ],
             ),

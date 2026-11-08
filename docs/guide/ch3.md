@@ -18,7 +18,7 @@ Settings has seven rows, each with a one-line status.
 
 The status lines show the state without opening the row. For example, "Storage" shows how much Cache uses and what is free.
 
-There is no Library or Videos page here. Open them from "Modules". "What's new in [version]" and "Credits and licences" are in "Library" > "Cache Documentation". See Cache Documentation in chapter 2.
+There is no Library or Videos page here. Open them from "Modules". "What's new in [version]" and "Credits and licenses" are in "Library" > "Cache Documentation". See Cache Documentation in chapter 2.
 
 At the foot of the page, a bar shows while Cache makes search ready in the background, for example `Getting search ready · 3 of 12 done`. It adds why it waits, for example `Paused · battery low (12%) · plug in to continue` or "Waits for charging (long job)". Tap it to see the queue. It goes away when the work is done. You do not need to do anything. See Background indexing speed, and Search inside PDFs, EPUBs and captions in chapter 2.
 

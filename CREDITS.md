@@ -2,42 +2,42 @@
 
 Copyright (C) 2026 Happy Little LLC. Cache is licensed AGPL-3.0-or-later.
 
-Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Library > Cache Documentation > Credits and licences > Credits; the full licence text of every Flutter and Dart package is under Open-source licences.
+Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Library > Cache Documentation > Credits and licenses > Credits; the full license text of every Flutter and Dart package is under Open-source licenses.
 
-No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licences; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
+No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licenses; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
 
 ## Data sources
 
-- OpenStreetMap: street, place, water and land data for the maps, place search and routing. (c) OpenStreetMap contributors, Open Database Licence (ODbL) 1.0. https://www.openstreetmap.org/copyright
+- OpenStreetMap: street, place, water and land data for the maps, place search and routing. (c) OpenStreetMap contributors, Open Database License (ODbL) 1.0. https://www.openstreetmap.org/copyright
 - Map, place and routing packs built from OpenStreetMap are databases under the ODbL 1.0. Attribution: (c) OpenStreetMap contributors.
 - Protomaps: the base map tiles (Protomaps basemap, version 4) and the PMTiles format. The tiles carry OpenStreetMap data (ODbL 1.0). The Protomaps basemaps style code is BSD-3-Clause, Copyright Protomaps LLC. https://protomaps.com
 - OpenFreeMap and OpenMapTiles: the alternative base map and the style the map is drawn from. The style is derived from OpenFreeMap's "Liberty" style (MIT), a fork of OSM Liberty, itself a fork of OSM Bright, derived from Mapbox Open Styles. Style code: BSD-3-Clause. Style design: CC BY 4.0 (OpenMapTiles). Map data: (c) OpenStreetMap contributors, ODbL 1.0. https://openfreemap.org
 - Noto Sans: the map label fonts (glyph ranges as served by OpenFreeMap), SIL Open Font License 1.1. https://openfontlicense.org
-- Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 licence. https://docs.overturemaps.org/attribution/
+- Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 license. https://docs.overturemaps.org/attribution/
 - Mapterhorn: terrain heights, and the hillshade and contour lines made from them. (c) Mapterhorn. Open data from many national sources, see https://mapterhorn.com/attribution
 - ESA WorldCover 2021: land cover. (c) ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0.
 - Open-Meteo: weather forecasts. Weather data by Open-Meteo.com, CC BY 4.0. https://open-meteo.com
 - timezone-boundary-builder: time zone boundaries (through the tzf-dist crate), ODbL 1.0. https://github.com/evansiroky/timezone-boundary-builder
-- Other map layers in the Cache catalogue, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
-- Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own licence (Wikipedia and most others: CC BY-SA), which the file states.
-- PeerTube: videos from the PeerTube sites you connect. Each video keeps the licence its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
+- Other map layers in the Cache catalog, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
+- Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own license (Wikipedia and most others: CC BY-SA), which the file states.
+- PeerTube: videos from the PeerTube sites you connect. Each video keeps the license its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
 
 ## Native libraries and tools
 
 - llama.cpp and ggml (the model runner): MIT, Copyright the ggml authors. https://github.com/ggml-org/llama.cpp
 - libzim 9.8.2 (reads ZIM files): GPL-2.0-or-later, openZIM. Source: https://github.com/openzim/libzim
 - Xapian 1.4 (the full-text index inside libzim): GPL-2.0-or-later. Source: https://xapian.org
-- ICU (inside libzim; Unicode text handling and data): the ICU / Unicode licence, Copyright Unicode, Inc. and others. https://icu.unicode.org
+- ICU (inside libzim; Unicode text handling and data): the ICU / Unicode license, Copyright Unicode, Inc. and others. https://icu.unicode.org
 - zstd and liblzma (inside libzim): zstd is BSD-3-Clause or GPL-2.0 (Meta Platforms); liblzma is public domain.
 - Valhalla 3.7.0 (road routing): MIT, Copyright the Valhalla contributors. https://github.com/valhalla/valhalla
-- Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib licence.
+- Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib license.
 - MapLibre Native (draws the map, through the maplibre_gl package): BSD-2-Clause. https://maplibre.org
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
 - OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
 - MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
-- PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType Licence), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library Licence 2), zlib (zlib licence), libtiff (libtiff licence), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode Licence v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
+- PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType License), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library License 2), zlib (zlib license), libtiff (libtiff license), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode License v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
-- Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licences of the libraries inside the Flutter engine are listed under Open-source licences.
+- Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licenses of the libraries inside the Flutter engine are listed under Open-source licenses.
 
 ## Artwork
 
@@ -45,12 +45,12 @@ No data, library content or language model ships inside Cache. The maps, library
 
 ## Fonts
 
-- Roboto Mono (Bold; the Library's call and shelf numbers): SIL Open Font License 1.1, Copyright 2015 The Roboto Mono Project Authors. https://github.com/googlefonts/robotomono (the licence is at app/assets/fonts/RobotoMono-OFL.txt)
-- Libre Baskerville (the book page's catalogue card): SIL Open Font License 1.1, Copyright 2012 The Libre Baskerville Project Authors, with Reserved Font Name Libre Baskerville. https://github.com/impallari/Libre-Baskerville (the licence is at app/assets/fonts/LibreBaskerville-OFL.txt)
+- Roboto Mono (Bold; the Library's call and shelf numbers): SIL Open Font License 1.1, Copyright 2015 The Roboto Mono Project Authors. https://github.com/googlefonts/robotomono (the license is at app/assets/fonts/RobotoMono-OFL.txt)
+- Libre Baskerville (the book page's catalog card): SIL Open Font License 1.1, Copyright 2012 The Libre Baskerville Project Authors, with Reserved Font Name Libre Baskerville. https://github.com/impallari/Libre-Baskerville (the license is at app/assets/fonts/LibreBaskerville-OFL.txt)
 
 ## Flutter and Dart packages
 
-Taken from `app/pubspec.lock` (every package the app is built with, direct and indirect). The copyright line is the first one in the package's own licence file; the full text of each licence is in Settings > About and credits > Open-source licences.
+Taken from `app/pubspec.lock` (every package the app is built with, direct and indirect). The copyright line is the first one in the package's own license file; the full text of each license is in Settings > About and credits > Open-source licenses.
 
 - android_file_picker 2.1.1: MIT (Copyright (c) 2018 Miguel Ruivo)
 - archive 4.5.2: MIT (Copyright (c) 2013-2021 Brendan Duncan.)
@@ -219,7 +219,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 
 ## Rust crates
 
-Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built for Android arm64), with the licence each crate declares in `cargo metadata`. The lockfile also covers the command-line tool and the tests, so a few crates listed here are not linked into the app. Where a crate offers a choice (for example MIT OR Apache-2.0), Cache uses it under either. The crates written for Cache itself are cache_layers, cache_live, cache_navigate, cache_offroad, cache_places, cache_search, cache_sync, cache_tool, cache_user, cache_video.
+Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built for Android arm64), with the license each crate declares in `cargo metadata`. The lockfile also covers the command-line tool and the tests, so a few crates listed here are not linked into the app. Where a crate offers a choice (for example MIT OR Apache-2.0), Cache uses it under either. The crates written for Cache itself are cache_layers, cache_live, cache_navigate, cache_offroad, cache_places, cache_search, cache_sync, cache_tool, cache_user, cache_video.
 
 - acto 0.8.2: Apache-2.0 OR MIT (github.com/rkuhn/acto)
 - addr2line 0.25.1: Apache-2.0 OR MIT (github.com/gimli-rs/addr2line)
@@ -287,7 +287,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - block-buffer 0.10.4: MIT OR Apache-2.0 (github.com/RustCrypto/utils)
 - block-buffer 0.12.1: MIT OR Apache-2.0 (github.com/RustCrypto/utils)
 - block2 0.6.2: MIT (github.com/madsmtm/objc2)
-- bm25 0.1.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- bm25 0.1.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
 - bon 3.10.3: MIT OR Apache-2.0 (github.com/elastio/bon)
 - bon-macros 3.10.3: MIT OR Apache-2.0 (github.com/elastio/bon)
 - bumpalo 3.20.3: MIT OR Apache-2.0 (github.com/fitzgen/bumpalo)
@@ -518,8 +518,8 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - integer-encoding 4.1.0: MIT (github.com/dermesser/integer-encoding-rs)
 - inventory 0.3.25: MIT OR Apache-2.0 (github.com/dtolnay/inventory)
 - io-uring 0.7.15: MIT OR Apache-2.0 (github.com/tokio-rs/io-uring)
-- io_bridge 0.0.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
-- io_bridge_object_store 0.0.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- io_bridge 0.0.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- io_bridge_object_store 0.0.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
 - ipconfig 0.3.4: MIT/Apache-2.0 (github.com/liranringel/ipconfig)
 - ipnet 2.12.2: MIT OR Apache-2.0 (github.com/krisprice/ipnet)
 - irg-kvariants 0.1.1: MIT (github.com/meilisearch/charabia)

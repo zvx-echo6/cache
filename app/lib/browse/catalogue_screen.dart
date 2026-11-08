@@ -169,7 +169,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             controller: _search,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              hintText: 'Search the catalogue',
+              hintText: 'Search the catalog',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _search.text.isEmpty
                   ? null
@@ -335,7 +335,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              '${b.total} in the catalogue',
+              '${b.total} in the catalog',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: k.secondary),
             ),
@@ -362,7 +362,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          b.catalogError == null ? 'Nothing found. Try another word, language or category.' : "Couldn't reach the catalogue. ${b.catalogError}",
+          b.catalogError == null ? 'Nothing found. Try another word, language or category.' : "Couldn't reach the catalog. ${b.catalogError}",
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 14, color: b.catalogError != null ? k.warning : k.secondary),
         ),

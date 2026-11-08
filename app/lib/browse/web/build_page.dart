@@ -220,7 +220,7 @@ class _BuildPageState extends State<BuildPage> {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('A new library', style: TextStyle(fontSize: 15, color: k.text)),
-                    const Small('Give it a name you will recognise.'),
+                    const Small('Give it a name you will recognize.'),
                   ]),
                 ),
               ]),

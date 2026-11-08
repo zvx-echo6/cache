@@ -516,7 +516,7 @@ class BuildController extends ChangeNotifier {
       e.state = 'done';
     } on UploadCancelled {
       e.state = 'failed';
-      e.error = 'Cancelled.';
+      e.error = 'Canceled.';
     } on DeviceException catch (x) {
       e.state = 'failed';
       e.error = _uploadWords(x, e.name);
@@ -535,7 +535,7 @@ class BuildController extends ChangeNotifier {
     if (u.stopped != null || u.cancelled) {
       for (final w in u.entries.where((x) => x.state == 'waiting')) {
         w.state = 'failed';
-        w.error = u.cancelled ? 'Cancelled.' : 'Not sent.';
+        w.error = u.cancelled ? 'Canceled.' : 'Not sent.';
       }
     }
     unawaited(refresh());
@@ -573,7 +573,7 @@ class BuildController extends ChangeNotifier {
     }
     for (final w in u.entries.where((x) => x.state == 'waiting')) {
       w.state = 'failed';
-      w.error = 'Cancelled.';
+      w.error = 'Canceled.';
     }
     _pump(u);
     if (u.entries.every((e) => e.state == 'done' || e.state == 'failed')) _end(u);

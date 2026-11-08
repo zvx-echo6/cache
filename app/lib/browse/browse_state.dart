@@ -481,7 +481,7 @@ class BrowseState extends ChangeNotifier {
         _remember(e, installed);
         logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
       } on CatalogException catch (e) {
-        logInfo('A partial download is not matched yet (catalogue: ${e.message}); kept', detail: fileName);
+        logInfo('A partial download is not matched yet (catalog: ${e.message}); kept', detail: fileName);
       } catch (e) {
         logError('A partial download is not matched yet; kept', error: e, detail: fileName);
       }
@@ -663,7 +663,7 @@ class BrowseState extends ChangeNotifier {
     if (t == null) return;
     t.token?.cancel();
     transfers.remove(entry.id);
-    logInfo('Download cancelled: ${entry.title}', job: 'download/${entry.id}');
+    logInfo('Download canceled: ${entry.title}', job: 'download/${entry.id}');
     final forgotten = _forget(entry.id);
     notifyListeners();
     final started = _starts[entry.id];

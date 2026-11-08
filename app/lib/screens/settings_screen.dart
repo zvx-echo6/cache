@@ -67,7 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Part> _maps() {
     if (d.maps.engine.problem != null) return const [Part('Not available', Tone.warn)];
     final names = [for (final r in d.hub.regions?.local ?? const []) r.name];
-    final units = unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale) == UnitSystem.imperial ? 'miles' : 'kilometres';
+    final units = unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale) == UnitSystem.imperial ? 'miles' : 'kilometers';
     return joinParts([
       [Part(names.isEmpty ? 'No regions yet' : names.join(', '))],
       [Part(units)],

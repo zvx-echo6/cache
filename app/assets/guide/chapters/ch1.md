@@ -139,7 +139,7 @@ To get several at once:
 If your area isn't listed, tap ["Draw your own area instead"](cache://maps/draw).
 
 - If a row says `off-road shared with Idaho`, that state's off-road data is downloaded once for all its regions.
-- If a size says "Size unknown", the catalogue has none for it.
+- If a size says "Size unknown", the catalog has none for it.
 - If the list won't load, connect once. It says "Couldn't read the list of regions. It needs a connection the first time."
 - If you're on mobile data, see Downloads, Wi-Fi and mobile data.
 - If a download stops, see A region's own page.
@@ -261,7 +261,7 @@ The Library holds offline copies of Wikipedia, medical guides and survival manua
 ![Add to Library](shot:library-add)
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
-2. Type in "Search the catalogue". You can narrow it with the language chip or a category chip such as "Medicine" or "Preparedness".
+2. Type in "Search the catalog". You can narrow it with the language chip or a category chip such as "Medicine" or "Preparedness".
 3. Under "Ready-made collections · free from Kiwix", tap the download button of the one you want.
 4. In the pop-up, check the size and storage bar, then tap "Download".
 

@@ -83,7 +83,7 @@ class MapsState extends ChangeNotifier {
   String? get baseProblem {
     if (!engine.ready) return null;
     if (activeDefinitions.any((d) => d.isBase)) return null;
-    return 'No base map yet. Connect once to get the catalogue.';
+    return 'No base map yet. Connect once to get the catalog.';
   }
 
   /// The small line about layers that cannot draw here and now, or null.

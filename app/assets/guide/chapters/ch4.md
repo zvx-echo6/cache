@@ -198,7 +198,7 @@ Every source comes from Cache's source list, which the app downloads when online
 Kiwix publishes free offline copies of Wikipedia, medical guides and how-to sites as ZIM files.
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
-2. Search the catalogue, or use the language and category chips such as "Medicine" or "Preparedness".
+2. Search the catalog, or use the language and category chips such as "Medicine" or "Preparedness".
 3. Download from "Ready-made collections · free from Kiwix".
 
 Every download asks first, with its size. Large files can be several gigabytes. Wikipedia comes with pictures (maxi) or without (nopic). The versions without pictures are much smaller.

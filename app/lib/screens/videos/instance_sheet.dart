@@ -66,7 +66,7 @@ class _InstanceSheetState extends State<_InstanceSheet> {
       if (!mounted) return;
       switch (r) {
         case null:
-          _error = 'Sign-in with ${auth.displayName} was cancelled.';
+          _error = 'Sign-in with ${auth.displayName} was canceled.';
         case ExternalSignInFailed():
           _error = "${widget.instance.name} couldn't sign you in with ${auth.displayName}. Try again.";
         case ExternalSignInDone(:final username, :final token):
