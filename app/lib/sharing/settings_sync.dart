@@ -247,6 +247,7 @@ class SettingsSync extends ChangeNotifier {
   Directory? _dir;
   bool _started = false;
   bool _wasRunning = false;
+  bool _disposed = false;
   String _links = '';
 
   bool get started => _started;
@@ -335,7 +336,7 @@ class SettingsSync extends ChangeNotifier {
     if (to != SettingsLink.off) await _seed([for (final s in settings) if (settingOn(peer, s.key)) s.key]);
     _links = _linkSignature();
     await pushKeys();
-    notifyListeners();
+    _tell();
   }
 
   /// [g] is included with [peer].
@@ -384,7 +385,7 @@ class SettingsSync extends ChangeNotifier {
     l['off_keys'] = off.toList()..sort();
     l['mode'] ??= 'match';
     await sharing.setLink(peer, l);
-    notifyListeners();
+    _tell();
   }
 
   Future<void> _seedFor(String peer, List<String> keys) async {
@@ -507,7 +508,7 @@ class SettingsSync extends ChangeNotifier {
     unawaited(() async {
       await pushKeys();
       await pull();
-      notifyListeners();
+      _tell();
     }());
   }
 
@@ -558,7 +559,7 @@ class SettingsSync extends ChangeNotifier {
     }
     if (changed) {
       await _saveState();
-      notifyListeners();
+      _tell();
     }
   }
 
@@ -591,7 +592,7 @@ class SettingsSync extends ChangeNotifier {
     await _apply(s, ev);
     if (!_waiting.containsKey(s.key)) {
       await _saveState();
-      notifyListeners();
+      _tell();
     }
   }
 
@@ -628,7 +629,7 @@ class SettingsSync extends ChangeNotifier {
     if (set.isEmpty) _keysFor.remove(peer);
     await _saveState();
     await pushKeys();
-    notifyListeners();
+    _tell();
   }
 
   /// Gives the sync engine, for each linked device, the keys ticked for it while this device's settings go there; none to the
@@ -679,7 +680,7 @@ class SettingsSync extends ChangeNotifier {
         }
       }
     }
-    if (any) notifyListeners();
+    if (any) _tell();
   }
 
   // ---------------------------------------------------------------- kept on this device
@@ -738,8 +739,14 @@ class SettingsSync extends ChangeNotifier {
     }
   }
 
+  /// Tells the pages, unless this is gone (a look that was running when it went).
+  void _tell() {
+    if (!_disposed) notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _timer?.cancel();
     for (final u in _unlisten) {
       u();

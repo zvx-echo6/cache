@@ -159,6 +159,17 @@ void tall(WidgetTester tester) {
   addTearDown(tester.view.reset);
 }
 
+/// Taps [key] with its work (files, the fake engine) running on the real clock, then lets the page settle.
+Future<void> tapReal(WidgetTester tester, String key) async {
+  await tester.runAsync(() async {
+    await tester.tap(find.byKey(ValueKey(key)));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  });
+  for (var i = 0; i < 6; i++) {
+    await tester.pump(const Duration(milliseconds: 200));
+  }
+}
+
 Future<(Dev, Dev)> pair() async {
   final a = Dev('A', 'B', otherName: 'Phone');
   final b = Dev('B', 'A');
@@ -216,6 +227,7 @@ void main() {
     // One-sided: A changes it (its previous value is the value on B), at a time before B's last change. It applies.
     a.clock = 200;
     a.popUp.value = 'none';
+    await a.sync.flush();
     expect(a.events().last, containsPair('prev', 'all'));
     await b.takeLog(a);
     expect(b.popUp.value, 'none', reason: 'only A changed it since');
@@ -490,13 +502,11 @@ void main() {
     expect(find.text('API keys'), findsOneWidget);
     expect(find.text('None included'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('link-send')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tapReal(tester, 'link-send');
     await tester.pump();
     expect(a.core.peers.single['link'], containsPair('mode', 'send'));
 
-    await tester.tap(find.byKey(const ValueKey('link-off')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tapReal(tester, 'link-off');
     await tester.pump();
     expect(find.text("What's included"), findsNothing, reason: 'nothing goes, so nothing to choose');
 
@@ -511,17 +521,14 @@ void main() {
     expect(find.text('API keys'), findsNothing, reason: 'keys come from the device whose settings it follows');
 
     // What's included: six groups and what never syncs; a group's page ticks single settings.
-    await tester.tap(find.byKey(const ValueKey('link-included')));
-    await tester.pumpAndSettle();
+    await tapReal(tester, 'link-included');
     for (final g in SettingsGroupId.values) {
       expect(find.text(g.label), findsOneWidget);
     }
     expect(find.text('Never synced'), findsOneWidget);
     expect(find.text(kNeverSynced), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('group-appearance')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('setting-appearance.theme')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tapReal(tester, 'group-appearance');
+    await tapReal(tester, 'setting-appearance.theme');
     await tester.pump();
     expect(b.sync.settingOn('A', 'appearance.theme'), isFalse);
     expect(b.core.peers.single['link'], containsPair('off_keys', ['appearance.theme']));
