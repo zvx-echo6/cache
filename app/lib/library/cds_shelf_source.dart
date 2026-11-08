@@ -98,6 +98,7 @@ class _LibraryBooks {
 /// book appends to this device's own log in that library.
 class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer {
   CdsShelfSource(this.libraries, {Future<String?> Function()? deviceId, int Function()? clock})
+    // ignore: prefer_initializing_formals
     : _deviceId = deviceId,
       _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
     libraries?.addListener(_onLibraries);

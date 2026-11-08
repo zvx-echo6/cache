@@ -38,19 +38,20 @@ class LogEvent {
       return null;
     }
     if (v is! Map) return null;
-    if (v['v'] != 1) return null;
-    final at = v['at'];
-    final dev = v['dev'];
-    final doc = v['doc'];
+    final Map<Object?, Object?> m = v;
+    if (m['v'] != 1) return null;
+    final at = m['at'];
+    final dev = m['dev'];
+    final doc = m['doc'];
     if (at is! int || at < 0 || dev is! String || dev.isEmpty || doc is! String || doc.isEmpty) return null;
-    LogBy? by() => switch (v['by']) {
+    LogBy? by() => switch (m['by']) {
       'auto' => LogBy.auto,
       'user' => LogBy.user,
       _ => null,
     };
-    final div = v['div'] is String ? v['div'] as String : null;
-    final seq = v['seq'] is int && (v['seq'] as int) >= 0 && (v['seq'] as int) <= 0xFFFFFFFF ? v['seq'] as int : null;
-    switch (v['ev']) {
+    final div = m['div'] is String ? m['div'] as String : null;
+    final seq = m['seq'] is int && (m['seq'] as int) >= 0 && (m['seq'] as int) <= 0xFFFFFFFF ? m['seq'] as int : null;
+    switch (m['ev']) {
       case 'place':
         final b = by();
         if (div == null || b == null) return null;
@@ -61,9 +62,9 @@ class LogEvent {
         return LogEvent(at: at, dev: dev, ev: LogEv.unsort, doc: doc, by: b);
       case 'assign' || 'retire':
         if (div == null || seq == null) return null;
-        return LogEvent(at: at, dev: dev, ev: v['ev'] == 'assign' ? LogEv.assign : LogEv.retire, doc: doc, div: div, seq: seq);
+        return LogEvent(at: at, dev: dev, ev: m['ev'] == 'assign' ? LogEv.assign : LogEv.retire, doc: doc, div: div, seq: seq);
       case 'title':
-        final t = v['title'];
+        final t = m['title'];
         if (t is! String) return null;
         return LogEvent(at: at, dev: dev, ev: LogEv.title, doc: doc, title: t);
       case 'remove':
