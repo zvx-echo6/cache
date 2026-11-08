@@ -167,14 +167,16 @@ class _HomeScreenState extends State<HomeScreen> {
           return LayoutBuilder(builder: (context, cts) => ListView(
             padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
             children: [
-              if (widget.updates != null && !typing) UpdateBanner(updates: widget.updates!),
+              // The banner's slot stays while typing (empty), so the children below keep their places: dropping it shifted the
+              // search box one place up, which made a new text field and closed the keyboard at the first letter typed.
+              if (widget.updates != null) typing ? const SizedBox.shrink() : UpdateBanner(updates: widget.updates!),
               for (final b in blocks)
                 if (typing && b != HomeBlock.ask)
                   const SizedBox.shrink()
                 else
                   switch (b) {
                     HomeBlock.setup => widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup),
-                    HomeBlock.ask => Padding(padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
+                    HomeBlock.ask => Padding(key: const ValueKey('home-ask-block'), padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
                     HomeBlock.weather => Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: _WeatherCard(weather: widget.weather, onTap: widget.onOpenWeather, turnOn: setupShown ? null : widget.turnOn, onOpenSettings: widget.onOpenWeatherSettings),
@@ -502,7 +504,8 @@ class _WeatherCard extends StatelessWidget {
       builder: (context, _) => FutureBuilder<(HomeWeather, bool)>(
         future: _read(w),
         builder: (context, snap) {
-          final h = snap.data?.$1 ?? const HomeWeather(message: '…');
+          // Until the core answers: what was last shown for the place, at once (build 46: 13-20 s of "…" at start).
+          final h = snap.data?.$1 ?? w.homeCardNow() ?? const HomeWeather(message: '…');
           final Widget? action;
           if (h.off && onOpenSettings != null) {
             action = Align(
