@@ -564,6 +564,7 @@ class _Books extends StatelessWidget {
               ),
             ),
             title: b.title,
+            titleLines: 2,
             statusWidget: libraryLines(context, bookLine(b), bookMark(deps, b)),
             statusLines: 2,
             chevron: false,

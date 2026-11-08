@@ -227,6 +227,7 @@ class LibraryRootPage extends StatelessWidget {
                     chevron: roomy ? null : false,
                     leading: tile(Icons.description_outlined),
                     title: 'Cache Documentation',
+                    titleLines: 2,
                     statusWidget: libraryLines(context, "The Cache guide, What's new, credits", null),
                     selected: nav.isOpen('docs'),
                     onTap: () => nav.open(context, docsSpec(d)),
