@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -942,6 +943,36 @@ void main() {
       expect(h.weather.waitingForPosition, isFalse);
       expect(await homeWeather(h.weather), 'Choose a place to watch in Settings');
       expect(await homeAlerts(h.weather), 'Choose a place to watch in Settings');
+    });
+
+    // build 46: at start Home's card and the Weather screen waited 10-15 s for the core (busy listing PDFs) for data the app
+    // already had.
+    test('after a restart Home and the Weather screen have the last data and the saved places before the core answers', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
+      expect([for (final p in await h.weather.watchedPlaces()) p.name], containsAll(['Where I am', 'Cabin']));
+
+      h = await h.restart();
+      // The new core has nothing yet and is busy: nothing it says arrives.
+      h.core.busy = Completer<void>();
+      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Where I am', 'Cabin']));
+      final now = h.weather.homeCardNow();
+      expect(now?.temperature, '45 °F');
+      expect(now?.place, 'Where I am');
+      expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2));
+      h.core.busy!.complete();
+    });
+
+    test('Update now fetches every source at once and counts each', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      final r = await h.weather.updateNow();
+      expect(r.fetched, h.core.fetches.length);
+      expect(h.core.fetches.map((f) => f['source']).toSet(), containsAll(['openmeteo-forecast', 'wfigs-incidents-near']));
     });
 
     test('Home weather: an expired forecast says it needs a connection', () async {
