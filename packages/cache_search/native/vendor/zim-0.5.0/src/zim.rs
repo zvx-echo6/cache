@@ -330,8 +330,16 @@ impl Zim {
     /// Loads a Zim file and parses the header, and the url, title, and cluster offset tables.  The
     /// rest of the data isn't parsed until it's needed, so this should be fairly quick.
     pub fn new<P: AsRef<Path>>(p: P) -> Result<Zim> {
-        let store = Store::open(p.as_ref())?;
+        Zim::with_store(p.as_ref(), Store::open(p.as_ref())?)
+    }
 
+    /// Loads a Zim file read through bounded mapping windows (see [`Store::open_windowed`]): for a pass over every directory
+    /// entry ([`Zim::scan_dirents`]) without the whole directory becoming resident memory.
+    pub fn new_windowed<P: AsRef<Path>>(p: P) -> Result<Zim> {
+        Zim::with_store(p.as_ref(), Store::open_windowed(p.as_ref())?)
+    }
+
+    fn with_store<P: AsRef<Path>>(p: P, store: Store) -> Result<Zim> {
         let (header, mime_table) = parse_header(&store)?;
         let checksum = read_checksum(&store, header.checksum_pos)?;
 
@@ -407,6 +415,37 @@ impl Zim {
     /// For performance reasons, you might want to extract by cluster instead.
     pub fn iterate_by_urls(&self) -> DirectoryIterator<'_> {
         DirectoryIterator::new(self)
+    }
+
+    /// The URL indexes of the entries for which `keep(mime id, namespace byte)` is true, in URL order. Only the first four bytes
+    /// of each directory entry are read (no path or title is parsed or allocated), and the path pointer list is read in large
+    /// slices. Redirects have the mime id 0xffff, link targets 0xfffe and deleted entries 0xfffd. `go_on(entries done)` is
+    /// asked every 65,536 entries; when it answers false the scan stops and the answer is `None`.
+    pub fn scan_dirents(&self, keep: &dyn Fn(u16, u8) -> bool, go_on: &mut dyn FnMut(u32) -> bool) -> Result<Option<Vec<u32>>> {
+        const BATCH: u32 = 65_536;
+        let count = self.header.article_count;
+        let mut out = Vec::new();
+        let mut start = 0u32;
+        while start < count {
+            if !go_on(start) {
+                return Ok(None);
+            }
+            let n = BATCH.min(count - start);
+            let at = self.header.url_ptr_pos.checked_add(u64::from(start) * 8).ok_or(Error::OutOfBounds)?;
+            let ptrs = self.store.slice(at, u64::from(n) * 8)?;
+            for (i, raw) in ptrs.chunks_exact(8).enumerate() {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(raw);
+                let head = self.store.slice(u64::from_le_bytes(b), 4)?;
+                let mime = u16::from_le_bytes([head[0], head[1]]);
+                if keep(mime, head[3]) {
+                    out.push(start + i as u32);
+                }
+            }
+            start += n;
+        }
+        go_on(count);
+        Ok(Some(out))
     }
 
     /// Returns the `DirectoryEntry` for the article found at the given URL index.

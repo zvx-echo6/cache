@@ -34,6 +34,7 @@ pub mod suggest;
 pub mod tools;
 pub mod vtt;
 pub mod web;
+pub mod zimpdfs;
 pub mod zimsrc;
 pub mod zimx;
 

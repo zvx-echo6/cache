@@ -215,10 +215,42 @@ class PdfIndexState extends ChangeNotifier {
     return tracePdfOperation(step, action, job: _job(z), alive: () => !_disposed, timers: _diagnosticTimers);
   }
 
+  /// [z]'s PDF list: the one kept for its uuid when there is one (a ZIM file never changes, so its list never does), else listed
+  /// by the core once and kept. Build 46 listed every ZIM at every start: 15 s of the core for a full Wikipedia each time.
   Future<ZimPdfList> _readList(PdfZimRef z) async {
-    final list = await _trace(z, 'Listing PDFs', () => core.zimPdfs(z.uuid!));
+    final uuid = z.uuid!;
+    final kept = await _keptList(uuid);
+    if (kept != null) return kept;
+    final list = await _trace(z, 'Listing PDFs', () => core.zimPdfs(uuid));
     logInfo('PDF list contains ${list.pdfs.length} PDFs, ${list.bytes} bytes', job: _job(z));
+    await _keepList(list);
     return list;
+  }
+
+  /// Where the PDF list of the ZIM [uuid] is kept: `pdf-lists/<uuid>.json` beside the record (never synced).
+  Future<File> _listFile(String uuid) async =>
+      File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-lists${Platform.pathSeparator}$uuid.json');
+
+  Future<ZimPdfList?> _keptList(String uuid) async {
+    try {
+      final f = await _listFile(uuid);
+      if (!f.existsSync()) return null;
+      final l = ZimPdfList.fromJson((jsonDecode(await f.readAsString()) as Map).cast<String, dynamic>());
+      return l.zimUuid == uuid ? l : null;
+    } catch (_) {
+      // unreadable: listed again
+      return null;
+    }
+  }
+
+  Future<void> _keepList(ZimPdfList l) async {
+    try {
+      final f = await _listFile(l.zimUuid);
+      await f.parent.create(recursive: true);
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsString(jsonEncode(l.toJson()), flush: true);
+      await tmp.rename(f.path);
+    } catch (_) {}
   }
 
   void _listingFailed(PdfZimRef z, Object error, StackTrace stack) {
@@ -903,7 +935,15 @@ class PdfIndexState extends ChangeNotifier {
         } catch (_) {}
       }
     }
-    _lists.remove(zimPath);
+    // the kept PDF list of a ZIM no longer here
+    final gone = _lists.remove(zimPath)?.zimUuid;
+    for (final u in {...uuids, ?gone}) {
+      if (kept.contains(u)) continue;
+      try {
+        final f = await _listFile(u);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
     _snaps.remove(zimPath);
     notifyListeners();
     _sweep(afterRemove: true);
