@@ -12,5 +12,6 @@ pub mod fingerprint;
 pub mod pack;
 pub mod pagewriter;
 pub mod points;
+pub mod sorter;
 
 pub use error::{Error, Result};

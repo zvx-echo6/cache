@@ -18,6 +18,6 @@ pub mod service;
 #[doc(hidden)]
 pub mod testing;
 
-pub use engine::{Classifier, Embedder, Env, EnvProvider, LibraryStore, PdfDocument, PdfEngine, Placement, Point, RenderedPage, Staged, Swap};
+pub use engine::{Classifier, Embedder, Env, EnvProvider, LibraryStore, PdfDocument, PdfEngine, Filing, Point, RenderedPage, Staged, Swap};
 pub use error::{Code, Error, Result};
 pub use service::Service;

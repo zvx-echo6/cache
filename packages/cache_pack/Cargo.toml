@@ -10,6 +10,8 @@ workspace = "../cache_search/native"
 # Pure Rust: no PDF engine, no model, no native library, so phones link it.
 [dependencies]
 cache_chunk = { path = "../cache_chunk" }
+# The division classifier (pure Rust), for the sorter that files a book from its piece vectors.
+cache_classify = { path = "../cache_classify" }
 # The MinHash Jaccard and the vector cosine the same-book decision uses (fingerprint.rs): one definition.
 cache_shelves = { path = "../cache_shelves" }
 serde.workspace = true

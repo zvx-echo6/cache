@@ -5,7 +5,7 @@
 //!   `update_library` job uses (`libreg`), works on a real copy beside the library (`<shard>.cs-stage`, `index.cs-stage`) and swaps
 //!   it in with renames, so it is all or nothing, and reopens the library when it is done;
 //! - PDFium and the embedding model, which the host ships and names in the optional `engines` object of the start call;
-//! - no classifier: the core does not load `cache_classify` on a device, so a new book is placed nowhere and goes to Unsorted.
+//! - the division sorter, from `engines.classifier`: the same code as the Linux builder (`cache_pack::sorter`).
 
 use crate::error::{Error, ErrorCode, Result};
 use crate::libindex::{append_documents, Appended, IndexDoc};
@@ -13,7 +13,7 @@ use crate::libreg::{self, LibEntry, UpdateGuard};
 use crate::libupdate::{self, copy_tree, hand_back_open, margin_for, sync_tree, tree_size};
 use crate::library::{self, ensure_init, write_segments_manifest, LibrarySettings};
 use cache_ingest::pdfium::PdfiumEngine;
-use cache_ingest::{Code as IngestCode, Env, Error as IngestError, LibraryStore, Point, Service, Staged, Swap};
+use cache_ingest::{Classifier, Code as IngestCode, Env, Error as IngestError, Filing, LibraryStore, Point, Service, Staged, Swap};
 use edge::{EdgeShard, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -289,6 +289,50 @@ impl cache_ingest::Embedder for CoreEmbedder {
     }
 }
 
+/// The division sorter of the Linux builder (`cache_pack::sorter`: one implementation), reading the vectors the job already made.
+struct CoreClassifier {
+    model: cache_classify::Model,
+}
+
+impl Classifier for CoreClassifier {
+    fn classify(&self, pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing> {
+        let v = cache_pack::sorter::classify(&self.model, pieces).ok()?;
+        let best = v.top.first()?;
+        let label = self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == best.division).map(|c| c.label.clone()).unwrap_or_else(|| best.division.clone());
+        Some(Filing {
+            suggested: cache_pack::pack::Suggested {
+                div: best.division.clone(),
+                label,
+                score: Some(best.score),
+                classifier_version: Some(v.version),
+                source: "classifier".to_string(),
+                second_div: v.top.get(1).map(|s| s.division.clone()),
+            },
+            filed: v.division.is_some(),
+        })
+    }
+}
+
+/// The embedding model a classifier must have been trained on: `engines.embed_sha256`, else the model Cache decided on.
+fn expected_embedding_sha(engines: &Value) -> String {
+    text(engines, "embed_sha256").unwrap_or_else(|| cache_embed::DECIDED_MODEL_SHA256.to_string())
+}
+
+/// Loads the classifier model at `path`; refused (with the reason) when it was trained on another embedding model than `expected_sha`.
+pub fn load_classifier(path: &str, expected_sha: &str) -> std::result::Result<(Arc<dyn Classifier>, u32), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let model = cache_pack::sorter::load_model(&bytes, expected_sha).map_err(|e| e.to_string())?;
+    let version = model.version();
+    Ok((Arc::new(CoreClassifier { model }), version))
+}
+
+fn classifier_for(engines: &Value) -> Option<Arc<dyn Classifier>> {
+    let path = text(engines, "classifier")?;
+    // a classifier that cannot be used (missing, damaged, trained on another embedding model) is no classifier: the book is not
+    // placed, and the probe says why
+    load_classifier(&path, &expected_embedding_sha(engines)).ok().map(|(c, _)| c)
+}
+
 fn text(engines: &Value, k: &str) -> Option<String> {
     engines.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
@@ -313,8 +357,7 @@ fn production_env(engines: &Value) -> cache_ingest::Result<Env> {
         pdf,
         embedder: embedder_for(engines),
         store: Arc::new(CoreStore),
-        // The core does not load cache_classify on a device (no classifier weights are shipped to it), so nothing is placed.
-        classifier: None,
+        classifier: classifier_for(engines),
         clock: Arc::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)),
     })
 }
@@ -380,5 +423,12 @@ pub fn probe(args: &str) -> Result<String> {
             Err(e) => json!({"ok": false, "sha256": null, "expected": expected, "matches": null, "error": e.to_string()}),
         },
     };
-    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report}).to_string())
+    let classifier = match text(&engines, "classifier") {
+        None => json!({"ok": false, "version": null, "error": "engines.classifier is not given"}),
+        Some(p) => match load_classifier(&p, &expected_embedding_sha(&engines)) {
+            Ok((_, version)) => json!({"ok": true, "version": version}),
+            Err(e) => json!({"ok": false, "version": null, "error": e}),
+        },
+    };
+    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier}).to_string())
 }

@@ -693,7 +693,7 @@ char *cs_shelves_import(const char *args_json);
  *   is not touched). Errors at start: "not_pdf", "locked", "damaged" (cannot be read, or no pages), "io".
  *   "engines" (optional, not part of INGEST-API.md): where the host's engines are. {"pdfium_lib": path of libpdfium (default: the
  *   usual library name, then this process), "pdfium_version": text recorded in the pack, "embed_lib": the built libcache_llama,
- *   "embed_model": the bge-m3 GGUF, "embed_sha256"?: its expected sha256}. Without embed_lib and embed_model the embedding step
+ *   "embed_model": the bge-m3 GGUF, "embed_sha256"?: its expected sha256, "classifier"?: a cache-classifier-N.bin}. Without embed_lib and embed_model the embedding step
  *   fails with "embed".
  * cs_ingest_step({"job","budget_ms"}) -> status
  *   Works for about budget_ms (the smallest unit is one page, one embed batch or the write, so a step can run over by one unit),
@@ -706,7 +706,9 @@ char *cs_shelves_import(const char *args_json);
  *   The library is written in one step, all or nothing: it is "updating" (search skips it, as during update_library) while it
  *   writes, then reopens. If another job is writing the same library the step returns NULL with "busy": step again later.
  *   With "bookshelves": a copy of a book already on the shelves gets "same" (by auto) events; a new book gets "place" and "assign"
- *   when a classifier is confident. This core loads no classifier, so no book is placed and "shelf" is null (the book is in Unsorted).
+ *   when the sorter (the Linux builder's, from "engines.classifier") is confident; otherwise the book is in Unsorted ("shelf" null).
+ *   "result.suggested" is the sorter's best guess ({"div","score","second_div","classifier_version"}, also kept in the pack and copies.jsonl), null
+ *   without a usable classifier or for a same-book match. A classifier trained on another embedding model than "embed_sha256" is refused.
  * cs_ingest_ocr({"job","engine","version","pages":[{"page","text","confidence"?}]}) -> {"accepted","remaining"}
  *   The text of pages the last needs_ocr asked for (an empty text is a blank page; confidence is 0 to 1 and is averaged into the
  *   pack's book.ocr.confidence). Each page's PNG is deleted once its text is accepted. A page that was not asked for, or a
@@ -721,7 +723,7 @@ char *cs_ingest_step(const char *params_json);
 char *cs_ingest_ocr(const char *params_json);
 char *cs_ingest_cancel(const char *params_json);
 /* cs_ingest_probe({"engines":{...as cs_ingest_start...},"hash_model"?:true}) -> {"pdfium":{"ok","version","from":"path"|"name"|"process"|null,"error"?},
- *   "embedder":{"ok","error"?},"model":{"ok","sha256","expected","matches","error"?}}
+ *   "embedder":{"ok","error"?},"model":{"ok","sha256","expected","matches","error"?},"classifier":{"ok","version","error"?}}
  *   Tries to load PDFium and the embedder (the model is loaded, then released) with those paths; writes nothing and keeps nothing
  *   loaded. A missing engine is reported in the result, never an error: only malformed JSON returns NULL ("bad_json"). "model"
  *   reads the whole GGUF file (about 600 MB) to give its sha256 (reported even without "embed_sha256"; "matches" is null then),

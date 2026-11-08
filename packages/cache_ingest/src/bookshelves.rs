@@ -2,7 +2,7 @@
 //! shelves; if it is, write `same by:auto`; if not, `place` it (when the classifier is confident) and `assign` the next free
 //! number. Nothing is written when the classifier has no confident answer: the book is then in Unsorted.
 
-use crate::engine::Placement;
+use crate::engine::Filing;
 use crate::error::{Error, Result};
 use cache_shelves::events::{By, Event, Kind};
 use cache_shelves::library::{load_library, LibraryInput, LibraryRef, PackFacts};
@@ -68,13 +68,24 @@ fn load_all(refs: &[LibraryRef]) -> Vec<LibraryInput> {
     refs.iter().filter_map(|l| load_library(l, &header_line).ok()).collect()
 }
 
-/// Decides the events for a new copy. `header_json` is the pack's header; `mean_vector` is the book's mean vector.
-pub fn plan(bs: &Bookshelves, library_dir: &Path, header_json: &str, placement: Option<&Placement>, at: u64) -> Result<Plan> {
+fn found_of(bs: &Bookshelves, library_dir: &Path, header_json: &str) -> Result<(PackFacts, Vec<LibraryInput>, Vec<cache_shelves::same::Found>)> {
     let facts = PackFacts::from_header_line(header_json).map_err(|e| Error::bad_json(e.to_string()))?;
     let refs = visible_libraries(library_dir, bs.libraries.as_deref());
     let libs = load_all(&refs);
     let against: Vec<_> = libs.iter().flat_map(|l| l.copies.iter().map(|c| c.detect_facts())).collect();
     let found = detect(&facts.detect_facts(), &against, &Tuning::default());
+    Ok((facts, libs, found))
+}
+
+/// Whether the book is a copy of one already on the shelves (the same-book detection). A book that is skips filing.
+pub fn has_same(bs: &Bookshelves, library_dir: &Path, header_json: &str) -> Result<bool> {
+    Ok(!found_of(bs, library_dir, header_json)?.2.is_empty())
+}
+
+/// Decides the events for a new copy. `header_json` is the pack's header. `filing` is the sorter's verdict (`None` when the book is a
+/// same-book match, which is not filed, or the sorter gave no guess).
+pub fn plan(bs: &Bookshelves, library_dir: &Path, header_json: &str, filing: Option<&Filing>, at: u64) -> Result<Plan> {
+    let (facts, libs, found) = found_of(bs, library_dir, header_json)?;
     let mut plan = Plan::default();
     if !found.is_empty() {
         for f in &found {
@@ -83,13 +94,14 @@ pub fn plan(bs: &Bookshelves, library_dir: &Path, header_json: &str, placement: 
         }
         return Ok(plan);
     }
-    if let Some(p) = placement {
+    if let Some(p) = filing.filter(|f| f.filed) {
+        let div = &p.suggested.div;
         let logs = read_logs(&bs.dir.join(LOG_DIR)).map_err(|e| Error::io("reading the Bookshelves log", e))?;
         let resolved = resolve::resolve(&logs.events, &libs);
-        let seq = resolved.next_seq(&p.div);
-        plan.events.push(Event::new(at, &bs.dev, Kind::Place { copy: facts.copy.clone(), div: p.div.clone(), by: By::Auto }));
-        plan.events.push(Event::new(at, &bs.dev, Kind::Assign { copy: facts.copy.clone(), div: p.div.clone(), seq }));
-        plan.shelf = Some((p.div.clone(), "auto"));
+        let seq = resolved.next_seq(div);
+        plan.events.push(Event::new(at, &bs.dev, Kind::Place { copy: facts.copy.clone(), div: div.clone(), by: By::Auto }));
+        plan.events.push(Event::new(at, &bs.dev, Kind::Assign { copy: facts.copy.clone(), div: div.clone(), seq }));
+        plan.shelf = Some((div.clone(), "auto"));
     }
     Ok(plan)
 }

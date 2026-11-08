@@ -35,7 +35,7 @@ platform has one ingest path.
   "pdf_path": ".../Inbox/Wilderness Medicine.pdf",
   "job_dir": ".../ingest/7f3a",
   "bookshelves": {"dir": ".../bookshelves", "dev": "<device id>", "libraries": [{"library_id": "...", "dir": "...", "packs_dir": "..."}]},
-  "engines": {"pdfium_lib": "...", "pdfium_version": "...", "embed_lib": "...", "embed_model": "...", "embed_sha256": "..."},
+  "engines": {"pdfium_lib": "...", "pdfium_version": "...", "embed_lib": "...", "embed_model": "...", "embed_sha256": "...", "classifier": ".../cache-classifier-1.bin"},
   "opts": {
     "title": "Wilderness Medicine",
     "ocr": "host",
@@ -56,6 +56,8 @@ platform has one ingest path.
   - `embed_lib`, `embed_model` (both needed): the built `libcache_llama` and the bge-m3 GGUF. Without them reading works, but embedding
     fails with `embed`.
   - `embed_sha256`: the model's expected SHA-256; a different file fails with `embed`.
+  - `classifier`: path of a `cache-classifier-N.bin`, the division classifier the Linux builder uses. It is refused if it was trained on another
+    embedding model than `embed_sha256` (else the model Cache decided on, bge-m3 Q8_0). Without a usable classifier no book is placed (see Bookshelves).
 - `opts` and each key in it are optional. Defaults:
   - `title`: the PDF's own title metadata, else the file name without `.pdf`.
   - `ocr`: `"host"`. The app does the OCR. With `"off"`, pages without text are skipped and counted.
@@ -107,7 +109,8 @@ platform has one ingest path.
     "pages_without_text": 0,
     "ocr": {"engine": "apple-vision", "version": "4", "pages_ocrd": 12},
     "same": [{"with": "<copy key>", "how": "blake3", "score": 1.0}],
-    "shelf": {"div": "610", "by": "auto"}
+    "shelf": {"div": "610", "by": "auto"},
+    "suggested": {"div": "610", "score": 0.91, "second_div": "620", "classifier_version": 3}
   }
 }
 ```
@@ -115,7 +118,9 @@ platform has one ingest path.
   - `ocr` is null when no page needed OCR.
   - `same` is the same-book matches written as `same by:auto` events. It is empty when there were none. In that case, `shelf` is
     the `place` written (the classifier's division when confident, else null for Unsorted).
-  - Both are absent without `bookshelves`.
+  - `suggested` is the sorter's best guess, null without a usable classifier, and also given when the book stays in Unsorted. It is not tied to
+    `bookshelves`. A same-book match is not scored: `suggested` is null.
+  - `same` and `shelf` are absent without `bookshelves`.
   - After `done` the job's `job_dir` is removed, and further calls return `not_found`.
 - On `failed`: `{"state":"failed","error":{"code","message"}}`. The `job_dir` is kept so the app can show the reason, and
   `cs_ingest_cancel` removes it.
@@ -167,7 +172,11 @@ platform has one ingest path.
   - Matches are written as `same by:auto`.
   - A new book gets `place` (classifier when confident, else none) and `assign` the next free number, through `cache_shelves` in
     process. The shared-Bookshelves number race (two devices that assign the same next number) is left to the resolver, whose clash suffix handles it by design.
-    **Phones pass no classifier** (the core loads none), so a new book is not placed: it goes to Unsorted and `shelf` is null. The events are owed to the log unless this device's log already holds
+    **A new book is filed as on Linux.** When no same-book match exists, the book is scored by the same sorter the Linux build uses
+    (`cache_pack::sorter`, one implementation), from the vectors the job already made (no second embedding pass). If the sorter is confident, `place` (by auto)
+    is written in that division with `assign` of the next free number. If it is not, the book is in Unsorted with no `place`. Either way the guess
+    (`div`, `label`, `score`, `second_div`, `classifier_version`, source `classifier`) is in the pack's `book.suggested` and the `copies.jsonl` line.
+    Without a usable classifier no guess is made, nothing is placed, and `shelf` and `suggested` are null. The events are owed to the log unless this device's log already holds
     some for the copy; what the log holds is what `same` and `shelf` report.
     When `same` is not empty the book is not placed either and `shelf` is null.
 
@@ -189,12 +198,14 @@ returns NULL with `bad_json`.
 ```json
 {"pdfium": {"ok": true, "version": "chromium/7811", "from": "path"},
  "embedder": {"ok": true},
- "model": {"ok": true, "sha256": "<actual>", "expected": "<engines.embed_sha256>", "matches": true}}
+ "model": {"ok": true, "sha256": "<actual>", "expected": "<engines.embed_sha256>", "matches": true},
+ "classifier": {"ok": true, "version": 3}}
 ```
 
 - `pdfium.from` is `path`, `name` or `process`; `version` is `engines.pdfium_version` (null when not given); on failure `ok` is false, `from` is
   null and `error` says why.
 - `model.sha256` is the SHA-256 of the file, read in full and reported even when no `embed_sha256` was given (`expected` and `matches` are then
   null). `ok` is false when the file is missing or `matches` is false.
+- `classifier.ok` is false (with `error`) when none is given, the file does not load, or it was trained on another embedding model.
 - Hashing a model of about 600 MB takes seconds on a phone, so do not do it at every app start: pass `"hash_model": false` to skip it
   (`sha256` and `matches` are then null; `ok` only says the file exists).

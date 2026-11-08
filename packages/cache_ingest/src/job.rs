@@ -13,7 +13,7 @@
 
 use crate::bookshelves;
 use crate::commit;
-use crate::engine::{Env, PdfDocument, Placement, Point};
+use crate::engine::{Env, Filing, PdfDocument, Point};
 use crate::error::{Code, Error, Result};
 use crate::files;
 use crate::params::Params;
@@ -657,24 +657,28 @@ impl Job {
     fn write_phase(&mut self) -> Result<()> {
         let prep = self.prepared.clone().ok_or_else(|| Error::new(Code::Io, "nothing to write"))?;
         let (mut pack, report) = finish_pack(prep, self.vectors.clone(), &self.env.embedder.name())?;
-        let placement: Option<Placement> = self.env.classifier.as_ref().and_then(|c| c.classify(&report.mean_vector));
-        if let Some(p) = &placement {
+        // Filing: a book that is a copy of one on the shelves is not scored; any other is scored from the vectors already made (no
+        // second embedding pass). The guess goes in the pack even when the book is not confident enough to be placed.
+        let lib = self.p.library_dir.clone();
+        let pre_json = serde_json::to_string(&pack.header).map_err(|e| io("the pack header", e))?;
+        let already_has_events = match &self.p.bookshelves {
+            Some(bs) => !bookshelves::existing(bs, &PackFacts::from_header_line(&pre_json).map_err(|e| Error::new(Code::Io, e.to_string()))?.copy)?.events.is_empty(),
+            None => false,
+        };
+        let is_copy = match (&self.p.bookshelves, already_has_events) {
+            (Some(bs), false) => bookshelves::has_same(bs, &lib, &pre_json)?,
+            _ => false,
+        };
+        let filing: Option<Filing> = if is_copy { None } else { self.env.classifier.as_ref().and_then(|c| c.classify(&pack.pieces)) };
+        if let Some(f) = &filing {
             if let Some(b) = pack.header.book.as_mut() {
-                b.suggested = Some(Suggested {
-                    div: p.div.clone(),
-                    label: p.label.clone(),
-                    score: Some(p.score),
-                    classifier_version: Some(p.classifier_version),
-                    source: "classifier".to_string(),
-                    second_div: p.second_div.clone(),
-                });
+                b.suggested = Some(f.suggested.clone());
             }
         }
         let doc_id = pack.header.doc_id.clone();
         let version = pack.header.doc_version;
         let header_json = serde_json::to_string(&pack.header).map_err(|e| io("the pack header", e))?;
         let facts = PackFacts::from_header_line(&header_json).map_err(|e| Error::new(Code::Io, e.to_string()))?;
-        let lib = self.p.library_dir.clone();
 
         // 1: the library (all or nothing). A book the library already lists, with no commit waiting, is there: a retry after a
         // failure that came later does not write it again.
@@ -689,7 +693,7 @@ impl Job {
         if let Some(bs) = &self.p.bookshelves {
             let have = bookshelves::existing(bs, &facts.copy)?;
             if have.events.is_empty() {
-                let p = bookshelves::plan(bs, &lib, &header_json, placement.as_ref(), (self.env.clock)())?;
+                let p = bookshelves::plan(bs, &lib, &header_json, filing.as_ref(), (self.env.clock)())?;
                 bookshelves::write(bs, &p.events)?;
                 plan = Some(p);
             } else {
@@ -705,6 +709,10 @@ impl Job {
             "pages_without_text": page_ins.iter().filter(|p| p.blocks.is_empty()).count(),
             "ocr": self.ocr_info().map(|o| json!({"engine": o.engine, "version": o.version, "pages_ocrd": o.pages_ocrd})).unwrap_or(Value::Null),
         });
+        result["suggested"] = filing
+            .as_ref()
+            .map(|f| json!({"div": f.suggested.div, "score": f.suggested.score, "second_div": f.suggested.second_div, "classifier_version": f.suggested.classifier_version}))
+            .unwrap_or(Value::Null);
         if let Some(plan) = &plan {
             result["same"] = json!(plan.same);
             result["shelf"] = plan.shelf.as_ref().map(|(d, by)| json!({"div": d, "by": by})).unwrap_or(Value::Null);

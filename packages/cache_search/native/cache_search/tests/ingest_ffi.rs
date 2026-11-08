@@ -340,3 +340,152 @@ fn a_kill_after_a_rename_is_rolled_forward_when_the_library_is_next_touched() {
     drop(staged);
     assert_eq!(docs(&lib), before + 1, "the interrupted book (20) is in; the dropped one (21) is not");
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Filing: the sorter of the Linux builder, from the vectors the job already made
+
+fn sha_bytes(hex: &str) -> [u8; 32] {
+    let mut b = [0u8; 32];
+    for (i, x) in b.iter_mut().enumerate() {
+        *x = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    b
+}
+
+/// A small classifier: each division's column is the fake embedder's vector of its name and words, scaled; the threshold sits between
+/// a book about the divisions and a book about nothing here (as libbuild's small_model does).
+fn small_model(embedding_sha: &str) -> Vec<u8> {
+    use cache_classify::{encode, Class, ModelSpec, Recipe, Weights};
+    use cache_ingest::testing::prose;
+    use cache_pack::embed::fake_vector;
+    let divs = [(510u16, "Wells", "well well wells digging"), (520, "Rain", "rainwater cistern barrel"), (710, "Radio", "radio antenna transmitter")];
+    let cols: Vec<Vec<f32>> = divs.iter().map(|(_, n, t)| fake_vector(&format!("{n}. {t}"))).collect();
+    let (dims, n) = (cols[0].len(), cols.len());
+    let mut w = vec![0f32; dims * n];
+    for (j, c) in cols.iter().enumerate() {
+        for (i, x) in c.iter().enumerate() {
+            w[i * n + j] = 25.0 * x;
+        }
+    }
+    let top = |topic: &str| -> f32 {
+        let v = fake_vector(&prose(topic, 1, 120).replace('\n', " "));
+        let e: Vec<f32> = (0..n).map(|j| (0..dims).map(|i| v[i] * w[i * n + j]).sum::<f32>()).collect();
+        let m = e.iter().cloned().fold(f32::MIN, f32::max);
+        1.0 / e.iter().map(|x| (x - m).exp()).sum::<f32>()
+    };
+    let (pos, neg) = (top("well"), top("kiln"));
+    assert!(pos > neg + 0.05, "the test model cannot tell the topics apart: {pos} {neg}");
+    encode(&ModelSpec {
+        classifier_version: 1,
+        embedding_sha256: sha_bytes(embedding_sha),
+        dims: dims as u32,
+        threshold: ((pos + neg) / 2.0) as f64,
+        recipe: Recipe { first_pieces: 8, spread_pieces: 16 },
+        classes: divs.iter().map(|(d, n, _)| Class { division: *d, label: n.to_string() }).collect(),
+        bias: vec![0.0; n],
+        weights: Weights::F32(w),
+    })
+}
+
+fn service_filing(classifier: Option<Arc<dyn cache_ingest::Classifier>>) -> Service {
+    service_with(Box::new(move |_engines: &Value| {
+        Ok(Env {
+            pdf: Arc::new(FakePdfEngine::default()),
+            embedder: Arc::new(FakeEmbedder::default()),
+            store: Arc::new(CoreStore),
+            classifier: classifier.clone(),
+            clock: Arc::new(|| 1_700_000_000_000),
+        })
+    }))
+}
+
+fn add_shelved(svc: &Service, root: &Path, lib: &Path, name: &str, topic: &str) -> Value {
+    let pdf = root.join("Inbox").join(format!("{name}.pdf"));
+    std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, &book(topic, 5))).unwrap();
+    let p = json!({"library_dir": lib, "pdf_path": pdf, "job_dir": root.join("ingest").join(name), "bookshelves": {"dir": root.join("bookshelves"), "dev": "phone-1"}});
+    let s: Value = serde_json::from_str(&svc.start(&p.to_string()).unwrap()).unwrap();
+    let job = s["job"].as_u64().unwrap();
+    loop {
+        let r: Value = serde_json::from_str(&svc.step(&json!({"job": job, "budget_ms": 60_000}).to_string()).unwrap()).unwrap();
+        match r["state"].as_str().unwrap() {
+            "done" => return r,
+            "failed" => panic!("failed: {r}"),
+            _ => {}
+        }
+    }
+}
+
+fn shelf_log(root: &Path) -> Vec<Value> {
+    std::fs::read_to_string(root.join("bookshelves").join("log").join("phone-1.jsonl")).map(|t| t.lines().map(|l| serde_json::from_str(l).unwrap()).collect()).unwrap_or_default()
+}
+
+#[test]
+fn a_book_is_filed_by_the_builders_sorter_and_a_copy_of_it_is_not_scored() {
+    let tmp = TempDir::new("filing");
+    let lib = make_library(&tmp.0);
+    let model = tmp.0.join("cache-classifier-1.bin");
+    std::fs::write(&model, small_model(cache_embed::DECIDED_MODEL_SHA256)).unwrap();
+    let (c, version) = cache_search::ingest::load_classifier(model.to_str().unwrap(), cache_embed::DECIDED_MODEL_SHA256).unwrap();
+    assert_eq!(version, 1);
+    let svc = service_filing(Some(c));
+
+    // confident: placed in its division and given the next number; the guess is in the pack and the copies line
+    let a = add_shelved(&svc, &tmp.0, &lib, "Well Book", "well");
+    assert_eq!(a["result"]["shelf"], json!({"div": "510", "by": "auto"}));
+    assert_eq!(a["result"]["suggested"]["div"], "510");
+    assert_eq!(a["result"]["suggested"]["classifier_version"], 1);
+    let ev = shelf_log(&tmp.0);
+    assert_eq!(ev.iter().map(|e| e["ev"].as_str().unwrap()).collect::<Vec<_>>(), vec!["place", "assign"]);
+    assert_eq!((ev[0]["div"].as_str(), ev[0]["by"].as_str(), ev[1]["seq"].as_u64()), (Some("510"), Some("auto"), Some(1)));
+    let copy = a["result"]["copy"].as_str().unwrap();
+    let pack = cache_pack::pack::read_pack(&lib.join("packs").join(format!("{copy}@1.cdoc"))).unwrap();
+    let sug = pack.header.book.as_ref().unwrap().suggested.clone().unwrap();
+    assert_eq!((sug.div.as_str(), sug.label.as_str(), sug.source.as_str()), ("510", "Wells", "classifier"));
+    assert!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().contains("\"suggested\":{\"div\":\"510\",\"label\":\"Wells\"}"));
+
+    // not confident: Unsorted, no place, and the guess kept
+    let k = add_shelved(&svc, &tmp.0, &lib, "Kiln Book", "kiln");
+    assert_eq!(k["result"]["shelf"], Value::Null);
+    assert!(k["result"]["suggested"]["div"].is_string(), "the best guess is reported even though the book stays in Unsorted");
+    assert_eq!(shelf_log(&tmp.0).len(), 2, "nothing was placed");
+    let kc = k["result"]["copy"].as_str().unwrap();
+    assert!(cache_pack::pack::read_pack(&lib.join("packs").join(format!("{kc}@1.cdoc"))).unwrap().header.book.as_ref().unwrap().suggested.is_some());
+
+    // a copy of a book on the shelves is detected, and skips filing
+    let w2 = add_shelved(&svc, &tmp.0, &lib, "Well Book Again", "well");
+    assert_eq!(w2["result"]["same"].as_array().unwrap().len(), 1);
+    assert_eq!(w2["result"]["shelf"], Value::Null);
+    assert_eq!(w2["result"]["suggested"], Value::Null);
+    let ev = shelf_log(&tmp.0);
+    assert_eq!(ev.len(), 3);
+    assert_eq!(ev[2]["ev"], "same");
+    let c2 = w2["result"]["copy"].as_str().unwrap();
+    assert!(cache_pack::pack::read_pack(&lib.join("packs").join(format!("{c2}@1.cdoc"))).unwrap().header.book.as_ref().unwrap().suggested.is_none());
+}
+
+#[test]
+fn a_classifier_trained_on_another_embedder_is_refused_and_the_book_goes_to_unsorted() {
+    let tmp = TempDir::new("otherembed");
+    let lib = make_library(&tmp.0);
+    let model = tmp.0.join("cache-classifier-2.bin");
+    std::fs::write(&model, small_model(&"ab".repeat(32))).unwrap();
+    let e = cache_search::ingest::load_classifier(model.to_str().unwrap(), cache_embed::DECIDED_MODEL_SHA256).err().unwrap();
+    assert!(e.contains("another embedding model"), "{e}");
+    // the same model is accepted when the embedder in use is the one it was trained on
+    assert!(cache_search::ingest::load_classifier(model.to_str().unwrap(), &"ab".repeat(32)).is_ok());
+    // the service has no classifier then
+    let svc = service_filing(None);
+    let a = add_shelved(&svc, &tmp.0, &lib, "Well Book", "well");
+    assert_eq!(a["result"]["shelf"], Value::Null);
+    assert_eq!(a["result"]["suggested"], Value::Null);
+    assert!(shelf_log(&tmp.0).is_empty());
+    // the probe says which
+    let r = probe(json!({"engines": {"classifier": model, "embed_sha256": cache_embed::DECIDED_MODEL_SHA256}}));
+    assert_eq!(r["classifier"]["ok"], false);
+    assert!(r["classifier"]["error"].as_str().unwrap().contains("another embedding model"));
+    let good = tmp.0.join("cache-classifier-1.bin");
+    std::fs::write(&good, small_model(cache_embed::DECIDED_MODEL_SHA256)).unwrap();
+    assert_eq!(probe(json!({"engines": {"classifier": good}}))["classifier"], json!({"ok": true, "version": 1}));
+    assert_eq!(probe(json!({}))["classifier"]["ok"], false);
+}

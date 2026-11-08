@@ -57,19 +57,20 @@ pub trait Embedder: Send + Sync {
     fn embed(&self, texts: &[String], threads: usize) -> Result<Vec<Vec<f32>>>;
 }
 
-/// A division the classifier is confident of.
+/// What the sorter made of a book: its best guess, and whether it is confident enough to file the book there.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Placement {
-    pub div: String,
-    pub label: String,
-    pub score: f32,
-    pub classifier_version: u32,
-    pub second_div: Option<String>,
+pub struct Filing {
+    /// The best division (`div`, `label`, `score`, `second_div`, `classifier_version`, source `classifier`): recorded in the pack
+    /// even when the book is not filed.
+    pub suggested: cache_pack::pack::Suggested,
+    /// Confident: the book is placed in `suggested.div`. Otherwise it stays in Unsorted.
+    pub filed: bool,
 }
 
-/// Picks a division from a book's mean vector. `None`: not confident, so the book stays in Unsorted.
+/// Scores a book from the vectors the job has already made (the shared sorter, `cache_pack::sorter`). `None`: no guess (the book has
+/// no real text, or the scorer failed).
 pub trait Classifier: Send + Sync {
-    fn classify(&self, mean_vector: &[f32]) -> Option<Placement>;
+    fn classify(&self, pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing>;
 }
 
 /// One passage as a library point.

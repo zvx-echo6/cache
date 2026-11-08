@@ -46,6 +46,9 @@ cache_shelves = { path = "../../../cache_shelves" }
 # The Add PDF job (cs_ingest_*): the job logic, and the embedder it runs on (loaded at run time, like the places builder).
 cache_ingest = { path = "../../../cache_ingest" }
 cache_embed = { path = "../cache_embed" }
+# The division sorter (the one the Linux builder and build service use) and the classifier model it reads.
+cache_pack = { path = "../../../cache_pack" }
+cache_classify = { path = "../../../cache_classify" }
 # Syncable index snapshots (layout, manifest, verify, pick, gc, stage, publish): re-exported as crate::snapshot.
 cache_snapshot = { path = "../cache_snapshot" }
 # The Notebook (Journal and Logbook) in notebook.sqlite, from the "notebook" section of the config: cs_notebook.

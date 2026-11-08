@@ -3,7 +3,7 @@
 //! the core (packages/cache_search/native/cache_search/tests/ingest_ffi.rs).
 
 use cache_ingest::testing::{book, make_pdf, prose, FakeEmbedder, FakePage, FakePdfEngine, Kind};
-use cache_ingest::{Classifier, Code, Env, Error, LibraryStore, Placement, Point, Service, Staged, Swap};
+use cache_ingest::{Classifier, Code, Env, Error, Filing, LibraryStore, Point, Service, Staged, Swap};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -67,16 +67,23 @@ impl LibraryStore for FakeStore {
     }
 }
 
-struct Confident(Placement);
+struct Confident(Filing);
 
 impl Classifier for Confident {
-    fn classify(&self, _mean_vector: &[f32]) -> Option<Placement> {
+    fn classify(&self, _pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing> {
         Some(self.0.clone())
     }
 }
 
+fn filing(filed: bool) -> Arc<dyn Classifier> {
+    Arc::new(Confident(Filing {
+        suggested: cache_pack::pack::Suggested { div: "610".into(), label: "Medicine".into(), score: Some(if filed { 0.9 } else { 0.4 }), classifier_version: Some(3), source: "classifier".into(), second_div: Some("620".into()) },
+        filed,
+    }))
+}
+
 fn medicine() -> Arc<dyn Classifier> {
-    Arc::new(Confident(Placement { div: "610".into(), label: "Medicine".into(), score: 0.9, classifier_version: 3, second_div: None }))
+    filing(true)
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -728,6 +735,9 @@ fn a_new_book_is_placed_and_numbered_and_a_copy_of_it_is_detected() {
     assert_eq!((same[0]["with"].as_str(), same[0]["how"].as_str()), (Some(copy_a.as_str()), Some("text")));
     assert!(same[0]["score"].as_f64().unwrap() > 0.99);
     assert_eq!(db["result"]["shelf"], Value::Null);
+    // a copy is not scored: no guess in the result or the pack
+    assert_eq!(db["result"]["suggested"], Value::Null);
+    assert!(read_pack(&lib, &copy_b).header.book.as_ref().unwrap().suggested.is_none());
     let ev = log_events(&rig);
     assert_eq!(ev.len(), 3);
     assert_eq!(ev[2]["ev"], "same");
@@ -989,4 +999,24 @@ fn a_cancel_that_loses_the_race_to_done_says_done() {
         Err(e) => assert_eq!(e.code, Code::NotFound),
     }
     assert_eq!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn a_book_the_sorter_is_not_sure_of_stays_in_unsorted_with_its_guess_kept() {
+    let mut rig = Rig::new();
+    rig.classifier = Some(filing(false));
+    let lib = rig.lib("mine");
+    let svc = rig.service();
+    let a = rig.pdf_file("a.pdf", None, Kind::Ok, &book("first", 5));
+    let ja = ok(svc.start(&with_shelves(&lib, &a, &rig.job_dir("a"), &rig)))["job"].as_u64().unwrap();
+    let (d, _) = run(&svc, ja, &[]);
+    assert_eq!(d["result"]["shelf"], Value::Null);
+    assert_eq!(d["result"]["same"], json!([]));
+    assert_eq!(d["result"]["suggested"], json!({"div": "610", "score": 0.4f32, "second_div": "620", "classifier_version": 3}));
+    assert!(log_events(&rig).is_empty(), "no place for a book the sorter is not sure of");
+    let pack = read_pack(&lib, d["result"]["copy"].as_str().unwrap());
+    let sug = pack.header.book.as_ref().unwrap().suggested.clone().unwrap();
+    assert_eq!((sug.div.as_str(), sug.second_div.as_deref(), sug.source.as_str()), ("610", Some("620"), "classifier"));
+    // the line of copies.jsonl carries the suggestion too
+    assert!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().contains("\"suggested\":{\"div\":\"610\""));
 }
