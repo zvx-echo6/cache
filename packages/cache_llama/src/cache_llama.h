@@ -19,9 +19,9 @@ extern "C" {
 // Process-wide options for the next cl_load, as JSON (keys left out keep their value):
 //   "prefix_dir":     a folder for the saved prompt prefix (the KV state of the stable start of the system prompt and tool schemas,
 //                     for the model file, engine build and n_ctx; at most 2 files are kept). "" turns the saving off (the default).
-//   "mem_room_bytes": Android only: the memory the system can still give the app (ActivityManager availMem minus threshold). The
-//                     CPU weights are repacked (faster, but an anonymous copy that can be swapped) only when this exceeds the
-//                     estimated repacked size plus 1 GiB; otherwise they stay file-backed through mmap. 0 = not known: repacked.
+//   "repack_weights": Android only, for measurement: true repacks the CPU weights (an anonymous copy that can be swapped).
+//                     false (the default) keeps them file-backed through mmap, as every Android load does unless this is set.
+//                     It is never set automatically. Other platforms ignore it.
 // Returns 0, or -1 when the JSON does not parse.
 CL_API int cl_configure(const char * options_json);
 
@@ -32,7 +32,8 @@ CL_API int cl_configure(const char * options_json);
 CL_API void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len);
 
 // Writes JSON {"description","n_ctx","chat_format","supports_tools","engine_build","weights","weights_reason"}. weights:
-// "repacked" (CPU repacked copy), "mmap" (file-backed, no repack) or "default" (the platform's own choice, not Android).
+// "mmap" (file-backed, no repack: the Android default, reason "default on Android"), "repacked" (CPU repacked copy: Android
+// only with the repack_weights opt-in) or "default" (the platform's own choice, not Android).
 // Returns the length, or -1 if out is too small.
 CL_API int cl_info(void * h, char * out_json, int len);
 

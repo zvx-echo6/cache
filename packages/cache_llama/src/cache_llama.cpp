@@ -200,7 +200,7 @@ void cl_logi(const char * fmt, ...) {
 // ---------------- options (cl_configure) ----------------
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
-long long   g_mem_room = 0;
+bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
@@ -474,9 +474,7 @@ int cl_configure(const char * options_json) {
         auto j = common_json::parse(options_json ? options_json : "{}");
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
-        if (j.contains("mem_room_bytes") && j.at("mem_room_bytes").is_number_integer()) {
-            g_mem_room = std::max<long long>(0, j.at("mem_room_bytes").get<long long>());
-        }
+        if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
         return 0;
     } catch (const std::exception &) {
         return -1;
@@ -502,37 +500,31 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
 
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
-        long long room = 0;
+        bool repack_opt_in = false;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
-            room          = g_mem_room;
+            repack_opt_in = g_repack_weights;
             h->prefix_dir = g_prefix_dir;
         }
-        (void) room;
+        (void) repack_opt_in;
 #if defined(__ANDROID__)
-        // CPU weight repacking makes an anonymous copy of the matrix weights (faster prompt reading), which Android swaps out when
-        // memory is short, and every later prompt then waits on swap. Repack only when the system can give the app the copy
-        // plus a margin; otherwise the weights stay in the file-backed mmap (pages the system drops and reads back, no swap).
-        {
-            const long long margin = 1LL << 30;  // 1 GiB: KV cache, compute buffers and the rest of the app
-            if (room > 0) {
-                const long long est = estimate_repack_bytes(model_path);
-                if (est >= 0) {
-                    const bool repack  = room >= est + margin;
-                    mp.use_extra_bufts = repack;
-                    h->weights         = repack ? "repacked" : "mmap";
-                    h->weights_reason  = "room " + std::to_string(room >> 20) + " MB, repacked copy about " + std::to_string(est >> 20) +
-                                        " MB + " + std::to_string(margin >> 20) + " MB margin";
-                } else {
-                    h->weights        = "repacked";
-                    h->weights_reason = "the model file's tensors could not be read";
-                }
-            } else {
-                h->weights        = "repacked";
-                h->weights_reason = "free memory not known";
-            }
-            cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
+        // Android always keeps the CPU weights in the file-backed mmap (use_extra_bufts=false). Repacking makes an anonymous copy
+        // of the matrix weights that Android swaps out when memory is short, and every later prompt then waits on swap. On a
+        // Galaxy S22 (build 46, repack off) the mmap load took 6.2 s against 9-16 s, swap fell from 1.7-1.9 GB to 0.3 GB, and
+        // prompt reading stayed at about 42 tok/s (30-50 repacked): the copy cost about a GB and gave no speed. Repacking stays
+        // available for measurement only (cl_configure "repack_weights"); it is never chosen automatically.
+        if (repack_opt_in) {
+            const long long est = estimate_repack_bytes(model_path);
+            mp.use_extra_bufts = true;
+            h->weights         = "repacked";
+            h->weights_reason  = std::string("opt-in for measurement, repacked copy ") +
+                                (est >= 0 ? "about " + std::to_string(est >> 20) + " MB" : "size not known");
+        } else {
+            mp.use_extra_bufts = false;
+            h->weights         = "mmap";
+            h->weights_reason  = "default on Android";
         }
+        cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
