@@ -193,7 +193,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
       bottomNavigationBar: Dock(
         maxWidth: 560,
         children: [
-          if (_step == 3) SpaceLine(label: (s) => '$s selected', bytes: total, free: free),
+          if (_step == 3) SpaceLine(label: (s) => widget.again ? '$s to add' : '$s selected', bytes: total, free: free),
           StepDots(step: _step, of: kWizardSteps),
           PillButton(
             key: const ValueKey('wizard-next'),
@@ -251,7 +251,9 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
         () {
           final on = _picked.contains(a.id);
           String? size;
-          if (sizes != null) {
+          if (widget.again && d.ledger.has(a.id)) {
+            size = 'Added';
+          } else if (sizes != null) {
             if (on) {
               size = first ? formatBytes(sizes.extra[a.id] ?? 0) : '+${formatBytes(sizes.extra[a.id] ?? 0)}';
               first = false;
