@@ -2,6 +2,8 @@
 // 844), a tablet upright (820 x 1180, the bottom bar and two panes), sideways (1180 x 820, the rail and three panes) and a
 // desktop window (1440 x 900), light and dark. Books are a sample library of books on this device (documents.tsv, packs and a seed
 // log, as cache-build writes them); this device has no PDF copies yet, as a phone in 1.1.
+// The app tests have no native library: Bookshelves gets a stand-in core (the app tests' FakeShelvesCalls behind the core's
+// Bookshelves calls) and an app support folder in the rig's temp folder, so its view is made and the books are on their shelves.
 // flutter test test_shots/library11_renders_test.dart --update-goldens  (pictures in test_shots/library11/)
 
 import 'dart:async';
@@ -20,13 +22,14 @@ import 'package:cache/settings/space.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart' show ZimFile;
 import 'package:cache/theme.dart';
-import 'package:cache_search/cache_search.dart' show SourceStatus;
+import 'package:cache_search/cache_search.dart' show SearchCore, SourceStatus;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test/browse/fakes.dart' show FakeSources, catalogWith, fixture, testPolicy;
-import '../test/library/library_fixtures.dart' show SampleBook, writeBookLibrary;
+import '../test/library/fake_shelves.dart';
+import '../test/library/library_fixtures.dart' show SampleBook, writeBookLibrary, writeShelves;
 import '../test/nav_fakes.dart';
 import '../test/support/settings_rig.dart';
 import 'shot_kit.dart';
@@ -46,11 +49,36 @@ class _Sources extends FakeSources {
 
   String? libraryShard;
 
+  /// The core Bookshelves asks for (the Library builds its own shelf source over these sources).
+  SearchCore? shelvesCore;
+
+  @override
+  Future<SearchCore?> whenCoreReady() async => shelvesCore;
+
   @override
   SourceStatus? statusAt(String path) => path == libraryShard
       ? SourceStatus(id: 'field', kind: 'library', path: path, title: 'Field library', indexed: true, building: false, stale: false, opening: false, updating: false, docs: 9412, sourceId: 'field')
       : super.statusAt(path);
 }
+
+/// A core that answers only the Bookshelves calls, through the app tests' stand-in for them.
+class _ShelvesCore implements SearchCore {
+  final FakeShelvesCalls _calls = FakeShelvesCalls();
+
+  @override
+  Future<List<Map<String, dynamic>>> shelvesDetect(Map<String, dynamic> args) => _calls.detect(args);
+  @override
+  Future<Map<String, dynamic>> shelvesAppend(Map<String, dynamic> args) => _calls.append(args);
+  @override
+  Future<Map<String, dynamic>> shelvesResolve(Map<String, dynamic> args) => _calls.resolve(args);
+  @override
+  Future<Map<String, dynamic>> shelvesImport(Map<String, dynamic> args) => _calls.import(args);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+const MethodChannel _pathProvider = MethodChannel('plugins.flutter.io/path_provider');
 
 class _Run implements IndexRun {
   final Completer<bool> _done = Completer<bool>();
@@ -152,13 +180,17 @@ class _Rig {
   late LayoutState layout;
   late NavState nav;
   IndexScheduler? scheduler;
+  late Directory support;
 
   Future<void> make(WidgetTester tester, {required bool full}) async {
     r = await SettingsRig.create(tester);
     layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
     final libsDir = Directory('${r.dir.path}/libraries')..createSync();
-    sources = _Sources(Directory('${r.dir.path}/zims11')..createSync());
+    sources = _Sources(Directory('${r.dir.path}/zims11')..createSync())..shelvesCore = _ShelvesCore();
+    // the app support folder (Bookshelves keeps its log in bookshelves/ there)
+    support = Directory('${r.dir.path}/support11')..createSync();
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_pathProvider, (call) async => support.path);
     if (full) {
       writeBookLibrary(
         libsDir,
@@ -173,6 +205,9 @@ class _Rig {
           'surgery': {'author': 'Borden Institute', 'edition': '5th edition', 'year': 2018},
         },
       );
+      // the unsorted books were seen before and left unsorted; the others are new here, so Bookshelves shelves each in its
+      // suggested division with the next free number, as on a phone
+      writeShelves(Directory('${support.path}/bookshelves'), checked: [for (final b in _unsorted) b.$1], dev: 'render-device');
     }
     sources.libraryShard = '${libsDir.path}/field/shard';
     libs = LibrariesState(sources: sources, dirOverride: libsDir);
@@ -216,6 +251,7 @@ class _Rig {
     browse.dispose();
     libs.dispose();
     layout.dispose();
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_pathProvider, null);
     await r.dispose(tester);
   }
 }
@@ -223,6 +259,11 @@ class _Rig {
 /// Opens the Library in the app's frame at [size], then taps [path] (keys) in turn, and draws it as [name].
 Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, List<String> path, CacheThemeId theme) async {
   phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+  // each picture starts from the defaults: what a picture chose (the Bookshelves look, a hidden list) is kept in files in the
+  // support folder, and only the Bookshelves log (bookshelves/) carries over
+  for (final f in rig.support.listSync().whereType<File>()) {
+    f.deleteSync();
+  }
   await tester.pumpWidget(shotApp(rig.shell(), theme: theme, insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero));
   await _settle(tester);
   await tester.tap(find.text('Library').first);

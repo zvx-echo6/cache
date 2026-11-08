@@ -748,8 +748,12 @@ fn web_search_through_the_cli_needs_the_environment() {
     assert!(!o.stderr.contains(WEB_KEY) && !o.stdout.contains(WEB_KEY));
 }
 
+/// A sources file with no sources, its own for each call: the tests run in parallel threads of one process, and a file shared
+/// between them is truncated by one test's `fs::write` while another test's `cs` reads it (an empty file, a parse error).
 fn empty_config() -> String {
-    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}.json", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}-{n}.json", std::process::id()));
     std::fs::write(&p, r#"{"sources":[]}"#).unwrap();
     p.to_string_lossy().into_owned()
 }
