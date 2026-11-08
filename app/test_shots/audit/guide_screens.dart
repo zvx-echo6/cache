@@ -1381,7 +1381,18 @@ void guideScreens() {
     final railDir = Directory.systemTemp.createTempSync('audit-rail');
     final rail = RailPrefs(dirOverride: railDir);
     Widget shell() => Shell(app: r.app, chat: a.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: a.layout, hub: r.hub, notebooks: n.deps, railPrefs: rail);
+    // "What's new in 1.1.0" opens over Home on the first start of the version: drawn once, then put away.
+    Future<void> gotIt() async {
+      final g = find.text('Got it');
+      if (g.evaluate().isEmpty) return;
+      await _reach(tester, g);
+      await tester.tap(g.first, warnIfMissed: false);
+      await settle(tester);
+      await tester.pumpAndSettle();
+    }
+
     Future<void> open(String label) async {
+      await gotIt();
       await tester.tap(find.text('Modules').last);
       await settle(tester);
       final tile = find.descendant(of: find.byType(ModulesScreen), matching: find.text(label));
@@ -1390,6 +1401,8 @@ void guideScreens() {
     }
 
     await show(tester, shell());
+    await auditSnap(tester, 'shell-whats-new', always: true);
+    await gotIt();
     await auditSnap(tester, 'shell-home', always: true);
     await tester.tap(find.text('Modules').last);
     await settle(tester);
