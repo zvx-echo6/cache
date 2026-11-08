@@ -172,6 +172,9 @@ class LibraryRootPage extends StatelessWidget {
           final readying = entries.where((e) => !e.ready).length;
           // A desktop window shows Add to Library beside the list while nothing is chosen: never two ways to one place.
           final addBeside = !nav.compact && isDesktop(context) && !LibraryNav.of(context).isAnythingOpen;
+          return LayoutBuilder(builder: (context, c) {
+          // a narrow sections pane (230 to 280) leaves the tiles out, so the names fit
+          IconTile? tile(IconData i) => c.maxWidth >= 300 ? IconTile(i) : null;
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
@@ -181,7 +184,7 @@ class LibraryRootPage extends StatelessWidget {
                 rows: [
                   SettingsRow(
                     key: const ValueKey('library-zims'),
-                    leading: const IconTile(Icons.collections_bookmark_outlined),
+                    leading: tile(Icons.collections_bookmark_outlined),
                     title: 'ZIM Collections',
                     statusWidget: libraryLines(
                       context,
@@ -193,7 +196,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-bookshelves'),
-                    leading: const IconTile(Icons.shelves),
+                    leading: tile(Icons.shelves),
                     title: 'Bookshelves',
                     statusWidget: libraryLines(
                       context,
@@ -205,7 +208,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-catalog'),
-                    leading: const IconTile(Icons.manage_search),
+                    leading: tile(Icons.manage_search),
                     title: 'Catalog',
                     statusWidget: libraryLines(
                       context,
@@ -217,7 +220,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-docs'),
-                    leading: const IconTile(Icons.description_outlined),
+                    leading: tile(Icons.description_outlined),
                     title: 'Cache Documentation',
                     statusWidget: libraryLines(context, "The Cache guide, What's new, credits", null),
                     selected: nav.isOpen('docs'),
@@ -239,6 +242,7 @@ class LibraryRootPage extends StatelessWidget {
               ],
             ],
           );
+          });
         },
       ),
     );

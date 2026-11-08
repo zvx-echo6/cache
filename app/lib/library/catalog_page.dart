@@ -237,9 +237,12 @@ class CatalogPage extends StatelessWidget {
               if (indexSchedulerShared case final s? when s.busy)
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: s.pausedAll
-                      ? FilledButton(key: const ValueKey('catalog-resume-all'), onPressed: s.resumeAll, child: const Text('Resume'))
-                      : OutlinedButton(key: const ValueKey('catalog-pause-all'), onPressed: s.pauseAll, child: const Text('Pause all')),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                    child: s.pausedAll
+                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: s.resumeAll)
+                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: s.pauseAll),
+                  ),
                 ),
               if (entries.isEmpty) ...[
                 Padding(
@@ -302,6 +305,11 @@ class CatalogRow extends StatelessWidget {
     final k = context.t;
     final e = entry;
     final action = e.pdf == null ? _action(context) : null;
+    final item = indexSchedulerShared?.statusOf(e.key);
+    final p = item?.progress;
+    final running = !e.ready && item?.state == IndexState.running;
+    // the work's own count when it says one (PDFs read of all), else the source's
+    final fraction = e.fraction ?? (running && p != null && p.$2 > 0 ? (p.$1 / p.$2).clamp(0.0, 1.0) : null);
     final tag = Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.5)), borderRadius: BorderRadius.circular(5)),
@@ -338,12 +346,12 @@ class CatalogRow extends StatelessWidget {
                 if (action != null) RowButton(key: ValueKey('catalog-action-${e.key}'), label: action.$1, onPressed: action.$2),
               ],
             ),
-            if (e.fraction != null || (!e.ready && indexSchedulerShared?.statusOf(e.key)?.state == IndexState.running))
+            if (fraction != null || running)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(3),
-                  child: LinearProgressIndicator(value: e.fraction, minHeight: 5, color: k.accent, backgroundColor: k.secondary.withValues(alpha: 0.15)),
+                  child: LinearProgressIndicator(value: fraction, minHeight: 5, color: k.accent, backgroundColor: k.secondary.withValues(alpha: 0.15)),
                 ),
               ),
           ],

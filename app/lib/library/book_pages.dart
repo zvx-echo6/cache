@@ -161,7 +161,7 @@ class _PlacePanelState extends State<PlacePanel> {
       final tree = _tree(context, b);
       return LayoutBuilder(
         builder: (context, c) {
-          final side = c.maxWidth >= 720;
+          final side = c.maxWidth >= 640;
           final head = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -268,10 +268,9 @@ class PlaceChip extends StatelessWidget {
       minimumSize: const WidgetStatePropertyAll(Size(0, 36)),
       padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
       shape: const WidgetStatePropertyAll(StadiumBorder()),
-      textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
       side: best ? null : WidgetStatePropertyAll(BorderSide(color: k.secondary, width: 1.5)),
     );
-    final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500));
     return best ? FilledButton(style: style, onPressed: onPressed, child: text) : OutlinedButton(style: style.copyWith(foregroundColor: WidgetStatePropertyAll(k.text)), onPressed: onPressed, child: text);
   }
 }
@@ -482,15 +481,16 @@ class BookPage extends StatelessWidget {
                           children: [
                             Expanded(child: facts),
                             const SizedBox(width: 16),
-                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [...actions, const SizedBox(height: 14), links])),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [...actions, if (actions.isNotEmpty) const SizedBox(height: 14), links])),
                           ],
                         ),
                       ],
                     )
-                  : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [card, const SizedBox(height: 12), facts, const SizedBox(height: 12), ...actions, const SizedBox(height: 12), links]);
+                  : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [card, const SizedBox(height: 12), facts, const SizedBox(height: 12), ...actions, if (actions.isNotEmpty) const SizedBox(height: 12), links]);
               return SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                child: Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: wide ? 1000 : 720), child: body)),
+                // text kept to a reading width; on a wide page the panels sit side by side under the card
+                child: Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: wide ? 1000 : 640), child: body)),
               );
             },
           ),
@@ -713,7 +713,7 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
     Widget choice({required String title, required String text, required Widget button, bool danger = false, String? note, Key? key}) => Container(
       key: key,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+      decoration: BoxDecoration(color: k.background, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
