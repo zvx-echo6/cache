@@ -118,9 +118,9 @@ When it's on:
 - Devices talk directly. Nothing goes through a Cache server.
 - If a direct link isn't possible, they use a relay ("Connected through a relay"). What they send is encrypted end to end, so the relay can't read it.
 - Devices look for each other on the local network and on the internet.
-- Only the kinds you tick under "Shared with linked devices" are shared: "Library", "Maps", "Models", "Videos", "Notebooks" and "Shared folder".
+- Only what you switch on under "Shared with linked devices" is shared: the kinds "Library", "Maps", "Models", "Notebooks" and "Videos", and inside each kind the items you leave on.
 - Chats, settings and keys aren't shared. Where you stopped in a video isn't shared either.
-- Search indexes are shared whatever kinds you tick, once sharing is set up. They hold words from your libraries, PDFs, EPUBs and video captions, and only your own linked devices get them. A device fetches only the indexes of what it has.
+- Search indexes are shared whatever kinds you switch on, once sharing is set up. They hold words from your libraries, PDFs, EPUBs and video captions, and only your own linked devices get them. A device fetches only the indexes of what it has.
 - Files and folders whose names start with a dot are never shared.
 - Private notebooks are left out by default.
 
@@ -130,5 +130,5 @@ Sharing follows "Mobile data downloads" in ["Settings" > "Storage"](cache://sett
 
 ## Stop sharing
 
-- To stop sharing a kind, untick it. The files stay on this device.
+- To stop sharing a kind, switch it off. To stop sharing one item, tap its kind and switch the item off. The files stay, on this device and on the others.
 - To stop a device connecting, tap it under "Linked devices", then "Unlink". Files already here stay.

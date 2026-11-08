@@ -71,6 +71,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/share_items.dart';
 import 'sharing/sharing_state.dart';
 import 'video/token_store.dart';
 import 'package:workmanager/workmanager.dart';
@@ -275,6 +276,8 @@ class _CacheAppState extends State<CacheApp> {
       notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
+      items: () => libraryItems(sources, libraries),
+      remoteItem: libraryRemoteItem,
     ),
     DataKind(
       id: 'models',
@@ -283,6 +286,8 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'models': app.modelsDir},
       count: () => app.models.length + (app.searchModel == null ? 0 : 1),
       list: () => ModelsScreen(app: app),
+      items: () => modelItems(app),
+      remoteItem: modelRemoteItem,
     ),
     DataKind(
       id: 'regions',
@@ -297,6 +302,10 @@ class _CacheAppState extends State<CacheApp> {
       notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
+      shareLabel: 'Maps',
+      items: () => mapItems(maps.engine, regions),
+      itemDepth: const {'maps': 2},
+      remoteItem: (share, path, bytes) => mapRemoteItem(maps.engine, share, path, bytes),
     ),
     DataKind(
       id: 'videos',
@@ -306,6 +315,10 @@ class _CacheAppState extends State<CacheApp> {
       // Weather is fetched by each device.
       local: () => [_support('live-catalogues'), weather.liveFolder],
       list: () => videos.LibraryScreen(video: video),
+      shareLabel: 'Videos',
+      items: () => videoItems(video),
+      itemDepth: const {'videos': 3},
+      remoteItem: videoRemoteItem,
     ),
     DataKind(
       id: 'notebooks',
@@ -317,14 +330,11 @@ class _CacheAppState extends State<CacheApp> {
       local: () => [_support('notebook')],
       count: () => notebooks.notebooks.length,
       list: () => NotebooksScreen(deps: notebookDeps),
+      items: () => notebookItems(notebooks),
+      remoteItem: notebookRemoteItem,
+      setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
-    DataKind(
-      id: 'shared',
-      label: 'Shared folder',
-      icon: Icons.folder_shared_outlined,
-      shared: () => {'shared': _beside(sources.zimsDir?.parent, 'Shared')},
-      inStorage: false,
-    ),
+    // The Shared folder of 1.0 is gone: SharingState stops sharing it at start (retiredShares), and its files stay where they are.
   ];
 
   // Sharing and sync: Cache's own folders, by kind.
