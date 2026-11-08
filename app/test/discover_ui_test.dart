@@ -4,6 +4,8 @@ import 'package:cache/discover/discover_state.dart';
 import 'package:cache/discover/ui/activity_page.dart';
 import 'package:cache/discover/ui/discover_screen.dart';
 import 'package:cache/discover/ui/progress_page.dart';
+import 'package:cache/discover/ui/kit.dart' show BigCard;
+import 'package:cache/discover/ui/wizard.dart' show openSetupAgain;
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -106,6 +108,33 @@ void main() {
     });
   });
 
+  testWidgets('Run setup again opens the wizard with what is added now picked, and Start adds only what is new', (tester) async {
+    tester.view.physicalSize = const Size(390, 2400) * 2;
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    final d = await makeDiscover(dev);
+    await d.get(d.catalogue.activity('homestead')!);
+    dev.added.clear();
+    await tester.pumpWidget(_app(Builder(builder: (c) => TextButton(onPressed: () => openSetupAgain(c, d), child: const Text('again')))));
+    await tester.tap(find.text('again'));
+    await _settle(tester);
+    await tapKey(tester, 'wizard-next');
+    await tapKey(tester, 'wizard-next');
+    expect(find.text('3 of 5'), findsOneWidget);
+    bool picked(String id) => tester.widget<BigCard>(find.byKey(ValueKey('wizard-activity-$id'))).selected;
+    expect(picked('homestead'), isTrue);
+    expect(picked('ready'), isFalse);
+    expect(picked('backcountry'), isFalse);
+    await tapKey(tester, 'wizard-activity-ready');
+    await tapKey(tester, 'wizard-next');
+    await tapKey(tester, 'wizard-next');
+    await tapKey(tester, 'wizard-next');
+    expect(d.ledger.has('ready'), isTrue);
+    expect(d.ledger.has('homestead'), isTrue);
+    expect(dev.added, contains('library:armypubs_en_all'));
+    expect(dev.added, isNot(contains('library:usda-2015_en')), reason: 'Homestead was there already');
+  });
+
   group('the Get sheet', () {
     Future<DiscoverState> listing(WidgetTester tester) async {
       tester.view.physicalSize = const Size(390, 844) * 2;
@@ -132,7 +161,7 @@ void main() {
       expect(size, endsWith('38.0 GB free'));
       final connects = tester.widget<Text>(find.descendant(of: find.byKey(const ValueKey('get-connects')), matching: find.byType(Text)).last).data!;
       expect(connects, contains('Kiwix'));
-      expect(connects, contains('Fire incident feed'));
+      expect(connects, contains('National Interagency Fire Center'));
       expect(find.text('Turns on weather and alerts'), findsOneWidget);
 
       await tapKey(tester, 'get-details');
@@ -144,7 +173,7 @@ void main() {
       expect(lines, isNot(contains('Water treatment')));
       expect(lines, isNot(contains('Field and emergency medicine')));
       final changes = tester.widget<Text>(find.descendant(of: find.byKey(const ValueKey('get-change-lines')), matching: find.byType(Text))).data!;
-      expect(changes, contains('Wildfires near the place (WFIGS) on'));
+      expect(changes, contains('Wildfires near you on'));
 
       await tapKey(tester, 'get-cancel');
       expect(dev.added, isEmpty, reason: 'Cancel adds nothing');

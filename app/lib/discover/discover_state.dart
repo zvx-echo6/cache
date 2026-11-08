@@ -310,6 +310,10 @@ class DiscoverState extends ChangeNotifier {
   /// Every item of [a] as switched on, with its size: what the activity holds once added.
   int totalBytes(Activity a) => [for (final i in a.items) if (!leftOutOf(a).contains(i.key) && i.kind.downloads) bytesOf(i)].fold(0, (s, b) => s + b);
 
+  /// An activity's size, the one figure every page shows for it (tile, featured card, listing, wizard, Get sheet): what it holds
+  /// once added, else what getting it downloads now (what other activities or the person have already is not counted again).
+  Future<int> sizeOf(Activity a) async => ledger.has(a.id) ? totalBytes(a) : addsBytes(await plan(a));
+
   /// The outside sources the plan connects to, once each ("National Weather Service").
   List<(String, String)> connectsTo(Iterable<RecipeItem> items) {
     final seen = <String>{};

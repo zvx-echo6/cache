@@ -258,7 +258,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                       children: [
                         Text(a.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                         Text(a.tagline, style: TextStyle(fontSize: 13, color: k.secondary)),
-                        Computed<int>(listenable: d, compute: () async => d.addsBytes(await d.plan(a)), builder: (context, b) => Text(formatBytes(b ?? d.totalBytes(a)), style: TextStyle(fontSize: 13, color: k.secondary))),
+                        Computed<int>(listenable: d, compute: () => d.sizeOf(a), builder: (context, b) => Text(formatBytes(b ?? d.totalBytes(a)), style: TextStyle(fontSize: 13, color: k.secondary))),
                       ],
                     ),
                   ),
@@ -281,7 +281,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       Computed<int>(
         key: ValueKey('tile-activity-${a.id}'),
         listenable: d,
-        compute: () async => d.ledger.has(a.id) ? d.totalBytes(a) : d.addsBytes(await d.plan(a)),
+        compute: () => d.sizeOf(a),
         builder: (context, bytes) {
           final s = d.status(a);
           return StoreTile(

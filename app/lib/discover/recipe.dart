@@ -68,7 +68,12 @@ class RecipeItem {
     this.parts = const {'map', 'routing', 'places'},
     this.defaultOn = true,
     this.lines = const [],
+    this.provider = '',
   });
+
+  /// [ItemKind.liveSource]: who the source is, in plain words ("National Weather Service"), for Connects to; the connector's own
+  /// provider when empty.
+  final String provider;
 
   final ItemKind kind;
 
@@ -127,6 +132,7 @@ class RecipeItem {
       parts: j['parts'] is List ? {for (final p in j['parts'] as List) if (p is String && kRegionParts.contains(p)) p} : const {'map', 'routing', 'places'},
       defaultOn: j['default_on'] != false,
       lines: lines,
+      provider: s('provider'),
     );
     switch (kind) {
       case ItemKind.library:
@@ -154,6 +160,7 @@ class RecipeItem {
     if (kind == ItemKind.mapRegion) 'parts': parts.toList()..sort(),
     if (!defaultOn) 'default_on': false,
     if (lines.isNotEmpty) 'lines': lines,
+    if (provider.isNotEmpty) 'provider': provider,
   };
 }
 

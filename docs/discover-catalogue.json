@@ -58,22 +58,26 @@
     {
      "kind": "live_source",
      "id": "openmeteo-forecast",
-     "title": "Weather forecast (Open-Meteo)"
+     "title": "Weather forecast",
+     "provider": "Open-Meteo"
     },
     {
      "kind": "live_source",
      "id": "nws-alerts-point",
-     "title": "Weather alerts (NWS, by point)"
+     "title": "Weather alerts",
+     "provider": "National Weather Service"
     },
     {
      "kind": "live_source",
      "id": "ipaws-alerts-near",
-     "title": "Emergency alerts"
+     "title": "Emergency alerts",
+     "provider": "FEMA"
     },
     {
      "kind": "live_source",
      "id": "wfigs-incidents-near",
-     "title": "Wildfires near the place (WFIGS)"
+     "title": "Wildfires near you",
+     "provider": "National Interagency Fire Center"
     },
     {
      "kind": "notebook",
@@ -172,22 +176,26 @@
     {
      "kind": "live_source",
      "id": "openmeteo-forecast",
-     "title": "Weather forecast (Open-Meteo)"
+     "title": "Weather forecast",
+     "provider": "Open-Meteo"
     },
     {
      "kind": "live_source",
      "id": "nws-alerts-point",
-     "title": "Weather alerts (NWS, by point)"
+     "title": "Weather alerts",
+     "provider": "National Weather Service"
     },
     {
      "kind": "live_source",
      "id": "wfigs-incidents-near",
-     "title": "Wildfires near the place (WFIGS)"
+     "title": "Wildfires near you",
+     "provider": "National Interagency Fire Center"
     },
     {
      "kind": "live_source",
      "id": "avalanche-forecast-zones",
-     "title": "Avalanche danger near the place (avalanche.org)",
+     "title": "Avalanche danger near you",
+     "provider": "Avalanche.org",
      "default_on": false
     },
     {
@@ -286,12 +294,14 @@
     {
      "kind": "live_source",
      "id": "openmeteo-forecast",
-     "title": "Weather forecast (Open-Meteo)"
+     "title": "Weather forecast",
+     "provider": "Open-Meteo"
     },
     {
      "kind": "live_source",
      "id": "nws-alerts-point",
-     "title": "Weather alerts (NWS, by point)"
+     "title": "Weather alerts",
+     "provider": "National Weather Service"
     },
     {
      "kind": "notebook",

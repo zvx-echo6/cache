@@ -8,9 +8,15 @@ import '../discover_state.dart';
 import '../ledger.dart' show InstallPlan;
 import '../recipe.dart';
 import '../words.dart';
-import 'discover_screen.dart' show DiscoverLinks;
+import 'discover_screen.dart' show DiscoverLinks, discoverLinks;
 import 'kit.dart';
 import 'progress_page.dart';
+
+/// Settings' "Run setup again": the wizard on its own page, with the activities added now, the place and its choice picked. Start
+/// adds what is picked and not added yet; nothing added is taken away here (that is Remove, on the activity's page).
+Future<void> openSetupAgain(BuildContext context, DiscoverState d) => Navigator.of(context).push(MaterialPageRoute<void>(
+  builder: (_) => DiscoverWizard(discover: d, links: discoverLinks, initialPicked: {for (final a in d.catalogue.activities) if (d.ledger.has(a.id)) a.id}, again: true),
+));
 
 /// The number of steps the wizard has.
 const int kWizardSteps = 5;
@@ -31,7 +37,7 @@ class WizardSizes {
     for (final a in d.catalogue.activities) {
       final p = await d.plan(a);
       final adds = [for (final x in p.adds) if (x.item.kind.downloads) x.item];
-      own[a.id] = adds.fold(0, (s, i) => s + d.bytesOf(i));
+      own[a.id] = await d.sizeOf(a);
       if (!picked.contains(a.id)) continue;
       var b = 0;
       for (final i in adds) {
@@ -48,7 +54,10 @@ class WizardSizes {
 /// optional device link, a short summary), big cards with the defaults picked, Skip on every step, and nothing installs before
 /// Start on the summary.
 class DiscoverWizard extends StatefulWidget {
-  const DiscoverWizard({super.key, required this.discover, required this.links, this.initialStep = 1, this.initialPicked, this.startDetailsOpen = false});
+  const DiscoverWizard({super.key, required this.discover, required this.links, this.initialStep = 1, this.initialPicked, this.startDetailsOpen = false, this.again = false});
+
+  /// Run again from Settings: its own page, closed when it is done.
+  final bool again;
 
   final DiscoverState discover;
   final DiscoverLinks links;
@@ -121,7 +130,14 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
       await d.get(a);
     }
     await d.setFirstRunDone();
-    if (chosen.isNotEmpty) await nav.push(MaterialPageRoute<void>(builder: (_) => ProgressPage(discover: d, activities: chosen)));
+    final adding = [for (final a in chosen) if (d.progress(a).any((p) => p.$2.active)) a];
+    final show = widget.again ? adding : chosen;
+    if (show.isEmpty) {
+      if (widget.again) nav.pop();
+      return;
+    }
+    final route = MaterialPageRoute<void>(builder: (_) => ProgressPage(discover: d, activities: show));
+    await (widget.again ? nav.pushReplacement(route) : nav.push(route));
   }
 
   Future<void> _chooseCard() async {
@@ -293,7 +309,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
           if (!d.leftOutOf(a).contains(i.key) && i.kind == ItemKind.library) i,
     ]);
     return [
-      _heading(context, chosen.isEmpty ? 'Nothing to add' : 'Ready to start'),
+      _heading(context, chosen.isEmpty || (widget.again && total == 0) ? 'Nothing to add' : 'Ready to start'),
       Container(
         key: const ValueKey('wizard-summary'),
         padding: const EdgeInsets.all(14),
