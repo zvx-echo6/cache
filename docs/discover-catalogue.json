@@ -1,0 +1,476 @@
+{
+ "format": "cache-discover",
+ "version": 1,
+ "updated": "2026-11-08",
+ "activities": [
+  {
+   "id": "ready",
+   "revision": 1,
+   "title": "Ready",
+   "tagline": "Home and emergency basics",
+   "icon": "shield",
+   "description": "Disaster plans, field manuals, water and first aid, with your area's map and alerts.",
+   "items": [
+    {
+     "kind": "library",
+     "name": "armypubs_en_all",
+     "title": "Field manuals",
+     "subtitle": "Army Publishing Directorate",
+     "approx_bytes": 8232397824
+    },
+    {
+     "kind": "library",
+     "name": "ready.gov_en_all",
+     "title": "Ready.gov",
+     "subtitle": "Plans and kits for disasters",
+     "approx_bytes": 2063895552
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-post-disaster_en",
+     "title": "Post disaster resources",
+     "subtitle": "After a disaster",
+     "approx_bytes": 644666368
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-water_en",
+     "title": "Water treatment",
+     "subtitle": "Collecting and purifying water",
+     "approx_bytes": 20925440
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-medicine_en",
+     "title": "Field and emergency medicine",
+     "subtitle": "Field medicine books",
+     "approx_bytes": 70179840
+    },
+    {
+     "kind": "map_region",
+     "title": "Your area's map and routes",
+     "parts": [
+      "map",
+      "routing",
+      "places"
+     ]
+    },
+    {
+     "kind": "live_source",
+     "id": "openmeteo-forecast",
+     "title": "Weather forecast (Open-Meteo)"
+    },
+    {
+     "kind": "live_source",
+     "id": "nws-alerts-point",
+     "title": "Weather alerts (NWS, by point)"
+    },
+    {
+     "kind": "live_source",
+     "id": "ipaws-alerts-near",
+     "title": "Emergency alerts"
+    },
+    {
+     "kind": "live_source",
+     "id": "wfigs-incidents-near",
+     "title": "Wildfires near the place (WFIGS)"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.water_rotation",
+     "title": "Water rotation"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.pantry_rotation",
+     "title": "Pantry rotation"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.fuel_storage",
+     "title": "Fuel storage"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.generator_test",
+     "title": "Generator test"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.smoke_detectors",
+     "title": "Smoke detector check"
+    }
+   ],
+   "settings": [
+    {
+     "key": "home:weather",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": "backcountry",
+   "revision": 1,
+   "title": "Backcountry",
+   "tagline": "Off-grid trips and first aid",
+   "icon": "peak",
+   "description": "Maps, medical guides and logs for time away from roads.",
+   "items": [
+    {
+     "kind": "library",
+     "name": "zimgit-medicine_en",
+     "title": "Field and emergency medicine",
+     "subtitle": "Field medicine books",
+     "approx_bytes": 70179840
+    },
+    {
+     "kind": "library",
+     "name": "irp.fas.org_en_military-medicine",
+     "title": "Military medicine",
+     "subtitle": "Field manuals for medics",
+     "approx_bytes": 64986112
+    },
+    {
+     "kind": "library",
+     "name": "wikipedia_en_medicine",
+     "flavour": "maxi",
+     "title": "Medical encyclopedia",
+     "subtitle": "Health and first aid",
+     "approx_bytes": 1864210432
+    },
+    {
+     "kind": "library",
+     "name": "outdoors.stackexchange.com_en_all",
+     "title": "Outdoors Q&A",
+     "subtitle": "Hiking, camping, wilderness",
+     "approx_bytes": 141820928
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-knots_en",
+     "title": "Knots",
+     "subtitle": "Knots, lashings, sutures",
+     "approx_bytes": 27945984
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-water_en",
+     "title": "Water treatment",
+     "subtitle": "Collecting and purifying water",
+     "approx_bytes": 20925440
+    },
+    {
+     "kind": "map_region",
+     "title": "Your area's map, routes and off-road",
+     "parts": [
+      "map",
+      "routing",
+      "places",
+      "offroad"
+     ]
+    },
+    {
+     "kind": "live_source",
+     "id": "openmeteo-forecast",
+     "title": "Weather forecast (Open-Meteo)"
+    },
+    {
+     "kind": "live_source",
+     "id": "nws-alerts-point",
+     "title": "Weather alerts (NWS, by point)"
+    },
+    {
+     "kind": "live_source",
+     "id": "wfigs-incidents-near",
+     "title": "Wildfires near the place (WFIGS)"
+    },
+    {
+     "kind": "live_source",
+     "id": "avalanche-forecast-zones",
+     "title": "Avalanche danger near the place (avalanche.org)",
+     "default_on": false
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.hike",
+     "title": "Hikes"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.wildlife",
+     "title": "Wildlife sightings"
+    }
+   ],
+   "settings": [
+    {
+     "key": "home:weather",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": "homestead",
+   "revision": 1,
+   "title": "Homestead",
+   "tagline": "Food, water, repairs",
+   "icon": "sprout",
+   "description": "Growing, preserving and fixing things at home, with logs for the jobs that come round again.",
+   "items": [
+    {
+     "kind": "library",
+     "name": "usda-2015_en",
+     "title": "Home canning",
+     "subtitle": "Safe preserving (USDA)",
+     "approx_bytes": 19787776
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-food-preparation_en",
+     "title": "Food for preppers",
+     "subtitle": "Recipes and techniques",
+     "approx_bytes": 97822720
+    },
+    {
+     "kind": "library",
+     "name": "cooking.stackexchange.com_en_all",
+     "title": "Cooking Q&A",
+     "subtitle": "Questions and answers",
+     "approx_bytes": 238098432
+    },
+    {
+     "kind": "library",
+     "name": "gardening.stackexchange.com_en_all",
+     "title": "Gardening Q&A",
+     "subtitle": "Gardens and landscaping",
+     "approx_bytes": 933097472
+    },
+    {
+     "kind": "library",
+     "name": "diy.stackexchange.com_en_all",
+     "title": "Home improvement Q&A",
+     "subtitle": "Repairs and building",
+     "approx_bytes": 2086025216
+    },
+    {
+     "kind": "library",
+     "name": "appropedia_en_all",
+     "flavour": "maxi",
+     "title": "Appropedia",
+     "subtitle": "Sustainable living",
+     "approx_bytes": 581642240
+    },
+    {
+     "kind": "library",
+     "name": "energypedia_en_all",
+     "flavour": "nopic",
+     "title": "Energypedia",
+     "subtitle": "Renewable energy",
+     "approx_bytes": 722590720
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-water_en",
+     "title": "Water treatment",
+     "subtitle": "Collecting and purifying water",
+     "approx_bytes": 20925440
+    },
+    {
+     "kind": "map_region",
+     "title": "Your area's map and routes",
+     "parts": [
+      "map",
+      "routing",
+      "places"
+     ]
+    },
+    {
+     "kind": "live_source",
+     "id": "openmeteo-forecast",
+     "title": "Weather forecast (Open-Meteo)"
+    },
+    {
+     "kind": "live_source",
+     "id": "nws-alerts-point",
+     "title": "Weather alerts (NWS, by point)"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.garden_harvest",
+     "title": "Garden harvest"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.pantry_rotation",
+     "title": "Pantry rotation"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.water_rotation",
+     "title": "Water rotation"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.generator_test",
+     "title": "Generator test"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.furnace_filter",
+     "title": "Furnace filter"
+    },
+    {
+     "kind": "notebook",
+     "id": "starter.fuel_storage",
+     "title": "Fuel storage"
+    }
+   ],
+   "settings": [
+    {
+     "key": "home:weather",
+     "value": true
+    }
+   ]
+  }
+ ],
+ "collections": [
+  {
+   "id": "preparedness",
+   "title": "Preparedness",
+   "icon": "stack",
+   "items": [
+    {
+     "kind": "library",
+     "name": "armypubs_en_all",
+     "title": "Field manuals",
+     "subtitle": "Army Publishing Directorate",
+     "approx_bytes": 8232397824
+    },
+    {
+     "kind": "library",
+     "name": "ready.gov_en_all",
+     "title": "Ready.gov",
+     "subtitle": "Plans and kits for disasters",
+     "approx_bytes": 2063895552
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-post-disaster_en",
+     "title": "Post disaster resources",
+     "subtitle": "After a disaster",
+     "approx_bytes": 644666368
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-water_en",
+     "title": "Water treatment",
+     "subtitle": "Collecting and purifying water",
+     "approx_bytes": 20925440
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-food-preparation_en",
+     "title": "Food for preppers",
+     "subtitle": "Recipes and techniques",
+     "approx_bytes": 97822720
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-knots_en",
+     "title": "Knots",
+     "subtitle": "Knots, lashings, sutures",
+     "approx_bytes": 27945984
+    }
+   ]
+  },
+  {
+   "id": "medical-repair",
+   "title": "Medical and repair",
+   "icon": "stack",
+   "items": [
+    {
+     "kind": "library",
+     "name": "wikipedia_en_medicine",
+     "flavour": "maxi",
+     "title": "Medical encyclopedia",
+     "subtitle": "Health and first aid",
+     "approx_bytes": 1864210432
+    },
+    {
+     "kind": "library",
+     "name": "zimgit-medicine_en",
+     "title": "Field and emergency medicine",
+     "subtitle": "Field medicine books",
+     "approx_bytes": 70179840
+    },
+    {
+     "kind": "library",
+     "name": "irp.fas.org_en_military-medicine",
+     "title": "Military medicine",
+     "subtitle": "Field manuals for medics",
+     "approx_bytes": 64986112
+    },
+    {
+     "kind": "library",
+     "name": "ifixit_en_all",
+     "title": "Repair guides",
+     "subtitle": "iFixit",
+     "approx_bytes": 3570696192
+    },
+    {
+     "kind": "library",
+     "name": "diy.stackexchange.com_en_all",
+     "title": "Home improvement Q&A",
+     "subtitle": "Repairs and building",
+     "approx_bytes": 2086025216
+    }
+   ]
+  }
+ ],
+ "libraries": [
+  {
+   "kind": "library",
+   "name": "armypubs_en_all",
+   "title": "Field manuals",
+   "subtitle": "Army Publishing Directorate",
+   "approx_bytes": 8232397824
+  },
+  {
+   "kind": "library",
+   "name": "wikipedia_en_medicine",
+   "flavour": "maxi",
+   "title": "Medical encyclopedia",
+   "subtitle": "Health and first aid",
+   "approx_bytes": 1864210432
+  },
+  {
+   "kind": "library",
+   "name": "usda-2015_en",
+   "title": "Home canning",
+   "subtitle": "Safe preserving (USDA)",
+   "approx_bytes": 19787776
+  },
+  {
+   "kind": "library",
+   "name": "ifixit_en_all",
+   "title": "Repair guides",
+   "subtitle": "iFixit",
+   "approx_bytes": 3570696192
+  },
+  {
+   "kind": "library",
+   "name": "wikivoyage_en_all",
+   "flavour": "nopic",
+   "title": "Travel guide",
+   "subtitle": "Wikivoyage",
+   "approx_bytes": 272495616
+  },
+  {
+   "kind": "library",
+   "name": "wikipedia_en_all",
+   "flavour": "maxi",
+   "title": "Wikipedia",
+   "subtitle": "Everything, offline",
+   "approx_bytes": 127418088448
+  }
+ ]
+}

@@ -27,6 +27,7 @@ import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
+import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
 import 'history/store_open.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
@@ -42,6 +43,7 @@ import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'net/fetch.dart' show fetchText;
 import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
@@ -1024,6 +1026,8 @@ class _CacheAppState extends State<CacheApp> {
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,
+          firstRunWizard: true,
+          discoverFetch: () => fetchText(Uri.parse(kDiscoverUrl)),
         ),
       ),
     );

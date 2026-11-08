@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../discover/discover_state.dart';
 import '../theme.dart';
 import 'adaptive.dart' show ContentWidth;
 import 'layout_state.dart';
@@ -9,6 +10,11 @@ class EditHomeScreen extends StatelessWidget {
   const EditHomeScreen({super.key, required this.layout});
 
   final LayoutState layout;
+
+  /// Once Discover's first run is done its card has the Set up block's place, and the block is called Discover.
+  static bool get _discover => DiscoverState.shared?.firstRunDone ?? false;
+  static String _label(HomeBlock b) => b == HomeBlock.setup && _discover ? 'Discover' : b.label;
+  static String? _note(HomeBlock b) => b == HomeBlock.setup && _discover ? 'Activities, libraries and maps' : b.note;
 
   @override
   Widget build(BuildContext context) {
@@ -48,8 +54,8 @@ class EditHomeScreen extends StatelessWidget {
                       ),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       contentPadding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
-                      title: Text(b.label, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-                      subtitle: b.note == null ? null : Text(b.note!, style: TextStyle(fontSize: 14, color: k.secondary)),
+                      title: Text(_label(b), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                      subtitle: _note(b) == null ? null : Text(_note(b)!, style: TextStyle(fontSize: 14, color: k.secondary)),
                       value: layout.isOn(b),
                       onChanged: (v) => layout.setBlockOn(b, v),
                     ),
