@@ -1204,7 +1204,8 @@ class _MapsScreenState extends State<MapsScreen> {
         padding: EdgeInsets.fromLTRB(12, 0, 12, panel == null ? 8 : 0),
         child: SafeArea(
           top: false,
-          bottom: panel == null,
+          // The guidance card sits above the home indicator (the card itself has no empty strip at its foot).
+          bottom: panel == null || nav.guiding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
