@@ -11,6 +11,8 @@ pub struct RenderedPage {
     pub png: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    /// The resolution it was drawn at: the one asked for, or less when the page was too big for it.
+    pub dpi: u32,
 }
 
 /// An open PDF. Pages are 0-based here.
@@ -47,6 +49,10 @@ pub trait PdfEngine: Send + Sync {
 pub trait Embedder: Send + Sync {
     /// The name recorded in the pack (`embedding.embedder`).
     fn name(&self) -> String;
+    /// What makes the vectors: the name and the model file. A checkpoint made with another identity is not carried on.
+    fn identity(&self) -> String {
+        self.name()
+    }
     /// One vector per text. `threads` is `opts.embed_threads`. Failure is the `embed` code.
     fn embed(&self, texts: &[String], threads: usize) -> Result<Vec<Vec<f32>>>;
 }
@@ -74,13 +80,24 @@ pub struct Point {
     pub payload: Value,
 }
 
+/// A folder of the library that the store prepared a new copy of, to be swapped in by the commit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Swap {
+    /// The folder, relative to the library folder (`shard`, `index`).
+    pub target: String,
+    /// The complete new copy, beside it (`shard.cs-stage`); `None`: the folder is to be moved away (an unfinished keyword index).
+    pub stage: Option<String>,
+}
+
 /// A write to the library that has been prepared but not yet put in place. While it exists the library is `updating`: search
-/// skips it. Dropping it ends the update and reopens the library.
+/// skips it. Dropping it ends the update and reopens the library. The commit itself (the renames) is the job's, in `commit`.
 pub trait Staged: Send {
-    /// Puts the new shard and keyword index in place (the first change to the library's files).
-    fn commit(&mut self) -> Result<()>;
-    /// Puts the old shard and keyword index back after `commit`.
-    fn undo(&mut self);
+    /// The folders prepared beside the library.
+    fn plan(&self) -> Vec<Swap>;
+    /// Called after the renames: opens the new library (it must open) and hands it to the handles that had it.
+    fn verify(&mut self) -> Result<()>;
+    /// Called before the renames are put back: lets go of what `verify` handed out.
+    fn before_rollback(&mut self);
 }
 
 /// The library's shard and keyword index, which the core owns.

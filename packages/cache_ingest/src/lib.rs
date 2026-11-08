@@ -6,6 +6,7 @@
 //! (`cache_pack::pagewriter`, also the builder's), the line of `copies.jsonl` and the Bookshelves events by `cache_shelves`.
 
 pub mod bookshelves;
+pub mod commit;
 pub mod engine;
 pub mod error;
 pub mod files;
@@ -17,6 +18,6 @@ pub mod service;
 #[doc(hidden)]
 pub mod testing;
 
-pub use engine::{Classifier, Embedder, Env, EnvProvider, LibraryStore, PdfDocument, PdfEngine, Placement, Point, RenderedPage, Staged};
+pub use engine::{Classifier, Embedder, Env, EnvProvider, LibraryStore, PdfDocument, PdfEngine, Placement, Point, RenderedPage, Staged, Swap};
 pub use error::{Code, Error, Result};
 pub use service::Service;

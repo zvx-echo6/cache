@@ -3,7 +3,7 @@
 //! the core (packages/cache_search/native/cache_search/tests/ingest_ffi.rs).
 
 use cache_ingest::testing::{book, make_pdf, prose, FakeEmbedder, FakePage, FakePdfEngine, Kind};
-use cache_ingest::{Classifier, Code, Env, Error, LibraryStore, Placement, Point, Service, Staged};
+use cache_ingest::{Classifier, Code, Env, Error, LibraryStore, Placement, Point, Service, Staged, Swap};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -35,16 +35,17 @@ struct FakeStaged {
 }
 
 impl Staged for FakeStaged {
-    fn commit(&mut self) -> Result<(), Error> {
+    fn plan(&self) -> Vec<Swap> {
+        Vec::new()
+    }
+    fn verify(&mut self) -> Result<(), Error> {
         if self.store.fail_commit.load(Ordering::SeqCst) {
-            return Err(Error::new(Code::Io, "the swap failed"));
+            return Err(Error::new(Code::Io, "the new library does not open"));
         }
         self.store.committed.lock().unwrap().push((self.lib.clone(), self.ids.clone()));
         Ok(())
     }
-    fn undo(&mut self) {
-        self.store.committed.lock().unwrap().pop();
-    }
+    fn before_rollback(&mut self) {}
 }
 
 impl Drop for FakeStaged {
@@ -850,4 +851,142 @@ fn a_text_page_and_a_scanned_page_make_one_book() {
     let ocr = pack.header.book.as_ref().unwrap().ocr.clone().unwrap();
     assert_eq!(ocr.pages_ocrd, 1);
     assert_eq!(ocr.confidence, None, "no confidence was given");
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Job folders, checkpoints that do not fit, a cancel that is too late
+
+#[test]
+fn a_folder_that_is_not_an_ingest_folder_is_never_touched() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("a.pdf", None, Kind::Ok, &book("alpha", 3));
+    let jd = rig.job_dir("mine-docs");
+    std::fs::create_dir_all(&jd).unwrap();
+    std::fs::write(jd.join("thesis.txt"), "keep me").unwrap();
+    let svc = rig.service();
+    assert_eq!(err(svc.start(&start_params(&lib, &pdf, &jd, json!({})))).code, Code::BadJson);
+    assert_eq!(std::fs::read_to_string(jd.join("thesis.txt")).unwrap(), "keep me");
+    // an empty folder is fine, and the job makes it its own
+    let empty = rig.job_dir("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &empty, json!({}))))["job"].as_u64().unwrap();
+    assert!(empty.join(".cache-ingest").exists());
+    ok(svc.cancel(&json!({"job": job}).to_string()));
+    assert!(!empty.exists());
+}
+
+#[test]
+fn a_failed_start_releases_the_job_dir() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let locked = rig.pdf_file("l.pdf", None, Kind::Locked, &book("x", 2));
+    let fine = rig.pdf_file("f.pdf", None, Kind::Ok, &book("x", 2));
+    let jd = rig.job_dir("x");
+    let svc = rig.service();
+    assert_eq!(err(svc.start(&start_params(&lib, &locked, &jd, json!({})))).code, Code::Locked);
+    ok(svc.start(&start_params(&lib, &fine, &jd, json!({}))));
+}
+
+#[test]
+fn a_checkpoint_made_with_another_embedder_or_ocr_mode_is_not_carried_on() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("a.pdf", None, Kind::Ok, &book("alpha", 6));
+    let jd = rig.job_dir("x");
+    let svc = rig.service();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &jd, json!({}))))["job"].as_u64().unwrap();
+    for _ in 0..3 {
+        step(&svc, job, 0);
+    }
+    drop(svc);
+    // the same again resumes
+    let svc = rig.service();
+    assert_eq!(ok(svc.start(&start_params(&lib, &pdf, &jd, json!({}))))["resumed"], true);
+    drop(svc);
+    // another OCR mode does not
+    let svc = rig.service();
+    assert_eq!(ok(svc.start(&start_params(&lib, &pdf, &jd, json!({"ocr": "off"}))))["resumed"], false);
+    for _ in 0..3 {
+        step(&svc, 1, 0);
+    }
+    drop(svc);
+    // another embedder (a different model file) does not
+    *rig.emb.ident.lock().unwrap() = Some("another-model".to_string());
+    let svc = rig.service();
+    assert_eq!(ok(svc.start(&start_params(&lib, &pdf, &jd, json!({"ocr": "off"}))))["resumed"], false);
+}
+
+#[test]
+fn a_cancel_after_the_book_is_in_the_library_does_not_say_cancelled() {
+    let mut rig = Rig::new();
+    rig.classifier = Some(medicine());
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("a.pdf", None, Kind::Ok, &book("alpha", 5));
+    // the Bookshelves folder cannot be used (it is a file): the write to the library succeeds, the log does not
+    let bs_dir = rig.root.path().join("bookshelves");
+    std::fs::write(&bs_dir, "not a folder").unwrap();
+    let jd = rig.job_dir("x");
+    let svc = rig.service();
+    let job = ok(svc.start(&with_shelves(&lib, &pdf, &jd, &rig)))["job"].as_u64().unwrap();
+    let (s, _) = run(&svc, job, &[]);
+    assert_eq!(s["state"], "failed");
+    assert_eq!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().lines().count(), 1, "the book is in the library");
+    let c = ok(svc.cancel(&json!({"job": job}).to_string()));
+    assert_eq!(c["cancelled"], false);
+    assert_eq!(c["committed"], true);
+    assert!(jd.exists(), "the job is kept so the events can still be written");
+    drop(svc);
+
+    // the cause is fixed and the app starts again: the library is not written twice, and the events that are owed are written
+    std::fs::remove_file(&bs_dir).unwrap();
+    let svc = rig.service();
+    let s = ok(svc.start(&with_shelves(&lib, &pdf, &jd, &rig)));
+    assert_eq!(s["resumed"], true);
+    let (done, _) = run(&svc, s["job"].as_u64().unwrap(), &[]);
+    assert_eq!(done["state"], "done");
+    assert_eq!(done["result"]["shelf"], json!({"div": "610", "by": "auto"}));
+    assert_eq!(done["result"]["same"], json!([]));
+    assert_eq!(rig.store.0.committed.lock().unwrap().len(), 1, "committed once");
+    assert_eq!(log_events(&rig).len(), 2);
+    // and a third time (events already there): reported from the log, nothing written again
+    let again = ok(svc.start(&with_shelves(&lib, &pdf, &rig.job_dir("y"), &rig)));
+    let (d2, _) = run(&svc, again["job"].as_u64().unwrap(), &[]);
+    assert_eq!(d2["result"]["shelf"], json!({"div": "610", "by": "auto"}));
+    assert_eq!(log_events(&rig).len(), 2);
+}
+
+#[test]
+fn a_cancel_that_loses_the_race_to_done_says_done() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("a.pdf", None, Kind::Ok, &book("alpha", 3));
+    let svc = Arc::new(rig.service());
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("x"), json!({}))))["job"].as_u64().unwrap();
+    // hold the job in its write; cancel arrives meanwhile
+    let (in_tx, in_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Mutex::new(go_rx);
+    *rig.store.0.hook.lock().unwrap() = Some(Box::new(move || {
+        in_tx.send(()).ok();
+        let _ = go_rx.lock().unwrap().recv();
+    }));
+    let s2 = svc.clone();
+    let stepper = std::thread::spawn(move || step(&s2, job, 60_000));
+    in_rx.recv().unwrap();
+    let s3 = svc.clone();
+    let canceller = std::thread::spawn(move || s3.cancel(&json!({"job": job}).to_string()));
+    go_tx.send(()).unwrap();
+    assert_eq!(stepper.join().unwrap()["state"], "done");
+    let c = canceller.join().unwrap();
+    // never cancelled:true for a book that was added
+    match c {
+        Ok(t) => {
+            let v: Value = serde_json::from_str(&t).unwrap();
+            assert_eq!(v["cancelled"], false);
+            assert_eq!(v["done"], true);
+        }
+        Err(e) => assert_eq!(e.code, Code::NotFound),
+    }
+    assert_eq!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().lines().count(), 1);
 }

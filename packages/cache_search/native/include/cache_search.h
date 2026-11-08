@@ -712,7 +712,9 @@ char *cs_shelves_import(const char *args_json);
  *   pack's book.ocr.confidence). Each page's PNG is deleted once its text is accepted. A page that was not asked for, or a
  *   different engine or version than an earlier call of the job, is "bad_json". The OCR text goes into the pieces and indexes only.
  * cs_ingest_cancel({"job"}) -> {"cancelled":true}
- *   Stops the job and deletes its job_dir. Nothing is in the library before "writing", so there is nothing else to undo; after
+ *   Stops the job and deletes its job_dir (a folder the job did not mark as its own is never removed; start fails with "bad_json" on one). A
+ *   cancel that loses the race to "done" returns {"cancelled":false,"done":true}; a job whose book is already in the library is kept
+ *   ({"cancelled":false,"done":false,"committed":true}). "cancelled":true is never returned for a book that was added. Nothing is in the library before "writing", so there is nothing else to undo; after
  *   "done" the job is gone ("not_found"). The pack records its text extractor ("pdfium"). */
 char *cs_ingest_start(const char *params_json);
 char *cs_ingest_step(const char *params_json);

@@ -127,34 +127,61 @@ pub fn lists_copy(library_dir: &Path, doc_id: &str, version: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// The text of `SHA256SUMS` for `dir`: `<sha256 hex>  <relative path>` for every file in the folder (sorted by path, `/`
-/// separators), except itself and local files (a name starting with a dot). The format the library builder writes.
-pub fn sha256sums_text(dir: &Path) -> Result<String> {
-    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-        for e in std::fs::read_dir(dir).map_err(|e| Error::io(&format!("reading {}", dir.display()), e))? {
-            let e = e.map_err(|e| Error::io("reading a folder", e))?;
-            let path = e.path();
-            if e.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let ft = e.file_type().map_err(|e| Error::io("reading a folder", e))?;
-            if ft.is_dir() {
-                walk(base, &path, out)?;
-            } else if ft.is_file() {
-                let rel = path.strip_prefix(base).unwrap_or(&path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
-                if rel != SUMS_FILE {
-                    out.push(rel);
-                }
-            }
+/// Names that are never listed: local files (a leading dot), and the copies and backups of a write (`*.cs-stage`, `*.cs-old`).
+fn unlisted(name: &str) -> bool {
+    name.starts_with('.') || name.ends_with(".cs-stage") || name.ends_with(".cs-old")
+}
+
+fn walk(base: &str, dir: &Path, mounts: &[(String, Option<PathBuf>)], walked: &mut Vec<String>, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
+    for e in std::fs::read_dir(dir).map_err(|e| Error::io(&format!("reading {}", dir.display()), e))? {
+        let e = e.map_err(|e| Error::io("reading a folder", e))?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if unlisted(&name) {
+            continue;
         }
-        Ok(())
+        let rel = if base.is_empty() { name } else { format!("{base}/{name}") };
+        let ft = e.file_type().map_err(|e| Error::io("reading a folder", e))?;
+        if ft.is_dir() {
+            if let Some((_, stage)) = mounts.iter().find(|(r, _)| *r == rel) {
+                walked.push(rel.clone());
+                if let Some(st) = stage {
+                    walk(&rel, st, mounts, walked, out)?;
+                }
+            } else {
+                walk(&rel, &e.path(), mounts, walked, out)?;
+            }
+        } else if ft.is_file() {
+            out.push((rel, e.path()));
+        }
     }
-    let mut files = Vec::new();
-    walk(dir, dir, &mut files)?;
-    files.sort();
+    Ok(())
+}
+
+/// The text of `SHA256SUMS` for the library `dir` as it will be once a commit has put its staged items in place: `<sha256 hex>
+/// <relative path>` (two spaces) for every file (sorted by path, `/` separators), except itself, local files and the copies and
+/// backups of a write. `mounts` are folders whose content comes from another folder (`shard` from `shard.cs-stage`; `None`: the
+/// folder is gone); `overrides` are files whose content comes from a staged file (or that are new). The format the library builder
+/// writes, checkable with `sha256sum -c`.
+pub fn sha256sums_staged(dir: &Path, mounts: &[(String, Option<PathBuf>)], overrides: &[(String, PathBuf)]) -> Result<String> {
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    let mut walked: Vec<String> = Vec::new();
+    walk("", dir, mounts, &mut walked, &mut files)?;
+    for (rel, stage) in mounts {
+        if let (false, Some(st)) = (walked.contains(rel), stage) {
+            walk(rel, st, mounts, &mut walked, &mut files)?;
+        }
+    }
+    for (rel, path) in overrides {
+        match files.iter_mut().find(|(r, _)| r == rel) {
+            Some(f) => f.1 = path.clone(),
+            None => files.push((rel.clone(), path.clone())),
+        }
+    }
+    files.retain(|(r, _)| r != SUMS_FILE);
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut text = String::new();
-    for rel in &files {
-        let mut f = std::fs::File::open(dir.join(rel)).map_err(|e| Error::io(&format!("reading {rel}"), e))?;
+    for (rel, path) in &files {
+        let mut f = std::fs::File::open(path).map_err(|e| Error::io(&format!("reading {rel}"), e))?;
         let mut h = Sha256::new();
         std::io::copy(&mut f, &mut h).map_err(|e| Error::io(&format!("reading {rel}"), e))?;
         let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
@@ -163,9 +190,37 @@ pub fn sha256sums_text(dir: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// [`sha256sums_staged`] with nothing staged: the library as it is.
+pub fn sha256sums_text(dir: &Path) -> Result<String> {
+    sha256sums_staged(dir, &[], &[])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sums_skip_backups_and_copies_and_see_staged_items_as_if_swapped() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, c: &str| {
+            let p = d.path().join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, c).unwrap();
+        };
+        w("shard/a", "old");
+        w("shard.cs-stage/a", "new");
+        w("shard.cs-old/a", "older");
+        w("index.cs-old/x", "x");
+        w(".local/v", "v");
+        w("copies.jsonl", "c");
+        w("staged.tmp", "c2");
+        let t = sha256sums_staged(d.path(), &[("shard".into(), Some(d.path().join("shard.cs-stage")))], &[("copies.jsonl".into(), d.path().join("staged.tmp")), ("packs/p.cdoc".into(), d.path().join("staged.tmp"))]).unwrap();
+        let names: Vec<&str> = t.lines().map(|l| l.split("  ").nth(1).unwrap()).collect();
+        assert_eq!(names, vec!["copies.jsonl", "packs/p.cdoc", "shard/a", "staged.tmp"]);
+        let h = |s: &str| Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert!(t.contains(&format!("{}  shard/a", h("new"))));
+        assert!(t.contains(&format!("{}  copies.jsonl", h("c2"))));
+    }
 
     #[test]
     fn utc_text_is_iso() {

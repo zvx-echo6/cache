@@ -6,7 +6,8 @@ use crate::error::{Error, Result};
 use crate::job::Job;
 use crate::params::Params;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -15,6 +16,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 struct Slot {
+    /// The job folder, absolute: one job per folder.
+    key: PathBuf,
     cancel: AtomicBool,
     job: Mutex<Option<Job>>,
 }
@@ -22,6 +25,8 @@ struct Slot {
 pub struct Service {
     provider: EnvProvider,
     jobs: Mutex<HashMap<u64, Arc<Slot>>>,
+    /// The job folders in use, taken before a job starts and released when it ends.
+    dirs: Mutex<HashSet<PathBuf>>,
     next: AtomicU64,
 }
 
@@ -35,35 +40,42 @@ fn job_id(v: &Value) -> Result<u64> {
 
 impl Service {
     pub fn new(provider: EnvProvider) -> Service {
-        Service { provider, jobs: Mutex::new(HashMap::new()), next: AtomicU64::new(1) }
+        Service { provider, jobs: Mutex::new(HashMap::new()), dirs: Mutex::new(HashSet::new()), next: AtomicU64::new(1) }
     }
 
     fn slot(&self, id: u64) -> Result<Arc<Slot>> {
-        lock(&self.jobs).get(&id).cloned().ok_or_else(|| Error::not_found(format!("no ingest job {id}")))
+        lock(&self.jobs).get(&id).cloned().ok_or_else(|| Error::not_found(format!("no ingest job {id} (it was never started, was cancelled, or is already done)")))
     }
 
     fn forget(&self, id: u64) {
-        lock(&self.jobs).remove(&id);
+        if let Some(slot) = lock(&self.jobs).remove(&id) {
+            lock(&self.dirs).remove(&slot.key);
+        }
     }
 
     /// `cs_ingest_start`.
     pub fn start(&self, params_json: &str) -> Result<String> {
         let v = parse(params_json)?;
         let params = Params::parse(&v)?;
-        let key = std::fs::canonicalize(&params.job_dir).unwrap_or_else(|_| params.job_dir.clone());
-        // one job per job_dir
-        for slot in lock(&self.jobs).values() {
-            if let Ok(g) = slot.job.try_lock() {
-                if g.as_ref().is_some_and(|j| std::fs::canonicalize(j.job_dir()).unwrap_or_else(|_| j.job_dir().to_path_buf()) == key) {
-                    return Err(Error::busy("a job already uses this job_dir"));
-                }
-            }
+        let key = std::path::absolute(&params.job_dir).unwrap_or_else(|_| params.job_dir.clone());
+        // one job per job_dir: the folder is taken here, before anything else, and released when the job ends or fails to start
+        if !lock(&self.dirs).insert(key.clone()) {
+            return Err(Error::busy("a job already uses this job_dir"));
         }
-        let env = (self.provider)(v.get("engines").unwrap_or(&Value::Null))?;
-        let (job, resumed) = Job::start(params, env)?;
+        let started = (|| {
+            let env = (self.provider)(v.get("engines").unwrap_or(&Value::Null))?;
+            Job::start(params, env)
+        })();
+        let (job, resumed) = match started {
+            Ok(x) => x,
+            Err(e) => {
+                lock(&self.dirs).remove(&key);
+                return Err(e);
+            }
+        };
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let out = json!({"job": id, "resumed": resumed, "copy": job.copy(), "pages": job.page_count()});
-        lock(&self.jobs).insert(id, Arc::new(Slot { cancel: AtomicBool::new(false), job: Mutex::new(Some(job)) }));
+        lock(&self.jobs).insert(id, Arc::new(Slot { key, cancel: AtomicBool::new(false), job: Mutex::new(Some(job)) }));
         Ok(out.to_string())
     }
 
@@ -77,7 +89,7 @@ impl Service {
         };
         let slot = self.slot(id)?;
         let mut g = lock(&slot.job);
-        let Some(job) = g.as_mut() else { return Err(Error::not_found(format!("no ingest job {id}"))) };
+        let Some(job) = g.as_mut() else { return Err(Error::not_found(format!("no ingest job {id} (it was never started, was cancelled, or is already done)"))) };
         let status = job.step(budget, &slot.cancel)?;
         if status["state"] == "done" {
             job.remove_dir();
@@ -110,11 +122,13 @@ impl Service {
         }
         let slot = self.slot(id)?;
         let mut g = lock(&slot.job);
-        let Some(job) = g.as_mut() else { return Err(Error::not_found(format!("no ingest job {id}"))) };
+        let Some(job) = g.as_mut() else { return Err(Error::not_found(format!("no ingest job {id} (it was never started, was cancelled, or is already done)"))) };
         Ok(job.accept_ocr(&engine, &version, &pages)?.to_string())
     }
 
-    /// `cs_ingest_cancel`.
+    /// `cs_ingest_cancel`. `{"cancelled":true}` only when nothing was added to the library. A cancel that lost the race to the
+    /// end of the write gets `{"cancelled":false,"done":true}`, and a job whose book is already in the library but that failed
+    /// afterwards (the Bookshelves events) is kept, with `{"cancelled":false,"done":false,"committed":true}`: step it again.
     pub fn cancel(&self, params_json: &str) -> Result<String> {
         let v = parse(params_json)?;
         let id = job_id(&v)?;
@@ -122,6 +136,13 @@ impl Service {
         // a step in progress stops at its next unit; the job lock is free then
         slot.cancel.store(true, Ordering::SeqCst);
         let mut g = lock(&slot.job);
+        let Some(job) = g.as_ref() else {
+            return Ok(json!({"cancelled": false, "done": true}).to_string());
+        };
+        if job.committed() {
+            slot.cancel.store(false, Ordering::SeqCst);
+            return Ok(json!({"cancelled": false, "done": false, "committed": true}).to_string());
+        }
         if let Some(job) = g.take() {
             job.remove_dir();
         }

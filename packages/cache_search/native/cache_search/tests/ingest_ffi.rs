@@ -143,6 +143,12 @@ fn the_keyword_index_gets_the_new_book() {
     assert_eq!(docs(&lib), after.docs);
 }
 
+fn commit_staged(lib: &Path, staged: &mut Box<dyn cache_ingest::Staged>) {
+    let steps: Vec<cache_ingest::commit::Step> =
+        staged.plan().into_iter().map(|s| cache_ingest::commit::Step { old: format!("{}.cs-old", s.target), target: s.target, stage: s.stage }).collect();
+    cache_ingest::commit::run(lib, &steps, &mut **staged).unwrap();
+}
+
 fn point(i: u32) -> Point {
     let doc = "xxxxxxxx".to_string();
     let id = format!("00000000-0000-4000-8000-{i:012}");
@@ -169,20 +175,13 @@ fn the_library_is_updating_while_a_write_is_staged_and_a_dropped_write_changes_n
 
     // committed: the points are there
     let mut staged = CoreStore.begin(&lib, &[point(1), point(2)]).expect("begin");
-    staged.commit().unwrap();
+    commit_staged(&lib, &mut staged);
     assert!(entry.updating(), "still updating until the write is finished");
     drop(staged);
     assert!(!entry.updating());
     no_leftovers(&lib);
     assert_eq!(docs(&lib), 2);
 
-    // committed and then undone: as it was
-    let mut staged = CoreStore.begin(&lib, &[point(5)]).expect("begin");
-    staged.commit().unwrap();
-    staged.undo();
-    drop(staged);
-    no_leftovers(&lib);
-    assert_eq!(docs(&lib), 2);
 }
 
 #[test]
@@ -247,4 +246,97 @@ fn probe_reports_missing_engines_and_hashes_the_model_without_failing() {
     let r = probe(json!({}));
     assert_eq!((r["embedder"]["ok"].clone(), r["model"]["ok"].clone()), (json!(false), json!(false)));
     assert!(cache_search::ingest::probe("not json").is_err());
+}
+
+/// `sha256sum -c` semantics: every line's file exists and has that hash; and every file of the library that is not local (a leading
+/// dot) or a copy or backup of a write is listed.
+fn check_sums(lib: &Path) {
+    use sha2::{Digest, Sha256};
+    let text = std::fs::read_to_string(lib.join("SHA256SUMS")).unwrap();
+    let mut listed = std::collections::BTreeSet::new();
+    for l in text.lines() {
+        let (hash, rel) = l.split_once("  ").unwrap();
+        assert!(!rel.contains("cs-old") && !rel.contains("cs-stage"), "{rel} is listed");
+        let bytes = std::fs::read(lib.join(rel)).unwrap_or_else(|_| panic!("{rel} is listed but not there"));
+        let got: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(got, hash, "{rel}");
+        listed.insert(rel.to_string());
+    }
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "SHA256SUMS" || name.ends_with(".cs-old") || name.ends_with(".cs-stage") {
+                continue;
+            }
+            if e.file_type().unwrap().is_dir() {
+                walk(base, &e.path(), out);
+            } else {
+                out.push(e.path().strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut on_disk = Vec::new();
+    walk(lib, lib, &mut on_disk);
+    for f in on_disk {
+        assert!(listed.contains(&f), "{f} is in the library but not in SHA256SUMS");
+    }
+}
+
+#[test]
+fn sha256sums_check_out_after_every_ingest_into_a_real_library() {
+    let tmp = TempDir::new("sums");
+    let lib = make_library(&tmp.0);
+    std::fs::write(lib.join("SHA256SUMS"), "").unwrap();
+    let svc = service();
+    add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
+    check_sums(&lib);
+    // with a keyword index too (a second folder swapped in)
+    let idx = lib.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    let cfg = settings();
+    let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &idx, heap_mb: 15, checkpoint_docs: 1000 };
+    build_library_index(&p, &|_, _| {}, &|| false).unwrap();
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    check_sums(&lib);
+    let text = std::fs::read_to_string(lib.join("SHA256SUMS")).unwrap();
+    assert!(text.contains("documents.tsv") && text.contains("copies.jsonl") && text.contains("packs/") && text.contains("shard/"));
+    assert!(std::fs::read_to_string(lib.join("documents.tsv")).unwrap().lines().count() == 3);
+}
+
+#[test]
+fn a_kill_after_a_rename_is_rolled_forward_when_the_library_is_next_touched() {
+    use cache_ingest::commit::{run_with, Step};
+    let tmp = TempDir::new("journal");
+    let lib = make_library(&tmp.0);
+    let shard = lib.join("shard");
+    for kill_after in [0usize, 1] {
+        let before = docs(&lib);
+        let mut staged = CoreStore.begin(&lib, &[point(10 + kill_after as u32)]).expect("begin");
+        let steps: Vec<Step> = staged
+            .plan()
+            .into_iter()
+            .map(|s| Step { old: format!("{}.cs-old", s.target), target: s.target, stage: s.stage })
+            .collect();
+        // killed after `kill_after` renames: the journal is left, the library is in between
+        assert!(!run_with(&lib, &steps, &mut *staged, Some(kill_after)).unwrap());
+        drop(staged);
+        assert!(cache_ingest::commit::pending(&lib));
+        // the next touch of the library (opening it, or the next write) finishes the commit
+        libupdate::recover_if_leftovers(&shard).unwrap();
+        assert!(!cache_ingest::commit::pending(&lib));
+        no_leftovers(&lib);
+        assert_eq!(docs(&lib), before + 1, "the book is in after a kill at {kill_after}");
+    }
+    // a new write also finds a journal first, and finishes it before it stages anything
+    let mut staged = CoreStore.begin(&lib, &[point(20)]).expect("begin");
+    let steps: Vec<Step> = staged.plan().into_iter().map(|s| Step { old: format!("{}.cs-old", s.target), target: s.target, stage: s.stage }).collect();
+    assert!(!run_with(&lib, &steps, &mut *staged, Some(1)).unwrap());
+    drop(staged);
+    // (the two books of the loop above are in; the library cannot be counted while a commit is half done)
+    let before = 2u64;
+    let staged = CoreStore.begin(&lib, &[point(21)]).expect("begin");
+    assert!(!cache_ingest::commit::pending(&lib));
+    drop(staged);
+    assert_eq!(docs(&lib), before + 1, "the interrupted book (20) is in; the dropped one (21) is not");
 }

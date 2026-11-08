@@ -143,7 +143,7 @@ impl PdfDocument for FakeDoc {
         let (w, h) = ((dpi / 30).max(1), (dpi / 25).max(1));
         let pixels = vec![200u8; (w * h) as usize];
         let png = crate::png::encode_gray(w, h, w as usize, &pixels).map_err(|e| Error::new(Code::Damaged, e))?;
-        Ok(RenderedPage { png, width: w, height: h })
+        Ok(RenderedPage { png, width: w, height: h, dpi })
     }
 }
 
@@ -154,11 +154,16 @@ pub struct FakeEmbedder {
     pub calls: Mutex<Vec<(usize, usize)>>,
     /// When set, the call with this number (from 0) fails with the `embed` code.
     pub fail_call: Mutex<Option<usize>>,
+    /// When set, the embedder's identity (the model file).
+    pub ident: Mutex<Option<String>>,
 }
 
 impl Embedder for FakeEmbedder {
     fn name(&self) -> String {
         "fake-hash-v1".to_string()
+    }
+    fn identity(&self) -> String {
+        self.ident.lock().unwrap().clone().unwrap_or_else(|| self.name())
     }
     fn embed(&self, texts: &[String], threads: usize) -> Result<Vec<Vec<f32>>> {
         let mut calls = self.calls.lock().unwrap();

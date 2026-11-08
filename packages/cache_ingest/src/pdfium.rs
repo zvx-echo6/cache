@@ -18,8 +18,8 @@ type Handle = *mut c_void;
 const ERR_PASSWORD: c_ulong = 4;
 /// `FPDF_ANNOT`: draw annotations too.
 const RENDER_ANNOT: c_int = 0x01;
-/// The largest page image, in pixels (a 300 dpi A3 page is about 17 million).
-const MAX_PIXELS: f64 = 100_000_000.0;
+/// The largest page image, in pixels (a 300 dpi A3 page is about 17 million): a bigger page is drawn at a lower resolution.
+const MAX_PIXELS: f64 = 40_000_000.0;
 
 static PDFIUM_LOCK: Mutex<()> = Mutex::new(());
 
@@ -43,7 +43,7 @@ struct Lib {
     meta_text: unsafe extern "C" fn(Handle, *const c_char, *mut c_void, c_ulong) -> c_ulong,
     page_label: unsafe extern "C" fn(Handle, c_int, *mut c_void, c_ulong) -> c_ulong,
     bitmap_create: unsafe extern "C" fn(c_int, c_int, c_int) -> Handle,
-    bitmap_fill: unsafe extern "C" fn(Handle, c_int, c_int, c_int, c_int, u32),
+    bitmap_fill: unsafe extern "C" fn(Handle, c_int, c_int, c_int, c_int, c_ulong),
     bitmap_buffer: unsafe extern "C" fn(Handle) -> *mut c_void,
     bitmap_stride: unsafe extern "C" fn(Handle) -> c_int,
     bitmap_destroy: unsafe extern "C" fn(Handle),
@@ -67,25 +67,26 @@ fn this_process() -> Option<Library> {
     None
 }
 
+/// Finds PDFium: the host's path first, then the usual library name, then the process itself. A path that does not load falls back to
+/// the others; the error lists everything tried.
 fn open_library(path: Option<&str>) -> Result<(Library, &'static str)> {
     let mut tried: Vec<String> = Vec::new();
-    let mut names: Vec<String> = Vec::new();
     if let Some(p) = path.filter(|p| !p.is_empty()) {
-        names.push(p.to_string());
-    } else {
-        names.extend(["libpdfium.so", "libpdfium.dylib", "pdfium.dll"].map(String::from));
+        // SAFETY: loading a shared library runs its initialisers; the host chose the path.
+        match unsafe { Library::new(p) } {
+            Ok(l) => return Ok((l, "path")),
+            Err(e) => tried.push(format!("{p}: {e}")),
+        }
     }
-    for n in &names {
-        // SAFETY: loading a shared library runs its initialisers; the host chose the path (or it is PDFium's usual name).
+    for n in ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"] {
+        // SAFETY: PDFium's usual library name.
         match unsafe { Library::new(n) } {
-            Ok(l) => return Ok((l, if path.is_some_and(|p| !p.is_empty()) { "path" } else { "name" })),
+            Ok(l) => return Ok((l, "name")),
             Err(e) => tried.push(format!("{n}: {e}")),
         }
     }
-    if path.is_none_or(str::is_empty) {
-        if let Some(l) = this_process() {
-            return Ok((l, "process"));
-        }
+    if let Some(l) = this_process() {
+        return Ok((l, "process"));
     }
     Err(Error::new(Code::Damaged, format!("PDFium could not be loaded ({})", tried.join("; "))))
 }
@@ -312,28 +313,29 @@ impl PdfDocument for PdfiumDoc {
                 (self.lib.close_page)(p);
                 return Err(damaged(format!("page {} is too large to draw", page + 1)));
             }
-            (self.lib.bitmap_fill)(bmp, 0, 0, w, h, 0xFFFF_FFFFu32);
+            (self.lib.bitmap_fill)(bmp, 0, 0, w, h, 0xFFFF_FFFF as c_ulong);
             (self.lib.render)(bmp, p, 0, 0, w, h, 0, RENDER_ANNOT);
             let stride = (self.lib.bitmap_stride)(bmp).max(0) as usize;
-            let buf = (self.lib.bitmap_buffer)(bmp) as *const u8;
-            let mut gray = vec![0u8; w as usize * h as usize];
-            if !buf.is_null() && stride >= w as usize * 4 {
+            let buf = (self.lib.bitmap_buffer)(bmp) as *mut u8;
+            let ok = !buf.is_null() && stride >= w as usize * 4;
+            if ok {
+                // BGRx to gray, in place in PDFium's own buffer (no second image in memory): the gray row y goes to y * w, which is
+                // never ahead of the pixels still to be read (stride is at least 4 * w).
+                let wu = w as usize;
                 for y in 0..h as usize {
-                    let row = std::slice::from_raw_parts(buf.add(y * stride), w as usize * 4);
-                    for x in 0..w as usize {
-                        // BGRx
-                        let (b, g, r) = (u32::from(row[x * 4]), u32::from(row[x * 4 + 1]), u32::from(row[x * 4 + 2]));
-                        gray[y * w as usize + x] = ((77 * r + 150 * g + 29 * b) >> 8) as u8;
+                    for x in 0..wu {
+                        let px = buf.add(y * stride + x * 4);
+                        let (b, g, r) = (u32::from(*px), u32::from(*px.add(1)), u32::from(*px.add(2)));
+                        *buf.add(y * wu + x) = ((77 * r + 150 * g + 29 * b) >> 8) as u8;
                     }
                 }
             }
+            let encoded = if ok { Some(crate::png::encode_gray(w as u32, h as u32, w as usize, std::slice::from_raw_parts(buf, w as usize * h as usize))) } else { None };
             (self.lib.bitmap_destroy)(bmp);
             (self.lib.close_page)(p);
-            if buf.is_null() {
-                return Err(damaged(format!("page {} cannot be drawn", page + 1)));
-            }
-            let png = crate::png::encode_gray(w as u32, h as u32, w as usize, &gray).map_err(damaged)?;
-            Ok(RenderedPage { png, width: w as u32, height: h as u32 })
+            let png = encoded.ok_or_else(|| damaged(format!("page {} cannot be drawn", page + 1)))?.map_err(damaged)?;
+            let actual_dpi = (scale * 72.0).round().max(1.0) as u32;
+            Ok(RenderedPage { png, width: w as u32, height: h as u32, dpi: actual_dpi.min(dpi) })
         }
     }
 }

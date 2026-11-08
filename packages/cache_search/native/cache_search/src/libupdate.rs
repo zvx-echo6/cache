@@ -574,7 +574,8 @@ pub fn library_is_complete(library: &Path) -> bool {
 
 /// Whether a staging folder or an old-library folder sits beside the library (a cheap look, no reading).
 pub fn has_leftovers(library: &Path) -> bool {
-    [stage_path(library), old_path(library)].into_iter().flatten().any(|p| std::fs::symlink_metadata(p).is_ok())
+    library.parent().is_some_and(cache_ingest::commit::pending)
+        || [stage_path(library), old_path(library)].into_iter().flatten().any(|p| std::fs::symlink_metadata(p).is_ok())
 }
 
 /// Put right what a crash during an update can leave beside the library, and report what was done. Rules:
@@ -589,6 +590,12 @@ pub fn has_leftovers(library: &Path) -> bool {
 /// other processes.
 pub fn recover_leftovers(library: &Path) -> Result<Vec<String>> {
     let mut done = Vec::new();
+    // an Add PDF commit a kill interrupted is rolled forward first: its staged copies must not be taken for an update's
+    if let Some(lib_dir) = library.parent() {
+        if cache_ingest::commit::recover(lib_dir).map_err(|e| op("finishing an interrupted Add PDF commit", e.message))? {
+            done.push(format!("finished an interrupted Add PDF commit in {}", lib_dir.display()));
+        }
+    }
     let (stage, old) = (stage_path(library)?, old_path(library)?);
     if std::fs::symlink_metadata(&stage).is_ok() {
         retry_fs(|| std::fs::remove_dir_all(&stage)).map_err(|e| op(&format!("deleting {}", stage.display()), e))?;

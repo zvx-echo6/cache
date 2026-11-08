@@ -103,3 +103,19 @@ pub fn write(bs: &Bookshelves, events: &[Event]) -> Result<()> {
     w.append(events).map_err(|e| Error::new(crate::error::Code::Io, e.to_string()))?;
     Ok(())
 }
+
+/// What this device's log already holds for the copy: its `same` events and its `place`. Events are owed to the log only when there
+/// are none (a crash or a write error after the library was written leaves the book there without them; the next try writes them).
+pub fn existing(bs: &Bookshelves, copy: &str) -> Result<Plan> {
+    let logs = read_logs(&bs.dir.join(LOG_DIR)).map_err(|e| Error::io("reading the Bookshelves log", e))?;
+    let mut plan = Plan::default();
+    for e in logs.events.into_iter().filter(|e| e.dev == bs.dev && e.kind.copy() == Some(copy)) {
+        match &e.kind {
+            Kind::Same { with, how, score, .. } => plan.same.push(json!({"with": with, "how": how.as_str(), "score": score})),
+            Kind::Place { div, by, .. } => plan.shelf = Some((div.clone(), by.as_str())),
+            _ => {}
+        }
+        plan.events.push(e);
+    }
+    Ok(plan)
+}

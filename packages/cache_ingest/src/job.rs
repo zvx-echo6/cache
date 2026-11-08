@@ -12,6 +12,7 @@
 //! Nothing is written to the library before the last step, and that step is all or nothing.
 
 use crate::bookshelves;
+use crate::commit;
 use crate::engine::{Env, PdfDocument, Placement, Point};
 use crate::error::{Code, Error, Result};
 use crate::files;
@@ -36,6 +37,8 @@ const PAGES_FILE: &str = "pages.jsonl";
 const OCR_FILE: &str = "ocr.jsonl";
 const VECTORS_FILE: &str = "vectors.bin";
 const OCR_DIR: &str = "ocr";
+/// Marks a folder as made by an ingest job: only such a folder is ever emptied or removed.
+const MARKER: &str = ".cache-ingest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum St {
@@ -56,6 +59,7 @@ struct Page {
     confidence: Option<f32>,
     width: u32,
     height: u32,
+    dpi: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +106,8 @@ pub struct Job {
     dims: usize,
     failed: Option<Error>,
     result: Option<Value>,
+    /// The book is in the library (the commit finished).
+    committed: bool,
 }
 
 /// Text of a page as paragraphs: blank lines separate them and the lines of a paragraph are joined into flowing text (the same
@@ -227,6 +233,12 @@ impl Job {
         if !p.library_dir.is_dir() {
             return Err(Error::io("library_dir", format!("{} is not a folder", p.library_dir.display())));
         }
+        if p.job_dir.exists() {
+            let empty = std::fs::read_dir(&p.job_dir).map(|mut r| r.next().is_none()).unwrap_or(false);
+            if !p.job_dir.is_dir() || !(p.job_dir.join(MARKER).exists() || empty) {
+                return Err(Error::bad_json(format!("{} is not an ingest folder (it has files that are not a job's)", p.job_dir.display())));
+            }
+        }
         let (copy, size) = file_hash(&p.pdf_path)?;
         let file_name = p.pdf_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "book.pdf".to_string());
         let doc = env.pdf.open(&p.pdf_path)?;
@@ -236,7 +248,11 @@ impl Job {
         }
         std::fs::create_dir_all(&p.job_dir).map_err(|e| io(&format!("creating {}", p.job_dir.display()), e))?;
         let state: Option<Value> = std::fs::read_to_string(p.job_dir.join(STATE_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok());
-        let resumed = state.as_ref().is_some_and(|s| s["copy"] == json!(copy) && s["page_count"] == json!(page_count) && s["v"] == json!(1));
+        let identity = env.embedder.identity();
+        let resumed = p.job_dir.join(MARKER).exists()
+            && state.as_ref().is_some_and(|s| {
+                s["copy"] == json!(copy) && s["page_count"] == json!(page_count) && s["v"] == json!(2) && s["embedder"] == json!(identity) && s["ocr_host"] == json!(p.opts.ocr_host)
+            });
         let meta_title = doc.title().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let year = doc.year();
         let mut job = Job {
@@ -257,6 +273,7 @@ impl Job {
             dims: 0,
             failed: None,
             result: None,
+            committed: false,
             p,
             env,
         };
@@ -267,8 +284,10 @@ impl Job {
             job.load()?;
         } else {
             // a checkpoint of another file (or none): start clean
+            // (the folder is empty or marked as an ingest folder: checked above)
             let _ = std::fs::remove_dir_all(&job.p.job_dir);
             std::fs::create_dir_all(job.dir().join(OCR_DIR)).map_err(|e| io("creating the job folder", e))?;
+            std::fs::write(job.dir().join(MARKER), b"cache ingest job folder\n").map_err(|e| io("writing the job folder marker", e))?;
             job.created_at = files::utc_text((job.env.clock)());
             job.save_state()?;
         }
@@ -276,7 +295,8 @@ impl Job {
     }
 
     fn save_state(&self) -> Result<()> {
-        let v = json!({"v": 1, "copy": self.copy, "size": self.size, "page_count": self.page_count, "created_at": self.created_at, "dims": self.dims});
+        let v = json!({"v": 2, "copy": self.copy, "size": self.size, "page_count": self.page_count, "created_at": self.created_at, "dims": self.dims,
+            "embedder": self.env.embedder.identity(), "ocr_host": self.p.opts.ocr_host});
         write_atomic(&self.dir().join(STATE_FILE), v.to_string().as_bytes())
     }
 
@@ -299,7 +319,7 @@ impl Job {
                 Some("skipped") => St::Skipped,
                 _ => St::Text,
             };
-            self.pages.push(Page { label: l["label"].as_str().unwrap_or("").to_string(), text: l["text"].as_str().unwrap_or("").to_string(), st, confidence: None, width: 0, height: 0 });
+            self.pages.push(Page { label: l["label"].as_str().unwrap_or("").to_string(), text: l["text"].as_str().unwrap_or("").to_string(), st, confidence: None, width: 0, height: 0, dpi: 0 });
         }
         if !all_good {
             rewrite_lines(&self.dir().join(PAGES_FILE), &good)?;
@@ -361,6 +381,7 @@ impl Job {
         write_atomic(&path, &r.png)?;
         self.pages[i].width = r.width;
         self.pages[i].height = r.height;
+        self.pages[i].dpi = r.dpi;
         Ok(())
     }
 
@@ -437,7 +458,7 @@ impl Job {
                     .iter()
                     .map(|&i| {
                         let p = &self.pages[i];
-                        json!({"page": i + 1, "image_path": self.png_path(i).to_string_lossy(), "width": p.width, "height": p.height, "dpi": self.p.opts.ocr_dpi})
+                        json!({"page": i + 1, "image_path": self.png_path(i).to_string_lossy(), "width": p.width, "height": p.height, "dpi": if p.dpi > 0 { p.dpi } else { self.p.opts.ocr_dpi }})
                     })
                     .collect();
                 v["needs_ocr"] = json!(list);
@@ -503,7 +524,7 @@ impl Job {
         } else {
             (St::Skipped, String::new())
         };
-        self.pages.push(Page { label: label.clone(), text: text.clone(), st, confidence: None, width: 0, height: 0 });
+        self.pages.push(Page { label: label.clone(), text: text.clone(), st, confidence: None, width: 0, height: 0, dpi: 0 });
         if st == St::Pending {
             self.render(i)?;
         }
@@ -653,109 +674,27 @@ impl Job {
         let version = pack.header.doc_version;
         let header_json = serde_json::to_string(&pack.header).map_err(|e| io("the pack header", e))?;
         let facts = PackFacts::from_header_line(&header_json).map_err(|e| Error::new(Code::Io, e.to_string()))?;
-        let already = files::lists_copy(&self.p.library_dir, &doc_id, version);
-        let plan = match (&self.p.bookshelves, already) {
-            (Some(bs), false) => Some(bookshelves::plan(bs, &self.p.library_dir, &header_json, placement.as_ref(), (self.env.clock)())?),
-            _ => None,
-        };
-
-        let points: Vec<Point> = (0..pack.pieces.len())
-            .map(|i| Point { id: point_uuid(&doc_id, version, pack.pieces[i].index).to_string(), vector: pack.pieces[i].vector.clone(), payload: payload_of(&pack, i) })
-            .collect();
-        let bytes = pack_bytes(&pack)?;
         let lib = self.p.library_dir.clone();
-        let packs_dir = lib.join(files::PACKS_DIR);
-        let pack_final = packs_dir.join(pack_file_name(&doc_id, version));
-        // the copies file is written at the library's root (a copy still in `shard/` is read from there and moves out)
-        let copies_final = lib.join(cache_shelves::library::COPIES_FILE);
-        let old_copies = std::fs::read_to_string(files::copies_file(&lib)).ok();
-        let new_copies = files::copies_with(old_copies.as_deref(), &facts);
-        let sums_final = lib.join(files::SUMS_FILE);
-        let old_sums = std::fs::read_to_string(&sums_final).ok();
 
-        let docs_final = lib.join(files::DOCUMENTS_FILE);
-        let old_docs = std::fs::read_to_string(files::documents_file(&lib)).ok();
-        let new_docs = files::documents_with(old_docs.as_deref(), &doc_id, version, &pack.header.title, &pack.header.source.blake3, pack.pieces.len(), pack.header.page_count);
+        // 1: the library (all or nothing). A book the library already lists, with no commit waiting, is there: a retry after a
+        // failure that came later does not write it again.
+        if !(files::lists_copy(&lib, &doc_id, version) && !commit::pending(&lib)) {
+            self.commit_book(&pack, &facts, &doc_id, version)?;
+        }
+        self.committed = true;
 
-        // 1: the shard and keyword index, prepared beside the library (the library is `updating` until `staged` is dropped)
-        let mut staged = self.env.store.begin(&lib, &points)?;
-        // 2: the plain files, under temporary names
-        let mut tmps: Vec<PathBuf> = Vec::new();
-        let mut parts: Vec<(PathBuf, PathBuf, Option<String>)> = Vec::new();
-        for (fin, bytes, old) in [(&pack_final, bytes.as_slice(), None), (&copies_final, new_copies.as_bytes(), old_copies.clone()), (&docs_final, new_docs.as_bytes(), old_docs.clone())] {
-            match files::write_tmp(fin, bytes) {
-                Ok(t) => {
-                    tmps.push(t.clone());
-                    parts.push((fin.clone(), t, old));
-                }
-                Err(e) => {
-                    for t in &tmps {
-                        let _ = std::fs::remove_file(t);
-                    }
-                    return Err(e);
-                }
+        // 2: the Bookshelves log (append-only, after the library, so a failure never leaves events for a book that is not there).
+        // Events are owed unless this device's log already holds some for the copy; what it holds is what is reported.
+        let mut plan = None;
+        if let Some(bs) = &self.p.bookshelves {
+            let have = bookshelves::existing(bs, &facts.copy)?;
+            if have.events.is_empty() {
+                let p = bookshelves::plan(bs, &lib, &header_json, placement.as_ref(), (self.env.clock)())?;
+                bookshelves::write(bs, &p.events)?;
+                plan = Some(p);
+            } else {
+                plan = Some(have);
             }
-        }
-        // 3: the point of no return for the shard; from here a failure puts everything back
-        if let Err(e) = staged.commit() {
-            for t in &tmps {
-                let _ = std::fs::remove_file(t);
-            }
-            return Err(e);
-        }
-        let had_pack = pack_final.exists();
-        let mut done = 0usize;
-        let mut failure: Option<Error> = None;
-        for (fin, tmp, _) in &parts {
-            if let Err(e) = std::fs::rename(tmp, fin) {
-                failure = Some(io(&format!("writing {}", fin.display()), e));
-                break;
-            }
-            done += 1;
-        }
-        if failure.is_none() && old_sums.is_some() {
-            let r = files::sha256sums_text(&lib).and_then(|t| {
-                let tmp = files::write_tmp(&sums_final, t.as_bytes())?;
-                std::fs::rename(&tmp, &sums_final).map_err(|e| {
-                    let _ = std::fs::remove_file(&tmp);
-                    io("writing SHA256SUMS", e)
-                })
-            });
-            if let Err(e) = r {
-                failure = Some(e);
-            }
-        }
-        if let Some(e) = failure {
-            for t in &tmps {
-                let _ = std::fs::remove_file(t);
-            }
-            for (i, (fin, _, old)) in parts.iter().enumerate().take(done) {
-                if i == 0 {
-                    if !had_pack {
-                        let _ = std::fs::remove_file(fin);
-                    }
-                } else {
-                    match old {
-                        Some(t) => {
-                            let _ = std::fs::write(fin, t);
-                        }
-                        None => {
-                            let _ = std::fs::remove_file(fin);
-                        }
-                    }
-                }
-            }
-            if let Some(t) = &old_sums {
-                let _ = std::fs::write(&sums_final, t);
-            }
-            staged.undo();
-            return Err(e);
-        }
-        drop(staged);
-
-        // 4: the Bookshelves log (append-only: after the library, so a failure never leaves events for a book that is not there)
-        if let (Some(bs), Some(plan)) = (&self.p.bookshelves, &plan) {
-            bookshelves::write(bs, &plan.events)?;
         }
         let page_ins = self.page_ins();
         let mut result = json!({
@@ -769,17 +708,79 @@ impl Job {
         if let Some(plan) = &plan {
             result["same"] = json!(plan.same);
             result["shelf"] = plan.shelf.as_ref().map(|(d, by)| json!({"div": d, "by": by})).unwrap_or(Value::Null);
-        } else if self.p.bookshelves.is_some() {
-            result["same"] = json!([]);
-            result["shelf"] = Value::Null;
         }
         self.result = Some(result);
         Ok(())
     }
 
+    /// Stages every output (the shard and keyword index by the store; the pack, `copies.jsonl`, `documents.tsv` and `SHA256SUMS`
+    /// as complete files), then makes the journaled commit.
+    fn commit_book(&mut self, pack: &cache_pack::pack::Pack, facts: &PackFacts, doc_id: &str, version: u32) -> Result<()> {
+        let points: Vec<Point> = (0..pack.pieces.len())
+            .map(|i| Point { id: point_uuid(doc_id, version, pack.pieces[i].index).to_string(), vector: pack.pieces[i].vector.clone(), payload: payload_of(pack, i) })
+            .collect();
+        let bytes = pack_bytes(pack)?;
+        let lib = self.p.library_dir.clone();
+        // the store first: it recovers an interrupted commit of an earlier job, and the files below are read after that
+        let mut staged = self.env.store.begin(&lib, &points)?;
+        let rel_pack = format!("{}/{}", files::PACKS_DIR, pack_file_name(doc_id, version));
+        let rel_copies = cache_shelves::library::COPIES_FILE.to_string();
+        let rel_docs = files::DOCUMENTS_FILE.to_string();
+        let old_copies = std::fs::read_to_string(files::copies_file(&lib)).ok();
+        let old_docs = std::fs::read_to_string(files::documents_file(&lib)).ok();
+        let new_copies = files::copies_with(old_copies.as_deref(), facts);
+        let new_docs = files::documents_with(old_docs.as_deref(), doc_id, version, &pack.header.title, &pack.header.source.blake3, pack.pieces.len(), pack.header.page_count);
+        let mut staged_files: Vec<(String, PathBuf)> = Vec::new();
+        let cleanup = |v: &[(String, PathBuf)]| {
+            for (_, t) in v {
+                let _ = std::fs::remove_file(t);
+            }
+        };
+        for (rel, data) in [(&rel_pack, bytes.as_slice()), (&rel_copies, new_copies.as_bytes()), (&rel_docs, new_docs.as_bytes())] {
+            match files::write_tmp(&lib.join(rel), data) {
+                Ok(t) => staged_files.push((rel.clone(), t)),
+                Err(e) => {
+                    cleanup(&staged_files);
+                    return Err(e);
+                }
+            }
+        }
+        let swaps = staged.plan();
+        if lib.join(files::SUMS_FILE).is_file() {
+            let mounts: Vec<(String, Option<PathBuf>)> = swaps.iter().map(|s| (s.target.clone(), s.stage.as_ref().map(|st| lib.join(st)))).collect();
+            let sums = files::sha256sums_staged(&lib, &mounts, &staged_files).and_then(|t| files::write_tmp(&lib.join(files::SUMS_FILE), t.as_bytes()));
+            match sums {
+                Ok(t) => staged_files.push((files::SUMS_FILE.to_string(), t)),
+                Err(e) => {
+                    cleanup(&staged_files);
+                    return Err(e);
+                }
+            }
+        }
+        let rel_of = |p: &Path| p.strip_prefix(&lib).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        let mut steps: Vec<commit::Step> = swaps.iter().map(|s| commit::Step { target: s.target.clone(), stage: s.stage.clone(), old: format!("{}.cs-old", s.target) }).collect();
+        for (rel, tmp) in &staged_files {
+            steps.push(commit::Step { target: rel.clone(), stage: Some(rel_of(tmp)), old: commit::old_name_of_file(rel) });
+        }
+        let r = commit::run(&lib, &steps, &mut *staged);
+        // whatever staged file is still there was not swapped in (the commit failed and was put back)
+        if !commit::pending(&lib) {
+            cleanup(&staged_files);
+        }
+        drop(staged);
+        r
+    }
+
     /// Removes the job's folder.
     pub fn remove_dir(&self) {
-        let _ = std::fs::remove_dir_all(self.dir());
+        if self.dir().join(MARKER).exists() {
+            let _ = std::fs::remove_dir_all(self.dir());
+        }
+    }
+
+    /// Whether the book is already in the library (the commit finished).
+    pub fn committed(&self) -> bool {
+        self.committed
     }
 
     pub fn job_dir(&self) -> &Path {

@@ -13,6 +13,10 @@ platform has one ingest path.
   work and returns. To pause, stop calling; the job is checkpointed in `job_dir` after every page and every embed batch.
 - **Resume after a kill:** call `cs_ingest_start` again with the same `job_dir`. If its checkpoint is for the same file (same
   BLAKE3), the job carries on from there; otherwise the old checkpoint is discarded and the job starts fresh.
+- **`job_dir` is the job's own folder.** The job marks it (`.cache-ingest`) and only ever empties or removes a folder that has the mark; a
+  folder that exists, is not empty and has no mark makes `cs_ingest_start` fail with `bad_json`. The check that no two jobs share a `job_dir` is
+  made before anything else is done.
+- **A checkpoint carries on only if everything it was made with matches:** the file's BLAKE3, the embedder (model file) and the OCR mode.
 - **One job per `job_dir`.** Several jobs may exist at once with different `job_dir`s, but only one may be in `writing` for a
   given library at a time (the other gets `busy` and should step again later).
 - **Identity** is the original file's BLAKE3 (the copy key, via `cache_shelves::library::copy_key`). The PDF is never modified.
@@ -46,8 +50,8 @@ platform has one ingest path.
 - `bookshelves` is optional; without it no Bookshelves events are written. `bookshelves.libraries` (optional; the shape `cs_shelves_resolve` takes)
   names the libraries whose copies the new book is compared with, besides the target library. Without it only the target library is compared.
 - `engines` is optional and says where the host's engines are. All keys are optional; what fails without them:
-  - `pdfium_lib`: path of the app's own `libpdfium` (the copy pdfrx ships). PDFium is loaded at run time: by this path, else by the usual
-    library name, else from the process itself (iOS links it into the app). If none works, `cs_ingest_start` fails with `damaged`.
+  - `pdfium_lib`: path of the app's own `libpdfium` (the copy pdfrx ships). PDFium is loaded at run time: by this path; if that does not load, by the
+    usual library name; if that does not, from the process itself (iOS links it into the app). If none works, `cs_ingest_start` fails with `damaged`.
   - `pdfium_version`: recorded in the pack's `extractor.version` (`unknown` without it).
   - `embed_lib`, `embed_model` (both needed): the built `libcache_llama` and the bge-m3 GGUF. Without them reading works, but embedding
     fails with `embed`.
@@ -140,7 +144,12 @@ platform has one ingest path.
 {"job": 12}
 ```
 
-- It stops the job, deletes `job_dir` and any partial output, and returns `{"cancelled": true}`.
+- It stops the job, deletes `job_dir` and any partial output, and returns `{"cancelled": true}`. `cancelled: true` is only ever returned when
+  nothing was added to the library.
+- A cancel that arrives while the book is being written and loses the race to `done` returns `{"cancelled": false, "done": true}` (or `not_found`
+  once the job is gone). A job whose book is already in the library but that then failed (the Bookshelves events could not be written) is kept
+  and returns `{"cancelled": false, "done": false, "committed": true}`: step it again, or start again with the same `job_dir`, and the missing
+  events are written without writing the library a second time.
 - Nothing is written to the library before `writing`, and `writing` is all or nothing. A cancel after `done` returns `not_found`.
 
 ## What the book gets
@@ -157,7 +166,9 @@ platform has one ingest path.
 - **Bookshelves** (when given): same-book detection against the visible copies.
   - Matches are written as `same by:auto`.
   - A new book gets `place` (classifier when confident, else none) and `assign` the next free number, through `cache_shelves` in
-    process. **Phones pass no classifier** (the core loads none), so a new book is not placed: it goes to Unsorted and `shelf` is null.
+    process. The shared-Bookshelves number race (two devices that assign the same next number) is left to the resolver, whose clash suffix handles it by design.
+    **Phones pass no classifier** (the core loads none), so a new book is not placed: it goes to Unsorted and `shelf` is null. The events are owed to the log unless this device's log already holds
+    some for the copy; what the log holds is what `same` and `shelf` report.
     When `same` is not empty the book is not placed either and `shelf` is null.
 
 ## OCR engines (host side)
@@ -166,7 +177,8 @@ The core renders each page that needs OCR to a grayscale PNG at `ocr_dpi`. The a
 `height` and `dpi`, and returns `text` (reading order, lines separated by `\n`) and an optional `confidence`. Engine names are
 lowercase, for example `apple-vision` and `mlkit`, and `version` is the engine's own version string.
 
-A page needs OCR when its text layer has fewer than 20 non-space characters.
+A page needs OCR when its text layer has fewer than 20 non-space characters. A page too big to draw at `ocr_dpi` within about 40 million pixels is
+drawn at a lower resolution, and the `dpi` of its `needs_ocr` entry says the resolution it was really drawn at.
 
 ## `cs_ingest_probe(params) -> report`
 

@@ -10,10 +10,10 @@
 use crate::error::{Error, ErrorCode, Result};
 use crate::libindex::{append_documents, Appended, IndexDoc};
 use crate::libreg::{self, LibEntry, UpdateGuard};
-use crate::libupdate::{self, copy_tree, hand_back_open, margin_for, retry_fs, sync_dir, sync_tree, tree_size};
+use crate::libupdate::{self, copy_tree, hand_back_open, margin_for, sync_tree, tree_size};
 use crate::library::{self, ensure_init, write_segments_manifest, LibrarySettings};
 use cache_ingest::pdfium::PdfiumEngine;
-use cache_ingest::{Code as IngestCode, Env, Error as IngestError, LibraryStore, Point, Service, Staged};
+use cache_ingest::{Code as IngestCode, Env, Error as IngestError, LibraryStore, Point, Service, Staged, Swap};
 use edge::{EdgeShard, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -68,21 +68,19 @@ enum IndexAction {
     /// No device index, or none that can be extended.
     Nothing,
     /// The extended copy replaces the index.
-    Swap(PathBuf),
+    Swap,
     /// The index is unfinished: it is moved away and built again when needed.
     Remove,
 }
 
 struct CoreStaged {
+    lib: PathBuf,
     entry: Arc<LibEntry>,
     shard: PathBuf,
     stage: PathBuf,
-    old: PathBuf,
     index: PathBuf,
-    index_old: PathBuf,
+    index_stage: PathBuf,
     index_action: IndexAction,
-    swapped_shard: bool,
-    swapped_index: bool,
     // Dropping the guard ends the update: the library is no longer `updating` and handles look at it again. Declared last so it
     // goes after the clean-up in `Drop`.
     _guard: UpdateGuard,
@@ -164,17 +162,14 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
     remove_dir(&index_old);
     remove_dir(&index_stage);
     let stage = libupdate::stage_path(&shard)?;
-    let old = libupdate::old_path(&shard)?;
     let mut st = CoreStaged {
+        lib: library_dir.to_path_buf(),
         entry,
         shard,
         stage,
-        old,
         index,
-        index_old,
+        index_stage: index_stage.clone(),
         index_action: IndexAction::Nothing,
-        swapped_shard: false,
-        swapped_index: false,
         _guard: guard,
     };
     // from here `Drop` removes the copies on any failure
@@ -193,7 +188,7 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
         st.index_action = match append_documents(&index_stage, &index_docs(&settings, points))? {
             Appended::Yes => {
                 sync_tree(&index_stage)?;
-                IndexAction::Swap(index_stage)
+                IndexAction::Swap
             }
             Appended::NoIndex => {
                 remove_dir(&index_stage);
@@ -208,90 +203,35 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
     Ok(st)
 }
 
-impl CoreStaged {
-    fn swap_in(&mut self) -> Result<()> {
-        retry_fs(|| std::fs::rename(&self.shard, &self.old)).map_err(|e| io("swapping: moving the library aside", e))?;
-        if let Err(e) = retry_fs(|| std::fs::rename(&self.stage, &self.shard)) {
-            let _ = std::fs::rename(&self.old, &self.shard);
-            return Err(io("swapping: moving the copy into place (the library was restored)", e));
-        }
-        self.swapped_shard = true;
-        match &self.index_action {
-            IndexAction::Nothing => {}
-            IndexAction::Swap(stage) => {
-                if self.index.is_dir() {
-                    retry_fs(|| std::fs::rename(&self.index, &self.index_old)).map_err(|e| io("swapping the keyword index", e))?;
-                }
-                retry_fs(|| std::fs::rename(stage, &self.index)).map_err(|e| io("swapping the keyword index", e))?;
-                self.swapped_index = true;
-            }
-            IndexAction::Remove => {
-                retry_fs(|| std::fs::rename(&self.index, &self.index_old)).map_err(|e| io("moving the unfinished keyword index aside", e))?;
-                self.swapped_index = true;
-            }
-        }
-        if let Some(parent) = self.shard.parent() {
-            let _ = sync_dir(parent);
-        }
-        Ok(())
-    }
-
-    /// Puts the old files back (the handles must not hold the new shard: the caller closes them first).
-    fn swap_back(&mut self) {
-        if self.swapped_index {
-            if let IndexAction::Swap(stage) = &self.index_action {
-                let _ = std::fs::rename(&self.index, stage);
-            } else {
-                let _ = std::fs::remove_dir_all(&self.index);
-            }
-            let _ = std::fs::rename(&self.index_old, &self.index);
-            self.swapped_index = false;
-        }
-        if self.swapped_shard {
-            let _ = std::fs::rename(&self.shard, &self.stage);
-            let _ = std::fs::rename(&self.old, &self.shard);
-            self.swapped_shard = false;
-        }
-    }
-}
-
 impl Staged for CoreStaged {
-    fn commit(&mut self) -> cache_ingest::Result<()> {
-        let r = self.swap_in().and_then(|_| hand_back_open(&self.shard, &self.entry));
-        if let Err(e) = r {
-            let _ = self.entry.close_all(&|| false);
-            self.swap_back();
-            return Err(from_core(e));
+    fn plan(&self) -> Vec<Swap> {
+        let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut v = vec![Swap { target: name(&self.shard), stage: Some(name(&self.stage)) }];
+        match self.index_action {
+            IndexAction::Nothing => {}
+            IndexAction::Swap => v.push(Swap { target: name(&self.index), stage: Some(name(&self.index_stage)) }),
+            IndexAction::Remove => v.push(Swap { target: name(&self.index), stage: None }),
         }
-        Ok(())
+        v
     }
 
-    fn undo(&mut self) {
+    fn verify(&mut self) -> cache_ingest::Result<()> {
+        hand_back_open(&self.shard, &self.entry).map_err(from_core)
+    }
+
+    fn before_rollback(&mut self) {
         let _ = self.entry.close_all(&|| false);
-        self.swap_back();
     }
 }
 
 impl Drop for CoreStaged {
     fn drop(&mut self) {
-        // not swapped in (or put back): the copies go; swapped in: the old files go
+        // a commit a kill (or a failed rollback) left half done needs its staged copies: they stay for the roll forward
+        if cache_ingest::commit::pending(&self.lib) {
+            return;
+        }
         remove_dir(&self.stage);
-        if let IndexAction::Swap(s) = &self.index_action {
-            remove_dir(s);
-        }
-        remove_dir(&self.index_stage_path());
-        if self.swapped_shard {
-            remove_dir(&self.old);
-        }
-        if self.swapped_index {
-            remove_dir(&self.index_old);
-        }
-    }
-}
-
-impl CoreStaged {
-    fn index_stage_path(&self) -> PathBuf {
-        self.index.with_file_name(INDEX_STAGE)
+        remove_dir(&self.index_stage);
     }
 }
 
@@ -320,6 +260,10 @@ impl cache_ingest::Embedder for CoreEmbedder {
             .and_then(|m| Path::new(m).file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| cache_embed::DECIDED_MODEL_FILE.to_string())
+    }
+
+    fn identity(&self) -> String {
+        format!("{}|{}|{}", cache_ingest::Embedder::name(self), self.model.as_deref().unwrap_or(""), self.sha256.as_deref().unwrap_or(""))
     }
 
     fn embed(&self, texts: &[String], threads: usize) -> cache_ingest::Result<Vec<Vec<f32>>> {
