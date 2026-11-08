@@ -20,6 +20,7 @@ pub(crate) fn guard_path(dir: &Path) -> io::Result<PathBuf> {
 
 /// A held index guard; dropping it releases the lock even if a forked child
 /// still shares the descriptor.
+#[derive(Debug)]
 pub(crate) struct Guard(File);
 
 impl Drop for Guard {
