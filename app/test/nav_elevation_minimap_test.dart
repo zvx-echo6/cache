@@ -12,6 +12,7 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -55,6 +56,9 @@ Future<void> _withGuidance(WidgetTester tester, {required Size size, required Fu
   tester.view.physicalSize = size * 3;
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
+  // The style template is read through the asset bundle, which keeps a read an earlier test started (and that never finishes in
+  // this one): read it afresh for each test.
+  rootBundle.clear();
   final dir = Directory.systemTemp.createTempSync('nav-elevation-');
   final originalPlatform = MapLibrePlatform.createInstance;
   MapLibrePlatform.createInstance = () => NoSurface();
