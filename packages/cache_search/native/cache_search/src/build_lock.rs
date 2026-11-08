@@ -1,5 +1,13 @@
 //! Kernel-owned index guard. Its sibling file is retained so replacing a build
 //! directory cannot unlink a held lock and create a second lock inode.
+//!
+//! The lock belongs to the open file description, not to this handle. Any
+//! process forked while the guard is open (by any thread, e.g. a
+//! `Command::spawn` elsewhere in the app) shares that description until it
+//! execs, so merely closing our handle would leave the lock held for that
+//! window and the next `try_guard` would see `WouldBlock`. Dropping a
+//! [`Guard`] therefore unlocks explicitly, which releases the lock for every
+//! copy of the descriptor at once.
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,8 +18,18 @@ pub(crate) fn guard_path(dir: &Path) -> io::Result<PathBuf> {
     Ok(PathBuf::from(name))
 }
 
+/// A held index guard; dropping it releases the lock even if a forked child
+/// still shares the descriptor.
+pub(crate) struct Guard(File);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// None means no guard exists yet (old index). A held guard returns WouldBlock.
-pub(crate) fn try_guard(dir: &Path, create: bool) -> io::Result<Option<File>> {
+pub(crate) fn try_guard(dir: &Path, create: bool) -> io::Result<Option<Guard>> {
     let path = match guard_path(dir) {
         Ok(path) => path,
         Err(e) if !create && e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -23,7 +41,7 @@ pub(crate) fn try_guard(dir: &Path, create: bool) -> io::Result<Option<File>> {
         Err(e) => return Err(e),
     };
     file.try_lock().map_err(io::Error::from)?;
-    Ok(Some(file))
+    Ok(Some(Guard(file)))
 }
 
 #[cfg(test)]
@@ -60,6 +78,21 @@ mod tests {
         let next = try_guard(&d.index(), false).unwrap().unwrap();
         assert!(guard_path(&d.index()).unwrap().exists());
         drop(next);
+    }
+
+    /// The CI flake: a sibling test's `Command::spawn` forked while this guard
+    /// was open, the child shared the locked description until exec, and the
+    /// re-take after `drop` saw WouldBlock. A dup of the descriptor is exactly
+    /// that child's copy, held open across the drop.
+    #[test]
+    fn drop_releases_while_a_forked_copy_is_still_open() {
+        let d = Scratch::new("shared");
+        let guard = try_guard(&d.index(), true).unwrap().unwrap();
+        let forked_copy = guard.0.try_clone().unwrap();
+        drop(guard);
+        let next = try_guard(&d.index(), false).unwrap().unwrap();
+        drop(next);
+        drop(forked_copy);
     }
 
     #[test]
