@@ -1,8 +1,11 @@
 """Builds the requests of the prompt reuse timing test from fixtures/prefix-turns.json (a scripted Ask conversation: two
 three-round questions in one chat, an app restart, then the second question again in a new chat; location known, text mode).
 
-  baseline   what the app's Ask loop sends (rel-1.1): the time and location lines at the end of the system prompt, and the
+  baseline   what rel-1.1 sent before 2026-11-08: the time and location lines at the end of the system prompt, and the
              final round without tools.
+  fix2       rel-1.1 with the final round that keeps the tools ("tool_choice": "none" and the answer-now nudge).
+  timeline   what the app sends now: fix2 with the date (no clock time) in the system prompt and "Local time: HH:MM" starting
+             each question's user message.
   candidate  a layout measured in the ask-perf-tier1 eval (not in the app): a fixed system prompt, the question's time and
              location context at the start of its user message, and after the third tool round the same tools with
              "tool_choice": "none" and the answer-now nudge.
@@ -39,13 +42,21 @@ def clock_line(now_iso):
     return f"Current local date and time: {dt.strftime('%A')}, {dt.year:04d}-{dt.month:02d}-{dt.day:02d} {dt.hour:02d}:{dt.minute:02d} (UTC{off})."
 
 
+def date_line(now_iso):
+    dt = datetime.fromisoformat(now_iso)
+    return clock_line(now_iso).replace("Current local date and time: ", "Current local date: ").replace(f" {dt.hour:02d}:{dt.minute:02d} (", " (")
+
+
 def requests(fx, arm):
     """One list of requests per scripted turn, as tool_loop.dart builds them."""
     reqs, chats = [], {}
     for t in fx["script"]:
         msgs, ncall = chats.setdefault(t["chat"], ([], [1]))
-        if arm == "baseline":
+        if arm in ("baseline", "fix2"):
             system, user = "\n".join(INSTRUCTIONS + [clock_line(t["now"]), LOC_KNOWN]), t["question"]
+        elif arm == "timeline":
+            dt = datetime.fromisoformat(t["now"])
+            system, user = "\n".join(INSTRUCTIONS + [date_line(t["now"]), LOC_KNOWN]), f"Local time: {dt.hour:02d}:{dt.minute:02d}\n\n" + t["question"]
         else:
             system, user = "\n".join(INSTRUCTIONS), clock_line(t["now"]) + "\n" + LOC_KNOWN + "\n\n" + t["question"]
         msgs.append({"role": "user", "content": user})

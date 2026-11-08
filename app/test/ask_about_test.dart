@@ -62,7 +62,9 @@ void main() {
     final backend = ScriptedBackend([
       (r) {
         final m = _messages(r);
-        expect(m[1], {'role': 'user', 'content': about.question});
+        expect(m[1]['role'], 'user');
+        expect(m[1]['content'], matches(RegExp(r'^Local time: \d\d:\d\d\n\n')), reason: 'the question starts with its time line');
+        expect(m[1]['content'], endsWith('\n\n${about.question}'));
         expect(about.question,
             'Tell me about this weather service alerts item near Pocatello: Freeze Warning. What does it mean for me, and what should I do?');
         // Byte for byte as recorded: the seeded assistant message and the tool result after it.
