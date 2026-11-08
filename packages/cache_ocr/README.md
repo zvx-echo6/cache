@@ -56,8 +56,8 @@ lower `ocr_dpi` can be compared; its numbers are in each OCR engines run's summa
 
 - `test/`: the Dart side with a fake engine and a mocked platform channel (`flutter test`; run in CI by tests.yml).
 - `example/integration_test/ocr_test.dart`: real OCR on an Android emulator and an iOS simulator (`.github/workflows/ocr.yml`).
-  It draws known text as grayscale 300 dpi page images made to look scanned, reads them with the device's engine, checks the
-  phrases come back and prints each page's time and memory.
+  Its fixtures are grayscale 300 dpi page images of known text made to look scanned (`example/tool/make_fixtures.py`, run in
+  CI); it reads them with the device's engine, checks the phrases come back and prints each page's time and memory.
 
 Emulator and simulator numbers are not a phone's: the emulator is x86_64 on a CI machine, and the simulator runs Vision on the
 Mac's CPU and GPU. What needs a real-device check: time per page and memory on a mid-range Android phone and an older iPhone,

@@ -19,10 +19,11 @@ public class CacheOcrPlugin: NSObject, FlutterPlugin {
   }
 
   /// The Vision request revision, pinned so the same engine and version always mean the same recogniser: 3 from iOS 16 (the
-  /// app's floor is 16.3), else 2.
+  /// app's floor is 16.3); 2 on iOS 14 and 15 and 1 before (only for the plugin's own floor, 13).
   static var revision: Int {
     if #available(iOS 16.0, *) { return VNRecognizeTextRequestRevision3 }
-    return VNRecognizeTextRequestRevision2
+    if #available(iOS 14.0, *) { return VNRecognizeTextRequestRevision2 }
+    return VNRecognizeTextRequestRevision1
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

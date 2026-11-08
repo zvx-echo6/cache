@@ -21,3 +21,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # The page images and their text, made in CI by tool/make_fixtures.py.
+    - assets/fixtures/

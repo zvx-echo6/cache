@@ -9,3 +9,6 @@ build/
 pubspec.lock
 *.iml
 .idea/
+# Made in CI by tool/make_fixtures.py.
+/assets/fixtures/*
+!/assets/fixtures/.gitkeep

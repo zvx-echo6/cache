@@ -110,7 +110,7 @@ void main() {
             return {'current_bytes': 100, 'peak_bytes': 200};
           case 'recognize':
             final path = (call.arguments as Map)['path'] as String;
-            if (path.endsWith('missing.png')) throw const PlatformException(code: 'no_file', message: 'No image');
+            if (path.endsWith('missing.png')) throw PlatformException(code: 'no_file', message: 'No image');
             return {
               'lines': [
                 {'text': 'The quick brown fox', 'confidence': 1.0},
