@@ -158,17 +158,17 @@ fn the_library_is_updating_while_a_write_is_staged_and_a_dropped_write_changes_n
     let shard = lib.join("shard");
     let entry = libreg::entry_for(&shard);
     assert!(!entry.updating());
-    let staged = CoreStore.begin(&lib, &[point(1), point(2)]).ok().expect("begin");
+    let staged = CoreStore.begin(&lib, &[point(1), point(2)]).expect("begin");
     assert!(entry.updating(), "search skips the library meanwhile, as during update_library");
     assert!(libupdate::has_leftovers(&shard), "the copy is beside the library, not in it");
-    assert_eq!(CoreStore.begin(&lib, &[point(3)]).err().expect("busy").code, Code::Busy);
+    assert_eq!(CoreStore.begin(&lib, &[point(3)]).err().unwrap().code, Code::Busy);
     drop(staged);
     assert!(!entry.updating());
     no_leftovers(&lib);
     assert_eq!(docs(&lib), 0, "nothing was committed");
 
     // committed: the points are there
-    let mut staged = CoreStore.begin(&lib, &[point(1), point(2)]).ok().expect("begin");
+    let mut staged = CoreStore.begin(&lib, &[point(1), point(2)]).expect("begin");
     staged.commit().unwrap();
     assert!(entry.updating(), "still updating until the write is finished");
     drop(staged);
@@ -177,7 +177,7 @@ fn the_library_is_updating_while_a_write_is_staged_and_a_dropped_write_changes_n
     assert_eq!(docs(&lib), 2);
 
     // committed and then undone: as it was
-    let mut staged = CoreStore.begin(&lib, &[point(5)]).ok().expect("begin");
+    let mut staged = CoreStore.begin(&lib, &[point(5)]).expect("begin");
     staged.commit().unwrap();
     staged.undo();
     drop(staged);
@@ -196,7 +196,7 @@ fn a_second_job_gets_busy_while_an_update_owns_the_library() {
     let job = s["job"].as_u64().unwrap();
     // an update_library job (or another ingest job) holds the library
     let guard = libreg::entry_for(&lib.join("shard")).begin_update().unwrap();
-    let e = svc.step(&json!({"job": job, "budget_ms": 60_000}).to_string()).err().expect("busy");
+    let e = svc.step(&json!({"job": job, "budget_ms": 60_000}).to_string()).err().unwrap();
     assert_eq!(e.code, Code::Busy);
     assert_eq!(docs(&lib), 0);
     drop(guard);
@@ -211,7 +211,7 @@ fn a_library_folder_without_a_shard_is_not_found_and_nothing_is_created() {
     let tmp = TempDir::new("nolib");
     let lib = tmp.0.join("libraries").join("none");
     std::fs::create_dir_all(&lib).unwrap();
-    let e = CoreStore.begin(&lib, &[point(1)]).err().expect("not found");
+    let e = CoreStore.begin(&lib, &[point(1)]).err().unwrap();
     assert_eq!(e.code, Code::NotFound);
     assert!(!lib.join("shard").exists());
 }
