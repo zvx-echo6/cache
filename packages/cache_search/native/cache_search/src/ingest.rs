@@ -129,11 +129,18 @@ fn remove_dir(p: &Path) {
 fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
     ensure_init();
     let shard = library_dir.join("shard");
+    let entry = libreg::entry_for(&shard);
+    let guard = entry.begin_update()?;
+    // a commit a kill interrupted is finished first (the shard may be half swapped, so it is looked for after this)
+    if cache_ingest::commit::pending(library_dir) {
+        if !entry.close_all(&|| false)? {
+            return Err(Error::new(ErrorCode::Cancelled, "cancelled"));
+        }
+        libupdate::recover_leftovers(&shard)?;
+    }
     if !shard.is_dir() {
         return Err(Error::not_found(format!("library shard {} not found", shard.display())));
     }
-    let entry = libreg::entry_for(&shard);
-    let guard = entry.begin_update()?;
     library::check_not_damaged(&shard, true)?;
     let index = library_dir.join(INDEX_DIR);
     let index_stage = library_dir.join(INDEX_STAGE);
