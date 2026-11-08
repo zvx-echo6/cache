@@ -37,7 +37,17 @@ recognition time, memory before, after and peak).
 
 300 dpi (the core's default): a US Letter page is 2550 x 3300 pixels, about 34 MB once decoded for the engine (4 bytes a pixel).
 Reading one page at a time keeps that the only large allocation. The CI test also reads a 9-point page at 200 dpi so the cost of a
-lower `ocr_dpi` can be compared; its numbers are in each OCR engines run's summary.
+lower `ocr_dpi` can be compared; each OCR engines run prints the numbers. On 2026-11-08 (CI, not phones):
+
+| | 300 dpi page, recognition | 200 dpi page, recognition | memory added by a page | process peak |
+|---|---|---|---|---|
+| iOS 26.5 simulator (Apple silicon Mac), Vision | 1.8 to 2.3 s | 1.8 s | about 50 to 105 MB while reading, back to about 90 MB above start | 247 MB |
+| Android 14 emulator (x86_64, 4 GB), ML Kit | 5.6 to 9.2 s | 8.3 s | about 65 MB | 454 MB (debug app) |
+
+Both read every word of both text pages at both resolutions (word recall 1.0) and gave nothing for the blank page. 200 dpi was
+no faster on either engine (both scale the image to their own working size), so it saves only the core's PNG and the decode:
+300 dpi stays the default, and 200 dpi is the fallback for a phone short of memory, not a speed setting. Small print (8
+point and under) and poor scans are where 300 dpi earns its keep; that needs a real-device check on real scans.
 
 ## Adding other scripts
 

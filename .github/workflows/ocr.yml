@@ -94,8 +94,9 @@ jobs:
           disk-size: 6000M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
-          working-directory: packages/cache_ocr/example
-          script: bash -c 'set -o pipefail; flutter test integration_test/ocr_test.dart -d emulator-5554 --reporter expanded 2>&1 | tee "$RUNNER_TEMP/ocr-android.log"'
+          # One more try only when the tool never got the test going (a run sat after installing the APK until the job's
+          # limit); a test that ran and failed is not tried again.
+          script: bash packages/cache_ocr/example/tool/android_test.sh
       - name: Measurements
         if: always()
         run: |
