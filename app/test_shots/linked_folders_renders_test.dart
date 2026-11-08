@@ -19,7 +19,7 @@ MockClient _client({
       jsonEncode({
         'ok': true,
         'result': [
-          {'id': 'recon-library', 'title': 'Recon library'},
+          {'id': 'home-library', 'title': 'Home library'},
         ],
       }),
       200,
@@ -186,7 +186,7 @@ void main() {
         shotApp(
           LinkedFolderManagementPage(
             controller: controller,
-            libraryId: 'recon-library',
+            libraryId: 'home-library',
           ),
           theme: theme,
           insets: EdgeInsets.zero,
@@ -209,7 +209,7 @@ void main() {
       shotApp(
         LinkedFolderManagementPage(
           controller: complete,
-          libraryId: 'recon-library',
+          libraryId: 'home-library',
         ),
         theme: CacheThemeId.light,
         insets: EdgeInsets.zero,
@@ -226,7 +226,7 @@ void main() {
       shotApp(
         LinkedFolderManagementPage(
           controller: offline,
-          libraryId: 'recon-library',
+          libraryId: 'home-library',
         ),
         theme: CacheThemeId.light,
         insets: EdgeInsets.zero,

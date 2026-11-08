@@ -771,6 +771,7 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     let mut json_args = args.to_vec();
     json_args.push("--json");
     let o = cs_env_patient(&json_args, &env);
+    assert!(o.ok, "cs {json_args:?} failed: {}", o.stderr);
     let v = j(o.stdout.trim());
     assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
     assert!(v["timing_ms"]["search"].is_u64());

@@ -916,8 +916,9 @@ class LibrariesState extends ChangeNotifier {
         return false;
       }
       if (p == null) return false;
-      // Snapshot metadata is unpacked into shard/; keep the catalog and its aliases at the library root.
-      for (final name in ['documents.tsv', 'source-identities.json']) {
+      // Snapshot metadata is unpacked into shard/; keep the catalog, its aliases and the copies' facts (copies.jsonl, which the
+      // Bookshelves read in place of packs) at the library root.
+      for (final name in ['documents.tsv', 'source-identities.json', 'copies.jsonl']) {
         final from = '$shard$_pathSep$name';
         final to = '$stagePath$_pathSep$name';
         final dev = _dev;

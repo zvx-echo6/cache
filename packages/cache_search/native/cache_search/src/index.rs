@@ -191,10 +191,28 @@ fn boot_id() -> Option<String> {
 /// A kernel-owned guard is authoritative for new jobs, including after a crash,
 /// PID reuse or a reboot. Old markers are checked by their recorded owner.
 pub fn lock_is_live(dir: &Path) -> bool {
-    match crate::build_lock::try_guard(dir, false) {
-        Ok(_guard) => legacy_lock_is_live(dir),
-        Err(_) => true, // A held or unreadable guard is never stolen.
+    guard_is_held(dir) || legacy_lock_is_live(dir)
+}
+
+/// Whether a build holds the kernel guard of `dir`. The check takes the guard *shared*: a build holds it exclusive, so a running
+/// build is still seen, but two checks at once (two handles, or two threads, looking at the same index) never see each other as
+/// a build. An exclusive check did: the second one got WouldBlock, the index read as building, and its library searched as if it
+/// had no keyword index. A missing guard (an old index) is not held; an unreadable one counts as held and is never stolen.
+fn guard_is_held(dir: &Path) -> bool {
+    let path = match crate::build_lock::guard_path(dir) {
+        Ok(p) => p,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    if file.try_lock_shared().is_err() {
+        return true;
     }
+    // released explicitly, so a process forked meanwhile (which shares the description until it execs) does not keep it
+    let _ = file.unlock();
+    false
 }
 
 fn legacy_lock_is_live(dir: &Path) -> bool {
@@ -647,6 +665,32 @@ mod tests {
     fn leading_title_line_is_dropped() {
         assert_eq!(body_text("Water\n\nIt is wet.", "water"), "It is wet.");
         assert_eq!(body_text("Other\n\nIt is wet.", "water"), "Other\n\nIt is wet.");
+    }
+
+    #[test]
+    fn a_check_does_not_take_another_check_for_a_build() {
+        let d = std::env::temp_dir().join(format!("cs-lock-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        drop(Lock::acquire(&d).unwrap()); // leaves the guard file, as a finished build does
+        assert!(!lock_is_live(&d));
+        // another check is in progress: it holds the guard shared
+        let other = std::fs::File::open(crate::build_lock::guard_path(&d).unwrap()).unwrap();
+        other.try_lock_shared().unwrap();
+        assert!(!lock_is_live(&d), "a check in progress is not a build");
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let d = d.clone();
+                std::thread::spawn(move || (0..500).all(|_| !lock_is_live(&d)))
+            })
+            .collect();
+        assert!(threads.into_iter().all(|t| t.join().unwrap()), "checks at once never see a build");
+        other.unlock().unwrap();
+        // a build is still seen
+        let l = Lock::acquire(&d).unwrap();
+        assert!(lock_is_live(&d));
+        drop(l);
+        let _ = std::fs::remove_file(crate::build_lock::guard_path(&d).unwrap());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

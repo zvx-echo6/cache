@@ -257,6 +257,24 @@ class SearchEngine {
     return _object(_ok(n.captionsSearch(_h, jsonEncode(request))));
   }
 
+  // ---- the Bookshelves log (cs_shelves_*) ----
+
+  /// True when the loaded core has the Bookshelves calls.
+  bool get hasShelves => native is CsShelvesNative && (native as CsShelvesNative).hasShelves;
+
+  /// One handle-less Bookshelves call: `detect`, `append`, `resolve` or `import` with its [args] (cache_search.h); the answer as JSON
+  /// (detect's is a list, the others' an object). Needs no open handle.
+  Object shelves(String op, Map<String, dynamic> args) => shelvesCall(native, op, args);
+
+  /// [shelves] on a native layer that may not be open yet (the calls take no handle).
+  static Object shelvesCall(CsNative native, String op, Map<String, dynamic> args) {
+    final n = native is CsShelvesNative ? native as CsShelvesNative : null;
+    if (n == null || !n.hasShelves) throw const CacheSearchException('unsupported', 'This build of the core has no Bookshelves yet');
+    if (!const {'detect', 'append', 'resolve', 'import'}.contains(op)) throw CacheSearchException('bad_json', 'unknown Bookshelves call $op');
+    final s = n.shelves(op, jsonEncode(args));
+    return jsonDecode(s ?? (throw CacheSearchException.fromJson(native.lastError(0)))) as Object;
+  }
+
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----
 
   /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),

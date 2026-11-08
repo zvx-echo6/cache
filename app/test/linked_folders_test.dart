@@ -135,7 +135,7 @@ void main() {
           calls.add(request);
           if (request.url.path == '/api/linked-folders/libraries') {
             return _ok([
-              {'id': 'recon-library', 'title': 'Recon library'},
+              {'id': 'home-library', 'title': 'Home library'},
               {'id': 'built-library', 'title': 'Built library'},
             ]);
           }
@@ -149,14 +149,14 @@ void main() {
             });
           }
           if (request.method == 'POST' &&
-              request.url.path == '/api/linked-folders/recon-library') {
+              request.url.path == '/api/linked-folders/home-library') {
             registrations++;
           }
           return _ok({});
         }),
       );
       final targets = await api.libraries();
-      expect(targets.map((x) => x.id), ['recon-library', 'built-library']);
+      expect(targets.map((x) => x.id), ['home-library', 'built-library']);
       final preview = await api.preview('/cache/docs', ['private']);
       expect(preview['readable'], isTrue);
       expect(preview['counts'], isNull);
@@ -179,7 +179,7 @@ void main() {
         if (request.method == 'GET' &&
             path == '/api/linked-folders/libraries') {
           return _ok([
-            {'id': 'recon-library', 'title': 'Recon library'},
+            {'id': 'home-library', 'title': 'Home library'},
             {'id': 'builder-target', 'title': 'Builder target'},
           ]);
         }
@@ -195,7 +195,7 @@ void main() {
           });
         }
         if (request.method == 'POST' &&
-            path == '/api/linked-folders/recon-library') {
+            path == '/api/linked-folders/home-library') {
           registrations++;
           return _ok({
             'registered': true,
@@ -213,7 +213,7 @@ void main() {
           return _ok({'active': _job(), 'latest': _job()});
         }
         if (request.method == 'GET' &&
-            path == '/api/linked-folders/recon-library') {
+            path == '/api/linked-folders/home-library') {
           return _ok(_config());
         }
         return _ok({});
@@ -247,7 +247,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('linked-folder-library')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Recon library').last);
+      await tester.tap(find.text('Home library').last);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('linked-folder-path')),
@@ -355,12 +355,12 @@ void main() {
         });
       }),
     );
-    final first = await api.check('recon-library', rootId: 'root-a');
-    final second = await api.check('recon-library', rootId: 'root-a');
+    final first = await api.check('home-library', rootId: 'root-a');
+    final second = await api.check('home-library', rootId: 'root-a');
     expect(second.id, first.id);
     expect(requests.map((r) => r.url.path), [
-      '/api/linked-folders/recon-library/checks',
-      '/api/linked-folders/recon-library/checks',
+      '/api/linked-folders/home-library/checks',
+      '/api/linked-folders/home-library/checks',
     ]);
     expect(jsonDecode(requests.first.body), {'root_id': 'root-a'});
   });
@@ -375,7 +375,7 @@ void main() {
     final client = MockClient((request) async {
       final path = request.url.path;
       if (request.method == 'GET' &&
-          path == '/api/linked-folders/recon-library') {
+          path == '/api/linked-folders/home-library') {
         final config = _config();
         final local = config['local_config'] as Map<String, dynamic>;
         (local['roots'] as List)[0] = {..._root(), 'paused': false};
@@ -442,7 +442,7 @@ void main() {
         theme: buildTheme(CacheThemeId.light),
         home: LinkedFolderManagementPage(
           controller: controller,
-          libraryId: 'recon-library',
+          libraryId: 'home-library',
         ),
       ),
     );
@@ -569,7 +569,7 @@ void main() {
       var libraryReads = 0, checkReads = 0;
       final client = MockClient((request) async {
         if (request.method == 'GET' &&
-            request.url.path == '/api/linked-folders/recon-library') {
+            request.url.path == '/api/linked-folders/home-library') {
           libraryReads++;
           return _ok(_config());
         }
@@ -593,7 +593,7 @@ void main() {
           home: const SizedBox(),
         ),
       );
-      controller.watch('recon-library');
+      controller.watch('home-library');
       await tester.pump();
       await tester.pumpAndSettle();
       expect(libraryReads, 1);
@@ -732,7 +732,7 @@ void main() {
         theme: buildTheme(CacheThemeId.light),
         home: LinkedFolderManagementPage(
           controller: controller,
-          libraryId: 'recon-library',
+          libraryId: 'home-library',
         ),
       ),
     );
@@ -804,7 +804,7 @@ void main() {
           theme: buildTheme(CacheThemeId.light),
           home: LinkedFolderManagementPage(
             controller: controller,
-            libraryId: 'recon-library',
+            libraryId: 'home-library',
           ),
         ),
       );
@@ -855,7 +855,7 @@ void main() {
                   MaterialPageRoute<void>(
                     builder: (_) => LinkedFolderManagementPage(
                       controller: controller,
-                      libraryId: 'recon-library',
+                      libraryId: 'home-library',
                     ),
                   ),
                 ),

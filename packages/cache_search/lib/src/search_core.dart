@@ -205,6 +205,25 @@ class SearchCore {
   Future<Map<String, dynamic>> captionsSearch(String query, {int? k, String? lang}) =>
       _map('captionsSearch', {'request': {'query': query, 'k': ?k, 'lang': ?lang}});
 
+  // ---- the Bookshelves log (cs_shelves_*; handle-less, run in the worker so they never block the UI) ----
+
+  /// Same-book detection for one copy (cs_shelves_detect): `{"copy": facts, "against": [facts], "tuning"?}` gives the matches,
+  /// `[{"with","how","score"}]`.
+  Future<List<Map<String, dynamic>>> shelvesDetect(Map<String, dynamic> args) async => [
+        for (final m in (await _call('shelves', {'op': 'detect', 'args': args})) as List) (m as Map).cast<String, dynamic>(),
+      ];
+
+  /// Appends events to this device's file of the Bookshelves log (cs_shelves_append): `{"dir","dev","events":[...]}` gives
+  /// `{"written","last_at"}`.
+  Future<Map<String, dynamic>> shelvesAppend(Map<String, dynamic> args) => _map('shelves', {'op': 'append', 'args': args});
+
+  /// The Bookshelves view, format 1 (cs_shelves_resolve): `{"dir","libraries":[{"library_id","dir","packs_dir"?}]}`.
+  Future<Map<String, dynamic>> shelvesResolve(Map<String, dynamic> args) => _map('shelves', {'op': 'resolve', 'args': args});
+
+  /// Brings this device's own old per-library log events into the Bookshelves log once (cs_shelves_import):
+  /// `{"dir","dev","libraries":[...]}` gives `{"events","files":[...]}`.
+  Future<Map<String, dynamic>> shelvesImport(Map<String, dynamic> args) => _map('shelves', {'op': 'import', 'args': args});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 
