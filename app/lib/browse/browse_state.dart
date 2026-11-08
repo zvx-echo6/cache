@@ -170,20 +170,32 @@ class BrowseState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _save() async {
+  /// The last write of browse.json; each write waits for the one before, so they land in the order they were asked for (an
+  /// older state never overwrites a newer one).
+  Future<void> _saving = Future<void>.value();
+
+  /// Ends when every write of browse.json asked for so far is on disk (tests).
+  @visibleForTesting
+  Future<void> get saved => _saving;
+
+  Future<void> _save() {
+    final fs = _fs;
+    if (fs == null) return _saving;
+    final String text;
     try {
-      final fs = _fs;
-      if (fs == null) return;
-      await fs.writeStringAtomic(
-        AppRoot.support,
-        _name,
-        jsonEncode({
-          'language': language,
-          'replacements': _replacements,
-          'downloads': _pending,
-        }),
-      );
-    } catch (_) {}
+      text = jsonEncode({
+        'language': language,
+        'replacements': _replacements,
+        'downloads': _pending,
+      });
+    } catch (_) {
+      return _saving;
+    }
+    return _saving = _saving.then((_) async {
+      try {
+        await fs.writeStringAtomic(AppRoot.support, _name, text);
+      } catch (_) {}
+    });
   }
 
   // ---- the catalogue
@@ -501,9 +513,8 @@ class BrowseState extends ChangeNotifier {
     });
   }
 
-  void _forget(String id) {
-    if (_pending.remove(id) != null) unawaited(_save());
-  }
+  /// Drops the record of a download; the returned future ends when browse.json says so.
+  Future<void> _forget(String id) => _pending.remove(id) != null ? _save() : _saving;
 
   /// How many downloads of each entry have been started, so a cancel can tell that a new one has taken over the file.
   final Map<String, int> _starts = {};
@@ -598,10 +609,12 @@ class BrowseState extends ChangeNotifier {
       if (transfers[entry.id] == t) transfers.remove(entry.id);
       final secs = DateTime.now().difference(started).inSeconds;
       logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
-      _forget(entry.id);
+      final forgotten = _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
       _onSources();
+      // A finished download returns once its record is gone from browse.json, not while that write is still going.
+      await forgotten;
     } on DownloadException catch (e) {
       if (e.code == 'cancelled') {
         // Only this transfer: a new download of the entry may already be in its place. A paused one stays, to resume.
@@ -651,12 +664,13 @@ class BrowseState extends ChangeNotifier {
     t.token?.cancel();
     transfers.remove(entry.id);
     logInfo('Download canceled: ${entry.title}', job: 'download/${entry.id}');
-    _forget(entry.id);
+    final forgotten = _forget(entry.id);
     notifyListeners();
     final started = _starts[entry.id];
     // The download loop notices the cancel and closes the file. The file goes once it has, and only if no new download of
     // this entry was started meanwhile (that one continues the file).
     await t.loop;
+    await forgotten;
     if (_starts[entry.id] != started) return;
     try {
       final part = File('${sources.partialDir.path}/${entry.fileName}.part');

@@ -39,7 +39,7 @@ rcgen = "0.14"
 ring = "0.17"
 subtle = "2"
 # The one outbound HTTP client of the Cache core crates (cache_live, cache_layers, cache_regions, ...): blocking, rustls with the
-# bundled web roots. Used for the library downloads and the catalogue fetch proxy; already in Cargo.lock.
+# bundled web roots. Used for the library downloads and the catalog fetch proxy; already in Cargo.lock.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 base64 = "0.22"
 # The library builder (PDFs to packs, packs to a shard) and the BLAKE3 of each PDF; both already in Cargo.lock.

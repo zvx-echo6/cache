@@ -1,5 +1,5 @@
 //! A stand-in for the Dart helper, speaking its line protocol (see server/helper/bin/line_protocol.dart). Used by the proxy
-//! tests. Behaviour:
+//! tests. Behavior:
 //!   env     -> {support, docs}: CACHE_APP_SUPPORT and CACHE_APP_DOCS as the server set them
 //!   version -> "fake-1"      status -> [] (or the JSON in FAKE_STATUS)      echo -> the args
 //!   sources.rescan -> {sources: the length of args.sources, or 0}      (anything else -> ok, null)

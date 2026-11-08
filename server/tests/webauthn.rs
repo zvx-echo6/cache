@@ -1,7 +1,7 @@
 //! Security keys end to end, through `route`, against a software authenticator written here (an ES256 key made with ring,
 //! "none" attestation). webauthn-rs has no soft token of its own, so this is what stands in for a real key: it checks the
 //! server's state handling, challenge matching, origin and RP ID checks, replay refusal and the session that follows.
-//! What it cannot show is a real key's USB/NFC behaviour or a browser's WebAuthn dialog: that needs hardware.
+//! What it cannot show is a real key's USB/NFC behavior or a browser's WebAuthn dialog: that needs hardware.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;

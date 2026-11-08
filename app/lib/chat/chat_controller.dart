@@ -314,6 +314,7 @@ class ChatController extends ChangeNotifier {
       numbering: numbering,
       host: newHost?.call(numbering),
       systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false, voice: _voice),
+      timeLine: () => buildTimeLine(DateTime.now()),
       history: history,
       knownResults: cited.values,
     );
@@ -397,9 +398,11 @@ class ChatController extends ChangeNotifier {
       }
       loop = made;
       await _installActions();
+      // The question as the model reads it (its time line first), stored as sent so a reopened chat renders it the same.
+      final question = loop.userMessage(text);
       if (store != null && convId != null) {
         try {
-          store.addMessage(convId, role: 'user', content: text, message: {'role': 'user', 'content': text}, model: _modelName);
+          store.addMessage(convId, role: 'user', content: text, message: question, model: _modelName);
         } catch (_) {}
       }
       if (cancelled()) return;
@@ -429,7 +432,7 @@ class ChatController extends ChangeNotifier {
         if (epoch == _epoch) notifyListeners();
       };
       final seeded = seed == null || loop.host == null ? null : (name: seed.toolName, arguments: spacedJson(seed.arguments));
-      await for (final u in loop.ask(text, seed: seeded)) {
+      await for (final u in loop.ask(text, seed: seeded, message: question)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
         _applyUpdate(reply, u);

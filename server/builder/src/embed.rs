@@ -1,4 +1,4 @@
-//! The embedder interface. The real embedder (bge-m3, n_ctx 512, CLS pooling, normalised, 1024 dimensions) comes from the
+//! The embedder interface. The real embedder (bge-m3, n_ctx 512, CLS pooling, normalized, 1024 dimensions) comes from the
 //! core's embedding code in another task; this crate only defines what it needs and a deterministic stand-in for tests.
 
 /// Turns texts into vectors. One vector per text, all of the same length.
@@ -14,7 +14,7 @@ pub trait Embedder {
 pub const DIMS: usize = 1024;
 
 /// A deterministic stand-in: each lowercase word is hashed into one of 1024 buckets with a sign, and the vector is
-/// normalised. Texts that share words are close, so searches in tests find what they should; it is not a language model.
+/// normalized. Texts that share words are close, so searches in tests find what they should; it is not a language model.
 pub struct FakeEmbedder;
 
 impl Embedder for FakeEmbedder {

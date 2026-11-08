@@ -174,7 +174,7 @@ class FsOps implements OpHandler {
     throw const CacheSearchException('bad_path', 'root is "support" or "docs"');
   }
 
-  /// The normalised segments of a relative path ("" and "." mean the root: no segments).
+  /// The normalized segments of a relative path ("" and "." mean the root: no segments).
   static List<String> _segments(Object? path) {
     if (path == null) return const [];
     if (path is! String) throw const CacheSearchException('bad_path', 'path is a string');

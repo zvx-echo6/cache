@@ -397,7 +397,7 @@ fn find_gutters(blocks: &[&Block]) -> Vec<(f32, f32)> {
         }
     }
     // Every column must hold real text (three lines and an eighth of the narrow characters); a gutter beside a thin strip
-    // (a column of page numbers, a margin note) is dropped, which joins the strip to its neighbour.
+    // (a column of page numbers, a margin note) is dropped, which joins the strip to its neighbor.
     let nc = narrow_chars.max(1) as f32;
     loop {
         if gutters.is_empty() {
@@ -436,8 +436,8 @@ fn column_of(l: &Line, gutters: &[(f32, f32)]) -> Option<usize> {
     if gutters.iter().any(|g| l.x0 < g.0 - 1.0 && l.x1 > g.1 + 1.0) {
         return None;
     }
-    let centre = (l.x0 + l.x1) / 2.0;
-    Some(gutters.iter().filter(|g| (g.0 + g.1) / 2.0 < centre).count())
+    let center = (l.x0 + l.x1) / 2.0;
+    Some(gutters.iter().filter(|g| (g.0 + g.1) / 2.0 < center).count())
 }
 
 /// Whether the lines of a column region start at (nearly) one x: at least 6 in 10 characters in lines whose left edge is

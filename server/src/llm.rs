@@ -402,7 +402,7 @@ impl LlmService {
         if !self.list_models().iter().any(|(n, _)| n == id) {
             return Err(err(404, "model_not_found", "no such model on this server"));
         }
-        // The turn serialises loads and generations; the `loaded` lock is only held for the swaps, never across the native load.
+        // The turn serializes loads and generations; the `loaded` lock is only held for the swaps, never across the native load.
         let _turn = self.queue.acquire(|_| {}, || false).map_err(|_| err(429, "busy", "too many requests are waiting for the model; try again shortly"))?;
         let old = {
             let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());

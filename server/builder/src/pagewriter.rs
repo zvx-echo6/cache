@@ -114,7 +114,7 @@ pub fn pages_json(pages: &[PageIn]) -> Result<String> {
     Ok(s)
 }
 
-/// Whitespace normalisation of every block (runs of whitespace, no-break and zero-width spaces become one space; soft hyphens and
+/// Whitespace normalization of every block (runs of whitespace, no-break and zero-width spaces become one space; soft hyphens and
 /// control characters go): what OCR output and a viewer's text need before they are chunked. Text the layout step made is
 /// already normal, so this changes none of it.
 pub fn normalize_pages(pages: &mut [PageIn]) {

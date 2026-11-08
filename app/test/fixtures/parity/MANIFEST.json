@@ -82,5 +82,23 @@
   "bytes": 7494,
   "sha256": "5c1a9b626d89eb2ce9833ff70df594e75135037fdcf4d412882d3e0863dd26b7",
   "what": "S11 after the UI simplification: host replies (all sections, and filtered to connection / location) from the harness's default_setup_reply with the 2026-10-30 guide titles and labels"
+ },
+ {
+  "file": "system-date-loc-text.txt",
+  "bytes": 1008,
+  "sha256": "fad0668a5ee1da77127c52d98a79acc8cc43ff44014c65088ee18e44a9e47cf8",
+  "what": "rel-1.1 compact prompt with the date line only (no clock time), now=2026-10-29T14:30:00-06:00, location_known=True, voice=False; harness-askperf prompt_app.py system_date"
+ },
+ {
+  "file": "system-date-noloc-voice.txt",
+  "bytes": 1144,
+  "sha256": "bb7b2e4ff0e24c7e81f1c04c4564c3fe6878fd6b6724f436ac1d1a9a82f6f4b4",
+  "what": "the same, location_known=False, voice=True"
+ },
+ {
+  "file": "time-line-1430.txt",
+  "bytes": 17,
+  "sha256": "321c20f786c3620116a82b38a5d1443b781c6015e21e3754ba59bb2873da5103",
+  "what": "the time line that starts the newest user message, now=14:30; harness-askperf prompt_app.py time_line"
  }
 ]
