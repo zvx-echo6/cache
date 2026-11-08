@@ -69,7 +69,7 @@ fn pack(id: &str, title: &str, text: &str, vector: Vec<f32>, label: Option<&str>
             text_source_ocr_pages: vec![],
             pieces: 2,
             division: None,
-            book: Some(BookBlock { title: title.into(), source_title: None, original_blake3: "ab".repeat(32), compression: None, ocr: None, suggested }),
+            book: Some(BookBlock { title: title.into(), source_title: None, original_blake3: "ab".repeat(32), compression: None, ocr: None, suggested, author: None, edition: None, year: None }),
             samebook: None,
         },
         pieces,

@@ -41,16 +41,16 @@ void main() {
     await tester.pump();
     expect(find.text('Desk'), findsOneWidget);
 
-    expect(r.sharing.shareOf('shared'), isNull);
+    expect(r.sharing.shareOf('models'), isNull);
+    expect(find.text('Not shared'), findsOneWidget);
     await tester.runAsync(() => r.sharing.setShared(r.sharing.kinds.single, true));
     await tester.pump();
-    expect(r.sharing.shareOf('shared')?['path'], '${r.dir.path}/Shared');
-    expect(Directory('${r.dir.path}/Shared').existsSync(), isTrue);
-    expect(find.text('0 files · 0 B'), findsOneWidget);
+    expect(r.sharing.shareOf('models')?['path'], r.modelsDir.path);
+    expect(find.text('Shared · nothing yet'), findsOneWidget);
 
     await tester.runAsync(() => r.sharing.setShared(r.sharing.kinds.single, false));
     await tester.pump();
-    expect(r.sharing.shareOf('shared'), isNull);
+    expect(r.sharing.shareOf('models'), isNull);
 
     // A restart picks sharing up again without asking.
     final again = SharingState(policy: r.policy, supportDir: () async => r.dir, kinds: const [], opener: (_) async => r.sync);
@@ -77,7 +77,6 @@ void main() {
           shared: () => {'maps': Directory('${r.dir.path}/maps'), 'regions': Directory('${r.dir.path}/regions')},
           notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
         ),
-        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': Directory('${r.dir.path}/Shared')}),
       ],
       opener: (c) async {
         config = c;

@@ -258,6 +258,9 @@ pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOp
         compression: opts.compression.clone(),
         ocr: opts.ocr.clone(),
         suggested: opts.suggested.clone(),
+        author: None,
+        edition: None,
+        year: None,
     });
     let print = fingerprint(pack_pieces.iter().map(|p| p.text.as_str()));
     let report = Report {

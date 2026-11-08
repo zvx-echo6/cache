@@ -20,7 +20,7 @@
 //!       a place and assign in the seed log, any other is left in Unsorted (its best guess is still in the view, with no place event);
 //!       --sorter-report FILE.tsv writes one line per book the sorter looked at (division, score, Filed/Unsorted, its top 3);
 //!       --labels sets each document's division (source "label") from a labels file ([{id, path, final, second_division}]);
-//!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok}), keeping the old one as source_title;
+//!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok, author?, edition?, year?}), keeping the old one as source_title;
 //!       --classes names the divisions (default: the server's classes-default.json). Packs are matched by doc_id = id, then source
 //!       BLAKE3 = blake3, then the PDF's file name when only one record has it (see PACK-FORMAT.md)
 //!   cache-build pages <in.pdf> --out <pages.json>
@@ -48,7 +48,7 @@ use cache_builder::isolate::ChildExtractor;
 use cache_builder::embed::{Embedder, FakeEmbedder};
 use cache_builder::embed_http::HttpEmbedder;
 use cache_builder::zim::{survey as zim_survey, Survey, ZimPdfOptions};
-use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles, Applied, Overrides};
+use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles_counted, Applied, Overrides};
 use cache_builder::log::{now_ms, parse_utc_ms};
 use cache_builder::pack::OcrInfo;
 use cache_builder::pagewriter;
@@ -292,12 +292,7 @@ fn cmd_pdf(a: &Args) -> i32 {
                     pack.header.text_source_ocr_pages = pages;
                 }
                 if use_over {
-                    let e = over.entry(&pack.header, &mut applied);
-                    pack.header.set_title(e.effective_title());
-                    if let Some(b) = pack.header.book.as_mut() {
-                        b.source_title = e.source_title.clone();
-                        b.suggested = e.suggested.clone();
-                    }
+                    apply_overrides(&over, &mut pack, &mut applied);
                 }
                 let path = match write_pack(&pack, &PathBuf::from(&out)) {
                     Ok(p) => p,
@@ -348,7 +343,10 @@ fn cmd_pdf(a: &Args) -> i32 {
         println!("labels: {} matched, {} ambiguous (file name shared), {} not found", applied.labels_matched, applied.labels_ambiguous, applied.labels_unmatched);
     }
     if over.titles.is_some() {
-        println!("titles: {} matched, {} ambiguous (file name shared), {} not found", applied.titles_matched, applied.titles_ambiguous, applied.titles_unmatched);
+        println!(
+            "titles: {} matched, {} ambiguous (file name shared), {} not found; author/edition/year given to {} documents, {} values dropped as invalid",
+            applied.titles_matched, applied.titles_ambiguous, applied.titles_unmatched, applied.facts_applied, applied.facts_dropped
+        );
     }
     if failed > 0 {
         1
@@ -382,10 +380,11 @@ fn overrides_from(a: &Args) -> Result<Overrides, i32> {
         }
     }
     if let Some(f) = a.get("--titles") {
-        match load_titles(&PathBuf::from(&f)) {
-            Ok(t) => {
+        match load_titles_counted(&PathBuf::from(&f)) {
+            Ok((t, dropped)) => {
                 println!("titles {f}: {} usable records", t.len());
                 over.titles = Some(t);
+                over.facts_dropped = dropped;
             }
             Err(e) => {
                 eprintln!("error: --titles: {e}");
@@ -454,6 +453,9 @@ fn apply_overrides(over: &Overrides, pack: &mut cache_builder::pack::Pack, appli
     if let Some(b) = pack.header.book.as_mut() {
         b.source_title = e.source_title.clone();
         b.suggested = e.suggested.clone();
+        b.author = e.author.clone();
+        b.edition = e.edition.clone();
+        b.year = e.year;
     }
 }
 
@@ -737,7 +739,10 @@ fn cmd_library(a: &Args) -> i32 {
                 println!("labels: {} matched, {} ambiguous (file name shared), {} not found", ap.labels_matched, ap.labels_ambiguous, ap.labels_unmatched);
             }
             if over.titles.is_some() {
-                println!("titles: {} matched, {} ambiguous (file name shared), {} not found", ap.titles_matched, ap.titles_ambiguous, ap.titles_unmatched);
+                println!(
+                    "titles: {} matched, {} ambiguous (file name shared), {} not found; author/edition/year given to {} documents (the library path does not rewrite packs, so they are not in its output), {} values dropped as invalid",
+                    ap.titles_matched, ap.titles_ambiguous, ap.titles_unmatched, ap.facts_applied, ap.facts_dropped
+                );
             }
             if over.sorter.is_some() {
                 let filed = r.sorter.iter().filter(|s| s.division.is_some()).count();

@@ -333,7 +333,6 @@ void main() {
     final zims = folder('library', {'wikivoyage_en_idaho.zim': 180 << 20, 'wikipedia_en_medicine.zim': 940 << 20});
     final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
     final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
-    final shared = folder('shared', const {});
     final sync = _CountingSync()..peers.addAll(r.sync.peers);
     final sharing = SharingState(
       policy: r.policy,
@@ -342,7 +341,6 @@ void main() {
         DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'library': zims}),
         DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': models}),
         DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => {'notebooks': notebooks}),
-        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
       ],
       deviceName: 'Android device',
       opener: (_) async => sync,

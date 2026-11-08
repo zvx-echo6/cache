@@ -11,6 +11,12 @@ class FakeSync implements SyncCoreLike {
   String name = 'Test phone';
   bool closed = false;
 
+  /// What `share_items` answers, by share id (rows as the engine gives them: name, files, bytes, peers).
+  final items = <String, List<Map<String, Object?>>>{};
+
+  /// The items switched off, by share id, as `set_off` last left them.
+  final off = <String, List<String>>{};
+
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
     calls.add(method);
@@ -26,7 +32,7 @@ class FakeSync implements SyncCoreLike {
           'free_bytes': 10 << 30,
           'reserve_bytes': 1 << 30,
           'peers': peers,
-          'shares': [for (final s in shares) {...s, 'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0}],
+          'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],
           'transfer': null,
           'paused': null,
@@ -46,6 +52,24 @@ class FakeSync implements SyncCoreLike {
       case 'set_name':
         name = args['name'] as String;
         return {'ok': true};
+      case 'set_peer_name':
+        final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+        if (p == null) throw Exception('that device is not linked');
+        p['name'] = args['name'];
+        return {'ok': true};
+      case 'unlink':
+        peers.removeWhere((p) => p['id'] == args['peer']);
+        return {'ok': true};
+      case 'set_off':
+        final list = [for (final x in (args['off'] as List? ?? const [])) '$x'];
+        if (list.isEmpty) {
+          off.remove(args['id']);
+        } else {
+          off[args['id'] as String] = list;
+        }
+        return {'ok': true};
+      case 'share_items':
+        return {'items': items[args['id']] ?? const []};
       default:
         return {'ok': true};
     }

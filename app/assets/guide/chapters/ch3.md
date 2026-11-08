@@ -335,7 +335,11 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
-Under "Linked devices", each device shows whether it is connected directly or through a relay. To stop one, tap it, then "Unlink". Files already here stay.
+Under "Linked devices", each device shows whether it is connected directly or through a relay. Tap a device to open its page:
+- how it is connected, when it was last seen, and its free space, if it says;
+- "Sync now" syncs with that device only;
+- "Rename" changes what this device calls it;
+- "Unlink" stops it connecting. Files already here stay.
 
 - If a device shows "Not reachable", open Cache on it.
 
@@ -346,18 +350,32 @@ After linking, pick what to share.
 ![Sharing and sync](shot:settings-sharing)
 
 1. On each device, go to ["Settings" > "Sharing and sync"](cache://settings/sharing).
-2. Under "Shared with linked devices", tick:
+2. Under "Shared with linked devices", switch on the kinds to share:
    - "Library": ZIM files and your own libraries;
-   - "Maps": downloaded regions;
+   - "Maps": downloaded map layers, and the regions' directions, places and off-road;
    - "Models": chat models and the search model;
-   - "Videos": saved videos (not where you left off in them);
    - "Notebooks": notebooks, with their photos;
-   - "Shared folder": any files you want on every device.
-3. Tick the same kinds on both devices.
+   - "Videos": saved videos (not where you left off in them).
+3. Switch on the same kinds on both devices.
 
-"Transfer" shows progress. "Sync now" checks straight away. "Activity" lists what happened.
+Each kind's line says how many of its items are shared and their size, or "Not shared".
 
-Unticking stops sharing. The files stay. Files whose names start with a dot are never shared.
+To choose single items, tap the kind. Its page lists every item, on this device and on your linked devices, each with its own switch:
+- the switch at the top turns the whole kind on or off;
+- new items you add follow that switch;
+- private notebooks are listed, but start off;
+- turning an item off keeps your copy and theirs.
+
+Sync now works at three levels:
+- "Sync all now" on "Sharing and sync": everything, with every device;
+- "Sync all" on a kind's page: that kind only;
+- the sync button on an item's row: that item only, for example to update one ZIM.
+
+"Transfer" shows progress. "Activity" lists what happened.
+
+Switching a kind or an item off stops sharing it. The files stay. Files whose names start with a dot are never shared.
+
+The Shared folder of Cache 1.0 is gone. Its files stay where they were; they are just not shared any more.
 
 - If sharing waits, "Mobile data downloads" may be off. Sync waits for Wi-Fi.
 - If the other device offers more than fits, Cache fetches what fits and pauses.
@@ -367,7 +385,7 @@ Unticking stops sharing. The files stay. Files whose names start with a dot are 
 
 When you build a search index on one device, your other devices can use it. Nothing to set and nothing to tick.
 
-An index covers a ZIM's pages, PDFs, EPUBs and captions, a library of your own, the captions of your saved videos, and the places and routing data of a region. It reaches any linked device that has the same ZIM, library or region. The device does not need the "Library" or "Maps" box ticked. It only needs sharing set up.
+An index covers a ZIM's pages, PDFs, EPUBs and captions, a library of your own, the captions of your saved videos, and the places and routing data of a region. It reaches any linked device that has the same ZIM, library or region. The device does not need "Library" or "Maps" switched on. It only needs sharing set up.
 
 1. Set up sharing and link the devices. See Sharing and sync: set up and link devices.
 2. Have the same ZIM, library or region on both. Each can have downloaded it by itself.
