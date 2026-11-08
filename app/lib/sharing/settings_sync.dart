@@ -296,7 +296,8 @@ class SettingsSync extends ChangeNotifier {
 
   // ---------------------------------------------------------------- links
 
-  /// How settings go between this device and [peer]. A link with nothing chosen yet (made before this version) is Match.
+  /// How settings go between this device and [peer]. A link with nothing chosen yet is Match when it was made before this
+  /// version asked ([SharingState.linkedSinceAsking]), and Off when it is new: nothing goes until the person answers.
   SettingsLink linkWith(String peer) {
     final l = sharing.linkOf(peer);
     switch (l?['mode']) {
@@ -307,9 +308,40 @@ class SettingsSync extends ChangeNotifier {
         if (from == peer) return SettingsLink.receiving;
         if (from == sharing.myId) return SettingsLink.sending;
         return SettingsLink.off;
-      default:
+      case 'match':
         return SettingsLink.match;
+      default:
+        return sharing.linkedSinceAsking(peer) ? SettingsLink.off : SettingsLink.match;
     }
+  }
+
+  /// A new link whose question ("Sync Cache settings with Desk?") neither device has answered yet: Off meanwhile.
+  bool unanswered(String peer) {
+    final l = sharing.linkOf(peer);
+    return l?['ask'] == true || (l?['mode'] == null && sharing.linkedSinceAsking(peer));
+  }
+
+  final Set<String> _marking = {};
+
+  /// Sets a new link with nothing chosen to Off, waiting for the answer (`ask`). The engine already makes every new link so;
+  /// this covers a link that reaches the app without a kind. A link made before this version is left as it is (Match).
+  Future<void> markNew(String peer) async {
+    final l = sharing.linkOf(peer);
+    if (l?['mode'] != null || !sharing.linkedSinceAsking(peer) || !_marking.add(peer)) return;
+    try {
+      await sharing.setLink(peer, {...?l, 'mode': 'off', 'from': sharing.myId, 'ask': true});
+    } catch (e) {
+      logError('Settings sync: could not set a new link to Off', error: e);
+    } finally {
+      _marking.remove(peer);
+    }
+  }
+
+  /// The answer to the question asked right after linking: Match, Send mine or Off, chosen here as on the device's page; null
+  /// when it was closed, which is Off while neither device has answered and keeps what the other device answered meanwhile.
+  Future<void> answer(String peer, SettingsLink? to) async {
+    if (to == null && !unanswered(peer)) return;
+    await setLink(peer, to ?? SettingsLink.off);
   }
 
   bool _sendsTo(String peer) => const {SettingsLink.match, SettingsLink.sending}.contains(linkWith(peer));
@@ -324,8 +356,9 @@ class SettingsSync extends ChangeNotifier {
   Future<void> setLink(String peer, SettingsLink to) async {
     if (to == SettingsLink.receiving) throw ArgumentError('Receiving is chosen on the other device');
     final was = linkWith(peer);
-    if (was == to) return;
+    if (was == to && !unanswered(peer)) return;
     final l = _linkValue(peer)
+      ..remove('ask')
       ..['mode'] = switch (to) {
         SettingsLink.match => 'match',
         SettingsLink.sending => 'send',
@@ -383,7 +416,7 @@ class SettingsSync extends ChangeNotifier {
   Future<void> _setLists(String peer, Map<String, Object?> l, Set<String> groups, Set<String> off) async {
     l['off_groups'] = groups.toList()..sort();
     l['off_keys'] = off.toList()..sort();
-    l['mode'] ??= 'match';
+    l['mode'] ??= sharing.linkedSinceAsking(peer) ? 'off' : 'match';
     await sharing.setLink(peer, l);
     _tell();
   }
@@ -502,6 +535,10 @@ class SettingsSync extends ChangeNotifier {
   /// A link changed (here, or the other device's choice arrived): keys and settings follow it.
   void _onSharing() {
     if (!sharing.running) return;
+    for (final p in sharing.peers) {
+      final id = p['id'];
+      if (id is String && (p['link'] as Map?)?['mode'] == null && sharing.linkedSinceAsking(id)) unawaited(markNew(id));
+    }
     final sig = _linkSignature();
     if (sig == _links) return;
     _links = sig;

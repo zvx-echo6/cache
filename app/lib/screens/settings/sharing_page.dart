@@ -48,44 +48,78 @@ class _SharingPageState extends State<SharingPage> {
     }
   }
 
-  Future<void> _showCode() => _run(() async {
-    final code = await s.linkCode();
+  /// Right after a new link: asks how settings go between the two ([askSettingsLink]).
+  Future<void> _ask(String peer) async {
+    final sync = widget.settingsSync;
+    if (sync == null || !mounted || s.peerOf(peer) == null) return;
+    await sync.markNew(peer);
     if (!mounted) return;
-    await showModalBottomSheet<void>(
+    await askSettingsLink(context, sync, peer, s.peerOf(peer)?['name'] as String? ?? 'the other device');
+  }
+
+  /// Shows the link code until the other device links with it (the sheet then closes and the question follows) or it is closed.
+  Future<void> _showCode() async {
+    String? linked;
+    await _run(() async {
+      final code = await s.linkCode();
+      if (!mounted) return;
+      final before = {for (final p in s.peers) p['id']: p['linked']};
+      BuildContext? sheet;
+      void onSharing() {
+        if (linked != null || sheet == null) return;
+        final fresh = s.peers.where((p) => !before.containsKey(p['id']) || before[p['id']] != p['linked']).firstOrNull;
+        if (fresh == null || fresh['id'] is! String) return;
+        linked = fresh['id'] as String;
+        Navigator.of(sheet!).pop();
+      }
+
+      s.addListener(onSharing);
+      try {
+        await _codeSheet(code, (ctx) => sheet = ctx);
+      } finally {
+        s.removeListener(onSharing);
+      }
+    });
+    if (linked != null) await _ask(linked!);
+  }
+
+  Future<void> _codeSheet(String code, void Function(BuildContext) opened) => showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Link code for ${s.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text('Works once, for 15 minutes', style: TextStyle(color: ctx.t.secondary)),
-              const SizedBox(height: 14),
-              Container(
-                color: Colors.white,
-                padding: const EdgeInsets.all(10),
-                child: QrImageView(data: code, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L),
-              ),
-              const SizedBox(height: 12),
-              SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
-              const SizedBox(height: 8),
-              TextButton.icon(
-                icon: const Icon(Icons.copy),
-                label: const Text('Copy code'),
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: code));
-                  say(ctx, 'Copied');
-                },
-              ),
-            ],
+      builder: (ctx) {
+        opened(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Link code for ${s.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text('Works once, for 15 minutes', style: TextStyle(color: ctx.t.secondary)),
+                const SizedBox(height: 14),
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(10),
+                  child: QrImageView(data: code, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L),
+                ),
+                const SizedBox(height: 12),
+                SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copy code'),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: code));
+                    say(ctx, 'Copied');
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
-  });
 
   Future<void> _enterCode() async {
     final ctl = TextEditingController();
@@ -114,10 +148,13 @@ class _SharingPageState extends State<SharingPage> {
       ),
     );
     if (code == null || code.isEmpty) return;
+    String? linked;
     await _run(() async {
-      final name = await s.link(code);
-      if (mounted) say(context, 'Linked with $name');
+      final r = await s.link(code);
+      if (mounted) say(context, 'Linked with ${r.name}');
+      if (r.peer.isNotEmpty) linked = r.peer;
     });
+    if (linked != null) await _ask(linked!);
   }
 
   Future<void> _rename() async {
@@ -202,8 +239,8 @@ class _SharingPageState extends State<SharingPage> {
                     status: peerStatus(p),
                     onTap: () => _peer(p),
                   ),
-                SettingsRow(icon: Icons.qr_code_2, title: 'Show my link code', onTap: _busy ? null : _showCode),
-                SettingsRow(icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
+                SettingsRow(key: const ValueKey('show-code'), icon: Icons.qr_code_2, title: 'Show my link code', onTap: _busy ? null : _showCode),
+                SettingsRow(key: const ValueKey('enter-code'), icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
               ],
             ),
             SettingsGroup(
