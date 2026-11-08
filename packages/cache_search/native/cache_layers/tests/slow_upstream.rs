@@ -256,6 +256,9 @@ fn a_burst_of_150_tiles_is_all_served_after_retries() {
         assert_eq!((g.status, g.body), (200, body(10, x, y)), "tile 10/{x}/{y} after {retries} retries");
         retried += usize::from(retries > 0);
     }
-    eprintln!("burst of 150: {retried} tiles needed a retry, all served");
+    {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "MEASURE burst of 150: {retried} tiles needed a retry, all served");
+    }
     assert!(retried > 0, "the burst overflowed the queue (64), so some tiles were answered busy first");
 }

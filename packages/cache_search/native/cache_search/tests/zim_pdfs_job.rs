@@ -13,6 +13,14 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::{Duration, Instant};
 
+/// A measurement line for the CI log, written to stderr directly (libtest captures eprintln! of a test that passes).
+macro_rules! report {
+    ($($t:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "MEASURE {}", format!($($t)*));
+    }};
+}
+
 const UUID: &str = "0badc0de-0000-4000-8000-0000000f00d5";
 const NO_PDF_UUID: &str = "0badc0de-0000-4000-8000-0000000f00d6";
 
@@ -216,7 +224,7 @@ fn the_pdf_list_of_a_large_zim_is_small_quick_and_off_the_worker() {
     const ARTICLES: usize = 2_000_000;
     let t = Instant::now();
     write_zim(&big, UUID, ARTICLES, 200_000, &sizes, true);
-    eprintln!("synthetic ZIM: {} entries, {} MB, written in {:?}", ARTICLES + 200_000 + sizes.len() + 2, std::fs::metadata(&big).unwrap().len() >> 20, t.elapsed());
+    report!("synthetic ZIM: {} entries, {} MB, written in {:?}", ARTICLES + 200_000 + sizes.len() + 2, std::fs::metadata(&big).unwrap().len() >> 20, t.elapsed());
     let want: Vec<(String, u64)> = sizes.iter().enumerate().map(|(j, s)| (format!("docs/{j:03}.pdf"), *s as u64)).collect();
 
     // the core's worker is free while the job runs: a call on a handle answers at once
@@ -275,7 +283,7 @@ fn the_pdf_list_of_a_large_zim_is_small_quick_and_off_the_worker() {
     drop(reader);
 
     let mb = |a: Option<f64>, b: Option<f64>| a.zip(b).map(|(a, b)| format!("{:+.0} MB", b - a)).unwrap_or_else(|| "n/a".into());
-    eprintln!(
+    report!(
         "PDF list, 2.2 M entries: before (whole-file mapping, every entry parsed, on the worker) {old_took:?}, resident {}; \
          after (job: windows, mime type only) {job_took:?} on its own thread (start {start_took:?}), resident at peak {} and {} after; \
          cs_zim_pdfs now {direct_took:?}; {calls_while_running} core calls answered while it ran, the slowest {worst_call:?}",
@@ -312,7 +320,7 @@ fn the_pdf_list_of_a_large_zim_is_small_quick_and_off_the_worker() {
     let old_none_took = t.elapsed();
     drop(reader);
     assert!(old_none.is_empty());
-    eprintln!("no PDFs in the mime list, 2 M entries: before {old_none_took:?}, after {none_took:?}");
+    report!("no PDFs in the mime list, 2 M entries: before {old_none_took:?}, after {none_took:?}");
     assert!(none_took < Duration::from_millis(500), "a ZIM without PDFs is not scanned: {none_took:?}");
 
     // cancel stops the pass
