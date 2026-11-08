@@ -4,7 +4,7 @@
 //! Events are ordered by (`at`, `dev`), then by position, so the answer does not depend on the order the files are read in (the
 //! position only orders two events of one device with the same `at`, and one device's file keeps its line order).
 
-use crate::events::{By, FolderMode, Kind, CALL_PREFIX};
+use crate::events::{By, FactFields, FolderMode, Kind, CALL_PREFIX};
 use crate::library::{LibraryInput, SuggestedDiv};
 use crate::quality::{compare_copies, CopyQuality};
 use crate::events::Event;
@@ -115,6 +115,10 @@ pub struct Book {
     pub aka: Vec<String>,
     pub removed: bool,
     pub suggested: Option<Suggest>,
+    /// Per field: the person's own `facts`, else the publisher's seed-log `facts`, else the pack's `book` block (the reading copy's).
+    pub author: Option<String>,
+    pub edition: Option<String>,
+    pub year: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -153,6 +157,8 @@ struct CopyData {
     suggested: Option<SuggestedDiv>,
     seed_title: Option<String>,
     seed_place: Option<String>,
+    fields: FactFields,
+    seed_fields: FactFields,
 }
 
 #[derive(Clone)]
@@ -224,6 +230,9 @@ struct Agg {
     title: Option<(Stamp, String)>,
     removed: Option<(Stamp, bool)>,
     prefer: Option<(Stamp, String)>,
+    author: Option<(Stamp, String)>,
+    edition: Option<(Stamp, String)>,
+    year: Option<(Stamp, u32)>,
 }
 
 /// Resolves the events against the libraries' facts.
@@ -252,10 +261,15 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
                 suggested: p.suggested.clone(),
                 seed_title: None,
                 seed_place: None,
+                fields: p.fields.clone(),
+                seed_fields: FactFields::default(),
             });
             d.locs.insert(format!("{}/{}", lib.library_id, p.doc_id));
             if d.seed_title.is_none() {
                 d.seed_title = lib.seed.title.get(&p.doc_id).cloned();
+            }
+            if let Some(f) = lib.seed.facts.get(&p.doc_id) {
+                d.seed_fields = d.seed_fields.or(f);
             }
             if d.seed_place.is_none() {
                 d.seed_place = lib.seed.place.get(&p.doc_id).cloned().flatten();
@@ -410,6 +424,17 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
             Kind::Remove { .. } if newer(a.removed.as_ref(), stamp) => a.removed = Some((stamp.clone(), true)),
             Kind::Restore { .. } if newer(a.removed.as_ref(), stamp) => a.removed = Some((stamp.clone(), false)),
             Kind::Prefer { copy } if newer(a.prefer.as_ref(), stamp) => a.prefer = Some((stamp.clone(), copy.clone())),
+            Kind::Facts { fields, .. } => {
+                if let Some(x) = fields.author.as_ref().filter(|_| newer(a.author.as_ref(), stamp)) {
+                    a.author = Some((stamp.clone(), x.clone()));
+                }
+                if let Some(x) = fields.edition.as_ref().filter(|_| newer(a.edition.as_ref(), stamp)) {
+                    a.edition = Some((stamp.clone(), x.clone()));
+                }
+                if let Some(x) = fields.year.filter(|_| newer(a.year.as_ref(), stamp)) {
+                    a.year = Some((stamp.clone(), x));
+                }
+            }
             _ => {}
         }
     }
@@ -486,6 +511,9 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
             aka: aka.into_iter().collect(),
             removed: a.removed.as_ref().is_some_and(|(_, x)| *x),
             suggested,
+            author: a.author.as_ref().map(|(_, x)| x.clone()).or_else(|| rd.seed_fields.author.clone()).or_else(|| rd.fields.author.clone()),
+            edition: a.edition.as_ref().map(|(_, x)| x.clone()).or_else(|| rd.seed_fields.edition.clone()).or_else(|| rd.fields.edition.clone()),
+            year: a.year.as_ref().map(|(_, x)| *x).or(rd.seed_fields.year).or(rd.fields.year),
         });
     }
     r

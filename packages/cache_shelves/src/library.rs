@@ -4,7 +4,7 @@
 //! first line of a pack, which is its header. The builder and the core each have one.
 
 use crate::error::{Error, Result};
-use crate::events::Kind;
+use crate::events::{FactFields, Kind};
 use crate::quality::CopyQuality;
 use crate::same::{mean_vector_from, minhash_from, Facts};
 use crate::store::{log_file_names, parse_legacy_log, LOG_DIR};
@@ -58,6 +58,8 @@ pub struct PackFacts {
     pub blake3: Option<String>,
     /// `samebook`, when the pack has it (revision 3 and later).
     pub same: Option<SameInfo>,
+    /// `book.author`, `book.edition` and `book.year`, each kept only if it passes the `facts` checks.
+    pub fields: FactFields,
 }
 
 /// The `samebook` block of a pack.
@@ -111,6 +113,7 @@ impl PackFacts {
             suggested,
             blake3,
             same,
+            fields: book.map(FactFields::from_value).unwrap_or_default(),
         })
     }
 
@@ -139,6 +142,8 @@ pub struct Seed {
     pub place: BTreeMap<String, Option<String>>,
     /// The publisher's latest `title` of each book.
     pub title: BTreeMap<String, String>,
+    /// The publisher's `facts`, per field the latest (by `at`, `dev`, line) that has the field.
+    pub facts: BTreeMap<String, FactFields>,
 }
 
 /// Reads the seed logs (`log/builder-*.jsonl`) of a library. Missing logs give an empty seed.
@@ -163,6 +168,10 @@ pub fn read_seed(library_dir: &Path) -> Result<Seed> {
             }
             Kind::Title { copy, title } => {
                 seed.title.insert(copy, title);
+            }
+            Kind::Facts { copy, fields } => {
+                let cur = seed.facts.entry(copy).or_default();
+                *cur = fields.or(cur);
             }
             _ => {}
         }

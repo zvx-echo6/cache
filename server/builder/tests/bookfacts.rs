@@ -130,3 +130,48 @@ fn the_library_path_does_not_rewrite_packs() {
     let h = read_header(&again.join(format!("{hash}@1.cdoc"))).unwrap();
     assert_eq!(h.book.unwrap().author.as_deref(), Some("A. Writer"));
 }
+
+#[test]
+fn the_seed_log_gets_facts_events_after_the_titles_and_is_byte_identical_across_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let packs = tmp.path().join("packs");
+    let (_, h1) = build_pdf(tmp.path(), "water.pdf", &doc_pdf("Water cycle", "water"), &packs, &[]);
+    let (_, h2) = build_pdf(tmp.path(), "stone.pdf", &doc_pdf("Stone work", "stone"), &packs, &[]);
+    let titles = tmp.path().join("t.jsonl");
+    // water: a title and all three facts, the year invalid (dropped); stone: only an edition, no title change
+    std::fs::write(
+        &titles,
+        json!({"path": "water.pdf", "title": "How Water Moves", "ok": true, "author": " A. Writer ", "edition": "7th edition", "year": 1399}).to_string()
+            + "\n"
+            + &json!({"path": "stone.pdf", "ok": false, "edition": "2nd edition"}).to_string()
+            + "\n",
+    )
+    .unwrap();
+    let run = |name: &str| -> String {
+        let lib = tmp.path().join(name);
+        let o = cli().arg("library").arg("--packs").arg(&packs).arg("--out").arg(&lib).args(["--id", "r", "--title", "R", "--built-at", "2026-11-01T00:00:00Z", "--titles"]).arg(&titles).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        std::fs::read_to_string(lib.join("log").join("builder-r.jsonl")).unwrap()
+    };
+    let (a, b) = (run("lib1"), run("lib2"));
+    assert_eq!(a, b, "the seed log is byte-identical across runs");
+    let lines: Vec<Value> = a.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let evs: Vec<&str> = lines.iter().map(|l| l["ev"].as_str().unwrap()).collect();
+    let first_facts = evs.iter().position(|e| *e == "facts").unwrap();
+    assert!(evs[first_facts..].iter().all(|e| *e == "facts"), "facts come after every title event: {evs:?}");
+    assert!(evs.contains(&"title"));
+    let facts: Vec<&Value> = lines.iter().filter(|l| l["ev"] == "facts").collect();
+    assert_eq!(facts.len(), 2);
+    // doc order
+    let mut docs = vec![h1.clone(), h2.clone()];
+    docs.sort();
+    assert_eq!(facts.iter().map(|f| f["doc"].as_str().unwrap().to_string()).collect::<Vec<_>>(), docs);
+    let water = facts.iter().find(|f| f["doc"] == json!(h1)).unwrap();
+    assert_eq!((water["author"].clone(), water["edition"].clone()), (json!("A. Writer"), json!("7th edition")));
+    assert!(water.get("year").is_none(), "the invalid year is dropped: {water}");
+    assert_eq!(water["copy"], json!(h1));
+    assert_eq!(water["loc"], json!(format!("r/{h1}")));
+    let stone = facts.iter().find(|f| f["doc"] == json!(h2)).unwrap();
+    assert_eq!(stone["edition"], json!("2nd edition"));
+    assert!(stone.get("author").is_none() && stone.get("year").is_none());
+}

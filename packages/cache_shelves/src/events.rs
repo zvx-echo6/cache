@@ -92,6 +92,63 @@ impl FolderMode {
     }
 }
 
+/// The optional book facts a `facts` event, the pack's `book` block or a titles file can give. A field that is `None` means "no
+/// value from this source".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FactFields {
+    pub author: Option<String>,
+    pub edition: Option<String>,
+    pub year: Option<u32>,
+}
+
+impl FactFields {
+    pub fn is_empty(&self) -> bool {
+        self.author.is_none() && self.edition.is_none() && self.year.is_none()
+    }
+
+    /// Per field, `self` if it has a value, else `other`.
+    pub fn or(&self, other: &FactFields) -> FactFields {
+        FactFields { author: self.author.clone().or_else(|| other.author.clone()), edition: self.edition.clone().or_else(|| other.edition.clone()), year: self.year.or(other.year) }
+    }
+
+    /// Reads `author`, `edition` and `year` from a JSON object. A field that fails its check is dropped on its own.
+    pub fn from_value(v: &Value) -> FactFields {
+        FactFields {
+            author: v.get("author").and_then(Value::as_str).and_then(valid_author),
+            edition: v.get("edition").and_then(Value::as_str).and_then(valid_edition),
+            year: v.get("year").and_then(Value::as_i64).and_then(valid_year),
+        }
+    }
+
+    /// Why the fields cannot be written, or `None` when each present field passes its check.
+    pub fn check(&self) -> Option<&'static str> {
+        let bad = self.author.as_deref().is_some_and(|a| valid_author(a).as_deref() != Some(a))
+            || self.edition.as_deref().is_some_and(|e| valid_edition(e).as_deref() != Some(e))
+            || self.year.is_some_and(|y| valid_year(i64::from(y)).is_none());
+        bad.then_some("a facts field is invalid (author 1 to 200 characters, edition 1 to 60, year 1400 to 2100)")
+    }
+}
+
+fn trimmed(s: &str, max: usize) -> Option<String> {
+    let t = s.trim();
+    (!t.is_empty() && t.chars().count() <= max).then(|| t.to_string())
+}
+
+/// An author: 1 to 200 characters after trimming.
+pub fn valid_author(s: &str) -> Option<String> {
+    trimmed(s, 200)
+}
+
+/// An edition: 1 to 60 characters after trimming.
+pub fn valid_edition(s: &str) -> Option<String> {
+    trimmed(s, 60)
+}
+
+/// A year: an integer from 1400 to 2100.
+pub fn valid_year(y: i64) -> Option<u32> {
+    (1400..=2100).contains(&y).then_some(y as u32)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     /// The book that holds `copy` goes on the shelf of division `div`.
@@ -112,6 +169,8 @@ pub enum Kind {
     NotSame { copy: String, with: String, by: By },
     /// Use this copy for reading its book.
     Prefer { copy: String },
+    /// Author, edition and year for the book that holds `copy`. A field that is absent means no value from this source.
+    Facts { copy: String, fields: FactFields },
     /// A device-local linked folder. This event deliberately has no copy.
     Folder { folder_id: String, label: String, mode: FolderMode },
     /// A copy is present at a relative path in a linked folder.
@@ -134,6 +193,7 @@ impl Kind {
             | Kind::Same { copy, .. }
             | Kind::NotSame { copy, .. }
             | Kind::Prefer { copy }
+            | Kind::Facts { copy, .. }
             | Kind::Locate { copy, .. }
             | Kind::Unlocate { copy, .. } => Some(copy),
             Kind::Folder { .. } => None,
@@ -152,6 +212,7 @@ impl Kind {
             | Kind::Same { copy, .. }
             | Kind::NotSame { copy, .. }
             | Kind::Prefer { copy }
+            | Kind::Facts { copy, .. }
             | Kind::Locate { copy, .. }
             | Kind::Unlocate { copy, .. } => Some(copy),
             Kind::Folder { .. } => None,
@@ -170,6 +231,7 @@ impl Kind {
             Kind::Same { .. } => "same",
             Kind::NotSame { .. } => "notsame",
             Kind::Prefer { .. } => "prefer",
+            Kind::Facts { .. } => "facts",
             Kind::Folder { .. } => "folder",
             Kind::Locate { .. } => "locate",
             Kind::Unlocate { .. } => "unlocate",
@@ -253,6 +315,17 @@ impl Event {
                 m.insert("folder_id".into(), json!(folder_id));
                 m.insert("relpath".into(), json!(relpath));
             }
+            Kind::Facts { fields, .. } => {
+                if let Some(a) = &fields.author {
+                    m.insert("author".into(), json!(a));
+                }
+                if let Some(e) = &fields.edition {
+                    m.insert("edition".into(), json!(e));
+                }
+                if let Some(y) = fields.year {
+                    m.insert("year".into(), json!(y));
+                }
+            }
             Kind::Remove { .. } | Kind::Restore { .. } | Kind::Prefer { .. } => {}
         }
         if let Some(loc) = &self.loc {
@@ -319,6 +392,13 @@ fn parse(v: &Value, key: &str, legacy: bool) -> Option<Event> {
             Kind::NotSame { copy: c, with, by: by()? }
         }
         "prefer" if !legacy => Kind::Prefer { copy: copy()? },
+        "facts" => {
+            let fields = FactFields::from_value(v);
+            if fields.is_empty() {
+                return None;
+            }
+            Kind::Facts { copy: copy()?, fields }
+        }
         "folder" => Kind::Folder { folder_id: folder_id()?, label: text("label")?, mode: FolderMode::parse(&text("mode")?)? },
         "locate" => {
             let version = v.get("version").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
@@ -361,6 +441,14 @@ pub fn check_for_write(e: &Event) -> Option<&'static str> {
         return Some("an event needs a copy");
     }
     match &e.kind {
+        Kind::Facts { fields, .. } => {
+            if fields.is_empty() {
+                return Some("a facts event needs at least one field");
+            }
+            if let Some(why) = fields.check() {
+                return Some(why);
+            }
+        }
         Kind::Locate { folder_id, relpath, source_blake3, .. } => {
             if folder_id.is_empty() || !valid_relpath(relpath) || source_blake3.as_ref().is_some_and(|h| !valid_blake3(h)) {
                 return Some("invalid linked-folder location; paths must be safe relative paths");

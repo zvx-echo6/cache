@@ -16,6 +16,7 @@
 //!       "shelf": "610" | null, "shelved": true, "by": "auto" | "user" | null,
 //!       "call": {"div": "610", "seq": 1, "suffix": 0, "text": "CDS 610-001"} | null,
 //!       "removed": false,
+//!       "author": "Ann" | null, "edition": "7th edition" | null, "year": 2018 | null,
 //!       "suggested": {"div": "610", "label": "Medicine" | null, "from": "seed" | "pack"} | null
 //!     }
 //!   },
@@ -73,6 +74,9 @@ pub fn view_value(r: &Resolved, libs: &[LibraryInput], logs: &[(String, u64)]) -
                 "by": b.by.map(|by| by.as_str()),
                 "call": call_json(&b.call),
                 "removed": b.removed,
+                "author": b.author,
+                "edition": b.edition,
+                "year": b.year,
                 "suggested": b.suggested.as_ref().map(|s| json!({"div": s.div, "label": s.label, "from": s.from})),
             }),
         );

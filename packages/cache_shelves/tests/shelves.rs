@@ -66,6 +66,7 @@ fn pf(copy: &str, doc: &str, title: &str, text_pages: u32) -> PackFacts {
         title: s(title),
         suggested: None,
         blake3: None,
+        fields: Default::default(),
         same: Some(SameInfo { minhash: vec![], mean_vector: vec![], text_pages, pages: text_pages, ppi: Some(150), source_size: 1000 }),
     }
 }
@@ -603,4 +604,83 @@ fn the_ops_take_and_give_json() {
 
     let imp: Value = serde_json::from_str(&ops::import(&json!({"dir": dir, "dev": "phone-1", "libraries": libs}).to_string(), &reader).unwrap()).unwrap();
     assert_eq!(imp["events"], json!(0));
+}
+
+// ------------------------------------------------------------------------------------------------------------------ facts
+
+fn facts_ev(copy: &str, author: Option<&str>, edition: Option<&str>, year: Option<u32>) -> Kind {
+    Kind::Facts { copy: s(copy), fields: cache_shelves::events::FactFields { author: author.map(s), edition: edition.map(s), year } }
+}
+
+#[test]
+fn a_facts_event_drops_invalid_fields_and_round_trips() {
+    let line = r#"{"v":1,"at":1,"dev":"d","ev":"facts","copy":"A","author":"  Ann  ","edition":"7th edition","year":2018}"#;
+    let e = Event::from_line(line).unwrap();
+    assert_eq!(e.kind, facts_ev("A", Some("Ann"), Some("7th edition"), Some(2018)));
+    assert_eq!(e.to_line(), r#"{"v":1,"at":1,"dev":"d","ev":"facts","copy":"A","author":"Ann","edition":"7th edition","year":2018}"#);
+    let long = "x".repeat(201);
+    let bad = json!({"v": 1, "at": 1, "dev": "d", "ev": "facts", "copy": "A", "author": long, "edition": "e".repeat(61), "year": 1399}).to_string();
+    assert!(Event::from_line(&bad).is_none(), "nothing valid left: the event is skipped");
+    let some = json!({"v": 1, "at": 1, "dev": "d", "ev": "facts", "copy": "A", "author": "", "edition": "2nd", "year": 2101}).to_string();
+    assert_eq!(Event::from_line(&some).unwrap().kind, facts_ev("A", None, Some("2nd"), None));
+    for y in ["\"2018\"", "2018.5", "1400.0"] {
+        let l = format!(r#"{{"v":1,"at":1,"dev":"d","ev":"facts","copy":"A","edition":"x","year":{y}}}"#);
+        assert_eq!(Event::from_line(&l).unwrap().kind, facts_ev("A", None, Some("x"), None), "{y}");
+    }
+    assert!(Event::from_line(r#"{"v":1,"at":1,"dev":"d","ev":"facts","copy":"A","year":2100}"#).is_some());
+    // the writer refuses what the reader would drop
+    let tmp = Tmp::new("facts");
+    let w = LogWriter::open(&tmp.path().join("log"), "d").unwrap();
+    assert!(w.append(&[ev(1, "d", facts_ev("A", Some(&"x".repeat(201)), None, None))]).is_err());
+    assert!(w.append(&[ev(1, "d", facts_ev("A", None, None, Some(1399)))]).is_err());
+    assert!(w.append(&[ev(1, "d", facts_ev("A", None, None, None))]).is_err());
+    w.append(&[ev(1, "d", facts_ev("A", Some("Ann"), None, Some(1400)))]).unwrap();
+}
+
+#[test]
+fn facts_resolve_per_field_person_then_publisher_then_pack() {
+    let mut a = pf("A", "a", "Book A", 10);
+    a.fields = cache_shelves::events::FactFields { author: Some(s("Pack Author")), edition: Some(s("Pack ed")), year: Some(2000) };
+    let mut l = lib("L", vec![a, pf("B", "b", "Book B", 5)]);
+    let none = resolve(&[], &[l.clone()]);
+    let b = none.book_of("A").unwrap();
+    assert_eq!((b.author.as_deref(), b.edition.as_deref(), b.year), (Some("Pack Author"), Some("Pack ed"), Some(2000)));
+    // no source at all: null
+    let b = none.book_of("B").unwrap();
+    assert_eq!((b.author.as_deref(), b.edition.as_deref(), b.year), (None, None, None));
+    // the publisher's seed-log facts beat the pack, per field (the seed gives author and year only)
+    l.seed.facts.insert(s("a"), cache_shelves::events::FactFields { author: Some(s("Seed Author")), edition: None, year: Some(2010) });
+    let r = resolve(&[], &[l.clone()]);
+    let b = r.book_of("A").unwrap();
+    assert_eq!((b.author.as_deref(), b.edition.as_deref(), b.year), (Some("Seed Author"), Some("Pack ed"), Some(2010)));
+    // the person's own facts beat both, per field, latest wins, over any copy of the book
+    let mut events = vec![ev(1, "d", same("B", "A", By::Auto, Some(0.9))), ev(2, "d", facts_ev("B", Some("My Author"), None, None)), ev(3, "d", facts_ev("A", Some("Later Author"), None, Some(1999)))];
+    let r = resolve(&events, &[l.clone()]);
+    let b = r.book_of("A").unwrap();
+    assert_eq!((b.author.as_deref(), b.edition.as_deref(), b.year), (Some("Later Author"), Some("Pack ed"), Some(1999)));
+    events.push(ev(4, "d", facts_ev("B", None, Some("My ed"), None)));
+    let b = resolve(&events, &[l]).book_of("A").unwrap().clone();
+    assert_eq!((b.author.as_deref(), b.edition.as_deref(), b.year), (Some("Later Author"), Some("My ed"), Some(1999)));
+}
+
+#[test]
+fn seed_log_facts_are_read_per_field_and_the_view_carries_them() {
+    let tmp = Tmp::new("seedfacts");
+    let seed = [
+        legacy(5, "builder-pub", "facts", "wm", ",\"copy\":\"WM\",\"loc\":\"pub/wm\",\"author\":\"A. Writer\",\"edition\":\"7th\""),
+        legacy(6, "builder-pub", "facts", "wm", ",\"author\":\"B. Writer\",\"year\":1399"),
+        legacy(7, "builder-pub", "facts", "wm", ",\"year\":2018"),
+    ]
+    .concat();
+    let lref = make_library(tmp.path(), "pub", &[("wm", "WM", "Wilderness Medicine")], &[("builder-pub.jsonl", seed)]);
+    let l = load_library(&lref, &reader).unwrap();
+    let f = l.seed.facts.get("wm").unwrap();
+    assert_eq!((f.author.as_deref(), f.edition.as_deref(), f.year), (Some("B. Writer"), Some("7th"), Some(2018)));
+    let r = resolve(&[], std::slice::from_ref(&l));
+    let v = view_value(&r, &[l], &[]);
+    let book = &v["books"]["WM"];
+    assert_eq!((book["author"].clone(), book["edition"].clone(), book["year"].clone()), (json!("B. Writer"), json!("7th"), json!(2018)));
+    // null when unknown
+    let empty = view_value(&resolve(&[], &[lib("L", vec![pf("A", "a", "A", 1)])]), &[], &[]);
+    assert_eq!((empty["books"]["A"]["author"].clone(), empty["books"]["A"]["year"].clone()), (Value::Null, Value::Null));
 }

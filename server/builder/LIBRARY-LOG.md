@@ -75,6 +75,7 @@ A log is JSON Lines: one event per line, UTF-8, `\n` after every line, never edi
 | `same` | `copy`, `with`, `by`, `how`, `score`? | The two copies are one book. `by` is `auto` (detection) or `user`; `how` is `blake3`, `text` or `user`; `score` is the detector's number, recorded for checking. |
 | `notsame` | `copy`, `with`, `by` | The two copies are different books ("Not the same book"). |
 | `prefer` | `copy` | Use this copy for reading its book. |
+| `facts` | `copy`, `author`?, `edition`?, `year`? | Author, edition and year for the book that holds `copy`. Every field is optional; an absent field means "no value from this source". See "Book facts". |
 | `folder`, `locate`, `unlocate` | as below | Linked-folder locations. |
 
 ```json
@@ -89,6 +90,16 @@ A log is JSON Lines: one event per line, UTF-8, `\n` after every line, never edi
 
 A `same` or `notsame` whose `copy` equals its `with` is not an event and is skipped. A move is three events in this order: `place` (new
 division), `retire` (old number), `assign` (new number), all against the book's numbered copy. Going to Unsorted is `unsort` then `retire`.
+
+### Book facts (`facts`)
+
+```json
+{"v":1,"at":1793600000000,"dev":"phone-7","ev":"facts","copy":"<blake3 A>","loc":"recon/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+```
+
+- Checks (the same as the titles file): `author` is 1 to 200 characters after trimming, `edition` 1 to 60 after trimming, `year` a JSON integer from 1400 to 2100. A field that fails its check is **dropped on its own** (a reader keeps the valid fields); an event left with no valid field is skipped, and the writer refuses it. Values are stored trimmed.
+- Three sources, per field: the person's own `facts` events in the Bookshelves log, then the publisher's `facts` in the library's seed log, then the pack's `book.author`, `book.edition`, `book.year`. Within the person's events the latest event that has the field wins, over all copies of the book; within the seed log the same, per field. The seed and pack values are the reading copy's.
+- The same event is written to the seed log by `cache-build library` (below), with `doc` as the seed log's other events have.
 
 ### Linked-folder events
 
@@ -147,7 +158,8 @@ copies is in a library given to the resolver; events about other copies still co
 3. **Shelf.** The latest `place` or `unsort` over all copies of the book. A book no event has placed is not shelved (`shelved: false`; it shows in Unsorted).
 4. **Title.** The latest `title` over the book's copies, else the publisher's seed-log `title` for the reading copy, else the reading copy's pack title. Other copies' pack titles that differ from the shown title are listed as `aka`.
 5. **Removed.** The latest `remove` or `restore` over the book's copies. Hiding is per person; a publisher removes a book by publishing a new library version without it.
-6. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book.
+6. **Facts.** Per field (`author`, `edition`, `year`): the person's own latest `facts` over the book's copies, else the seed log's `facts` for the reading copy, else the reading copy's pack `book` block, else `null`.
+7. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book.
 
 ### Worked example: a clash
 
@@ -228,6 +240,7 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
       "shelf": "210", "shelved": true, "by": "auto",
       "call": {"div": "210", "seq": 1, "suffix": 0, "text": "CDS 210-001"},
       "removed": false,
+      "author": "A. Writer", "edition": "7th edition", "year": 2018,
       "suggested": {"div": "610", "label": "Medicine", "from": "pack"}
     }
   },
@@ -241,6 +254,7 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
 - `books` has one entry for each book with a copy in a library given to the resolver. Every key is always present, `null` when unknown.
 - `id` is the book's smallest copy key. `reading` is the copy to read. `copies` is every copy of the book in key order, including ones no library holds (`available: false`, `locs: []`, `title: null`), with the copy's own held number (`own_call`) and its linked-folder locations.
 - `title_from` is `log`, `seed` or `pack`. `shelf` is the division, or `null` for Unsorted; `shelved` says an event placed or unsorted the book; `by` is who made the latest placement.
+- `author`, `edition` and `year` are resolved per field as in "Facts" above, `null` when unknown.
 - `call` is `{div, seq, suffix, text}` or `null`. There is no state field: a clash is a suffix.
 - `suggested` is `{div, label, from}` with `from` `seed` or `pack` (`label` is `null` from a seed), or `null`.
 - `retired` maps a division to the numbers retired in it; `next` maps a division to the next free number; `folders` is the latest state of each device's linked folders.
@@ -258,6 +272,11 @@ events), and its `assign` numbers are **never** call numbers and never count tow
 - Books with no division (Unsorted) get no `place` or `assign`.
 - With `--classifier`, a book no label and no pack placed is sorted from its vectors: a confident one is placed and numbered like the rest; an unsure one gets no event (it stays in Unsorted) and the view keeps the sorter's best guess as `suggested`.
 - A title that a `--titles` file replaced is written as a `title` event, after the placements, so the view can be made again from the packs and the log.
+- When `--titles` lines carry `author`, `edition` or `year` (checked as above, invalid fields dropped), a `facts` event follows for each such book, after all the title events, in `doc_id` order. This is the one addition to the seed log; older readers skip the unknown event. The event has `doc`, the book's `copy` (its `original_blake3`) and `loc` (`<library_id>/<doc_id>`) for readability, and only the fields the titles file gave:
+
+  ```json
+  {"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"facts","doc":"b3f1","copy":"b3f1","loc":"recon-library/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+  ```
 - Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). The recon build passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
 - Divisions are written in number order; within a division, books in number order, each as `place` then `assign`.
 
