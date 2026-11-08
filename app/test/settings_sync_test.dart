@@ -701,7 +701,8 @@ void main() {
     expect(find.text('Changes on either device go to both.'), findsOneWidget);
     expect(find.text('Desk follows my settings.'), findsOneWidget);
     expect(find.text("Each keeps its own. You can change this on Desk's page."), findsOneWidget);
-    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me', 'ask': true}, reason: 'Off until it is answered');
+    expect(a.core.peers.single['link'], {'mode': 'off', 'ask': true}, reason: 'Off until it is answered, as the engine made it');
+    expect(a.sync.unanswered('peer1'), isTrue);
 
     await tester.runAsync(() async {
       await tester.tapAt(const Offset(4, 4));

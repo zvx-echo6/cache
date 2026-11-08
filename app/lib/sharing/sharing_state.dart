@@ -587,8 +587,8 @@ class AlwaysShared {
   final List<String> hidden;
 }
 
-/// A folder kept only with the linked devices whose link is one of [modes] (`match`, `send`; a link with none set yet counts as
-/// `match` to the engine, and the app sets a new link to `off` as soon as it sees it), and never listed under Sharing and sync:
+/// A folder kept only with the linked devices whose link is one of [modes] (`match`, `send`; the engine makes a new link `off`
+/// until the person answers, and gave the links made before that `match` once), and never listed under Sharing and sync:
 /// the person's Bookshelves log with their own devices (Match), the settings log with the devices settings go to or come from.
 class LinkShare {
   const LinkShare({required this.id, required this.name, required this.dir, required this.modes});

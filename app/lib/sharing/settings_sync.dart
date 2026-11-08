@@ -323,8 +323,8 @@ class SettingsSync extends ChangeNotifier {
 
   final Set<String> _marking = {};
 
-  /// Sets a new link with nothing chosen to Off, waiting for the answer (`ask`), so both devices and the sync engine keep
-  /// the settings and Bookshelves logs from it. A link made before this version is left as it is (Match).
+  /// Sets a new link with nothing chosen to Off, waiting for the answer (`ask`). The engine already makes every new link so;
+  /// this covers a link that reaches the app without a kind. A link made before this version is left as it is (Match).
   Future<void> markNew(String peer) async {
     final l = sharing.linkOf(peer);
     if (l?['mode'] != null || !sharing.linkedSinceAsking(peer) || !_marking.add(peer)) return;

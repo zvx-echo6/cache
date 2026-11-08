@@ -146,8 +146,8 @@ pub struct Config {
     #[serde(default)]
     pub off: BTreeMap<String, Vec<String>>,
     /// Shares kept only with some linked devices, by share id: the link kinds ([`Link`]'s `mode`) a device must have for the share
-    /// to be offered to it and taken from it. A device whose link has no mode yet (linked before modes existed, or an older
-    /// version that never sends one) counts as `"match"`. A share not listed goes to every linked device. The person's
+    /// to be offered to it and taken from it. A link starts `"off"` until the person answers ([`new_link`]); links made before
+    /// that were given `"match"` once ([`migrate_links`]). A link with no mode at all counts as `"match"`. A share not listed goes to every linked device. The person's
     /// Bookshelves log is `["match"]` (their own devices only), the settings log `["match", "send"]`. `set_share_with` replaces a
     /// share's list later.
     #[serde(default)]
@@ -207,7 +207,8 @@ struct Link {
     t: u64,
 }
 
-/// A link's kind for [`Config::with`]: its `mode`, or `"match"` while it has none.
+/// A link's kind for [`Config::with`]: its `mode`, or `"match"` while it has none (a link only an older version of the other
+/// device knows about; every link here has one, see [`new_link`] and [`migrate_links`]).
 fn link_mode(link: Option<&Link>) -> String {
     link.and_then(|l| l.v.get("mode")).and_then(|m| m.as_str()).unwrap_or("match").to_string()
 }
@@ -231,6 +232,28 @@ struct Saved {
     peers: Vec<Peer>,
     #[serde(default)]
     shares: Vec<Share>,
+    /// The links made before new links started Off have been given `"match"` ([`migrate_links`]); done once, never again.
+    #[serde(default)]
+    links_migrated: bool,
+}
+
+/// A link as it is made: Off, waiting for the person's answer (`ask`), until either device sets it. Its time is 0, so any
+/// link set later on either device wins, and both devices start with the same one.
+fn new_link() -> Link {
+    Link { v: json!({"mode": "off", "ask": true}), t: 0 }
+}
+
+/// Once, the first time this version opens: every link made before new links started Off, still with no kind, becomes
+/// `"match"` (what it counted as), so only links made from now on start Off. Returns whether anything changed.
+fn migrate_links(saved: &mut Saved) -> bool {
+    if saved.links_migrated {
+        return false;
+    }
+    for p in saved.peers.iter_mut().filter(|p| p.link.is_none()) {
+        p.link = Some(Link { v: json!({"mode": "match"}), t: 0 });
+    }
+    saved.links_migrated = true;
+    true
 }
 
 /// Local-only facts about a file in a shared folder: the size and modification time it had when it was last hashed.
@@ -1507,7 +1530,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: None });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()) });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -1577,6 +1600,9 @@ impl SyncEngine {
         let mut saved: Saved = read_json(&cfg.dir.join("sync.json")).unwrap_or_default();
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
+        }
+        if migrate_links(&mut saved) {
+            write_json(&cfg.dir.join("sync.json"), &saved)?;
         }
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));

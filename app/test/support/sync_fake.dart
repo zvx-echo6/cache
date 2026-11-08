@@ -51,7 +51,11 @@ class FakeSync implements SyncCoreLike {
         return {'code': 'CACHE1-TESTCODE', 'valid_secs': 900};
       case 'link':
         peers.removeWhere((p) => p['id'] == 'peer1');
-        peers.add({'id': 'peer1', 'name': 'Desk', 'linked': DateTime.now().millisecondsSinceEpoch, 'last_seen': null, 'via': null, 'error': null});
+        // As the engine makes a link: Off, waiting for the answer.
+        peers.add({
+          'id': 'peer1', 'name': 'Desk', 'linked': DateTime.now().millisecondsSinceEpoch, 'last_seen': null, 'via': null, 'error': null,
+          'link': {'mode': 'off', 'ask': true}, 'link_t': 0,
+        });
         return {'ok': true, 'peer': 'peer1', 'name': 'Desk'};
       case 'share_add':
         shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
