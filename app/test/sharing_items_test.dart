@@ -262,11 +262,14 @@ void main() {
       'paths': ['canning.zim'],
     });
 
-    // An item switched off on its page: its switch, and nothing to sync for it.
-    await tester.tap(find.descendant(of: find.byKey(const ValueKey('item-library/canning.zim')), matching: find.byType(Switch)));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    // An item switched off (saving the choice writes a file, so it runs outside the test's clock): its switch shows off, and
+    // there is nothing to sync for it.
+    final canning = s.itemsOf(r.kind('library')).firstWhere((i) => i.item.path == 'canning.zim').item;
+    await tester.runAsync(() => s.setItem(r.kind('library'), canning, false));
     await tester.pump();
     expect(r.sync.off['library'], ['canning.zim']);
+    final sw = tester.widget<Switch>(find.descendant(of: find.byKey(const ValueKey('item-library/canning.zim')), matching: find.byType(Switch)));
+    expect(sw.value, isFalse);
     final button = tester.widget<IconButton>(find.descendant(of: find.byKey(const ValueKey('item-library/canning.zim')), matching: find.byType(IconButton)));
     expect(button.onPressed, isNull);
     expect(find.text('2 of 3 shared · 8.9 GB'), findsOneWidget);
