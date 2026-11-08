@@ -15,6 +15,7 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -73,6 +74,9 @@ class _Marker extends StatelessWidget {
 
 Future<void> _guidance(WidgetTester tester, {required String name, required Size size, required double ratio, required EdgeInsets insets, required CacheThemeId theme}) async {
   phone(tester, size: size, ratio: ratio);
+  // The style's template is read through the asset bundle, which keeps what an earlier picture read; read afresh for each one
+  // (a read left over from an earlier test never finishes in this one).
+  rootBundle.clear();
   final dir = Directory.systemTemp.createTempSync('guidance-renders-');
   final originalPlatform = MapLibrePlatform.createInstance;
   MapLibrePlatform.createInstance = () => NoSurface();
@@ -102,9 +106,10 @@ Future<void> _guidance(WidgetTester tester, {required String name, required Size
       theme: theme,
       insets: insets,
     ));
-    for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
-      await tester.pump();
+    // The screen builds its map once the style is ready (as the guide's pictures wait for it).
+    for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
     }
     final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
     map.onMapCreated!(camera);
