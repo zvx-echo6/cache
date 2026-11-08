@@ -1,0 +1,135 @@
+# Real text recognition for packages/cache_ocr: its integration test (example/integration_test/ocr_test.dart) on an Android
+# emulator (Google ML Kit, bundled Latin model) and an iOS simulator (Apple Vision). The test makes grayscale 300 dpi page
+# images from known text, reads them with the device's engine, checks the phrases come back, and prints each page's time and
+# memory (OCR-MEASURE lines), which are copied into the run's summary. The unit tests (fake engine) run in tests.yml.
+#
+# The example's Android and iOS folders are not in the repository: `flutter create --platforms=android,ios .` makes them here.
+# Emulator and simulator timings are not a phone's: see packages/cache_ocr/README.md for what needs a real-device check.
+name: OCR engines
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - packages/cache_ocr/**
+      - .github/workflows/ocr.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_ocr/example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk space
+        working-directory: .
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: KVM for the emulator
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Example app
+        run: |
+          flutter create --platforms=android --org co.cache --project-name cache_ocr_example .
+          rm -rf test
+          flutter pub get
+      - name: Build the test APK first (so the emulator's time limit is spent on the test)
+        run: flutter build apk --debug
+      - name: Real OCR on the emulator (API 34, x86_64, 4 GB)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          working-directory: packages/cache_ocr/example
+          script: bash -c 'set -o pipefail; flutter test integration_test/ocr_test.dart -d emulator-5554 --reporter expanded 2>&1 | tee "$RUNNER_TEMP/ocr-android.log"'
+      - name: Measurements
+        if: always()
+        run: |
+          {
+            echo '### Android (ML Kit), emulator'
+            echo '```'
+            grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' "$RUNNER_TEMP/ocr-android.log" | sed 's/^.*OCR-/OCR-/' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_ocr/example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Example app
+        run: |
+          flutter create --platforms=ios --org co.cache --project-name cache_ocr_example .
+          rm -rf test
+          flutter pub get
+      - name: Simulator
+        id: sim
+        run: |
+          xcodebuild -version
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for k in reversed(ios):
+              for dev in d[k]:
+                  if dev["name"].startswith("iPhone"):
+                      print(dev["udid"]); sys.exit()
+          ')
+          [ -n "$udid" ] || { xcrun simctl list devices available; echo 'no iPhone simulator'; exit 1; }
+          xcrun simctl list devices | grep "$udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Real OCR on the simulator
+        run: |
+          set -o pipefail
+          flutter test integration_test/ocr_test.dart -d "${{ steps.sim.outputs.udid }}" --reporter expanded 2>&1 | tee "$RUNNER_TEMP/ocr-ios.log"
+      - name: Measurements
+        if: always()
+        run: |
+          {
+            echo '### iOS (Apple Vision), simulator'
+            echo '```'
+            grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' "$RUNNER_TEMP/ocr-ios.log" | sed 's/^.*OCR-/OCR-/' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

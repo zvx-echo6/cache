@@ -1,0 +1,26 @@
+name: cache_ocr
+description: "Cache on-device text recognition for scanned PDF pages: Apple Vision on iPhone and iPad, Google ML Kit on Android."
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.12.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: co.cache.cache_ocr
+        pluginClass: CacheOcrPlugin
+      ios:
+        pluginClass: CacheOcrPlugin

@@ -1,0 +1,35 @@
+// Text recognition on Android: Google ML Kit with its bundled Latin model (com.google.mlkit:text-recognition), on the
+// device and offline: the model is inside the app, nothing is downloaded at run time. It is an Android dependency only, so
+// iOS builds pull nothing of ML Kit. The plugin is Java (no Kotlin plugin to line up with the app's Android Gradle Plugin).
+
+group = "co.cache.cache_ocr"
+version = "1.0"
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "co.cache.cache_ocr"
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        // ML Kit text recognition needs API 21; the app's floor is 28.
+        minSdk = 21
+    }
+}
+
+dependencies {
+    // Pinned (published 2024; approved 2026-11-08). CacheOcrPlugin.VERSION must say the same: it goes into book.ocr.
+    implementation "com.google.mlkit:text-recognition:16.0.1"
+}

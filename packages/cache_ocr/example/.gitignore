@@ -1,0 +1,11 @@
+# Made in CI by `flutter create --platforms=android,ios .` (see .github/workflows/ocr.yml).
+/android/
+/ios/
+/test/
+.dart_tool/
+.flutter-plugins-dependencies
+.metadata
+build/
+pubspec.lock
+*.iml
+.idea/
