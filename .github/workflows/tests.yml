@@ -4,7 +4,8 @@
 #   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
 #   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
-#            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it)
+#            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it), and cache_ocr's analyze
+#            and tests (a fake engine; the real engines run on an emulator and a simulator in ocr.yml)
 #   embed-parity  the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
 #            with the pinned bge-m3 model and a Linux cache_llama (places_pack's parity_tests, then
 #            app/test/query_embedder_parity_test.dart, matched to the golden at cosine 0.999 and to each other exactly)
@@ -120,6 +121,14 @@ jobs:
         working-directory: packages/cache_search
         run: |
           flutter pub get
+          flutter test --no-pub
+      # The OCR engine layer's Dart side with a fake engine and a mocked channel (the real engines run in ocr.yml).
+      - name: Plugin tests (cache_ocr)
+        working-directory: packages/cache_ocr
+        run: |
+          flutter pub get
+          (cd example && flutter pub get)
+          flutter analyze
           flutter test --no-pub
 
   embed-parity:

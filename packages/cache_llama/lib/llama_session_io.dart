@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 
 import 'cache_llama_bindings.dart';
+import 'load_options.dart';
 import 'partial_message.dart';
 
 /// Owns one loaded model. All native calls that can take time (load, start, token loop, parse) run
@@ -86,11 +87,9 @@ class LlamaSession {
   }
 
   /// Loads the model (replacing a model loaded before). Throws a [StateError] with the reason on failure.
-  /// [memoryRoomBytes] (Android): what the system can still give the app now (availMem minus threshold); the native layer
-  /// repacks the CPU weights only when that leaves room for the copy (see cl_configure), else keeps them in the mmap. Null: not
-  /// known (repacked, as before). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs;
-  /// null: not saved.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, int? memoryRoomBytes, String? prefixDir}) async {
+  /// On Android the CPU weights stay file-backed in the mmap; [repackWeights] repacks them instead, for measurement only (see
+  /// cl_configure). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs; null: not saved.
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir}) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
@@ -101,7 +100,7 @@ class LlamaSession {
       'id': id,
       'path': path,
       'nCtx': nCtx,
-      'options': jsonEncode({'prefix_dir': prefixDir ?? '', 'mem_room_bytes': memoryRoomBytes ?? 0}),
+      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights),
     });
     final r = await c.future;
     if (r['error'] != null) throw StateError(r['error'] as String);

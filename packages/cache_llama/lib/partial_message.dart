@@ -132,7 +132,8 @@ class ModelInfo {
   final String chatFormat;
   final bool supportsTools;
 
-  /// How the weights were loaded: "repacked", "mmap" or "default" (null from an older library or a remote model), and why.
+  /// How the weights were loaded: "mmap" (the Android default), "repacked" (Android, measurement opt-in only) or "default"
+  /// (null from an older library or a remote model), and why.
   final String? weights;
   final String? weightsReason;
 }

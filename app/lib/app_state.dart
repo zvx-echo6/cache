@@ -59,6 +59,11 @@ const int kContextTokens = 8192;
 /// The folder under app support where the native layer keeps the saved prompt prefix (at most two files).
 const String kPromptPrefixDir = 'prompt-prefix';
 
+/// Android, for measurement builds only: true repacks the chat model's CPU weights (an anonymous copy) instead of keeping them
+/// file-backed in the mmap, the default. On a Galaxy S22 the copy cost about a GB of memory, pushed the app into swap and gave no
+/// speed, so a released build keeps this false; nothing chooses it at run time.
+const bool kRepackChatWeightsForMeasurement = false;
+
 class AppState extends ChangeNotifier {
   AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
 
@@ -375,24 +380,19 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Loads [path] into the session. On Android the native layer is told the memory the system can still give the app, so it
-  /// repacks the CPU weights only when the copy fits (else they stay file-backed in the mmap); it is also given the folder where
-  /// the fixed prompt start is saved between runs (app support/[kPromptPrefixDir]).
+  /// Loads [path] into the session. On Android the CPU weights stay file-backed in the mmap (repacked only in a measurement build,
+  /// [kRepackChatWeightsForMeasurement]); the native layer is also given the folder where the fixed prompt start is saved between
+  /// runs (app support/[kPromptPrefixDir]).
   Future<ModelInfo> _loadModel(String path, int nCtx) async {
-    int? room;
     String? prefixDir;
     if (!kIsWeb) {
       try {
-        if (Platform.isAndroid) {
-          final m = await memory();
-          if (m != null && !m.appScoped && m.room > 0) room = m.room;
-        }
         prefixDir = '${(await getApplicationSupportDirectory()).path}/$kPromptPrefixDir';
       } catch (_) {
-        // Without a reading or a folder the model loads as before.
+        // Without a folder the model loads without the saved prefix.
       }
     }
-    return session.load(path, nCtx: nCtx, memoryRoomBytes: room, prefixDir: prefixDir);
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
