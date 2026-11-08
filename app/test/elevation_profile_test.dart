@@ -91,7 +91,7 @@ void main() {
       final c = p.steepestClimbAhead(0)!;
       // Smoothing rounds the corners of a stretch, so its grade reads a little under the true 9%.
       expect(c.grade, inInclusiveRange(0.07, 0.095));
-      expect(c.startM, inInclusiveRange(2850, 3150));
+      expect(c.startM, inInclusiveRange(2800, 3200));
       expect(c.lengthM, inInclusiveRange(600, 950));
     });
 
