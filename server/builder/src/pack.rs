@@ -174,6 +174,15 @@ pub struct BookBlock {
     pub ocr: Option<OcrInfo>,
     #[serde(default)]
     pub suggested: Option<Suggested>,
+    /// Optional, additive (no revision change): who wrote the book. Written only when known, never `null` or empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Optional: the edition, e.g. "7th edition". Written only when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edition: Option<String>,
+    /// Optional: the year of this edition (1400..2100). Written only when known, as a JSON integer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<u32>,
 }
 
 impl Header {
@@ -220,6 +229,9 @@ impl Header {
                     compression: None,
                     ocr: None,
                     suggested: Some(Suggested::from_division(d)),
+                    author: None,
+                    edition: None,
+                    year: None,
                 });
             }
         }

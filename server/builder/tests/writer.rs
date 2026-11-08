@@ -345,7 +345,7 @@ fn original_identity_survives_pack_export_archive_and_core_unpack() {
     let mut pack = pack_of("compressed", vec![piece(0, "Existing passage", "1", Some(1))]);
     pack.header.book = Some(cache_builder::pack::BookBlock {
         title: pack.header.title.clone(), source_title: None,
-        original_blake3: "ef".repeat(32), compression: None, ocr: None, suggested: None,
+        original_blake3: "ef".repeat(32), compression: None, ocr: None, suggested: None, author: None, edition: None, year: None,
     });
     let doc = LibDoc::from_pack(&read_pack_bytes(&pack_bytes(&pack).unwrap()).unwrap());
     assert_eq!(doc.original_blake3.as_deref(), Some("ef".repeat(32).as_str()));

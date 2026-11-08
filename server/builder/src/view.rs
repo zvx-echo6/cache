@@ -32,11 +32,15 @@ pub struct BookFacts {
     pub unsure: bool,
     pub compression: Option<CompressionOutcome>,
     pub ocr: Option<OcrInfo>,
+    /// Optional book facts (the pack's `book.author`, `book.edition`, `book.year`), or what a titles file gave.
+    pub author: Option<String>,
+    pub edition: Option<String>,
+    pub year: Option<u32>,
 }
 
 impl BookFacts {
     pub fn new(title: &str, suggested: Option<Suggested>) -> BookFacts {
-        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None }
+        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None, author: None, edition: None, year: None }
     }
 
     pub fn from_header(h: &Header) -> BookFacts {
@@ -49,6 +53,9 @@ impl BookFacts {
             unsure: false,
             compression: b.and_then(|b| b.compression.clone()),
             ocr: b.and_then(|b| b.ocr.clone()),
+            author: b.and_then(|b| b.author.clone()),
+            edition: b.and_then(|b| b.edition.clone()),
+            year: b.and_then(|b| b.year),
         }
     }
 

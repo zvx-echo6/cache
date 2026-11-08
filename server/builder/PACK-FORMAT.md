@@ -132,7 +132,10 @@ the book afterwards (where it is shelved, its call number, a new title, hiding i
   "compression": {"original_size": 58000000, "stored_size": 41000000, "level": "smaller_scans", "preset": "balanced",
                   "kept_original": false, "kept_reason": null, "psnr_min": 31.2},
   "ocr": {"engine": "doctr", "version": "1.1.0", "pages_ocrd": 412},
-  "suggested": {"div": "210", "label": "First aid", "score": 0.91, "classifier_version": 3, "source": "classifier", "second_div": "220"}
+  "suggested": {"div": "210", "label": "First aid", "score": 0.91, "classifier_version": 3, "source": "classifier", "second_div": "220"},
+  "author": "Eric A. Weiss",
+  "edition": "7th edition",
+  "year": 2018
 }
 ```
 
@@ -144,8 +147,15 @@ the book afterwards (where it is shelved, its call number, a new title, hiding i
 | `compression` | What compression did, as the build record has it (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`), or `null`. |
 | `ocr` | `{engine, version, pages_ocrd}`: the text came from OCR (`pages_ocrd` is how many pages it read), or `null`. |
 | `suggested` | `{div, label, score, classifier_version, source, second_div}` or `null`. `source` is `classifier` or `label` (readers refuse other values). `score`, `classifier_version` and `second_div` are `null` when unknown (a label has no score). It is a suggestion, not a shelf: the shelf is the latest `place` in the log. |
+| `author` | Optional. Who wrote the book: a string of 1 to 200 characters. |
+| `edition` | Optional. The edition, for example `"7th edition"`: a string of 1 to 60 characters. |
+| `year` | Optional. The year of this edition: a JSON integer from 1400 to 2100. |
 
-Every key of `book` is always written (`null` when unknown). `cache-build pdf` and the build service write the block on every pack:
+`author`, `edition` and `year` are additive and optional (no revision change; a reader that does not know them ignores them). They are
+written **only when known**: the key is absent otherwise, never `null` and never an empty string. Bookshelves reads them for the book's
+catalogue card and hides each one that is absent.
+
+Every other key of `book` is always written (`null` when unknown). `cache-build pdf` and the build service write the block on every pack:
 
 - `title` and `source_title`: from `--title` or the PDF metadata, as before (a `--titles` file replaces the title, keeping the old one as `source_title`).
 - `original_blake3`: the hash of the file as it came (before `--compress`). `--original-blake3 HEX` names it when the PDF given is an OCR copy.
@@ -244,8 +254,14 @@ division and the titles for a rebuild:
   set with source `"label"`, no score and no classifier version (in `cache-build pdf` it goes into the pack; in `cache-build library` it
   decides the seed log's `place`). The label (name) comes from the record's optional `label`, else
   from `--classes` (default: the server's `classes-default.json`), else the code itself.
-- `--titles`: JSON Lines `{id, path, title, source_title, method, ok}`. A line that is not `ok`, or has an empty title, is
-  skipped. Otherwise the document's title is the line's, and its old title is kept as `source_title`.
+- `--titles`: JSON Lines `{id, path, title, source_title, method, ok, author?, edition?, year?}`. A line that is not `ok`, or has an
+  empty title, gives no title. Otherwise the document's title is the line's, and its old title is kept as `source_title`.
+  `author` (1 to 200 characters after trimming), `edition` (1 to 60 characters) and `year` (an integer, 1400 to 2100) are optional.
+  A value that fails its check is dropped on its own (the rest of the line stands) and counted in the report. A line may carry them
+  with no usable title, and they are taken whenever the line matches a pack, even if `ok` is false. They are written into the pack's
+  `book` block only by `cache-build pdf` (and `cache-build pack`), which write a pack. `cache-build library` never rewrites packs:
+  it counts the lines that matched but its output (seed log, view, index) has no place for these three, so an existing library gets
+  them by rebuilding its packs with `cache-build pdf --titles` (a new pack version), not by re-running `library`.
 - How a pack finds its record. A pack records its `doc_id`, its source's BLAKE3, and the source's file name (the last part of the
   path, not the folder). A record is matched by, in order: (1) `doc_id` equal to the record's `id`; (2) the source BLAKE3 equal to
   the record's optional `blake3`; (3) the file name equal to the last part of the record's `path`, **only when exactly one record

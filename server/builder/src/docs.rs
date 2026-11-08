@@ -137,29 +137,96 @@ pub fn load_labels(path: &Path) -> Result<Labels> {
 /// What a titles file says about one document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TitleRec {
-    pub title: String,
+    /// The new title; `None` when the line has no usable title (or is not `ok`).
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub edition: Option<String>,
+    pub year: Option<u32>,
+}
+
+impl TitleRec {
+    fn has_facts(&self) -> bool {
+        self.author.is_some() || self.edition.is_some() || self.year.is_some()
+    }
+}
+
+/// A string book fact: trimmed, 1..=`max` characters. `Err(())` when the field is present but unusable; `Ok(None)` when absent.
+fn fact_text(r: &Value, k: &str, max: usize) -> std::result::Result<Option<String>, ()> {
+    match r.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() || t.chars().count() > max {
+                Err(())
+            } else {
+                Ok(Some(t.to_string()))
+            }
+        }
+        Some(_) => Err(()),
+    }
+}
+
+/// The year book fact: a JSON integer in 1400..=2100.
+fn fact_year(r: &Value) -> std::result::Result<Option<u32>, ()> {
+    match r.get("year") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_i64() {
+            Some(y) if (1400..=2100).contains(&y) => Ok(Some(y as u32)),
+            _ => Err(()),
+        },
+    }
 }
 
 pub type Titles = KeyedFile<TitleRec>;
 
-/// Reads a titles file: JSON Lines `{id, path, title, source_title, method, ok}`. A line that is not `ok`, or has no title, is
-/// skipped (the existing title stays). A blank line is ignored; any other line that is not JSON is an error.
+/// Reads a titles file: JSON Lines `{id, path, title, source_title, method, ok, author?, edition?, year?}`. A line that is not
+/// `ok`, or has no title, gives no title (the existing one stays). `author` (1..200 characters after trimming), `edition`
+/// (1..60 characters) and `year` (an integer, 1400..2100) are optional; a value that fails its check is dropped on its own, not
+/// the line, and counted (see [`load_titles_counted`]). A line with no usable title can still carry them, and they are taken
+/// even when `ok` is false. A blank line is ignored; any other line that is not JSON is an error.
 pub fn load_titles(path: &Path) -> Result<Titles> {
+    load_titles_counted(path).map(|(t, _)| t)
+}
+
+/// [`load_titles`], and how many author, edition or year values were dropped for failing their checks.
+pub fn load_titles_counted(path: &Path) -> Result<(Titles, usize)> {
     let raw = std::fs::read_to_string(path).map_err(|e| Error::ctx(&format!("reading {}", path.display()), e))?;
     let mut recs = Vec::new();
+    let mut dropped = 0usize;
     for (n, line) in raw.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         let r: Value = serde_json::from_str(line).map_err(|e| Error::ctx(&format!("{} line {}", path.display(), n + 1), e))?;
-        if r.get("ok").and_then(|x| x.as_bool()) == Some(false) {
+        let title = if r.get("ok").and_then(|x| x.as_bool()) == Some(false) { None } else { text(&r, "title") };
+        let mut keep = |res: std::result::Result<Option<String>, ()>| match res {
+            Ok(v) => v,
+            Err(()) => {
+                dropped += 1;
+                None
+            }
+        };
+        let author = keep(fact_text(&r, "author", 200));
+        let edition = keep(fact_text(&r, "edition", 60));
+        let year = keep_year(fact_year(&r), &mut dropped);
+        let value = TitleRec { title, author, edition, year };
+        if value.title.is_none() && !value.has_facts() {
             continue;
         }
-        let Some(title) = text(&r, "title") else { continue };
         let name = text(&r, "path").map(|p| file_name_of(&p)).unwrap_or_default();
-        recs.push(Keyed { id: text(&r, "id"), blake3: text(&r, "blake3"), name, value: TitleRec { title } });
+        recs.push(Keyed { id: text(&r, "id"), blake3: text(&r, "blake3"), name, value });
     }
-    Ok(KeyedFile::new(recs))
+    Ok((KeyedFile::new(recs), dropped))
+}
+
+fn keep_year(res: std::result::Result<Option<u32>, ()>, dropped: &mut usize) -> Option<u32> {
+    match res {
+        Ok(v) => v,
+        Err(()) => {
+            *dropped += 1;
+            None
+        }
+    }
 }
 
 /// The names of the divisions, from a classes file (`{"classes":[{"divisions":[{"number","name"}]}]}`, the format of the
@@ -190,6 +257,10 @@ pub struct Applied {
     pub titles_matched: usize,
     pub titles_ambiguous: usize,
     pub titles_unmatched: usize,
+    /// Documents that got an author, edition or year from the titles file.
+    pub facts_applied: usize,
+    /// Author, edition or year values the titles file had that failed their checks and were dropped (set when it was read).
+    pub facts_dropped: usize,
 }
 
 /// The overrides of a rebuild: both are optional.
@@ -197,6 +268,8 @@ pub struct Applied {
 pub struct Overrides {
     pub labels: Option<Labels>,
     pub titles: Option<Titles>,
+    /// Author, edition and year values of the titles file dropped as invalid, for the report.
+    pub facts_dropped: usize,
     /// Names for the divisions of `labels`; a division without a name gets its code as its label.
     pub names: HashMap<String, String>,
     /// The division sorter (`cache-build library --classifier`): files the books no label and no pack has placed.
@@ -208,6 +281,7 @@ impl Overrides {
     /// title kept as `source_title`.
     pub fn entry(&self, h: &Header, applied: &mut Applied) -> BookFacts {
         let mut e = BookFacts::from_header(h);
+        applied.facts_dropped = self.facts_dropped;
         if let Some(l) = &self.labels {
             match l.find(h) {
                 Found::One(r) => {
@@ -229,9 +303,23 @@ impl Overrides {
             match t.find(h) {
                 Found::One(r) => {
                     applied.titles_matched += 1;
-                    if r.title != e.title {
-                        e.source_title = Some(e.title.clone());
-                        e.title_override = Some(r.title.clone());
+                    if let Some(t) = &r.title {
+                        if *t != e.title {
+                            e.source_title = Some(e.title.clone());
+                            e.title_override = Some(t.clone());
+                        }
+                    }
+                    if r.has_facts() {
+                        applied.facts_applied += 1;
+                        if r.author.is_some() {
+                            e.author = r.author.clone();
+                        }
+                        if r.edition.is_some() {
+                            e.edition = r.edition.clone();
+                        }
+                        if r.year.is_some() {
+                            e.year = r.year;
+                        }
                     }
                 }
                 Found::Ambiguous => applied.titles_ambiguous += 1,
@@ -251,6 +339,30 @@ mod tests {
         assert_eq!(file_name_of("/mnt/library/A/b c.pdf"), "b c.pdf");
         assert_eq!(file_name_of("C:\\x\\y.pdf"), "y.pdf");
         assert_eq!(file_name_of("plain.pdf"), "plain.pdf");
+    }
+
+    #[test]
+    fn titles_file_facts_are_checked_one_by_one() {
+        let dir = std::env::temp_dir().join(format!("cache-titles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.jsonl");
+        let long_author = "a".repeat(201);
+        let lines = [
+            serde_json::json!({"id": "1", "title": "T", "author": " Ann ", "edition": "3rd", "year": 1400}),
+            serde_json::json!({"id": "2", "author": long_author, "edition": "", "year": 2101}),
+            serde_json::json!({"id": "3", "ok": false, "title": "No", "year": 2100, "edition": 5}),
+            serde_json::json!({"id": "4", "title": "", "path": "x.pdf"}),
+        ];
+        std::fs::write(&f, lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n") + "\n\n").unwrap();
+        let (t, dropped) = load_titles_counted(&f).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        // line 2 has nothing usable left, line 4 has nothing at all: both are not records; line 3 keeps only its year
+        assert_eq!(t.len(), 2);
+        assert_eq!(dropped, 4);
+        let by = |id: &str| t.recs.iter().find(|r| r.id.as_deref() == Some(id)).map(|r| r.value.clone());
+        assert_eq!(by("1"), Some(TitleRec { title: Some("T".into()), author: Some("Ann".into()), edition: Some("3rd".into()), year: Some(1400) }));
+        assert_eq!(by("3"), Some(TitleRec { title: None, author: None, edition: None, year: Some(2100) }));
+        assert_eq!(by("2"), None);
     }
 
     #[test]
