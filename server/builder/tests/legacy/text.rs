@@ -1,4 +1,4 @@
-//! Text helpers: whitespace normalisation, joining lines, dehyphenation and sentence splitting. Only layout-level
+//! Text helpers: whitespace normalization, joining lines, dehyphenation and sentence splitting. Only layout-level
 //! work on the book's own words; nothing is rewritten.
 
 /// Replace leader dots (four or more dots in a row, with or without spaces between them: "Chapter 1 ........ 12") with a
@@ -80,7 +80,7 @@ pub fn join_pair(a: &str, b: &str) -> String {
     format!("{a} {b}")
 }
 
-/// Join lines into one flowing paragraph (whitespace normalised, hyphenated words made whole).
+/// Join lines into one flowing paragraph (whitespace normalized, hyphenated words made whole).
 pub fn join_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     let mut cur = String::new();
     for l in lines {
@@ -125,7 +125,7 @@ fn list_marker_at(chars: &[(usize, char)], k: usize) -> bool {
 
 /// True when the period ending `before` (the text up to and including the period) is an abbreviation or a list marker
 /// and not the end of a sentence: an initial or a single character ("a.", "1."), a token with a period inside ("U.S.",
-/// "e.g."), or a short capitalised token ("Mr.", "Dr.", "St.", "Gen.").
+/// "e.g."), or a short capitalized token ("Mr.", "Dr.", "St.", "Gen.").
 fn is_abbrev(before: &str) -> bool {
     let tok = before.rsplit(char::is_whitespace).next().unwrap_or("");
     let tok = tok.trim_start_matches(|c: char| !c.is_alphanumeric());

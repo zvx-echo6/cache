@@ -1,6 +1,6 @@
 //! An embedder that asks a running llama.cpp `llama-server` (started with `--embeddings --pooling cls`, bge-m3 Q8_0) for the
 //! vectors, so a build can use a GPU. It is a plain HTTP/1.1 client over `std::net` (the server is local, so no TLS and no
-//! HTTP crate). The vectors are normalised here exactly as `cl_embed` does it (the sum of squares in f64, one f32 scale), and
+//! HTTP crate). The vectors are normalized here exactly as `cl_embed` does it (the sum of squares in f64, one f32 scale), and
 //! a text longer than the model's 512 tokens is cut the way `cl_embed` cuts it (keep the first 511 tokens and the closing
 //! special token), so a server vector and a phone vector for the same text agree up to the numeric precision of the device.
 
@@ -16,7 +16,7 @@ pub const N_CTX: usize = 512;
 /// The name recorded in packs: the same as the CPU embedder's model file, so packs from either are one library.
 pub const MODEL_NAME: &str = "bge-m3-Q8_0.gguf";
 
-/// L2-normalise as `cl_embed` does: the norm accumulated in f64, the scale rounded to f32, left alone when the norm is 0.
+/// L2-normalize as `cl_embed` does: the norm accumulated in f64, the scale rounded to f32, left alone when the norm is 0.
 pub fn normalize(v: &mut [f32]) {
     let norm: f64 = v.iter().map(|x| (*x as f64) * (*x as f64)).sum();
     let scale = if norm > 0.0 { (1.0 / norm.sqrt()) as f32 } else { 1.0 };
@@ -119,7 +119,7 @@ impl HttpEmbedder {
         Ok((status, v))
     }
 
-    /// Vectors for `inputs` (each a string or a token array), in order, normalised.
+    /// Vectors for `inputs` (each a string or a token array), in order, normalized.
     fn request(&self, inputs: Vec<Value>) -> Result<Vec<Vec<f32>>, (u16, String)> {
         let n = inputs.len();
         let (status, v) = self.post("/v1/embeddings", &json!({ "input": inputs, "encoding_format": "float" })).map_err(|e| (0, e))?;
@@ -147,7 +147,7 @@ impl HttpEmbedder {
         Ok(out.into_iter().map(|o| o.unwrap()).collect())
     }
 
-    /// One text cut to the model's context exactly as cl_embed cuts it (tokenise with the server's own vocabulary, then send tokens).
+    /// One text cut to the model's context exactly as cl_embed cuts it (tokenize with the server's own vocabulary, then send tokens).
     fn embed_cut(&self, text: &str) -> Result<Vec<f32>, String> {
         let (st, t) = self.post("/tokenize", &json!({ "content": text, "add_special": true, "parse_special": false })).map_err(|e| e.to_string())?;
         if st != 200 {

@@ -68,7 +68,7 @@ pub struct PresetParams {
     pub threshold_dpi: f32,
     /// ...to this resolution.
     pub target_dpi: f32,
-    /// Half-resolution colour (4:2:0) when true, else 4:2:2.
+    /// Half-resolution color (4:2:0) when true, else 4:2:2.
     pub chroma_half: bool,
     /// The lowest page PSNR (dB) at [`CHECK_DPI`] that is accepted; below it the original is kept.
     pub psnr_floor: f64,
@@ -448,7 +448,7 @@ fn filters(o: &PdfObject) -> Vec<String> {
     }
 }
 
-/// Components of a colour space we can recompress as plain gray or RGB: 1 or 3, else None (CMYK, Indexed, Lab, separation...).
+/// Components of a color space we can recompress as plain gray or RGB: 1 or 3, else None (CMYK, Indexed, Lab, separation...).
 fn components(cs: &PdfObject) -> Option<u8> {
     if cs.is_name().unwrap_or(false) {
         return match name(cs)?.as_str() {
@@ -552,7 +552,7 @@ fn recompress_one(obj: &mut PdfObject, dpi: Option<f32>, pp: PresetParams) -> st
     if int(obj, "BitsPerComponent").ok_or("no bpc")? != 8 {
         return Err("not 8 bit");
     }
-    let n = get(obj, "ColorSpace").as_ref().and_then(components).ok_or("colour space")? as usize;
+    let n = get(obj, "ColorSpace").as_ref().and_then(components).ok_or("color space")? as usize;
     let (w, h) = (int(obj, "Width").ok_or("no width")? as usize, int(obj, "Height").ok_or("no height")? as usize);
     if w == 0 || h == 0 || w > 60000 || h > 60000 {
         return Err("size");
@@ -583,7 +583,7 @@ fn recompress_one(obj: &mut PdfObject, dpi: Option<f32>, pp: PresetParams) -> st
             }
             v.truncate(w * h * n);
             if looks_synthetic(&v, n) {
-                return Err("few colours");
+                return Err("few colors");
             }
             v
         }
@@ -617,7 +617,7 @@ fn recompress_one(obj: &mut PdfObject, dpi: Option<f32>, pp: PresetParams) -> st
     Ok(())
 }
 
-/// Drawings and diagrams stored losslessly (a handful of gray levels, or at most 256 colours) are left alone: JPEG rings around their edges.
+/// Drawings and diagrams stored losslessly (a handful of gray levels, or at most 256 colors) are left alone: JPEG rings around their edges.
 fn looks_synthetic(v: &[u8], n: usize) -> bool {
     let limit = if n == 1 { 8 } else { 256 };
     let mut seen: HashSet<u32> = HashSet::new();

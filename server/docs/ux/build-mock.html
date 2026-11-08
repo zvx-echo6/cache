@@ -322,7 +322,7 @@ function addPage({model=true}){
  <div class="note2" style="padding-top:6px">Dropping PDFs anywhere on Library opens this too.</div>
  ${dropRow(STATE==='ingest-active')}
  <div class="gl">Ready-made collections · free from Kiwix</div>
- <div class="search">${ic('search',20)}Search the catalogue</div>
+ <div class="search">${ic('search',20)}Search the catalog</div>
  <div class="chips"><span class="chip">All languages</span><span class="chip on">All</span><span class="chip">Medicine</span><span class="chip">Preparedness</span></div>
  <div class="entry"><div class="lt">W</div><div class="tx"><div class="ti">Wikipedia (English)</div><div class="de">All articles, no images · 98.2 GB</div></div><span class="badge" style="color:var(--ok);margin-right:8px">On this device</span></div>
  </div></div>`;
@@ -332,7 +332,7 @@ function addPage({model=true}){
 function destination({pick='new', name='', focus=true, nameErr}){
  const n = pick==='new';
  return `<div class="gl">1 · Where should the books go?</div>
- <div class="choice ${n?'on':''}"><div class="radio">${n?'<i></i>':''}</div><div class="tx"><div class="ti">A new library</div><div class="de" style="margin-bottom:8px">Give it a name you will recognise on your phone.</div>
+ <div class="choice ${n?'on':''}"><div class="radio">${n?'<i></i>':''}</div><div class="tx"><div class="ti">A new library</div><div class="de" style="margin-bottom:8px">Give it a name you will recognize on your phone.</div>
   ${n?`<div class="inp ${focus?'focus':''}">${name?`<span>${name}</span>`:'<span style="color:var(--secondary)">Library name</span>'}${focus?'<span class="caret"></span>':''}</div>${nameErr?`<div class="errline" style="padding:6px 0 0">${nameErr}</div>`:''}`:''}</div></div>
  <div class="choice ${!n?'on':''}"><div class="radio">${!n?'<i></i>':''}</div><div class="tx"><div class="ti">A library you built</div><div class="de">${n?'Add to one you made from PDFs earlier.':''}</div>
   ${!n?`<div class="inp" style="margin-top:8px"><span>${LIBNAME}</span><span class="sfx">214 books</span></div>`:`<div class="de" style="margin-top:2px">${LIBNAME} · 214 books<br>Garden and homestead · 38 books</div>`}</div></div>`;
@@ -443,9 +443,9 @@ function libPage({mode, n=5}){
  let mid='';
  if(mode==='search'){
   mid = `<div class="gl">3 passages in ${LIBNAME}</div>
-  <div class="hit"><div class="m"><b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting</div><p>"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilise the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."</p></div>
+  <div class="hit"><div class="m"><b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting</div><p>"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilize the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."</p></div>
   <div class="hit"><div class="m"><b>Field Manual 21-76 Survival</b> · page 204 · Improvised splints</div><p>"A <mark>broken forearm</mark> can be <mark>splinted</mark> with two straight sticks, one on each side, padded with cloth and tied above and below the injury."</p></div>
-  <div class="hit"><div class="m"><b>Where There Is No Doctor</b> · page 76 · Broken bones</div><p>"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for colour and warmth."</p></div>
+  <div class="hit"><div class="m"><b>Where There Is No Doctor</b> · page 76 · Broken bones</div><p>"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for color and warmth."</p></div>
   <div class="note2">These are the books' own words with their pages. Results come from this device only.</div>`;
  } else if(empty){
   mid = `<div class="center" style="padding:40px 16px"><div style="color:var(--secondary);display:grid;place-items:center;margin-bottom:12px">${ic('pdf',40)}</div>No books in this library yet.<br>Add PDFs and Cache builds them one at a time. It keeps going if you close this tab.<div style="margin-top:16px"><span class="fbtn">${ic('add',18)}Add PDFs</span></div></div>`;
@@ -493,7 +493,7 @@ function deskAddPage({model=true, ring=null}={}){
   ${dropRow(false)}
   <div class="opt" style="margin-top:12px"><div style="color:var(--text)">${ic('link',22)}</div><div class="tx"><div class="ti">From a download link</div><div class="de">A link to a library file</div></div><div style="color:var(--secondary)">${ic('chev',24)}</div></div>`;
  const right = `<div class="gl" style="margin-top:4px">Ready-made collections · free from Kiwix</div>
-  <div class="search">${ic('search',20)}Search the catalogue</div>
+  <div class="search">${ic('search',20)}Search the catalog</div>
   <div class="chips"><span class="chip">All languages</span><span class="chip on">All</span><span class="chip">Medicine</span><span class="chip">Preparedness</span><span class="chip">Reference</span><span class="chip">Q&amp;A</span></div>
   <div class="grid2">${catHtml(ring)}</div>`;
  return deskShell(deskBar('Add to Library'), left, right);
@@ -521,9 +521,9 @@ function deskTable({n=14, hov=2, edit=-1}){
 }
 function deskHits(){
  const h=(m,p)=>`<div class="hit"><div class="m">${m}</div><p>${p}</p></div>`;
- return `<div class="hits">${h('<b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting','"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilise the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."')}
+ return `<div class="hits">${h('<b>Wilderness Medicine Handbook, 7th ed</b> · page 118 · Fractures and splinting','"To <mark>splint</mark> a <mark>broken forearm</mark>, immobilize the joint above and below the break. Pad a rigid support along the palm side, and bind it snugly without cutting off the circulation."')}
  ${h('<b>Field Manual 21-76 Survival</b> · page 204 · Improvised splints','"A <mark>broken forearm</mark> can be <mark>splinted</mark> with two straight sticks, one on each side, padded with cloth and tied above and below the injury."')}
- ${h('<b>Where There Is No Doctor</b> · page 76 · Broken bones','"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for colour and warmth."')}
+ ${h('<b>Where There Is No Doctor</b> · page 76 · Broken bones','"Make the <mark>splint</mark> long enough to hold the bones still and keep the hand slightly raised. Check the fingers often for color and warmth."')}
  ${h('<b>Basic Wilderness First Aid</b> · page 52 · Arm injuries','"If the <mark>forearm</mark> is <mark>broken</mark>, support it across the chest in a sling after <mark>splinting</mark>. Recheck the hand every fifteen minutes."')}
  ${h('<b>Backcountry Navigation Basics</b> · page 301 · When someone is hurt','"Mark your position before you leave an injured person to get help, and write down how to find them."')}
  <div class="note2">These are the books\' own words with their pages. Results come from this device only.</div></div>`;

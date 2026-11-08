@@ -57,7 +57,7 @@ Every other line is a piece:
 
 ## Pieces
 
-Verbatim text only: whitespace is normalised, words hyphenated at a line end are made whole, ligatures are expanded and
+Verbatim text only: whitespace is normalized, words hyphenated at a line end are made whole, ligatures are expanded and
 leader dots in tables of contents are dropped; nothing is rewritten. Pieces are whole sentences, with the last one or two
 sentences (at most 40 words) repeated at the start of the next piece of the same section. A piece never crosses a heading, and
 spans a page break only when a sentence does.
@@ -153,7 +153,7 @@ the book afterwards (where it is shelved, its call number, a new title, hiding i
 
 `author`, `edition` and `year` are additive and optional (no revision change; a reader that does not know them ignores them). They are
 written **only when known**: the key is absent otherwise, never `null` and never an empty string. Bookshelves reads them for the book's
-catalogue card and hides each one that is absent.
+catalog card and hides each one that is absent.
 
 Every other key of `book` is always written (`null` when unknown). `cache-build pdf` and the build service write the block on every pack:
 
@@ -194,7 +194,7 @@ made into these pages and calls the same writer.
 | `label` | The printed page label (a numeral or number). Empty or absent: the PDF page number. |
 | `text_source` | `"layer"` (the PDF's text layer; the default when absent) or `"ocr"`. Anything else is refused. |
 | `blocks` | The page's blocks **in reading order**. A page with none has no text (the writer lists it in `ocr_pages` unless the caller says otherwise). |
-| `blocks[].text` | The text of one paragraph or heading, whitespace normalised. (`cache-build pack` normalises it: runs of whitespace, no-break and zero-width spaces become one space, soft hyphens and control characters go.) |
+| `blocks[].text` | The text of one paragraph or heading, whitespace normalized. (`cache-build pack` normalizes it: runs of whitespace, no-break and zero-width spaces become one space, soft hyphens and control characters go.) |
 | `blocks[].kind` | `"body"` (running text), `"heading"`, or `"aside"` (a pull-quote, epigraph, caption or note: the chunker keeps it from interrupting a sentence that runs on to the next page). |
 | `blocks[].level` | Heading level from 1 (outermost); 1 when a heading has none; 0 is refused. |
 | `blocks[].bullet` | Optional, `true` for a list item. |
@@ -229,7 +229,7 @@ A built library is the normal library (`shard/`, `cache-library.json`, `document
   `{"version":1,"entries":[{"doc_id","version","source_blake3","original_blake3"}]}` (pretty-printed, a final line break): `source_blake3` is the BLAKE3 of the
   stored PDF (`documents.tsv`'s column), `original_blake3` the BLAKE3 of the file as it arrived. Hashes are 64 lowercase hex characters; entries are sorted by
   (`doc_id`, `version`, hashes), so a rebuild is byte-identical; a bad id, version or hash, or a repeated (`doc_id`, `version`), is refused, and so is a
-  `version` other than 1. A library whose documents have no `book` block has an empty list. The build service's linked-folder scan uses it to recognise a file
+  `version` other than 1. A library whose documents have no `book` block has an empty list. The build service's linked-folder scan uses it to recognize a file
   whose hash is the arrival hash rather than the stored file's: an alias counts only when its `doc_id`, `version` and `source_blake3` match a row of
   `documents.tsv`, so a library without packs still identifies those files. A missing file is a valid older library. Like `documents.tsv` it is in the
   `.cache-library` archive at its root, and the app puts it at the library root.
@@ -246,7 +246,7 @@ A built library is the normal library (`shard/`, `cache-library.json`, `document
 
 `cache-build library --classifier cache-classifier-N.bin` files the books that no label and no pack has placed. Each is scored from its
 vectors by the same sorter the build service uses (`cache_builder::sorter`); the model must have been trained on the embedding model
-Cache uses (it is refused otherwise). A confident book gets a `place` (by `auto`) and an `assign` in the seed log, as a labelled one does,
+Cache uses (it is refused otherwise). A confident book gets a `place` (by `auto`) and an `assign` in the seed log, as a labeled one does,
 and its view entry has `suggested` with source `classifier`, the score, the second choice (`second_div`) and the classifier version.
 A book the sorter is not sure of is left in Unsorted: **no `place` event**, and the view still shows the best guess in `suggested` (so a
 person's "Place it" can offer it), with no shelf. Packs are not changed. `--sorter-report FILE.tsv` writes one line per book the sorter

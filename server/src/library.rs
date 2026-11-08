@@ -1,4 +1,4 @@
-//! Libraries on the server: download jobs, uploads from the browser's computer, what is installed, and the catalogue fetch proxy.
+//! Libraries on the server: download jobs, uploads from the browser's computer, what is installed, and the catalog fetch proxy.
 //!
 //! The server owns every transfer, so a download keeps going with the browser closed.
 //!
@@ -20,7 +20,7 @@
 //! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
 //! - **Rescan** (`POST /api/library/rescan`): tells the core to read the library folders again, for a browser that has put a
 //!   library in place itself.
-//! - **Fetch** (`GET /api/fetch?url=`) reads a catalogue through the server, from the allow-listed hosts only (`fetch`).
+//! - **Fetch** (`GET /api/fetch?url=`) reads a catalog through the server, from the allow-listed hosts only (`fetch`).
 //!
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
 
@@ -93,7 +93,7 @@ struct Job {
     /// When the job was asked for, RFC 3339 UTC. Null in entries written before this was kept.
     #[serde(default)]
     created_at: Option<String>,
-    /// When it finished, failed or was cancelled, RFC 3339 UTC; null until then.
+    /// When it finished, failed or was canceled, RFC 3339 UTC; null until then.
     #[serde(default)]
     finished_at: Option<String>,
 }
@@ -237,7 +237,7 @@ fn sha256_file(path: &Path, cancel: &AtomicBool) -> Result<String, JobErr> {
     let mut buf = vec![0u8; 1 << 20];
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(job_err("cancelled", "Cancelled"));
+            return Err(job_err("cancelled", "Canceled"));
         }
         let n = f.read(&mut buf).map_err(io_job_err)?;
         if n == 0 {
@@ -517,7 +517,7 @@ impl Library {
     }
 
     fn download_and_install(&self, job: &Job, part: &Path, cancel: &AtomicBool) -> Result<(), JobErr> {
-        let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Cancelled")) } else { Ok(()) };
+        let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         std::fs::create_dir_all(self.tmp_dir()).map_err(io_job_err)?;
         let agent = fetch::agent();
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
@@ -769,7 +769,7 @@ impl Library {
         Value::Array(jobs.iter().map(Job::view).collect())
     }
 
-    /// `DELETE /api/library/jobs/{id}`: a waiting or running job is cancelled (its part file is thrown away); a finished one is
+    /// `DELETE /api/library/jobs/{id}`: a waiting or running job is canceled (its part file is thrown away); a finished one is
     /// taken off the list.
     pub fn cancel_job(&self, id: &str) -> Result<Value, ApiErr> {
         let (view, was_active) = self.update_jobs(|jobs| {
@@ -959,7 +959,7 @@ impl Library {
         })
     }
 
-    // ---- the catalogue fetch proxy
+    // ---- the catalog fetch proxy
 
     /// `GET /api/fetch?url=`: check the address, connect, and hand back the body as a stream capped at the size limit.
     pub async fn fetch(self: &Arc<Self>, query: &str) -> Result<FetchStream, ApiErr> {
@@ -969,11 +969,11 @@ impl Library {
         let opened = tokio::task::spawn_blocking(move || fetch::open(&hosts, &u2, max)).await.map_err(|e| api_err(500, "server_error", e.to_string()))?;
         let opened = opened.map_err(|e| match e {
             FetchError::BadUrl => api_err(400, "invalid", "That is not an address the server will read."),
-            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not one of the catalogue hosts.")),
-            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The catalogue answered {c}.")),
-            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than a catalogue."),
-            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The catalogue redirected too many times."),
-            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the catalogue: {m}")),
+            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not one of the catalog hosts.")),
+            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The catalog answered {c}.")),
+            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than a catalog."),
+            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The catalog redirected too many times."),
+            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the catalog: {m}")),
         })?;
         let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
         let mut reader = opened.reader;
@@ -986,7 +986,7 @@ impl Library {
                     Ok(n) => {
                         sent += n as u64;
                         if sent > max {
-                            let _ = tx.blocking_send(Err(std::io::Error::other("the answer is bigger than a catalogue")));
+                            let _ = tx.blocking_send(Err(std::io::Error::other("the answer is bigger than a catalog")));
                             return;
                         }
                         if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {

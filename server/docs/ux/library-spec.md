@@ -1,12 +1,12 @@
 # Cache for Linux: Library flows
 
-Based on the phone code (browse, download, catalogue, theme). Mock: library-mock.html (`?theme=&state=`), viewed at 1920x1080. Sample numbers. User-visible text never says "server" or "job". One device word everywhere: "this device". Phone and tablet move to it in 1.0.30; Linux and Windows use it from the start. Model-visible "this phone" text (system prompt, tool definitions) is unchanged; that is the training session's call.
+Based on the phone code (browse, download, catalog, theme). Mock: library-mock.html (`?theme=&state=`), viewed at 1920x1080. Sample numbers. User-visible text never says "server" or "job". One device word everywhere: "this device". Phone and tablet move to it in 1.0.30; Linux and Windows use it from the start. Model-visible "this phone" text (system prompt, tool definitions) is unchanged; that is the training session's call.
 
 ## Layout
-1.0.29 frame: rail 80, list pane 340, detail pane at most 640. The list keeps the phone's rows, badges and transfer cards. "Add to Library" opens in the detail pane (the phone pushes a page), so progress stays visible beside the catalogue.
+1.0.29 frame: rail 80, list pane 340, detail pane at most 640. The list keeps the phone's rows, badges and transfer cards. "Add to Library" opens in the detail pane (the phone pushes a page), so progress stays visible beside the catalog.
 
 ## 1. Downloads
-Same catalogue and dialog, plus one line: "It keeps downloading if you close this tab." After Download: snackbar "Download started. It keeps downloading if you close this tab." and the phone's transfer card (pause, cancel, Try again). List hint while any run: "Downloads keep going if you close this tab."
+Same catalog and dialog, plus one line: "It keeps downloading if you close this tab." After Download: snackbar "Download started. It keeps downloading if you close this tab." and the phone's transfer card (pause, cancel, Try again). List hint while any run: "Downloads keep going if you close this tab."
 On reopen the list shows the current state. A card "While this tab was closed" lists what finished, still runs or failed, with Dismiss. Running cards show "started yesterday 22:10".
 
 ## 2. Upload from this computer
@@ -35,7 +35,7 @@ The device word is the same on every platform. Rows that only swap "this phone" 
 Library and add flows
 | Phone (to 1.0.29) | From 1.0.30 |
 |---|---|
-| On this phone (catalogue badge) | On this device |
+| On this phone (catalog badge) | On this device |
 | That source is not on this phone any more. | That source is not on this device any more. |
 | Phone storage (delete and download dialogs) | Device storage |
 | Cache keeps X free for the phone | Cache keeps X free for the device |

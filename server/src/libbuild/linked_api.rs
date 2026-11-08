@@ -172,7 +172,7 @@ fn set_controls(path: &Path, id: &str, paused: bool) -> Result<(), ApiErr> {
             }
             persist(&sidecar, &state).map_err(io_error)?;
             // A queued worker owns a frozen registry snapshot. Save future controls
-            // without changing that snapshot or cancelling its check.
+            // without changing that snapshot or canceling its check.
             if state.active.is_none() {
                 registry.reconcile_controls(&state.controls).map_err(io_error)?;
             }

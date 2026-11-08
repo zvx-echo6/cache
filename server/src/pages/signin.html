@@ -93,7 +93,7 @@ form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
 .offline .pill .ico{display:block}
 .offline .key{border-style:dashed;border-color:var(--warn)}
 .okpill input{border-color:var(--ok)}
-/* a security key signs in: nothing of ours but the background and the logo, until the key is cancelled or times out */
+/* a security key signs in: nothing of ours but the background and the logo, until the key is canceled or times out */
 #app.auto form{display:none}
 #app.auto .brand{opacity:.9}
 @media (prefers-reduced-motion:reduce){
@@ -194,7 +194,7 @@ form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
     setTimeout(function(){flag('shake',0)},420); setTimeout(function(){flag('wrong',0)},900);
   }
   function keyWrong(btn){
-    clearAll(); app.classList.remove('auto'); btn.classList.add('on'); flag('keywrong',1); busy=false; say('Key not recognised');
+    clearAll(); app.classList.remove('auto'); btn.classList.add('on'); flag('keywrong',1); busy=false; say('Key not recognized');
     setTimeout(function(){clearAll()},1000);
   }
 
@@ -240,7 +240,7 @@ form{width:100%;display:flex;flex-direction:column;align-items:center;gap:24px}
       else fallBack();
     });
   }
-  // Cancelled (Esc, the browser's Cancel) or timed out: show the page's own controls.
+  // Canceled (Esc, the browser's Cancel) or timed out: show the page's own controls.
   function fallBack(){
     if(abort){try{abort.abort()}catch(e){}}
     clearAll(); app.classList.remove('auto'); busy=false; focusFirst();

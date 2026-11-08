@@ -91,10 +91,10 @@ delta. This mirrors Dart, where each `cl_partial` replaces the previous `Partial
 tokens sends on the order of N^2/2 tokens of text over the stream. It is bounded by `max_tokens` (the app uses 2048), and a
 client that wants less can ignore partials it has not yet had time to draw; it cannot ask for deltas in version 1.
 
-**Client disconnect:** if writing an event fails (the browser went away or cancelled the request), the server calls `cl_stop`,
+**Client disconnect:** if writing an event fails (the browser went away or canceled the request), the server calls `cl_stop`,
 lets the generation drain, and sends nothing more. A client that keeps the connection open but stops reading counts as gone too:
 if one event cannot be queued for 30 seconds, the generation is stopped the same way (otherwise it would hold the one turn for
-everyone). A client that is still waiting in the queue leaves it. This is what cancelling
+everyone). A client that is still waiting in the queue leaves it. This is what canceling
 the Dart stream does (`stop()` in `onCancel`).
 
 ## `POST /api/llm/stop`
@@ -106,7 +106,7 @@ Calls `cl_stop` on the generation with that id; its stream still ends with `done
 false when that generation is not the one running (it ended, or never started): nothing is stopped then, and nobody else's
 generation can be hit with an id.
 
-- **Without `id`**, the current behaviour: `cl_stop` on **whatever is running**, which with several browsers signed in may be
+- **Without `id`**, the current behavior: `cl_stop` on **whatever is running**, which with several browsers signed in may be
   someone else's. Clients should always send the id.
 - **The `started` event is sent after `cl_start` returns**, and `cl_start` clears the model's stop flag. So a stop sent once the
   client has seen `started` is never lost; a stop sent earlier (the client has no id before it) would be.

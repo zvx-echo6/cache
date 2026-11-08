@@ -1,4 +1,4 @@
-//! Outbound HTTP for the library features: the catalogue fetch proxy (`GET /api/fetch`) and the address rules the downloads share.
+//! Outbound HTTP for the library features: the catalog fetch proxy (`GET /api/fetch`) and the address rules the downloads share.
 //!
 //! The client is `ureq`, the one the Cache core crates use (blocking, rustls with the bundled web roots), so every call here
 //! runs in `spawn_blocking`. Redirects are never followed by the client: this module follows them itself so each hop can be
@@ -7,16 +7,16 @@
 use std::io::Read;
 use std::time::Duration;
 
-/// The hosts the app's catalogue screens read from, and nothing else (app/lib, checked 2026-11-01):
-///   opds.library.kiwix.org  the Kiwix OPDS catalogue (browse/opds.dart `kiwixCatalogHost`) and its icons
-///   data.cached.info        Cache's published data: region and off-road catalogues, routing and places, `app/latest.json`,
+/// The hosts the app's catalog screens read from, and nothing else (app/lib, checked 2026-11-01):
+///   opds.library.kiwix.org  the Kiwix OPDS catalog (browse/opds.dart `kiwixCatalogHost`) and its icons
+///   data.cached.info        Cache's published data: region and off-road catalogs, routing and places, `app/latest.json`,
 ///                           `models/recommended.json` (search/core_config.dart `kDataBaseUrl`)
-///   cache.echo6.co          the same bucket under its other name, and the connector catalogue
+///   cache.echo6.co          the same bucket under its other name, and the connector catalog
 ///                           (settings/app_settings.dart `kDefaultCatalogueUrl`, `catalogue.json`)
 /// The big files (ZIMs and library packages) are not fetched through here: they are server-side downloads.
 pub const FETCH_HOSTS: [&str; 3] = ["opds.library.kiwix.org", "data.cached.info", "cache.echo6.co"];
 
-/// The most a fetched answer may be: catalogues, not files.
+/// The most a fetched answer may be: catalogs, not files.
 pub const FETCH_MAX_BYTES: u64 = 50 << 20;
 
 /// How long to wait for a connection.
@@ -162,7 +162,7 @@ pub fn agent() -> ureq::Agent {
         .build()
 }
 
-/// A Kiwix catalogue icon asked for at a size the catalogue does not have (it answers 404 for anything but the 48 px its feed
+/// A Kiwix catalog icon asked for at a size the catalog does not have (it answers 404 for anything but the 48 px its feed
 /// links): the same icon at 48. None for any other address, or one already at 48 (so the retry happens once).
 pub fn illustration_fallback(url: &str) -> Option<String> {
     let p = parse_url(url)?;
@@ -198,7 +198,7 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
         let resp = match agent.get(&cur).call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) if illustration_fallback(&cur).is_some() => {
-                // The catalogue only serves its icons at the size its own feed links (48); another size is a 404.
+                // The catalog only serves its icons at the size its own feed links (48); another size is a 404.
                 cur = illustration_fallback(&cur).unwrap_or_default();
                 continue;
             }

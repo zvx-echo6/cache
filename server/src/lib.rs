@@ -3,7 +3,7 @@
 //! The core lives in a Dart helper process (server/helper) that this server supervises (`helper`); `/api/core` forwards the
 //! browser app's calls to it. The rest is the web side: sign-in (`auth`, `keys`), the sign-in and settings pages (`pages`), the routes (`http`), the files of the browser app
 //! (`webfiles`), the certificate (`tls`) and the data folders (`config`). Libraries on the server (downloads, uploads, what is
-//! installed) are `library`; its outbound HTTP and the catalogue fetch rules are `fetch`. Building libraries from PDFs (the queue,
+//! installed) are `library`; its outbound HTTP and the catalog fetch rules are `fetch`. Building libraries from PDFs (the queue,
 //! the work shards, the swap into the core's library folder, the drop folder) is `libbuild`.
 
 pub mod auth;
