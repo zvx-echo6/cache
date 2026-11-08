@@ -33,6 +33,10 @@ abstract class ShelfSource implements Listenable {
   /// Every book the source has (shelved and unsorted).
   int get bookCount;
 
+  /// The books the person hid from Bookshelves (on all of their devices; no file is deleted), by title. Each keeps the shelf and
+  /// number it had ([ShelfBook.shelf], [ShelfBook.callNumber]), as the logs now resolve them, so it shows where it would go back.
+  List<ShelfBook> get hidden;
+
   /// The book [id], or null when it is gone.
   ShelfBook? book(String id);
 
@@ -191,7 +195,11 @@ class ShelfBook {
     this.spares = const [],
     this.aka = const [],
     this.reading,
+    this.libraryName,
   });
+
+  /// The name of the library the book is read from ("Field library"), when it is on this device.
+  final String? libraryName;
 
   /// The book's other files (Spare copies), best first.
   final List<SpareCopy> spares;
