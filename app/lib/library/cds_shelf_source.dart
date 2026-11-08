@@ -242,6 +242,9 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   List<_LibraryBooks> _libs = const [];
   final Map<String, ShelfBook> _books = {};
 
+  /// The books the view has as removed (hidden from Bookshelves), by id.
+  final Map<String, ShelfBook> _hidden = {};
+
   /// Every copy key of a shown book -> the book's id, so a page opened on a book finds it after a merge or a split.
   final Map<String, String> _byCopy = {};
   final Map<String, _ViewBook> _view = {};
@@ -334,6 +337,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   @override
   int get bookCount => _books.length;
+
+  @override
+  List<ShelfBook> get hidden {
+    final out = _hidden.values.toList();
+    out.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    return out;
+  }
 
   @override
   ShelfBook? book(String id) => _books[id] ?? _books[_byCopy[id]];
@@ -646,6 +656,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   void _apply(List<_LibraryBooks> libs, Map<String, dynamic>? view) {
     _libs = libs;
     _books.clear();
+    _hidden.clear();
     _byCopy.clear();
     _view.clear();
     _readOnly = view == null;
@@ -679,7 +690,6 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       for (final e in (view['books'] as Map? ?? const {}).entries) {
         final vb = _ViewBook(e.key as String, (e.value as Map).cast<String, dynamic>());
         _view[vb.id] = vb;
-        if (vb.removed) continue;
         final copies = vb.copies;
         final reading = copies.where((c) => c['copy'] == vb.reading).firstOrNull ?? copies.firstOrNull;
         final at = reading == null ? null : here(reading);
@@ -720,6 +730,11 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
           aka: [for (final a in (vb.j['aka'] as List? ?? const [])) '$a'],
           reading: reading?['copy'] as String? ?? vb.id,
         );
+        // a hidden book keeps its shelf and number in the view; it shows only in Hidden books
+        if (vb.removed) {
+          _hidden[vb.id] = b;
+          continue;
+        }
         _books[vb.id] = b;
         for (final c in copies) {
           _byCopy[c['copy'] as String] = vb.id;
@@ -789,6 +804,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       spares: spares,
       aka: aka,
       reading: reading,
+      libraryName: lb == null ? null : (libraries?.titleOf(lb.item) ?? lb.item.folderName),
     );
   }
 
