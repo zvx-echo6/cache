@@ -10,7 +10,9 @@ import '../theme.dart';
 import '../video/format.dart' show formatBytes;
 import 'cds.dart';
 import 'library_pages.dart';
+import 'book_edit_pages.dart';
 import 'library_panes.dart';
+import 'same_book_pages.dart';
 import 'shelf_source.dart';
 import 'shelves_pages.dart' show shelfColor;
 
@@ -463,10 +465,26 @@ class BookPage extends StatelessWidget {
         final crumbsWithLast = b.shelf == null ? crumbs : [...crumbs.sublist(0, crumbs.length - 1), Crumb(crumbs.last.label, shelfPath(d, b.shelf!))];
         final color = bookColor(context, d, b);
         final card = _CatalogueCard(book: b, color: color);
-        final facts = _facts(context, _bookFacts(context, d, b));
+        final facts = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _facts(context, _bookFacts(context, d, b)),
+            if (b.spares.isNotEmpty) ...[const SizedBox(height: 12), _spares(context, d, b)],
+          ],
+        );
         final actions = _actions(context, d, b);
         final links = SettingsGroup(
           rows: [
+            if (d.shelves.copies != null) ...[
+              SettingsRow(key: const ValueKey('book-rename'), title: 'Rename', onTap: () => openRename(context, d, b)),
+              SettingsRow(
+                key: const ValueKey('book-hide'),
+                title: 'Hide from Bookshelves',
+                status: const [Part('On all your devices. No file is deleted.')],
+                chevron: false,
+                onTap: () => hideBook(context, d, b),
+              ),
+            ],
             SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );
@@ -541,7 +559,88 @@ class BookPage extends StatelessWidget {
         },
       ),
       if (b.stored != null) _Fact('Stored', b.stored!, valueKey: 'book-stored'),
+      if (b.aka.isNotEmpty) _Fact('Also known as', b.aka.join('\n'), valueKey: 'book-aka'),
     ];
+  }
+
+  /// The book's other files: each with its title, size and where it is; "Read this copy instead" for one on this device, and
+  /// "Not the same book" to make it a book of its own.
+  static Widget _spares(BuildContext context, LibraryDeps d, ShelfBook b) {
+    final k = context.t;
+    final copies = d.shelves.copies;
+    final messenger = ScaffoldMessenger.of(context);
+    Future<void> run(Future<void> Function() f, String done) async {
+      try {
+        await f();
+      } catch (_) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+        return;
+      }
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(done)));
+    }
+
+    return Column(
+      key: const ValueKey('book-spares'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('Spare copies'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+          child: Text('Other files of this book. They share its number; Cache reads the best one.', style: TextStyle(fontSize: 13, color: k.secondary)),
+        ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < b.spares.length; i++) ...[
+                if (i > 0) const SizedBox(height: 2),
+                Container(
+                  key: ValueKey('spare-${b.spares[i].copy}'),
+                  color: k.surface,
+                  padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(b.spares[i].title, style: TextStyle(fontSize: 15, color: k.text)),
+                      const SizedBox(height: 2),
+                      Text(
+                        [if (b.spares[i].bytes case final n? when n > 0) formatBytes(n), b.spares[i].where].join(' · '),
+                        style: TextStyle(fontSize: 13, color: k.secondary),
+                      ),
+                      if (copies != null) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (b.spares[i].here)
+                              RowButton(
+                                key: ValueKey('spare-read-${b.spares[i].copy}'),
+                                label: 'Read this copy instead',
+                                onPressed: () => run(() => copies.readInstead(b, b.spares[i].copy), 'You will read this copy from now on.'),
+                              ),
+                            RowButton(
+                              key: ValueKey('spare-notsame-${b.spares[i].copy}'),
+                              label: 'Not the same book',
+                              onPressed: () => run(() => copies.notSame(b, b.spares[i].copy), 'Now a book of its own.'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   /// The size of the book's PDF on this device, or null when it is not here.
@@ -594,6 +693,15 @@ class BookPage extends StatelessWidget {
     ];
     return [
       if (buttons.isNotEmpty) Row(children: [for (var i = 0; i < buttons.length; i++) ...[if (i > 0) const SizedBox(width: 8), buttons[i]]]),
+      if (d.shelves.copies != null) ...[
+        if (buttons.isNotEmpty) const SizedBox(height: 8),
+        OutlinedButton(
+          key: const ValueKey('book-same-as'),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(46), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+          onPressed: () => openSameBook(context, d, b),
+          child: const Text('Same book as…'),
+        ),
+      ],
       if (original) ...[
         if (buttons.isNotEmpty) const SizedBox(height: 8),
         OutlinedButton.icon(

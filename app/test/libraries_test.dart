@@ -305,19 +305,21 @@ void main() {
       expect((c['settings'] as Map)['library_id'], 'manuals');
     });
 
-    test('archive catalog and original identities are installed beside settings', () async {
+    test('archive catalog, original identities and copies are installed beside settings', () async {
       await setUpLibs();
       const catalog = 'doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n';
       final identities = jsonEncode({'version': 1, 'entries': []});
+      const copies = '{"doc_id":"a","version":1,"copy":"a"}\n';
       final archive = (jsonDecode(_lib()) as Map).cast<String, dynamic>()
-        ..['metadata'] = {'documents.tsv': catalog, 'source-identities.json': identities};
+        ..['metadata'] = {'documents.tsv': catalog, 'source-identities.json': identities, 'copies.jsonl': copies};
       await libs.addFile(libFile('manuals.cache-library', jsonEncode(archive)),
           confirmUpdate: never, askSettings: noSettings);
       final library = libs.libraries.single;
       expect(libs.phaseOf(library), LibraryPhase.ready);
       expect(File('${library.path}/documents.tsv').readAsStringSync(), catalog);
       expect(File('${library.path}/source-identities.json').readAsStringSync(), identities);
-      for (final name in ['documents.tsv', 'source-identities.json']) {
+      expect(File('${library.path}/copies.jsonl').readAsStringSync(), copies);
+      for (final name in ['documents.tsv', 'source-identities.json', 'copies.jsonl']) {
         expect(File('${library.shardPath}/$name').existsSync(), isFalse);
       }
       expect(folders(), ['manuals']);

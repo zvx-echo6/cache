@@ -109,7 +109,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   bool get _structured => b.device == null;
 
   CdsShelfSource? _ownShelves;
-  late final ShelfSource _shelves = widget.shelves ?? (_ownShelves = CdsShelfSource(libs));
+  late final ShelfSource _shelves = widget.shelves ?? (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10)));
   late final BookFiles _files = widget.files ?? BookFilesUnavailable();
   late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
 

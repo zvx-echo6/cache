@@ -117,7 +117,27 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 ),
                 const SizedBox(height: 10),
               ],
-              if (s.bookCount == 0 && !s.loading) ...[
+              for (final g in s.notShelved) ...[
+                Container(
+                  key: ValueKey('shelves-gap-${g.library}'),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'This library was made before Cache could shelve books. They are still searchable. '
+                        'Update the library to put them on your shelves.',
+                        style: TextStyle(fontSize: 13, color: k.secondary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (s.bookCount == 0 && s.notShelved.isEmpty && !s.loading) ...[
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
                   child: Text('No books yet.', key: const ValueKey('shelves-empty'), style: TextStyle(fontSize: 14, color: k.secondary)),
@@ -576,11 +596,13 @@ class _Books extends StatelessWidget {
   }
 }
 
-/// "41 MB", or "230 pages" when the size is not known.
+/// "41 MB", or "230 pages" when the size is not known; "41 MB · 1 spare copy" when the book has other files.
 String bookLine(ShelfBook b) {
-  if (b.bytes != null && b.bytes! > 0) return formatBytes(b.bytes!);
-  if (b.pages != null && b.pages! > 0) return b.pages == 1 ? '1 page' : '${b.pages} pages';
-  return 'Book';
+  final size = b.bytes != null && b.bytes! > 0
+      ? formatBytes(b.bytes!)
+      : (b.pages != null && b.pages! > 0 ? (b.pages == 1 ? '1 page' : '${b.pages} pages') : 'Book');
+  final n = b.spares.length;
+  return n == 0 ? size : '$size · ${n == 1 ? '1 spare copy' : '$n spare copies'}';
 }
 
 /// The one small state mark a book row carries when needed: "Not on this device", "Making it searchable 40%".
