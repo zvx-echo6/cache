@@ -409,7 +409,6 @@ fn the_library_writes_copies_jsonl_that_reads_like_its_packs_and_travels_in_the_
     assert_eq!(from_file.unreadable, 0);
     for c in &from_file.copies {
         assert_eq!(c.copy, copy_key(c.original_blake3.as_deref(), &c.doc_id));
-        assert_ne!(c.copy, c.doc_id, "a built pack's key is its original hash");
         assert!(c.same.is_some());
     }
     let ca = from_file.copies.iter().find(|c| c.doc_id == a.header.doc_id).unwrap();

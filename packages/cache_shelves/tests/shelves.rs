@@ -965,19 +965,19 @@ fn the_batch_detect_reads_the_libraries_and_equals_the_union_of_the_single_calls
     assert_eq!(shaped, union);
     // the file seen in two libraries is one copy (no pair with itself); b4 and b6 are two keys with one source hash; B3 is an
     // edition at best and B5 has another meaning
-    let text_pair = ("A2".to_string(), "A1".to_string(), "text".to_string(), 122.0 / 128.0);
+    let text_pair = ("ORIG-A2".to_string(), "ORIG-A1".to_string(), "text".to_string(), 122.0 / 128.0);
     let hash_pair = ("b6".to_string(), "b4".to_string(), "blake3".to_string(), 1.0);
     assert_eq!(shaped, [text_pair.clone(), hash_pair.clone()]);
 
     // checking one copy, and skipping what is known
     let pairs = |v: &[Value]| v.iter().map(|m| (m["copy"].as_str().unwrap().to_string(), m["with"].as_str().unwrap().to_string())).collect::<Vec<_>>();
-    assert_eq!(pairs(&run(json!({"copies": ["A1"]}))), [("A2".to_string(), "A1".to_string())]);
+    assert_eq!(pairs(&run(json!({"copies": ["ORIG-A1"]}))), [("ORIG-A2".to_string(), "ORIG-A1".to_string())]);
     assert_eq!(pairs(&run(json!({"copies": ["b4"]}))), [("b6".to_string(), "b4".to_string())]);
-    assert!(run(json!({"copies": ["B3", "nobody"]})).is_empty());
-    assert_eq!(pairs(&run(json!({"copies": ["A1", "A2", "b4", "b6"]}))).len(), 2, "pairs among the checked copies count once");
-    assert_eq!(pairs(&run(json!({"known": ["A1", "A2"]}))), [("b6".to_string(), "b4".to_string())]);
-    assert_eq!(pairs(&run(json!({"known": ["A1"]}))).len(), 2, "a pair with one new copy is not skipped");
-    assert!(ops::detect(&json!({"libraries": dirs, "known": "A1"}).to_string(), &reader).is_err());
+    assert!(run(json!({"copies": ["ORIG-B3", "nobody"]})).is_empty());
+    assert_eq!(pairs(&run(json!({"copies": ["ORIG-A1", "ORIG-A2", "b4", "b6"]}))).len(), 2, "pairs among the checked copies count once");
+    assert_eq!(pairs(&run(json!({"known": ["ORIG-A1", "ORIG-A2"]}))), [("b6".to_string(), "b4".to_string())]);
+    assert_eq!(pairs(&run(json!({"known": ["ORIG-A1"]}))).len(), 2, "a pair with one new copy is not skipped");
+    assert!(ops::detect(&json!({"libraries": dirs, "known": "ORIG-A1"}).to_string(), &reader).is_err());
     assert!(ops::detect(&json!({"libraries": [{"dir": "x"}]}).to_string(), &reader).is_err());
 
     // the same through packs: a library with packs and no copies file gives the same pairs

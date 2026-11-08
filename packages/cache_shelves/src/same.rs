@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(minhash_to(&[1, 2]), "AQAAAAIAAAA=");
         let v: Vec<f32> = (0..64).map(|i| f16_to_f32(f32_to_f16(i as f32 * 0.37 - 5.0))).collect();
         assert_eq!(mean_vector_from(&json!(mean_vector_to(&v))).unwrap(), v);
-        let m: Vec<u32> = (0..128).map(|i| i * 77_777_777).collect();
+        let m: Vec<u32> = (0..128u32).map(|i| i.wrapping_mul(77_777_777)).collect();
         assert_eq!(minhash_from(&json!(minhash_to(&m))).unwrap(), m);
     }
 
