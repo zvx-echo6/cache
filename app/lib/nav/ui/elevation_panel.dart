@@ -412,35 +412,46 @@ class ElevationPanel extends StatelessWidget {
               ),
             ),
           );
-      Widget fact(Widget key, String label, String value, String rest, {Key? rowKey}) => SizedBox(
-            key: rowKey,
-            height: 32,
-            child: Row(
+      // A fact: its key, its name and its value. The value keeps its full size when the row has room, and shrinks to fit (it
+      // never runs off the card) when the text is large; the name gives way first only down to 40% of the row.
+      Widget fact(Widget key, double keyWidth, String label, String value, String rest, {Key? rowKey}) {
+        final labelStyle = TextStyle(fontSize: 14, color: k.secondary);
+        final valueText = Text.rich(
+          TextSpan(children: [
+            TextSpan(text: value, style: const TextStyle(fontWeight: FontWeight.w700)),
+            TextSpan(text: rest),
+          ]),
+          maxLines: 1,
+          style: TextStyle(fontSize: 14, color: k.text),
+        );
+        return SizedBox(
+          key: rowKey,
+          height: 32,
+          child: LayoutBuilder(builder: (context, box) {
+            final labelWidth = (TextPainter(
+              text: TextSpan(text: label, style: DefaultTextStyle.of(context).style.merge(labelStyle)),
+              textDirection: TextDirection.ltr,
+              textScaler: MediaQuery.textScalerOf(context),
+              maxLines: 1,
+            )..layout())
+                .width;
+            final room = box.maxWidth - keyWidth - 16 - math.min(labelWidth, box.maxWidth * 0.4);
+            return Row(
               children: [
                 key,
                 const SizedBox(width: 8),
-                Flexible(flex: 2, child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary))),
+                Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: labelStyle)),
                 const SizedBox(width: 8),
-                // Large text shrinks the value to fit rather than running off the card.
-                Expanded(
-                  flex: 3,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text.rich(
-                        TextSpan(children: [
-                          TextSpan(text: value, style: const TextStyle(fontWeight: FontWeight.w700)),
-                          TextSpan(text: rest),
-                        ]),
-                        style: TextStyle(fontSize: 14, color: k.text),
-                      ),
-                    ),
-                  ),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: math.max(0, room)),
+                  child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerRight, child: valueText),
                 ),
               ],
-            ),
-          );
+            );
+          }),
+        );
+      }
+
       final dotKey = Container(width: 9, height: 9, decoration: BoxDecoration(color: k.text, shape: BoxShape.circle));
       final steepKey = Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3)));
       final where = steep == null ? '' : (pos == null || steep.startM - pos < 1 ? ', starts here' : ', in ${fmt.distance(steep.startM - pos)}');
@@ -466,12 +477,12 @@ class ElevationPanel extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2, bottom: 6),
             child: Column(
               children: [
-                if (p.highest case final h?) fact(dotKey, 'Highest', elevationText(fmt, h.elevM), ' at ${markerText(fmt, h.distM)}'),
-                if (p.lowest case final lw?) fact(dotKey, 'Lowest', elevationText(fmt, lw.elevM), ' at ${markerText(fmt, lw.distM)}'),
+                if (p.highest case final h?) fact(dotKey, 9, 'Highest', elevationText(fmt, h.elevM), ' at ${markerText(fmt, h.distM)}'),
+                if (p.lowest case final lw?) fact(dotKey, 9, 'Lowest', elevationText(fmt, lw.elevM), ' at ${markerText(fmt, lw.distM)}'),
                 if (steep != null)
-                  fact(steepKey, 'Steepest climb ahead', '${(steep.grade * 100).round()}%', ' for ${fmt.distance(steep.lengthM)}$where', rowKey: const ValueKey('elevation-steep'))
+                  fact(steepKey, 16, 'Steepest climb ahead', '${(steep.grade * 100).round()}%', ' for ${fmt.distance(steep.lengthM)}$where', rowKey: const ValueKey('elevation-steep'))
                 else
-                  fact(steepKey, 'Steepest climb ahead', '', 'None', rowKey: const ValueKey('elevation-steep')),
+                  fact(steepKey, 16, 'Steepest climb ahead', '', 'None', rowKey: const ValueKey('elevation-steep')),
               ],
             ),
           ),
