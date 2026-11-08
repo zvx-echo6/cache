@@ -32,6 +32,10 @@ target 'Runner' do
   use_frameworks! :linkage => :static
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  # The whole-route picture during guidance (RouteSnapshot in AppDelegate.swift) uses MapLibre's map snapshotter: the same pod, at
+  # the same version, that the maplibre_gl plugin already brings in, so no new code ships. tools/check_maplibre_pin.py (run by the
+  # Tests workflow) fails if the two ever differ.
+  pod 'MapLibre', '6.28.0'
   target 'RunnerTests' do
     inherit! :search_paths
   end
