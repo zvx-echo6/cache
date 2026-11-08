@@ -359,6 +359,9 @@ impl LibraryWriter {
         if facts.effective_title() != doc.title {
             facts.title_override = Some(doc.title.clone());
         }
+        if facts.copy.is_none() {
+            facts.copy = doc.original_blake3.clone();
+        }
         self.facts.insert(doc.doc_id.clone(), facts);
         self.rows.push(format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
@@ -427,7 +430,8 @@ pub fn seed_device_id(library_id: &str) -> String {
 }
 
 /// The events of the seed log, in order: for each division (by number), each of its books as `place` then `assign`; then a `title`
-/// for every book whose title a titles file replaced. A book with no suggested division gets none (it is in Unsorted). Numbers run
+/// for every book whose title a titles file replaced, then a `facts` for every book whose titles-file line gave an author, edition or
+/// year (doc order). A book with no suggested division gets none (it is in Unsorted). Numbers run
 /// from 1 in order of (title, doc_id) within a division, so a rebuild gives the same numbers. Every event has `at`.
 pub fn seed_events(facts: &BTreeMap<String, BookFacts>, dev: &str, at: u64) -> Vec<Event> {
     let mut by_div: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
@@ -447,6 +451,13 @@ pub fn seed_events(facts: &BTreeMap<String, BookFacts>, dev: &str, at: u64) -> V
     for (id, f) in facts {
         if let Some(t) = &f.title_override {
             out.push(Event::new(at, dev, Kind::Title { doc: id.clone(), title: t.clone() }));
+        }
+    }
+    // then the facts a titles file gave (author, edition, year), in doc order; additive, older readers skip the event
+    for (id, f) in facts {
+        if !f.titles_facts.is_empty() {
+            let loc = dev.strip_prefix("builder-").map(|l| format!("{l}/{id}"));
+            out.push(Event::new(at, dev, Kind::Facts { doc: id.clone(), copy: f.copy.clone(), loc, fields: f.titles_facts.clone() }));
         }
     }
     out

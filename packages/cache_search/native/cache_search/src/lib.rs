@@ -28,6 +28,7 @@ pub mod nbplaces;
 pub mod pdfbuild;
 pub mod pdfindex;
 pub mod search;
+pub mod shelves;
 pub mod snapshot;
 pub mod suggest;
 pub mod tools;

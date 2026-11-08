@@ -2,53 +2,8 @@
 //! better. The numbers are `build/tuning.json` (defaults here); the text fingerprint and the mean meaning vector come from the
 //! builder. See "Same book, different file" in `vault/projects/cache-classification.md`.
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Tuning {
-    /// Estimated Jaccard similarity of the 5-word shingles from which two files are the same book.
-    pub same_jaccard: f32,
-    /// Mean-vector cosine needed with it.
-    pub same_cosine: f32,
-    /// From this Jaccard up to `same_jaccard` (with the same cosine) a copy may be a new edition.
-    pub edition_jaccard: f32,
-    /// The shorter book's text must be at least this share of the longer's, or it is an excerpt.
-    pub min_length_ratio: f32,
-}
-
-impl Default for Tuning {
-    fn default() -> Self {
-        Tuning { same_jaccard: 0.85, same_cosine: 0.95, edition_jaccard: 0.5, min_length_ratio: 0.8 }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Match {
-    /// Not the same book (or an excerpt).
-    Different,
-    /// The same book in another file.
-    Same,
-    /// The same work, noticeably different content: maybe a new edition.
-    Edition,
-}
-
-pub fn judge(t: &Tuning, jaccard: f32, cosine: f32, new_words: usize, old_words: usize) -> Match {
-    let (lo, hi) = (new_words.min(old_words) as f32, new_words.max(old_words) as f32);
-    if hi <= 0.0 || lo / hi < t.min_length_ratio {
-        return Match::Different;
-    }
-    if cosine < t.same_cosine {
-        return Match::Different;
-    }
-    if jaccard >= t.same_jaccard {
-        Match::Same
-    } else if jaccard >= t.edition_jaccard {
-        Match::Edition
-    } else {
-        Match::Different
-    }
-}
+// The rules and the numbers moved to cache_shelves::same, which the Bookshelves log's same-book decision shares; re-exported here.
+pub use cache_builder::samebook::{judge, Match, Tuning};
 
 /// What makes one copy better than another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

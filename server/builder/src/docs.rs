@@ -311,6 +311,7 @@ impl Overrides {
                     }
                     if r.has_facts() {
                         applied.facts_applied += 1;
+                        e.titles_facts = cache_shelves::events::FactFields { author: r.author.clone(), edition: r.edition.clone(), year: r.year };
                         if r.author.is_some() {
                             e.author = r.author.clone();
                         }
