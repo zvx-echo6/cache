@@ -204,12 +204,12 @@ class ZimDownloader {
   }
 
   DownloadException? _stopped(CancelToken? c) => c != null && c.isCancelled
-      ? const DownloadException('Cancelled', code: 'cancelled')
+      ? const DownloadException('Canceled', code: 'cancelled')
       : null;
 
   void _checkCancel(CancelToken? c) {
     if (c != null && c.isCancelled) {
-      throw const DownloadException('Cancelled', code: 'cancelled');
+      throw const DownloadException('Canceled', code: 'cancelled');
     }
   }
 

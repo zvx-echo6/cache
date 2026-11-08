@@ -221,7 +221,7 @@ class CoreLayerEngine extends LayerEngine {
       await _reload();
       notifyListeners();
     } catch (e) {
-      logError('Layer catalogue refresh', error: e);
+      logError('Layer catalog refresh', error: e);
     }
   }
 

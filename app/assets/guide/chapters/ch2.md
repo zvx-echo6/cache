@@ -49,7 +49,7 @@ If nothing matches, "Nothing found" shows under that row. Cache doesn't guess or
 
 With no model on the device, the box says "Search Cache". There is no "Ask Cache:" row. If nothing matches, Cache says "Nothing found on this device." and, small under it, "For an answer in words, choose a model." Tap "Choose a model" to get one.
 
-At the foot of the results, a small grey line can say `Still making [library]'s PDFs searchable (340 of 5,768)`. Tap it for that library's status. Tap the close mark ("Hide") to hide it.
+At the foot of the results, a small gray line can say `Still making [library]'s PDFs searchable (340 of 5,768)`. Tap it for that library's status. Tap the close mark ("Hide") to hide it.
 
 ## Edit Home
 
@@ -87,7 +87,7 @@ A shortcut puts something you use often on "Home". Use "Add to Home" on:
 
 The bar at the bottom starts with "Home" and ends with "Modules". Between them are up to three modules you pin. At first they are "Ask", "Maps" and "Library".
 
-With no model on the device, "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model". While a model downloads, the line reads "Model downloading 40%". Your pin is kept, so "Ask" comes back to the bar when a model arrives.
+With no model on the device, "Ask" leaves the bar. In "Modules" it is grayed, with the line "Needs a model". While a model downloads, the line reads "Model downloading 40%". Your pin is kept, so "Ask" comes back to the bar when a model arrives.
 
 ![The Modules screen](shot:modules)
 
@@ -176,7 +176,7 @@ To turn it off for your questions:
 1. Tap the + button left of the box where you type.
 2. Turn off "Use my location".
 
-- If the device blocks location, the switch is greyed out. It says "Blocked in the device's settings" or "The device's location is switched off".
+- If the device blocks location, the switch is grayed out. It says "Blocked in the device's settings" or "The device's location is switched off".
 
 ## Open a route from Ask
 
@@ -214,7 +214,7 @@ A model is optional. With none on the device, Cache is search only. Everything t
 You are in this mode when you never added a model, when you tap "Not now" on the model row of the "Set up Cache" card, or when you delete your last chat model.
 
 What you see:
-1. "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model".
+1. "Ask" leaves the bar. In "Modules" it is grayed, with the line "Needs a model".
 2. Open "Ask" from "Modules". It says "Ask needs a model on this device." with "Choose a model". Under it, "Saved chats" lists your old chats.
 3. Tap a saved chat to read it. It opens read-only, with the title "Ask" and a back arrow. Where you type it says "Ask is off. Choose a model to carry on." with "Choose a model".
 4. Home search says "Search Cache" and has no "Ask Cache:" row. See Search Cache from Home.
@@ -410,14 +410,14 @@ Layers stream while you're online and keep what you viewed. To keep a whole area
 
 ## Library
 
-"Library" has four rows. Each one says in a line or two what it holds, and a fix shows in colour, for example "Update ready for 1" or "9 unsorted".
+"Library" has four rows. Each one says in a line or two what it holds, and a fix shows in color, for example "Update ready for 1" or "9 unsorted".
 
 ![The Library](shot:library)
 
 - "ZIM Collections": the ZIMs from Kiwix, such as Wikipedia and medical guides.
 - "Bookshelves": your books, shelved by the Cache Decimal System.
 - "Catalog": every search index on this device, with "Pause all" and "Resume".
-- "Cache Documentation": this guide, "What's new in [version]" and "Credits and licences".
+- "Cache Documentation": this guide, "What's new in [version]" and "Credits and licenses".
 
 At the top, a bar shows while Cache makes search ready in the background. See Search inside PDFs, EPUBs and captions.
 
@@ -474,7 +474,7 @@ A book that is not searchable yet can be placed too. Your choice is saved and he
 
 ## A book's page
 
-Tap a book on a shelf to open its page. At the top is its catalogue card: its call number, title, and author and edition when known. Under it:
+Tap a book on a shelf to open its page. At the top is its catalog card: its call number, title, and author and edition when known. Under it:
 - "Subject": its division, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another division;
 - "PDF": its size, and where it is when Cache knows;
 - "Search": "Searchable here", or how far Cache is;
@@ -512,21 +512,21 @@ Tap one of your own libraries to see what it holds, with its "..." menu.
 1. Open "Library" and tap "Cache Documentation".
 2. Tap "The Cache guide" to read this guide. It is built in and can't be deleted.
 3. Tap "What's new in [version]" to see what changed. It shows only when lines were written for that version.
-4. Tap "Credits and licences" to see what Cache is built on. See Credits and licences.
+4. Tap "Credits and licenses" to see what Cache is built on. See Credits and licenses.
 
-## Credits and licences
+## Credits and licenses
 
 This page says what Cache is and what it is built on.
 
-![Credits and licences](shot:settings-credits)
+![Credits and licenses](shot:settings-credits)
 
-1. Go to ["Library" > "Cache Documentation" > "Credits and licences"](cache://settings/credits).
+1. Go to ["Library" > "Cache Documentation" > "Credits and licenses"](cache://settings/credits).
 2. Read:
    - "Version": which Cache you have;
-   - "Licence": the GNU Affero General Public License, version 3 or later;
+   - "License": the GNU Affero General Public License, version 3 or later;
    - "Source code": where to get it;
    - "Credits": the maps, data, libraries and art used;
-   - "Open-source licences": the full text for every package.
+   - "Open-source licenses": the full text for every package.
 
 If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
 
@@ -807,7 +807,7 @@ You only need this for videos a site keeps behind a sign-in.
 
 The sheet then says "Signed in as [user name]". Tap "Sign out" to sign out.
 
-- If you see "Sign-in with [name] was cancelled.", you closed the page. Tap it again.
+- If you see "Sign-in with [name] was canceled.", you closed the page. Tap it again.
 - If you see "That sign-in took too long or was already used. Try again.", tap it again.
 - If you see "The video site needs you to sign in again.", sign in again.
 

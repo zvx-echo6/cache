@@ -36,7 +36,7 @@ class AboutPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SettingsPage(
-      title: 'Credits and licences',
+      title: 'Credits and licenses',
       children: [
         SettingsGroup(
           rows: [
@@ -62,7 +62,7 @@ class AboutPage extends StatelessWidget {
               },
             ),
             SettingsRow(
-              title: 'Licence',
+              title: 'License',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
             ),
             SettingsRow(
@@ -84,13 +84,13 @@ class AboutPage extends StatelessWidget {
             SettingsRow(
               key: const ValueKey('licences'),
               icon: Icons.description_outlined,
-              title: 'Open-source licences',
-              status: const [Part('The full licence text of every package')],
+              title: 'Open-source licenses',
+              status: const [Part('The full license text of every package')],
               onTap: () => showLicensePage(
                 context: context,
                 applicationName: 'Cache',
                 applicationVersion: kAppVersion,
-                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Library > Cache Documentation > Credits and licences > Credits.',
+                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Library > Cache Documentation > Credits and licenses > Credits.',
               ),
             ),
           ],

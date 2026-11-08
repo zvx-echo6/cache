@@ -162,13 +162,13 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 - `Making PDFs searchable · 340 of 5,768`, "Waiting to make PDFs searchable" or "PDFs: searching ready": see Search indexing messages.
 - "Nothing found. Try another word, language or category.": change the search or chips.
 
-## Kiwix catalogue messages
+## Kiwix catalog messages
 
-When the catalogue in ["Library" > "Add to Library"](cache://library/add) can't load:
+When the catalog in ["Library" > "Add to Library"](cache://library/add) can't load:
 - "Cannot reach the Kiwix library. Check the connection.": connect and tap "Try again".
 - "Cannot make a secure connection to the Kiwix library.": the network may block it, or the device's date is wrong. Try another network.
 - "The Kiwix library took too long to answer.": try later.
-- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalogue." or "The library could not be read: [reason]": try later or on another network.
+- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalog." or "The library could not be read: [reason]": try later or on another network.
 
 ## ZIM download messages
 
@@ -180,7 +180,7 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 - "The connection failed: [reason]": check the connection.
 - "Could not make a secure connection to the download server.": try another network.
 - "The download server took too long to answer.": try later.
-- "That file is no longer on the download server.": search the catalogue again.
+- "That file is no longer on the download server.": search the catalog again.
 - "The download server answered [code].", "The download server did not say how big the file is.", "The download server redirected too many times.", "The download server sent a redirect with no address." or "The download server continued from the wrong place. Try again.": try later.
 - "Could not write the file: [reason]": check free space.
 - "Could not finish the download: [reason]": tap "Try again".
@@ -231,7 +231,7 @@ States are "Getting ready", "Waiting to index", "Building index" and "Not availa
 ## Map and layer messages
 
 In "Maps":
-- "No base map yet. Connect once to get the catalogue.": connect once.
+- "No base map yet. Connect once to get the catalog.": connect once.
 - "[layer] needs a connection here" or "[layer] needs a connection or a download here": connect, or download the region.
 - "Maps need network access": tap "Allow". If it still fails, tap "Open settings".
 
@@ -273,9 +273,9 @@ On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/r
 - "This country's regions need a connection the first time." or "Search needs a connection the first time.": connect once.
 - "This region could not be read. Connect and try again."
 - `No region called "[name]".`: try another spelling, or browse "Countries".
-- "No region here in the catalogue. Search for one in Regions.": search by name.
+- "No region here in the catalog. Search for one in Regions.": search by name.
 - "Nothing downloaded yet": pick a region under "Downloads".
-- "Size unknown": the catalogue has no size for it.
+- "Size unknown": the catalog has no size for it.
 - "Waiting for Wi-Fi": it will download on Wi-Fi.
 - "On this device": already here.
 
@@ -465,7 +465,7 @@ In "Videos":
 ## Video sign-in messages
 
 In the sheet from the account button on a site:
-- "Sign-in with [name] was cancelled.": you closed the site's page. Tap the button again.
+- "Sign-in with [name] was canceled.": you closed the site's page. Tap the button again.
 - "[site] couldn't sign you in with [name]. Try again."
 - "That sign-in took too long or was already used. Try again.": start the sign-in again.
 - "Sign in to [site] to play this video": a private video. Tap "Sign in".
@@ -514,7 +514,7 @@ In ["Settings" > "Storage"](cache://settings/storage):
 - "Nothing to clean up": nothing to remove.
 - "Freed [size]": "Clean up" finished.
 
-In ["Library" > "Cache Documentation" > "Credits and licences"](cache://settings/credits):
+In ["Library" > "Cache Documentation" > "Credits and licenses"](cache://settings/credits):
 - "Couldn't load the credits.": restart Cache.
 
 ## Notebook messages
@@ -556,7 +556,7 @@ These need a connection:
 - downloads;
 - map layers that "Streams when online" or "Needs a connection" outside downloaded areas;
 - web search;
-- the first look at the region list and Kiwix catalogue;
+- the first look at the region list and Kiwix catalog;
 - linking devices over the internet.
 
 ## Mobile data: why a download did not start

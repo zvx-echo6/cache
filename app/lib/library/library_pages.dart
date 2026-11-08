@@ -302,7 +302,7 @@ class _DocsPageState extends State<DocsPage> {
                   SettingsRow(
                     key: const ValueKey('docs-credits'),
                     leading: const IconTile(Icons.favorite_border),
-                    title: 'Credits and licences',
+                    title: 'Credits and licenses',
                     status: const [Part('The maps, data and code Cache is built on')],
                     onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AboutPage())),
                   ),
@@ -311,7 +311,7 @@ class _DocsPageState extends State<DocsPage> {
             },
           ),
           const SizedBox(height: 12),
-          const NoteText("What's new and Credits and licences moved here from Settings."),
+          const NoteText("What's new and Credits and licenses moved here from Settings."),
         ],
       ),
     );

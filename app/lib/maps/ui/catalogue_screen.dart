@@ -262,7 +262,7 @@ class LayerDefinitions extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Each layer is a definition: what it is, its licence, and the address of its original source. '
+          'Each layer is a definition: what it is, its license, and the address of its original source. '
           'Switch one off to leave it out, edit one to point Cache at your own server, or add a new one.',
           style: TextStyle(fontSize: 14, color: k.secondary),
         ),

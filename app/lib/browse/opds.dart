@@ -346,7 +346,7 @@ Future<String> fetchCatalogueViaDevice(DeviceApi api, Uri url) async {
     throw CatalogException(switch (e.code) {
       'unreachable' => 'Cannot reach the Kiwix library. Check the connection.',
       'upstream_status' => 'The library answered ${e.message.replaceAll(RegExp(r'[^0-9]'), '')}.',
-      'too_large' => 'The library answered with something that is not a catalogue.',
+      'too_large' => 'The library answered with something that is not a catalog.',
       'unauthorized' => 'Sign in again to read the Kiwix library.',
       _ => 'The library could not be read.',
     });
@@ -423,7 +423,7 @@ XmlDocument _parse(String body) {
     return XmlDocument.parse(body);
   } on XmlException {
     throw const CatalogException(
-      'The library answered with something that is not a catalogue.',
+      'The library answered with something that is not a catalog.',
     );
   }
 }
@@ -441,7 +441,7 @@ CatalogPage parseEntries(String body, {Uri? base}) {
   final feed = doc.rootElement;
   if (feed.name.local != 'feed') {
     throw const CatalogException(
-      'The library answered with something that is not a catalogue.',
+      'The library answered with something that is not a catalog.',
     );
   }
   final root = base ?? Uri.parse(kiwixCatalogHost);
