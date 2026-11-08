@@ -308,6 +308,8 @@ class SettingsSync extends ChangeNotifier {
         if (from == peer) return SettingsLink.receiving;
         if (from == sharing.myId) return SettingsLink.sending;
         return SettingsLink.off;
+      case 'match':
+        return SettingsLink.match;
       default:
         return sharing.linkedSinceAsking(peer) ? SettingsLink.off : SettingsLink.match;
     }
