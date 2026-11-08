@@ -335,13 +335,11 @@ class _Drawers extends StatelessWidget {
           key: const ValueKey('shelves-drawers'),
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(color: w.cabinet, borderRadius: BorderRadius.circular(14)),
-          child: GridView.count(
+          child: GridView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: cols,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 1.45,
+            // a fixed height, so a two-line name always fits whatever the width
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisSpacing: 8, crossAxisSpacing: 8, mainAxisExtent: 118),
             children: [
               for (final sh in shelves)
                 Semantics(
