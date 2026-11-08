@@ -211,7 +211,8 @@ void main() {
     await start();
     final f = FakeShelvesCalls();
     final s = await open(f);
-    expect((f.detectCalls, f.detected), (1, ['aid', 'aid2', 'bees']), reason: 'one batch call for every new copy');
+    expect(f.detectCalls, 1, reason: 'one batch call for every new copy');
+    expect(f.detected, ['aid', 'aid2', 'bees']);
     expect(_mine(f), [
       {'at': 5000, 'ev': 'same', 'copy': 'aid2', 'with': 'aid', 'by': 'auto', 'how': 'text', 'score': 0.9},
       // new books in (title, copy) order, each in its suggested division with the next free number
@@ -239,7 +240,8 @@ void main() {
     await library('more', const [('water', 'The water purification handbook', '530', null)], samebook: {'water': {'minhash': [4, 5, 6]}});
     await libs.rescan();
     await again.whenRead();
-    expect((f2.detectCalls, f2.detected), (1, ['water']), reason: 'only the new copy is checked; the others are known');
+    expect(f2.detectCalls, 1);
+    expect(f2.detected, ['water'], reason: 'only the new copy is checked; the others are known');
     expect(again.booksOn('530').single.callNumber, 'CDS 530-001');
   });
 
