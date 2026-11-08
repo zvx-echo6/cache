@@ -750,6 +750,15 @@ pub unsafe extern "C" fn cs_live_fetch(h: *mut Handle, request_json: *const c_ch
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_fetch(arg_str(request_json, "request_json")?)?))
 }
 
+/// `cs_live_fetch` as a job on a thread of its own (see `Ext::live_fetch_job`). NULL on error (`cs_last_error(h)`).
+///
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_fetch_start(h: *mut Handle, request_json: *const c_char) -> *mut Job {
+    with_handle(h, ptr::null_mut(), |h| Ok(Box::into_raw(Box::new(h.ext.live_fetch_job(arg_str(request_json, "request_json")?)?))))
+}
+
 /// # Safety
 /// `h` NULL or live; `request_json` NULL or NUL-terminated.
 #[no_mangle]

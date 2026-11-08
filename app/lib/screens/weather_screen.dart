@@ -84,18 +84,35 @@ class _WeatherScreenState extends State<WeatherScreen> {
   Future<void> _load() async {
     // (A focus from a pop-up may name a place first; keep it if it is watched.)
     _seenRevision = _revision;
+    // The places and what was last shown for them, at once, from what the app keeps (build 46: the page stayed empty for 9 s
+    // at start while the core was busy); the core's answers replace them when they come.
+    if (_places == null) {
+      final now = w.watchedPlacesNow();
+      if (now.isNotEmpty) {
+        setState(() {
+          _places = now;
+          _pick(now);
+          final p = now.where((p) => p.id == _placeId).firstOrNull;
+          _kept = p == null ? null : w.keptViewFor(p);
+        });
+      }
+    }
     final places = await w.watchedPlaces();
     if (!mounted) return;
     setState(() {
       _places = places;
-      if (_placeId == null || !places.any((p) => p.id == _placeId)) {
-        _placeId = places.isEmpty ? null : places.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => places.first).id;
-      }
+      _pick(places);
       final p = places.where((p) => p.id == _placeId).firstOrNull;
       _view = p == null ? null : w.viewFor(p);
       // What was last shown shows at once, with its age; the core's answer replaces it when it comes.
       _kept = p == null ? null : w.keptViewFor(p);
     });
+  }
+
+  void _pick(List<WatchPlace> places) {
+    if (_placeId == null || !places.any((p) => p.id == _placeId)) {
+      _placeId = places.isEmpty ? null : places.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => places.first).id;
+    }
   }
 
   Future<void> _update() async {

@@ -431,6 +431,7 @@ class WeatherState extends ChangeNotifier {
     _moveLinkedLists();
     _readStatus();
     _readShown();
+    _readSaved();
     await _readKeys();
     _kind = await policy.probe.current();
     if (_kind != ConnectionKind.none) _lastOnlineAt = _now();
@@ -439,6 +440,9 @@ class WeatherState extends ChangeNotifier {
       _sub = policy.probe.changes.listen(_onConnection);
     } catch (_) {}
     _started = true;
+    // What is kept on the phone (the sources that are on, the last data shown, the saved places) shows from here, before the core
+    // has answered anything: the rest of start waits for the core.
+    notifyListeners();
     await _applyAll();
     notifyListeners();
     if (_catalogueDue) {
@@ -966,8 +970,29 @@ class WeatherState extends ChangeNotifier {
       if (p.kind != PlaceKind.saved) (place: p, on: settings.watchedPlaces.contains(p.id)),
   ];
 
-  /// Everything that can be watched: where the phone is, each saved place by name, and the downloaded regions.
+  /// Everything that can be watched: where the phone is, each saved place by name, and the downloaded regions. The saved places are
+  /// the core's; when it cannot answer, the ones it last gave.
   Future<List<WatchPlace>> placeChoices() async {
+    List<SavedPlaceRecord> saved;
+    try {
+      saved = await core.savedPlaces();
+      // A newly saved place is watched (see AppSettings.noteSavedPlaces).
+      settings.noteSavedPlaces([for (final s in saved) 'place:${s.key}']);
+      _keepSaved(saved);
+    } catch (_) {
+      saved = _savedKept ?? const [];
+    }
+    return _choices(saved);
+  }
+
+  /// [placeChoices] at once, without the core: the saved places it last gave (kept in a file). At start the core can be busy for
+  /// seconds; the Weather screen and Home show "Where I am" and the kept places meanwhile.
+  List<WatchPlace> placeChoicesNow() => _choices(_savedKept ?? const []);
+
+  /// [watchedPlaces] at once, without the core (see [placeChoicesNow]).
+  List<WatchPlace> watchedPlacesNow() => _watched(placeChoicesNow());
+
+  List<WatchPlace> _choices(List<SavedPlaceRecord> saved) {
     final p = position?.call();
     final out = <WatchPlace>[
       WatchPlace(
@@ -980,22 +1005,17 @@ class WeatherState extends ChangeNotifier {
         key: p == null ? null : _hereKey(p.lat, p.lon),
       ),
     ];
-    try {
-      final saved = await core.savedPlaces();
-      // A newly saved place is watched (see AppSettings.noteSavedPlaces).
-      settings.noteSavedPlaces([for (final s in saved) 'place:${s.key}']);
-      for (final s in saved) {
-        out.add(WatchPlace(
-          id: 'place:${s.key}',
-          kind: PlaceKind.saved,
-          name: s.name,
-          subtitle: (s.label != null && s.label!.isNotEmpty) ? s.label! : '${s.lat.toStringAsFixed(2)}, ${s.lon.toStringAsFixed(2)}',
-          lat: s.lat,
-          lon: s.lon,
-          key: s.key,
-        ));
-      }
-    } catch (_) {}
+    for (final s in saved) {
+      out.add(WatchPlace(
+        id: 'place:${s.key}',
+        kind: PlaceKind.saved,
+        name: s.name,
+        subtitle: (s.label != null && s.label!.isNotEmpty) ? s.label! : '${s.lat.toStringAsFixed(2)}, ${s.lon.toStringAsFixed(2)}',
+        lat: s.lat,
+        lon: s.lon,
+        key: s.key,
+      ));
+    }
     for (final r in regions?.call() ?? const <WatchRegion>[]) {
       out.add(WatchPlace(
         id: 'region:${r.name}',
@@ -1059,10 +1079,44 @@ class WeatherState extends ChangeNotifier {
   }
 
   /// The watched places that can be fetched for now (a place without a position, like "Where I am" before the first fix, waits).
-  Future<List<WatchPlace>> watchedPlaces() async {
-    final all = await placeChoices();
+  Future<List<WatchPlace>> watchedPlaces() async => _watched(await placeChoices());
+
+  List<WatchPlace> _watched(List<WatchPlace> all) {
     final w = settings.watchedPlaces;
     return [for (final p in all) if (w.contains(p.id) && p.located) p];
+  }
+
+  /// The saved places the core last gave, also kept in a file (read at start, before the core opens).
+  List<SavedPlaceRecord>? _savedKept;
+
+  File? get _savedFile {
+    final d = _store?.root;
+    return d == null ? null : File('${d.path}/saved-places.json');
+  }
+
+  static Map<String, dynamic> _savedJson(SavedPlaceRecord s) => {'key': s.key, 'name': s.name, 'lat': s.lat, 'lon': s.lon, 'label': ?s.label};
+
+  void _readSaved() {
+    try {
+      final f = _savedFile;
+      if (f == null || !f.existsSync()) return;
+      final j = jsonDecode(f.readAsStringSync());
+      if (j is! List) return;
+      _savedKept ??= [for (final e in j) if (e is Map) SavedPlaceRecord.fromJson(e.cast<String, dynamic>())];
+    } catch (_) {}
+  }
+
+  void _keepSaved(List<SavedPlaceRecord> saved) {
+    final text = jsonEncode([for (final s in saved) _savedJson(s)]);
+    final before = _savedKept == null ? null : jsonEncode([for (final s in _savedKept!) _savedJson(s)]);
+    _savedKept = saved;
+    if (text == before) return;
+    try {
+      final f = _savedFile;
+      if (f == null) return;
+      f.parent.createSync(recursive: true);
+      writeStringAtomicSync(f, text);
+    } catch (_) {}
   }
 
   /// The watched places by name, one per line ("Where I am", "Home", "Cabin", "+2 more"): a name can hold a comma, as
@@ -1105,29 +1159,46 @@ class WeatherState extends ChangeNotifier {
     // The policy the core fetches under must be the one just checked (it is also what the assistant's fetch uses).
     await pushPolicy();
     var fetched = 0, fresh = 0;
-    final failures = <String>[];
-    try {
-      for (final c in srcs) {
-        for (final p in places) {
-          try {
-            final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
-            r['fetched'] == true ? fetched++ : fresh++;
-          } on CacheSearchException catch (e) {
-            logError('Live update failed (${e.code})', error: e.message, detail: c.id);
-            final who = c.provider.isEmpty ? c.title : c.provider;
-            final line = '$who for ${p.name} failed: ${_fetchFailureWords(e)}';
-            failures.add(line);
-            _sourceErrors[c.id] = _fetchFailureWords(e);
-          } catch (e) {
-            logError('Live update failed', error: e, detail: c.id);
-            failures.add('${c.title} for ${p.name} failed');
-            _sourceErrors[c.id] = "Couldn't update.";
-          }
-        }
+    // Every source for every place at once: each download runs on a thread of the core's own (cs_live_fetch_start), so none waits
+    // for another's network and the core's worker stays free for searches and the stored data meanwhile. Failures are listed in
+    // the order of the sources and places, as before.
+    final all = Stopwatch()..start();
+    Future<(bool, String?)> one(Connector c, WatchPlace p) async {
+      final took = Stopwatch()..start();
+      try {
+        final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+        final got = r['fetched'] == true;
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
+        return (got, null);
+      } on CacheSearchException catch (e) {
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
+        logError('Live update failed (${e.code})', error: e.message, detail: c.id);
+        final who = c.provider.isEmpty ? c.title : c.provider;
+        _sourceErrors[c.id] = _fetchFailureWords(e);
+        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
+      } catch (e) {
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
+        logError('Live update failed', error: e, detail: c.id);
+        _sourceErrors[c.id] = "Couldn't update.";
+        return (false, '${c.title} for ${p.name} failed');
       }
+    }
+
+    final List<(bool, String?)> outcomes;
+    try {
+      outcomes = await Future.wait([for (final c in srcs) for (final p in places) one(c, p)]);
     } finally {
       _updating = false;
     }
+    final failures = <String>[];
+    for (final (got, failure) in outcomes) {
+      if (failure != null) {
+        failures.add(failure);
+      } else {
+        got ? fetched++ : fresh++;
+      }
+    }
+    logInfo('Live update: ${outcomes.length} fetches at once in ${all.elapsedMilliseconds} ms ($fetched downloaded, $fresh still fresh, ${failures.length} failed)');
     _lastRunAt = _now();
     if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
     // Every source that failed, not only the first.
@@ -1228,20 +1299,23 @@ class WeatherState extends ChangeNotifier {
   /// What every switched-on source holds for [p], as stored (expired data is included and flagged). Read from the core, so it
   /// is exactly what the assistant would get.
   Future<List<SourceView>> viewFor(WatchPlace p) async {
-    final out = <SourceView>[];
     var kept = false;
-    for (final c in enabledSources) {
-      try {
-        final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-        _shown['${c.id} ${p.id}'] = g;
-        kept = true;
-        out.add(_viewOf(c, p, g));
-      } on CacheSearchException catch (e) {
-        out.add(SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message)));
-      } catch (_) {
-        out.add(SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]));
-      }
-    }
+    // asked all at once (the core answers them one after another, without a round trip between)
+    final out = await Future.wait([
+      for (final c in enabledSources)
+        () async {
+          try {
+            final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+            _shown['${c.id} ${p.id}'] = g;
+            kept = true;
+            return _viewOf(c, p, g);
+          } on CacheSearchException catch (e) {
+            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
+          } catch (_) {
+            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]);
+          }
+        }(),
+    ]);
     if (kept) _saveShown();
     return out;
   }
@@ -1329,8 +1403,12 @@ class WeatherState extends ChangeNotifier {
   }
 
   /// The place Home talks about: "Where I am" when it is watched and known, else the first watched place.
-  Future<WatchPlace?> homePlace() async {
-    final w = await watchedPlaces();
+  Future<WatchPlace?> homePlace() async => _homeOf(await watchedPlaces());
+
+  /// [homePlace] at once, without the core (see [placeChoicesNow]).
+  WatchPlace? homePlaceNow() => _homeOf(watchedPlacesNow());
+
+  static WatchPlace? _homeOf(List<WatchPlace> w) {
     if (w.isEmpty) return null;
     return w.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => w.first);
   }
@@ -1350,6 +1428,27 @@ class WeatherState extends ChangeNotifier {
   /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
   /// listed are those of the one fire source that reports the most.
   Future<HomeWeather> homeCard() async {
+    final early = _homeEarly();
+    if (early != null) return early;
+    final p = await homePlace();
+    if (p == null) return HomeWeather(message: _noPlaceWords);
+    return _homeFrom(p, await viewFor(p));
+  }
+
+  /// [homeCard] at once, without the core: what was last shown for the place Home talks about, with its age as of now; null while
+  /// nothing is kept for it (Home then waits for [homeCard]). At start the core can be busy for seconds (build 46: 13-20 s
+  /// before the card filled).
+  HomeWeather? homeCardNow() {
+    final early = _homeEarly();
+    if (early != null) return early;
+    final p = homePlaceNow();
+    final kept = p == null ? null : keptViewFor(p);
+    if (p == null || kept == null) return null;
+    return _homeFrom(p, kept);
+  }
+
+  /// What the card says before it is about a place: getting ready, off, or not set up.
+  HomeWeather? _homeEarly() {
     // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
     // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
@@ -1358,9 +1457,12 @@ class WeatherState extends ChangeNotifier {
     // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".
     if (enabledSources.isEmpty && settings.liveDefaultsSeen.isNotEmpty) return const HomeWeather(message: 'Weather is off', off: true);
     if (forecast.isEmpty && counted.isEmpty) return const HomeWeather(message: 'Not set up yet');
-    final p = await homePlace();
-    if (p == null) return HomeWeather(message: _noPlaceWords);
-    final views = await viewFor(p);
+    return null;
+  }
+
+  HomeWeather _homeFrom(WatchPlace p, List<SourceView> views) {
+    final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
+    final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     String? temperature, conditions, high, low, age;
     var forecastExpired = false;
     for (final v in views) {

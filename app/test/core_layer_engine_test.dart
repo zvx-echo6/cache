@@ -464,6 +464,18 @@ void main() {
     expect((await core.layers('list'))['online'], isTrue);
   });
 
+  test('the connection coming back gives the map new source addresses, so tiles it had no answer for are asked again', () async {
+    expect(engine.sourcesGeneration, 0);
+    connected = false;
+    await engine.refreshOnline(force: true);
+    expect(engine.sourcesGeneration, 0, reason: 'going offline reloads nothing');
+    connected = true;
+    await engine.refreshOnline(force: true);
+    expect(engine.sourcesGeneration, 1);
+    expect(engine.tilesUrl('basemap'), 'http://127.0.0.1:${server.port}/layers/basemap/{z}/{x}/{y}?g=1');
+    expect(engine.tileJsonUrl('hillshade'), 'http://127.0.0.1:${server.port}/layers/hillshade/tilejson.json?g=1');
+  });
+
   test('a stopped download never shows a server address', () {
     expect(CoreLayerEngine.words('internal', 'HTTP 500 from https://cache.echo6.co/basemap/x.pmtiles'), 'The download stopped. Tap Update to continue.');
     expect(CoreLayerEngine.words('internal', 'disk error'), 'The download stopped: disk error');

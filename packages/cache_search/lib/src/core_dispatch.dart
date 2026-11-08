@@ -206,6 +206,14 @@ class CoreDispatcher {
         result = eng().liveSources();
       case 'liveFetch':
         result = eng().liveFetch((a['request'] as Map).cast<String, dynamic>());
+      case 'liveFetchStart':
+        // null: this core has no cs_live_fetch_start (the caller uses liveFetch)
+        final j = eng().liveFetchJob((a['request'] as Map).cast<String, dynamic>());
+        if (j != null) {
+          final key = nextKey++;
+          jobs[key] = j;
+          result = key;
+        }
       case 'liveGet':
         result = eng().liveGet((a['request'] as Map).cast<String, dynamic>());
       case 'liveSetFetchPolicy':
