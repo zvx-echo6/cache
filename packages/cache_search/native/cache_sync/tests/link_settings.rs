@@ -101,9 +101,13 @@ fn a_link_set_on_one_device_is_taken_by_the_other_and_gates_the_shares_kept_with
         std::fs::create_dir_all(s).unwrap();
         call(e, "share_add", json!({"id": "settings", "name": "Settings", "path": s}));
     }
-    assert_eq!(peer(&a, &ib)["link"], Value::Null, "no link kind yet");
+    // A new link is Off on both devices from the moment it exists, waiting for the person's answer.
+    for (e, other) in [(&a, &ib), (&b, &ia)] {
+        assert_eq!(peer(e, other)["link"], json!({"mode": "off", "ask": true}), "a new link starts Off");
+    }
 
-    // No link kind yet: a link made before them counts as Match, so the Bookshelves log goes both ways.
+    // Answered Both ways on A: the Bookshelves log goes both ways.
+    call(&a, "set_link", json!({"peer": ib, "link": {"mode": "match", "from": ia}}));
     until("each Bookshelves log on the other device", 60, &[&a, &b], || fb.join("log/a.jsonl").exists() && fa.join("log/b.jsonl").exists());
     until("each knows the other keeps links", 30, &[&a, &b], || peer(&a, &ib)["link_known"] == true && peer(&b, &ia)["link_known"] == true);
 
@@ -184,4 +188,91 @@ fn secrets_go_only_to_the_device_they_are_for_and_never_to_disk() {
         assert!(nowhere(d, key), "a key is never written to disk ({})", d.display());
         assert!(nowhere(d, "SECOND-SECRET-42"), "a key is never written to disk ({})", d.display());
     }
+}
+
+#[test]
+fn a_fresh_link_sends_nothing_from_the_shares_kept_with_some_links_before_a_mode_is_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fa, fb) = (tmp.path().join("shelves-a"), tmp.path().join("shelves-b"));
+    let (sa, sb) = (tmp.path().join("settings-a"), tmp.path().join("settings-b"));
+    let (pa, pb) = (tmp.path().join("plain-a"), tmp.path().join("plain-b"));
+    write(&fa.join("log/a.jsonl"), "shelf from A\n");
+    write(&fb.join("log/b.jsonl"), "shelf from B\n");
+    write(&sa.join("log/a.jsonl"), "settings from A\n");
+    write(&sb.join("log/b.jsonl"), "settings from B\n");
+    write(&pa.join("a.txt"), "plain from A\n");
+    std::fs::create_dir_all(&pb).unwrap();
+    let with = json!({"bookshelves": ["match"], "settings": ["match", "send"]});
+    let a = engine(&tmp.path().join("a"), "Desk", with.clone());
+    let b = engine(&tmp.path().join("b"), "Phone", with);
+    // The shares are there before the link, so the first round after it could send them.
+    for (e, f, s, p) in [(&a, &fa, &sa, &pa), (&b, &fb, &sb, &pb)] {
+        call(e, "share_add", json!({"id": "bookshelves", "name": "Bookshelves", "path": f}));
+        call(e, "share_add", json!({"id": "settings", "name": "Settings", "path": s}));
+        call(e, "share_add", json!({"id": "plain", "name": "Plain", "path": p}));
+    }
+    link(&a, &b);
+    let (ia, ib) = (id(&a), id(&b));
+    assert_eq!(peer(&a, &ib)["link"]["mode"], "off");
+    assert_eq!(peer(&b, &ia)["link"]["mode"], "off");
+
+    // A share kept with every device goes: the two are talking.
+    until("the plain share on B", 60, &[&a, &b], || pb.join("a.txt").exists());
+    rounds(&[&a, &b]);
+    for (what, p) in [
+        ("A's Bookshelves log on B", fb.join("log/a.jsonl")),
+        ("B's Bookshelves log on A", fa.join("log/b.jsonl")),
+        ("A's settings log on B", sb.join("log/a.jsonl")),
+        ("B's settings log on A", sa.join("log/b.jsonl")),
+    ] {
+        assert!(!p.exists(), "{what}: nothing goes before a mode is set");
+    }
+    for (e, other) in [(&a, &ib), (&b, &ia)] {
+        let offers = status(e)["offers"].as_array().unwrap().clone();
+        assert!(
+            offers.iter().all(|o| o["peer"] != other.as_str() || (o["id"] != "bookshelves" && o["id"] != "settings")),
+            "nothing is offered from them either: {offers:?}"
+        );
+    }
+
+    // Send mine on A: the settings log goes from A; the Bookshelves log still stays.
+    call(&a, "set_link", json!({"peer": ib, "link": {"mode": "send", "from": ia}}));
+    until("A's settings log on B", 60, &[&a, &b], || sb.join("log/a.jsonl").exists());
+    assert!(!fb.join("log/a.jsonl").exists());
+    a.close();
+    b.close();
+}
+
+#[test]
+fn links_made_before_new_links_started_off_become_match_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("a");
+    std::fs::create_dir_all(&dir).unwrap();
+    // As an earlier version left it: two links with no kind, and one set to Off.
+    let old = json!({
+        "name": "Desk",
+        "peers": [
+            {"id": "old-one", "name": "Phone", "linked": 1},
+            {"id": "old-two", "name": "Tablet", "linked": 2},
+            {"id": "old-off", "name": "Laptop", "linked": 3, "link": {"v": {"mode": "off", "from": "x"}, "t": 5}},
+        ],
+        "shares": [],
+    });
+    std::fs::write(dir.join("sync.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+    let a = engine(&dir, "Desk", json!({}));
+    assert_eq!(peer(&a, "old-one")["link"], json!({"mode": "match"}));
+    assert_eq!(peer(&a, "old-two")["link"], json!({"mode": "match"}));
+    assert_eq!(peer(&a, "old-off")["link"], json!({"mode": "off", "from": "x"}), "a link already set is kept");
+    a.close();
+    let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("sync.json")).unwrap()).unwrap();
+    assert_eq!(saved["links_migrated"], true);
+
+    // It never runs again: a link with no kind written in later (as only an older version would) stays as it is.
+    let mut again = saved.clone();
+    again["peers"].as_array_mut().unwrap().push(json!({"id": "later", "name": "Watch", "linked": 9}));
+    std::fs::write(dir.join("sync.json"), serde_json::to_vec(&again).unwrap()).unwrap();
+    let a = engine(&dir, "Desk", json!({}));
+    assert_eq!(peer(&a, "later")["link"], Value::Null, "the migration ran once");
+    assert_eq!(peer(&a, "old-one")["link"], json!({"mode": "match"}));
+    a.close();
 }
