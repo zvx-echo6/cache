@@ -281,7 +281,7 @@ class Dock extends StatelessWidget {
     Widget col = Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       for (var i = 0; i < children.length; i++) ...[if (i > 0) const SizedBox(height: 10), children[i]],
     ]);
-    if (maxWidth != null) col = Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth!), child: col));
+    if (maxWidth != null) col = Center(heightFactor: 1, child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth!), child: col));
     return DecoratedBox(
       decoration: BoxDecoration(color: k.background, border: Border(top: BorderSide(color: lineColor(k)))),
       child: SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 20), child: col)),
@@ -615,7 +615,7 @@ class SeeAllToggle extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.accent)),
+              Flexible(child: Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.accent))),
               const SizedBox(width: 4),
               Icon(open ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: k.accent),
             ]),

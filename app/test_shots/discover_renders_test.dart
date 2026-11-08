@@ -104,6 +104,7 @@ Widget _app(Widget page, CacheThemeId theme, String size) {
       data: MediaQuery.of(context).copyWith(padding: insets, viewPadding: insets),
       child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: child!),
     ),
+    onGenerateRoute: (_) => MaterialPageRoute<void>(builder: (_) => const Scaffold()),
     onGenerateInitialRoutes: (_) => [
       MaterialPageRoute<void>(builder: (_) => const Scaffold()),
       MaterialPageRoute<void>(builder: (_) => page),
