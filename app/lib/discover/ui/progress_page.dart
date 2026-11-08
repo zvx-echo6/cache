@@ -43,7 +43,7 @@ class ProgressPage extends StatelessWidget {
     }
     final rows = downloads.length + groups.length;
     final done = downloads.where((x) => x.$3.phase == DlPhase.done).length + groups.length;
-    final current = downloads.where((x) => x.$3.active).firstOrNull;
+    final current = downloads.where((x) => x.$3.phase == DlPhase.running).firstOrNull ?? downloads.where((x) => x.$3.active && x.$3.phase != DlPhase.waiting).firstOrNull;
     final libs = [for (final x in downloads) if (x.$2.kind == ItemKind.library) x];
     final searchWaits = [
       for (final x in libs)

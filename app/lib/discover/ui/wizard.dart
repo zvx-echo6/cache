@@ -155,7 +155,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
           TextButton(
             key: const ValueKey('wizard-skip'),
             onPressed: _starting ? null : _skip,
-            style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+            style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: buttonText(context, 14, FontWeight.w500)),
             child: const Text('Skip'),
           ),
           const SizedBox(width: 8),

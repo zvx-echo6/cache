@@ -142,7 +142,7 @@ class _GetSheetState extends State<GetSheet> {
             TextButton(
               key: const ValueKey('get-cancel'),
               onPressed: widget.onCancel,
-              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: buttonText(context, 14, FontWeight.w500)),
               child: const Text('Cancel'),
             ),
           ],
@@ -259,7 +259,7 @@ class _RemoveSheetState extends State<RemoveSheet> {
             const SizedBox(height: 4),
             TextButton(
               onPressed: widget.onCancel,
-              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: buttonText(context, 14, FontWeight.w500)),
               child: const Text('Cancel'),
             ),
           ],

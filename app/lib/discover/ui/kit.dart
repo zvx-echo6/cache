@@ -19,6 +19,10 @@ Color _pick(CacheTokens k, Color light, Color dark, double mix) {
   return Color.alphaBlend(k.text.withValues(alpha: mix), k.surface);
 }
 
+/// A button's words: the theme's label face at [size] and [weight] (a style with no family would lose the theme's face).
+TextStyle buttonText(BuildContext context, double size, FontWeight weight) =>
+    (Theme.of(context).textTheme.labelLarge ?? const TextStyle()).copyWith(fontSize: size, fontWeight: weight);
+
 /// The icon a recipe names.
 IconData discoverIcon(String name) => switch (name) {
   'shield' => Icons.shield_outlined,
@@ -239,7 +243,7 @@ class PillButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     const shape = StadiumBorder();
-    const text = TextStyle(fontSize: 16, fontWeight: FontWeight.w700);
+    final text = buttonText(context, 16, FontWeight.w700);
     if (outlined) {
       final c = danger ? k.emergency : k.accent;
       return OutlinedButton(
@@ -435,7 +439,7 @@ class TileButton extends StatelessWidget {
               shape: StadiumBorder(side: BorderSide(color: fill ? k.primary : k.accent, width: 2)),
               backgroundColor: fill ? k.primary : null,
               foregroundColor: fill ? k.onPrimary : k.accent,
-              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              textStyle: buttonText(context, 13, FontWeight.w700),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             child: Text(fill ? 'Update' : 'Get'),
@@ -516,7 +520,7 @@ class SectionHead extends StatelessWidget {
             TextButton(
               key: ValueKey('see-all-${title.toLowerCase()}'),
               onPressed: onSeeAll,
-              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              style: TextButton.styleFrom(foregroundColor: k.accent, textStyle: buttonText(context, 14, FontWeight.w500)),
               child: const Text('See all'),
             ),
         ],
@@ -605,23 +609,20 @@ class SeeAllToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: InkWell(
+    return InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 40),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
+            child: Row(children: [
               Flexible(child: Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.accent))),
               const SizedBox(width: 4),
               Icon(open ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: k.accent),
             ]),
           ),
         ),
-      ),
     );
   }
 }

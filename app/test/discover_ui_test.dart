@@ -74,7 +74,9 @@ void main() {
       expect(find.text('National Weather Service'), findsOneWidget, reason: 'outside sources by name');
       expect(find.text('Field manuals · 7.7 GB'), findsNothing, reason: 'the full list is behind See everything');
       await tapKey(tester, 'wizard-see-everything');
-      expect(find.textContaining('Field manuals · 7.7 GB'), findsOneWidget);
+      final manuals = find.textContaining('Field manuals · 7.7 GB');
+      await tester.scrollUntilVisible(manuals, 200, scrollable: find.byType(Scrollable).first);
+      expect(manuals, findsOneWidget);
       expect(dev.added, isEmpty, reason: 'nothing installs before Start');
 
       await tapKey(tester, 'wizard-next');
