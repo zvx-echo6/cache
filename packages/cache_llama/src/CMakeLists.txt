@@ -147,4 +147,11 @@ if (CACHE_LLAMA_TEST_CLI)
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
   target_link_libraries(cl_cases PRIVATE cache_llama)
+
+  # Prompt reuse timing (saved prefix, tool_choice "none" rounds): C API + the vendored JSON library.
+  add_executable(cl_prefix "${CMAKE_CURRENT_LIST_DIR}/../test/cl_prefix.cpp")
+  target_include_directories(cl_prefix PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
+  target_link_libraries(cl_prefix PRIVATE cache_llama)
 endif()

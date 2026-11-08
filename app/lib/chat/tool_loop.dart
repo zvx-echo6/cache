@@ -21,7 +21,8 @@ const String kSystemPrompt =
 
 const int kMaxToolRounds = 3;
 
-/// Sent (not kept in the conversation) when the model asked for more tools after the cap and said nothing.
+/// Sent (not kept in the conversation) with every request after the cap: the tool schemas stay in the request (so the
+/// prompt start the engine keeps is not read again), but `tool_choice` "none" stops the model from calling them.
 const Map<String, dynamic> _kAnswerNow = {
   'role': 'user',
   'content': 'Answer now from the tool results above. No more tools are available.',
@@ -159,7 +160,11 @@ class ToolLoop {
 
   List<Map<String, dynamic>> get _schemas => host == null ? [for (final t in _tools.values) t.toSchema()] : _hostSchemas;
 
-  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools, {required String prompt, Map<String, dynamic>? extra}) => {
+  /// [noToolCalls]: the tools stay in the request, so the rendered prompt start is the same as in the rounds before, but the
+  /// model may not call them (`tool_choice` "none": no tool-call grammar, and the engine stops at a tool-call opening).
+  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools,
+          {required String prompt, Map<String, dynamic>? extra, bool noToolCalls = false}) =>
+      {
         'messages': [
           {'role': 'system', 'content': prompt},
           ...messages,
@@ -168,6 +173,7 @@ class ToolLoop {
         'enable_thinking': enableThinking,
         'max_tokens': kMaxTokens,
         if (withTools) 'tools': _schemas,
+        if (withTools && noToolCalls) 'tool_choice': 'none',
       };
 
   /// Frees the numbering in the core. The loop is not used afterwards.
@@ -212,15 +218,17 @@ class ToolLoop {
         await _addResult(call);
       }
       while (true) {
-        final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
-        final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
+        // After kMaxToolRounds rounds the same tool schemas are still sent (a request without them renders a different prompt,
+        // which the engine would read again from the tool schemas on), with tool calls switched off and the nudge.
+        final capped = rounds >= kMaxToolRounds || finalAnswer;
+        final request = _request(_messages, _schemas.isNotEmpty, prompt: prompt, extra: capped ? _kAnswerNow : null, noToolCalls: capped);
 
         final roundClock = Stopwatch()..start();
         final requestNumber = ++modelRequests;
         int? firstTextMs;
         logInfo('Ask round $requestNumber starts: messages=${(request['messages'] as List).length}, '
             'system_chars=${prompt.length}, tools_chars=${jsonEncode(request['tools'] ?? const []).length}, '
-            'thinking_requested=$enableThinking');
+            'thinking_requested=$enableThinking, tool_calls_off=${request['tool_choice'] == 'none'}');
         PartialMessage? last;
         await for (final p in backend.generate(request)) {
           last = p;
@@ -248,12 +256,12 @@ class ToolLoop {
             'content_chars=${last.content.length}, reasoning_chars=${last.reasoning.length}, '
             'tool_calls=${last.toolCalls.length}, parse_error=${last.parseError != null}, '
             'native_ms=${last.totalMs ?? 'unknown'}, round_ms=${roundClock.elapsedMilliseconds}');
+        if (last.prefixNote != null) logInfo(last.prefixNote!);
         promptTokens += last.promptTokens;
         generatedTokens += last.generatedTokens;
 
-        // The cap is enforced here, not only by leaving the schemas out: once kMaxToolRounds rounds have run, a tool
-        // call the model returns anyway is ignored. Its text, if any, is the answer; with none, one more request
-        // goes out without tools to get one.
+        // The cap is enforced here too, not only by tool_choice "none": once kMaxToolRounds rounds have run, a tool call the
+        // model returns anyway is ignored. Its text, if any, is the answer; with none, one more request goes out to get one.
         if (last.hasToolCalls && !_stopped && rounds >= kMaxToolRounds) {
           if (last.content.trim().isEmpty && !finalAnswer) {
             finalAnswer = true;
