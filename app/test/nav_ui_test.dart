@@ -434,10 +434,10 @@ void main() {
           // The phone's text size is respected, not capped: the lines grow with it.
           expect(tester.getSize(distance).height, greaterThanOrEqualTo(26 * 1.1 * scale - 1));
           expect(tester.getSize(street).height, greaterThanOrEqualTo(17 * 1.2 * scale - 1));
-          // Inside the 360-wide window, nothing cut off at the sides.
+          // Inside the window, nothing cut off at the sides.
           final banner = tester.getRect(find.byKey(const ValueKey('guidance-banner')));
           expect(banner.left, greaterThanOrEqualTo(0));
-          expect(banner.right, lessThanOrEqualTo(360));
+          expect(banner.right, lessThanOrEqualTo(tester.getSize(find.byType(Scaffold)).width));
           for (final f in [distance, street, find.byIcon(Icons.turn_left)]) {
             expect(banner.contains(tester.getRect(f).center), isTrue);
           }

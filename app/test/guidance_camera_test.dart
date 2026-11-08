@@ -62,8 +62,9 @@ void main() {
   });
 
   testWidgets('guiding heading-up moves the camera ahead of the position; following outside guidance keeps it centred', (tester) async {
-    tester.view.physicalSize = const Size(390, 844) * 3;
-    tester.view.devicePixelRatio = 3;
+    // A phone held upright (stacked layout), wide enough for the test font's square letters.
+    tester.view.physicalSize = const Size(600, 1000);
+    tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final dir = Directory.systemTemp.createTempSync('guidance-camera-');
     final originalPlatform = MapLibrePlatform.createInstance;
@@ -124,11 +125,14 @@ void main() {
       // Heading east: the centre is east of the position.
       expect(target[1], greaterThan(-114.46));
 
-      // Guidance over: back on the position.
+      // Guidance over (the map then shows the place); following again, the camera is back on the position.
       await tester.runAsync(() => nav.end());
-      location.publish(fixAt(42.56, -114.46, heading: 90));
       await tester.pump();
-      expect(lastPosition()['target'], [42.56, -114.46]);
+      maps.setFollow(FollowMode.headingUp);
+      location.publish(fixAt(42.561, -114.461, heading: 90));
+      await tester.pump();
+      expect(nav.guiding, isFalse);
+      expect(lastPosition()['target'], [42.561, -114.461]);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       MapLibrePlatform.createInstance = originalPlatform;
