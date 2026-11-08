@@ -354,6 +354,9 @@ impl EndpointHooks for Gate {
     }
 }
 
+/// What one linked device last sent of its secrets: their digest, and the secrets until the app takes them.
+type Received = (String, Option<BTreeMap<String, String>>);
+
 struct Inner {
     dir: PathBuf,
     me: String,
@@ -399,7 +402,7 @@ struct Inner {
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
     /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
-    received: Mutex<HashMap<String, (String, Option<BTreeMap<String, String>>)>>,
+    received: Mutex<HashMap<String, Received>>,
 }
 
 pub struct SyncEngine {
@@ -1023,7 +1026,7 @@ impl Inner {
     fn shares_with(&self, share: &str, peer: &str) -> bool {
         let Some(modes) = self.with.lock().unwrap().get(share).cloned() else { return true };
         let mode = link_mode(self.saved.lock().unwrap().peers.iter().find(|p| p.id == peer).and_then(|p| p.link.as_ref()));
-        modes.iter().any(|m| *m == mode)
+        modes.contains(&mode)
     }
 
     /// The link as `peer` last set it, when that is later than the copy here (on the same time, the device with the greater key

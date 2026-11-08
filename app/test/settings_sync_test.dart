@@ -39,7 +39,7 @@ class Dev {
   final String id;
   final String other;
   final FakeSync core = FakeSync();
-  final Directory root = Directory.systemTemp.createTempSync('settings-sync-$id');
+  late final Directory root = Directory.systemTemp.createTempSync('settings-sync-$id');
   late final SharingState sharing;
   late final SettingsSync sync;
   int clock = 1000;
