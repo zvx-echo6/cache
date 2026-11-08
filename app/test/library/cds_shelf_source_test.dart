@@ -218,7 +218,8 @@ void main() {
       {'at': 5000, 'ev': 'assign', 'copy': 'aid', 'div': '210', 'seq': 1},
     ]);
     final aid = s.booksOn('210').single;
-    expect((aid.callNumber, aid.spares.single.title, aid.aka), ('CDS 210-001', 'Wilderness first aid, 2nd printing', ['Wilderness first aid, 2nd printing']));
+    expect((aid.callNumber, aid.spares.single.title), ('CDS 210-001', 'Wilderness first aid, 2nd printing'));
+    expect(aid.aka, ['Wilderness first aid, 2nd printing']);
     final checked = jsonDecode(File('${shelvesDir().path}/.local/detected.json').readAsStringSync());
     expect(checked['copies'], ['aid', 'aid2', 'bees']);
 
