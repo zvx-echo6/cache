@@ -328,7 +328,7 @@ impl Job {
             let each = self.dims * 4;
             let whole = bytes.len() / each;
             for k in 0..whole {
-                let v: Vec<f32> = bytes[k * each..(k + 1) * each].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                let v: Vec<f32> = bytes[k * each..(k + 1) * each].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
                 self.vectors.push(v);
             }
             if bytes.len() != whole * each {
