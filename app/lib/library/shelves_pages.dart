@@ -128,8 +128,8 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                       Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                       const SizedBox(height: 4),
                       Text(
-                        'This copy of the library came without what Cache needs to shelve its books. They are still searchable. '
-                        'A newer version of the library puts them on your shelves.',
+                        'This library was made before Cache could shelve books. They are still searchable. '
+                        'Update the library to put them on your shelves.',
                         style: TextStyle(fontSize: 13, color: k.secondary),
                       ),
                     ],
