@@ -98,6 +98,8 @@ void main() {
     for (final k in path) {
       final f = find.byKey(ValueKey(k));
       if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
+      await tester.ensureVisible(f.first);
+      await _settle(tester, 2);
       await tester.tap(f.first);
       await _settle(tester);
     }
