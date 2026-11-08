@@ -37,7 +37,7 @@ const List<SampleBook> _field = [
   ('water', 'The water purification handbook', '530', null),
 ];
 
-const List<SampleBook> _recon = [
+const List<SampleBook> _home = [
   ('wfa-scan', 'WFA handbook (scan)', '210', null),
   ('hives', 'Beekeeping basics', '350', null),
 ];
@@ -75,8 +75,8 @@ void main() {
     const same = {'minhash': [1, 2, 3]};
     writeBookLibrary(root, 'field', _field, compression: compression, pdfs: {for (final b in _field) b.$1},
         samebook: {'aid': same, 'aid2': same}, extra: {'aid': {'author': 'Paul S. Auerbach', 'edition': '7th edition', 'year': 2017}});
-    writeBookLibrary(root, 'recon', _recon, samebook: {'wfa-scan': same});
-    File('${root.path}/recon/cache-library.json').writeAsStringSync('{"format":1,"library_id":"recon","title":"Recon library","version":"1"}');
+    writeBookLibrary(root, 'home', _home, samebook: {'wfa-scan': same});
+    File('${root.path}/home/cache-library.json').writeAsStringSync('{"format":1,"library_id":"home","title":"Home library","version":"1"}');
     // a library made before libraries carried copies.jsonl, downloaded without its packs: Bookshelves says so
     writeBookLibrary(root, 'old', const [('stove', 'Rocket stoves', '590', null), ('soap', 'Soap making', '680', null)]);
     Directory('${root.path}/old/packs').deleteSync(recursive: true);
