@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../actions/act_core.dart';
@@ -53,6 +55,10 @@ class ChatMessage {
 
   /// The confirm cards this answer asked for, in order.
   List<ConfirmCard> confirms = const [];
+
+  /// While this answer waits on a server for others to finish: how many are ahead (1 is next); null when it runs or never waits.
+  /// Shown on screen only; not stored and never sent to the model.
+  int? queuePosition;
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
@@ -145,10 +151,13 @@ class ChatController extends ChangeNotifier {
   void _bump() => historyRevision.value++;
 
   /// The model for the next answers. A different model keeps the open conversation: its transcript is
-  /// sent to the new model, which rebuilds its context.
-  void setBackend(ModelBackend? backend, {String modelName = ''}) {
+  /// sent to the new model, which rebuilds its context. [queuePosition] is where its generation waits on a server
+  /// (LlamaSession.queuePosition); the answer being produced shows it while it waits.
+  void setBackend(ModelBackend? backend, {String modelName = '', Stream<int?>? queuePosition}) {
     if (identical(backend, _backend)) return;
     _backend = backend;
+    unawaited(_queueSub?.cancel());
+    _queueSub = queuePosition?.listen(_onQueuePosition);
     _modelName = modelName;
     _dropLoop();
     _turn = null;
@@ -157,6 +166,23 @@ class ChatController extends ChangeNotifier {
   }
 
   bool get canSend => _backend != null && !busy;
+
+  StreamSubscription<int?>? _queueSub;
+
+  void _onQueuePosition(int? position) {
+    if (messages.isEmpty) return;
+    final reply = messages.last;
+    // A title written after the answer also waits; only an answer still being produced shows it.
+    if (reply.isUser || reply.isDone || reply.queuePosition == position) return;
+    reply.queuePosition = position;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_queueSub?.cancel());
+    super.dispose();
+  }
 
   /// The open conversation is in voice mode: every request's system prompt carries the voice line. The mode is fixed when the
   /// conversation is made and stored with it, so a reopened chat keeps it. A new chat starts in text.
@@ -416,6 +442,7 @@ class ChatController extends ChangeNotifier {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
       reply.phase = TurnPhase.done;
+      reply.queuePosition = null;
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, actionDraft);
       }
@@ -576,6 +603,7 @@ class ChatController extends ChangeNotifier {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
       reply.phase = TurnPhase.done;
+      reply.queuePosition = null;
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, null);
       }
