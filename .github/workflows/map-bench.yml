@@ -169,6 +169,8 @@ jobs:
         run: |
           set -euo pipefail
           B="$RUNNER_TEMP/snapcheck"
+          # CocoaPods, as the app (its ios/Podfile), not Swift Package Manager.
+          flutter config --no-enable-swift-package-manager
           flutter create --org co.cache.check --project-name snapcheck --platforms ios "$B" > /dev/null
           cd "$B"
           V=$(awk '/^  maplibre_gl:/{f=1;next} f&&/version:/{gsub(/"/,"",$2);print $2;exit}' "$GITHUB_WORKSPACE/app/pubspec.lock")
