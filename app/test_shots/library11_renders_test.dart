@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/library/cds_shelf_source.dart' show libraryDeviceIdShared;
+import 'package:cache/library/library_prefs.dart' show ShelfLookPrefs;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/platform/battery.dart';
@@ -180,6 +181,7 @@ class _Rig {
   late LayoutState layout;
   late NavState nav;
   IndexScheduler? scheduler;
+  late Directory support;
 
   Future<void> make(WidgetTester tester, {required bool full}) async {
     r = await SettingsRig.create(tester);
@@ -188,7 +190,7 @@ class _Rig {
     final libsDir = Directory('${r.dir.path}/libraries')..createSync();
     sources = _Sources(Directory('${r.dir.path}/zims11')..createSync())..core = _ShelvesCore();
     // the app support folder (Bookshelves keeps its log in bookshelves/ there)
-    final support = Directory('${r.dir.path}/support11')..createSync();
+    support = Directory('${r.dir.path}/support11')..createSync();
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_pathProvider, (call) async => support.path);
     if (full) {
       writeBookLibrary(
@@ -258,6 +260,9 @@ class _Rig {
 /// Opens the Library in the app's frame at [size], then taps [path] (keys) in turn, and draws it as [name].
 Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, List<String> path, CacheThemeId theme) async {
   phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+  // each picture starts from the default Bookshelves look (the look a picture chose is kept in the support folder)
+  final look = File('${rig.support.path}/${ShelfLookPrefs.fileName}');
+  if (look.existsSync()) look.deleteSync();
   await tester.pumpWidget(shotApp(rig.shell(), theme: theme, insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero));
   await _settle(tester);
   await tester.tap(find.text('Library').first);
