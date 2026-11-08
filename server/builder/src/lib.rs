@@ -1,6 +1,7 @@
 //! Cache library builder core: PDFs to document packs, and packs to a normal Cache library. No UI and no server endpoints;
 //! the embedder is a trait (the real one comes from the core's embedding code).
 
+pub mod bookshelves;
 pub mod build;
 pub mod chunk;
 pub mod compress;

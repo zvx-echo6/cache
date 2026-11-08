@@ -66,12 +66,10 @@ pub fn fingerprint<'a>(texts: impl Iterator<Item = &'a str>) -> Fingerprint {
     Fingerprint { minhash: mins, words }
 }
 
-/// The estimated Jaccard similarity (0 to 1) of two fingerprints; 0 when either is empty or they differ in length.
+/// The estimated Jaccard similarity (0 to 1) of two fingerprints; 0 when either is empty or they differ in length. The comparison
+/// is `cache_shelves::same::jaccard`, shared with the Bookshelves log's same-book decision.
 pub fn jaccard(a: &[u32], b: &[u32]) -> f32 {
-    if a.is_empty() || a.len() != b.len() {
-        return 0.0;
-    }
-    a.iter().zip(b).filter(|(x, y)| x == y).count() as f32 / a.len() as f32
+    cache_shelves::same::jaccard(a, b)
 }
 
 pub fn encode_minhash(m: &[u32]) -> String {
@@ -114,22 +112,9 @@ pub fn mean_unit<'a>(vectors: impl Iterator<Item = &'a [f32]>) -> Vec<f32> {
     sum
 }
 
-/// Cosine similarity; 0 when the vectors differ in length or either is empty.
+/// Cosine similarity; 0 when the vectors differ in length or either is empty (`cache_shelves::same::cosine`).
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.is_empty() || a.len() != b.len() {
-        return 0.0;
-    }
-    let (mut dot, mut na, mut nb) = (0f32, 0f32, 0f32);
-    for (x, y) in a.iter().zip(b) {
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na <= 0.0 || nb <= 0.0 {
-        0.0
-    } else {
-        dot / (na.sqrt() * nb.sqrt())
-    }
+    cache_shelves::same::cosine(a, b)
 }
 
 /// The mean meaning of the whole book.

@@ -627,6 +627,36 @@ char *cs_place_delete(cs_handle *h, const char *key);
  * "unsupported" for an unknown op or a notebook.sqlite made by a newer Cache, "io". */
 char *cs_notebook(cs_handle *h, const char *op, const char *args_json);
 
+/* --- the Bookshelves log (logic in packages/cache_shelves; format in server/builder/LIBRARY-LOG.md) ---
+ *
+ * The person's own shelves, call numbers, same-book groups and linked-folder locations, as events in one log file per device
+ * (<dir>/log/<dev>.jsonl). All four calls are handle-less (nothing is opened; the arguments name the folders) and take one JSON
+ * object. They return JSON, or NULL with cs_last_error(NULL) ("bad_json" for a bad request, "io" for a file problem).
+ *
+ * cs_shelves_detect({"copy": facts, "against": [facts], "tuning"?}) -> [{"with": copy key, "how": "blake3" | "text", "score"}]
+ *   Pure. facts = {"copy": key, "blake3"?: content hash, "minhash"?: [128 numbers] or base64, "mean_vector"?: base64 f16 as in the pack
+ *   or a list of numbers, "words"?: n}; the pack header's book.original_blake3 (else source.blake3), samebook.minhash and
+ *   samebook.mean_vector. A match is the same content hash, or MinHash Jaccard >= 0.85 with mean-vector cosine >= 0.95 (the
+ *   build service's thresholds, "tuning" overrides {"same_jaccard","same_cosine","edition_jaccard","min_length_ratio"}). A new
+ *   edition is not a match. score is 1.0 for blake3, else the Jaccard. Copies with the same key as "copy" are skipped.
+ * cs_shelves_append({"dir": <bookshelves folder>, "dev", "events": [event]}) -> {"written": n, "last_at": ms}
+ *   Appends to <dir>/log/<dev>.jsonl in one write, fsynced. An event is a log line's object ({"ev": "place", "copy", "div", "by"},
+ *   "assign", "retire", "unsort", "title", "remove", "restore", "same" {"with","by","how","score"?}, "notsame" {"with","by"},
+ *   "prefer", "folder", "locate", "unlocate"; an optional "loc": "<library_id>/<doc_id>"); "v" and "at" (now) and "dev" may be
+ *   left out. A clock set back is held at the device's last "at". An event the log does not take, or one from another device,
+ *   fails the whole call and writes nothing.
+ * cs_shelves_resolve({"dir", "libraries": [{"library_id", "dir", "packs_dir"?}]}) -> the view (format 1): {"format","built_from",
+ *   "books": {<id>: {"title","title_from","aka","reading","copies","shelf","shelved","by","call","removed","suggested"}},
+ *   "retired","next","folders"}. Reads every log in <dir>/log/ and the packs (<library dir>/packs unless "packs_dir") and the seed
+ *   log (<library dir>/log/builder-*.jsonl) of each library. The same inputs give the same bytes.
+ * cs_shelves_import({"dir", "dev", "libraries": [...]}) -> {"events","files":[{"library_id","file","size","events","unmapped","already"}]}
+ *   Once per library log: this device's own events from <library dir>/log/<dev>.jsonl go into <dir>/log/<dev>.jsonl with "doc"
+ *   mapped to the copy key; recorded in <dir>/.local/migrated.json. */
+char *cs_shelves_detect(const char *args_json);
+char *cs_shelves_append(const char *args_json);
+char *cs_shelves_resolve(const char *args_json);
+char *cs_shelves_import(const char *args_json);
+
 /* --- the user's map layers and repeater lists (user.sqlite; logic in cache_user's mapdata) ---
  *
  * A map layer (id "y<n>") holds pins, lines and areas with a name and notes, imported from KML, KMZ, GPX, GeoJSON or a layer

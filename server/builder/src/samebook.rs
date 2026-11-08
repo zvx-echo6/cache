@@ -11,6 +11,9 @@
 use crate::pack::Pack;
 use std::cmp::Ordering;
 
+/// The same-book decision (thresholds and the judge) lives in `cache_shelves::same`; the build service and the Bookshelves log both use it.
+pub use cache_shelves::same::{judge, Match, Tuning};
+
 /// What the order looks at, for one copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyQuality {
@@ -23,6 +26,10 @@ pub struct CopyQuality {
 }
 
 impl CopyQuality {
+    fn to_shelves(&self) -> cache_shelves::CopyQuality {
+        cache_shelves::CopyQuality { doc_id: self.doc_id.clone(), text_pages: self.text_pages, pages: self.pages, ppi: self.ppi, size: self.size }
+    }
+
     /// The quality of a pack's copy; `None` for a pack without `samebook` (an older pack cannot be compared).
     pub fn of_pack(pack: &Pack) -> Option<CopyQuality> {
         let s = pack.header.samebook.as_ref()?;
@@ -30,14 +37,10 @@ impl CopyQuality {
     }
 }
 
-/// `Greater` when `a` is the better copy, `Less` when `b` is; never `Equal` for two different doc ids.
+/// `Greater` when `a` is the better copy, `Less` when `b` is; never `Equal` for two different doc ids. The order itself lives in
+/// `cache_shelves::quality` (shared with the Bookshelves log's reading copy); this calls it.
 pub fn compare_copies(a: &CopyQuality, b: &CopyQuality) -> Ordering {
-    a.text_pages
-        .cmp(&b.text_pages)
-        .then(a.pages.cmp(&b.pages))
-        .then(a.ppi.cmp(&b.ppi)) // Option orders None below Some
-        .then(b.size.cmp(&a.size)) // smaller is better
-        .then(b.doc_id.cmp(&a.doc_id)) // lower doc_id is better
+    cache_shelves::compare_copies(&a.to_shelves(), &b.to_shelves())
 }
 
 /// The index of the best copy (the same whatever order `copies` comes in); `None` when there are none.
