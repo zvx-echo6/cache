@@ -35,16 +35,42 @@ jobs:
           key: lock-repeat
       - name: Fixed code, build_lock tests x500 (all four in parallel each time)
         run: |
+          cargo test --locked -p cache_search --lib --no-run
           bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.profile.test==true and .target.kind==["lib"]) | .executable' | tail -n1)
+          test -x "$bin"
           fails=0
           for i in $(seq 1 500); do "$bin" build_lock:: -q > "$RUNNER_TEMP/out.txt" 2>&1 || { fails=$((fails+1)); cat "$RUNNER_TEMP/out.txt"; }; done
           echo "FIXED: $fails failures in 500 runs"
           test "$fails" -eq 0
-      - name: Old code (rel-1.1 base), original test x500, for comparison only
-        continue-on-error: true
+  old:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Pinned libzim
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - run: echo "LD_LIBRARY_PATH=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          key: lock-repeat
+      - name: Old code (rel-1.1 base), original tests x500, for comparison only
         run: |
           git checkout ac9f1db4 -- cache_search/src/build_lock.rs cache_search/src/index.rs
+          cargo test --locked -p cache_search --lib --no-run
           bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.profile.test==true and .target.kind==["lib"]) | .executable' | tail -n1)
+          test -x "$bin"
           fails=0
-          for i in $(seq 1 500); do "$bin" build_lock:: -q > "$RUNNER_TEMP/out.txt" 2>&1 || { fails=$((fails+1)); grep -m1 panicked "$RUNNER_TEMP/out.txt"; }; done
+          for i in $(seq 1 500); do "$bin" build_lock:: -q > "$RUNNER_TEMP/out.txt" 2>&1 || { fails=$((fails+1)); grep -m1 -A1 panicked "$RUNNER_TEMP/out.txt"; }; done
           echo "OLD: $fails failures in 500 runs"
