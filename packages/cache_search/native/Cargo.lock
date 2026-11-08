@@ -777,6 +777,7 @@ dependencies = [
  "cache_classify",
  "cache_embed",
  "cache_search",
+ "cache_shelves",
  "edge",
  "flate2",
  "jpeg-encoder",
@@ -939,6 +940,7 @@ dependencies = [
  "cache_notebook",
  "cache_places",
  "cache_regions",
+ "cache_shelves",
  "cache_snapshot",
  "cache_sync",
  "cache_tool",
@@ -1007,6 +1009,14 @@ dependencies = [
  "tokio-rustls",
  "ureq",
  "webauthn-rs",
+]
+
+[[package]]
+name = "cache_shelves"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -670,6 +670,36 @@ pub unsafe extern "C" fn cs_userlayer_export(h: *mut Handle, export_json: *const
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_export(arg_str(export_json, "export_json")?)?))
 }
 
+// ---- the Bookshelves log (logic in cache_shelves; see shelves.rs). Handle-less. ----
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_detect(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::detect(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_append(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::append(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_resolve(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::resolve(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_import(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::import(arg_str(args_json, "args_json")?))
+}
+
 // ---- the Notebook (logic in cache_notebook; see ext.rs) ----
 
 /// # Safety

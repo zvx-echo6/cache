@@ -63,6 +63,9 @@ pub enum Kind {
     /// Hides the book on every device; deletes no files.
     Remove { doc: String },
     Restore { doc: String },
+    /// Optional book facts (author, edition, year) from a source: the seed log writes them from a titles file. `copy` (the
+    /// book's `original_blake3`) and `loc` (`<library_id>/<doc_id>`) are informational; resolution keys on `doc`.
+    Facts { doc: String, copy: Option<String>, loc: Option<String>, fields: cache_shelves::events::FactFields },
     /// A device-local linked folder. This event deliberately has no document id.
     Folder { folder_id: String, label: String, mode: FolderMode },
     /// A document is present at a relative path in a linked folder.
@@ -74,7 +77,7 @@ pub enum Kind {
 impl Kind {
     pub fn doc(&self) -> Option<&str> {
         match self {
-            Kind::Place { doc, .. } | Kind::Unsort { doc, .. } | Kind::Assign { doc, .. } | Kind::Retire { doc, .. } | Kind::Title { doc, .. } | Kind::Remove { doc } | Kind::Restore { doc } | Kind::Locate { doc, .. } | Kind::Unlocate { doc, .. } => Some(doc),
+            Kind::Place { doc, .. } | Kind::Unsort { doc, .. } | Kind::Assign { doc, .. } | Kind::Retire { doc, .. } | Kind::Title { doc, .. } | Kind::Remove { doc } | Kind::Restore { doc } | Kind::Facts { doc, .. } | Kind::Locate { doc, .. } | Kind::Unlocate { doc, .. } => Some(doc),
             Kind::Folder { .. } => None,
         }
     }
@@ -107,6 +110,7 @@ impl Event {
             Kind::Title { .. } => "title",
             Kind::Remove { .. } => "remove",
             Kind::Restore { .. } => "restore",
+            Kind::Facts { .. } => "facts",
             Kind::Folder { .. } => "folder",
             Kind::Locate { .. } => "locate",
             Kind::Unlocate { .. } => "unlocate",
@@ -143,6 +147,23 @@ impl Event {
                 m.insert("folder_id".into(), json!(folder_id));
                 m.insert("relpath".into(), json!(relpath));
             }
+            Kind::Facts { copy, loc, fields, .. } => {
+                if let Some(c) = copy {
+                    m.insert("copy".into(), json!(c));
+                }
+                if let Some(l) = loc {
+                    m.insert("loc".into(), json!(l));
+                }
+                if let Some(a) = &fields.author {
+                    m.insert("author".into(), json!(a));
+                }
+                if let Some(e) = &fields.edition {
+                    m.insert("edition".into(), json!(e));
+                }
+                if let Some(y) = fields.year {
+                    m.insert("year".into(), json!(y));
+                }
+            }
             Kind::Remove { .. } | Kind::Restore { .. } => {}
         }
         Value::Object(m).to_string()
@@ -173,6 +194,13 @@ impl Event {
             "title" => Kind::Title { doc: doc()?, title: text("title")? },
             "remove" => Kind::Remove { doc: doc()? },
             "restore" => Kind::Restore { doc: doc()? },
+            "facts" => {
+                let fields = cache_shelves::events::FactFields::from_value(&v);
+                if fields.is_empty() {
+                    return None;
+                }
+                Kind::Facts { doc: doc()?, copy: text("copy").filter(|c| !c.is_empty()), loc: text("loc").filter(|l| !l.is_empty()), fields }
+            }
             "folder" => Kind::Folder { folder_id: folder_id()?, label: text("label")?, mode: FolderMode::parse(&text("mode")?)? },
             "locate" => {
                 let version = v.get("version").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
@@ -467,6 +495,7 @@ pub fn resolve(events: &[Event]) -> Resolved {
                     removed.insert(doc, (stamp, false));
                 }
             }
+            Kind::Facts { .. } => {}
             Kind::Folder { folder_id, label, mode } => {
                 let key = (e.dev.clone(), folder_id.clone());
                 if folder_events.get(&key).is_none_or(|(s, _)| *s < stamp) {

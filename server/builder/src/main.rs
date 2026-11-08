@@ -33,6 +33,9 @@
 //!       (PACK-FORMAT.md, "pages.json"). A page with "text_source": "ocr" needs --ocr-engine and --ocr-version.
 //!   cache-build view --library <libdir> [--packs <packs dir>]
 //!       rebuilds <libdir>/.local/docs.json from the packs (default <libdir>/packs) and every log in <libdir>/log/
+//!   cache-build view --bookshelves <dir> --library <libdir> [--library <libdir>...]
+//!       the Bookshelves view: resolves every log in <dir>/log/ against the libraries' packs and seed logs and writes
+//!       <dir>/.local/view.json (LIBRARY-LOG.md, "The Bookshelves view"); the library id is the one in cache-library.json
 //!   cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]
 //!       (each PDF is read in a child process, like `pdf`, so one that crashes MuPDF counts as failed and the survey goes on)
 //!       counts the ZIM's PDFs, pages, text layers and estimated pieces (JSON on stdout; nothing written, nothing embedded)
@@ -61,7 +64,7 @@ fn usage() -> ! {
         "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
     );
     eprintln!(
-        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]"
+        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]\n  cache-build view --bookshelves <dir> --library <library dir> [--library <library dir>...]"
     );
     std::process::exit(2);
 }
@@ -655,6 +658,22 @@ fn ocr_entry(v: &Value) -> (Option<OcrInfo>, Option<String>) {
 }
 
 fn cmd_view(a: &Args) -> i32 {
+    if let Some(shelves) = a.get("--bookshelves") {
+        let libs: Vec<PathBuf> = a.opts.iter().filter(|(n, _)| n == "--library").filter_map(|(_, v)| v.clone()).map(PathBuf::from).collect();
+        if libs.is_empty() {
+            usage();
+        }
+        return match cache_builder::bookshelves::rebuild_bookshelves_view(&PathBuf::from(shelves), &libs) {
+            Ok(r) => {
+                println!("view {}: {} books, {} log files", r.path.display(), r.books, r.log_files);
+                0
+            }
+            Err(e) => {
+                eprintln!("FAILED: {e}");
+                1
+            }
+        };
+    }
     let Some(lib) = a.get("--library") else { usage() };
     let lib = PathBuf::from(lib);
     let packs = a.get("--packs").map(PathBuf::from).unwrap_or_else(|| lib.join("packs"));
