@@ -126,10 +126,12 @@ void main() {
       expect(target[1], greaterThan(-114.46));
 
       // Guidance over: back on the position.
+      final before = camera.cameras.length;
       await tester.runAsync(() => nav.end());
-      location.publish(fixAt(42.56, -114.46, heading: 90));
+      location.publish(fixAt(42.561, -114.461, heading: 90));
       await tester.pump();
-      expect(lastPosition()['target'], [42.56, -114.46]);
+      expect(camera.cameras.length, greaterThan(before));
+      expect(lastPosition()['target'], [42.561, -114.461]);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       MapLibrePlatform.createInstance = originalPlatform;
