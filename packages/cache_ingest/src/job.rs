@@ -19,7 +19,7 @@ use crate::files;
 use crate::params::Params;
 use cache_chunk::text::join_lines;
 use cache_pack::build_types::BuildOptions;
-use cache_pack::pack::{pack_bytes, pack_file_name, OcrInfo, Suggested, Tool};
+use cache_pack::pack::{pack_bytes, pack_file_name, OcrInfo, Tool};
 use cache_pack::pagewriter::{finish_pack, prepare_pack, BlockKind, PageBlock, PageIn, PagesSource, Prepared, TextSource};
 use cache_pack::points::{payload_of, point_uuid};
 use cache_shelves::library::PackFacts;
@@ -656,7 +656,7 @@ impl Job {
     /// The write: everything the library gets, all or nothing.
     fn write_phase(&mut self) -> Result<()> {
         let prep = self.prepared.clone().ok_or_else(|| Error::new(Code::Io, "nothing to write"))?;
-        let (mut pack, report) = finish_pack(prep, self.vectors.clone(), &self.env.embedder.name())?;
+        let (mut pack, _) = finish_pack(prep, self.vectors.clone(), &self.env.embedder.name())?;
         // Filing: a book that is a copy of one on the shelves is not scored; any other is scored from the vectors already made (no
         // second embedding pass). The guess goes in the pack even when the book is not confident enough to be placed.
         let lib = self.p.library_dir.clone();

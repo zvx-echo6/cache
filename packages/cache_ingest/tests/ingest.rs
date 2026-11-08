@@ -933,12 +933,13 @@ fn a_cancel_after_the_book_is_in_the_library_does_not_say_cancelled() {
     rig.classifier = Some(medicine());
     let lib = rig.lib("mine");
     let pdf = rig.pdf_file("a.pdf", None, Kind::Ok, &book("alpha", 5));
-    // the Bookshelves folder cannot be used (it is a file): the write to the library succeeds, the log does not
-    let bs_dir = rig.root.path().join("bookshelves");
-    std::fs::write(&bs_dir, "not a folder").unwrap();
+    // the device id is not usable as a log name: the book is written to the library, the log write is refused
+    let bad = |lib: &Path, pdf: &Path, jd: &Path, dev: &str| {
+        json!({"library_dir": lib, "pdf_path": pdf, "job_dir": jd, "bookshelves": {"dir": rig.root.path().join("bookshelves"), "dev": dev}}).to_string()
+    };
     let jd = rig.job_dir("x");
     let svc = rig.service();
-    let job = ok(svc.start(&with_shelves(&lib, &pdf, &jd, &rig)))["job"].as_u64().unwrap();
+    let job = ok(svc.start(&bad(&lib, &pdf, &jd, "bad dev!")))["job"].as_u64().unwrap();
     let (s, _) = run(&svc, job, &[]);
     assert_eq!(s["state"], "failed");
     assert_eq!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().lines().count(), 1, "the book is in the library");
@@ -949,7 +950,6 @@ fn a_cancel_after_the_book_is_in_the_library_does_not_say_cancelled() {
     drop(svc);
 
     // the cause is fixed and the app starts again: the library is not written twice, and the events that are owed are written
-    std::fs::remove_file(&bs_dir).unwrap();
     let svc = rig.service();
     let s = ok(svc.start(&with_shelves(&lib, &pdf, &jd, &rig)));
     assert_eq!(s["resumed"], true);
