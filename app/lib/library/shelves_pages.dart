@@ -576,11 +576,13 @@ class _Books extends StatelessWidget {
   }
 }
 
-/// "41 MB", or "230 pages" when the size is not known.
+/// "41 MB", or "230 pages" when the size is not known; "41 MB · 1 spare copy" when the book has other files.
 String bookLine(ShelfBook b) {
-  if (b.bytes != null && b.bytes! > 0) return formatBytes(b.bytes!);
-  if (b.pages != null && b.pages! > 0) return b.pages == 1 ? '1 page' : '${b.pages} pages';
-  return 'Book';
+  final size = b.bytes != null && b.bytes! > 0
+      ? formatBytes(b.bytes!)
+      : (b.pages != null && b.pages! > 0 ? (b.pages == 1 ? '1 page' : '${b.pages} pages') : 'Book');
+  final n = b.spares.length;
+  return n == 0 ? size : '$size · ${n == 1 ? '1 spare copy' : '$n spare copies'}';
 }
 
 /// The one small state mark a book row carries when needed: "Not on this device", "Making it searchable 40%".

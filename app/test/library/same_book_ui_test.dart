@@ -1,0 +1,170 @@
+import 'dart:io';
+
+import 'package:cache/browse/browse_state.dart';
+import 'package:cache/layout/adaptive.dart' show PanePrefs;
+import 'package:cache/library/cds_shelf_source.dart';
+import 'package:cache/library/library_pages.dart';
+import 'package:cache/library/library_panes.dart';
+import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/sources/libraries_state.dart';
+import 'package:cache/theme.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../browse/fakes.dart';
+import 'fake_shelves.dart';
+import 'library_fixtures.dart';
+
+void main() {
+  late Directory tmp;
+  late FakeSources sources;
+  late LibrariesState libs;
+  late CdsShelfSource shelves;
+  late BrowseState browse;
+  late FakeShelvesCalls calls;
+  var made = false;
+
+  // two files of one book (the same text), and two other books; nothing on the shelves yet, so Cache files them all
+  Future<void> setUpBooks() async {
+    writeBookLibrary(Directory('${tmp.path}/libraries'), 'field', const [
+      ('aid', 'Wilderness first aid', '210', null),
+      ('aid2', 'Wilderness first aid, 2nd printing', '210', null),
+      ('surgery', 'Emergency war surgery', '210', null),
+      ('bees', 'Keeping bees in cold climates', '350', null),
+    ], pdfs: {'aid', 'aid2'}, samebook: {
+      'aid': {'minhash': [1, 2, 3]},
+      'aid2': {'minhash': [1, 2, 3]},
+    });
+    sources = FakeSources(Directory('${tmp.path}/zims')..createSync(recursive: true));
+    libs = await librariesAt(Directory('${tmp.path}/libraries'), sources);
+    calls = FakeShelvesCalls();
+    shelves = CdsShelfSource(libs, calls: calls, bookshelvesDir: () async => Directory('${tmp.path}/bookshelves'), deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+    await shelves.whenRead();
+    browse = BrowseState(sources: sources, libraries: libs, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
+    made = true;
+  }
+
+  setUp(() {
+    tmp = Directory.systemTemp.createTempSync('same-book-ui');
+    made = false;
+  });
+  tearDown(() {
+    if (made) {
+      shelves.dispose();
+      browse.dispose();
+      libs.dispose();
+      sources.dispose();
+    }
+    indexSchedulerShared = null;
+    try {
+      tmp.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  void size(WidgetTester tester, Size s) {
+    tester.view.physicalSize = s;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+  }
+
+  Widget app(LibraryDeps d) => MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: LibraryPanes(root: (_) => LibraryRootPage(deps: d), prefs: PanePrefs(dirOverride: tmp)),
+      );
+
+  Future<void> tapKey(WidgetTester tester, String key) async {
+    await tester.ensureVisible(find.byKey(ValueKey(key)).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey(key)).first);
+    await tester.runAsync(shelves.whenRead);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openDivision(WidgetTester tester) async {
+    await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+    await tester.pumpAndSettle();
+    await tapKey(tester, 'library-bookshelves');
+    await tapKey(tester, 'shelf-200');
+    await tapKey(tester, 'shelf-210');
+  }
+
+  List<Map<String, dynamic>> mine() => [for (final e in calls.appended) if (e['dev'] == 'phone-test') e];
+
+  testWidgets('one book with its spare copy: the division says so, the book page lists it; read it instead; Not the same book splits it', (tester) async {
+    size(tester, const Size(390, 1400));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    expect(find.text('210-001'), findsOneWidget, reason: 'Emergency war surgery, filed first by title');
+    expect(find.text('210-002'), findsOneWidget, reason: 'the two files of first aid are one book with one number');
+    expect(find.text('210-003'), findsNothing);
+    expect(find.textContaining('1 spare copy'), findsOneWidget);
+
+    await tapKey(tester, 'book-aid');
+    expect(find.text('CDS 210-002'), findsOneWidget);
+    expect(find.text('SPARE COPIES'), findsOneWidget);
+    expect(find.text('Wilderness first aid, 2nd printing'), findsNWidgets(2), reason: 'the spare, and Also known as');
+    expect(find.text('Also known as'), findsOneWidget);
+    expect(find.text('39.1 MB · Field library'), findsOneWidget, reason: 'its size and where it is');
+    for (final word in ['copy key', 'event', 'log']) {
+      expect(find.textContaining(RegExp('\\b$word\\b', caseSensitive: false)), findsNothing, reason: 'no "$word" in the words');
+    }
+
+    calls.appended.clear();
+    await tapKey(tester, 'spare-read-aid2');
+    expect(mine().single, containsPair('ev', 'prefer'));
+    expect(mine().single['copy'], 'aid2');
+    expect(find.text('You will read this copy from now on.'), findsOneWidget);
+    expect(shelves.book('aid')!.reading, 'aid2');
+    // the spare now is the other file
+    expect(find.byKey(const ValueKey('spare-aid')), findsOneWidget);
+
+    calls.appended.clear();
+    await tapKey(tester, 'spare-notsame-aid');
+    expect([for (final e in mine()) (e['ev'], e['copy'], e['with'], e['by'])], [('notsame', 'aid', 'aid2', 'user')]);
+    expect(find.text('Now a book of its own.'), findsOneWidget);
+    expect(find.text('SPARE COPIES'), findsNothing);
+    expect(shelves.bookCount, 4);
+  });
+
+  testWidgets('Same book as… searches the books and joins the two, with Undo', (tester) async {
+    size(tester, const Size(390, 1000));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    await tapKey(tester, 'book-surgery');
+    await tapKey(tester, 'book-same-as');
+    expect(find.byType(BottomSheet), findsOneWidget, reason: 'a sheet on a phone');
+    expect(find.text('Same book as…'), findsWidgets);
+    expect(find.byKey(const ValueKey('same-pick-surgery')), findsNothing, reason: 'not itself');
+    expect(find.byKey(const ValueKey('same-pick-aid')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('same-search')), 'BEES');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('same-pick-aid')), findsNothing);
+    expect(find.byKey(const ValueKey('same-pick-bees')), findsOneWidget);
+    calls.appended.clear();
+    await tapKey(tester, 'same-pick-bees');
+    expect([for (final e in mine()) (e['ev'], e['copy'], e['with'], e['by'], e['how'])], [('same', 'surgery', 'bees', 'user', 'user')]);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.textContaining('Now one book'), findsOneWidget);
+    expect(shelves.bookCount, 2);
+    calls.appended.clear();
+    await tester.tap(find.byKey(const ValueKey('same-undo')));
+    await tester.runAsync(shelves.whenRead);
+    await tester.pumpAndSettle();
+    expect([for (final e in mine()) (e['ev'], e['copy'], e['with'])], [('notsame', 'surgery', 'bees')]);
+    expect(shelves.bookCount, 3);
+  });
+
+  testWidgets('on a desktop Same book as… is the detail pane, never a dialog', (tester) async {
+    size(tester, const Size(1440, 900));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    await tapKey(tester, 'book-surgery');
+    await tapKey(tester, 'book-same-as');
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const ValueKey('same-search')), findsOneWidget);
+    await tapKey(tester, 'same-pick-aid');
+    expect(shelves.bookCount, 2);
+    expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget, reason: 'back to the joined book');
+  });
+}

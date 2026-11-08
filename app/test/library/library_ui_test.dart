@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../browse/fakes.dart';
+import 'fake_shelves.dart';
 import 'library_fixtures.dart';
 
 const _seed = '''
@@ -70,7 +71,9 @@ void main() {
     }
     sources = FakeSources(Directory('${tmp.path}/zims')..createSync(recursive: true));
     libs = await librariesAt(Directory('${tmp.path}/libraries'), sources);
-    shelves = CdsShelfSource(libs, deviceId: () async => 'phone-test', clock: () => 5000);
+    final shelvesDir = writeShelves(Directory('${tmp.path}/bookshelves'),
+        placed: books ? const [('aid', '210', 1), ('surgery', '210', 2)] : const [], checked: const ['aid', 'surgery', 'bees', 'engines', 'stone']);
+    shelves = CdsShelfSource(libs, calls: FakeShelvesCalls(), bookshelvesDir: () async => shelvesDir, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
     await shelves.whenRead();
     browse = BrowseState(sources: sources, libraries: libs, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
     made = true;
@@ -138,7 +141,7 @@ void main() {
       expect(find.text('First aid and emergency care'), findsOneWidget);
       expect(find.text('210-001'), findsOneWidget);
       expect(find.text('210-002'), findsOneWidget);
-      await tapKey(tester, 'book-field/aid');
+      await tapKey(tester, 'book-aid');
       expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget);
       expect(find.text('CDS 210-001'), findsOneWidget);
       expect(find.text('CDS 210 · First aid and emergency care'), findsOneWidget);
@@ -197,17 +200,17 @@ void main() {
         expect(find.text('Shelved by the Cache Decimal System'), findsOneWidget, reason: '$s: the list');
         expect(find.byKey(const ValueKey('shelf-210')), findsOneWidget, reason: '$s: the detail');
         await tapKey(tester, 'shelf-210');
-        await tapKey(tester, 'book-field/aid');
+        await tapKey(tester, 'book-aid');
         // the division beside the book (sections, list, detail): never deeper
         expect(find.byKey(const ValueKey('library-bookshelves')), findsOneWidget);
-        expect(find.byKey(const ValueKey('book-field/surgery')), findsOneWidget);
+        expect(find.byKey(const ValueKey('book-surgery')), findsOneWidget);
         expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget);
         expect(find.text('Shelved by the Cache Decimal System'), findsNothing, reason: 'Bookshelves is in the breadcrumb now');
         await tapKey(tester, 'library-hide-list');
-        expect(find.byKey(const ValueKey('book-field/surgery')), findsNothing, reason: 'Hide list: the book takes the width');
+        expect(find.byKey(const ValueKey('book-surgery')), findsNothing, reason: 'Hide list: the book takes the width');
         expect(find.byKey(const ValueKey('library-show-list')), findsOneWidget);
         await tapKey(tester, 'library-show-list');
-        expect(find.byKey(const ValueKey('book-field/surgery')), findsOneWidget);
+        expect(find.byKey(const ValueKey('book-surgery')), findsOneWidget);
       }
     });
   });
@@ -257,13 +260,13 @@ void main() {
       expect(find.text("3 books Cache wasn't sure about. Pick a subject; it's saved and helps Cache learn."), findsOneWidget);
       expect(find.text('350 Beekeeping · Best guess'), findsOneWidget);
       expect(find.text('CDS —'), findsNWidgets(3));
-      await tapKey(tester, 'chip-field/bees-350');
+      await tapKey(tester, 'chip-bees-350');
       expect(find.text('Placed in CDS 350 · Beekeeping as CDS 350-001.'), findsOneWidget);
-      expect(shelves.book('field/bees')!.shelf, '350');
+      expect(shelves.book('bees')!.shelf, '350');
       expect(find.text('CDS —'), findsNWidgets(2));
       await tester.tap(find.text('Undo'));
       await tester.pumpAndSettle();
-      expect(shelves.book('field/bees')!.unsorted, isTrue);
+      expect(shelves.book('bees')!.unsorted, isTrue);
       expect(find.text('CDS —'), findsNWidgets(3));
 
       await tapKey(tester, 'place-all');
@@ -281,13 +284,13 @@ void main() {
       await tester.pumpAndSettle();
       await tapKey(tester, 'library-bookshelves');
       await tapKey(tester, 'shelves-unsorted');
-      await tapKey(tester, 'all-divisions-field/bees');
+      await tapKey(tester, 'all-divisions-bees');
       expect(find.text('Where does this book go?'), findsOneWidget);
       expect(find.text('The book gets its call number in the division you pick, for example CDS 350-001.'), findsOneWidget);
       await tapKey(tester, 'place-all-divisions');
       await tester.scrollUntilVisible(find.byKey(const ValueKey('place-div-530')), 200, scrollable: find.byType(Scrollable).last);
       await tapKey(tester, 'place-div-530');
-      expect(shelves.book('field/bees')!.callNumber, 'CDS 530-001');
+      expect(shelves.book('bees')!.callNumber, 'CDS 530-001');
       // it went on to the next book
       expect(find.text('Small engine repair'), findsWidgets);
       await tapKey(tester, 'place-leave');
@@ -302,11 +305,11 @@ void main() {
       await tester.pumpAndSettle();
       await tapKey(tester, 'library-bookshelves');
       await tapKey(tester, 'shelves-unsorted');
-      await tapKey(tester, 'all-divisions-field/bees');
+      await tapKey(tester, 'all-divisions-bees');
       expect(find.byType(Dialog), findsNothing);
       expect(find.byType(BottomSheet), findsNothing);
       expect(find.text('Where does this book go?'), findsOneWidget);
-      expect(find.byKey(const ValueKey('unsorted-field/bees')), findsOneWidget, reason: 'Unsorted stays beside it');
+      expect(find.byKey(const ValueKey('unsorted-bees')), findsOneWidget, reason: 'Unsorted stays beside it');
     });
   });
 
@@ -320,11 +323,11 @@ void main() {
       await tapKey(tester, 'shelf-200');
       await tapKey(tester, 'shelf-210');
       expect(find.text('Not on this device'), findsOneWidget, reason: 'surgery is not here; aid is');
-      await tapKey(tester, 'book-field/aid');
+      await tapKey(tester, 'book-aid');
       expect(find.byKey(const ValueKey('book-open')), findsOneWidget);
       expect(find.text('On this device · 3 KB'), findsOneWidget);
       expect(find.byKey(const ValueKey('book-download')), findsNothing);
-      expect(shelves.book('field/aid')!.pdfPath, endsWith('bookshelf/${sampleHash('aid')}.pdf'));
+      expect(shelves.book('aid')!.pdfPath, endsWith('bookshelf/${sampleHash('aid')}.pdf'));
     });
 
     testWidgets('the catalogue card shows the author, edition and original title only when the pack has them', (tester) async {
@@ -337,13 +340,13 @@ void main() {
       await tapKey(tester, 'library-bookshelves');
       await tapKey(tester, 'shelf-200');
       await tapKey(tester, 'shelf-210');
-      await tapKey(tester, 'book-field/aid');
+      await tapKey(tester, 'book-aid');
       expect(find.text('Paul S. Auerbach'), findsOneWidget);
       expect(find.text('7th edition, 2017'), findsOneWidget);
       expect(find.text('Original title: wilderness_med_7e.pdf'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tapKey(tester, 'book-field/surgery');
+      await tapKey(tester, 'book-surgery');
       expect(find.byKey(const ValueKey('book-author')), findsNothing);
       expect(find.byKey(const ValueKey('book-edition')), findsNothing);
       expect(find.byKey(const ValueKey('book-original-title')), findsNothing);
@@ -370,7 +373,7 @@ void main() {
       await tapKey(tester, 'library-bookshelves');
       await tapKey(tester, 'shelf-200');
       await tapKey(tester, 'shelf-210');
-      await tapKey(tester, 'book-field/aid');
+      await tapKey(tester, 'book-aid');
     }
 
     testWidgets('two separate choices: Remove from this device refuses when no other device has it; Delete from all devices', (tester) async {
@@ -387,7 +390,7 @@ void main() {
       expect(find.text("No other device has this book right now, so it can't be removed from just this device. Delete it instead."), findsOneWidget);
       expect(files.removed, isEmpty, reason: 'nothing is removed');
       await tapKey(tester, 'delete-all-button');
-      expect(files.deleted, ['field/aid']);
+      expect(files.deleted, ['aid']);
       expect(find.byKey(const ValueKey('delete-all')), findsNothing, reason: 'the sheet closes');
     });
 
@@ -396,7 +399,7 @@ void main() {
       await openBook(tester, files);
       await tapKey(tester, 'book-delete');
       await tapKey(tester, 'delete-here-button');
-      expect(files.removed, ['field/aid']);
+      expect(files.removed, ['aid']);
       expect(find.byKey(const ValueKey('delete-here')), findsNothing);
     });
 

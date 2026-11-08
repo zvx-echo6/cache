@@ -27,7 +27,7 @@ abstract class ShelfSource implements Listenable {
   /// Every book on [shelf] and the shelves under it.
   int countUnder(Shelf shelf);
 
-  /// The books no shelf holds yet, in the order they came.
+  /// The books no shelf holds yet, by title.
   List<ShelfBook> get unsorted;
 
   /// Every book the source has (shelved and unsorted).
@@ -50,6 +50,50 @@ abstract class ShelfSource implements Listenable {
 
   /// Whether [book] is searchable on this device.
   BookSearch searchOf(ShelfBook book);
+
+  /// Telling Cache which files are one book (Read this copy instead, Not the same book, Same book as...), or null when this
+  /// source cannot.
+  ShelfCopies? get copies;
+}
+
+/// The person's corrections to which files are one book. Each one is kept on all of the person's own devices.
+abstract class ShelfCopies {
+  /// Read [copy] (one of [book]'s spares) instead of the copy Cache picked.
+  Future<void> readInstead(ShelfBook book, String copy);
+
+  /// [copy] is not the same book as [book]: it becomes a book of its own, with its own number back.
+  Future<void> notSame(ShelfBook book, String copy);
+
+  /// [book] and [other] are one book. Returns the joined book.
+  Future<ShelfBook?> sameAs(ShelfBook book, ShelfBook other);
+
+  /// Undoes [sameAs]: the two are separate books again.
+  Future<void> unjoin(ShelfBook book, ShelfBook other);
+
+  /// A new title for [book] on all of the person's devices.
+  Future<void> retitle(ShelfBook book, String title);
+
+  /// Hides [book] on all of the person's devices (no file is deleted), or shows it again.
+  Future<void> hide(ShelfBook book, {bool hidden = true});
+}
+
+/// One of a book's other files: kept, not read, unless the person picks it.
+@immutable
+class SpareCopy {
+  const SpareCopy({required this.copy, required this.title, this.bytes, required this.where, this.here = false});
+
+  /// Which file it is (for the source's own use, never shown).
+  final String copy;
+
+  /// Its own title.
+  final String title;
+  final int? bytes;
+
+  /// Where it is: "Field library", "Books folder · Medicine/wm.pdf", or "Not on this device".
+  final String where;
+
+  /// Its library is on this device.
+  final bool here;
 }
 
 enum BookSearchState {
@@ -130,7 +174,19 @@ class ShelfBook {
     this.docId,
     this.originalTitle,
     this.pdfPath,
+    this.spares = const [],
+    this.aka = const [],
+    this.reading,
   });
+
+  /// The book's other files (Spare copies), best first.
+  final List<SpareCopy> spares;
+
+  /// Other titles its files carry ("Also known as").
+  final List<String> aka;
+
+  /// The file the book is read from (for the source's own use).
+  final String? reading;
 
   /// The title the book came with, when it was renamed since ("Original title").
   final String? originalTitle;

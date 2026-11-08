@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative, CsShelvesNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -615,6 +615,28 @@ class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, C
       'close' when close != null => _take(close(session)),
       _ => null,
     };
+  });
+
+  // ---- the Bookshelves log: looked up on first use ----
+
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _shelvesDetect = _lookupStr1('cs_shelves_detect');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _shelvesAppend = _lookupStr1('cs_shelves_append');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _shelvesResolve = _lookupStr1('cs_shelves_resolve');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _shelvesImport = _lookupStr1('cs_shelves_import');
+
+  @override
+  bool get hasShelves => _shelvesDetect != null && _shelvesAppend != null && _shelvesResolve != null && _shelvesImport != null;
+
+  @override
+  String? shelves(String op, String argsJson) => using((a) {
+    final f = switch (op) {
+      'detect' => _shelvesDetect,
+      'append' => _shelvesAppend,
+      'resolve' => _shelvesResolve,
+      'import' => _shelvesImport,
+      _ => null,
+    };
+    return f == null ? null : _take(f(argsJson.toNativeUtf8(allocator: a)));
   });
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).

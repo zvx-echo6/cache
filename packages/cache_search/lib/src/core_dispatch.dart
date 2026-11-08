@@ -191,6 +191,9 @@ class CoreDispatcher {
         result = eng().hasCaptionsSearch;
       case 'captionsSearch':
         result = eng().captionsSearch((a['request'] as Map).cast<String, dynamic>());
+      case 'shelves':
+        // handle-less: works before the core is opened
+        result = SearchEngine.shelvesCall(native ?? (native = factory()), a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
       case 'userLayers':
         result = eng().userLayers(a['call'] as String, a['arg'] as String?);
       case 'placesList':

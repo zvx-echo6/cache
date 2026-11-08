@@ -15,14 +15,14 @@ import '../browse/fakes.dart';
 typedef SampleBook = (String doc, String title, String? div, String? second);
 
 /// A library of books as cache-build writes it (cache-library.json, shard/, documents.tsv, packs/ with each book's header) and,
-/// optionally, a seed log.
+/// optionally, a seed log. [samebook]: a pack's `samebook` block by doc id.
 /// The stored PDF's BLAKE3 a sample book is given (64 hex digits from its doc id; only the name matters here).
 String sampleHash(String doc) => (doc.codeUnits.map((c) => c.toRadixString(16).padLeft(2, '0')).join() * 32).substring(0, 64);
 
 /// [pdfs]: the books whose PDF is on this device, as `bookshelf/<blake3>.pdf` (3,000 bytes each). [extra]: more keys for each
 /// book's `book` block (a later pack revision's author or edition).
 Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
-    {String? log, Map<String, dynamic>? compression, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}}) {
+    {String? log, Map<String, dynamic>? compression, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}, Map<String, Map<String, dynamic>> samebook = const {}}) {
   final d = Directory('${root.path}/$name')..createSync(recursive: true);
   Directory('${d.path}/shard').createSync();
   File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': name, 'title': 'Field library', 'version': '1'}));
@@ -38,18 +38,20 @@ Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
       'doc_id': b.$1,
       'doc_version': 1,
       'title': b.$2,
-      'source': {'blake3': 'abc', 'size': 41000000, 'file_name': '${b.$1}.pdf'},
+      'source': {'blake3': sampleHash(b.$1), 'size': 41000000, 'file_name': '${b.$1}.pdf'},
       'page_count': 120,
       'pieces': 1,
       'book': {
         'title': b.$2,
         'source_title': null,
-        'original_blake3': 'abc',
+        // no original BLAKE3 unless [extra] gives one: each book's copy key in the Bookshelves log is then its doc id
+        'original_blake3': null,
         'compression': compression,
         'ocr': null,
         'suggested': b.$3 == null ? null : {'div': b.$3, 'label': '', 'score': 0.4, 'classifier_version': 3, 'source': 'classifier', 'second_div': b.$4},
         ...?extra[b.$1],
       },
+      if (samebook[b.$1] != null) 'samebook': samebook[b.$1],
     };
     final body = '${jsonEncode(header)}\n${jsonEncode({'i': 0, 'text': 'x' * 2000, 'page': '1'})}\n';
     File('${d.path}/packs/${b.$1}@1.cdoc').writeAsBytesSync(gzip.encode(utf8.encode(body)));
@@ -64,6 +66,25 @@ Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
     File('${d.path}/log/builder-$name.jsonl').writeAsStringSync(log);
   }
   return d;
+}
+
+/// A Bookshelves folder as another of the person's devices ([dev]) left it: each of [placed] (copy key, division, number) shelved
+/// by Cache, and every copy in [checked] already checked for same books (so nothing new is shelved on its own).
+Directory writeShelves(Directory dir, {List<(String, String, int)> placed = const [], Iterable<String> checked = const [], String dev = 'tablet'}) {
+  final log = StringBuffer();
+  var at = 1000;
+  for (final (copy, div, seq) in placed) {
+    log
+      ..writeln(jsonEncode({'v': 1, 'at': at++, 'dev': dev, 'ev': 'place', 'copy': copy, 'div': div, 'by': 'auto'}))
+      ..writeln(jsonEncode({'v': 1, 'at': at++, 'dev': dev, 'ev': 'assign', 'copy': copy, 'div': div, 'seq': seq}));
+  }
+  File('${dir.path}/log/$dev.jsonl')
+    ..createSync(recursive: true)
+    ..writeAsStringSync(log.toString());
+  File('${dir.path}/.local/detected.json')
+    ..createSync(recursive: true)
+    ..writeAsStringSync(jsonEncode({'format': 1, 'copies': checked.toList()..sort()}));
+  return dir;
 }
 
 /// The libraries state over [root] (no search core: every library reads "Not searchable yet").

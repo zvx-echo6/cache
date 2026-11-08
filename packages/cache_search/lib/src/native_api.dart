@@ -187,6 +187,17 @@ abstract class CsPdfNative {
   String? pdfIndex(String op, {int session = 0, String json = '{}'});
 }
 
+/// The Bookshelves log (cs_shelves_detect, cs_shelves_append, cs_shelves_resolve, cs_shelves_import; cache_search.h). Handle-less: each
+/// takes one JSON object naming the folders and answers JSON. Kept apart from [CsNative] like the Notebook; [hasShelves] is false when
+/// the loaded core is older than these calls (looked up when first used).
+abstract class CsShelvesNative {
+  bool get hasShelves;
+
+  /// [op] is the function's name after `cs_shelves_`: `detect`, `append`, `resolve` or `import`; [argsJson] its one argument. The
+  /// answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
+  String? shelves(String op, String argsJson);
+}
+
 /// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
 /// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
 abstract class CsCaptionsNative {

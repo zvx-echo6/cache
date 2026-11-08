@@ -248,9 +248,9 @@ void main() {
 
   const shelves = ['library-bookshelves'];
   const division = [...shelves, 'shelf-200', 'shelf-210'];
-  const book = [...division, 'book-field/aid'];
-  const bookCard = [...division, 'book-field/surgery'];
-  const bookNotHere = [...division, 'book-field/nodoctor'];
+  const book = [...division, 'book-aid'];
+  const bookCard = [...division, 'book-surgery'];
+  const bookNotHere = [...division, 'book-nodoctor'];
   const unsorted = [...shelves, 'shelves-unsorted'];
 
   const phoneScreens = <String, List<String>>{
@@ -266,8 +266,8 @@ void main() {
     'book-not-here': bookNotHere,
     'delete-book': [...book, 'book-delete'],
     'unsorted': unsorted,
-    'place-it': [...unsorted, 'all-divisions-field/bees'],
-    'place-it-all-divisions': [...unsorted, 'all-divisions-field/bees', 'place-all-divisions'],
+    'place-it': [...unsorted, 'all-divisions-bees'],
+    'place-it-all-divisions': [...unsorted, 'all-divisions-bees', 'place-all-divisions'],
     'catalog': ['library-catalog'],
     'docs': ['library-docs'],
   };
@@ -283,7 +283,7 @@ void main() {
     'division-book': book,
     'division-book-not-here': bookNotHere,
     'hide-list': [...book, 'library-hide-list'],
-    'unsorted-place-it': [...unsorted, 'all-divisions-field/bees'],
+    'unsorted-place-it': [...unsorted, 'all-divisions-bees'],
     'catalog': ['library-catalog'],
     'docs': ['library-docs'],
   };
