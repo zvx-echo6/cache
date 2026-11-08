@@ -241,10 +241,11 @@ void main() {
       final b = make();
       await b.init();
       expect(b.transfers, isEmpty);
-      await Future<void>.delayed(const Duration(milliseconds: 100)); // the record is written without waiting
+      await b.saved; // the record is written without waiting
       final again = make();
       await again.init();
       expect(again.transfers, isEmpty);
+      await again.saved;
       expect(File('${settings.path}/browse.json').readAsStringSync(), isNot(contains(e.id)));
     });
 
