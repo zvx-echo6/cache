@@ -337,6 +337,7 @@ Cache names the other device, for example "Linked with Android device". To renam
 
 Under "Linked devices", each device shows whether it is connected directly or through a relay. Tap a device to open its page:
 - how it is connected, when it was last seen, and its free space, if it says;
+- "Settings": whether settings go between the two. See Sharing and sync: settings between devices;
 - "Sync now" syncs with that device only;
 - "Rename" changes what this device calls it;
 - "Unlink" stops it connecting. Files already here stay.
@@ -380,6 +381,38 @@ The Shared folder of Cache 1.0 is gone. Its files stay where they were; they are
 - If sharing waits, "Mobile data downloads" may be off. Sync waits for Wi-Fi.
 - If the other device offers more than fits, Cache fetches what fits and pauses.
 - Private notebooks are left out by default. See Private notebooks in chapter 5.
+
+## Sharing and sync: settings between devices
+
+Your linked devices can keep their settings the same. Each device's page has a "Settings" section.
+
+1. Go to ["Settings" > "Sharing and sync"](cache://settings/sharing) and tap a device under "Linked devices".
+2. Under "Settings", choose:
+   - "Match": "Changes on either device go to both."
+   - "Send mine": for example "Desk follows my settings. Its own changes stay on Desk."
+   - "Off": "Each keeps its own."
+
+The device you choose it on is where the settings come from. On the other device the choice says, for example, "Follows Desk's settings". A device linked before this version starts on "Match".
+
+"What's included" has six groups. Each has its own switch, and each opens a page where you tick single settings:
+- "Appearance": the theme, module icons and dark PDF pages;
+- "Home screen": the bar, Home and its order, and the shortcuts;
+- "Weather and alerts": the sources that are on, what weather watches, your own sources and source lists added from a link;
+- "Notifications": which alerts pop up, and quiet hours;
+- "Map layers": which layers are on;
+- "Ask": the model and web search.
+
+"Never synced" lists what always stays on each device: its name, mobile data downloads, indexing speed, the space kept free, the log level, Obsidian and Logseq connections, and the permissions each device asks for itself.
+
+"API keys" lists each key saved on this device, each with its own switch. All start off. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match", from you only with "Send mine".
+
+A setting changes on the other device at once. Nothing restarts.
+
+- Each setting goes on its own. If both devices change the same setting, the later change wins.
+- With "Send mine", a change made on the other device stays there until you change that setting again.
+- If the other device uses a model this one doesn't have, "Model" says, for example, "Uses Gemma 4 E4B · Q4_K_M, not downloaded here". Tap "Download" to get it. Cache never downloads it on its own.
+- A watched place that hasn't come to this device yet says "waiting for this place" under "What weather watches". It comes with the notebooks.
+- Your Bookshelves are kept the same only with devices set to "Match".
 
 ## Search indexes on linked devices
 

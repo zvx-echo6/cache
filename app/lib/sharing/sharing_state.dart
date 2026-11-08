@@ -24,12 +24,17 @@ class SharingState extends ChangeNotifier {
     required this.supportDir,
     required this.kinds,
     this.always = const [],
+    this.linkShares = const [],
     this.deviceName = 'Cache device',
     SyncOpener? opener,
   }) : _opener = opener ?? _openReal;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
+
+  /// Folders kept only with some linked devices, by how settings go between them (the device's page): never listed under
+  /// Sharing and sync, set up once sharing is (see [LinkShare]).
+  final List<LinkShare> linkShares;
 
   final DataPolicy policy;
   final Future<Directory> Function() supportDir;
@@ -119,11 +124,15 @@ class SharingState extends ChangeNotifier {
         'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
         // The items switched off, from the start, so the first round already leaves them out.
         'off': {for (final k in shareKinds) for (final id in k.shared().keys) id: _sentOff[id] = _offOf(k, id)},
+        // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
+        // Send mine).
+        'with': {for (final l in linkShares) l.id: l.modes},
       });
       await _applyPolicy();
       await refresh();
       await _retire();
       await _addAlways();
+      await _addLinkShares();
       await refreshItems();
       _net = policy.probe.changes.listen((_) async {
         try {
@@ -158,6 +167,50 @@ class SharingState extends ChangeNotifier {
         logError('Could not share', error: e, detail: a.name);
       }
     }
+  }
+
+  /// Shares every folder of [linkShares] that is not shared yet (its folder is made if it is missing).
+  Future<void> _addLinkShares() async {
+    for (final l in linkShares) {
+      final d = l.dir();
+      if (d == null || shareOf(l.id) != null) continue;
+      try {
+        await d.create(recursive: true);
+        await _call('share_add', {'id': l.id, 'name': l.name, 'path': d.path});
+      } catch (e) {
+        logError('Could not share', error: e, detail: l.name);
+      }
+    }
+  }
+
+  /// This device's key (its identity for linked devices), once sharing runs.
+  String? get myId => status['id'] as String?;
+
+  /// What this device and [peer] keep about their link (how settings go between them), as last set on either; null until set.
+  Map<String, dynamic>? linkOf(String peer) => (peerOf(peer)?['link'] as Map?)?.cast<String, dynamic>();
+
+  /// Sets what this device and [peer] keep about their link; [peer] takes it with the next sync.
+  Future<void> setLink(String peer, Map<String, Object?> link) => _call('set_link', {'peer': peer, 'link': link});
+
+  /// The keys for [peer] ({secure-storage name: key}): held by the sync engine in memory only and sent only to [peer], over its
+  /// own encrypted connection, when it asks. Empty: none.
+  Future<void> setSecrets(String peer, Map<String, String> secrets) async {
+    final c = _core;
+    if (c == null) return;
+    await c.call('set_secrets', {'peer': peer, 'secrets': secrets});
+  }
+
+  /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
+  Future<Map<String, Map<String, String>>> takeSecrets() async {
+    final c = _core;
+    if (c == null) return const {};
+    final r = await c.call('take_secrets');
+    final m = r['secrets'];
+    if (m is! Map) return const {};
+    return {
+      for (final e in m.entries)
+        if (e.value is Map) '${e.key}': {for (final k in (e.value as Map).entries) if (k.value is String) '${k.key}': k.value as String},
+    };
   }
 
   /// What this device fetches of the always-shared folder [id] from now on: the paths [patterns] cover (the sync engine's
@@ -505,6 +558,18 @@ class AlwaysShared {
 
   /// Hidden files that do travel (a name starting with "." otherwise never does).
   final List<String> hidden;
+}
+
+/// A folder kept only with the linked devices whose link is one of [modes] (`match`, `send`; a link with none set yet counts as
+/// `match`), and never listed under Sharing and sync: the person's Bookshelves log with their own devices (Match), the settings log
+/// with the devices settings go to or come from.
+class LinkShare {
+  const LinkShare({required this.id, required this.name, required this.dir, required this.modes});
+
+  final String id;
+  final String name;
+  final Directory? Function() dir;
+  final List<String> modes;
 }
 
 /// One item as the Sharing screens list it: the item, whether this device holds it, and the linked devices that do.

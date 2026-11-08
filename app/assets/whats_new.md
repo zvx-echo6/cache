@@ -7,6 +7,7 @@ written by the owner (lead words in **bold**). A version with no lines shows no 
 - **A new Library:** four places in one: ZIM Collections, Bookshelves (your books on the numbered shelves of the Cache Decimal System, each with its own call number), Catalog (every search index, with Pause and Resume) and Cache Documentation (this guide, What's new and the credits).
 - **Add your own source:** plug in any web service that gives data, pick what to show, and it works like the other weather and alerts sources.
 - **Share just what you choose:** each kind under Sharing and sync opens a list of its items, each with its own switch and Sync now, and each linked device has its own page with Sync now, Rename and Unlink. The Shared folder is gone; its files stay where they are.
+- **Settings across your devices:** each linked device's page has Settings: Match, Send mine or Off. Choose what goes group by group under What's included; API keys go only when you tick them, encrypted for that device.
 
 ## 1.0.30
 - **Search inside your ZIMs:** PDFs, e-books and video captions inside your libraries are now searchable, and answers cite the exact page, chapter or moment.
