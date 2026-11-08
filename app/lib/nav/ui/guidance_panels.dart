@@ -172,10 +172,14 @@ class GuidanceBanner extends StatelessWidget {
 
 /// The strip at the bottom while guiding: arrival time, time and distance left, the voice switch, and End.
 class GuidanceBar extends StatelessWidget {
-  const GuidanceBar({super.key, required this.nav, required this.fmt});
+  const GuidanceBar({super.key, required this.nav, required this.fmt, this.bare = false});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// Inside the guidance card (GuidanceDock in elevation_dock.dart), which draws the card: no background of its own and no top
+  /// padding (the elevation handle is above it).
+  final bool bare;
 
   @override
   Widget build(BuildContext context) {
@@ -199,9 +203,10 @@ class GuidanceBar extends StatelessWidget {
         );
     return Container(
       key: const ValueKey('guidance-bar'),
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      decoration: bare ? null : mapPanel(context, radius: 20, alpha: 0.98),
       // The screen's bottom inset (the home indicator) is kept below the card by the Maps screen, not inside it as an empty strip.
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      // Inside the guidance card the elevation handle is above, so no top padding.
+      padding: EdgeInsets.fromLTRB(8, bare ? 0 : 4, 8, 4),
       child: nav.arrived
             ? Row(
                 children: [

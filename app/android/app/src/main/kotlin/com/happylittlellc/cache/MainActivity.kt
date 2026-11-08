@@ -56,6 +56,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var memoryChannel: MethodChannel? = null
+    private var routeSnapshot: RouteSnapshot? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
 
@@ -126,6 +127,8 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        // The whole-route picture during guidance (RouteSnapshot.kt).
+        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -141,6 +144,8 @@ class MainActivity : FlutterActivity() {
         systemUiChannel = null
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
+        routeSnapshot?.dispose()
+        routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

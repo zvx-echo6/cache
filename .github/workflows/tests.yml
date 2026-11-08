@@ -109,6 +109,8 @@ jobs:
         run: |
           flutter --version
           flutter pub get
+      - name: MapLibre versions (the app's own and maplibre_gl's)
+        run: python3 -I tools/check_maplibre_pin.py
       - name: Analyze
         working-directory: app
         run: flutter analyze

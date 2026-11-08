@@ -1,0 +1,190 @@
+# The route mini map's costs, measured on an Android emulator (no phone needed): the whole-route picture's render time and memory
+# (the app's own snapshotter, app/android/.../RouteSnapshot.kt) and the frame, CPU and memory cost of the live map with the picture
+# and its position dot (the app's distance rule, app/lib/nav/overview/overview_camera.dart). The bench app is tools/map_bench; the
+# workflow makes a Flutter project around it, copies the app's snapshotter and camera code in, builds it in profile mode and runs
+# it. The emulator draws with SwiftShader (software), so absolute frame and CPU numbers are worse than a phone's; the comparison
+# between the modes is what it is for. A second job builds the iOS snapshotter against the app's pinned MapLibre pod. Runs on a push to a branch named map-bench-* (a new workflow cannot be run by hand until it
+# is on the default branch), or by hand once it is. No secrets are used.
+name: Map bench
+
+on:
+  push:
+    branches: ['map-bench-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: map-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: The bench project
+        run: |
+          set -euo pipefail
+          B="$RUNNER_TEMP/map_bench"
+          flutter create --org co.cache.bench --project-name map_bench --platforms android "$B" > /dev/null
+          cd "$B"
+          # The same maplibre_gl as the app (its lock file's version).
+          V=$(awk '/^  maplibre_gl:/{f=1;next} f&&/version:/{gsub(/"/,"",$2);print $2;exit}' "$GITHUB_WORKSPACE/app/pubspec.lock")
+          echo "maplibre_gl $V"
+          flutter pub add "maplibre_gl:$V"
+          cp "$GITHUB_WORKSPACE/tools/map_bench/lib/main.dart" lib/main.dart
+          cp "$GITHUB_WORKSPACE/app/lib/nav/overview/overview_camera.dart" lib/overview_camera.dart
+          K=android/app/src/main/kotlin/co/cache/bench/map_bench
+          sed 's/^package com.happylittlellc.cache$/package co.cache.bench.map_bench/' \
+            "$GITHUB_WORKSPACE/app/android/app/src/main/kotlin/com/happylittlellc/cache/RouteSnapshot.kt" > "$K/RouteSnapshot.kt"
+          cat > "$K/MainActivity.kt" <<'KT'
+          package co.cache.bench.map_bench
+
+          import android.os.Debug
+          import android.os.Process
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity : FlutterActivity() {
+              private var snapshot: RouteSnapshot? = null
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  snapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache.bench/stats").setMethodCallHandler { call, result ->
+                      if (call.method != "read") return@setMethodCallHandler result.notImplemented()
+                      val mi = Debug.MemoryInfo()
+                      Debug.getMemoryInfo(mi)
+                      result.success(mapOf(
+                          "pssKb" to mi.totalPss,
+                          "graphicsKb" to (mi.getMemoryStat("summary.graphics")?.toIntOrNull() ?: -1),
+                          "nativeHeapKb" to (Debug.getNativeHeapAllocatedSize() / 1024),
+                          "cpuMs" to Process.getElapsedCpuTime(),
+                      ))
+                  }
+              }
+          }
+          KT
+          # The snapshotter's MapLibre SDK, as the app declares it (tools/check_maplibre_pin.py keeps it the plugin's).
+          DEP=$(grep -o 'org.maplibre.gl:android-sdk-opengl:[0-9.]*' "$GITHUB_WORKSPACE/app/android/app/build.gradle.kts")
+          cat >> android/app/build.gradle.kts <<GRADLE
+
+          dependencies {
+              implementation("$DEP") {
+                  exclude(group = "org.maplibre.gl", module = "android-sdk")
+              }
+          }
+          GRADLE
+          # The plugin needs API 21+, Java 21 and the network.
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/' android/app/build.gradle.kts
+          grep -q INTERNET android/app/src/main/AndroidManifest.xml || sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          flutter build apk --profile --target-platform android-x64
+          ls -l build/app/outputs/flutter-apk/
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Emulator
+        run: |
+          set -euo pipefail
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # One place for the AVD, for avdmanager and the emulator alike (they look in different places by default).
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          # (yes ends with a broken pipe once the licences are taken; that is not a failure)
+          { yes 2> /dev/null || true; } | "$SDKM" --install "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /dev/null
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n bench -k "system-images;android-34;google_apis;x86_64" -d pixel_6 --force
+          nohup "$ANDROID_HOME/emulator/emulator" -avd bench -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 4096 -cores 4 > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          if ! timeout 600 "$ADB" wait-for-device; then
+            echo "::error::the emulator did not start"; tail -n 40 "$RUNNER_TEMP/emulator.log"; exit 1
+          fi
+          for i in $(seq 1 120); do
+            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break
+            sleep 5
+          done
+          "$ADB" shell getprop ro.build.version.release
+          "$ADB" shell settings put global window_animation_scale 0
+          "$ADB" shell wm size
+          "$ADB" shell wm density
+      - name: Run the bench
+        run: |
+          set -uo pipefail
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" install -r "$RUNNER_TEMP/map_bench/build/app/outputs/flutter-apk/app-profile.apk"
+          "$ADB" logcat -c
+          "$ADB" shell am start -n co.cache.bench.map_bench/.MainActivity
+          for i in $(seq 1 180); do
+            "$ADB" logcat -d -s flutter:I | grep -q 'BENCH DONE' && break
+            sleep 5
+          done
+          "$ADB" logcat -d -s flutter:I | grep 'BENCH' | sed 's/^.*BENCH /BENCH /' | tee "$RUNNER_TEMP/bench.txt"
+          "$ADB" shell dumpsys meminfo co.cache.bench.map_bench | tee "$RUNNER_TEMP/meminfo.txt"
+          "$ADB" logcat -d > "$RUNNER_TEMP/logcat.txt"
+          grep -q 'BENCH DONE' "$RUNNER_TEMP/bench.txt"
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-bench-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/bench.txt
+            ${{ runner.temp }}/meminfo.txt
+            ${{ runner.temp }}/logcat.txt
+            ${{ runner.temp }}/emulator.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The app's iOS snapshotter (RouteSnapshot in app/ios/Runner/AppDelegate.swift) built against the MapLibre pod the app pins, in a
+  # small project of its own: the full iOS build needs the native core, which takes longer than one job may run.
+  ios-snapshot-compile:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build it
+        run: |
+          set -euo pipefail
+          B="$RUNNER_TEMP/snapcheck"
+          # CocoaPods, as the app (its ios/Podfile), not Swift Package Manager.
+          flutter config --no-enable-swift-package-manager
+          flutter create --org co.cache.check --project-name snapcheck --platforms ios "$B" > /dev/null
+          cd "$B"
+          V=$(awk '/^  maplibre_gl:/{f=1;next} f&&/version:/{gsub(/"/,"",$2);print $2;exit}' "$GITHUB_WORKSPACE/app/pubspec.lock")
+          flutter pub add "maplibre_gl:$V"
+          # The class exactly as the app has it, at the end of AppDelegate.swift, with the app's import.
+          sed -n '/^\/\/\/ The whole-route picture during guidance (lib\/nav\/overview/,$p' "$GITHUB_WORKSPACE/app/ios/Runner/AppDelegate.swift" > "$RUNNER_TEMP/snapshot.swift"
+          grep -q 'final class RouteSnapshot' "$RUNNER_TEMP/snapshot.swift"
+          { echo 'import MapLibre'; cat ios/Runner/AppDelegate.swift; echo; cat "$RUNNER_TEMP/snapshot.swift"; echo 'let routeSnapshotForTheBuild = RouteSnapshot()'; } > "$RUNNER_TEMP/AppDelegate.swift"
+          cp "$RUNNER_TEMP/AppDelegate.swift" ios/Runner/AppDelegate.swift
+          flutter build ios --config-only --simulator --debug
+          # The app's Podfile settings: iOS 16.3, static frameworks, and the MapLibre pod at the app's pinned version.
+          POD=$(grep -E "^\s*pod 'MapLibre'" "$GITHUB_WORKSPACE/app/ios/Podfile")
+          sed -i '' "s/^# platform :ios.*/platform :ios, '16.3'/" ios/Podfile
+          sed -i '' "s/^  use_frameworks!$/  use_frameworks! :linkage => :static/" ios/Podfile
+          awk -v pod="$POD" '{print} /flutter_install_all_ios_pods/{print pod}' ios/Podfile > "$RUNNER_TEMP/Podfile" && cp "$RUNNER_TEMP/Podfile" ios/Podfile
+          cat ios/Podfile
+          flutter build ios --simulator --debug
