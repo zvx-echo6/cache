@@ -36,7 +36,8 @@ void main() {
 
   group('the wizard', () {
     testWidgets('Next through five steps with the defaults, then Start adds the picked activities and shows their progress', (tester) async {
-      tester.view.physicalSize = const Size(390, 844) * 2;
+      // tall enough that the summary's full list is built without scrolling
+      tester.view.physicalSize = const Size(390, 2400) * 2;
       tester.view.devicePixelRatio = 2;
       addTearDown(tester.view.reset);
       final d = await makeDiscover(dev, firstRunDone: false);
@@ -74,9 +75,7 @@ void main() {
       expect(find.text('National Weather Service'), findsOneWidget, reason: 'outside sources by name');
       expect(find.text('Field manuals · 7.7 GB'), findsNothing, reason: 'the full list is behind See everything');
       await tapKey(tester, 'wizard-see-everything');
-      final manuals = find.textContaining('Field manuals · 7.7 GB');
-      await tester.scrollUntilVisible(manuals, 200, scrollable: find.byType(Scrollable).first);
-      expect(manuals, findsOneWidget);
+      expect(find.textContaining('Field manuals · 7.7 GB'), findsOneWidget);
       expect(dev.added, isEmpty, reason: 'nothing installs before Start');
 
       await tapKey(tester, 'wizard-next');
