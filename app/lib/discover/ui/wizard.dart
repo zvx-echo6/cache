@@ -193,7 +193,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
       bottomNavigationBar: Dock(
         maxWidth: 560,
         children: [
-          if (_step == 3) SpaceLine(label: (s) => widget.again ? '$s to add' : '$s selected', bytes: total, free: free),
+          if (_step == 3) SpaceLine(label: (s) => widget.again ? (total == 0 ? 'Nothing new to add' : '$s to add') : '$s selected', bytes: total, free: free),
           StepDots(step: _step, of: kWizardSteps),
           PillButton(
             key: const ValueKey('wizard-next'),
