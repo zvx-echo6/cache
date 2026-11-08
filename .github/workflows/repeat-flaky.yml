@@ -1,0 +1,103 @@
+# TEMPORARY (removed before merging): runs two flaky tests 200 times each, on the fixed code and on the old code.
+name: Repeat flaky tests
+
+on:
+  push:
+    branches: [flaky-tests-3]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.44.8
+  RUST_VERSION: 1.99.1
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  flutter:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [fixed, old]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.code == 'old' && '222fa68ad849de57462d9e6956f34116f37f7f44' || github.sha }}
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      - name: 200 runs of the cancel-then-download test
+        working-directory: app
+        run: |
+          cat > test/browse/repeat_cancel_test.dart <<'DART'
+          import 'package:flutter_test/flutter_test.dart';
+
+          import 'browse_state_test.dart' as t;
+
+          void main() {
+            for (var i = 0; i < 200; i++) {
+              group('run $i', t.main);
+            }
+          }
+          DART
+          flutter test --no-pub -r expanded test/browse/repeat_cancel_test.dart \
+            --plain-name 'a download started again right after a cancel keeps the partial file and finishes it' > out.txt 2>&1 || true
+          tail -n 5 out.txt
+          ran=$(grep -cE '^[0-9:]+ \+[0-9]+.*run [0-9]+ a download started again' out.txt || true)
+          failed=$(grep -E 'run [0-9]+ a download started again.* \[E\]$' out.txt | wc -l)
+          notempty=$(grep -c 'Directory not empty' out.txt || true)
+          echo "RESULT ${{ matrix.code }}: test lines $ran, failed runs $failed, 'Directory not empty' $notempty" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [fixed, old]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.code == 'old' && '222fa68ad849de57462d9e6956f34116f37f7f44' || github.sha }}
+      - name: Free disk space
+        working-directory: .
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          save-if: false
+      - name: Build the cli tests
+        run: cargo test --locked -p cache_search_cli --test cli --no-run
+      - name: 200 runs of the cli tests (all in parallel, as in CI)
+        run: |
+          bin=$(ls -t target/debug/deps/cli-* | grep -v '\.d$' | head -n 1)
+          echo "binary $bin"
+          fails=0; other=0
+          for i in $(seq 1 200); do
+            "$bin" > run.txt 2>&1 || true
+            if grep -q 'cs_tool_web_search_against_a_stand_in_server ... FAILED' run.txt; then
+              fails=$((fails+1))
+              [ "$fails" -le 2 ] && sed -n '/---- cs_tool_web_search_against_a_stand_in_server/,/^failures:/p' run.txt | head -n 20
+            fi
+            grep -q 'test result: FAILED' run.txt && ! grep -q 'cs_tool_web_search_against_a_stand_in_server ... FAILED' run.txt && other=$((other+1))
+          done
+          echo "RESULT ${{ matrix.code }}: cs_tool_web_search_against_a_stand_in_server failed $fails of 200 (other failing runs: $other)" | tee -a "$GITHUB_STEP_SUMMARY"
