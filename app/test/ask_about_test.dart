@@ -89,7 +89,8 @@ void main() {
       (_) => _call('search', '{"query": "pipes"}'),
       (_) => _call('search', '{"query": "plants"}'),
       (r) {
-        expect(r['tools'], isNull, reason: 'three rounds of its own after the seed, then the request without tools');
+        expect(r['tools'], isNotNull, reason: 'the same tools stay in the request, so the prompt start is reused');
+        expect(r['tool_choice'], 'none', reason: 'three rounds of its own after the seed, then no more tool calls');
         return say('Cover plants and drain pipes [2].');
       },
       (_) => _call('search', '{"query": "pets"}'),

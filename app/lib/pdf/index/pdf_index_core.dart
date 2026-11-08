@@ -104,6 +104,8 @@ class ZimPdf {
   /// Bytes; 0 when the core does not know.
   final int size;
 
+  Map<String, dynamic> toJson() => {'path': path, 'title': title, 'size': size};
+
   /// The title shown and stored: the entry's title, else its file name without ".pdf".
   String get name {
     if (title.trim().isNotEmpty) return title.trim();
@@ -125,6 +127,9 @@ class ZimPdfList {
   final String zimUuid;
   final String zimName;
   final List<ZimPdf> pdfs;
+
+  /// As cs_zim_pdfs answers it (the app keeps it per ZIM uuid).
+  Map<String, dynamic> toJson() => {'zim_uuid': zimUuid, 'zim_name': zimName, 'pdfs': [for (final p in pdfs) p.toJson()]};
 
   /// All their bytes.
   int get bytes => pdfs.fold(0, (s, p) => s + p.size);

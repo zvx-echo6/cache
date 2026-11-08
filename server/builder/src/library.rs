@@ -9,6 +9,8 @@ use crate::log::{read_logs, resolve, By, Event, Kind, LogWriter, LOG_DIR};
 use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
 use crate::source_identity::{write_source_identities, SourceIdentity, SOURCE_IDENTITIES_FILE};
 use crate::view::{view_value, write_view, BookFacts};
+use cache_shelves::events::FactFields;
+use cache_shelves::library::{content_hash, copy_key, PackFacts, SameInfo, SuggestedDiv};
 use edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
     VectorStorageDatatype,
@@ -23,6 +25,8 @@ pub const POINT_NAMESPACE: &str = "c4b95b91-e641-5c16-91a0-13ba2f6f7970";
 pub const SETTINGS_FILE: &str = "cache-library.json";
 /// The per-document table written beside the shard.
 pub const DOCUMENTS_FILE: &str = "documents.tsv";
+/// The per-document facts the Bookshelves log reads (LIBRARY-LOG.md, "The copies file"), at the library's root and in the archive.
+pub use cache_shelves::library::COPIES_FILE;
 /// The checksums of every other file in the folder.
 pub const SUMS_FILE: &str = "SHA256SUMS";
 /// The `source` payload value of every point (mapped as the library's source type).
@@ -266,6 +270,51 @@ pub struct LibraryWriter {
     rows: Vec<String>,
     identities: Vec<SourceIdentity>,
     facts: BTreeMap<String, BookFacts>,
+    /// One per document, for `copies.jsonl`.
+    copies: Vec<PackFacts>,
+}
+
+/// What `copies.jsonl` says about one document: everything the Bookshelves log reads from a pack. The copy key and the content hash
+/// are worked out by the shared `copy_key` and `content_hash` of `cache_shelves`, the same functions the resolver calls on a pack
+/// header, so a library reads the same with or without its packs. `facts` are the book's facts as the writer holds them; the title
+/// is the pack's (a title the caller replaced goes to the seed log as a `title` event, as before), and `suggested` is the
+/// library's suggestion (a label or the sorter's guess, else the pack's).
+pub fn copies_entry(doc: &LibDoc, facts: &BookFacts) -> PackFacts {
+    let original = doc.original_blake3.as_deref().filter(|o| !o.is_empty());
+    let source = Some(doc.source_blake3.as_str()).filter(|s| !s.is_empty());
+    PackFacts {
+        copy: copy_key(original, &doc.doc_id),
+        doc_id: doc.doc_id.clone(),
+        version: doc.doc_version,
+        title: facts.title.clone(),
+        suggested: facts.suggested.as_ref().map(|s| SuggestedDiv { div: s.div.clone(), label: s.label.clone() }),
+        blake3: content_hash(original, source),
+        original_blake3: original.map(str::to_string),
+        source_blake3: source.map(str::to_string),
+        same: facts.samebook.as_ref().map(|s| SameInfo {
+            minhash: s.minhash.clone(),
+            mean_vector: s.mean_vector.clone(),
+            text_pages: s.text_pages,
+            pages: s.pages,
+            ppi: s.ppi,
+            source_size: s.source_size,
+            words: None,
+        }),
+        fields: FactFields { author: facts.author.clone(), edition: facts.edition.clone(), year: facts.year },
+    }
+}
+
+/// The text of `copies.jsonl`: one line per document, sorted by `doc_id`, each ending in a line break. The same documents always
+/// give the same bytes.
+pub fn copies_text(copies: &[PackFacts]) -> String {
+    let mut sorted: Vec<&PackFacts> = copies.iter().collect();
+    sorted.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
+    let mut text = String::new();
+    for c in sorted {
+        text.push_str(&c.to_copies_line());
+        text.push('\n');
+    }
+    text
 }
 
 /// A tab-separated field: tabs and line breaks become spaces.
@@ -299,7 +348,7 @@ impl LibraryWriter {
             }
         };
         let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), vector_datatype: opts.vector_datatype, archive: opts.archive, built_at: opts.built_at };
-        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), identities: Vec::new(), facts: BTreeMap::new() })
+        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), identities: Vec::new(), facts: BTreeMap::new(), copies: Vec::new() })
     }
 
     /// Add one document's pieces.
@@ -362,6 +411,7 @@ impl LibraryWriter {
         if facts.copy.is_none() {
             facts.copy = doc.original_blake3.clone();
         }
+        self.copies.push(copies_entry(doc, &facts));
         self.facts.insert(doc.doc_id.clone(), facts);
         self.rows.push(format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
@@ -375,10 +425,10 @@ impl LibraryWriter {
         Ok(())
     }
 
-    /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS`, the seed log `log/builder-<library_id>.jsonl` and the local view `.local/docs.json` (and the
+    /// Flush the shard and write `cache-library.json`, `documents.tsv`, `copies.jsonl` and `SHA256SUMS`, the seed log `log/builder-<library_id>.jsonl` and the local view `.local/docs.json` (and the
     /// archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
-        let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, identities, .. } = self;
+        let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, identities, copies, .. } = self;
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
@@ -394,6 +444,8 @@ impl LibraryWriter {
         let tsv_path = out.join(DOCUMENTS_FILE);
         std::fs::write(&tsv_path, tsv).map_err(|e| Error::ctx(&format!("writing {}", tsv_path.display()), e))?;
         write_source_identities(&out, identities).map_err(|e| Error::ctx("writing source identities", e))?;
+        let copies_path = out.join(COPIES_FILE);
+        std::fs::write(&copies_path, copies_text(&copies)).map_err(|e| Error::ctx(&format!("writing {}", copies_path.display()), e))?;
         // The seed log (synced, so it is in SHA256SUMS), then the local view made from it (never synced, in no list).
         let dev = seed_device_id(&opts.id);
         let seed = seed_events(&facts, &dev, opts.built_at);
@@ -610,7 +662,7 @@ fn sort_book(model: &cache_classify::Model, pack: &Pack, names: &std::collection
 }
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's
-/// snapshot packer writes only the shard; this appends settings, the document table and source identities).
+/// snapshot packer writes only the shard; this appends settings, the document table, source identities and the copies file).
 fn write_archive(shard_dir: &Path, settings: &str, library: &Path, out: &Path) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let tmp = out.with_file_name(format!(".{}.tmp", out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
@@ -634,8 +686,8 @@ fn write_archive(shard_dir: &Path, settings: &str, library: &Path, out: &Path) -
     h.set_mtime(0);
     h.set_cksum();
     b.append_data(&mut h, SETTINGS_FILE, settings.as_bytes()).map_err(|e| Error::ctx("adding the settings file", e))?;
-    // The catalog and its aliases travel together, beside the settings in the shard snapshot.
-    for name in [DOCUMENTS_FILE, SOURCE_IDENTITIES_FILE] {
+    // The catalog, its aliases and the copies file travel together, beside the settings in the shard snapshot.
+    for name in [DOCUMENTS_FILE, SOURCE_IDENTITIES_FILE, COPIES_FILE] {
         let bytes = std::fs::read(library.join(name)).map_err(|e| Error::ctx(&format!("reading {name}"), e))?;
         let mut h = tar::Header::new_gnu();
         h.set_size(bytes.len() as u64);

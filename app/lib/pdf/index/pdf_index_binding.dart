@@ -31,8 +31,46 @@ class CorePdfIndex implements PdfIndexCore {
     return _has;
   }
 
+  /// The list is made by the core's `zim_pdfs` job, on a thread of its own: a pass over every entry of a large ZIM took 15 s on
+  /// the core's one worker at every start (build 46), and every search, read and weather call waited behind it. A core older than
+  /// the job lists on its worker (cs_zim_pdfs). The app keeps each ZIM's list, so this runs once per ZIM ([PdfIndexState]).
   @override
-  Future<ZimPdfList> zimPdfs(String zimId) async => ZimPdfList.fromJson(await _core.zimPdfs(zimId));
+  Future<ZimPdfList> zimPdfs(String zimId) async {
+    final core = _core;
+    String? path;
+    try {
+      path = (await core.status()).where((s) => s.id == zimId).firstOrNull?.path;
+    } catch (_) {}
+    if (path != null) {
+      CoreJobHandle? job;
+      try {
+        job = await core.startJob('zim_pdfs', {'zim_path': path});
+      } on CacheSearchException catch (e) {
+        if (!(e.code == 'bad_json' && e.message.contains('unknown job kind'))) rethrow;
+      }
+      if (job != null) {
+        try {
+          var wait = const Duration(milliseconds: 50);
+          while (true) {
+            final p = await job.progress();
+            switch (p.state) {
+              case JobState.running:
+                await Future<void>.delayed(wait);
+                if (wait < const Duration(milliseconds: 400)) wait *= 2;
+              case JobState.done:
+                return ZimPdfList.fromJson(p.result ?? (throw const CacheSearchException('internal', 'The PDF list gave no answer')));
+              case JobState.cancelled:
+              case JobState.failed:
+                throw CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'The PDF list stopped');
+            }
+          }
+        } finally {
+          await job.free();
+        }
+      }
+    }
+    return ZimPdfList.fromJson(await core.zimPdfs(zimId));
+  }
 
   @override
   Future<Uint8List> readEntry(String address) async => (await sources.zimGet(address)).bytes;

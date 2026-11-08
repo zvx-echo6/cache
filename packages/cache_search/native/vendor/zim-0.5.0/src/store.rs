@@ -101,13 +101,24 @@ impl Store {
     /// A whole archive takes precedence over chunks of the same name. `path` may also name the
     /// first chunk directly, as `foobar.zimaa`.
     pub fn open(path: &Path) -> Result<Store> {
+        Store::open_with(path, false)
+    }
+
+    /// Opens an archive through bounded mapping windows on every platform (as iOS always does), never one mapping of the whole
+    /// file. A pass over the whole directory then keeps a few MiB mapped: through a whole-file mapping every page it reads stays
+    /// in the process's resident memory (2.2 GB for the 30 M entries of a full Wikipedia, build 46).
+    pub fn open_windowed(path: &Path) -> Result<Store> {
+        Store::open_with(path, true)
+    }
+
+    fn open_with(path: &Path, windowed: bool) -> Result<Store> {
         // A path naming the first chunk always means the chunked archive - that file exists, but
         // opening it on its own would yield only the archive's first slice.
         let base = chunk_base(path);
         let names_first_chunk = base != path;
 
         if !names_first_chunk && path.is_file() {
-            return Store::from_maps(vec![map_file(path)?]);
+            return Store::from_maps(vec![map_file(path, windowed)?]);
         }
 
         let mut maps = Vec::new();
@@ -121,7 +132,7 @@ impl Store {
                 break;
             }
 
-            maps.push(map_file(&chunk)?);
+            maps.push(map_file(&chunk, windowed)?);
         }
 
         if maps.is_empty() {
@@ -296,12 +307,12 @@ fn chunk_suffixes() -> impl Iterator<Item = String> {
     })
 }
 
-fn map_file(path: &Path) -> Result<Part> {
+fn map_file(path: &Path, windowed: bool) -> Result<Part> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
     // iOS has a much smaller virtual address budget than desktop systems.
     // Also use windows if a desktop cannot reserve a full-file mapping.
-    let map = if len == 0 || cfg!(any(target_os = "ios", feature = "windowed-mmap")) {
+    let map = if len == 0 || windowed || cfg!(any(target_os = "ios", feature = "windowed-mmap")) {
         None
     } else {
         unsafe { Mmap::map(&file) }.ok()

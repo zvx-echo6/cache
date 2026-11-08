@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cache/chat/citations.dart';
 import 'package:cache/chat/model_backend.dart';
 import 'package:cache/chat/tool.dart';
@@ -155,7 +157,7 @@ void main() {
       expect(updates.last.text, 'Not in your sources.');
     });
 
-    test('at most 3 tool rounds, then tools are withheld', () async {
+    test('at most 3 tool rounds, then the same tools with tool calls off and the answer-now nudge', () async {
       final backend = FakeBackend([
         (_) => toolCall('a'),
         (_) => toolCall('b'),
@@ -167,8 +169,19 @@ void main() {
       final updates = await loop.ask('q').toList();
       expect(search.calls, 3);
       expect(backend.requests.length, 4);
-      expect(backend.requests[2]['tools'], isNotNull);
-      expect(backend.requests[3].containsKey('tools'), isFalse);
+      for (final req in backend.requests.take(3)) {
+        expect(req['tools'], isNotNull);
+        expect(req.containsKey('tool_choice'), isFalse);
+      }
+      // The capped round keeps the schemas byte for byte (the prompt start is unchanged) and stops tool calls another way.
+      expect(jsonEncode(backend.requests[3]['tools']), jsonEncode(backend.requests[2]['tools']));
+      expect(backend.requests[3]['tool_choice'], 'none');
+      final last = backend.requests[3]['messages'] as List;
+      expect((last.last as Map)['content'], 'Answer now from the tool results above. No more tools are available.');
+      // Everything before the nudge is the previous request's messages plus the round's call and result: a pure extension.
+      final before = backend.requests[2]['messages'] as List;
+      expect(jsonEncode(last.sublist(0, before.length)), jsonEncode(before));
+      expect(loop.messages.where((m) => m['role'] == 'user').length, 1, reason: 'the nudge is not kept');
       expect(updates.last.text, 'Final [1].');
     });
 
@@ -194,7 +207,7 @@ void main() {
       expect(loop.messages.last.containsKey('tool_calls'), isFalse);
     });
 
-    test('after the cap, a tool call with no text gets one more request without tools', () async {
+    test('after the cap, a tool call with no text gets one more request with tool calls off', () async {
       final backend = FakeBackend([
         (_) => toolCall('a'),
         (_) => toolCall('b'),
@@ -207,8 +220,9 @@ void main() {
       final updates = await loop.ask('q').toList();
       expect(search.calls, 3);
       expect(backend.requests.length, 5);
-      expect(backend.requests[3].containsKey('tools'), isFalse);
-      expect(backend.requests[4].containsKey('tools'), isFalse);
+      expect(backend.requests[3]['tool_choice'], 'none');
+      expect(backend.requests[4]['tool_choice'], 'none');
+      expect(backend.requests[4]['tools'], isNotNull);
       // The nudge is sent but not kept in the conversation.
       expect((backend.requests[4]['messages'] as List).last['role'], 'user');
       expect(loop.messages.where((m) => m['role'] == 'user').length, 1);

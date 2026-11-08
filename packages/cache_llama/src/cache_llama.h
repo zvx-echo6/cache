@@ -16,19 +16,34 @@ extern "C" {
 #define CL_API __attribute__((visibility("default"))) __attribute__((used))
 #endif
 
+// Process-wide options for the next cl_load, as JSON (keys left out keep their value):
+//   "prefix_dir":     a folder for the saved prompt prefix (the KV state of the stable start of the system prompt and tool schemas,
+//                     for the model file, engine build and n_ctx; at most 2 files are kept). "" turns the saving off (the default).
+//   "mem_room_bytes": Android only: the memory the system can still give the app (ActivityManager availMem minus threshold). The
+//                     CPU weights are repacked (faster, but an anonymous copy that can be swapped) only when this exceeds the
+//                     estimated repacked size plus 1 GiB; otherwise they stay file-backed through mmap. 0 = not known: repacked.
+// Returns 0, or -1 when the JSON does not parse.
+CL_API int cl_configure(const char * options_json);
+
 // Load a GGUF model and create a context. n_ctx <= 0 means 8192. n_threads <= 0 means automatic: on
 // Android, the fast CPU cores (the slowest cluster is left out, at most 5 threads) and the threads are
 // pinned to them; elsewhere, or if the cores cannot be read, 4 threads.
 // Returns a handle, or NULL with the reason in err.
 CL_API void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len);
 
-// Writes JSON {"description","n_ctx","chat_format","supports_tools"}. Returns the length, or -1 if out is too small.
+// Writes JSON {"description","n_ctx","chat_format","supports_tools","engine_build","weights","weights_reason"}. weights:
+// "repacked" (CPU repacked copy), "mmap" (file-backed, no repack) or "default" (the platform's own choice, not Android).
+// Returns the length, or -1 if out is too small.
 CL_API int cl_info(void * h, char * out_json, int len);
 
 // Start a generation. request_json is OpenAI style: {"messages":[...],"tools":[...]} (tools optional) plus an optional top-level "enable_thinking": true|false (default true)
-// and an optional "temperature" (0 = greedy).
+// and an optional "temperature" (0 = greedy), and an optional "tool_choice": "auto" (default) | "none" | "required". With
+// "none" the tools are still rendered (the prompt start stays the same), but there is no tool-call grammar and the generation
+// ends at a tool-call opening token.
 // Builds the prompt with the model's chat template and decodes it. The start of the prompt that is
-// the same as the previous prompt plus its answer is not decoded again (KV cache reuse).
+// the same as the previous prompt plus its answer is not decoded again (KV cache reuse). With a prefix_dir (cl_configure),
+// the stable start of the system prompt and tools (the part that stays the same from one request to the next) is restored
+// from disk when the cache does not hold it, and saved once.
 // Returns 0 or -1 (reason in err).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
 
@@ -54,6 +69,9 @@ CL_API int cl_generated_tokens(void * h);
 CL_API int cl_reused_tokens(void * h);
 // The first token of the last cl_start's prompt, or -1.
 CL_API int cl_first_prompt_token(void * h);
+// What the last cl_start did with the saved prompt prefix, one line for the app log ("Prompt prefix restored (N tokens, T ms)",
+// "... saved ...", or why a file was dropped), or "" when nothing. Returns the length, or -1 if out is too small.
+CL_API int cl_prefix_note(void * h, char * out, int len);
 // The BOS token id when the model's vocab wants BOS added to every prompt (add_bos_token), else -1.
 CL_API int cl_bos_token(void * h);
 

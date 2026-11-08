@@ -40,6 +40,19 @@ PdfBytesReader _reader(void Function(int n) onRead) {
   };
 }
 
+/// Counts the core's PDF listings.
+class _CountingCore extends FakePdfIndexCore {
+  _CountingCore({required super.zims});
+
+  int listed = 0;
+
+  @override
+  Future<ZimPdfList> zimPdfs(String zimId) {
+    listed++;
+    return super.zimPdfs(zimId);
+  }
+}
+
 /// Stands in for a native crash inside PDFium (which in the app ends the process).
 class _Crash implements Exception {
   const _Crash();
@@ -376,6 +389,38 @@ void main() {
       coreSays = null;
     });
     tearDown(() => state.dispose());
+
+    // build 46: every ZIM was listed again at every start (15 s of the core for a full Wikipedia). A ZIM never changes, so its
+    // list is kept by uuid and the core lists a ZIM once.
+    test('a ZIM is listed once: its PDF list is kept by uuid and read from there at the next start', () async {
+      final counting = _CountingCore(zims: {'u1': _zim()});
+      state = make(withCore: counting);
+      await state.init();
+      final kept = File('${dir.path}/support/pdf-lists/u1.json');
+      for (var i = 0; i < 400 && !kept.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(kept.existsSync(), isTrue);
+      expect((await state.listOf(zims.single))?.pdfs.length, 5);
+      expect(counting.listed, 1);
+
+      final next = make(withCore: counting);
+      await next.init();
+      final l = await next.listOf(zims.single);
+      expect([for (final p in l!.pdfs) p.path], [for (final p in _zim().pdfs) p.path]);
+      expect(l.zimName, 'guide');
+      expect(counting.listed, 1, reason: 'the kept list is used; the core is not asked again');
+      next.dispose();
+
+      // A new edition (another uuid) is listed.
+      zims = [PdfZimRef(path: zimPath, uuid: 'u2', title: 'Guide')];
+      counting.zims['u2'] = _zim(uuid: 'u2');
+      final third = make(withCore: counting);
+      await third.init();
+      await third.listOf(zims.single);
+      expect(counting.listed, 2);
+      third.dispose();
+    });
 
     test('nothing shows while the core cannot index PDFs', () async {
       state = make(withCore: const PdfIndexCoreMissing());

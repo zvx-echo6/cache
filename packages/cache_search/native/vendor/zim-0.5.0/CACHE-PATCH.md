@@ -9,3 +9,5 @@ Uncompressed blob lengths are read from two offset-table entries, without mappin
 The windowed-mmap Cargo feature exercises the iOS path on desktop for regression checks.
 
 Upstream unit tests are retained. The one testdir-only temporary directory uses std instead, so no extra test package is needed. Fixture-driven tests and the fixture-only testdir dependency are omitted from this local package; Cache has its own synthetic and real-archive regression tests.
+
+`Zim::new_windowed` opens an archive through the same bounded windows on every platform, and `Zim::scan_dirents` walks every directory entry reading only its mime type and namespace (the pointer list in large slices). Together they find an archive's PDFs without the directory becoming resident memory: through the whole-file mapping a pass over the 30 M entries of a full Wikipedia kept 2.2 GB of it resident.

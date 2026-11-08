@@ -2,6 +2,7 @@
 //! one log file per device, and the pure function that resolves them. Pure Rust (serde and serde_json only), so the library
 //! builder, Cache for Linux and the phones link the same code. See server/builder/LIBRARY-LOG.md.
 
+pub mod batch;
 pub mod error;
 pub mod events;
 pub mod import;

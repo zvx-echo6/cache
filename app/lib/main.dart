@@ -745,13 +745,19 @@ class _CacheAppState extends State<CacheApp> {
     // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
     final Future<void> supportRead = plat.isWeb ? Future.value() : getApplicationSupportDirectory().then((d) => _supportPath = d.path);
     if (!plat.isWeb) getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    // Weather starts from what it keeps on the phone (the sources that are on, the last data shown, the saved places) as soon as
+    // the settings are read, so Home's card and the Weather screen show it before the core is open; the steps that need the core
+    // wait for it inside start.
+    final weatherStart = settingsRead.then((_) => supportRead).then((_) => weather.start());
+    // (its error, if any, is met where it is awaited below)
+    unawaited(weatherStart.then((_) {}, onError: (Object _) {}));
     // Once the core is open: at the first start, or after Try again in Ask started it again.
     settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
       // In a browser a part that cannot start (it needs a phone feature) is logged and the rest still starts; on a phone nothing changes.
       await _soft('web search', webSearch.apply);
       await _soft('alert notifier', LocalAlertNotifier.instance.init);
       await _soft('weather', () async {
-        await weather.start();
+        await weatherStart;
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));

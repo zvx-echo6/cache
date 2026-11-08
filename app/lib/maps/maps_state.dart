@@ -298,6 +298,8 @@ class MapsState extends ChangeNotifier {
   String get styleKey => [
         for (final u in uses) '${u.def.id}:${u.opacity.toStringAsFixed(2)}',
         engine.ready ? 'ready' : 'wait',
+        // The connection came back: the style is applied again with new source addresses, so blank tiles are asked for again.
+        'net${engine.sourcesGeneration}',
         for (final l in engine.layers) l.styleSignature,
       ].join(',');
 

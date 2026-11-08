@@ -30,10 +30,9 @@ class Ping extends ValueNotifier<String?> {
 
 /// One device: a fake engine, sharing on it, and a few settings held in notifiers.
 class Dev {
-  Dev(this.id, this.other, {String otherName = 'Desk'}) {
-    core
-      ..id = id
-      ..peers.add({'id': other, 'name': otherName, 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null, 'link_known': true});
+  Dev(this.id, this.other, {String otherName = 'Desk', bool linked = true}) {
+    core.id = id;
+    if (linked) core.peers.add({'id': other, 'name': otherName, 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null, 'link_known': true});
   }
 
   final String id;
@@ -175,6 +174,15 @@ Future<(Dev, Dev)> pair() async {
   final b = Dev('B', 'A');
   await a.start();
   await b.start();
+  return (a, b);
+}
+
+/// Two devices linked just now, with this version: each link starts Off, asked about once.
+Future<(Dev, Dev)> pairNew() async {
+  final (a, b) = await pair();
+  for (final d in [a, b]) {
+    d.core.peers.single['linked'] = DateTime.now().millisecondsSinceEpoch;
+  }
   return (a, b);
 }
 
@@ -567,5 +575,181 @@ void main() {
     s.dispose();
     a.dispose();
     b.dispose();
+  });
+
+  // ---------------------------------------------------------------- the question right after linking
+
+  test('a new link never counts as Match before it is answered; a link from before this version stays Match', () async {
+    final (oa, ob) = await pair();
+    expect(oa.sync.linkWith('B'), SettingsLink.match, reason: 'a link from before this version');
+    expect(oa.sync.unanswered('B'), isFalse, reason: 'it is never asked about');
+    await oa.sync.markNew('B');
+    expect(oa.core.peers.single['link'], isNull, reason: 'an old link is left as it is');
+    oa.dispose();
+    ob.dispose();
+
+    final (a, b) = await pairNew();
+    // Seen, nothing written yet.
+    expect(a.sync.linkWith('B'), SettingsLink.off);
+    expect(a.sync.unanswered('B'), isTrue);
+    await a.sync.markNew('B');
+    await b.sync.markNew('A');
+    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'A', 'ask': true}, reason: 'the engine keeps the settings and Bookshelves logs from it');
+    expect(kSettingsShareModes, isNot(contains('off')));
+    expect(kBookshelvesShareModes, isNot(contains('off')));
+    for (final d in [a, b]) {
+      expect(d.sync.linkWith(d.other), SettingsLink.off);
+      expect(d.sync.unanswered(d.other), isTrue);
+    }
+
+    // Nothing goes meanwhile, either way.
+    a.theme.value = 'light';
+    await a.sync.flush();
+    expect(a.events(), isEmpty);
+    await b.takeLog(a);
+    expect(b.theme.value, 'dark');
+
+    // A group ticked on the device page meanwhile keeps it Off.
+    await a.sync.setGroupOn('B', SettingsGroupId.appearance, false);
+    expect((a.core.peers.single['link'] as Map?)?['mode'], 'off');
+    expect(a.sync.linkWith('B'), SettingsLink.off);
+
+    // A restart keeps old and new apart: when this version first ran is kept.
+    final since = jsonDecode(File('${a.root.path}/sharing.json').readAsStringSync())['ask_since'];
+    expect(since, isA<int>());
+    a.dispose();
+    b.dispose();
+  });
+
+  test('the first run of this version: every link there already is stays Match', () async {
+    final root = Directory.systemTemp.createTempSync('ask-since');
+    File('${root.path}/sharing.json').writeAsStringSync(jsonEncode({'enabled': true, 'off': {'library': ['x']}}));
+    final core = FakeSync()
+      ..id = 'A'
+      ..peers.add({'id': 'B', 'name': 'Desk', 'linked': DateTime.now().millisecondsSinceEpoch - 1000, 'link_known': true});
+    final sharing = SharingState(
+      policy: DataPolicy(settings: AppSettings(settingsDirOverride: root), probe: FakeProbe(ConnectionKind.wifi)),
+      supportDir: () async => root,
+      kinds: const [],
+      opener: (_) async => core,
+    );
+    await sharing.init();
+    expect(sharing.linkedSinceAsking('B'), isFalse);
+    final j = jsonDecode(File('${root.path}/sharing.json').readAsStringSync()) as Map;
+    expect(j['ask_since'], isA<int>());
+    expect(j['off'], {'library': ['x']}, reason: 'what was switched off stays');
+    sharing.dispose();
+    root.deleteSync(recursive: true);
+  });
+
+  test('each answer sets the right mode on both devices', () async {
+    for (final (to, here, there, mode) in [
+      (SettingsLink.match, SettingsLink.match, SettingsLink.match, 'match'),
+      (SettingsLink.sending, SettingsLink.sending, SettingsLink.receiving, 'send'),
+      (SettingsLink.off, SettingsLink.off, SettingsLink.off, 'off'),
+    ]) {
+      final (a, b) = await pairNew();
+      await a.sync.markNew('B');
+      await b.sync.markNew('A');
+      await a.sync.answer('B', to);
+      expect(a.core.peers.single['link'], {'mode': mode, 'from': 'A'}, reason: '$to');
+      await b.takeLink(a);
+      expect(a.sync.linkWith('B'), here, reason: '$to');
+      expect(b.sync.linkWith('A'), there, reason: '$to');
+      expect(a.sync.unanswered('B'), isFalse);
+      expect(b.sync.unanswered('A'), isFalse);
+      if (to != SettingsLink.off) {
+        // A's settings went as they are.
+        await b.takeLog(a);
+        expect([for (final e in a.events()) e['k']], contains('appearance.theme'));
+      }
+      a.dispose();
+      b.dispose();
+    }
+  });
+
+  test('closing the question keeps what the other device answered meanwhile; Off chosen replaces it', () async {
+    final (a, b) = await pairNew();
+    await a.sync.markNew('B');
+    await b.sync.markNew('A');
+    await b.sync.answer('A', SettingsLink.sending);
+    await a.takeLink(b);
+    expect(a.sync.linkWith('B'), SettingsLink.receiving);
+    await a.sync.answer('B', null);
+    expect(a.sync.linkWith('B'), SettingsLink.receiving, reason: 'closing it is no choice');
+    await a.sync.answer('B', SettingsLink.off);
+    expect(a.sync.linkWith('B'), SettingsLink.off, reason: 'Off, chosen, is a choice as on the device page');
+    a.dispose();
+    b.dispose();
+  });
+
+  testWidgets('Enter a link code: the question right after, and closing it is Off', (tester) async {
+    tall(tester);
+    final a = Dev('me', 'peer1', linked: false);
+    await tester.runAsync(a.start);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingPage(sharing: a.sharing, settingsSync: a.sync)));
+    await tester.pump();
+    await tester.tap(find.text('Enter a link code'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'CACHE1-TESTCODE');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Link'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Sync Cache settings with Desk?'), findsOneWidget);
+    expect(find.text('Match'), findsOneWidget);
+    expect(find.text('Send mine'), findsOneWidget);
+    expect(find.text('Off'), findsOneWidget);
+    expect(find.text('Changes on either device go to both.'), findsOneWidget);
+    expect(find.text('Desk follows my settings.'), findsOneWidget);
+    expect(find.text("Each keeps its own. You can change this on Desk's page."), findsOneWidget);
+    expect(a.core.peers.single['link'], {'mode': 'off', 'ask': true}, reason: 'Off until it is answered, as the engine made it');
+    expect(a.sync.unanswered('peer1'), isTrue);
+
+    await tester.runAsync(() async {
+      await tester.tapAt(const Offset(4, 4));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Sync Cache settings with Desk?'), findsNothing);
+    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me'}, reason: 'closed: Off');
+    expect(a.sync.linkWith('peer1'), SettingsLink.off);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
+  });
+
+  testWidgets('Show my link code: the sheet closes when the other device links, then the question; Send mine', (tester) async {
+    tall(tester);
+    final a = Dev('me', 'B', linked: false);
+    await tester.runAsync(a.start);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingPage(sharing: a.sharing, settingsSync: a.sync)));
+    await tester.pump();
+    await tapReal(tester, 'show-code');
+    expect(find.text('Copy code'), findsOneWidget);
+
+    // The other device enters the code.
+    await tester.runAsync(() async {
+      a.core.peers.add({'id': 'B', 'name': 'Tablet', 'linked': DateTime.now().millisecondsSinceEpoch, 'last_seen': 1, 'via': 'direct', 'error': null, 'link_known': true});
+      await a.sharing.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+    expect(find.text('Copy code'), findsNothing);
+    expect(find.text('Sync Cache settings with Tablet?'), findsOneWidget);
+    expect(find.text('Tablet follows my settings.'), findsOneWidget);
+
+    await tapReal(tester, 'ask-send');
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Sync Cache settings with Tablet?'), findsNothing);
+    expect(a.core.peers.single['link'], {'mode': 'send', 'from': 'me'});
+    expect(a.sync.linkWith('B'), SettingsLink.sending);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
   });
 }

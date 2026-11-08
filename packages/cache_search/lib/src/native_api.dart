@@ -120,6 +120,14 @@ abstract class CsLiveNative {
   String? livePreview(String requestJson);
 }
 
+/// cs_live_fetch_start: cs_live_fetch as a job on a thread of the core's own, so the download's network wait never holds the
+/// worker. Kept apart from [CsNative] so the fakes do not change.
+abstract class CsLiveJobNative {
+  /// The job (for [CsNative.jobProgress] and the rest), 0 on error ([CsNative.lastError] with [handle]), -1 when the loaded core
+  /// is older than the call.
+  int liveFetchStart(int handle, String requestJson);
+}
+
 /// cs_places_refresh: the core reads the places again (the merged database of the downloaded regions and the single-region
 /// packs). Kept apart from [CsNative] so the fakes of the older seam do not change. [FfiCsNative] implements it;
 /// [hasPlacesRefresh] is false when the loaded core is older than the call (the symbol is looked up when first used, never at
