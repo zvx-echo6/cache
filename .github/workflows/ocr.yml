@@ -151,7 +151,7 @@ jobs:
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
       # Not `flutter test -d <simulator>`: on the runner's iOS 26 simulators the tool sat at "Waiting for VM Service port to be
       # available" until the time limit, twice. The test app is built with the test as its entry point and launched on its
-      # own; the test prints OCR-RESULT when it is done, and its output is read from the app's console.
+      # own; the test prints OCR-RESULT when it is done, and its output is read from the app's console and the unified log.
       - name: Build the test app for the simulator
         run: flutter build ios --simulator --debug -t integration_test/ocr_test.dart
       - name: Real OCR on the simulator
@@ -174,7 +174,8 @@ jobs:
           sleep 5
           xcrun simctl terminate "$udid" co.cache.cacheOcrExample || true
           { cat "$RUNNER_TEMP/ocr-ios-console.log"; grep -E 'OCR-|\[[0-9.]+ s\]' "$RUNNER_TEMP/ocr-ios-oslog.log"; } > "$RUNNER_TEMP/ocr-ios.log"
-          grep -v -E '^\s*$' "$RUNNER_TEMP/ocr-ios-console.log" | tail -n 120
+          # the test's own lines (the console stays empty on iOS 26: Dart's print goes to the unified log)
+          both | grep -E 'OCR-|\[[0-9.]+ s\]' | sed -E 's/^.*(OCR-|\[[0-9.]+ s\])/\1/' | awk '!seen[$0]++'
           both | grep -q 'OCR-RESULT pass'
       - name: Logs when it fails
         if: failure() || cancelled()
