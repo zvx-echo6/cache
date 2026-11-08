@@ -1,0 +1,66 @@
+{
+  "format": 2,
+  "id": "own-creek-level-at-the-bridge",
+  "title": "Creek level at the bridge",
+  "provider": "sensors.example.org",
+  "description": "Water level, Trend and Updated from sensors.example.org (a source added on this device)",
+  "attribution": "Data from sensors.example.org",
+  "request": {
+    "url": "https://sensors.example.org/api/creek?site=12&lat={lat}&lon={lon}&key={api_key}"
+  },
+  "api_key": {
+    "alias": "own-creek-level-at-the-bridge",
+    "required": true
+  },
+  "refresh_minutes": 30,
+  "quota": {
+    "per_minute": 10,
+    "per_day": 2000
+  },
+  "validity": {
+    "fixed_hours": 1.5
+  },
+  "require": [
+    "water.level"
+  ],
+  "items": [
+    {
+      "key": {
+        "const": "now"
+      },
+      "label": {
+        "first_of": [
+          {
+            "template": "Water level {v}",
+            "vars": {
+              "v": {
+                "path": "water.level"
+              }
+            }
+          },
+          {
+            "const": "Creek level at the bridge"
+          }
+        ]
+      },
+      "point": {
+        "lat": {
+          "path": "station.latitude"
+        },
+        "lon": {
+          "path": "station.longitude"
+        }
+      },
+      "fields": [
+        {
+          "label": "Trend",
+          "path": "water.trend"
+        },
+        {
+          "label": "Updated",
+          "path": "updated"
+        }
+      ]
+    }
+  ]
+}

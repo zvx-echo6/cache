@@ -4,6 +4,7 @@ import '../../theme.dart';
 import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
 import 'deps.dart';
+import 'own_source_pages.dart';
 import 'weather_page.dart' show addKeyFor;
 import 'widgets.dart';
 
@@ -66,7 +67,7 @@ class _SourcePageState extends State<SourcePage> {
       builder: (context, _) {
         final c = w.sourceById(widget.sourceId);
         if (c == null) {
-          return const SettingsPage(title: 'Data source', children: [NoteText('This source is no longer in the catalogue.')]);
+          return const SettingsPage(title: 'Data source', children: [NoteText('This source is no longer offered.')]);
         }
         final i = _info;
         final on = w.isOn(c.id);
@@ -98,6 +99,7 @@ class _SourcePageState extends State<SourcePage> {
                 ],
               ],
             ),
+            if (w.isOwn(c)) OwnSourceActions(deps: d, source: c),
             SettingsGroup(
               label: 'About this source',
               rows: [

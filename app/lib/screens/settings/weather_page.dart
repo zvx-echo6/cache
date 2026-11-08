@@ -7,7 +7,8 @@ import '../../weather/connector.dart';
 import '../../weather/places.dart';
 import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
-import 'catalogues_page.dart';
+import '../../weather/words.dart';
+import 'own_source_pages.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
 import 'source_page.dart';
@@ -94,13 +95,12 @@ class _WeatherPageState extends State<WeatherPage> {
               SettingsGroup(
                 rows: [
                   for (final c in featured) SourceRow(deps: d, source: c),
-                  if (more.isNotEmpty)
-                    SettingsRow(
+                  SettingsRow(
                       key: const ValueKey('more-sources'),
                       icon: Icons.add,
                       title: 'More sources',
-                      status: [Part(more.map((c) => c.title).join(', '))],
-                      trailing: Text('${more.length} more', style: TextStyle(fontSize: 13, color: context.t.secondary)),
+                      status: [Part(more.isEmpty ? 'Add your own source' : more.map((c) => c.title).join(', '))],
+                      trailing: more.isEmpty ? null : Text('${more.length} more', style: TextStyle(fontSize: 13, color: context.t.secondary)),
                       chevron: true,
                       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MoreSourcesPage(deps: d))),
                     ),
@@ -271,10 +271,15 @@ class SourceRow extends StatelessWidget {
     final c = source;
     final k = context.t;
     final gives = c.description.isEmpty ? '' : '${c.description[0].toUpperCase()}${c.description.substring(1)}';
-    final status = joinParts([
-      if (gives.isNotEmpty) [Part(gives)],
-      if (c.provider.isNotEmpty) [Part(c.provider)],
-    ]);
+    final status = w.isOwn(c)
+        ? joinParts([
+            [const Part('Your source')],
+            [Part('checked ${everyWords(c.refreshMinutes)}')],
+          ])
+        : joinParts([
+            if (gives.isNotEmpty) [Part(gives)],
+            if (c.provider.isNotEmpty) [Part(c.provider)],
+          ]);
     return SettingsRow(
       key: ValueKey('source-${c.id}'),
       leading: Icon(sourceIcon(c), size: 22, color: k.secondary),
@@ -288,7 +293,8 @@ class SourceRow extends StatelessWidget {
   }
 }
 
-/// Weather and alerts > More sources: the sources that are not featured, searchable, and sources other people publish.
+/// Weather and alerts > More sources: the sources that are not featured, searchable; then "Your own" (the sources the person
+/// added, each with its switch) and Add your own source.
 class MoreSourcesPage extends StatefulWidget {
   const MoreSourcesPage({super.key, required this.deps});
 
@@ -322,8 +328,9 @@ class _MoreSourcesPageState extends State<MoreSourcesPage> {
     return ListenableBuilder(
       listenable: Listenable.merge([w, d.hub.settings]),
       builder: (context, _) {
-        final more = [for (final c in w.sources) if (!c.featured) c];
+        final more = [for (final c in w.sources) if (!c.featured && !w.isOwn(c)) c];
         final shown = [for (final c in more) if (_matches(c)) c];
+        final own = [for (final c in w.ownSources) if (_matches(c)) c];
         final errors = w.catalogueErrors.values.toList();
         return SettingsPage(
           title: 'More sources',
@@ -347,15 +354,8 @@ class _MoreSourcesPageState extends State<MoreSourcesPage> {
             if (more.isNotEmpty && shown.isEmpty) const NoteText('No source matches your search.'),
             if (shown.isNotEmpty) SettingsGroup(rows: [for (final c in shown) SourceRow(deps: d, source: c)]),
             if (errors.isNotEmpty) NoteText(errors.first),
-            SettingsGroup(
-              rows: [
-                SettingsRow(
-                  title: 'Add sources from a link',
-                  status: const [Part('Sources other people publish')],
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CataloguesPage(deps: d))),
-                ),
-              ],
-            ),
+            if (own.isNotEmpty) SettingsGroup(label: 'Your own', rows: [for (final c in own) SourceRow(deps: d, source: c)]),
+            AddOwnSourceRow(deps: d),
           ],
         );
       },

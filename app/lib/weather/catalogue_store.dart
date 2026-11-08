@@ -71,14 +71,19 @@ class CatalogueLoader {
   Future<LoadedCatalogue> load(String address) async {
     final url = Uri.tryParse(address.trim());
     if (url == null || !isAllowedAddress(url)) throw const CatalogueException('Enter an address that starts with https://');
-    final text = utf8.decode(await fetch(url), allowMalformed: true);
+    return loadText(utf8.decode(await fetch(url), allowMalformed: true), address.trim());
+  }
+
+  /// [load] for a list already read ([text], from a file or a link): its definitions are downloaded from its base address and
+  /// checked. [url] is what the list is kept under.
+  Future<LoadedCatalogue> loadText(String text, String url) async {
     final cat = Catalogue.parse(text);
     final defs = <String, String>{};
     final skipped = <String, String>{};
     for (final e in cat.entries) {
       final bytes = await fetch(cat.definitionUrl(e));
       if (e.sha256 != null && sha256.convert(bytes).toString() != e.sha256) {
-        skipped[e.id] = 'The file is not the one the catalogue lists (its checksum differs).';
+        skipped[e.id] = 'The file is not the one the list names (its checksum differs).';
         continue;
       }
       final defText = utf8.decode(bytes, allowMalformed: true);
@@ -92,7 +97,7 @@ class CatalogueLoader {
       }
       defs[e.id] = defText;
     }
-    return LoadedCatalogue(url: address.trim(), catalogue: cat, definitions: defs, skipped: skipped, at: now());
+    return LoadedCatalogue(url: url, catalogue: cat, definitions: defs, skipped: skipped, at: now());
   }
 }
 

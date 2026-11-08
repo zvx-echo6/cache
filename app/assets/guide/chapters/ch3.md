@@ -92,13 +92,13 @@ This page turns weather sources on and off.
 ![The Weather and alerts settings](shot:settings-weather)
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
-2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. It also looks for new sources, the same as "Check for updates". If data is old, the line warns, for example "Updated 3 days ago".
+2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. It also looks for new sources in the source list. If data is old, the line warns, for example "Updated 3 days ago".
 3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts" and "Wildfires". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
 4. Turn its switch on or off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
 
-The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Its bottom has "Add sources from a link" and "Catalogues in use".
+The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Under them is "Your own", with the sources you added, and at the bottom "Add your own source".
 
 - If the row has a "Get key" button, the source needs a free key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.
@@ -148,27 +148,51 @@ Keys stay on this device, in secure storage. They are never shown again and are 
 
 - Removing a key turns off every source that uses it.
 
-## Add sources from a link
+## Add your own source
 
-Other people can publish lists of data sources, called catalogues. You can add one by its link.
-
-![Add sources from a link](shot:add-catalogue)
+You can plug in any web service that answers with data in JSON, such as a sensor, a gauge or a club's own server. It then works like every other source: on "Weather", in Ask, and with its own switch.
 
 1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
-2. At the bottom, tap "Add sources from a link".
-3. Paste the link and tap "Check this link". Nothing is added yet.
-4. Read the card: who publishes it, how many sources it adds, and any it left out.
+2. At the bottom, tap "Add your own source".
+3. Type a "Name" and the "Web address" of the service.
+4. If the service answers for a location, put the place in the address: tap "Latitude" and "Longitude" where the address needs them. It then works for every place weather watches.
+5. If the service needs a key, type it under "Key (if the service needs one)", and put it in the address where the service asks for it.
+6. Choose "Check every": 15 minutes, 30 minutes, 1 hour or 6 hours.
+7. Tap "Try it". Cache calls the address once. Nothing is saved yet.
+8. On "Pick what to show", tick the values to show. Tap a name to rename it. The card at the bottom shows how it will look in "Weather and alerts".
+9. Tap "Save source". It turns on and is listed under "Your own".
+
+- If it did not work, Cache says why, for example "[site] answered with an error (HTTP [code]).", "[site] answered, but not with JSON. This version of Cache only reads JSON." or "[site] didn't answer in time." Check the address and tap "Try again".
+- The key stays on this device, in secure storage. It is never part of the source.
+
+## Import a source file
+
+Someone may give you a source file: one source, or a list of sources. A link to a list of sources works too.
+
+1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather) and tap "Add your own source".
+2. At the bottom, tap "Or import a source file".
+3. Tap "Choose a file", or paste the link and tap "Check this link". Nothing is added yet.
+4. Read the card: how many sources it adds, and any it left out with the reason.
 5. Tap "Add these sources", or "Cancel".
 
-New sources stay off until you switch them on. Only add links from people you trust.
+The sources go under "Your own" and stay off until you switch them on. Only add files from people you trust.
 
-## Manage catalogues
+## Edit or remove your own source
 
-"Catalogues in use" is at the bottom of the "More sources" list. It lists every catalogue on the device.
+1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
+2. Under "Your own", tap the source.
+3. Tap "Edit" to change it, then "Try it" and "Save source". A source from a file has no "Edit".
+4. Or tap "Remove this source". Its key is removed too.
 
-- Tap "Remove" on one you added to take its sources off.
-- The main catalogue has "Address" instead, to change where it comes from.
-- Tap "Check for updates" to download every catalogue again. Cache says "Sources are up to date" or what went wrong.
+Sources added from a link in earlier versions are under "Your own" now, and keep their switches and keys.
+
+## Source list address
+
+The sources Cache offers come from its source list, which it downloads when online. You only change its address if someone gives you another one.
+
+1. Go to ["Settings" > "Storage"](cache://settings/storage) and tap "Advanced".
+2. Under "Weather and alerts", tap "Source list address".
+3. Paste the address and tap "Save", or tap "Use the default".
 
 ## Notifications
 

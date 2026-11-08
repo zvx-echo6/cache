@@ -92,7 +92,6 @@ import 'package:cache/weather/weather_state.dart';
 import 'package:cache/screens/settings/about_pages.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
 import 'package:cache/screens/settings/assistant_page.dart';
-import 'package:cache/screens/settings/catalogues_page.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/screens/settings/notifications_page.dart';
 import 'package:cache/screens/settings/sharing_page.dart';
@@ -359,7 +358,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('settings-weather, source-page, key-sheet, add-catalogue', (tester) async {
+  testWidgets('settings-weather, source-page, key-sheet', (tester) async {
     final r = await _rig(tester);
     await tester.runAsync(() async {
       await r.weather.setRowOn(kCurated.first, true);
@@ -386,9 +385,6 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
-    await show(tester, CataloguesPage(deps: r.deps));
-    await tester.pumpAndSettle();
-    await shot(tester, 'add-catalogue');
     await r.dispose(tester);
   });
 

@@ -23,7 +23,6 @@ places-edit | A saved place open for editing: name, position and its weather and
 map-ring | The map with the ring open on a point: From here, Add stop, Measure
 ask | Ask: a question answered with its sources
 ask-plus-menu | Ask with the + menu open (Use my location, the sources and the rest)
-add-catalogue | Settings > Weather and alerts > More sources > Add sources from a link: the link field with "Check this link"
 ask-confirm-card | Ask with the confirm card "Add to Journal"/log with details, "Not now" and the add button
 ask-model-menu | Ask with the model name tapped: model and memory used, "Switch model...", "Unload: free the memory", "Manage models"
 ask-open-navigation | Ask: an answer with a route and the "Open navigation" button

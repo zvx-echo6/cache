@@ -26,6 +26,9 @@ const Map<String, String> liveReplaces = {
 
 final RegExp _idPattern = RegExp(r'^[a-z0-9][a-z0-9_-]{0,63}$');
 
+/// An id a source list may give a source (and a source of your own may have).
+bool isValidSourceId(String id) => _idPattern.hasMatch(id);
+
 /// Hosts a catalogue may be served from over plain HTTP: this phone itself (the app is tested against a server on a computer through
 /// adb reverse). Everything else must be https.
 /// True for an address a catalogue or definition may be fetched from: https, or http to this phone.
@@ -75,7 +78,7 @@ class CatalogueEntry {
   static String _str(Map<String, dynamic> j, String k, {bool required = true, String orElse = ''}) {
     final v = j[k];
     if (v is String && v.trim().isNotEmpty) return v.trim();
-    if (required) throw CatalogueException('A connector in the catalogue has no "$k".');
+    if (required) throw CatalogueException('A source in the list has no "$k".');
     return orElse;
   }
 
@@ -132,34 +135,34 @@ class Catalogue {
     try {
       j = jsonDecode(text);
     } catch (_) {
-      throw const CatalogueException("That address didn't give a connector catalogue.");
+      throw const CatalogueException("That isn't a list of sources.");
     }
-    if (j is! Map<String, dynamic>) throw const CatalogueException("That address didn't give a connector catalogue.");
+    if (j is! Map<String, dynamic>) throw const CatalogueException("That isn't a list of sources.");
     final Map<String, dynamic> json = j;
     final format = json['format'];
     if (format != kCatalogueFormat) {
       throw CatalogueException(format is int && format > kCatalogueFormat
-          ? 'This catalogue is in a newer format than this version of Cache can read. Update Cache to use it.'
-          : 'This catalogue is in a format Cache does not know.');
+          ? 'This source list is in a newer format than this version of Cache can read. Update Cache to use it.'
+          : 'This source list is in a format Cache does not know.');
     }
     String field(String k) {
       final v = json[k];
       if (v is String && v.trim().isNotEmpty) return v.trim();
-      throw CatalogueException('The catalogue has no "$k".');
+      throw CatalogueException('The source list has no "$k".');
     }
 
     final id = field('id');
-    if (!_idPattern.hasMatch(id)) throw CatalogueException('"$id" is not a valid catalogue id.');
+    if (!_idPattern.hasMatch(id)) throw CatalogueException('"$id" is not a valid source list id.');
     final base = Uri.tryParse(field('base_url'));
-    if (base == null || !isAllowedAddress(base)) throw const CatalogueException('The catalogue\'s base address must start with https://.');
+    if (base == null || !isAllowedAddress(base)) throw const CatalogueException('The source list\'s base address must start with https://.');
     final list = json['connectors'];
-    if (list is! List) throw const CatalogueException('The catalogue has no list of connectors.');
+    if (list is! List) throw const CatalogueException('The source list has no sources in it.');
     final entries = <CatalogueEntry>[];
     final seen = <String>{};
     for (final e in list) {
-      if (e is! Map<String, dynamic>) throw const CatalogueException('The catalogue has a connector that is not an object.');
+      if (e is! Map<String, dynamic>) throw const CatalogueException('The source list has a source that is not an object.');
       final entry = CatalogueEntry.fromJson(e);
-      if (!seen.add(entry.id)) throw CatalogueException('The catalogue lists "${entry.id}" twice.');
+      if (!seen.add(entry.id)) throw CatalogueException('The source list has "${entry.id}" twice.');
       entries.add(entry);
     }
     final cat = Catalogue(
@@ -189,7 +192,7 @@ class Catalogue {
     }
     final segments = p.split('/');
     if (p.startsWith('/') || segments.any((s) => s == '..' || s == '.' || s.isEmpty) || p.contains('\\') || p.contains('?') || p.contains('#')) {
-      throw CatalogueException('The path of "${e.id}" leaves the catalogue\'s folder.');
+      throw CatalogueException('The path of "${e.id}" leaves the source list\'s folder.');
     }
     return baseUrl.resolve(p);
   }
