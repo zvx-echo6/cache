@@ -253,6 +253,7 @@ void guideScreens() {
     final r = await _rig(tester);
     await show(tester, StoragePage(deps: r.deps), height: 1160);
     await settle(tester);
+    await _reach(tester, find.byKey(const ValueKey('storage-advanced')));
     await tester.tap(find.byKey(const ValueKey('storage-advanced')));
     await tester.pumpAndSettle();
     expect(find.byType(IndexingSpeedPage), findsOneWidget);
@@ -714,6 +715,7 @@ void guideScreens() {
     await settle(tester);
     await shot(tester, 'chat-list', crop: find.byType(Drawer));
 
+    await _reach(tester, find.text('Treating burns'));
     await tester.longPress(find.text('Treating burns'));
     await settle(tester);
     await shot(tester, 'chat-menu', crop: _sheet);
@@ -909,6 +911,7 @@ void guideScreens() {
     n.nb.privateSharing = _Included();
     await show(tester, NotebookEditor(notebook: n.nb, existing: g));
     await tester.pumpAndSettle();
+    await _reach(tester, find.byKey(const ValueKey('notebook-private')));
     await tester.tap(find.byKey(const ValueKey('notebook-private')));
     await tester.pumpAndSettle();
     await shot(tester, 'notebook-edit');
@@ -1085,6 +1088,7 @@ void guideScreens() {
     await settle(tester);
     await tester.tap(find.text('Water purification at camp'));
     await settle(tester);
+    await _reach(tester, find.text('Download'));
     await tester.tap(find.text('Download'));
     await settle(tester);
     await shot(tester, 'video-download', crop: _sheet);
@@ -1117,7 +1121,10 @@ void guideScreens() {
     c.at(const Duration(seconds: 14));
     await tester.pump();
     // The pane reads the caption file outside the test's clock.
-    await _until(tester, find.byKey(const ValueKey('player-transcript')));
+    for (var i = 0; i < 100 && find.byKey(const ValueKey('player-transcript')).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+      await tester.pump(const Duration(milliseconds: 30));
+    }
     await settle(tester);
     await shot(tester, 'video-transcript', crop: find.byType(PlayerScreen));
     await tester.pumpWidget(const SizedBox());
@@ -1377,7 +1384,8 @@ void guideScreens() {
     Future<void> open(String label) async {
       await tester.tap(find.text('Modules').last);
       await settle(tester);
-      await tester.tap(find.descendant(of: find.byType(ModulesScreen), matching: find.text(label)).first);
+      final tile = find.descendant(of: find.byType(ModulesScreen), matching: find.text(label));
+      await tester.tap(tile.evaluate().isNotEmpty ? tile.first : find.text(label).last);
       await settle(tester);
     }
 
@@ -1391,9 +1399,9 @@ void guideScreens() {
         await show(tester, shell());
         await open(label);
         await auditSnap(tester, id, always: true);
-      } catch (e) {
+      } catch (e, st) {
         // ignore: avoid_print
-        print('AUDIT-FAIL $auditSizeName-$id: $e');
+        print('AUDIT-FAIL $auditSizeName-$id: $e\n${st.toString().split('\n').take(8).join('\n')}');
       }
     }
     await tester.pumpWidget(const SizedBox());
@@ -1617,6 +1625,18 @@ Future<void> _openPdf(WidgetTester tester, Widget reader) async {
 }
 
 /// Pumps until [f] finds something (file work runs outside the test's clock).
+/// Scrolls [f] into view in the scrollable around it (a short landscape phone keeps it below the fold); no-op when it is shown.
+Future<void> _reach(WidgetTester tester, Finder f) async {
+  if (f.hitTestable().evaluate().isNotEmpty) return;
+  for (final s in find.byType(Scrollable).evaluate().toList().reversed) {
+    try {
+      await tester.scrollUntilVisible(f, 120, scrollable: find.byWidget(s.widget).first, maxScrolls: 30);
+      await tester.pumpAndSettle();
+      if (f.hitTestable().evaluate().isNotEmpty) return;
+    } catch (_) {}
+  }
+}
+
 Future<void> _until(WidgetTester tester, Finder f, {int max = 200}) async {
   for (var i = 0; i < max && f.evaluate().isEmpty; i++) {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
