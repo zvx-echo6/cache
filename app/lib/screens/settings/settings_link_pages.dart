@@ -90,6 +90,47 @@ class DeviceSettingsSection extends StatelessWidget {
   }
 }
 
+/// Asked once, right after a new link: how settings go between this device and [name] ([SettingsSync.answer]). Until it is
+/// answered nothing goes; dismissing it is Not now.
+Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String peer, String name) async {
+  final to = await showDialog<SettingsLink>(
+    context: context,
+    builder: (ctx) {
+      Widget choice(String id, SettingsLink value, IconData icon, String title, String text) => SettingsRow(
+        key: ValueKey('ask-$id'),
+        icon: icon,
+        title: title,
+        status: [Part(text)],
+        statusLines: null,
+        chevron: false,
+        onTap: () => Navigator.pop(ctx, value),
+      );
+      return AlertDialog(
+        key: const ValueKey('ask-settings-link'),
+        title: Text('Sync Cache settings with $name?'),
+        contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+        content: SizedBox(
+          width: 400,
+          child: SingleChildScrollView(
+            child: SettingsGroup(
+              rows: [
+                choice('match', SettingsLink.match, Icons.sync, 'Both ways', 'Changes on either device go to both.'),
+                choice('send', SettingsLink.sending, Icons.north_east, 'Send mine', '$name follows my settings.'),
+                choice('off', SettingsLink.off, Icons.schedule, 'Not now', "Each keeps its own. You can change this on $name's page."),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+  try {
+    await sync.answer(peer, to ?? SettingsLink.off);
+  } catch (e) {
+    if (context.mounted) say(context, '$e');
+  }
+}
+
 /// "Theme, module icons, dark PDF pages", "2 of 3 settings", "Not included".
 List<Part> groupSummary(SettingsSync sync, String peer, SettingsGroupId g) {
   final all = sync.settingsOf(g);

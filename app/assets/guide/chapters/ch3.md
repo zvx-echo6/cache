@@ -332,6 +332,12 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 3. On the first device, tap "Show my link code". It works once, for 15 minutes.
 4. Tap "Copy code" and get the text to the other device.
 5. On the other device, tap "Enter a link code", then "Paste", then "Link".
+6. Each device then asks once, for example "Sync Cache settings with Desk?". Choose:
+   - "Both ways": "Changes on either device go to both." This is "Match" on the device's page;
+   - "Send mine": for example "Desk follows my settings.";
+   - "Not now": for example "Each keeps its own. You can change this on Desk's page."
+
+Closing the question is the same as "Not now". Until one device answers, no settings go between the two. If the other device has already answered, "Not now" keeps its answer.
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
@@ -392,7 +398,7 @@ Your linked devices can keep their settings the same. Each device's page has a "
    - "Send mine": for example "Desk follows my settings. Its own changes stay on Desk."
    - "Off": "Each keeps its own."
 
-The device you choose it on is where the settings come from. On the other device the choice says, for example, "Follows Desk's settings". A device linked before this version starts on "Match".
+The device you choose it on is where the settings come from. On the other device the choice says, for example, "Follows Desk's settings". A device linked before this version starts on "Match". A device linked since starts on "Off" until you answer the question after linking.
 
 "What's included" has six groups. Each has its own switch, and each opens a page where you tick single settings:
 - "Appearance": the theme, module icons and dark PDF pages;

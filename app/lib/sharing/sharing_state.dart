@@ -62,6 +62,17 @@ class SharingState extends ChangeNotifier {
   /// every item on: what a kind ticked before items existed shares as it did.
   final Map<String, Set<String>> _off = {};
 
+  /// Since when links are new ones (ms, kept in sharing.json as `ask_since`): the time this version first ran, or sharing was
+  /// set up. A link made since starts with nothing going between the two until the person answers; one made before keeps
+  /// counting as Match (see [linkedSinceAsking]).
+  int? _askSince;
+
+  /// [peer] was linked since this version asks how settings go ([_askSince]).
+  bool linkedSinceAsking(String peer) {
+    final at = peerOf(peer)?['linked'];
+    return _askSince != null && at is int && at >= _askSince!;
+  }
+
   /// Starts sharing if it was set up before.
   Future<void> init() async {
     try {
@@ -74,6 +85,14 @@ class SharingState extends ChangeNotifier {
         _off
           ..clear()
           ..addAll({for (final e in off.entries) if (e.value is List) '${e.key}': {for (final k in e.value as List) '$k'}});
+      }
+      final since = j['ask_since'];
+      if (since is int) {
+        _askSince = since;
+      } else {
+        // The first run of this version: every link there is now was made before it.
+        _askSince = DateTime.now().millisecondsSinceEpoch;
+        await _save();
       }
       if (j['enabled'] == true) {
         _enabled = true;
@@ -92,6 +111,7 @@ class SharingState extends ChangeNotifier {
       f,
       jsonEncode({
         'enabled': _enabled,
+        'ask_since': ?_askSince,
         if (_off.values.any((v) => v.isNotEmpty)) 'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: [...e.value]..sort()},
       }),
     );
@@ -100,6 +120,7 @@ class SharingState extends ChangeNotifier {
   /// The first time: creates this device's identity and starts sharing.
   Future<void> setUp() async {
     _enabled = true;
+    _askSince ??= DateTime.now().millisecondsSinceEpoch;
     await _save();
     await _start();
   }
@@ -472,7 +493,13 @@ class SharingState extends ChangeNotifier {
   List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
 
   Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
-  Future<String> link(String code) async => (await _call('link', {'code': code}))['name'] as String? ?? 'the other device';
+
+  /// Links with the device that showed [code]: its key and its name.
+  Future<({String peer, String name})> link(String code) async {
+    final r = await _call('link', {'code': code});
+    return (peer: r['peer'] as String? ?? '', name: r['name'] as String? ?? 'the other device');
+  }
+
   Future<void> unlink(String peer) => _call('unlink', {'peer': peer});
   Future<void> rename(String name) => _call('set_name', {'name': name});
 
@@ -561,8 +588,8 @@ class AlwaysShared {
 }
 
 /// A folder kept only with the linked devices whose link is one of [modes] (`match`, `send`; a link with none set yet counts as
-/// `match`), and never listed under Sharing and sync: the person's Bookshelves log with their own devices (Match), the settings log
-/// with the devices settings go to or come from.
+/// `match` to the engine, and the app sets a new link to `off` as soon as it sees it), and never listed under Sharing and sync:
+/// the person's Bookshelves log with their own devices (Match), the settings log with the devices settings go to or come from.
 class LinkShare {
   const LinkShare({required this.id, required this.name, required this.dir, required this.modes});
 
