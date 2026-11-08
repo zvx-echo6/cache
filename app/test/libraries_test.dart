@@ -457,6 +457,23 @@ void main() {
       expect(libs.phaseOf(l), LibraryPhase.ready, reason: 'the index left unfinished is built once the library is open');
     });
 
+    test('a library just added that the core is still opening is read again until it is open: no restart, no other change', () async {
+      // Pixel testing: a newly added library stayed on "Getting ready" until the app was restarted or another library changed.
+      await setUpLibs();
+      final notified = <LibraryPhase>[];
+      await libs.addFile(
+        libFile('m.cache-library', jsonEncode({...jsonDecode(_lib()) as Map, 'opening_reads': 4})),
+        confirmUpdate: never,
+        askSettings: noSettings,
+      );
+      final l = libs.libraries.single;
+      libs.addListener(() => notified.add(libs.phaseOf(libs.libraries.single)));
+      await libs.whenIdle();
+      expect(libs.statusOf(l)!.opening, isFalse, reason: 'the status is read again until the core has opened it');
+      expect(libs.phaseOf(l), LibraryPhase.ready);
+      expect(notified.last, LibraryPhase.ready, reason: 'the list is told, so the row leaves Getting ready at once');
+    });
+
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {
       await setUpLibs();
       final f = File('${tmp.path}/photos.tar')..writeAsBytesSync(_tar({'a.jpg': List.filled(10, 2)}));
@@ -631,8 +648,12 @@ void main() {
       });
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: BrowseScreen(browse: browse, active: true)));
       await tester.pump();
-      expect(find.textContaining('Built in · 3 entries'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
-      expect(find.textContaining('Your own · 2 entries'), findsOneWidget);
+      // The 1.1 Library: every library is a search index in Catalog, the guide built in, the person's own under Your own.
+      await tester.tap(find.byKey(const ValueKey('library-catalog')));
+      await tester.pumpAndSettle();
+      expect(find.text('Ready · Built in'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
+      expect(find.text('Ready · 2 entries'), findsOneWidget);
+      expect(find.text('YOUR OWN'), findsOneWidget);
       expect(find.text('Getting ready'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       browse.dispose();

@@ -8,9 +8,7 @@ import '../layout/adaptive.dart';
 import '../theme.dart';
 import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
-import '../version.dart';
 import '../video/format.dart';
-import 'settings/about_pages.dart';
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
@@ -21,7 +19,8 @@ import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings/widgets.dart';
 
-/// Settings: eight rows, only things that can be changed, each with its state in one line and opening one page.
+/// Settings: only things that can be changed, each row with its state in one line and opening one page. What's new and Credits
+/// and licences are in Library > Cache Documentation (1.1: each has one home).
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.deps});
 
@@ -33,7 +32,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingsDeps get d => widget.deps;
-  late final Future<String> _version = installedVersion();
 
   @override
   void initState() {
@@ -197,18 +195,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   status: [Part(d.app.theme.label)],
                   selected: isPaneSelected(context, 'settings-appearance'),
                   onTap: () => _open(context, 'settings-appearance', AppearancePage(app: d.app)),
-                ),
-                FutureBuilder<String>(
-                  future: _version,
-                  initialData: kAppVersion,
-                  builder: (context, snap) => SettingsRow(
-                    key: const ValueKey('settings-credits'),
-                    icon: Icons.info_outline,
-                    title: 'Credits and licences',
-                    status: [Part('${snap.data ?? kAppVersion} · $kAppLicenceShort')],
-                    selected: isPaneSelected(context, 'settings-credits'),
-                  onTap: () => _open(context, 'settings-credits', const AboutPage()),
-                  ),
                 ),
               ],
             ),

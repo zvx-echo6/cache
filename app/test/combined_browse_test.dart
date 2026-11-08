@@ -28,7 +28,13 @@ void main() {
     expect(find.text('Videos'), findsNothing);
     expect(find.textContaining('PeerTube'), findsNothing);
     expect(find.text('Add to Library'), findsOneWidget);
-    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget);
+    // the 1.1 Library: four rows, nothing in them yet
+    expect(find.text('None yet'), findsOneWidget, reason: 'ZIM Collections');
+    expect(find.text('No books yet'), findsOneWidget, reason: 'Bookshelves');
+    await tester.tap(find.byKey(const ValueKey('library-zims')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('zims-empty')), findsOneWidget);
+    expect(find.text('Videos'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     browse.dispose();

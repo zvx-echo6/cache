@@ -2,7 +2,7 @@
 
 ## Opening Settings
 
-Settings has eight rows, each with a one-line status.
+Settings has seven rows, each with a one-line status.
 
 ![The Settings page](shot:settings)
 
@@ -15,11 +15,10 @@ Settings has eight rows, each with a one-line status.
    - "Storage"
    - "Sharing and sync"
    - "Appearance"
-   - "Credits and licences"
 
 The status lines show the state without opening the row. For example, "Storage" shows how much Cache uses and what is free.
 
-There is no Library or Videos page here. Open them from "Modules".
+There is no Library or Videos page here. Open them from "Modules". "What's new in [version]" and "Credits and licences" are in "Library" > "Cache Documentation". See Cache Documentation in chapter 2.
 
 At the foot of the page, a bar shows while Cache makes search ready in the background, for example `Getting search ready · 3 of 12 done`. It adds why it waits, for example `Paused · battery low (12%) · plug in to continue` or "Waits for charging (long job)". Tap it to see the queue. It goes away when the work is done. You do not need to do anything. See Background indexing speed, and Search inside PDFs, EPUBs and captions in chapter 2.
 
@@ -397,21 +396,3 @@ Appearance changes how Cache looks. Changes apply straight away.
 4. Under "PDF pages", turn "Dark pages" on or off.
 
 "Dark pages" is for the PDF reader. Off: "Off: pages look as printed, dimmed in a dark theme". On: "On: in a dark theme, pages are light on dark. Pictures look wrong". It only matters in a dark theme.
-
-## Credits and licences
-
-This page says what Cache is and what it is built on.
-
-![Credits and licences](shot:settings-credits)
-
-1. Go to ["Settings" > "Credits and licences"](cache://settings/credits).
-2. Read:
-   - "Version": which Cache you have;
-   - "Licence": the GNU Affero General Public License, version 3 or later;
-   - "Source code": where to get it;
-   - "Credits": the maps, data, libraries and art used;
-   - "Open-source licences": the full text for every package.
-
-If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
-
-The row "What's new in [version]" shows what changed in your version. It shows only when lines were written for that version. Tap it, read, and tap "Got it".

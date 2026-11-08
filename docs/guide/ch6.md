@@ -514,7 +514,7 @@ In ["Settings" > "Storage"](cache://settings/storage):
 - "Nothing to clean up": nothing to remove.
 - "Freed [size]": "Clean up" finished.
 
-In ["Settings" > "Credits and licences"](cache://settings/credits):
+In ["Library" > "Cache Documentation" > "Credits and licences"](cache://settings/credits):
 - "Couldn't load the credits.": restart Cache.
 
 ## Notebook messages

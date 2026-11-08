@@ -4,6 +4,7 @@ The lines the "What's new in 1.0.N" sheet shows once after an update: one "## <v
 written by the owner (lead words in **bold**). A version with no lines shows no sheet; the app never writes them itself.
 
 ## 1.1.0
+- **A new Library:** four places in one: ZIM Collections, Bookshelves (your books on the numbered shelves of the Cache Decimal System, each with its own call number), Catalog (every search index, with Pause and Resume) and Cache Documentation (this guide, What's new and the credits).
 - **Add your own source:** plug in any web service that gives data, pick what to show, and it works like the other weather and alerts sources.
 
 ## 1.0.30

@@ -17,6 +17,13 @@ import '../layout/adaptive.dart';
 import '../platform.dart' as plat;
 
 import '../guide/guide_book.dart';
+import '../library/cds_shelf_source.dart';
+import '../library/library_pages.dart';
+import '../library/library_panes.dart';
+import '../library/library_prefs.dart';
+import '../library/shelf_source.dart';
+import '../regions/regions_state.dart';
+import '../sharing/sharing_state.dart';
 import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' as modules show addToHome;
@@ -43,18 +50,43 @@ import 'web/device_library.dart' show kUploadedAgain;
 import 'web/device_widgets.dart';
 import 'zim_urls.dart';
 
-/// The Library module: one list of everything (Kiwix ZIMs and your own libraries), each with its icon, name, a short description and
-/// its size, and a badge only for an exception. Tap opens an item; press and hold opens its menu. "Add to Library" is the one way
-/// to add anything.
+/// The Library module (1.1, UX-library-11b): four rows, ZIM Collections, Bookshelves, Catalog and Cache Documentation, with the
+/// search progress above them and "Add to Library", the one way to add anything. ZIM Collections is the list people know (each ZIM
+/// with its icon, name, a short description and its size, and a badge only for an exception; tap opens it, press and hold opens
+/// its menu). In a browser (Cache for Linux) the Library is still the one list of everything, as the browser build has it.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({
     super.key,
     required this.browse,
     required this.active,
     this.layout,
+    this.regions,
+    this.sharing,
+    this.shelves,
+    this.files,
+    this.originals,
+    this.looks,
   });
 
   final BrowseState browse;
+
+  /// The regions, for Catalog's places and routing; null leaves them out.
+  final RegionsState? regions;
+
+  /// Sharing, for Catalog's sync lines; null leaves them out.
+  final SharingState? sharing;
+
+  /// What Bookshelves shows (the Cache Decimal System over the libraries when null).
+  final ShelfSource? shelves;
+
+  /// This device's copies of the books (none on a phone yet when null: [BookFilesUnavailable]).
+  final BookFiles? files;
+
+  /// The book page's "Open original", where there is one.
+  final OriginalFileProvider? originals;
+
+  /// The Bookshelves look kept on this device.
+  final ShelfLookPrefs? looks;
 
   /// Where "Add to Home" puts its shortcut (offered only when this is given).
   final LayoutState? layout;
@@ -73,6 +105,39 @@ class _BrowseScreenState extends State<BrowseScreen> {
   SourcesState get sources => b.sources;
   LibrariesState? get libs => b.libraries;
 
+  /// The 1.1 Library (a phone, a tablet, a computer's app); a browser keeps the one list.
+  bool get _structured => b.device == null;
+
+  CdsShelfSource? _ownShelves;
+  late final ShelfSource _shelves = widget.shelves ?? (_ownShelves = CdsShelfSource(libs));
+  late final BookFiles _files = widget.files ?? BookFilesUnavailable();
+  late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
+
+  /// The Library's root page's context in the panes (citations open from it).
+  BuildContext? _root;
+
+  late final LibraryDeps _deps = LibraryDeps(
+    browse: b,
+    shelves: _shelves,
+    files: _files,
+    looks: _looks,
+    originals: widget.originals,
+    regions: widget.regions,
+    sharing: widget.sharing,
+    zims: _zimsPage,
+    addToLibrary: _addFrom,
+    openGuide: _openGuideFrom,
+    openOwnLibrary: (ctx, l) => LibraryNav.of(ctx).open(
+      ctx,
+      LibraryPageSpec('library:${l.folderName}', (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (c) => showLibraryMenu(c, _libraryActions(l))), leaf: true),
+    ),
+    holdsBooks: (l) => switch (_shelves) {
+      final CdsShelfSource c => c.holdsBooks(l),
+      _ => false,
+    },
+    rootTop: (ctx) => [if (libs?.task case final t?) _taskRow(ctx.t, t)],
+  );
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +155,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   @override
   void dispose() {
     b.removeListener(_onBrowse);
+    _ownShelves?.dispose();
     super.dispose();
   }
 
@@ -119,6 +185,11 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   void _openAddress(String address, {String? quote}) {
     if (address.startsWith('lib:')) {
+      final root = _root;
+      if (_structured && root != null && root.mounted) {
+        LibraryNav.of(root).open(root, LibraryPageSpec('library-passage:$address', (_) => LibraryPassageScreen(sources: sources, address: address), leaf: true));
+        return;
+      }
       openDetail(
         _pane ?? context,
         key: 'library-passage:$address',
@@ -138,27 +209,31 @@ class _BrowseScreenState extends State<BrowseScreen> {
       return;
     }
     // An EPUB chapter opens at the cited block, with the quote's first words marked.
-    _openZim(z, address: address, quote: quote);
+    final root = _root;
+    _openZim(z, address: address, quote: quote, from: _structured && root != null && root.mounted ? root : null);
   }
 
   /// The list's context inside the two panes (a tablet opens items beside the list).
   BuildContext? _pane;
 
-  void _openZim(ZimFile z, {String? address, String? quote}) {
+  /// Opens a ZIM in the reader: from ZIM Collections (or the Library's root, for a citation) in the 1.1 Library, [from] being that
+  /// page's context; in a browser beside the one list.
+  void _openZim(ZimFile z, {String? address, String? quote, BuildContext? from}) {
+    Widget reader(BuildContext _) => ZimReaderScreen(
+      sources: sources,
+      zim: z,
+      address: address,
+      quote: quote,
+      layout: widget.layout,
+      itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
+    );
+    if (from != null) {
+      LibraryNav.of(from).open(from, LibraryPageSpec('zim:${z.path}', reader, leaf: true));
+      return;
+    }
     // A browser on a desktop window opens a ZIM in the full window: the list slides away (rail stays), its Show button brings it back.
     if (plat.isWeb && _pane != null && isDesktop(context)) _pane!.findAncestorStateOfType<TwoPaneState>()?.setListHidden(true);
-    openDetail(
-      _pane ?? context,
-      key: 'zim:${z.path}',
-      builder: (_) => ZimReaderScreen(
-          sources: sources,
-          zim: z,
-          address: address,
-          quote: quote,
-          layout: widget.layout,
-          itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
-        ),
-    );
+    openDetail(_pane ?? context, key: 'zim:${z.path}', builder: reader);
   }
 
   /// The guide that ships in the app opens as a book: its chapters, links and search, with the library's usual menu.
@@ -168,13 +243,22 @@ class _BrowseScreenState extends State<BrowseScreen> {
     await Navigator.of(context).push(guideContentsRoute(book, menu: (ctx) async => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
+  /// Cache Documentation's "The Cache guide": the book, from [from] (in its pane on a tablet), with the guide's menu when it is
+  /// installed.
+  Future<void> _openGuideFrom(BuildContext from) async {
+    final book = await GuideBook.load();
+    if (!from.mounted) return;
+    final l = libs?.libraries.where((x) => libs!.isGuide(x)).firstOrNull;
+    await Navigator.of(from).push(guideContentsRoute(book, menu: l == null ? null : (ctx) async => showLibraryMenu(ctx, _libraryActions(l))));
+  }
+
   void _openLibrary(LibraryItem l) {
     openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
   int? get _free => b.device != null ? b.device!.spaceForDialog.usable : b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
 
-  LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome}) {
+  LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome, bool parts = true}) {
     final id = sources.idOf(z);
     final layout = widget.layout;
     return LibraryActions(
@@ -210,7 +294,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
       again: b.device?.wasUploaded(z.fileName) == true ? kUploadedAgain : null,
       // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none); its
       // EPUBs beside it (the scheduler's core work).
-      parts: pdfIndexShared == null && coreIndexShared == null
+      // The 1.1 Library: Pause, Resume and fixes are in Catalog only (the row's search line opens it), never twice.
+      parts: !parts || (pdfIndexShared == null && coreIndexShared == null)
           ? null
           : (_) => Column(
               mainAxisSize: MainAxisSize.min,
@@ -326,6 +411,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   static const _kAddKey = 'add-to-library';
 
+  /// The 1.1 Library's Add to Library: in the detail on a desktop window, else a page of its own.
+  void _addFrom(BuildContext from) {
+    if (isDesktop(from) && !LibraryNav.of(from).compact) {
+      LibraryNav.of(from).goTo(from, [LibraryPageSpec(_kAddKey, (_) => AddToLibraryScreen(browse: b), leaf: true)]);
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  }
+
   /// A library built from PDFs (a browser): its own page beside the list, or a page of its own.
   void _openBuilt(String id) {
     final bc = b.device?.build;
@@ -347,6 +441,16 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_structured) {
+      return LibraryPanes(
+        // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
+        desktopInitial: widget.active ? (_) => AddToLibraryScreen(browse: b) : null,
+        root: (c) {
+          _root = c;
+          return LibraryRootPage(deps: _deps);
+        },
+      );
+    }
     final pane = TwoPane(
       id: 'library',
       listName: 'Library',
@@ -444,7 +548,72 @@ class _BrowseScreenState extends State<BrowseScreen> {
     );
   }
 
-  Widget _zimRow(CacheTokens k, ZimFile z) {
+  /// ZIM Collections (the 1.1 Library): the ZIMs as people know them, each opening in the reader, with its search line read-only
+  /// (tapping it opens that entry in Catalog, where Pause and Resume are).
+  Widget _zimsPage(BuildContext context) {
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      appBar: libraryAppBar(context, title: 'ZIM Collections'),
+      body: ListenableBuilder(
+        listenable: Listenable.merge([b, sources, ?pdfIndexShared, ?indexSchedulerShared, ?coreIndexShared?.progress]),
+        builder: (context, _) {
+          final k = context.t;
+          _maybeCheck();
+          final transfers = b.transfers.values.toList();
+          final nav = LibraryNav.of(context);
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+            children: [
+              if (!nav.compact) const LibraryCrumbs(crumbs: [Crumb('Library', []), Crumb('ZIM Collections')]),
+              if (sources.zims.isEmpty && transfers.isEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 8, 6, 12),
+                  child: Text(
+                    sources.unavailable ?? 'No ZIM Collections yet. Add Wikipedia, medical guides or survival manuals.',
+                    key: const ValueKey('zims-empty'),
+                    style: TextStyle(fontSize: 14, color: k.secondary),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    key: const ValueKey('zims-add'),
+                    onPressed: () => _addFrom(context),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add to Library'),
+                  ),
+                ),
+              ] else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+                  child: Text("Each opens in the reader. Icons come from each source's website; change one from the hold menu.", style: TextStyle(fontSize: 13, color: k.secondary)),
+                ),
+              for (final t in transfers) _transferRow(k, t),
+              for (final z in sources.zims) _zimRow(k, z, from: context),
+              if (b.updateError != null && sources.zims.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  child: Text("Couldn't check for updates: ${b.updateError}", style: TextStyle(fontSize: 12, color: k.warning)),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// The Catalog entry a ZIM's search line is about: the work the scheduler has on it now, else its PDFs.
+  String _catalogKeyOf(ZimFile z) {
+    final id = sources.idOf(z) ?? z.path;
+    final s = indexSchedulerShared;
+    for (final key in zimIndexKeys(id)) {
+      final item = s?.statusOf(key);
+      if (item != null && item.state != IndexState.done) return key;
+    }
+    return 'zim-pdf/$id';
+  }
+
+  Widget _zimRow(CacheTokens k, ZimFile z, {BuildContext? from}) {
     final phase = sources.phaseOf(z);
     final update = b.updates[z.path];
     final o = sources.originOf(z);
@@ -457,6 +626,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
       _ => null,
     };
     final canOpen = sources.idOf(z) != null && phase != ZimPhase.failed;
+    final note = _indexNote(z);
+    final f = from;
     return LibraryRow(
       key: ValueKey('zim-${z.fileName}'),
       icon: sources.iconOf(z),
@@ -464,11 +635,23 @@ class _BrowseScreenState extends State<BrowseScreen> {
       detail: [
         if (o != null && o.summary.isNotEmpty) o.summary,
         formatBytes(z.size),
-        ?_indexNote(z),
+        if (f == null) ?note,
       ].join(' · '),
       badge: badge,
-      onTap: canOpen ? () => _openZim(z) : null,
-      onHold: () => showLibraryMenu(context, _zimActions(z)),
+      // the search line, read-only: it opens that entry in Catalog
+      below: f == null || note == null
+          ? null
+          : InkWell(
+              key: ValueKey('zim-index-line-${z.fileName}'),
+              onTap: () => LibraryNav.of(f).goTo(f, [catalogSpec(_deps, focus: _catalogKeyOf(z))]),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(note, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.accent)),
+              ),
+            ),
+      selected: f != null && LibraryNav.of(f).isOpen('zim:${z.path}'),
+      onTap: canOpen ? () => _openZim(z, from: f) : null,
+      onHold: () => showLibraryMenu(f ?? context, _zimActions(z, parts: f == null)),
     );
   }
 
@@ -541,10 +724,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
 /// One row of the Library: the icon (the source's own, or a letter), the name on one line, the description and size on one line,
 /// and a badge for an exception. The size always stays visible; a long name ends in an ellipsis.
 class LibraryRow extends StatelessWidget {
-  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false});
+  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false, this.below});
 
   final String title;
   final String detail;
+
+  /// A line under the detail with its own tap (ZIM Collections' search line).
+  final Widget? below;
   final File? icon;
   final Widget? badge;
   final VoidCallback? onTap;
@@ -572,6 +758,7 @@ class LibraryRow extends StatelessWidget {
                     children: [
                       Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                       Text(detail, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                      ?below,
                     ],
                   ),
                 ),

@@ -29,6 +29,8 @@ import 'chat/local_llama_backend.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'history/store_open.dart';
+import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
+import 'library/library_device.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
@@ -683,6 +685,8 @@ class _CacheAppState extends State<CacheApp> {
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
     });
+    // Bookshelves writes where a person places a book in this device's own library log.
+    if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     app.init();
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());

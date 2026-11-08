@@ -19,12 +19,10 @@ const String kSourceUrl = 'https://github.com/zvx-echo6/cache';
 /// Where the credits text is bundled (a copy of CREDITS.md at the repository root; a test keeps them equal).
 const String kCreditsAsset = 'assets/credits.md';
 
-/// Settings > Credits and licences: the version, the licence, the credits and the open-source licences.
+/// Library > Cache Documentation > Credits and licences: the version, the licence, the credits and the open-source licences.
+/// (What's new has its own row in Cache Documentation.)
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion, this.updates, this.whatsNew = currentWhatsNew});
-
-  /// This version's "What's new" lines (the owner's); none leaves the row out.
-  final Future<List<String>> Function() whatsNew;
+  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion, this.updates});
 
   /// The iPhone's update check (the app's when null): the Version line says when a newer build is out, with Open TestFlight.
   final AppUpdates? updates;
@@ -63,19 +61,6 @@ class AboutPage extends StatelessWidget {
                 );
               },
             ),
-            FutureBuilder<List<String>>(
-              future: whatsNew(),
-              builder: (context, snap) {
-                final lines = snap.data ?? const <String>[];
-                if (lines.isEmpty) return const SizedBox.shrink();
-                return SettingsRow(
-                  key: const ValueKey('about-whats-new'),
-                  icon: Icons.new_releases_outlined,
-                  title: "What's new in $kAppVersion",
-                  onTap: () => showWhatsNew(context, version: kAppVersion, lines: lines),
-                );
-              },
-            ),
             SettingsRow(
               title: 'Licence',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
@@ -105,7 +90,7 @@ class AboutPage extends StatelessWidget {
                 context: context,
                 applicationName: 'Cache',
                 applicationVersion: kAppVersion,
-                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Settings > Credits and licences > Credits.',
+                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Library > Cache Documentation > Credits and licences > Credits.',
               ),
             ),
           ],

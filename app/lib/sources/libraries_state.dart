@@ -194,8 +194,12 @@ class LibrariesState extends ChangeNotifier {
   final Set<Future<void>> _pending = {};
   bool _disposed = false;
 
-  /// Ends when the index builds started at start have ended (for tests).
-  Future<void> whenIdle() => Future.wait(_pending.toList());
+  /// Ends when the index builds started at start, and the reading of a library still opening, have ended (for tests).
+  Future<void> whenIdle() async {
+    while (_pending.isNotEmpty) {
+      await Future.wait(_pending.toList());
+    }
+  }
 
   Future<void> init() async {
     if (plat.isWeb || _dev != null) {
@@ -244,6 +248,8 @@ class LibrariesState extends ChangeNotifier {
     await sources.refresh();
     _resumeIndexes();
     notifyListeners();
+    // a library the sync brought is opened by the core on its own thread: follow it until it is open
+    _settleOpening();
   }
 
   Future<void> _afterCore() async {
@@ -330,6 +336,37 @@ class LibrariesState extends ChangeNotifier {
     }
     await _scan();
     await sources.refresh();
+    _settleOpening();
+  }
+
+  Future<void>? _settling;
+  bool _settleAgain = false;
+
+  /// After a change the core opens a new or swapped-in library on its own thread, so the list right after it can still say it is
+  /// opening. Nothing else read the status again, so a library just added stayed on "Getting ready" until a restart or the next
+  /// library change (found on a Pixel): the status is read again until no library is opening, then any index left to build is
+  /// resumed. One poll at a time; a change during it polls once more after it.
+  void _settleOpening() {
+    if (_disposed) return;
+    if (_settling != null) {
+      _settleAgain = true;
+      return;
+    }
+    final f = () async {
+      do {
+        _settleAgain = false;
+        await _whileOpening();
+      } while (_settleAgain && !_disposed);
+      if (_disposed) return;
+      _resumeIndexes();
+      notifyListeners();
+    }();
+    _settling = f;
+    _pending.add(f);
+    unawaited(f.whenComplete(() {
+      _pending.remove(f);
+      _settling = null;
+    }));
   }
 
   /// A browser: the device's core reads the library folders again, then this list and the sources' status follow.

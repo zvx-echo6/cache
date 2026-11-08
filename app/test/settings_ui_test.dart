@@ -22,17 +22,17 @@ Switch switchIn(WidgetTester tester, String title) =>
 
 void main() {
   group('the Settings home: every row says its state, from the real state', () {
-    testWidgets('a fresh phone: eight rows, each with its state in one line', (tester) async {
+    testWidgets('a fresh phone: seven rows, each with its state in one line', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
       for (final title in [
         'Cache model and web search', 'Maps', 'Weather and alerts', 'Notifications', 'Storage', 'Sharing and sync', 'Appearance',
-        'Credits and licences',
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
-      for (final gone in ['Library', 'Videos', 'Set up Cache', 'Assistant']) {
+      // What's new and Credits and licences moved to Library > Cache Documentation (1.1).
+      for (final gone in ['Library', 'Videos', 'Set up Cache', 'Assistant', 'Credits and licences', "What's new in $kAppVersion"]) {
         expect(find.text(gone), findsNothing, reason: '$gone is not a Settings row');
       }
       expect(find.text('Choose a model · web search off'), findsOneWidget);
@@ -42,7 +42,6 @@ void main() {
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('$kAppVersion · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -427,7 +426,7 @@ void main() {
       await r.show(tester, StoragePage(deps: r.deps));
       await tester.tap(find.byKey(const ValueKey('kind-library')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('library-empty')), findsOneWidget, reason: 'the Library list');
+      expect(find.byKey(const ValueKey('library-zims')), findsOneWidget, reason: 'the Library, its ZIM Collections first');
       await tester.pageBack();
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('kind-models')));
