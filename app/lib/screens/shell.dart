@@ -345,7 +345,7 @@ class _ShellState extends State<Shell> {
       AppPlace.weatherSettings => WeatherPage(deps: d),
       AppPlace.notifications => NotificationsPage(deps: d),
       AppPlace.storage => StoragePage(deps: d),
-      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync),
       AppPlace.appearance => AppearancePage(app: widget.app),
       AppPlace.credits => const AboutPage(),
       AppPlace.models => ModelsScreen(app: widget.app),

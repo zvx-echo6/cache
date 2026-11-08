@@ -252,6 +252,20 @@ class MapsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The layers switched on, sorted (what a linked device takes, Settings > Sharing and sync).
+  List<String> get layersOn => _enabled.toList()..sort();
+
+  /// Switches on exactly [ids], as a linked device has them. A layer not here yet stays listed and draws once it arrives.
+  void setLayersOn(Iterable<String> ids) {
+    final next = ids.toSet();
+    if (next.length == _enabled.length && next.containsAll(_enabled)) return;
+    _enabled
+      ..clear()
+      ..addAll(next);
+    _save();
+    notifyListeners();
+  }
+
   void setOpacity(String id, double v) {
     _opacity[id] = v.clamp(0.1, 1.0);
     _save();

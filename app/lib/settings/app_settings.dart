@@ -317,6 +317,31 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  /// The live sources switched on, exactly [ids] (a linked device's settings).
+  void replaceLiveSourcesOn(Iterable<String> ids) {
+    final next = ids.toSet();
+    if (next.length == _liveOn.length && next.containsAll(_liveOn)) return;
+    _liveOn = next;
+    _save();
+  }
+
+  /// The watched places whose ids start with [prefix] (`region:`, `place:`), exactly [ids] (a linked device's settings); the
+  /// others stay as they are.
+  void replaceWatched(String prefix, Iterable<String> ids) {
+    final next = {for (final id in _watched) if (!id.startsWith(prefix)) id, for (final id in ids) if (id.startsWith(prefix)) id};
+    if (next.length == _watched.length && next.containsAll(_watched)) return;
+    _watched = next;
+    _save();
+  }
+
+  /// The source links added from a link, exactly [urls] (a linked device's settings).
+  void replaceCatalogues(Iterable<String> urls) {
+    final next = urls.toList();
+    if (listEquals(next, _extraCatalogues)) return;
+    _extraCatalogues = next;
+    _save();
+  }
+
   /// Watches or stops watching a place (see [watchedPlaces]).
   void setWatched(String placeId, bool on) {
     if (on == _watched.contains(placeId)) return;

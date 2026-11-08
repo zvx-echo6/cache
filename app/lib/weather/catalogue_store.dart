@@ -178,25 +178,25 @@ class CatalogueStore {
     'homepage': c.homepage,
     'base_url': c.baseUrl.toString(),
     'updated': c.updated,
-    'connectors': [
-      for (final e in c.entries)
-        {
-          'id': e.id,
-          'title': e.title,
-          'description': e.description,
-          'category': e.category,
-          'provider': e.provider,
-          'coverage': e.coverage,
-          'needs_key': e.needsKey,
-          if (e.keyAlias != null) 'key_alias': e.keyAlias,
-          'default_on': e.defaultOn,
-          'featured': e.featured,
-          'path': e.path,
-          'attribution': e.attribution,
-          'license': e.license,
-          if (e.docs != null) 'docs': e.docs,
-          if (e.sha256 != null) 'sha256': e.sha256,
-        },
-    ],
+    'connectors': [for (final e in c.entries) catalogueEntryJson(e)],
   };
 }
+
+/// One source of a list in the list's format (CatalogueEntry.fromJson reads it back).
+Map<String, dynamic> catalogueEntryJson(CatalogueEntry e) => {
+  'id': e.id,
+  'title': e.title,
+  'description': e.description,
+  'category': e.category,
+  'provider': e.provider,
+  'coverage': e.coverage,
+  'needs_key': e.needsKey,
+  if (e.keyAlias != null) 'key_alias': e.keyAlias,
+  'default_on': e.defaultOn,
+  'featured': e.featured,
+  'path': e.path,
+  'attribution': e.attribution,
+  'license': e.license,
+  if (e.docs != null) 'docs': e.docs,
+  if (e.sha256 != null) 'sha256': e.sha256,
+};

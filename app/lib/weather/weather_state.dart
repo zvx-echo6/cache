@@ -646,6 +646,55 @@ class WeatherState extends ChangeNotifier {
 
   bool isOwn(Connector c) => c.origin.catalogueId == ownListId;
 
+  /// The sources of your own as a linked device takes them (Settings > Sharing and sync > a device > Settings): each source's
+  /// entry and definition, sorted by id. Their keys are not here (see API keys there).
+  List<Map<String, dynamic>> get ownSourcesJson {
+    final own = _own;
+    if (own == null) return const [];
+    final entries = [...own.catalogue.entries]..sort((a, b) => a.id.compareTo(b.id));
+    return [
+      for (final e in entries)
+        if (own.definitions[e.id] != null) {'entry': catalogueEntryJson(e), 'definition': own.definitions[e.id]},
+    ];
+  }
+
+  /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
+  /// any other, and one that fails is left out. Applied at once.
+  Future<void> replaceOwnSources(Object? list) async {
+    if (_store == null) return;
+    final entries = <CatalogueEntry>[];
+    final defs = <String, String>{};
+    for (final x in (list is List ? list : const [])) {
+      if (x is! Map || x['entry'] is! Map || x['definition'] is! String) continue;
+      try {
+        final e = _ownEntry(CatalogueEntry.fromJson((x['entry'] as Map).cast<String, dynamic>()));
+        Connector.parse(x['definition'] as String);
+        if (defs.containsKey(e.id)) continue;
+        entries.add(e);
+        defs[e.id] = x['definition'] as String;
+      } catch (_) {}
+    }
+    _saveOwn(entries, defs);
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
+  /// The live sources switched on changed from outside this page (a linked device's settings): the core is told at once.
+  Future<void> sourcesChanged() async {
+    await _applyAll();
+    notifyListeners();
+  }
+
+  /// Keeps a key a linked device sent, under [alias], and uses it at once.
+  Future<void> keepKey(String alias, String key) async {
+    await secrets.write(secretName(alias), key);
+    await _readKeys();
+    _keys.add(alias);
+    await _applyAll();
+    notifyListeners();
+  }
+
   /// Replaces the collection with [entries] and their [defs].
   void _saveOwn(List<CatalogueEntry> entries, Map<String, String> defs) {
     final cat = Catalogue(
