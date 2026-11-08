@@ -43,6 +43,10 @@ abstract class LayerEngine extends ChangeNotifier {
   /// Re-checks the connection (cheap, at most every few seconds).
   Future<void> refreshOnline();
 
+  /// Counts the times the connection came back. It is part of [tilesUrl] and [tileJsonUrl] (and of the map's style key), so
+  /// the map loads its sources again: tiles it could not have while offline are asked for again.
+  int get sourcesGeneration => 0;
+
   /// True when the engine can draw [layerId] at the middle of [view] without the network: the tile is
   /// downloaded or was cached from an earlier view.
   Future<bool> hasTiles(String layerId, GeoBounds view, int zoom);

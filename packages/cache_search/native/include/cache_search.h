@@ -321,7 +321,10 @@ char *cs_zim_main_page(cs_handle *h, const char *zim_id);
  * ZIM's own keyword list (both BM25), not against its own best hit.
  *
  * cs_zim_pdfs: {"zim_uuid","zim_name" (the ZIM's metadata Name),"pdfs":[{"path","title","size"}]} for the entries whose mime type
- * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
+ * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id.
+ * A ZIM whose mime list has no application/pdf answers at once; otherwise it is a pass over every directory entry (reading
+ * each one's mime type through bounded mapping windows, a few MiB mapped at a time), which for a large ZIM takes seconds on
+ * the caller's thread: the job kind "zim_pdfs" (cs_job_start) makes the same list on a thread of its own. */
 char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
 
 /* cs_pdf_chunk: pure (no handle, nothing read or written): the shared passage chunker (packages/cache_chunk) on the text of a
@@ -741,6 +744,11 @@ char *cs_live_sources(cs_handle *h);
  * Returns what cs_live_get returns plus "fetched":true|false. */
 char *cs_live_fetch(cs_handle *h, const char *request_json);
 
+/* cs_live_fetch as a job, on a thread of its own: the download never holds the caller (the app's one core worker), and several
+ * run at once. Poll cs_job_progress: when "done", "result" is what cs_live_fetch returns; a failed fetch is "failed" with
+ * cs_live_fetch's error. Free it with cs_job_free. NULL on error (cs_last_error(h)): "not_configured" without "live". */
+cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
+
 /* request_json: {"source","place","params"?,"now"?}. The stored data for Home cards and map layers, expired or not:
  * {"source":{"id","title","provider","description","attribution"},"place":{"key","name","lat","lon"},
  *  "fetched_at","valid_until","age":"2 hours old","age_seconds","expired":bool,"not_covered_after":null|"<date>",
@@ -1127,6 +1135,10 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "zim_pdfs": {"zim_path"}
+ *   the list cs_zim_pdfs gives, made on the job's thread (the ZIM is opened by path; "zim_name" is its metadata Name, else the
+ *   file name). Progress is directory entries looked at, of all; when done the progress JSON adds "result" (the list).
+ *   Cancellable. The ZIM's list never changes (a ZIM file never does): the app keeps it per uuid and lists a ZIM once.
  * kind "pdfindex_finish": {"indexes_dir","zim_uuid"}
  *   publishes the PDF index build of a ZIM: merges .build/ to one segment, moves its files into
  *   .build/publish-<build-id>/ (hashing them with sha256 as they are read), writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,

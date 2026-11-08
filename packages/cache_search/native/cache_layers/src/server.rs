@@ -4,9 +4,13 @@
 //!   GET /layers/{id}/tilejson.json       TileJSON (also /layers/{id}.json)
 //!   GET /health                          {"ok":true}
 //!
-//! Answers: 200 with the tile; 204 where the source has no tile; 404 when the tile is not on the device and there is
-//! no connection (header `X-Cache-Status: miss`); 503 `needs a connection` for an online-only layer with no
-//! connection (`X-Cache-Status: needs-connection`); 400/404/502 with a JSON error otherwise.
+//! Answers: 200 with the tile; 204 where the source has no tile; 503 with `Retry-After` for a tile that may come later:
+//! not on the device and no connection (`X-Cache-Status: miss`), or the source too slow or its queue full
+//! (`X-Cache-Status: busy`); 503 `needs a connection` for an online-only layer with no connection
+//! (`X-Cache-Status: needs-connection`); 400/404/502 with a JSON error otherwise (404: no such layer or path).
+//!
+//! A temporary miss is never a 404: MapLibre never asks for a 404 tile again, so the tile stayed blank until the style was
+//! loaded again (build 46: 59 of 150 tiles of a fast pan). It retries a 5xx with a back-off.
 
 use crate::core::{Inner, TileOut};
 use crate::sched::{self, Outcome, Sched};
@@ -24,6 +28,11 @@ pub struct TileServer {
 }
 
 const WORKERS: usize = 8;
+
+/// Seconds a map waits before asking again for a tile the source did not answer in time (or whose queue was full).
+const RETRY_BUSY: &str = "1";
+/// Seconds before asking again for a tile that needs the connection back (the map also reloads its sources when it returns).
+const RETRY_OFFLINE: &str = "5";
 
 impl TileServer {
     pub fn start(inner: Arc<Inner>) -> Result<TileServer> {
@@ -121,7 +130,8 @@ fn tile_response(req: Request, t: Result<TileOut>) {
     match t {
         Ok(TileOut::Tile { bytes, mime, from }) => respond(req, 200, bytes, vec![hdr("Content-Type", mime), hdr("X-Cache-Status", from)]),
         Ok(TileOut::Empty) => respond(req, 204, Vec::new(), vec![hdr("X-Cache-Status", "empty")]),
-        Ok(TileOut::Miss) => respond(req, 404, b"not on this device and no connection".to_vec(), vec![hdr("X-Cache-Status", "miss"), hdr("Content-Type", "text/plain")]),
+        Ok(TileOut::Miss) => respond(req, 503, b"not on this device and no connection".to_vec(), vec![hdr("X-Cache-Status", "miss"), hdr("Retry-After", RETRY_OFFLINE), hdr("Content-Type", "text/plain")]),
+        Ok(TileOut::Busy) => respond(req, 503, b"busy, ask again".to_vec(), vec![hdr("X-Cache-Status", "busy"), hdr("Retry-After", RETRY_BUSY), hdr("Content-Type", "text/plain")]),
         Ok(TileOut::NeedsConnection) => respond(req, 503, b"needs a connection".to_vec(), vec![hdr("X-Cache-Status", "needs-connection"), hdr("Content-Type", "text/plain")]),
         Err(e) => json_err(req, e.http_status(), &e),
     }

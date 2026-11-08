@@ -1040,49 +1040,14 @@ impl Handle {
     }
 
     /// `cs_zim_pdfs`: the PDFs inside a ZIM (entries whose mime type is application/pdf), by path:
-    /// `{"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}`.
+    /// `{"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}`. A pass over every entry of a ZIM that has PDFs (none at all
+    /// for one whose mime list has none), through bounded mapping windows (see zimpdfs.rs). It runs on the caller's thread: the
+    /// app lists through the `zim_pdfs` job instead, once per ZIM.
     pub fn zim_pdfs(&self, zim_id: &str) -> Result<String> {
         let src = self.zim(zim_id)?;
-        let czim = src.zim()?;
-        let mut cands: Vec<(u32, u32, String, String)> = Vec::new();
-        for idx in 0..src.entry_count() as u32 {
-            let Ok(e) = czim.get_by_url_index(idx) else { continue };
-            if !matches!(e.namespace, zim::Namespace::UserContent | zim::Namespace::Articles) {
-                continue;
-            }
-            let zim::MimeType::Type(m) = &e.mime_type else { continue };
-            if !m.to_ascii_lowercase().starts_with("application/pdf") {
-                continue;
-            }
-            let Some(zim::Target::Cluster(cluster, blob)) = e.target else { continue };
-            let title = if e.title.is_empty() { e.url.clone() } else { e.title.clone() };
-            cands.push((cluster, blob, e.url, title));
-        }
-        // sizes by cluster, so each cluster is read once
-        cands.sort_by_key(|c| (c.0, c.1));
-        let mut pdfs: Vec<(String, String, u64)> = Vec::with_capacity(cands.len());
-        let mut i = 0;
-        while i < cands.len() {
-            let c0 = cands[i].0;
-            let mut j = i;
-            while j < cands.len() && cands[j].0 == c0 {
-                j += 1;
-            }
-            let cluster = czim.get_cluster(c0).ok();
-            let guard = cluster.as_ref().and_then(|c| c.read().ok());
-            for c in &cands[i..j] {
-                let size = guard.as_ref().and_then(|g| g.blob(c.1).ok()).map(|b| b.len() as u64).unwrap_or(0);
-                pdfs.push((c.2.clone(), c.3.clone(), size));
-            }
-            i = j;
-        }
-        pdfs.sort();
-        Ok(json!({
-            "zim_uuid": src.id,
-            "zim_name": src.name.clone().unwrap_or_else(|| src.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
-            "pdfs": pdfs.into_iter().map(|(path, title, size)| json!({"path": path, "title": title, "size": size})).collect::<Vec<_>>(),
-        })
-        .to_string())
+        let name = src.name.clone().unwrap_or_else(|| src.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+        let v = crate::zimpdfs::list_path(&src.path, Some(&name), &|_, _| {}, &|| false)?.ok_or_else(|| Error::internal("the PDF list stopped"))?;
+        Ok(v.to_string())
     }
 
     /// The opened PDF index of the ZIM `zim_id`, when it has one ready.

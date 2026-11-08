@@ -60,6 +60,8 @@ class CoreLayerEngine extends LayerEngine {
   int _port = 0;
   bool _ready = false;
   bool _online = true;
+  int _generation = 0;
+  StreamSubscription<ConnectionKind>? _connection;
   String? _problem;
   bool _blocked = false;
   DateTime _lastProbe = DateTime.fromMillisecondsSinceEpoch(0);
@@ -94,6 +96,9 @@ class CoreLayerEngine extends LayerEngine {
   @override
   bool get online => _online;
 
+  @override
+  int get sourcesGeneration => _generation;
+
   int get port => _port;
 
   @override
@@ -111,6 +116,10 @@ class CoreLayerEngine extends LayerEngine {
       await _loadSaved();
       final s = await core.layers('server', jsonEncode({'online': _online}));
       _port = (s['port'] as num).toInt();
+      // The connection coming back is heard at once, not only when the map next moves: the map then loads its sources again.
+      try {
+        _connection ??= policy?.probe.changes.listen((_) => unawaited(refreshOnline(force: true)));
+      } catch (_) {}
       await _reload();
       _ready = true;
       notifyListeners();
@@ -135,6 +144,7 @@ class CoreLayerEngine extends LayerEngine {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _connection?.cancel();
     _dropPlanner();
     // Nothing will look at the running downloads again, so nobody may wait for them (a cancel in progress returns).
     for (final r in _running.values) {
@@ -241,11 +251,15 @@ class CoreLayerEngine extends LayerEngine {
 
   // ---- addresses ----------------------------------------------------------------------------------------
 
-  @override
-  String tilesUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/{z}/{x}/{y}';
+  // After the connection came back the addresses carry its count (the tile server ignores the query), so they are new sources to
+  // MapLibre and it asks again for the tiles it had no answer for.
+  String get _again => _generation == 0 ? '' : '?g=$_generation';
 
   @override
-  String tileJsonUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/tilejson.json';
+  String tilesUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/{z}/{x}/{y}$_again';
+
+  @override
+  String tileJsonUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/tilejson.json$_again';
 
   // ---- connection ---------------------------------------------------------------------------------------
 
@@ -256,6 +270,7 @@ class CoreLayerEngine extends LayerEngine {
     final now = await _connected();
     if (now == _online) return;
     _online = now;
+    if (now) _generation++;
     // The engine uses the network only when told it may.
     try {
       await _core?.layers('server', jsonEncode({'online': now}));
