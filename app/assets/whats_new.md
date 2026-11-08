@@ -3,6 +3,9 @@
 The lines the "What's new in 1.0.N" sheet shows once after an update: one "## <version>" heading, then one "- " line each,
 written by the owner (lead words in **bold**). A version with no lines shows no sheet; the app never writes them itself.
 
+## 1.1.0
+- **Add your own source:** plug in any web service that gives data, pick what to show, and it works like the other weather and alerts sources.
+
 ## 1.0.30
 - **Search inside your ZIMs:** PDFs, e-books and video captions inside your libraries are now searchable, and answers cite the exact page, chapter or moment.
 - **Built quietly:** Cache makes them searchable on its own in the background, going easy on battery and heat. Settings shows the progress, with a speed choice under Advanced.

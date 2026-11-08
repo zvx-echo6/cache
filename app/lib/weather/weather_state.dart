@@ -21,6 +21,7 @@ import 'live_folder.dart';
 import 'alert_notifier.dart';
 import 'alert_watch.dart';
 import 'live_view.dart';
+import 'own_source.dart';
 import 'place_alerts.dart';
 import 'places.dart';
 import 'words.dart';
@@ -162,8 +163,11 @@ class WeatherState extends ChangeNotifier {
     this.told,
     this.onPlacesChanged,
     FetchBytes? fetch,
+    OwnFetch? ownFetch,
+    this.ownTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
   }) : _fetch = fetch ?? fetchBytes,
+       _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
 
   final AppSettings settings;
@@ -185,6 +189,10 @@ class WeatherState extends ChangeNotifier {
   final Position? Function()? position;
   final List<WatchRegion> Function()? regions;
   final FetchBytes _fetch;
+  final OwnFetch _ownFetch;
+
+  /// How long Try it waits for a source of your own to answer.
+  final Duration ownTimeout;
   final DateTime Function() _now;
 
   /// Shows alert pop-ups; null where there are none (tests, or before the app sets it up).
@@ -233,10 +241,11 @@ class WeatherState extends ChangeNotifier {
   /// The last failure of each source in the last update, by source id.
   Map<String, String> get sourceErrors => Map.unmodifiable(_sourceErrors);
 
-  /// The address of the main catalogue (Advanced can change it).
+  /// The address of the main source list (Settings > Storage > Advanced > Source list address can change it).
   String get catalogueUrl => settings.catalogueUrl ?? kDefaultCatalogueUrl;
 
-  /// The catalogues in use, the main one first, then the ones added from a link.
+  /// The source lists in use: the main one, then links added by earlier versions that are not moved to "Your own" yet (see
+  /// [_moveLinkedLists]).
   List<String> get catalogueUrls => [catalogueUrl, ...settings.extraCatalogues.where((u) => u != catalogueUrl)];
 
   List<LoadedCatalogue> get catalogues {
@@ -252,7 +261,7 @@ class WeatherState extends ChangeNotifier {
   List<Connector> get sources {
     final out = <Connector>[];
     final seen = <String>{};
-    for (final c in catalogues) {
+    for (final c in [...catalogues, ?_own]) {
       for (final k in c.connectors) {
         if (seen.add(k.id)) out.add(k);
       }
@@ -419,6 +428,7 @@ class WeatherState extends ChangeNotifier {
       logError('Built-in live sources', error: e);
     }
     _catalogues = _store!.loadAll();
+    _moveLinkedLists();
     _readStatus();
     _readShown();
     await _readKeys();
@@ -592,12 +602,13 @@ class WeatherState extends ChangeNotifier {
         } on CatalogueException catch (e) {
           _catalogueErrors[url] = e.message;
         } catch (e) {
-          _catalogueErrors[url] = "Couldn't load the catalogue.";
+          _catalogueErrors[url] = "Couldn't load the list of sources.";
         }
       }
     } finally {
       _refreshing = false;
     }
+    _moveLinkedLists();
     await _readKeys();
     await _applyAll();
   }
@@ -617,44 +628,276 @@ class WeatherState extends ChangeNotifier {
     return s.length > 240 ? '${s.substring(0, 240)}…' : s;
   }
 
-  /// Downloads a catalogue from [address] and checks every definition in it, without keeping anything. The person is shown what it
-  /// adds, then [addCatalogue] keeps it. Throws [CatalogueException] with the reason in words.
-  Future<LoadedCatalogue> previewCatalogue(String address) async {
-    if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to add a catalogue.');
-    final url = address.trim();
-    if (catalogueUrls.contains(url)) throw const CatalogueException('That catalogue is already added.');
-    final loaded = await _loader.load(url);
-    if (loaded.definitions.isEmpty) {
-      throw const CatalogueException('None of the sources in this catalogue can be used by this version of Cache.');
-    }
-    if (catalogues.any((c) => c.catalogue.id == loaded.catalogue.id)) {
-      throw CatalogueException('A catalogue called "${loaded.catalogue.title}" is already added.');
-    }
-    return loaded;
+  // ---------------------------------------------------------------- your own sources
+
+  /// What the "Your own" collection is kept under in the store (it is kept like a downloaded list, in the same format, and is never
+  /// downloaded again).
+  static const String ownListUrl = 'cache:own';
+
+  /// The id and title of the collection; its sources' [Origin].
+  static const String ownListId = 'own';
+  static const String ownListTitle = 'Your own';
+
+  LoadedCatalogue? get _own => _catalogues.where((c) => c.url == ownListUrl).firstOrNull;
+
+  /// The sources of your own: made with Add your own source, imported from a source file, or moved from a link an earlier version
+  /// added. They behave like every other source.
+  List<Connector> get ownSources => _own?.connectors ?? const [];
+
+  bool isOwn(Connector c) => c.origin.catalogueId == ownListId;
+
+  /// Replaces the collection with [entries] and their [defs].
+  void _saveOwn(List<CatalogueEntry> entries, Map<String, String> defs) {
+    final cat = Catalogue(
+      id: ownListId,
+      title: ownListTitle,
+      maintainer: '',
+      homepage: '',
+      baseUrl: Uri.parse('https://localhost/own/'),
+      updated: '',
+      entries: entries,
+    );
+    _store!.save(LoadedCatalogue(url: ownListUrl, catalogue: cat, definitions: {for (final e in entries) e.id: defs[e.id]!}, skipped: const {}, at: _now()));
+    _catalogues = _store!.loadAll();
   }
 
-  /// Keeps a catalogue [previewCatalogue] returned.
-  Future<void> addCatalogue(LoadedCatalogue loaded) async {
-    _store!.save(loaded);
-    settings.addCatalogue(loaded.url);
-    _catalogues = _store!.loadAll();
+  /// [e] as an entry of the collection: listed under "Your own" (not featured, not switched on by default), its definition beside it.
+  static CatalogueEntry _ownEntry(CatalogueEntry e) => CatalogueEntry(
+    id: e.id,
+    title: e.title,
+    description: e.description,
+    category: e.category,
+    provider: e.provider,
+    coverage: e.coverage,
+    needsKey: e.needsKey,
+    keyAlias: e.keyAlias,
+    defaultOn: false,
+    featured: false,
+    path: 'defs/${e.id}.json',
+    attribution: e.attribution,
+    license: e.license,
+    docs: e.docs,
+    sha256: null,
+  );
+
+  /// An entry for a definition that came without one (one source file, or the form): its words from the definition.
+  static CatalogueEntry _entryOf(Connector c) => _ownEntry(CatalogueEntry(
+    id: c.id,
+    title: c.title,
+    description: c.description,
+    category: 'other',
+    provider: c.provider,
+    coverage: '',
+    needsKey: c.needsKey,
+    keyAlias: c.keyAlias,
+    defaultOn: false,
+    path: '',
+    attribution: c.attribution,
+    license: '',
+    docs: null,
+    sha256: null,
+  ));
+
+  /// Ids a new source of your own may not take: every source there is but the ones of [except].
+  Set<String> _takenIds({Iterable<String> except = const []}) => {
+    for (final c in sources) c.id,
+    for (final c in _builtIn) c.id,
+    ...liveReplaces.keys,
+  }..removeAll(except);
+
+  /// Links an earlier version added under "Add sources from a link" become part of "Your own": every source the kept copy holds is
+  /// moved (its switch and its key stay, the ids are the same), and the link is dropped. A link not downloaded yet stays until a
+  /// refresh brings its copy. A source the main list also has is the main list's. True when something moved.
+  bool _moveLinkedLists() {
+    final store = _store;
+    if (store == null) return false;
+    final links = [for (final u in settings.extraCatalogues) if (u != catalogueUrl) u];
+    if (links.isEmpty) return false;
+    final own = _own;
+    final entries = [...?own?.catalogue.entries];
+    final defs = {...?own?.definitions};
+    final main = _catalogues.where((c) => c.url == catalogueUrl).firstOrNull;
+    final taken = <String>{
+      for (final e in entries) e.id,
+      for (final e in main?.catalogue.entries ?? const <CatalogueEntry>[]) e.id,
+      for (final c in _builtIn) c.id,
+      ...liveReplaces.keys,
+    };
+    var moved = false;
+    for (final url in links) {
+      final kept = _catalogues.where((c) => c.url == url).firstOrNull;
+      if (kept == null) continue;
+      for (final e in kept.catalogue.entries) {
+        final text = kept.definitions[e.id];
+        if (text == null || !taken.add(e.id)) continue;
+        entries.add(_ownEntry(e));
+        defs[e.id] = text;
+      }
+      store.remove(url);
+      settings.removeCatalogue(url);
+      _catalogueErrors.remove(url);
+      moved = true;
+    }
+    if (!moved) return false;
+    _saveOwn(entries, defs);
+    return true;
+  }
+
+  /// Where Try it asks for: the first watched place, else where the phone is, else the middle of Idaho.
+  Future<({double lat, double lon})> _tryPlace() async {
+    try {
+      final w = await watchedPlaces();
+      if (w.isNotEmpty) return (lat: w.first.lat!, lon: w.first.lon!);
+    } catch (_) {}
+    return _probePlace();
+  }
+
+  /// Try it: fetches the address of [d] once, for the first watched place, with the key typed (or, editing, the one kept), and
+  /// gives the values found. Nothing is kept.
+  Future<OwnTry> tryOwnSource(OwnDraft d) async {
+    final host = ownHost(d.keptAddress);
+    if (await policy.probe.current() == ConnectionKind.none) return OwnTry.failed(host, OwnTryFailure.offline);
+    final at = await _tryPlace();
+    var key = d.key.trim();
+    if (key.isEmpty && d.needsKey && d.id != null) {
+      try {
+        key = await secrets.read(secretName(d.id!)) ?? '';
+      } catch (_) {}
+    }
+    final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
+    if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
+    return tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+  }
+
+  /// Saves the source [d] makes with the values [picks] (a new one, or the one being edited, [OwnDraft.id]): its definition is
+  /// checked by the core as every published definition is, the key goes to secure storage only, and the source is switched on.
+  /// Gives the reason in words when it cannot be saved, else null.
+  Future<String?> saveOwnSource(OwnDraft d, List<OwnPick> picks, {({String lat, String lon})? point}) async {
+    if (_store == null) return 'Weather and alerts is still starting. Try again in a moment.';
+    if (picks.isEmpty) return 'Tick at least one value to show.';
+    final id = d.id ?? ownIdFor(d.name, _takenIds());
+    final text = buildOwnDefinition(id: id, draft: d, picks: picks, point: point);
+    try {
+      await _checkDefinition(text);
+    } on CatalogueException catch (e) {
+      return "Cache can't use this source: ${e.message}";
+    }
+    final key = d.key.trim();
+    try {
+      if (d.needsKey && key.isNotEmpty) await secrets.write(secretName(id), key);
+      if (!d.needsKey) await secrets.delete(secretName(id));
+    } catch (_) {
+      return "The key couldn't be saved on this device.";
+    }
+    final c = Connector.parse(text);
+    final own = _own;
+    final entries = [for (final e in own?.catalogue.entries ?? const <CatalogueEntry>[]) if (e.id != id) e, _entryOf(c)];
+    final defs = {...?own?.definitions, id: text};
+    _saveOwn(entries, defs);
+    settings.setLiveSourcesOn({id}, true);
+    await _readKeys();
+    await _applyAll();
+    return null;
+  }
+
+  /// Removes a source of your own: it is switched off and taken off this device, with its key when no other source uses it.
+  Future<void> removeOwnSource(String id) async {
+    final own = _own;
+    if (own == null || !own.catalogue.entries.any((e) => e.id == id)) return;
+    final alias = sourceById(id)?.keyAlias;
+    settings.setLiveSourcesOn(_same(id), false);
+    _saveOwn([for (final e in own.catalogue.entries) if (e.id != id) e], own.definitions);
+    if (alias != null && sourcesUsingKey(alias).isEmpty) {
+      try {
+        await secrets.delete(secretName(alias));
+      } catch (_) {}
+      _keys.remove(alias);
+    }
+    await _applyAll();
+  }
+
+  /// Reads a source file ([text], or the file at [link]): one source definition, or a list of sources in the published list format
+  /// (its definitions are downloaded from the address it gives). Every source is checked by the core, as the published ones are;
+  /// one that fails, or that is here already, is left out with the reason. Nothing is kept: [addImported] keeps it. Throws
+  /// [CatalogueException] with the reason in words.
+  Future<LoadedCatalogue> previewImport({String? text, String? link}) async {
+    var body = text;
+    final from = link?.trim() ?? 'file';
+    if (body == null) {
+      final u = Uri.tryParse(from);
+      if (u == null || !isAllowedAddress(u)) throw const CatalogueException('Enter an address that starts with https://');
+      if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to read the link.');
+      body = utf8.decode(await _fetch(u), allowMalformed: true);
+    }
+    final Object? j;
+    try {
+      j = jsonDecode(body.replaceFirst('\u{feff}', ''));
+    } on FormatException {
+      throw const CatalogueException("This isn't a source file. Cache reads source files written in JSON.");
+    }
+    if (j is! Map<String, dynamic>) throw const CatalogueException("This isn't a source file.");
+    final LoadedCatalogue read;
+    if (j.containsKey('connectors')) {
+      if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to read the sources in the list.');
+      read = await _loader.loadText(body, from);
+    } else if (j.containsKey('items') || j.containsKey('request')) {
+      final c = Connector.parse(body);
+      try {
+        await _checkDefinition(body);
+      } on CatalogueException catch (e) {
+        throw CatalogueException("Cache can't use this source: ${e.message}");
+      }
+      final e = _entryOf(c);
+      read = LoadedCatalogue(
+        url: from,
+        catalogue: Catalogue(id: ownListId, title: c.title, maintainer: c.provider, homepage: '', baseUrl: Uri.parse('https://localhost/own/'), updated: '', entries: [e]),
+        definitions: {c.id: body},
+        skipped: const {},
+        at: _now(),
+      );
+    } else {
+      throw const CatalogueException("This isn't a source file: it is neither a source nor a list of sources.");
+    }
+    final taken = _takenIds();
+    final defs = <String, String>{};
+    final skipped = {...read.skipped};
+    for (final e in read.catalogue.entries) {
+      final t = read.definitions[e.id];
+      if (t == null) continue;
+      if (!isValidSourceId(e.id)) {
+        skipped[e.id] = 'Its id must be lower-case letters, digits, - and _, at most 64.';
+      } else if (taken.contains(e.id)) {
+        skipped[e.id] = 'You have this source already.';
+      } else {
+        defs[e.id] = t;
+      }
+    }
+    if (defs.isEmpty) {
+      throw CatalogueException(skipped.isEmpty ? 'There is no source in it that Cache can add.' : 'None of its sources can be added. ${skipped.values.first}');
+    }
+    return LoadedCatalogue(url: read.url, catalogue: read.catalogue, definitions: defs, skipped: skipped, at: read.fetchedAt);
+  }
+
+  /// Keeps the sources [previewImport] read, in "Your own". They stay off until switched on.
+  Future<void> addImported(LoadedCatalogue p) async {
+    if (_store == null) return;
+    final own = _own;
+    final entries = [...?own?.catalogue.entries];
+    final defs = {...?own?.definitions};
+    final have = {for (final e in entries) e.id};
+    for (final e in p.catalogue.entries) {
+      final t = p.definitions[e.id];
+      if (t == null || !have.add(e.id)) continue;
+      entries.add(_ownEntry(e));
+      defs[e.id] = t;
+    }
+    _saveOwn(entries, defs);
     await _readKeys();
     await _applyAll();
   }
 
-  /// Removes a catalogue added from a link: its sources go from the lists, and from the core.
-  Future<void> removeCatalogue(String url) async {
-    if (url == catalogueUrl) return;
-    final gone = [for (final c in _catalogues.where((c) => c.url == url)) ...c.connectors.map((k) => k.id)];
-    _store!.remove(url);
-    settings.removeCatalogue(url);
-    _catalogues = _store!.loadAll();
-    settings.setLiveSourcesOn(gone.where((id) => sourceById(id) == null), false);
-    await _readKeys();
-    await _applyAll();
-  }
-
-  /// Sets the main catalogue's address (Advanced); null or empty puts the default back. The old copy is dropped and the new one fetched.
+  /// Sets the main source list's address (Settings > Storage > Advanced); null or empty puts the default back. The old copy is
+  /// dropped and the new one fetched.
   Future<void> setCatalogueUrl(String? address) async {
     final old = catalogueUrl;
     settings.setCatalogueUrl(address);

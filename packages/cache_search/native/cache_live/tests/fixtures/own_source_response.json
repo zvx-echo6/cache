@@ -1,0 +1,7 @@
+{
+  "station": {"id": "site-12", "name": "Bridge gauge", "latitude": 42.53, "longitude": -113.79},
+  "water": {"level": 1.42, "unit": "m", "trend": "Rising"},
+  "updated": "12:40",
+  "battery": 87,
+  "readings": [{"t": "12:40", "v": 1.42}, {"t": "12:25", "v": 1.4}]
+}

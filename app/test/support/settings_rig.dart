@@ -220,6 +220,7 @@ class SettingsRig {
       position: () => r.here,
       regions: () => r.regionList,
       fetch: r.web.fetch,
+      ownFetch: r.web.tryFetch,
       clock: () => r.clock,
     );
     r.sharing = SharingState(

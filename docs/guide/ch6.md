@@ -369,7 +369,7 @@ In the "Choose a place" sheet:
 On a source's page (tap its row in ["Settings" > "Weather and alerts"](cache://settings/weather)):
 - "Data" "Out of date": update when online.
 - "Last update" "Nothing downloaded yet": tap "Update now" on "Weather".
-- "This source is no longer in the catalogue.": its catalogue dropped it.
+- "This source is no longer offered.": the source list dropped it.
 - "Needs your own key": tap "Get key".
 
 In the source list:
@@ -415,21 +415,26 @@ In the key sheet from "Get key" on a source's row (["Settings" > "Weather and al
 - "[source] is on" or "Key replaced": it worked.
 - "Key removed": its sources are off.
 
-## Catalogue messages
+## Your own source messages
 
-In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a link"](cache://settings/weather):
-- "Enter an address that starts with https://": paste the full link.
-- "No connection. Connect to add a catalogue."
-- "Couldn't check that link. Try again."
-- "That address didn't give a connector catalogue.": ask whoever gave you the link.
-- "That catalogue is already added." or `A catalogue called "[name]" is already added.`
-- "None of the sources in this catalogue can be used by this version of Cache."
-- "This catalogue is in a newer format than this version of Cache can read. Update Cache to use it."
-- "This catalogue is in a format Cache does not know."
-- "Couldn't reach [site]. Check your connection.", "Couldn't make a secure connection to [site].", "Couldn't read from [site].", "[site] answered with an error (HTTP [code]).", "The file is larger than expected.": a network or server problem. Try later.
-- "Left out ([n])": some sources couldn't be used. The reason is under each. Tell the publisher.
-- "[name] added", "Removed", "Sources are up to date": it worked.
-- "Couldn't load the catalogue.": the last good copy is kept.
+In ["Settings" > "Weather and alerts" > "More sources" > "Add your own source"](cache://settings/weather):
+- "Give the source a name." or "Enter the web address of the service."
+- "Enter an address that starts with https://": paste the full address.
+- "The address has { } in it that Cache doesn't fill in. Use the Latitude and Longitude buttons for the place."
+- "Put your key in the web address where the service asks for it." or "This address needs your key. Type it under Key."
+- "No connection. Connect to the internet and try again."
+- "[site] answered with an error (HTTP [code]).": check the address, or try later.
+- "[site] answered, but not with JSON. This version of Cache only reads JSON.": this kind of service can't be added yet.
+- "[site] answered, but there are no values in it.", "[site] didn't answer in time.", "Couldn't reach [site]. Check the address and your connection.": check the address and tap "Try again".
+- "Tick at least one value to show."
+- "Cache can't use this source: [reason]": the source was not saved.
+
+When you import a source file:
+- "This isn't a source file." or "This isn't a source file: it is neither a source nor a list of sources.": ask whoever gave it to you.
+- "None of its sources can be added. [reason]"
+- "This source list is in a newer format than this version of Cache can read. Update Cache to use it."
+- "Left out ([n])": some sources couldn't be used, or you have them already. The reason is under each.
+- "Couldn't load the list of sources.": the last good copy is kept.
 
 ## Notification messages
 
