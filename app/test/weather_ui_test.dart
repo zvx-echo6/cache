@@ -363,7 +363,6 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('own-rename-save')));
       await tester.pumpAndSettle();
       expect(find.text('Water level 1.42'), findsOneWidget, reason: 'the preview');
-      await tester.scrollUntilVisible(find.byKey(const ValueKey('own-save')), 200, scrollable: find.byType(Scrollable).first);
       await tester.tap(find.byKey(const ValueKey('own-save')));
       await settle(tester);
       // back on More sources, under Your own, on

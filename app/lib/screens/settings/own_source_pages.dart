@@ -287,7 +287,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
                 initialValue: _every,
                 decoration: _box(k),
                 dropdownColor: k.surface,
-                style: TextStyle(fontSize: 15, color: k.text),
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontSize: 15, color: k.text),
                 items: [for (final m in kOwnRefreshChoices) DropdownMenuItem(value: m, child: Text(ownRefreshWords(m)))],
                 onChanged: (v) => setState(() => _every = v ?? kOwnRefreshDefault),
               ),
@@ -457,6 +457,25 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     ];
     return SettingsPage(
       title: 'Pick what to show',
+      // the preview and Save source stay in sight under the list, however long it is
+      bottom: !_t.ok
+          ? null
+          : Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  OwnPreview(name: widget.draft.name.trim(), lines: lines),
+                  if (_error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_error!, key: const ValueKey('own-save-error'), style: TextStyle(fontSize: 14, height: 1.4, color: k.emergency)),
+                  ],
+                  const SizedBox(height: 10),
+                  _bigButton(key: const ValueKey('own-save'), label: 'Save source', onPressed: picks.isEmpty ? null : _save, busy: _busy),
+                ],
+              ),
+            ),
       children: [
         _banner(k),
         if (!_t.ok)
@@ -477,9 +496,6 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
             ],
           ),
           const NoteText('Tap a name to rename it. Ask can read what you tick, so it can answer questions about it.'),
-          OwnPreview(name: widget.draft.name.trim(), lines: lines),
-          if (_error != null) Text(_error!, key: const ValueKey('own-save-error'), style: TextStyle(fontSize: 14, height: 1.4, color: k.emergency)),
-          _bigButton(key: const ValueKey('own-save'), label: 'Save source', onPressed: picks.isEmpty ? null : _save, busy: _busy),
         ],
       ],
     );
