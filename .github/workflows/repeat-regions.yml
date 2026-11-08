@@ -1,0 +1,57 @@
+# TEMPORARY (removed before merging): runs regions_migration_test's "old per-layer downloads join the region..." 200 times on the
+# fixed code and on the old code, with load on the machine as when the whole suite runs.
+name: Repeat regions migration
+
+on:
+  push:
+    branches: [flaky-sync-select]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  flutter:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [fixed, old]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.code == 'old' && 'ac2a2b2daf8133d1c80ff82ee2afb6a256d50aa9' || github.sha }}
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      - name: 200 runs
+        working-directory: app
+        run: |
+          cat > test/repeat_regions_test.dart <<'DART'
+          import 'package:flutter_test/flutter_test.dart';
+
+          import 'regions_migration_test.dart' as t;
+
+          void main() {
+            for (var i = 0; i < 200; i++) {
+              group('run $i', t.main);
+            }
+          }
+          DART
+          for c in $(seq 1 "$(nproc)"); do (while :; do :; done) & done
+          (while :; do dd if=/dev/zero of="$RUNNER_TEMP/load" bs=1M count=64 conv=fsync status=none; done) &
+          flutter test --no-pub -r expanded test/repeat_regions_test.dart --plain-name 'old per-layer downloads join the region' > out.txt 2>&1 || true
+          kill $(jobs -p) 2>/dev/null || true
+          tail -n 3 out.txt
+          failed=$(grep -E 'run [0-9]+ old per-layer downloads.* \[E\]$' out.txt | wc -l)
+          dup=$(grep -c "contains 'Removed 1 duplicate'" out.txt || true)
+          passed=$(grep -oE '\+[0-9]+' out.txt | tail -n 1)
+          echo "RESULT ${{ matrix.code }}: failed runs $failed (tidyNote null $dup), last count $passed" | tee -a "$GITHUB_STEP_SUMMARY"
