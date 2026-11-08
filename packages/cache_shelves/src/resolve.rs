@@ -339,7 +339,7 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
                     location_events.insert(k, (stamp, None));
                 }
             }
-            Kind::Place { .. } | Kind::Unsort { .. } | Kind::Title { .. } | Kind::Remove { .. } | Kind::Restore { .. } | Kind::Prefer { .. } => {}
+            Kind::Place { .. } | Kind::Unsort { .. } | Kind::Title { .. } | Kind::Remove { .. } | Kind::Restore { .. } | Kind::Prefer { .. } | Kind::Facts { .. } => {}
         }
     }
     for (div, m) in &max_seq {
