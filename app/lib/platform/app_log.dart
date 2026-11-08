@@ -5,7 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-import '../files.dart' as files;
+import '../files.dart' as file_io;
 
 /// How much Cache writes to its own log (Settings > Storage > Advanced > Log level). Each level writes what the one before
 /// it writes, and more:
@@ -148,7 +148,7 @@ class AppLog extends ChangeNotifier {
     final text = jsonEncode({'level': _level.name, 'before': _before.name, 'until': _everythingUntil?.toIso8601String()});
     return _levelSaving = _levelSaving.then((_) async {
       try {
-        await files.writeStringAtomic(file, text);
+        await file_io.writeStringAtomic(file, text);
       } catch (_) {}
     });
   }
