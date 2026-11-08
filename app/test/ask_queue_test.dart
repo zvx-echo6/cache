@@ -79,6 +79,11 @@ void main() {
     expect(find.textContaining('Waiting for'), findsNothing);
 
     // A position after the answer is done (its title waiting, say) is not shown.
+    for (var i = 0; i < 100 && !chat.messages.last.isDone; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(chat.messages.last.isDone, isTrue);
     session.queue.add(3);
     await tester.pump();
     expect(find.textContaining('Waiting for'), findsNothing);
