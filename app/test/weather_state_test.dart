@@ -953,7 +953,7 @@ void main() {
       h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
-      expect([for (final p in await h.weather.watchedPlaces()) p.name], containsAll(['Where I am', 'Cabin']));
+      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Where I am', 'Cabin']));
 
       h = await h.restart();
       // The new core has nothing yet and is busy: nothing it says arrives.

@@ -217,25 +217,36 @@ class PdfIndexState extends ChangeNotifier {
 
   /// [z]'s PDF list: the one kept for its uuid when there is one (a ZIM file never changes, so its list never does), else listed
   /// by the core once and kept. Build 46 listed every ZIM at every start: 15 s of the core for a full Wikipedia each time.
-  Future<ZimPdfList> _readList(PdfZimRef z) async {
+  /// A listing in progress, by uuid: the start's listing and a [listOf] at the same time share one.
+  final Map<String, Future<ZimPdfList>> _reading = {};
+
+  Future<ZimPdfList> _readList(PdfZimRef z) {
     final uuid = z.uuid!;
-    final kept = await _keptList(uuid);
-    if (kept != null) return kept;
-    final list = await _trace(z, 'Listing PDFs', () => core.zimPdfs(uuid));
-    logInfo('PDF list contains ${list.pdfs.length} PDFs, ${list.bytes} bytes', job: _job(z));
-    await _keepList(list);
-    return list;
+    final kept = _keptList(uuid);
+    if (kept != null) return Future.value(kept);
+    return _reading[uuid] ??= () async {
+      try {
+        final list = await _trace(z, 'Listing PDFs', () => core.zimPdfs(uuid));
+        logInfo('PDF list contains ${list.pdfs.length} PDFs, ${list.bytes} bytes', job: _job(z));
+        await _keepList(list);
+        return list;
+      } finally {
+        _reading.remove(uuid);
+      }
+    }();
   }
 
-  /// Where the PDF list of the ZIM [uuid] is kept: `pdf-lists/<uuid>.json` beside the record (never synced).
-  Future<File> _listFile(String uuid) async =>
-      File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-lists${Platform.pathSeparator}$uuid.json');
+  /// Where the PDF lists are kept: `pdf-lists/` beside the record (never synced); known once [init] has read the record.
+  String? _listsDir;
 
-  Future<ZimPdfList?> _keptList(String uuid) async {
+  /// Where the PDF list of the ZIM [uuid] is kept: `pdf-lists/<uuid>.json`.
+  File? _listFile(String uuid) => _listsDir == null ? null : File('$_listsDir${Platform.pathSeparator}$uuid.json');
+
+  ZimPdfList? _keptList(String uuid) {
     try {
-      final f = await _listFile(uuid);
-      if (!f.existsSync()) return null;
-      final l = ZimPdfList.fromJson((jsonDecode(await f.readAsString()) as Map).cast<String, dynamic>());
+      final f = _listFile(uuid);
+      if (f == null || !f.existsSync()) return null;
+      final l = ZimPdfList.fromJson((jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>());
       return l.zimUuid == uuid ? l : null;
     } catch (_) {
       // unreadable: listed again
@@ -245,7 +256,8 @@ class PdfIndexState extends ChangeNotifier {
 
   Future<void> _keepList(ZimPdfList l) async {
     try {
-      final f = await _listFile(l.zimUuid);
+      final f = _listFile(l.zimUuid);
+      if (f == null) return;
       await f.parent.create(recursive: true);
       final tmp = File('${f.path}.tmp');
       await tmp.writeAsString(jsonEncode(l.toJson()), flush: true);
@@ -285,6 +297,7 @@ class PdfIndexState extends ChangeNotifier {
       await tracePdfOperation('Preparing PDF indexing', core.prepare, alive: () => !_disposed, timers: _diagnosticTimers);
       _indexes = (await indexesDir()).path;
       final f = await recordFile();
+      _listsDir = '${f.parent.path}${Platform.pathSeparator}pdf-lists';
       if (f.existsSync()) _record = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
     } catch (error, stack) {
       logError('PDF index initialization failed', error: error, stack: stack);
@@ -940,8 +953,8 @@ class PdfIndexState extends ChangeNotifier {
     for (final u in {...uuids, ?gone}) {
       if (kept.contains(u)) continue;
       try {
-        final f = await _listFile(u);
-        if (f.existsSync()) f.deleteSync();
+        final f = _listFile(u);
+        if (f != null && f.existsSync()) f.deleteSync();
       } catch (_) {}
     }
     _snaps.remove(zimPath);
