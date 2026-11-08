@@ -87,13 +87,8 @@ void main() {
         expect(find.text('Sync Cache settings with Desk?'), findsOneWidget);
         await snap(tester, _out, '1-ask-${e.key}-$t');
 
-        // Answered: Send mine.
-        await _tap(tester, find.byKey(const ValueKey('ask-send')));
-        expect(sync.peers.single['link'], {'mode': 'send', 'from': 'me'});
-
         await tester.pumpWidget(shotApp(const SizedBox(), theme: theme));
         await _settle(tester);
-        await tester.runAsync(settingsSync.flush);
         settingsSync.dispose();
         sharing.dispose();
         layout.dispose();

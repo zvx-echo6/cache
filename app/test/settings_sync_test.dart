@@ -611,7 +611,7 @@ void main() {
 
     // A group ticked on the device page meanwhile keeps it Off.
     await a.sync.setGroupOn('B', SettingsGroupId.appearance, false);
-    expect(a.core.peers.single['link']?['mode'], 'off');
+    expect((a.core.peers.single['link'] as Map?)?['mode'], 'off');
     expect(a.sync.linkWith('B'), SettingsLink.off);
 
     // A restart keeps old and new apart: when this version first ran is kept.
