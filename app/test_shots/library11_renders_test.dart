@@ -136,19 +136,12 @@ Future<void> _settle(WidgetTester tester, [int n = 8]) async {
   }
 }
 
-/// The catalogue card's serif, drawn in Roboto here (the test machine has no serif; the phone uses its own).
-Future<void> _loadSerif() async {
-  final root = Platform.environment['FLUTTER_ROOT'] ?? File(Platform.resolvedExecutable).parent.parent.parent.parent.parent.path;
-  final dir = Directory('$root/bin/cache/artifacts/material_fonts');
-  final loader = FontLoader('serif');
-  for (final f in dir.listSync().whereType<File>().where((f) {
-    final n = f.uri.pathSegments.last.toLowerCase();
-    return n == 'roboto-regular.ttf' || n == 'roboto-bold.ttf';
-  })) {
-    final bytes = f.readAsBytesSync();
-    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+/// The Library's own faces, bundled with the app (assets/fonts): Roboto Mono for numbers, Libre Baskerville for the catalogue card.
+Future<void> _loadLibraryFonts() async {
+  for (final (family, asset) in [('Roboto Mono', 'assets/fonts/RobotoMono-Bold.ttf'), ('Libre Baskerville', 'assets/fonts/LibreBaskerville-Variable.ttf')]) {
+    final loader = FontLoader(family)..addFont(Future.value(ByteData.view(File(asset).readAsBytesSync().buffer)));
+    await loader.load();
   }
-  await loader.load();
 }
 
 class _Rig {
@@ -166,7 +159,21 @@ class _Rig {
     await tester.runAsync(layout.init);
     final libsDir = Directory('${r.dir.path}/libraries')..createSync();
     sources = _Sources(Directory('${r.dir.path}/zims11')..createSync());
-    if (full) writeBookLibrary(libsDir, 'field', [..._books, ..._unsorted], log: _seed(), compression: {'original_size': 58 << 20, 'stored_size': 41 << 20, 'level': 'smaller_scans', 'preset': 'balanced', 'kept_original': false});
+    if (full) {
+      writeBookLibrary(
+        libsDir,
+        'field',
+        [..._books, ..._unsorted],
+        log: _seed(),
+        compression: {'original_size': 58 << 20, 'stored_size': 41 << 20, 'level': 'smaller_scans', 'preset': 'balanced', 'kept_original': false},
+        // most books' PDFs are on this device; "Where there is no doctor" is not
+        pdfs: {for (final b in [..._books, ..._unsorted]) if (b.$1 != 'nodoctor') b.$1},
+        // a later pack revision's author and edition, to show the card's lines (revision 4 packs carry neither)
+        extra: {
+          'surgery': {'author': 'Borden Institute', 'edition': '5th edition', 'year': 2018},
+        },
+      );
+    }
     sources.libraryShard = '${libsDir.path}/field/shard';
     libs = LibrariesState(sources: sources, dirOverride: libsDir);
     await tester.runAsync(() async {
@@ -234,7 +241,7 @@ Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, Lis
 void main() {
   setUpAll(() async {
     await loadShotFonts();
-    await _loadSerif();
+    await _loadLibraryFonts();
   });
   // Bookshelves writes placements in this device's log; the renders draw a device that can.
   libraryDeviceIdShared = () async => 'render-device';
@@ -242,6 +249,8 @@ void main() {
   const shelves = ['library-bookshelves'];
   const division = [...shelves, 'shelf-200', 'shelf-210'];
   const book = [...division, 'book-field/aid'];
+  const bookCard = [...division, 'book-field/surgery'];
+  const bookNotHere = [...division, 'book-field/nodoctor'];
   const unsorted = [...shelves, 'shelves-unsorted'];
 
   const phoneScreens = <String, List<String>>{
@@ -253,6 +262,8 @@ void main() {
     'class': [...shelves, 'shelf-200'],
     'division': division,
     'book': book,
+    'book-card-lines': bookCard,
+    'book-not-here': bookNotHere,
     'delete-book': [...book, 'book-delete'],
     'unsorted': unsorted,
     'place-it': [...unsorted, 'all-divisions-field/bees'],
@@ -270,6 +281,7 @@ void main() {
     'class': [...shelves, 'shelf-200'],
     'division': division,
     'division-book': book,
+    'division-book-not-here': bookNotHere,
     'hide-list': [...book, 'library-hide-list'],
     'unsorted-place-it': [...unsorted, 'all-divisions-field/bees'],
     'catalog': ['library-catalog'],

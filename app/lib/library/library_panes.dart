@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../layout/adaptive.dart';
 import '../theme.dart';
+import 'cds.dart' show kCdsMono;
 
 /// One page of the Library's depth (Bookshelves, a class, a division, a book...): a key that names it and how to build it.
 /// [leaf]: nothing opens from it, so on the widest windows it takes the list and the detail together.
@@ -162,7 +163,8 @@ class LibraryPanesState extends State<LibraryPanes> {
     final hidden = _hidden && n > 1;
     // hidden: only the page the person is on (never the placeholder)
     final visible = hidden ? [shown.last < 0 ? shown[shown.length - 2] : shown.last] : shown;
-    final sections = desktop ? 270.0 : 230.0;
+    // wide enough that the Library's row names never cut off ("Cache Documentation")
+    final sections = desktop ? 280.0 : 260.0;
     final list = desktop ? 400.0 : 330.0;
     final widths = <double>[];
     if (visible.length == 1) {
@@ -346,15 +348,16 @@ PreferredSizeWidget libraryAppBar(BuildContext context, {required String title, 
   return AppBar(
     automaticallyImplyLeading: nav.impliesBack,
     leading: nav.leading(context),
-    toolbarHeight: number == null ? kToolbarHeight : 64,
+    // a numbered shelf: the number above a name that may take two lines ("First aid and emergency care" in a 330 pane)
+    toolbarHeight: number == null ? kToolbarHeight : 84,
     title: titleWidget ?? (number == null
         ? Text(title, maxLines: 1, overflow: TextOverflow.ellipsis)
         : Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(number, style: TextStyle(fontFamily: 'monospace', fontSize: 15, fontWeight: FontWeight.w700, color: numberColor ?? k.accent)),
-              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(number, style: TextStyle(fontFamily: kCdsMono, fontSize: 15, fontWeight: FontWeight.w700, color: numberColor ?? k.accent)),
+              Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 19, height: 1.15, fontWeight: FontWeight.w600)),
             ],
           )),
     actions: [...actions, ?nav.hideButton(context)],

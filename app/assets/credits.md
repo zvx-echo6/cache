@@ -2,7 +2,7 @@
 
 Copyright (C) 2026 Happy Little LLC. Cache is licensed AGPL-3.0-or-later.
 
-Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Settings > About and credits > Credits; the full licence text of every Flutter and Dart package is under Open-source licences.
+Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Library > Cache Documentation > Credits and licences > Credits; the full licence text of every Flutter and Dart package is under Open-source licences.
 
 No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licences; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
 
@@ -42,6 +42,11 @@ No data, library content or language model ships inside Cache. The maps, library
 ## Artwork
 
 - The Cache logo, wordmarks, app icons, launch scene and module tiles are the project's own artwork (see assets/brand in the repository).
+
+## Fonts
+
+- Roboto Mono (Bold; the Library's call and shelf numbers): SIL Open Font License 1.1, Copyright 2015 The Roboto Mono Project Authors. https://github.com/googlefonts/robotomono (the licence is at app/assets/fonts/RobotoMono-OFL.txt)
+- Libre Baskerville (the book page's catalogue card): SIL Open Font License 1.1, Copyright 2012 The Libre Baskerville Project Authors, with Reserved Font Name Libre Baskerville. https://github.com/impallari/Libre-Baskerville (the licence is at app/assets/fonts/LibreBaskerville-OFL.txt)
 
 ## Flutter and Dart packages
 

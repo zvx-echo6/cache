@@ -16,13 +16,19 @@ typedef SampleBook = (String doc, String title, String? div, String? second);
 
 /// A library of books as cache-build writes it (cache-library.json, shard/, documents.tsv, packs/ with each book's header) and,
 /// optionally, a seed log.
-Directory writeBookLibrary(Directory root, String name, List<SampleBook> books, {String? log, Map<String, dynamic>? compression}) {
+/// The stored PDF's BLAKE3 a sample book is given (64 hex digits from its doc id; only the name matters here).
+String sampleHash(String doc) => (doc.codeUnits.map((c) => c.toRadixString(16).padLeft(2, '0')).join() * 32).substring(0, 64);
+
+/// [pdfs]: the books whose PDF is on this device, as `bookshelf/<blake3>.pdf` (3,000 bytes each). [extra]: more keys for each
+/// book's `book` block (a later pack revision's author or edition).
+Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
+    {String? log, Map<String, dynamic>? compression, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}}) {
   final d = Directory('${root.path}/$name')..createSync(recursive: true);
   Directory('${d.path}/shard').createSync();
   File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': name, 'title': 'Field library', 'version': '1'}));
   final tsv = StringBuffer('doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n');
   for (final b in books) {
-    tsv.writeln('${b.$1}\t1\t${b.$2}\tabc\t10\t120');
+    tsv.writeln('${b.$1}\t1\t${b.$2}\t${sampleHash(b.$1)}\t10\t120');
   }
   File('${d.path}/documents.tsv').writeAsStringSync(tsv.toString());
   Directory('${d.path}/packs').createSync();
@@ -42,10 +48,16 @@ Directory writeBookLibrary(Directory root, String name, List<SampleBook> books, 
         'compression': compression,
         'ocr': null,
         'suggested': b.$3 == null ? null : {'div': b.$3, 'label': '', 'score': 0.4, 'classifier_version': 3, 'source': 'classifier', 'second_div': b.$4},
+        ...?extra[b.$1],
       },
     };
     final body = '${jsonEncode(header)}\n${jsonEncode({'i': 0, 'text': 'x' * 2000, 'page': '1'})}\n';
     File('${d.path}/packs/${b.$1}@1.cdoc').writeAsBytesSync(gzip.encode(utf8.encode(body)));
+  }
+  for (final doc in pdfs) {
+    File('${d.path}/bookshelf/${sampleHash(doc)}.pdf')
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(List<int>.filled(3000, 0x20));
   }
   if (log != null) {
     Directory('${d.path}/log').createSync();
@@ -70,14 +82,11 @@ class FakeBookFiles extends ChangeNotifier implements BookFiles {
   RemoveOutcome outcome;
   bool remove;
   bool deleteAll;
-  final List<String> opened = [];
   final List<String> removed = [];
   final List<String> deleted = [];
 
   @override
   BookFileState stateOf(ShelfBook book) => BookFileState(where, bytes: book.bytes, from: where == BookFileWhere.elsewhere ? 'Kitchen tablet' : null);
-  @override
-  Future<void> Function()? open(ShelfBook book) => where == BookFileWhere.here ? () async => opened.add(book.id) : null;
   @override
   Future<void> Function()? download(ShelfBook book) => where == BookFileWhere.elsewhere ? () async {} : null;
   @override

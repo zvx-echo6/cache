@@ -174,7 +174,8 @@ class LibraryRootPage extends StatelessWidget {
           final addBeside = !nav.compact && isDesktop(context) && !LibraryNav.of(context).isAnythingOpen;
           return LayoutBuilder(builder: (context, c) {
           // a narrow sections pane (230 to 280) leaves the tiles out, so the names fit
-          IconTile? tile(IconData i) => c.maxWidth >= 300 ? IconTile(i) : null;
+          final roomy = c.maxWidth >= 300;
+          IconTile? tile(IconData i) => roomy ? IconTile(i) : null;
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
@@ -184,6 +185,7 @@ class LibraryRootPage extends StatelessWidget {
                 rows: [
                   SettingsRow(
                     key: const ValueKey('library-zims'),
+                    chevron: roomy ? null : false,
                     leading: tile(Icons.collections_bookmark_outlined),
                     title: 'ZIM Collections',
                     statusWidget: libraryLines(
@@ -196,6 +198,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-bookshelves'),
+                    chevron: roomy ? null : false,
                     leading: tile(Icons.shelves),
                     title: 'Bookshelves',
                     statusWidget: libraryLines(
@@ -208,6 +211,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-catalog'),
+                    chevron: roomy ? null : false,
                     leading: tile(Icons.manage_search),
                     title: 'Catalog',
                     statusWidget: libraryLines(
@@ -220,6 +224,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                   SettingsRow(
                     key: const ValueKey('library-docs'),
+                    chevron: roomy ? null : false,
                     leading: tile(Icons.description_outlined),
                     title: 'Cache Documentation',
                     statusWidget: libraryLines(context, "The Cache guide, What's new, credits", null),

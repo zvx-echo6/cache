@@ -377,7 +377,7 @@ class _Drawers extends StatelessWidget {
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     textAlign: TextAlign.center,
-                                    style: TextStyle(fontFamily: kCdsSerif, fontSize: 11, height: 1.25, color: k.text),
+                                    style: TextStyle(fontFamily: kCdsSerif, fontVariations: serifWeight(FontWeight.w400), fontSize: 11, height: 1.25, color: k.text),
                                   ),
                                 ],
                               ),
@@ -594,6 +594,6 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
     default:
       break;
   }
-  if (d.files.stateOf(b).where == BookFileWhere.elsewhere) return 'Not on this device';
+  if (b.pdfPath == null) return 'Not on this device';
   return null;
 }

@@ -56,7 +56,7 @@ void main() {
   late BrowseState browse;
   var made = false;
 
-  Future<void> setUpAll0({bool books = true}) async {
+  Future<void> setUpAll0({bool books = true, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}}) async {
     if (books) {
       writeBookLibrary(Directory('${tmp.path}/libraries'), 'field', const [
         ('aid', 'Wilderness first aid', '210', '220'),
@@ -64,7 +64,7 @@ void main() {
         ('bees', 'Keeping bees in cold climates', '350', '190'),
         ('engines', 'Small engine repair', '670', '690'),
         ('stone', 'Stone', null, null),
-      ], log: _seed);
+      ], log: _seed, pdfs: pdfs, extra: extra);
     } else {
       Directory('${tmp.path}/libraries').createSync(recursive: true);
     }
@@ -144,8 +144,10 @@ void main() {
       expect(find.text('CDS 210 · First aid and emergency care'), findsOneWidget);
       expect(find.text('Filed by Cache'), findsOneWidget);
       expect(find.text('Not searchable yet'), findsOneWidget);
-      expect(find.text('39.1 MB'), findsOneWidget, reason: 'the PDF row says only what this device knows');
-      expect(find.byKey(const ValueKey('book-open')), findsNothing, reason: 'no PDF to open on this device: no button that would not work');
+      expect(find.text('Not on this device'), findsOneWidget, reason: 'its PDF is not on this device');
+      expect(find.byKey(const ValueKey('book-open')), findsNothing, reason: 'nothing to open here: no button that would not work');
+      expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('book-download'))).onPressed, isNull, reason: 'Download is greyed until stream-back');
+      expect(find.byKey(const ValueKey('book-author')), findsNothing, reason: 'the pack has no author: no line');
       await tapKey(tester, 'crumb-CDS 200');
       expect(find.text('Medicine and Health'), findsOneWidget);
       expect(find.byKey(const ValueKey('catalogue-card')), findsNothing);
@@ -308,10 +310,61 @@ void main() {
     });
   });
 
+  group('the book page', () {
+    testWidgets('a book whose PDF is here has Open; the division marks the ones that are not', (tester) async {
+      size(tester, const Size(390, 1000));
+      await tester.runAsync(() => setUpAll0(pdfs: {'aid'}));
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelf-200');
+      await tapKey(tester, 'shelf-210');
+      expect(find.text('Not on this device'), findsOneWidget, reason: 'surgery is not here; aid is');
+      await tapKey(tester, 'book-field/aid');
+      expect(find.byKey(const ValueKey('book-open')), findsOneWidget);
+      expect(find.text('On this device · 3 KB'), findsOneWidget);
+      expect(find.byKey(const ValueKey('book-download')), findsNothing);
+      expect(shelves.book('field/aid')!.pdfPath, endsWith('bookshelf/${sampleHash('aid')}.pdf'));
+    });
+
+    testWidgets('the catalogue card shows the author, edition and original title only when the pack has them', (tester) async {
+      size(tester, const Size(390, 1000));
+      await tester.runAsync(() => setUpAll0(extra: {
+        'aid': {'author': 'Paul S. Auerbach', 'edition': '7th edition', 'year': 2017, 'source_title': 'wilderness_med_7e.pdf'},
+      }));
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelf-200');
+      await tapKey(tester, 'shelf-210');
+      await tapKey(tester, 'book-field/aid');
+      expect(find.text('Paul S. Auerbach'), findsOneWidget);
+      expect(find.text('7th edition, 2017'), findsOneWidget);
+      expect(find.text('Original title: wilderness_med_7e.pdf'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'book-field/surgery');
+      expect(find.byKey(const ValueKey('book-author')), findsNothing);
+      expect(find.byKey(const ValueKey('book-edition')), findsNothing);
+      expect(find.byKey(const ValueKey('book-original-title')), findsNothing);
+    });
+
+    test('a device copy kept as Cache for Linux keeps it (sources/<library>/<doc>.pdf) counts as here', () async {
+      final root = Directory('${tmp.path}/docs/libraries')..createSync(recursive: true);
+      writeBookLibrary(root, 'field', const [('aid', 'Wilderness first aid', '210', null)]);
+      File('${tmp.path}/docs/sources/field/aid.pdf')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('%PDF-1.4');
+      final l = LibraryItem(dir: Directory('${root.path}/field'));
+      expect(CdsShelfSource.localPdfOf(l, 'aid', sampleHash('aid')), '${tmp.path}/docs/sources/field/aid.pdf');
+      expect(CdsShelfSource.localPdfOf(l, 'other', null), isNull);
+    });
+  });
+
   group('Delete book', () {
     Future<void> openBook(WidgetTester tester, BookFiles files) async {
       size(tester, const Size(390, 1000));
-      await tester.runAsync(setUpAll0);
+      await tester.runAsync(() => setUpAll0(pdfs: {'aid'}));
       await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves, files: files)));
       await tester.pumpAndSettle();
       await tapKey(tester, 'library-bookshelves');
@@ -323,7 +376,7 @@ void main() {
     testWidgets('two separate choices: Remove from this device refuses when no other device has it; Delete from all devices', (tester) async {
       final files = FakeBookFiles(outcome: RemoveOutcome.noOtherCopy);
       await openBook(tester, files);
-      expect(find.text('On this device · 39.1 MB'), findsOneWidget);
+      expect(find.text('On this device · 3 KB'), findsOneWidget);
       expect(find.byKey(const ValueKey('book-open')), findsOneWidget);
       expect(find.text('Remove PDF from this device'), findsOneWidget, reason: 'the PDF-only button never shares a name with the book choice');
       await tapKey(tester, 'book-delete');

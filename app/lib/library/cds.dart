@@ -271,8 +271,11 @@ extension CdsColours on BuildContext {
   }
 }
 
-/// The fixed-width face of shelf and call numbers (the phone's own monospace).
-const String kCdsMono = 'monospace';
+/// The fixed-width face of shelf and call numbers: Roboto Mono, bundled (assets/fonts, OFL).
+const String kCdsMono = 'Roboto Mono';
 
-/// The catalogue card's title and author face (the phone's own serif).
-const String kCdsSerif = 'serif';
+/// The catalogue card's title and author face: Libre Baskerville, bundled (assets/fonts, OFL; a variable font).
+const String kCdsSerif = 'Libre Baskerville';
+
+/// Libre Baskerville's weight, set on its wght axis (the bundled file is variable).
+List<FontVariation> serifWeight(FontWeight w) => [FontVariation.weight(w.value.toDouble())];

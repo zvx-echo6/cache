@@ -20,7 +20,15 @@ Future<String?> Function()? libraryDeviceIdShared;
 
 /// The facts a book's pack holds (PACK-FORMAT.md, revision 4, the header's `book` block), as far as Bookshelves uses them.
 class PackFacts {
-  const PackFacts({this.suggested = const [], this.compression, this.sourceBytes, this.pages});
+  const PackFacts({this.suggested = const [], this.compression, this.sourceBytes, this.pages, this.sourceTitle, this.author, this.edition, this.year});
+
+  /// The title the book had before a caller's title or a titles file replaced it (`book.source_title`).
+  final String? sourceTitle;
+
+  /// Not in pack revision 4: read when a later revision writes them (`book.author`, `book.edition`, `book.year`), never guessed.
+  final String? author;
+  final String? edition;
+  final String? year;
 
   /// The suggested division, then the second best, when known.
   final List<String> suggested;
@@ -44,7 +52,18 @@ class PackFacts {
       compression: book?['compression'] is Map ? (book!['compression'] as Map).cast<String, dynamic>() : null,
       sourceBytes: (source?['size'] as num?)?.toInt(),
       pages: (h['page_count'] as num?)?.toInt(),
+      sourceTitle: _text(book?['source_title']),
+      author: _text(book?['author']),
+      edition: _text(book?['edition']),
+      year: _text(book?['year']),
     );
+  }
+
+  static String? _text(Object? v) {
+    if (v is num) return '$v';
+    if (v is! String) return null;
+    final t = v.trim();
+    return t.isEmpty ? null : t;
   }
 }
 
@@ -86,8 +105,8 @@ class _LibraryBooks {
 
   final LibraryItem item;
 
-  /// doc id -> (title, pages), in catalogue order.
-  final Map<String, (String, int?)> docs = {};
+  /// doc id -> (title, pages, the stored PDF's BLAKE3), in catalogue order.
+  final Map<String, (String, int?, String?)> docs = {};
   final Map<String, PackFacts> facts = {};
   LogResolved log = LogResolved();
 }
@@ -299,7 +318,8 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer 
         for (final line in lines.skip(1)) {
           final f = line.split('\t');
           if (f.isEmpty || f[0].isEmpty) continue;
-          lb.docs[f[0]] = (f.length > 2 && f[2].isNotEmpty ? f[2] : f[0], f.length > 5 ? int.tryParse(f[5]) : null);
+          final hash = f.length > 3 && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(f[3]) ? f[3].toLowerCase() : null;
+          lb.docs[f[0]] = (f.length > 2 && f[2].isNotEmpty ? f[2] : f[0], f.length > 5 ? int.tryParse(f[5]) : null, hash);
         }
       } catch (_) {
         continue;
@@ -357,6 +377,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer 
           pages: facts?.pages ?? d.value.$2,
           bytes: (facts?.compression?['stored_size'] as num?)?.toInt() ?? facts?.sourceBytes,
           stored: stored,
+          author: facts?.author,
+          edition: [?facts?.edition, ?facts?.year].join(', ').emptyToNull,
+          originalTitle: facts?.sourceTitle != null && facts!.sourceTitle != (st?.title ?? d.value.$1) ? facts.sourceTitle : null,
+          pdfPath: localPdfOf(lb.item, d.key, d.value.$3),
         );
       }
     }
@@ -375,6 +399,23 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer 
       LibraryPhase.failed => const BookSearch(BookSearchState.failed),
       LibraryPhase.waiting => const BookSearch(BookSearchState.waiting),
     };
+  }
+
+  /// Where a book's PDF is kept on this device, when it is here: the library's Bookshelf copy, `bookshelf/<blake3>.pdf` (named by
+  /// the stored file's hash, documents.tsv's `source_blake3`; it arrives with "PDF files" sync), else a device copy kept beside the
+  /// libraries as Cache for Linux keeps it, `sources/<library_id>/<doc_id>.pdf`. Null when neither file is here.
+  static String? localPdfOf(LibraryItem l, String doc, String? hash) {
+    final sep = Platform.pathSeparator;
+    final candidates = [
+      if (hash != null) '${l.path}${sep}bookshelf$sep$hash.pdf',
+      '${l.dir.parent.parent.path}${sep}sources$sep${l.folderName}$sep$doc.pdf',
+    ];
+    for (final c in candidates) {
+      try {
+        if (File(c).existsSync()) return c;
+      } catch (_) {}
+    }
+    return null;
   }
 
   /// The library that holds [book].
@@ -461,4 +502,8 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer 
     libraries?.removeListener(_onLibraries);
     super.dispose();
   }
+}
+
+extension on String {
+  String? get emptyToNull => isEmpty ? null : this;
 }

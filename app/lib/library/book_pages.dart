@@ -1,4 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+
+import '../pdf/open_pdf.dart' show openPdfReader;
+import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom;
 
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
@@ -500,16 +505,14 @@ class BookPage extends StatelessWidget {
   }
 
   static List<_Fact> _bookFacts(BuildContext context, LibraryDeps d, ShelfBook b) {
-    final file = d.files.stateOf(b);
     final search = d.shelves.searchOf(b);
     final placer = d.shelves.placer;
-    final bytes = file.bytes ?? b.bytes;
-    final pdf = switch (file.where) {
-      BookFileWhere.here => bytes == null ? 'On this device' : 'On this device · ${formatBytes(bytes)}',
-      BookFileWhere.elsewhere => file.from == null ? 'Not on this device.' : 'Not on this device. Opens from ${file.from} when it is online.',
-      // what this device cannot tell is left out: only the size, when it is known
-      BookFileWhere.unknown => bytes == null ? null : formatBytes(bytes),
-    };
+    // whether the PDF is here is the file itself; which other device has it, when this device knows (stream-back)
+    final from = d.files.stateOf(b).from;
+    final here = _pdfBytes(b);
+    final String pdf = here != null
+        ? 'On this device · ${formatBytes(here)}'
+        : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
     return [
       _Fact(
         'Subject',
@@ -520,7 +523,7 @@ class BookPage extends StatelessWidget {
             ? null
             : RowButton(key: const ValueKey('book-move'), label: b.shelf == null ? 'Place it' : 'Move', onPressed: () => openPlace(context, d, b, replace: true)),
       ),
-      if (pdf != null) _Fact('PDF', pdf, valueKey: 'book-pdf'),
+      _Fact('PDF', pdf, valueKey: 'book-pdf'),
       _Fact(
         'Search',
         switch (search.state) {
@@ -541,19 +544,31 @@ class BookPage extends StatelessWidget {
     ];
   }
 
+  /// The size of the book's PDF on this device, or null when it is not here.
+  static int? _pdfBytes(ShelfBook b) {
+    final p = b.pdfPath;
+    if (p == null) return null;
+    try {
+      return File(p).lengthSync();
+    } catch (_) {
+      return null;
+    }
+  }
+
   static List<Widget> _actions(BuildContext context, LibraryDeps d, ShelfBook b) {
     final f = d.files;
-    final open = f.open(b);
     final download = f.download(b);
-    final here = f.stateOf(b).where == BookFileWhere.here;
+    final path = b.pdfPath;
+    final here = path != null && _pdfBytes(b) != null;
     final original = d.originals?.available(b) ?? false;
     final buttons = <Widget>[
-      if (open != null)
+      // Open: the book's own PDF in the app's PDF reader, at its first page
+      if (here)
         Expanded(
           child: FilledButton(
             key: const ValueKey('book-open'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-            onPressed: open,
+            onPressed: () => openPdfReader(context, PdfFileSource(path!, title: b.title, from: PdfFrom.library), page: 1),
             child: const Text('Open'),
           ),
         ),
@@ -566,7 +581,8 @@ class BookPage extends StatelessWidget {
             child: const Text('Remove PDF from this device', textAlign: TextAlign.center),
           ),
         )
-      else if (download != null)
+      // not here: Download, greyed until this device can fetch a book from another (stream-back)
+      else if (!here)
         Expanded(
           child: OutlinedButton(
             key: const ValueKey('book-download'),
@@ -603,7 +619,8 @@ class _CatalogueCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final who = [?book.author, ?book.edition].join(' · ');
+    final serif = TextStyle(fontFamily: kCdsSerif, fontVariations: serifWeight(FontWeight.w400), fontSize: 14, height: 1.35, color: k.secondary);
+    // each line only when the pack has it
     return Container(
       key: const ValueKey('catalogue-card'),
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
@@ -632,11 +649,15 @@ class _CatalogueCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          Text(book.title, key: const ValueKey('book-title'), style: TextStyle(fontFamily: kCdsSerif, fontSize: 21, height: 1.3, fontWeight: FontWeight.w700, color: k.text)),
-          if (who.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(who, style: TextStyle(fontFamily: kCdsSerif, fontSize: 14, color: k.secondary)),
-          ],
+          Text(
+            book.title,
+            key: const ValueKey('book-title'),
+            style: TextStyle(fontFamily: kCdsSerif, fontVariations: serifWeight(FontWeight.w700), fontWeight: FontWeight.w700, fontSize: 21, height: 1.3, color: k.text),
+          ),
+          if (book.author != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(book.author!, key: const ValueKey('book-author'), style: serif)),
+          if (book.edition != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(book.edition!, key: const ValueKey('book-edition'), style: serif)),
+          if (book.originalTitle != null)
+            Padding(padding: const EdgeInsets.only(top: 2), child: Text('Original title: ${book.originalTitle}', key: const ValueKey('book-original-title'), style: serif)),
         ],
       ),
     );

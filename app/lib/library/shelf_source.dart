@@ -128,7 +128,15 @@ class ShelfBook {
     this.stored,
     this.sourceKey,
     this.docId,
+    this.originalTitle,
+    this.pdfPath,
   });
+
+  /// The title the book came with, when it was renamed since ("Original title").
+  final String? originalTitle;
+
+  /// The book's PDF on this device (a file path), or null when it is not here. Open reads it in the PDF reader.
+  final String? pdfPath;
 
   /// Unique in its source.
   final String id;
@@ -243,14 +251,13 @@ enum RemoveOutcome {
   noLinkedDevice,
 }
 
-/// This device's copy of each book: where its PDF is, opening it, getting it, and taking it off this device (only after a live
-/// check that another device has a checked copy), and deleting a book on every linked device. On phones none of this is
-/// available yet ([BookFilesUnavailable]); the book page then shows only what it knows and no action that would not work.
+/// What this device can do with books beyond reading the PDF it has ([ShelfBook.pdfPath], opened in the PDF reader): which other
+/// device has a book, getting it, taking it off this device (only after a live check that another device has a checked copy),
+/// and deleting a book on every linked device. On phones none of this is available yet ([BookFilesUnavailable]); the book page
+/// then shows Download greyed and the delete choices as not available yet.
 abstract class BookFiles implements Listenable {
+  /// Which linked device has the book ([BookFileState.from]), when this device knows.
   BookFileState stateOf(ShelfBook book);
-
-  /// Null when this device cannot open the book's PDF.
-  Future<void> Function()? open(ShelfBook book);
 
   /// Null when it cannot be downloaded to this device.
   Future<void> Function()? download(ShelfBook book);
@@ -274,8 +281,6 @@ abstract class BookFiles implements Listenable {
 class BookFilesUnavailable extends ChangeNotifier implements BookFiles {
   @override
   BookFileState stateOf(ShelfBook book) => BookFileState.unknown;
-  @override
-  Future<void> Function()? open(ShelfBook book) => null;
   @override
   Future<void> Function()? download(ShelfBook book) => null;
   @override
