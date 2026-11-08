@@ -48,12 +48,16 @@ jobs:
             }
           }
           DART
+          # load on every core and the disk, as when the whole suite runs, so a write that outlives the test can be caught
+          for c in $(seq 1 "$(nproc)"); do (while :; do :; done) & done
+          (while :; do dd if=/dev/zero of="$RUNNER_TEMP/load" bs=1M count=64 conv=fsync status=none; done) &
           flutter test --no-pub -r expanded test/browse/repeat_cancel_test.dart \
             --plain-name 'a download started again right after a cancel keeps the partial file and finishes it' > out.txt 2>&1 || true
           tail -n 5 out.txt
           ran=$(grep -cE '^[0-9:]+ \+[0-9]+.*run [0-9]+ a download started again' out.txt || true)
           failed=$(grep -E 'run [0-9]+ a download started again.* \[E\]$' out.txt | wc -l)
           notempty=$(grep -c 'Directory not empty' out.txt || true)
+          kill $(jobs -p) 2>/dev/null || true
           echo "RESULT ${{ matrix.code }}: test lines $ran, failed runs $failed, 'Directory not empty' $notempty" | tee -a "$GITHUB_STEP_SUMMARY"
 
   rust:
@@ -90,6 +94,8 @@ jobs:
       - name: 200 runs of the cli tests (all in parallel, as in CI)
         run: |
           bin=$(ls -t target/debug/deps/cli-* | grep -v '\.d$' | head -n 1)
+          # cs finds libzim through this (as tests.yml sets it)
+          export LD_LIBRARY_PATH="$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")"
           echo "binary $bin"
           fails=0; other=0
           for i in $(seq 1 200); do
