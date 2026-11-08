@@ -265,7 +265,7 @@ fn owner_without_proc(info: &LockInfo) -> bool {
 pub struct Lock {
     dir: PathBuf,
     canon: PathBuf,
-    _guard: std::fs::File,
+    _guard: crate::build_lock::Guard,
 }
 
 impl Lock {

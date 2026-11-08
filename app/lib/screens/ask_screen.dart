@@ -657,6 +657,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             notes: m.toolNotes,
             text: m.text,
             failed: m.error != null,
+            queuePosition: m.queuePosition,
           ),
           for (final card in m.confirms)
             ConfirmCardView(
