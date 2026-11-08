@@ -193,7 +193,7 @@ pub fn mean_vector_from(v: &Value) -> Result<Vec<f32>> {
             if bytes.len() % 2 != 0 {
                 return Err(Error::new("a mean vector is not a whole number of f16 values"));
             }
-            Ok(bytes.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect())
+            Ok(bytes.as_chunks::<2>().0.iter().map(|c| f16_to_f32(u16::from_le_bytes(*c))).collect())
         }
         Value::Array(a) => a.iter().map(|x| x.as_f64().map(|f| f as f32).ok_or_else(|| Error::new("a mean vector holds a non-number"))).collect(),
         _ => Err(Error::new("a mean vector is a base64 string or a list of numbers")),
@@ -209,7 +209,7 @@ pub fn minhash_from(v: &Value) -> Result<Vec<u32>> {
             if bytes.len() % 4 != 0 {
                 return Err(Error::new("a minhash is not a whole number of u32 values"));
             }
-            Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+            Ok(bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
         }
         Value::Array(a) => a.iter().map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| Error::new("a minhash holds a non-u32"))).collect(),
         _ => Err(Error::new("a minhash is a list of numbers or a base64 string")),
