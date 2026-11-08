@@ -9,7 +9,7 @@
 use crate::error::{Error, Result};
 use crate::events::{valid_device_id, Event};
 use crate::library::{LibraryInput, LibraryRef};
-use crate::store::{parse_legacy_log, write_atomic, LogWriter, LOCAL_DIR, LOG_DIR, LOG_EXT};
+use crate::store::{parse_legacy_log, parse_log, write_atomic, LogWriter, LOCAL_DIR, LOG_DIR, LOG_EXT};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -55,6 +55,12 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
         Ok(b) => serde_json::from_slice::<Value>(&b).ok().and_then(|v| v.get("files").and_then(Value::as_object).cloned()).unwrap_or_default(),
         Err(_) => Map::new(),
     };
+    // events already in this device's log (an earlier import that did not get to write migrated.json) are not written again
+    let own_path = bookshelves_dir.join(LOG_DIR).join(format!("{dev}.{LOG_EXT}"));
+    let present: Vec<Event> = match std::fs::read(&own_path) {
+        Ok(b) => parse_log(&String::from_utf8_lossy(&b)).0,
+        Err(_) => Vec::new(),
+    };
     let mut order: Vec<&(LibraryRef, LibraryInput)> = libs.iter().collect();
     order.sort_by(|a, b| a.0.library_id.cmp(&b.0.library_id));
     let mut report = ImportReport::default();
@@ -91,17 +97,23 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
                 }
                 e.loc = Some(format!("{}/{doc}", lref.library_id));
             }
+            if present.contains(&e) || to_write.contains(&e) {
+                continue;
+            }
             kept += 1;
             to_write.push(e);
         }
-        fresh.push((record_key, size, kept, unmapped));
+        // a file with unmapped events stays eligible: a later import maps them once their pack is here
+        if unmapped == 0 {
+            fresh.push((record_key, size, kept, unmapped));
+        }
         report.files.push(ImportedFile { library_id: lref.library_id.clone(), file, size, events: kept, unmapped, already: false });
     }
     // oldest first; ties keep the library and line order
     to_write.sort_by_key(|e| e.at);
     let events = to_write;
     if !events.is_empty() {
-        LogWriter::open(&bookshelves_dir.join(LOG_DIR), dev)?.append(&events)?;
+        LogWriter::open(&bookshelves_dir.join(LOG_DIR), dev)?.append_unclamped(&events)?;
     }
     report.events = events.len();
     if !fresh.is_empty() {

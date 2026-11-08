@@ -560,13 +560,13 @@ fn the_import_maps_doc_to_copy_once_and_records_it() {
     assert_eq!(r.folders.len(), 1);
     // recorded
     let rec: Value = serde_json::from_slice(&std::fs::read(shelves.join(".local/migrated.json")).unwrap()).unwrap();
-    assert_eq!(rec["files"]["one/me.jsonl"]["events"], json!(4));
-    assert_eq!(rec["files"]["one/me.jsonl"]["unmapped"], json!(1));
-    assert!(rec["files"]["one/me.jsonl"]["size"].as_u64().unwrap() > 0);
-    // a second run imports nothing
+    // the file with an unmapped event is not recorded (it stays eligible); the fully mapped one is
+    assert!(rec["files"].get("one/me.jsonl").is_none());
+    assert_eq!(rec["files"]["two/me.jsonl"]["events"], json!(1));
+    // a second run writes nothing new
     let again = import_own(&shelves, "me", &loaded).unwrap();
     assert_eq!(again.events, 0);
-    assert!(again.files.iter().all(|f| f.already));
+    assert!(again.files.iter().find(|f| f.library_id == "two").unwrap().already);
     assert_eq!(read_logs(&shelves.join("log")).unwrap().events.len(), 5);
 }
 
@@ -683,4 +683,84 @@ fn seed_log_facts_are_read_per_field_and_the_view_carries_them() {
     // null when unknown
     let empty = view_value(&resolve(&[], &[lib("L", vec![pf("A", "a", "A", 1)])]), &[], &[]);
     assert_eq!((empty["books"]["A"]["author"].clone(), empty["books"]["A"]["year"].clone()), (Value::Null, Value::Null));
+}
+
+
+// -------------------------------------------------------------------------------------------------------- review fixes
+
+#[test]
+fn one_copy_claiming_a_number_twice_gets_no_suffix() {
+    let libs = abc();
+    let r = resolve(&[ev(50, "d", place("A", "210")), ev(100, "d", assign("A", "210", 5)), ev(200, "d", assign("A", "210", 5))], &libs);
+    assert_eq!(call(&r, "A").as_deref(), Some("CDS 210-005"));
+    // another copy's claim in between still ranks after A's first claim, and A is not pushed down by its own second claim
+    let r = resolve(
+        &[
+            ev(50, "d", place("A", "210")),
+            ev(100, "d", assign("A", "210", 5)),
+            ev(150, "e", place("B", "210")),
+            ev(150, "e", assign("B", "210", 5)),
+            ev(200, "d", assign("A", "210", 5)),
+        ],
+        &libs,
+    );
+    assert_eq!((call(&r, "A").as_deref(), call(&r, "B").as_deref()), (Some("CDS 210-005"), Some("CDS 210-005.1")));
+}
+
+fn old_log_library(root: &Path, with_pack: bool, log: &str) -> (LibraryRef, LibraryInput) {
+    let books: &[(&str, &str, &str)] = if with_pack { &[("wm", "WM", "WM")] } else { &[] };
+    let lref = make_library(root, "one", books, &[("me.jsonl", log.to_string())]);
+    let input = load_library(&lref, &reader).unwrap();
+    (lref, input)
+}
+
+#[test]
+fn an_old_import_does_not_override_a_newer_user_place() {
+    let tmp = Tmp::new("importorder");
+    let shelves = tmp.path().join("bookshelves");
+    // the person already moved the book on this device, at t=500
+    LogWriter::open(&shelves.join("log"), "me").unwrap().append(&[ev(500, "me", Kind::Place { copy: s("WM"), div: s("320"), by: By::User })]).unwrap();
+    let old = legacy(50, "me", "place", "wm", ",\"div\":\"210\",\"by\":\"auto\"");
+    let lib = old_log_library(tmp.path(), true, &old);
+    import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    let set = read_logs(&shelves.join("log")).unwrap();
+    assert_eq!(set.events.iter().map(|e| e.at).collect::<Vec<_>>(), [500, 50], "the imported event keeps its at");
+    let r = resolve(&set.events, &[lib.1]);
+    assert_eq!(r.book_of("WM").unwrap().shelf.as_deref(), Some("320"));
+}
+
+#[test]
+fn re_running_an_import_after_a_failure_writes_nothing_new() {
+    let tmp = Tmp::new("importcrash");
+    let shelves = tmp.path().join("bookshelves");
+    let log = [legacy(1, "me", "place", "wm", ",\"div\":\"210\",\"by\":\"user\""), legacy(2, "me", "assign", "wm", ",\"div\":\"210\",\"seq\":1")].concat();
+    let lib = old_log_library(tmp.path(), true, &log);
+    assert_eq!(import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap().events, 2);
+    // the crash: the events were appended but migrated.json was not written
+    std::fs::remove_file(shelves.join(".local/migrated.json")).unwrap();
+    let again = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!(again.events, 0);
+    assert_eq!(read_logs(&shelves.join("log")).unwrap().events.len(), 2);
+    assert!(shelves.join(".local/migrated.json").exists());
+}
+
+#[test]
+fn an_unmapped_event_maps_once_its_pack_appears() {
+    let tmp = Tmp::new("importlate");
+    let shelves = tmp.path().join("bookshelves");
+    let log = [legacy(1, "me", "place", "wm", ",\"div\":\"210\",\"by\":\"user\""), legacy(2, "me", "title", "wm", ",\"title\":\"Mine\"")].concat();
+    // first run: the library has no pack for wm yet
+    let lib = old_log_library(tmp.path(), false, &log);
+    let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((rep.events, rep.files[0].unmapped), (0, 2));
+    // the pack arrives
+    let lib = old_log_library(tmp.path(), true, &log);
+    let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((rep.events, rep.files[0].unmapped, rep.files[0].already), (2, 0, false));
+    let r = resolve(&read_logs(&shelves.join("log")).unwrap().events, &[lib.1.clone()]);
+    assert_eq!(r.book_of("WM").unwrap().title, "Mine");
+    // and it is now recorded and not repeated
+    let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!(rep.events, 0);
+    assert!(rep.files[0].already);
 }

@@ -39,20 +39,20 @@ pub enum Match {
     Edition,
 }
 
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn judge(t: &Tuning, jaccard: f32, cosine: f32, new_words: usize, old_words: usize) -> Match {
     let (lo, hi) = (new_words.min(old_words) as f32, new_words.max(old_words) as f32);
     if hi <= 0.0 || lo / hi < t.min_length_ratio {
         return Match::Different;
     }
-    if cosine < t.same_cosine {
+    // written so that a NaN fails the check (a NaN compares false with everything)
+    if !(cosine >= t.same_cosine) || !(jaccard >= t.edition_jaccard) {
         return Match::Different;
     }
     if jaccard >= t.same_jaccard {
         Match::Same
-    } else if jaccard >= t.edition_jaccard {
-        Match::Edition
     } else {
-        Match::Different
+        Match::Edition
     }
 }
 
@@ -265,6 +265,19 @@ mod tests {
         assert_eq!(judge(&t, 0.95, 0.80, 1000, 1000), Match::Different);
         assert_eq!(judge(&t, 0.95, 0.99, 1000, 700), Match::Different);
         assert_eq!(judge(&t, 0.95, 0.99, 0, 0), Match::Different);
+    }
+
+    #[test]
+    fn a_nan_is_never_the_same_book() {
+        let t = Tuning::default();
+        assert_eq!(judge(&t, 0.95, f32::NAN, 1000, 1000), Match::Different);
+        assert_eq!(judge(&t, f32::NAN, 0.99, 1000, 1000), Match::Different);
+        // a mean vector with inf entries gives a NaN cosine
+        let base: Vec<u32> = (0..128).collect();
+        let a = facts("a", base.clone(), vec![f32::INFINITY, 0.0]);
+        let b = facts("b", base, vec![f32::INFINITY, 0.0]);
+        assert!(cosine(&a.mean_vector, &b.mean_vector).is_nan());
+        assert!(detect(&a, &[b], &Tuning::default()).is_empty());
     }
 
     #[test]

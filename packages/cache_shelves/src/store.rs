@@ -51,6 +51,16 @@ impl LogWriter {
     /// - If the file ends in a torn line (no line break), that line is closed first so the new lines are not glued to it.
     /// - Events that fail the write checks (a bad linked-folder path, a copy linked with itself) are refused, and nothing is written.
     pub fn append(&self, events: &[Event]) -> Result<Vec<Event>> {
+        self.append_with(events, true)
+    }
+
+    /// Like [`LogWriter::append`] but keeps every event's `at` as given (no clock hold). For the one-time import of old events,
+    /// whose order comes from (`at`, `dev`, position), not from where they sit in the file.
+    pub fn append_unclamped(&self, events: &[Event]) -> Result<Vec<Event>> {
+        self.append_with(events, false)
+    }
+
+    fn append_with(&self, events: &[Event], hold_clock: bool) -> Result<Vec<Event>> {
         if events.is_empty() {
             return Ok(Vec::new());
         }
@@ -77,7 +87,9 @@ impl LogWriter {
         }
         for e in events {
             let mut e = e.clone();
-            e.at = e.at.max(last);
+            if hold_clock {
+                e.at = e.at.max(last);
+            }
             last = e.at;
             buf.push_str(&e.to_line());
             buf.push('\n');

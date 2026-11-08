@@ -443,8 +443,18 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
     let held = |copy: &str| -> Option<(&Stamp, &str, u32)> {
         assigns.get(copy)?.iter().filter(|(_, d, s)| !retires.contains(&(copy, *d, *s))).max_by(|a, b| a.0.cmp(b.0)).map(|(st, d, s)| (*st, *d, *s))
     };
-    let call_of = |copy: &str, at: u64, div: &str, seq: u32| -> Call {
-        let suffix = claims.get(&(div, seq)).and_then(|c| c.iter().position(|(a, who)| *a == at && *who == copy)).unwrap_or(0) as u32;
+    // the clash rank: the copy's place among the distinct copies that claimed (div, seq), ordered by each copy's first claim
+    // (`at`, `copy`); a copy that claimed the same number twice is one claim
+    let call_of = |copy: &str, _at: u64, div: &str, seq: u32| -> Call {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut suffix = 0;
+        for (_, who) in claims.get(&(div, seq)).into_iter().flatten() {
+            if *who == copy {
+                suffix = seen.len() as u32;
+                break;
+            }
+            seen.insert(who);
+        }
         Call { div: div.to_string(), seq, suffix, text: call_text(div, seq, suffix) }
     };
 
