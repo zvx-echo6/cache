@@ -1,6 +1,6 @@
 // The Bookshelves log's screens for review, drawn by the app itself with sample data (no personal data): a division whose first-aid
-// book has two spare copies, that book's page (Spare copies, Also known as, Read this copy instead, Not the same book) and the
-// Same book as… picker, on a phone (390 x 844) and a desktop window (1440 x 900), light and dark. The books come from two sample
+// book has two spare copies, that book's page (Spare copies, Also known as, Read this copy instead, Not the same book, Rename,
+// Hide from Bookshelves), the Rename sheet and the Same book as… picker, on a phone (390 x 844) and a desktop window (1440 x 900), light and dark. The books come from two sample
 // libraries as cache-build writes them; which files are one book is decided by a stand-in for the core (test/library/fake_shelves.dart).
 // flutter test test_shots/bookshelves_renders_test.dart --update-goldens  (pictures in test_shots/bookshelves/)
 
@@ -124,11 +124,13 @@ void main() {
         await shoot(tester, size, 'book-spares', book, theme);
         await shoot(tester, size, 'same-book-as', picker, theme);
         await shoot(tester, size, 'same-book-as-search', picker, theme, search: 'first aid');
+        await shoot(tester, size, 'rename', [...book, 'book-rename'], theme);
       }
       if (size == '390') {
         // the spares lower down the page on a phone
         for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
           await shoot(tester, size, 'book-spares-scrolled', book, theme, scroll: 520);
+          await shoot(tester, size, 'book-rename-hide', book, theme, scroll: 1400);
         }
       }
       await tester.pumpWidget(const SizedBox());

@@ -167,4 +167,61 @@ void main() {
     expect(shelves.bookCount, 2);
     expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget, reason: 'back to the joined book');
   });
+
+  testWidgets('Rename writes the new title for all devices; the original title is one tap away', (tester) async {
+    size(tester, const Size(390, 1400));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    await tapKey(tester, 'book-aid');
+    await tapKey(tester, 'book-rename');
+    expect(find.byType(BottomSheet), findsOneWidget, reason: 'a sheet on a phone');
+    expect(find.text('Rename'), findsWidgets);
+    expect(find.byKey(const ValueKey('rename-use-Wilderness first aid, 2nd printing')), findsOneWidget, reason: 'the spare\'s title to pick');
+    calls.appended.clear();
+    await tester.enterText(find.byKey(const ValueKey('rename-field')), 'Wilderness First Aid, 2nd ed.');
+    await tester.pumpAndSettle();
+    await tapKey(tester, 'rename-save');
+    expect([for (final e in mine()) (e['ev'], e['copy'], e['title'])], [('title', 'aid', 'Wilderness First Aid, 2nd ed.')]);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.text('Renamed on all your devices.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-title')), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const ValueKey('book-title'))).data, 'Wilderness First Aid, 2nd ed.');
+  });
+
+  testWidgets('Hide from Bookshelves hides the book on all devices, goes back to its shelf, and Undo shows it again', (tester) async {
+    size(tester, const Size(390, 1400));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    await tapKey(tester, 'book-surgery');
+    expect(find.text('On all your devices. No file is deleted.'), findsOneWidget);
+    calls.appended.clear();
+    await tapKey(tester, 'book-hide');
+    expect([for (final e in mine()) (e['ev'], e['copy'])], [('remove', 'surgery')]);
+    expect(shelves.book('surgery'), isNull);
+    expect(find.text('Hidden on all your devices. No file was deleted.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('catalogue-card')), findsNothing, reason: 'back on the shelf');
+    expect(find.byKey(const ValueKey('book-aid')), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-surgery')), findsNothing);
+    calls.appended.clear();
+    await tester.tap(find.byKey(const ValueKey('hidden-undo')));
+    await tester.runAsync(shelves.whenRead);
+    await tester.pumpAndSettle();
+    expect([for (final e in mine()) (e['ev'], e['copy'])], [('restore', 'surgery')]);
+    expect(find.byKey(const ValueKey('book-surgery')), findsOneWidget);
+  });
+
+  testWidgets('on a desktop Rename is the detail pane, never a dialog', (tester) async {
+    size(tester, const Size(1440, 900));
+    await tester.runAsync(setUpBooks);
+    await openDivision(tester);
+    await tapKey(tester, 'book-surgery');
+    await tapKey(tester, 'book-rename');
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    await tester.enterText(find.byKey(const ValueKey('rename-field')), 'Emergency War Surgery');
+    await tester.pumpAndSettle();
+    await tapKey(tester, 'rename-save');
+    expect(shelves.book('surgery')!.title, 'Emergency War Surgery');
+    expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget, reason: 'back to the book');
+  });
 }

@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../video/format.dart' show formatBytes;
 import 'cds.dart';
 import 'library_pages.dart';
+import 'book_edit_pages.dart';
 import 'library_panes.dart';
 import 'same_book_pages.dart';
 import 'shelf_source.dart';
@@ -474,6 +475,16 @@ class BookPage extends StatelessWidget {
         final actions = _actions(context, d, b);
         final links = SettingsGroup(
           rows: [
+            if (d.shelves.copies != null) ...[
+              SettingsRow(key: const ValueKey('book-rename'), title: 'Rename', onTap: () => openRename(context, d, b)),
+              SettingsRow(
+                key: const ValueKey('book-hide'),
+                title: 'Hide from Bookshelves',
+                status: const [Part('On all your devices. No file is deleted.')],
+                chevron: false,
+                onTap: () => hideBook(context, d, b),
+              ),
+            ],
             SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );

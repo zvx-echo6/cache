@@ -23,6 +23,8 @@ Future<void> openSameBook(BuildContext context, LibraryDeps d, ShelfBook b) asyn
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
+      // the page's own background, so the search box and the book rows stand out from it as they do on a page
+      backgroundColor: context.t.background,
       builder: (ctx) => ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: SameBookPanel(deps: d, bookId: b.id, onDone: (_) => Navigator.of(ctx).pop()),
