@@ -568,7 +568,7 @@ class BookPage extends StatelessWidget {
           child: FilledButton(
             key: const ValueKey('book-open'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-            onPressed: () => openPdfReader(context, PdfFileSource(path!, title: b.title, from: PdfFrom.library), page: 1),
+            onPressed: () => openPdfReader(context, PdfFileSource(path, title: b.title, from: PdfFrom.library), page: 1),
             child: const Text('Open'),
           ),
         ),
