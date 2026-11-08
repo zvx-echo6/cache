@@ -339,7 +339,7 @@ class _MapsScreenState extends State<MapsScreen> {
     // While guiding and standing still the map keeps pointing along the route.
     final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
     final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
-    final zoom = math.max(_zoom, guiding ? 16 : 14);
+    final zoom = math.max(_zoom, guiding ? 16 : 14).toDouble();
     var target = LatLng(fix.lat, fix.lon);
     // Guiding heading-up, the position sits low on the map so more of the road ahead shows (lib/nav/guidance_camera.dart).
     if (guiding && maps.follow == FollowMode.headingUp && !_mapSize.isEmpty && mounted) {

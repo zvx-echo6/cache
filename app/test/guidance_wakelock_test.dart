@@ -137,9 +137,9 @@ void main() {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       await keepScreenOn(true);
       await keepScreenOn(false);
-      expect(sent.map((c) => (c.method, c.arguments)), [
-        ('co.cache/system_ui keepScreenOn', {'on': true}),
-        ('co.cache/system_ui keepScreenOn', {'on': false}),
+      expect(sent.map((c) => '${c.method} ${c.arguments}'), [
+        'co.cache/system_ui keepScreenOn {on: true}',
+        'co.cache/system_ui keepScreenOn {on: false}',
       ]);
     });
 
@@ -147,9 +147,9 @@ void main() {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       await keepScreenOn(true);
       await keepScreenOn(false);
-      expect(sent.map((c) => (c.method, c.arguments)), [
-        ('co.cache/screen_awake keepScreenOn', {'on': true}),
-        ('co.cache/screen_awake keepScreenOn', {'on': false}),
+      expect(sent.map((c) => '${c.method} ${c.arguments}'), [
+        'co.cache/screen_awake keepScreenOn {on: true}',
+        'co.cache/screen_awake keepScreenOn {on: false}',
       ]);
     });
 
