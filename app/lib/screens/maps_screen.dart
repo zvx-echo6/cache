@@ -22,6 +22,7 @@ import '../maps/ui/map_widgets.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
+import '../nav/guidance_camera.dart';
 import '../nav/nav_geojson.dart';
 import '../notebook/notebook_map.dart';
 import '../notebook/notebook_model.dart';
@@ -93,6 +94,9 @@ class _MapsScreenState extends State<MapsScreen> {
   double _bearing = 0;
   double? _lastHeading;
   Offset? _downAt;
+
+  /// The map's size on the screen (for where the position sits while guiding).
+  Size _mapSize = Size.zero;
 
   /// Drawing an area to download as a region.
   bool _drawing = false;
@@ -335,10 +339,19 @@ class _MapsScreenState extends State<MapsScreen> {
     // While guiding and standing still the map keeps pointing along the route.
     final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
     final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
+    final zoom = math.max(_zoom, guiding ? 16 : 14);
+    var target = LatLng(fix.lat, fix.lon);
+    // Guiding heading-up, the position sits low on the map so more of the road ahead shows (lib/nav/guidance_camera.dart).
+    if (guiding && maps.follow == FollowMode.headingUp && !_mapSize.isEmpty && mounted) {
+      final side = MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null;
+      final anchor = guidanceAnchor(_mapSize, side: side, leftInset: MediaQuery.paddingOf(context).left);
+      final (lat, lon) = cameraCentreFor(fix.lat, fix.lon, bearing: bearing, zoom: zoom, map: _mapSize, anchor: anchor);
+      target = LatLng(lat, lon);
+    }
     await c.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(fix.lat, fix.lon),
-        zoom: math.max(_zoom, guiding ? 16 : 14),
+        target: target,
+        zoom: zoom,
         bearing: bearing,
       )),
       duration: Duration(milliseconds: guiding ? 900 : 400),
@@ -937,34 +950,37 @@ class _MapsScreenState extends State<MapsScreen> {
     return Stack(
       children: [
         Positioned.fill(
-          child: Listener(
-            // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
-            onPointerDown: (e) => _downAt = e.position,
-            onPointerMove: (e) {
-              final d = _downAt;
-              if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
-                maps.setFollow(FollowMode.free);
-              }
-            },
-            child: MapLibreMap(
-              styleString: style,
-              initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
-              onMapCreated: _onMapCreated,
-              onStyleLoadedCallback: _onStyleLoaded,
-              onCameraMove: _onCameraMove,
-              onCameraIdle: _onCameraIdle,
-              onMapClick: _onMapTap,
-              onMapLongClick: _onMapLongPress,
-              trackCameraPosition: true,
-              compassEnabled: false,
-              tiltGesturesEnabled: false,
-              logoEnabled: false,
-              // Credits are shown by the app (below), so the SDK's own button is moved out of sight.
-              attributionButtonMargins: const math.Point(-200, -200),
-              myLocationEnabled: false,
-              rotateGesturesEnabled: true,
-            ),
-          ),
+          child: LayoutBuilder(builder: (context, box) {
+            _mapSize = box.biggest;
+              return Listener(
+              // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
+              onPointerDown: (e) => _downAt = e.position,
+              onPointerMove: (e) {
+                final d = _downAt;
+                if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
+                  maps.setFollow(FollowMode.free);
+                }
+              },
+              child: MapLibreMap(
+                styleString: style,
+                initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
+                onMapCreated: _onMapCreated,
+                onStyleLoadedCallback: _onStyleLoaded,
+                onCameraMove: _onCameraMove,
+                onCameraIdle: _onCameraIdle,
+                onMapClick: _onMapTap,
+                onMapLongClick: _onMapLongPress,
+                trackCameraPosition: true,
+                compassEnabled: false,
+                tiltGesturesEnabled: false,
+                logoEnabled: false,
+                // Credits are shown by the app (below), so the SDK's own button is moved out of sight.
+                attributionButtonMargins: const math.Point(-200, -200),
+                myLocationEnabled: false,
+                rotateGesturesEnabled: true,
+              ),
+            );
+          }),
         ),
         if (!drawing && maps.baseProblem != null)
           Center(

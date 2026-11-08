@@ -69,10 +69,12 @@ class GuidanceBanner extends StatelessWidget {
       key: const ValueKey('guidance-banner'),
       decoration: BoxDecoration(
         color: k.surface,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 8, offset: Offset(0, 2))],
       ),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      // Compact, so more of the map shows; the type stays large enough to read from the dashboard, and grows with the phone's
+      // text size. Solid surface and text colours, so it holds its contrast in sunlight.
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: body,
     );
   }
@@ -96,20 +98,20 @@ class GuidanceBanner extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 56,
-          height: 56,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(color: k.accent.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(14)),
-          child: Icon(icon, size: 36, color: k.accent),
+          child: Icon(icon, size: 32, color: k.accent),
         ),
-        const SizedBox(width: 14),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(big, key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
-              if (small.isNotEmpty) Text(small, key: const ValueKey('banner-instruction'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, height: 1.2, color: k.text)),
-              if (then != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(then, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, color: k.secondary))),
+              Text(big, key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
+              if (small.isNotEmpty) Text(small, key: const ValueKey('banner-instruction'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, height: 1.2, color: k.text)),
+              if (then != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(then, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary))),
             ],
           ),
         ),
@@ -135,20 +137,20 @@ class GuidanceBanner extends StatelessWidget {
       key: const ValueKey('banner-offroad'),
       children: [
         Container(
-          width: 56,
-          height: 56,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(color: k.warning.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
-          child: Transform.rotate(angle: angle, child: Icon(Icons.navigation, size: 36, color: k.warning)),
+          child: Transform.rotate(angle: angle, child: Icon(Icons.navigation, size: 32, color: k.warning)),
         ),
-        const SizedBox(width: 14),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(fmt.distance(leg.distanceM), key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
-              Text('Head ${leg.cardinal} · ${leg.bearingDeg}°', key: const ValueKey('banner-instruction'), style: TextStyle(fontSize: 18, color: k.text)),
-              if (info.isNotEmpty) Text(info.join(' · '), style: TextStyle(fontSize: 15, color: k.secondary)),
+              Text(fmt.distance(leg.distanceM), key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
+              Text('Head ${leg.cardinal} · ${leg.bearingDeg}°', key: const ValueKey('banner-instruction'), style: TextStyle(fontSize: 17, color: k.text)),
+              if (info.isNotEmpty) Text(info.join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
             ],
           ),
         ),

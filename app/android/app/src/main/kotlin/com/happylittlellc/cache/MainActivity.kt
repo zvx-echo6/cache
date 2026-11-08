@@ -14,6 +14,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.os.Build
 import android.os.PowerManager
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -70,6 +71,16 @@ class MainActivity : FlutterActivity() {
                         hideStatusBar = call.argument<Boolean>("hideStatusBar") == true
                         systemBarsConfigured = true
                         window.decorView.post(restoreSystemBars)
+                        result.success(null)
+                    }
+                    // Turn-by-turn guidance keeps the screen on (lib/nav/guidance_wakelock.dart). The flag only holds while
+                    // this window is shown, so the background lets the screen sleep as usual.
+                    "keepScreenOn" -> {
+                        if (call.argument<Boolean>("on") == true) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
                         result.success(null)
                     }
                     else -> result.notImplemented()

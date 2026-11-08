@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
@@ -416,6 +417,45 @@ void main() {
         expect(find.byTooltip('Turn the voice on'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
+
+      for (final scale in [1.0, 1.5, 2.0]) {
+        testWidgets('guidance banner at text size ${scale}x: the turn, how far and the street all show, and grow with the text', (tester) async {
+          final route = fakeRouteJson();
+          await _startGuiding(nav, backend, route);
+          nav.progress = MapProgress.fromJson(fakeProgressJson(route, 0.3));
+          nav.poke();
+          await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt)), scale: scale));
+          expect(tester.takeException(), isNull);
+          expect(find.byIcon(Icons.turn_left), findsOneWidget);
+          final distance = find.byKey(const ValueKey('banner-distance'));
+          final street = find.byKey(const ValueKey('banner-instruction'));
+          expect(distance, findsOneWidget);
+          expect(find.text('Turn left onto Road 1.'), findsOneWidget);
+          // The phone's text size is respected, not capped: the lines grow with it.
+          expect(tester.getSize(distance).height, greaterThanOrEqualTo(26 * 1.1 * scale - 1));
+          expect(tester.getSize(street).height, greaterThanOrEqualTo(17 * 1.2 * scale - 1));
+          // Inside the 360-wide window, nothing cut off at the sides.
+          final banner = tester.getRect(find.byKey(const ValueKey('guidance-banner')));
+          expect(banner.left, greaterThanOrEqualTo(0));
+          expect(banner.right, lessThanOrEqualTo(360));
+          for (final f in [distance, street, find.byIcon(Icons.turn_left)]) {
+            expect(banner.contains(tester.getRect(f).center), isTrue);
+          }
+          // Readable in sunlight: solid surface, and the turn and the street in the theme's main text colour.
+          final k = Theme.of(tester.element(distance)).extension<CacheTokens>()!;
+          final box = tester.widget<Container>(find.byKey(const ValueKey('guidance-banner'))).decoration as BoxDecoration;
+          expect(box.color, k.surface);
+          expect(box.color!.a, 1.0);
+          expect(tester.widget<Text>(distance).style!.color, k.text);
+          expect(tester.widget<Text>(street).style!.color, k.text);
+          double contrast(Color a, Color b) {
+            final (x, y) = (a.computeLuminance(), b.computeLuminance());
+            return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+          }
+
+          expect(contrast(k.text, k.surface), greaterThanOrEqualTo(4.5));
+        });
+      }
 
       testWidgets('guidance: on open ground it shows the bearing, how far, and the climb', (tester) async {
         final route = fakeRouteJson(offroad: true);
