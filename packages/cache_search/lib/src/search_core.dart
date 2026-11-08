@@ -222,7 +222,47 @@ class SearchCore {
 
   /// Live data (cs_live_sources, cs_live_fetch, cs_live_get).
   Future<Map<String, dynamic>> liveSources() => _map('liveSources');
-  Future<Map<String, dynamic>> liveFetch(Map<String, dynamic> request) => _map('liveFetch', {'request': request});
+  ///
+  /// [liveFetch] runs as a job on a thread of the core's own (cs_live_fetch_start) and is polled, so the download's network wait
+  /// never holds the core's one worker: searches, reads and stored weather are answered meanwhile, and several sources download
+  /// at once. A core (or Cache Server helper) without the call fetches on the worker as before.
+  Future<Map<String, dynamic>> liveFetch(Map<String, dynamic> request) async {
+    if (!_noLiveJob) {
+      Object? id;
+      try {
+        id = await _call('liveFetchStart', {'request': request});
+      } on CacheSearchException catch (e) {
+        if (!(e.code == 'internal' && e.message.startsWith('Unknown call'))) rethrow;
+      }
+      if (id is int) return _liveJobResult(id);
+      _noLiveJob = true;
+    }
+    return _map('liveFetch', {'request': request});
+  }
+
+  bool _noLiveJob = false;
+
+  Future<Map<String, dynamic>> _liveJobResult(int id) async {
+    final job = CoreJobHandle._(this, id);
+    try {
+      var wait = const Duration(milliseconds: 40);
+      while (true) {
+        final p = await job.progress();
+        switch (p.state) {
+          case JobState.running:
+            await Future<void>.delayed(wait);
+            if (wait < const Duration(milliseconds: 320)) wait *= 2;
+          case JobState.done:
+            return p.result ?? (throw const CacheSearchException('internal', 'The live fetch gave no answer'));
+          case JobState.cancelled:
+          case JobState.failed:
+            throw CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'The live fetch stopped');
+        }
+      }
+    } finally {
+      await job.free();
+    }
+  }
   Future<Map<String, dynamic>> liveGet(Map<String, dynamic> request) => _map('liveGet', {'request': request});
 
   /// The host's grant for network fetches (cs_live_set_fetch_policy): `{"online","allow_metered","metered","enabled_sources":[ids]}`.

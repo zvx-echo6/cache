@@ -108,6 +108,37 @@ pub struct Found {
     pub score: f64,
 }
 
+/// Whether two copies are the same book, and how: the same content hash is `blake3` (score 1.0), else the text rule (`text`, score
+/// the MinHash Jaccard). `None` for a different book, an edition, or a copy that cannot be fingerprinted. Symmetric in its two
+/// copies. [`detect`] and the batch form ([`crate::batch`]) both decide through this, so they cannot disagree.
+pub fn compare(a: &Facts, b: &Facts, t: &Tuning) -> Option<(How, f64)> {
+    if a.blake3.is_some() && a.blake3 == b.blake3 {
+        return Some((How::Blake3, 1.0));
+    }
+    compare_text(a, b, t)
+}
+
+/// The text half of [`compare`]. The Jaccard is worked out first and a pair under `edition_jaccard` is dropped before the cosine
+/// is: [`judge`] says `Different` for such a pair whatever the cosine is, so the answer is the same and the 1024-number cosine
+/// is only paid for by pairs that are close.
+pub fn compare_text(a: &Facts, b: &Facts, t: &Tuning) -> Option<(How, f64)> {
+    if a.minhash.is_empty() || b.minhash.is_empty() || a.mean_vector.is_empty() || b.mean_vector.is_empty() {
+        return None;
+    }
+    let j = jaccard(&a.minhash, &b.minhash);
+    // written so that a NaN fails the check
+    let close = j >= t.edition_jaccard;
+    if !close {
+        return None;
+    }
+    let c = cosine(&a.mean_vector, &b.mean_vector);
+    let (w1, w2) = match (a.words, b.words) {
+        (Some(x), Some(y)) => (x as usize, y as usize),
+        _ => (1, 1),
+    };
+    (judge(t, j, c, w1, w2) == Match::Same).then(|| (How::Text, f64::from(j)))
+}
+
 /// Which of `against` is the same book as `copy`, in `with` order. Copies with `copy`'s own key are skipped. A new edition
 /// (`Match::Edition`) is not a match: the person decides that, and may write `same` by hand.
 pub fn detect(copy: &Facts, against: &[Facts], t: &Tuning) -> Vec<Found> {
@@ -116,21 +147,8 @@ pub fn detect(copy: &Facts, against: &[Facts], t: &Tuning) -> Vec<Found> {
         if a.copy == copy.copy || out.iter().any(|f| f.with == a.copy) {
             continue;
         }
-        if copy.blake3.is_some() && copy.blake3 == a.blake3 {
-            out.push(Found { with: a.copy.clone(), how: How::Blake3, score: 1.0 });
-            continue;
-        }
-        if copy.minhash.is_empty() || a.minhash.is_empty() || copy.mean_vector.is_empty() || a.mean_vector.is_empty() {
-            continue;
-        }
-        let j = jaccard(&copy.minhash, &a.minhash);
-        let c = cosine(&copy.mean_vector, &a.mean_vector);
-        let (w1, w2) = match (copy.words, a.words) {
-            (Some(x), Some(y)) => (x as usize, y as usize),
-            _ => (1, 1),
-        };
-        if judge(t, j, c, w1, w2) == Match::Same {
-            out.push(Found { with: a.copy.clone(), how: How::Text, score: f64::from(j) });
+        if let Some((how, score)) = compare(copy, a, t) {
+            out.push(Found { with: a.copy.clone(), how, score });
         }
     }
     out.sort_by(|x, y| x.with.cmp(&y.with));
@@ -159,6 +177,68 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+/// Standard base64 with padding.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(B64[((n >> 18) & 63) as usize] as char);
+        out.push(B64[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { B64[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// f32 to IEEE 754 half-precision bits, round to nearest and ties to even (the same as the builder's `pack::f32_to_f16`).
+pub fn f32_to_f16(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xff) as i32;
+    let man = b & 0x7f_ffff;
+    if exp == 0xff {
+        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
+    }
+    let e = exp - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if e <= 0 {
+        if e < -10 {
+            return sign;
+        }
+        let m = man | 0x80_0000;
+        let shift = (14 - e) as u32;
+        let half = m >> shift;
+        let rem = m & ((1 << shift) - 1);
+        let mid = 1 << (shift - 1);
+        let round = (rem > mid || (rem == mid && half & 1 == 1)) as u32;
+        return sign | (half + round) as u16;
+    }
+    let half = ((e as u32) << 10) | (man >> 13);
+    let rem = man & 0x1fff;
+    let round = (rem > 0x1000 || (rem == 0x1000 && half & 1 == 1)) as u32;
+    sign | (half + round) as u16
+}
+
+/// A mean vector as the pack writes it: base64 of little-endian f16 values.
+pub fn mean_vector_to(v: &[f32]) -> String {
+    let mut bytes = Vec::with_capacity(v.len() * 2);
+    for x in v {
+        bytes.extend_from_slice(&f32_to_f16(*x).to_le_bytes());
+    }
+    base64_encode(&bytes)
+}
+
+/// A MinHash as the pack writes it: base64 of little-endian u32 values.
+pub fn minhash_to(m: &[u32]) -> String {
+    let mut bytes = Vec::with_capacity(m.len() * 4);
+    for x in m {
+        bytes.extend_from_slice(&x.to_le_bytes());
+    }
+    base64_encode(&bytes)
 }
 
 /// IEEE 754 half-precision bits to f32 (the same as the builder's `pack::f16_to_f32`).
@@ -230,7 +310,15 @@ impl Facts {
     }
 }
 
-/// The core op `shelvesDetect`: `{"copy": facts, "against": [facts], "tuning"?}` to `[{"with","how","score"}]`.
+/// The request's `tuning` (the defaults when absent or null).
+pub fn tuning_of(args: &Value) -> Result<Tuning> {
+    match args.get("tuning") {
+        Some(t) if !t.is_null() => serde_json::from_value(t.clone()).map_err(|e| Error::ctx("\"tuning\"", e)),
+        _ => Ok(Tuning::default()),
+    }
+}
+
+/// The single-copy form of the core op `shelvesDetect`: `{"copy": facts, "against": [facts], "tuning"?}` to `[{"with","how","score"}]`.
 pub fn detect_json(args: &Value) -> Result<Value> {
     let copy = Facts::from_value(args.get("copy").ok_or_else(|| Error::new("\"copy\" is missing"))?)?;
     let against = args
@@ -240,10 +328,7 @@ pub fn detect_json(args: &Value) -> Result<Value> {
         .iter()
         .map(Facts::from_value)
         .collect::<Result<Vec<_>>>()?;
-    let tuning: Tuning = match args.get("tuning") {
-        Some(t) if !t.is_null() => serde_json::from_value(t.clone()).map_err(|e| Error::ctx("\"tuning\"", e))?,
-        _ => Tuning::default(),
-    };
+    let tuning = tuning_of(args)?;
     Ok(Value::Array(detect(&copy, &against, &tuning).into_iter().map(|f| json!({"with": f.with, "how": f.how.as_str(), "score": f.score})).collect()))
 }
 
@@ -336,6 +421,21 @@ mod tests {
         let f = Facts::from_value(&json!({"copy": "k", "blake3": "h", "minhash": [1, 2], "mean_vector": [1.0, 0.0], "words": 10})).unwrap();
         assert_eq!((f.copy.as_str(), f.words, f.mean_vector.len()), ("k", Some(10), 2));
         assert!(Facts::from_value(&json!({"minhash": []})).is_err());
+    }
+
+    #[test]
+    fn the_encoders_are_the_decoders_inverse_and_match_the_packs_bytes() {
+        assert_eq!(base64_encode(&[0x00, 0x3c, 0x00, 0x38]), "ADwAOA==");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(mean_vector_to(&[1.0, 0.5]), "ADwAOA==");
+        assert_eq!(minhash_to(&[1, 2]), "AQAAAAIAAAA=");
+        let v: Vec<f32> = (0..64).map(|i| f16_to_f32(f32_to_f16(i as f32 * 0.37 - 5.0))).collect();
+        assert_eq!(mean_vector_from(&json!(mean_vector_to(&v))).unwrap(), v);
+        let m: Vec<u32> = (0..128u32).map(|i| i.wrapping_mul(77_777_777)).collect();
+        assert_eq!(minhash_from(&json!(minhash_to(&m))).unwrap(), m);
     }
 
     #[test]

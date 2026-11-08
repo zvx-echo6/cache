@@ -25,7 +25,8 @@ given with it. Another person's shelves number on their own.
   .local/migrated.json           which old library logs were imported (never synced)
 
 <library>/                       a library, as before
-  cache-library.json  shard/  documents.tsv  SHA256SUMS
+  cache-library.json  shard/  documents.tsv  copies.jsonl  SHA256SUMS
+  copies.jsonl                   the same facts, one line per book (synced; a library without packs has only this)
   packs/<doc_id>@<version>.cdoc  facts (synced)
   log/builder-<library_id>.jsonl the publisher's seed log (synced, read-only suggestions)
   log/<device_id>.jsonl          old per-device library logs (imported once, then never written)
@@ -49,6 +50,41 @@ most 64, not starting with a dot). **Cache for Linux** keeps its identity in `<d
 - The **reading copy** is the one the person picked (`prefer`), else the best by the `samebook` order (`cache_shelves::compare_copies`, the order of PACK-FORMAT.md "Which copy is better": text pages, pages, ppi, smaller file, lower key; the copy key stands in for the doc id in the last tie-break; a copy without `samebook` ranks below every copy with it). A `prefer` for a copy that no library holds is ignored.
 - Other copies are spares. A spare whose pack title differs shows as "also known as" (`aka`).
 - A book's `id` in the view is its smallest copy key. It changes when books merge or split, so an app addresses a book by a copy it holds.
+
+## The copies file
+
+A library does not have to carry its packs. A **downloaded `.cache-library` has none**: it holds `shard/`, `cache-library.json`, `documents.tsv`,
+`source-identities.json` and the copies file. `cache-build library` writes `copies.jsonl` at the library root (it is in `SHA256SUMS`, and in the
+`.cache-library` archive at its root, beside `documents.tsv`; unpacking leaves it in `shard/`, and the app moves it to the library root as it does `documents.tsv`, though the core also finds it in `shard/`). It has
+one line per document, **sorted by `doc_id`**, compact JSON in a fixed key order, so the same inputs give the same bytes. Each line holds everything
+`cache_shelves` reads from a pack:
+
+| Key | Meaning |
+|---|---|
+| `doc_id`, `doc_version` | the document |
+| `copy` | the copy key: `original_blake3`, else `doc_id` |
+| `original_blake3`? | `book.original_blake3`, when the pack has it |
+| `source_blake3`? | the source's BLAKE3 (`source.blake3`) |
+| `title` | the pack's title (`book.title`, else the header's); a replaced title is the seed log's `title` event, as before |
+| `suggested`? | `{"div","label"}`: the library's suggested division (the pack's `book.suggested`, or the label or sorter result of this build) |
+| `author`?, `edition`?, `year`? | the book facts, checked on read as for `facts` events |
+| `samebook`? | `{"minhash","mean_vector","text_pages","pages","ppi"?,"source_size","words"?}`; `minhash` is base64 of little-endian u32, `mean_vector` base64 of little-endian f16 (the pack's own encodings); absent for a document with no fingerprint (a ZIM's, an old pack's) |
+
+```json
+{"doc_id":"wm","doc_version":2,"copy":"b3f1...","original_blake3":"b3f1...","source_blake3":"9a07...","title":"Wilderness Medicine","suggested":{"div":"610","label":"Medicine"},"author":"A. Writer","year":2018,"samebook":{"minhash":"AQAAAAIAAAA=","mean_vector":"ADwAOA==","text_pages":300,"pages":310,"ppi":150,"source_size":4123456}}
+```
+
+- The **copy key** and the **content hash** (`original_blake3`, else `source_blake3`) are computed by one function each in `cache_shelves::library` (`copy_key`,
+  `content_hash`). The builder calls them to write the file and the resolver calls them on a pack header or a copies line (it works the key out again from
+  `original_blake3` and `doc_id`; the line's `copy` is for readers that do not link the crate), so a library reads the **same keys either way**. A test builds
+  a library, reads it through its packs and through its copies file, and compares every field.
+- **Reading.** `resolve`, `import` and detection read `<library>/copies.jsonl` when it exists (also `<library>/shard/copies.jsonl`, where unpacking an archive
+  leaves it before the app moves it), and open no pack. Without it they read the packs, as before. A line that is not readable is skipped and counted as
+  `unreadable`; of several lines for one `doc_id` the highest `doc_version` is used.
+- A library whose documents were not built with a fingerprint has lines without `samebook`: it can still match by content hash, and its copies rank below
+  those with a fingerprint when the reading copy is chosen.
+- A library changed by other means than `cache-build library` (documents added by the build service or by a linked folder) has a stale or missing copies
+  file until it is rebuilt; with no copies file and no packs it resolves to nothing.
 
 ## Events
 
@@ -130,7 +166,7 @@ When a device first sees a new copy (built here, arrived in a library, or found 
 against the copies it can see and writes `same ... by:auto` for each match. Resolution reads only events, so two devices never disagree
 because of float rounding, different model builds, or one of them not holding a library.
 
-The decision is `cache_shelves::same::detect` (core op `shelvesDetect`). It is the Linux build service's rule, moved into the shared crate
+The decision is `cache_shelves::same::detect` (core op `shelvesDetect`; one pair is `same::compare`). It is the Linux build service's rule, moved into the shared crate
 (`server/src/libbuild/same.rs` now re-exports it), applied to the facts the builder already writes in the pack header:
 
 | Fact | From the pack | Use |
@@ -140,9 +176,27 @@ The decision is `cache_shelves::same::detect` (core op `shelvesDetect`). It is t
 | meaning | `samebook.mean_vector` (unit length, f16) | cosine |
 | length | `words` (not in the pack header, so usually absent) | the shorter text must be at least `min_length_ratio` of the longer's; skipped when either count is unknown (the Jaccard already bounds it) |
 
+The facts come from the pack header or, for a library with no packs, from the copies file (above); they are the same either way.
+
 A text match is Jaccard >= 0.85 **and** cosine >= 0.95 (`same_jaccard`, `same_cosine`; `min_length_ratio` 0.8; `edition_jaccard` 0.5). It is
 logged as `how: text`, `score` = the Jaccard. A new edition (Jaccard between 0.5 and 0.85 with the same meaning) is **not** a match: the
 person decides, and a person's choice is a `same` with `by: user`. A copy too short to fingerprint matches nothing by text.
+
+### Detecting a whole library at once (the batch form)
+
+A library arriving can hold thousands of copies, so `shelvesDetect` has a batch form (the request has `libraries`) that reads the features itself:
+
+```json
+{"libraries":[{"library_id":"recon","dir":"/data/recon"}],"copies":["<key>"],"known":["<key>"],"tuning":{}}
+```
+
+- `libraries`: where the copies are (each library's `copies.jsonl`, else its packs). All their copies are the **visible** copies; a copy in two libraries is one.
+- `copies` (optional, default all): the copy keys to check. `known` (optional): copy keys already detected; a pair with both copies in `known` is skipped.
+- The answer is `[{"copy","with","how","score"}]`: every match between a checked copy and any other visible copy, checked copies included. Each unordered
+  pair appears **once**, `copy` the greater key and `with` the lesser, sorted by (`copy`, `with`). It is exactly the union of the single-copy calls (same
+  rule: `same::compare`), as one list. Copies with the same content hash are matched first (`how: blake3`, no comparison); the text rule then compares
+  the fingerprinted copies pairwise (about 10,000 copies is fine: a pair under `edition_jaccard` is dropped before the 1024-number cosine).
+- The caller writes `same ... by:auto` for each pair (`shelvesAppend`). The single-copy form is unchanged.
 
 ## Resolution
 
@@ -206,7 +260,7 @@ If `A`, `B` and `C` are linked `A-B` (0.90) and `B-C` (0.95), a user `notsame` b
 ## Arriving libraries and existing logs
 
 - **A library arrives** (downloaded, given, or built): for each copy, run detection and write `same` where it matches. Copies matching nothing are new books: `place` in the suggested division (the seed log's `place`, else `book.suggested`, else Unsorted) and `assign` the next free number, in (title, copy) order, so two devices that shelve the same library offline make the same choices except for clashes.
-- **Existing per-device library logs** (only test devices and the build service have any; 1.1 has not shipped): on first run each device imports its OWN events from every library's `log/<own id>.jsonl` into its Bookshelves log (`cache_shelves::import`, core op `shelvesImport`). Each `doc` is mapped to the copy key through that library's live packs; the event keeps its `at` and gets `loc` = `<library_id>/<doc_id>`; an event about a `doc` with no pack in that library is not imported and is counted as `unmapped`. Events are appended oldest first **with their original `at`** (the import does not raise them to the device's last `at`, so an old `place` never overrides a newer move), and an event already present in the device's Bookshelves log is not written again, so a crash between the append and the record cannot duplicate events. A file whose events were all mapped is recorded in `.local/migrated.json`; a file with unmapped events is not recorded, so a later import maps them once their pack is here:
+- **Existing per-device library logs** (only test devices and the build service have any; 1.1 has not shipped): on first run each device imports its OWN events from every library's `log/<own id>.jsonl` into its Bookshelves log (`cache_shelves::import`, core op `shelvesImport`). Each `doc` is mapped to the copy key through that library's copies file, else its live packs; the event keeps its `at` and gets `loc` = `<library_id>/<doc_id>`; an event about a `doc` with no pack in that library is not imported and is counted as `unmapped`. Events are appended oldest first **with their original `at`** (the import does not raise them to the device's last `at`, so an old `place` never overrides a newer move), and an event already present in the device's Bookshelves log is not written again, so a crash between the append and the record cannot duplicate events. A file whose events were all mapped is recorded in `.local/migrated.json`; a file with unmapped events is not recorded, so a later import maps them once their pack is here:
 
   ```json
   {"format":1,"files":{"recon/phone-7.jsonl":{"size":4120,"events":31,"unmapped":0}}}
@@ -216,7 +270,7 @@ If `A`, `B` and `C` are linked `A-B` (0.90) and `B-C` (0.95), a user `notsame` b
 
 ## The Bookshelves view
 
-`<app support>/bookshelves/.local/view.json`, format 1 (core op `shelvesResolve`; `cache-build view --bookshelves`). Written atomically (a temporary
+`<app support>/bookshelves/.local/view.json`, format 1 (core op `shelvesResolve`, which writes the file and also returns the view; `cache-build view --bookshelves`). Written atomically (a temporary
 file in the same folder, flushed, renamed over the name). The same events and libraries always give the same bytes: no clock, keys in a fixed order,
 books in `id` order, and the same bytes whatever order the log files, or the libraries, are given in.
 

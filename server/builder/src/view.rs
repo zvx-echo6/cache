@@ -40,11 +40,13 @@ pub struct BookFacts {
     pub titles_facts: cache_shelves::events::FactFields,
     /// The book's `original_blake3`, when known (written on the seed log's `facts` event).
     pub copy: Option<String>,
+    /// The pack's `samebook` block, when it has one (written to the library's `copies.jsonl`).
+    pub samebook: Option<crate::pack::Samebook>,
 }
 
 impl BookFacts {
     pub fn new(title: &str, suggested: Option<Suggested>) -> BookFacts {
-        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None, author: None, edition: None, year: None, titles_facts: Default::default(), copy: None }
+        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None, author: None, edition: None, year: None, titles_facts: Default::default(), copy: None, samebook: None }
     }
 
     pub fn from_header(h: &Header) -> BookFacts {
@@ -62,6 +64,7 @@ impl BookFacts {
             year: b.and_then(|b| b.year),
             titles_facts: Default::default(),
             copy: b.map(|b| b.original_blake3.clone()).filter(|c| !c.is_empty()),
+            samebook: h.samebook.clone(),
         }
     }
 

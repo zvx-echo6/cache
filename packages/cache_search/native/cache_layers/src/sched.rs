@@ -3,7 +3,8 @@
 //! The server's worker threads answer everything that local storage can answer at once. A request that needs the
 //! source is handed to the lane of its layer: at most the layer's `max_parallel` fetches run at a time (each on its
 //! own short-lived thread), the rest wait in a short queue, newest first (the map has moved on from old requests),
-//! and a request that waited longer than the upstream timeout is answered as a miss. Several requests for the same
+//! and a request that waited longer than the upstream timeout, or was pushed out of a full queue, is answered `Busy`
+//! (503 with Retry-After: the map asks again). Several requests for the same
 //! tile share one fetch. A slow layer can therefore fill only its own lane: the worker threads and every other
 //! layer carry on.
 
@@ -28,7 +29,7 @@ pub type Reply = Box<dyn FnOnce(Outcome) + Send>;
 pub type Key = (String, u8, u32, u32);
 pub const TILEJSON: u8 = 255;
 
-/// Requests waiting in a lane beyond the ones running; the oldest are answered as misses past this.
+/// Requests waiting in a lane beyond the ones running; the oldest are answered `Busy` past this.
 const MAX_QUEUE: usize = 64;
 
 #[derive(Default)]
@@ -83,13 +84,13 @@ impl Sched {
             }
         }
         for r in dropped {
-            r(Outcome::Tile(TileOut::Miss));
+            r(Outcome::Tile(TileOut::Busy));
         }
         if let Some(name) = spawn {
             let me = self.clone();
             let n2 = name.clone();
             if std::thread::Builder::new().name("cs-upstream".into()).spawn(move || me.work(&n2)).is_err() {
-                // no thread to be had: answer what is queued in this lane as a miss rather than leave it hanging
+                // no thread to be had: answer what is queued in this lane as busy rather than leave it hanging
                 self.give_up(&name);
             }
         }
@@ -111,7 +112,7 @@ impl Sched {
             }
         }
         for r in all {
-            r(Outcome::Tile(TileOut::Miss));
+            r(Outcome::Tile(TileOut::Busy));
         }
     }
 
@@ -129,8 +130,8 @@ impl Sched {
             };
             let Some((key, queued_at)) = next else { return };
             let outcome = if queued_at.elapsed() > crate::http::upstream_timeout() {
-                // the map stopped waiting long ago
-                Outcome::Tile(TileOut::Miss)
+                // the map stopped waiting long ago; it asks again after the 503's Retry-After
+                Outcome::Tile(TileOut::Busy)
             } else {
                 self.run(&key)
             };
