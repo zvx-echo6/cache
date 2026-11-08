@@ -62,8 +62,9 @@ void main() {
   });
 
   testWidgets('guiding heading-up moves the camera ahead of the position; following outside guidance keeps it centred', (tester) async {
-    tester.view.physicalSize = const Size(390, 844) * 3;
-    tester.view.devicePixelRatio = 3;
+    // A phone held upright (stacked layout), wide enough for the test font's square letters.
+    tester.view.physicalSize = const Size(600, 1000);
+    tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final dir = Directory.systemTemp.createTempSync('guidance-camera-');
     final originalPlatform = MapLibrePlatform.createInstance;
