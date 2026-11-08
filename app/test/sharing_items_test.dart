@@ -9,6 +9,7 @@ import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/sharing/share_items.dart';
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -230,7 +231,7 @@ void main() {
     final s = r!.make();
     await tester.runAsync(s.setUp);
     await tester.runAsync(() => s.setShared(r.kind('library'), true));
-    await tester.pumpWidget(MaterialApp(home: SharingPage(sharing: s)));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
     await tester.pump();
 
     expect(find.text('Library'), findsOneWidget);
@@ -289,7 +290,7 @@ void main() {
       'free_bytes': 612 << 30,
     });
     await tester.runAsync(s.refresh);
-    await tester.pumpWidget(MaterialApp(home: SharingPage(sharing: s)));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
     await tester.pump();
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
