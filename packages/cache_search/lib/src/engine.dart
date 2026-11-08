@@ -111,6 +111,17 @@ class SearchEngine {
   Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
   Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
 
+  /// cs_live_fetch_start: [liveFetch] as a job on a thread of its own (its "result" is liveFetch's answer); null when the core
+  /// has no such call (then [liveFetch] is the way).
+  CoreJob? liveFetchJob(Map<String, dynamic> request) {
+    final n = native;
+    if (n is! CsLiveJobNative) return null;
+    final j = (n as CsLiveJobNative).liveFetchStart(_h, jsonEncode(request));
+    if (j == -1) return null;
+    if (j == 0) throw CacheSearchException.fromJson(native.lastError(_h));
+    return CoreJob(native, j);
+  }
+
   CsLiveNative get _liveNative {
     final n = native is CsLiveNative ? native as CsLiveNative : null;
     if (n != null && n.hasLivePolicy) return n;
