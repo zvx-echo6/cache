@@ -24,7 +24,8 @@ class LlamaSession {
 
   /// Loads the model with this id on the server (replacing the one loaded before; the server has one for all browsers).
   /// Throws a [StateError] with the reason on failure.
-  Future<ModelInfo> load(String path, {int nCtx = 8192}) async {
+  /// [memoryRoomBytes] and [prefixDir] are the phone's (the server decides for its own model): not used here.
+  Future<ModelInfo> load(String path, {int nCtx = 8192, int? memoryRoomBytes, String? prefixDir}) async {
     _modelId = null;
     final r = await _post('/api/llm/load', {'v': 1, 'model': path, 'n_ctx': nCtx});
     final body = await _text(r);

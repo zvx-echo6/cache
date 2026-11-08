@@ -62,7 +62,8 @@ class LlamaSession {
             reusedTokens: msg['reusedTokens'] as int?,
             startMs: msg['startMs'] as int?,
             firstTokenMs: msg['firstTokenMs'] as int?,
-            totalMs: msg['totalMs'] as int?));
+            totalMs: msg['totalMs'] as int?,
+            prefixNote: msg['prefixNote'] as String?));
         c?.close();
       case 'error':
         final c = _gens.remove(id);
@@ -85,13 +86,23 @@ class LlamaSession {
   }
 
   /// Loads the model (replacing a model loaded before). Throws a [StateError] with the reason on failure.
-  Future<ModelInfo> load(String path, {int nCtx = 8192}) async {
+  /// [memoryRoomBytes] (Android): what the system can still give the app now (availMem minus threshold); the native layer
+  /// repacks the CPU weights only when that leaves room for the copy (see cl_configure), else keeps them in the mmap. Null: not
+  /// known (repacked, as before). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs;
+  /// null: not saved.
+  Future<ModelInfo> load(String path, {int nCtx = 8192, int? memoryRoomBytes, String? prefixDir}) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
     _loads[id] = c;
     _handleAddress = 0;
-    _toWorker!.send({'type': 'load', 'id': id, 'path': path, 'nCtx': nCtx});
+    _toWorker!.send({
+      'type': 'load',
+      'id': id,
+      'path': path,
+      'nCtx': nCtx,
+      'options': jsonEncode({'prefix_dir': prefixDir ?? '', 'mem_room_bytes': memoryRoomBytes ?? 0}),
+    });
     final r = await c.future;
     if (r['error'] != null) throw StateError(r['error'] as String);
     _handleAddress = r['handle'] as int;
@@ -190,6 +201,12 @@ void _workerMain(SendPort toMain) {
         final left = b.clFreeAll();
         // ignore: avoid_print
         if (left > 0) print('cache_llama: freed $left model(s) an earlier engine of this process left loaded');
+        final options = msg['options'] as String?;
+        if (options != null && b.clConfigure != null) {
+          final o = options.toNativeUtf8();
+          b.clConfigure!(o);
+          malloc.free(o);
+        }
         final p = (msg['path'] as String).toNativeUtf8();
         // 0 threads: the native layer picks the fast cores itself.
         handle = b.clLoad(p, msg['nCtx'] as int, 0, err, _kErrLen);
@@ -231,6 +248,8 @@ void _workerMain(SendPort toMain) {
           toMain.send({'type': 'error', 'id': id, 'error': 'The model stopped with an error while answering'});
           break;
         }
+        String? prefixNote;
+        if (b.clPrefixNote != null && b.clPrefixNote!(handle, json, _kJsonBuf) > 0) prefixNote = json.toDartString();
         final fn = b.clFinish(handle, json, _kJsonBuf);
         toMain.send({
           'type': 'final',
@@ -242,6 +261,7 @@ void _workerMain(SendPort toMain) {
           'startMs': startMs,
           'firstTokenMs': firstTokenMs,
           'totalMs': clock.elapsedMilliseconds,
+          'prefixNote': prefixNote,
         });
       case 'free':
         if (handle != nullptr) {

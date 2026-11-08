@@ -248,6 +248,7 @@ class ToolLoop {
             'content_chars=${last.content.length}, reasoning_chars=${last.reasoning.length}, '
             'tool_calls=${last.toolCalls.length}, parse_error=${last.parseError != null}, '
             'native_ms=${last.totalMs ?? 'unknown'}, round_ms=${roundClock.elapsedMilliseconds}');
+        if (last.prefixNote != null) logInfo(last.prefixNote!);
         promptTokens += last.promptTokens;
         generatedTokens += last.generatedTokens;
 
