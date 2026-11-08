@@ -4,12 +4,14 @@
 
 use crate::error::{Error, Result};
 use crate::events::Event;
+use crate::batch::find_pairs;
 use crate::import::import_own;
 use crate::library::{load_library, HeaderReader, LibraryInput, LibraryRef};
-use crate::same::detect_json;
+use crate::same::{detect_json, tuning_of, Facts};
 use crate::store::{now_ms, LogWriter, LOG_DIR};
-use crate::view::build_view;
+use crate::view::{build_view, write_view};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn parse(args: &str) -> Result<Value> {
@@ -33,9 +35,47 @@ fn libraries(v: &Value) -> Result<Vec<LibraryRef>> {
         .collect()
 }
 
-/// `shelvesDetect`: `{"copy": facts, "against": [facts], "tuning"?}` to `[{"with","how","score"}]`.
-pub fn detect(args: &str) -> Result<String> {
-    Ok(detect_json(&parse(args)?)?.to_string())
+/// `shelvesDetect`, in two forms.
+///
+/// Single copy: `{"copy": facts, "against": [facts], "tuning"?}` to `[{"with","how","score"}]`. Pure; reads nothing.
+///
+/// Batch (when the request has `"libraries"`): `{"libraries": [{"library_id","dir","packs_dir"?}], "copies"?: [copy keys to check,
+/// default all], "known"?: [copy keys already detected], "tuning"?}` to `[{"copy","with","how","score"}]`. It reads the features
+/// itself (each library's `copies.jsonl`, else its packs), and returns every match between a checked copy and any other visible
+/// copy, checked ones included. Each unordered pair appears once with `copy` the greater key, sorted by (`copy`, `with`). A pair
+/// with both copies in `known` is skipped.
+pub fn detect(args: &str, read_header: HeaderReader) -> Result<String> {
+    let v = parse(args)?;
+    if v.get("libraries").is_some() {
+        return Ok(detect_batch(&v, read_header)?.to_string());
+    }
+    Ok(detect_json(&v)?.to_string())
+}
+
+fn key_set(v: &Value, k: &str) -> Result<Option<BTreeSet<String>>> {
+    match v.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| x.as_str().map(str::to_string).ok_or_else(|| Error::new(format!("\"{k}\" holds a value that is not a copy key"))))
+            .collect::<Result<BTreeSet<_>>>()
+            .map(Some),
+        Some(_) => Err(Error::new(format!("\"{k}\" is a list of copy keys"))),
+    }
+}
+
+/// The batch form of `shelvesDetect`.
+pub fn detect_batch(v: &Value, read_header: HeaderReader) -> Result<Value> {
+    let mut refs = libraries(v)?;
+    refs.sort_by(|a, b| a.library_id.cmp(&b.library_id));
+    let checked = key_set(v, "copies")?;
+    let known = key_set(v, "known")?.unwrap_or_default();
+    let mut all: Vec<Facts> = Vec::new();
+    for l in &refs {
+        all.extend(load_library(l, read_header)?.copies.iter().map(|c| c.detect_facts()));
+    }
+    let pairs = find_pairs(&all, checked.as_ref(), &known, &tuning_of(v)?);
+    Ok(Value::Array(pairs.into_iter().map(|p| json!({"copy": p.copy, "with": p.with, "how": p.how.as_str(), "score": p.score})).collect()))
 }
 
 /// `shelvesAppend`: `{"dir": <bookshelves folder>, "dev", "events": [event]}` to `{"written": n, "last_at": ms}`. An event is
@@ -58,10 +98,14 @@ pub fn append(args: &str) -> Result<String> {
     Ok(json!({"written": written.len(), "last_at": written.last().map(|e| e.at)}).to_string())
 }
 
-/// `shelvesResolve`: `{"dir", "libraries": [{"library_id", "dir", "packs_dir"?}]}` to the view (view.rs).
+/// `shelvesResolve`: `{"dir", "libraries": [{"library_id", "dir", "packs_dir"?}]}` to the view (view.rs). The view is also written to
+/// `<dir>/.local/view.json`, atomically (a temporary file in the same folder, flushed, renamed over the name), before it is
+/// returned; a write that fails fails the call.
 pub fn resolve_view(args: &str, read_header: HeaderReader) -> Result<String> {
     let v = parse(args)?;
-    let view = build_view(Path::new(text(&v, "dir")?), &libraries(&v)?, read_header)?;
+    let dir = Path::new(text(&v, "dir")?);
+    let view = build_view(dir, &libraries(&v)?, read_header)?;
+    write_view(dir, &view)?;
     Ok(view.to_string())
 }
 

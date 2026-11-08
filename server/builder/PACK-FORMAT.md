@@ -224,6 +224,19 @@ version than the code is older, not wrong.
 
 A built library is the normal library (`shard/`, `cache-library.json`, `documents.tsv`, `SHA256SUMS`) plus:
 
+- `source-identities.json`: the **source identities** (synced; in `SHA256SUMS`). Portable aliases for a document's source file, written by
+  `cache-build library` for each document whose pack records the file as it arrived (`book.original_blake3`). The file is a JSON object
+  `{"version":1,"entries":[{"doc_id","version","source_blake3","original_blake3"}]}` (pretty-printed, a final line break): `source_blake3` is the BLAKE3 of the
+  stored PDF (`documents.tsv`'s column), `original_blake3` the BLAKE3 of the file as it arrived. Hashes are 64 lowercase hex characters; entries are sorted by
+  (`doc_id`, `version`, hashes), so a rebuild is byte-identical; a bad id, version or hash, or a repeated (`doc_id`, `version`), is refused, and so is a
+  `version` other than 1. A library whose documents have no `book` block has an empty list. The build service's linked-folder scan uses it to recognise a file
+  whose hash is the arrival hash rather than the stored file's: an alias counts only when its `doc_id`, `version` and `source_blake3` match a row of
+  `documents.tsv`, so a library without packs still identifies those files. A missing file is a valid older library. Like `documents.tsv` it is in the
+  `.cache-library` archive at its root, and the app puts it at the library root.
+- `copies.jsonl`: the **copies file** (synced; in `SHA256SUMS`). One JSON line per document, sorted by `doc_id`, with everything the Bookshelves log
+  reads from a pack, so a library needs **no packs** to be resolved (a downloaded `.cache-library` has none). It is in the `.cache-library` archive at
+  its root, like `documents.tsv` and `source-identities.json`. The app moves those out of `shard/` to the library root when it adds a library, and `copies.jsonl` goes with them; the core also finds it in `shard/`. Where it is present, `cache_shelves` reads it
+  and never opens a pack. Lines are compact JSON in a fixed key order, so a rebuild is byte-identical. See LIBRARY-LOG.md, "The copies file".
 - `log/builder-<library_id>.jsonl`: the **seed log** (synced; in `SHA256SUMS`). `cache-build library` writes `place` then `assign` for every book that has a suggested
   division. Numbers run from 1 in order of (title, doc_id) within a division, so a rebuild gives the same numbers. Books with no division get nothing (they are in
   Unsorted). A title a `--titles` file replaced is recorded as a `title` event. Every event's `at` is `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default
@@ -242,7 +255,7 @@ The guess of an unsure book is in the view `library` writes, not in the packs, s
 with no suggestion.
 
 The format 1 `docs.json` at the library root and `overrides.json` were never released and are gone. `cache-library.json` no longer has a `docs` key, and the
-`.cache-library` archive holds the shard and the settings file only (the seed log travels beside it, in the library folder).
+`.cache-library` archive holds the shard, the settings file, `documents.tsv`, `source-identities.json` and `copies.jsonl` (the seed log travels beside it, in the library folder).
 
 ### `--labels` and `--titles`
 
@@ -278,7 +291,7 @@ for it, so it is not repeated there.
 `cache-build library <packs dir> --out <dir> --id ID --title TITLE` takes, for each `doc_id`, the pack with the highest
 `doc_version`, and writes `<dir>/shard/` (a Qdrant Edge shard: one unnamed 1024-dimension Cosine vector) and
 `<dir>/cache-library.json` (format 1), `<dir>/log/builder-<id>.jsonl` and `<dir>/.local/docs.json` (see above), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source
-BLAKE3, pieces, pages for each document) and `<dir>/SHA256SUMS` (the SHA-256 of every other file in the folder, `sha256sum -c`
+BLAKE3, pieces, pages for each document), `<dir>/source-identities.json`, `<dir>/copies.jsonl` and `<dir>/SHA256SUMS` (the SHA-256 of every other file in the folder, `sha256sum -c`
 format). `--packs <dir>` names the packs folder (a first argument works too). No `index/` is written: the keyword index is built
 on the device when the library is added (`keyword_index` "auto"). Packs go through the general writer
 (`cache_builder::library::write_library`, one `LibDoc` per document; `LibDoc::from_pack` is the adapter), which any other source of

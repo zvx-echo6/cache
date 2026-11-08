@@ -26,9 +26,10 @@ fn err(e: cache_shelves::Error) -> Error {
     }
 }
 
-/// `shelvesDetect`: `{"copy": facts, "against": [facts], "tuning"?}` -> `[{"with","how","score"}]`. Pure.
+/// `shelvesDetect`. Single copy: `{"copy": facts, "against": [facts], "tuning"?}` -> `[{"with","how","score"}]` (pure). Batch, when
+/// the request has "libraries": `{"libraries","copies"?,"known"?,"tuning"?}` -> `[{"copy","with","how","score"}]`.
 pub fn detect(args: &str) -> Result<String> {
-    cache_shelves::ops::detect(args).map_err(err)
+    cache_shelves::ops::detect(args, &header_line).map_err(err)
 }
 
 /// `shelvesAppend`: `{"dir","dev","events":[...]}` -> `{"written","last_at"}`.
@@ -73,6 +74,10 @@ mod tests {
         let view: Value = serde_json::from_str(&resolve(&json!({"dir": dir, "libraries": libs}).to_string()).unwrap()).unwrap();
         assert_eq!(view["books"]["WM"]["call"]["text"], "CDS 610-001");
         assert_eq!(view["books"]["WM"]["title"], "Wilderness Medicine");
+        // resolve also wrote the view file, and the batch detect reads the gzip packs
+        assert!(dir.join(".local").join("view.json").is_file());
+        let batch: Value = serde_json::from_str(&detect(&json!({"libraries": libs}).to_string()).unwrap()).unwrap();
+        assert_eq!(batch, json!([]));
         assert!(append("{}").is_err());
         assert!(detect("not json").is_err());
         let _ = std::fs::remove_dir_all(&root);
