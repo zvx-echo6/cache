@@ -36,11 +36,15 @@ pub struct BookFacts {
     pub author: Option<String>,
     pub edition: Option<String>,
     pub year: Option<u32>,
+    /// What a titles file gave for author, edition and year (the seed log records it as a `facts` event). Empty when it gave none.
+    pub titles_facts: cache_shelves::events::FactFields,
+    /// The book's `original_blake3`, when known (written on the seed log's `facts` event).
+    pub copy: Option<String>,
 }
 
 impl BookFacts {
     pub fn new(title: &str, suggested: Option<Suggested>) -> BookFacts {
-        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None, author: None, edition: None, year: None }
+        BookFacts { title: title.to_string(), source_title: None, title_override: None, suggested, unsure: false, compression: None, ocr: None, author: None, edition: None, year: None, titles_facts: Default::default(), copy: None }
     }
 
     pub fn from_header(h: &Header) -> BookFacts {
@@ -56,6 +60,8 @@ impl BookFacts {
             author: b.and_then(|b| b.author.clone()),
             edition: b.and_then(|b| b.edition.clone()),
             year: b.and_then(|b| b.year),
+            titles_facts: Default::default(),
+            copy: b.map(|b| b.original_blake3.clone()).filter(|c| !c.is_empty()),
         }
     }
 

@@ -28,6 +28,8 @@ cache_chunk = { path = "../../packages/cache_chunk" }
 # the classifier must have been trained on.
 cache_classify = { path = "../../packages/cache_classify" }
 cache_embed = { path = "../../packages/cache_search/native/cache_embed" }
+# The Bookshelves log (events, resolution, the same-book decision, the view); pure Rust. Its compare_copies is the one samebook.rs uses.
+cache_shelves = { path = "../../packages/cache_shelves" }
 # The read-write shard (the same Qdrant revision as cache_search).
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 # PDF compression (compress.rs): the pure-Rust JPEG encoder for recompressed page images (no dependencies), and mupdf-sys for the
