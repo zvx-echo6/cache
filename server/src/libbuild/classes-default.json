@@ -99,7 +99,7 @@
     {
      "number": "190",
      "name": "Animals and insects",
-     "description": "Animal identification and biology: mammals, birds, reptiles, fish, insects, spiders and their behaviour."
+     "description": "Animal identification and biology: mammals, birds, reptiles, fish, insects, spiders and their behavior."
     }
    ]
   },
@@ -283,7 +283,7 @@
     {
      "number": "550",
      "name": "Sanitation and waste",
-     "description": "Toilets, latrines, septic systems, sewage, greywater, garbage and waste disposal."
+     "description": "Toilets, latrines, septic systems, sewage, graywater, garbage and waste disposal."
     },
     {
      "number": "560",
@@ -365,7 +365,7 @@
     {
      "number": "710",
      "name": "Radio fundamentals",
-     "description": "How radio works: radio theory, receivers, transmitters, licences, bands, CB, FRS, GMRS and shortwave listening."
+     "description": "How radio works: radio theory, receivers, transmitters, licenses, bands, CB, FRS, GMRS and shortwave listening."
     },
     {
      "number": "720",
@@ -456,7 +456,7 @@
     {
      "number": "890",
      "name": "Climbing, caving and water travel",
-     "description": "Climbing, mountaineering, caving, rope work, canoeing, kayaking and travelling by river."
+     "description": "Climbing, mountaineering, caving, rope work, canoeing, kayaking and traveling by river."
     }
    ]
   },
