@@ -117,7 +117,27 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 ),
                 const SizedBox(height: 10),
               ],
-              if (s.bookCount == 0 && !s.loading) ...[
+              for (final g in s.notShelved) ...[
+                Container(
+                  key: ValueKey('shelves-gap-${g.library}'),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'This copy of the library came without what Cache needs to shelve its books. They are still searchable. '
+                        'A newer version of the library puts them on your shelves.',
+                        style: TextStyle(fontSize: 13, color: k.secondary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (s.bookCount == 0 && s.notShelved.isEmpty && !s.loading) ...[
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
                   child: Text('No books yet.', key: const ValueKey('shelves-empty'), style: TextStyle(fontSize: 14, color: k.secondary)),

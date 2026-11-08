@@ -54,6 +54,20 @@ abstract class ShelfSource implements Listenable {
   /// Telling Cache which files are one book (Read this copy instead, Not the same book, Same book as...), or null when this
   /// source cannot.
   ShelfCopies? get copies;
+
+  /// Libraries whose books this device cannot put on the shelves (a copy made before libraries carried what shelving needs),
+  /// with how many books each; their books are still searchable.
+  List<ShelfGap> get notShelved;
+}
+
+/// A library some of whose books cannot be shelved on this device.
+@immutable
+class ShelfGap {
+  const ShelfGap(this.library, this.books);
+
+  /// The library's name.
+  final String library;
+  final int books;
 }
 
 /// The person's corrections to which files are one book. Each one is kept on all of the person's own devices.

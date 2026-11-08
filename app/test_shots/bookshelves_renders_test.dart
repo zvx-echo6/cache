@@ -77,6 +77,10 @@ void main() {
         samebook: {'aid': same, 'aid2': same}, extra: {'aid': {'author': 'Paul S. Auerbach', 'edition': '7th edition', 'year': 2017}});
     writeBookLibrary(root, 'recon', _recon, samebook: {'wfa-scan': same});
     File('${root.path}/recon/cache-library.json').writeAsStringSync('{"format":1,"library_id":"recon","title":"Recon library","version":"1"}');
+    // a library made before libraries carried copies.jsonl, downloaded without its packs: Bookshelves says so
+    writeBookLibrary(root, 'old', const [('stove', 'Rocket stoves', '590', null), ('soap', 'Soap making', '680', null)]);
+    Directory('${root.path}/old/packs').deleteSync(recursive: true);
+    File('${root.path}/old/cache-library.json').writeAsStringSync('{"format":1,"library_id":"old","title":"Homestead library","version":"1"}');
     sources = FakeSources(Directory('${tmp.path}/zims')..createSync(recursive: true));
     libs = LibrariesState(sources: sources, dirOverride: root, pollInterval: const Duration(milliseconds: 1));
     libs.dir = root;
@@ -122,6 +126,7 @@ void main() {
     testWidgets('Bookshelves log screens at $size', (tester) async {
       await tester.runAsync(make);
       for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+        await shoot(tester, size, 'bookshelves-not-shelved', const ['library-bookshelves'], theme);
         await shoot(tester, size, 'division', division, theme);
         await shoot(tester, size, 'book-spares', book, theme);
         await shoot(tester, size, 'same-book-as', picker, theme);

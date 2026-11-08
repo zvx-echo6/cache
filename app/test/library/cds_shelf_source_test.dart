@@ -142,15 +142,18 @@ void main() {
     expect(written, view, reason: 'the view is kept in .local/view.json');
   });
 
-  test('a library that came without packs (a download) still shows its books, keyed by doc id', () async {
+  test('a library with neither copies.jsonl nor packs: its books are counted as not shelvable here, and old stubs are removed', () async {
     await library('field', _field);
+    await library('more', const [('water', 'The water purification handbook', '530', null)]);
     Directory('${tmp.path}/libraries/field/packs').deleteSync(recursive: true);
     await start();
-    writeShelves(shelvesDir(), placed: const [('aid', '210', 1)], checked: _allChecked);
+    writeShelves(shelvesDir(), placed: const [('water', '530', 1)], checked: const ['water']);
+    final stubs = Directory('${shelvesDir().path}/.local/packs/field')..createSync(recursive: true);
     final s = await open(FakeShelvesCalls());
-    expect(s.bookCount, 5);
-    expect(s.booksOn('210').single.callNumber, 'CDS 210-001');
-    expect(Directory('${shelvesDir().path}/.local/packs/field').listSync().where((e) => e.path.endsWith('.cdoc')), hasLength(5));
+    expect(s.bookCount, 1);
+    expect([for (final g in s.notShelved) (g.library, g.books)], [('Field library', 5)]);
+    expect(stubs.existsSync(), isFalse, reason: 'the header stubs of the earlier build are gone');
+    expect(File('${shelvesDir().path}/.local/view.json').existsSync(), isTrue, reason: 'the core keeps the view');
   });
 
   test('every action writes its events to this device\'s file: place, move, Undo, Unsorted, title, hide and show', () async {
@@ -208,7 +211,7 @@ void main() {
     await start();
     final f = FakeShelvesCalls();
     final s = await open(f);
-    expect(f.detected, ['aid2', 'bees'], reason: 'each against the copies before it (the first has none)');
+    expect((f.detectCalls, f.detected), (1, ['aid', 'aid2', 'bees']), reason: 'one batch call for every new copy');
     expect(_mine(f), [
       {'at': 5000, 'ev': 'same', 'copy': 'aid2', 'with': 'aid', 'by': 'auto', 'how': 'text', 'score': 0.9},
       // new books in (title, copy) order, each in its suggested division with the next free number
@@ -228,7 +231,7 @@ void main() {
     made.remove(s);
     final f2 = FakeShelvesCalls();
     final again = await open(f2);
-    expect(f2.detected, isEmpty);
+    expect(f2.detectCalls, 0);
     expect(f2.appended, isEmpty);
     expect(again.booksOn('210').single.spares, hasLength(1));
 
@@ -236,7 +239,7 @@ void main() {
     await library('more', const [('water', 'The water purification handbook', '530', null)], samebook: {'water': {'minhash': [4, 5, 6]}});
     await libs.rescan();
     await again.whenRead();
-    expect(f2.detected, ['water']);
+    expect((f2.detectCalls, f2.detected), (1, ['water']), reason: 'only the new copy is checked; the others are known');
     expect(again.booksOn('530').single.callNumber, 'CDS 530-001');
   });
 

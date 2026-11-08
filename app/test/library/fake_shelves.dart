@@ -10,7 +10,7 @@ import 'package:cache/library/shelves_calls.dart';
 /// detector's, held numbers, the earliest held number in the shelf's division, clash ranks by (at, copy), next free). The core's
 /// own resolution, the weakest-link split and the import's details are tested in packages/cache_shelves and through the C ABI in
 /// packages/cache_search/native/cache_search/tests/shelves_ffi.rs; this is only what the app needs to see its writes come back.
-/// Detection: the same content hash, or the same `minhash` (a stand-in for the core's text match).
+/// Detection (the batch form): the same content hash, or the same `minhash` (a stand-in for the core's text match).
 class FakeShelvesCalls implements ShelvesCalls {
   FakeShelvesCalls({this.now = 9000});
 
@@ -22,7 +22,7 @@ class FakeShelvesCalls implements ShelvesCalls {
   /// Every event appended, as written (with v, at and dev).
   final List<Map<String, dynamic>> appended = [];
 
-  /// The copies detection was run for, in order.
+  /// The copies detection was asked to check, call by call.
   final List<String> detected = [];
   int imports = 0;
   int importedEvents = 0;
@@ -30,19 +30,38 @@ class FakeShelvesCalls implements ShelvesCalls {
 
   static const _known = {'place', 'unsort', 'assign', 'retire', 'title', 'remove', 'restore', 'same', 'notsame', 'prefer', 'facts'};
 
+  /// The batch form (cs_shelves_detect with "libraries"): the copies of [args] `copies` (default all) against every visible copy,
+  /// each pair once ("copy" the greater key), pairs with both copies in `known` skipped. Each call's `copies` are recorded.
   @override
   Future<List<Map<String, dynamic>>> detect(Map<String, dynamic> args) async {
-    final c = (args['copy'] as Map).cast<String, dynamic>();
-    detected.add(c['copy'] as String);
+    final feats = <String, (String?, String?)>{};
+    for (final lib in (args['libraries'] as List).cast<Map>()) {
+      for (final h in _packs(lib).values) {
+        final book = (h['book'] as Map?)?.cast<String, dynamic>();
+        final blake3 = (book?['original_blake3'] ?? (h['source'] as Map?)?['blake3']) as String?;
+        final minhash = (h['samebook'] as Map?)?['minhash'];
+        feats[_copyOf(h)] = (blake3, minhash == null ? null : jsonEncode(minhash));
+      }
+    }
+    final check = ((args['copies'] as List?)?.cast<String>() ?? feats.keys.toList()).toSet();
+    final known = ((args['known'] as List?)?.cast<String>() ?? const <String>[]).toSet();
+    _detectCalls++;
+    detected.addAll(check.toList()..sort());
+    final keys = feats.keys.toList()..sort();
     return [
-      for (final o in (args['against'] as List).cast<Map>())
-        if (o['copy'] != c['copy'])
-          if (c['blake3'] != null && o['blake3'] == c['blake3'])
-            {'with': o['copy'], 'how': 'blake3', 'score': 1.0}
-          else if (c['minhash'] != null && jsonEncode(o['minhash']) == jsonEncode(c['minhash']))
-            {'with': o['copy'], 'how': 'text', 'score': 0.9},
+      for (final a in keys)
+        for (final b in keys)
+          if (a.compareTo(b) > 0 && (check.contains(a) || check.contains(b)) && !(known.contains(a) && known.contains(b)))
+            if (feats[a]!.$1 != null && feats[a]!.$1 == feats[b]!.$1)
+              {'copy': a, 'with': b, 'how': 'blake3', 'score': 1.0}
+            else if (feats[a]!.$2 != null && feats[a]!.$2 == feats[b]!.$2)
+              {'copy': a, 'with': b, 'how': 'text', 'score': 0.9},
     ];
   }
+
+  /// The detect calls made (each one's `copies`).
+  int get detectCalls => _detectCalls;
+  int _detectCalls = 0;
 
   @override
   Future<Map<String, dynamic>> append(Map<String, dynamic> args) async {
@@ -122,7 +141,16 @@ class FakeShelvesCalls implements ShelvesCalls {
   @override
   Future<Map<String, dynamic>> resolve(Map<String, dynamic> args) async {
     resolves++;
-    if (canned != null) return canned!;
+    final dir = args['dir'] as String;
+    final view = canned ?? _resolve(args);
+    // as the core does: the view is kept in .local/view.json
+    File('$dir/.local/view.json')
+      ..parent.createSync(recursive: true)
+      ..writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(view)}\n');
+    return view;
+  }
+
+  Map<String, dynamic> _resolve(Map<String, dynamic> args) {
     final dir = args['dir'] as String;
     // the libraries' copies
     final copies = <String, ({List<String> locs, String title, String? suggested, String? seedPlace, String? seedTitle})>{};

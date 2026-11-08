@@ -25,7 +25,13 @@ void main() {
   var made = false;
 
   // two files of one book (the same text), and two other books; nothing on the shelves yet, so Cache files them all
-  Future<void> setUpBooks() async {
+  Future<void> setUpBooks({bool oldLibrary = false}) async {
+    if (oldLibrary) {
+      // a library made before libraries carried copies.jsonl, downloaded without its packs
+      writeBookLibrary(Directory('${tmp.path}/libraries'), 'old', const [('stove', 'Rocket stoves', '590', null), ('soap', 'Soap making', '680', null)]);
+      Directory('${tmp.path}/libraries/old/packs').deleteSync(recursive: true);
+      File('${tmp.path}/libraries/old/cache-library.json').writeAsStringSync('{"format":1,"library_id":"old","title":"Homestead library","version":"1"}');
+    }
     writeBookLibrary(Directory('${tmp.path}/libraries'), 'field', const [
       ('aid', 'Wilderness first aid', '210', null),
       ('aid2', 'Wilderness first aid, 2nd printing', '210', null),
@@ -223,5 +229,16 @@ void main() {
     await tapKey(tester, 'rename-save');
     expect(shelves.book('surgery')!.title, 'Emergency War Surgery');
     expect(find.byKey(const ValueKey('catalogue-card')), findsOneWidget, reason: 'back to the book');
+  });
+
+  testWidgets('a library that cannot be shelved here says so on Bookshelves, in plain words, instead of showing nothing', (tester) async {
+    size(tester, const Size(390, 1000));
+    await tester.runAsync(() => setUpBooks(oldLibrary: true));
+    await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+    await tester.pumpAndSettle();
+    await tapKey(tester, 'library-bookshelves');
+    expect(find.text("2 books in Homestead library aren't on your shelves"), findsOneWidget);
+    expect(find.textContaining('They are still searchable.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('shelves-empty')), findsNothing);
   });
 }

@@ -160,12 +160,7 @@ class _LibraryBooks {
   final Map<String, File> packs = {};
   final Map<String, PackFacts> facts = {};
 
-  /// The packs folder the core reads: the library's own, or (when some books came without packs, as a downloaded library does)
-  /// a folder of their headers this device writes under the Bookshelves' `.local/`.
-  String? packsDir;
 
-  /// The copy key of a doc: its pack's original BLAKE3, else the doc id (as the core keys it).
-  String copyOf(String doc) => facts[doc]?.originalBlake3 ?? doc;
 }
 
 /// One book of the resolved view (`books.<id>`), as far as the app reads it.
@@ -369,6 +364,11 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   @override
   ShelfCopies? get copies => _canWrite ? this : null;
 
+  List<ShelfGap> _gaps = const [];
+
+  @override
+  List<ShelfGap> get notShelved => _gaps;
+
   // ---- reading
 
   /// The libraries that hold books: every one but the guide with a catalogue of documents.
@@ -502,48 +502,8 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     return out;
   }
 
-  /// Gives each library the packs folder the core reads: its own when every book has a pack, else a folder under `.local/` with a
-  /// pack header for every book (the pack's own first line where there is one, else the catalogue's row), rewritten when the
-  /// catalogue or the packs change. A book without a pack is keyed by its doc id, as the core keys an older pack.
-  void _packsFolders(List<_LibraryBooks> libs, Directory shelvesDir) {
-    final sep = Platform.pathSeparator;
-    for (final lb in libs) {
-      if (lb.docs.keys.every(lb.packs.containsKey)) {
-        lb.packsDir = '${lb.item.path}${sep}packs';
-        continue;
-      }
-      final dir = Directory('${shelvesDir.path}$sep.local${sep}packs$sep${lb.item.folderName}');
-      lb.packsDir = dir.path;
-      final stamp = StringBuffer();
-      for (final d in lb.docs.entries) {
-        stamp.write('${d.key}:${d.value.version}:${d.value.title}:${lb.packs[d.key]?.path ?? ''}|');
-      }
-      final sign = stamp.toString().hashCode.toRadixString(16);
-      final mark = File('${dir.path}$sep.made');
-      try {
-        if (mark.existsSync() && mark.readAsStringSync() == sign) continue;
-        if (dir.existsSync()) dir.deleteSync(recursive: true);
-        dir.createSync(recursive: true);
-        for (final d in lb.docs.entries) {
-          final pack = lb.packs[d.key];
-          final line = (pack == null ? null : readPackHeaderLine(pack)) ??
-              jsonEncode({
-                'cdoc': 1,
-                'doc_id': d.key,
-                'doc_version': d.value.version,
-                'title': d.value.title,
-                'source': {'blake3': d.value.hash},
-                'page_count': d.value.pages,
-              });
-          File('${dir.path}$sep${d.key}@${d.value.version}.cdoc').writeAsBytesSync(gzip.encode(utf8.encode('$line\n')));
-        }
-        mark.writeAsStringSync(sign, flush: true);
-      } catch (_) {}
-    }
-  }
-
   List<Map<String, dynamic>> _refs(List<_LibraryBooks> libs) => [
-        for (final lb in libs) {'library_id': lb.id, 'dir': lb.item.path, 'packs_dir': ?lb.packsDir},
+        for (final lb in libs) {'library_id': lb.id, 'dir': lb.item.path},
       ];
 
   Future<String?> _devOrNull() async {
@@ -567,7 +527,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       return;
     }
     try {
-      _packsFolders(libs, dir);
+      _dropOldStubs(dir);
       final refs = _refs(libs);
       final dev = await _devOrNull();
       // this device's own old per-library logs, once per library (the core records what it imported)
@@ -589,7 +549,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       if (dev != null && await _firstSeen(calls, dir, dev, libs, view)) {
         view = await calls.resolve({'dir': dir.path, 'libraries': refs});
       }
-      _writeView(dir, view);
+      // the core keeps the view in .local/view.json itself
       if (_disposed) return;
       _apply(libs, view);
     } catch (_) {
@@ -611,41 +571,34 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     }
   }
 
-  /// What detection is given of a copy: its content hash and its pack's text fingerprint and meaning, as the pack holds them.
-  static Map<String, dynamic> _facts(String copy, PackFacts? f, _Doc doc) => {
-        'copy': copy,
-        'blake3': ?(f?.blake3 ?? doc.hash),
-        if (f?.samebook?['minhash'] != null) 'minhash': f!.samebook!['minhash'],
-        if (f?.samebook?['mean_vector'] != null) 'mean_vector': f!.samebook!['mean_vector'],
-      };
+  /// Removes the header stubs an earlier build of this page wrote under `.local/packs/` (the core reads copies.jsonl now).
+  static void _dropOldStubs(Directory dir) {
+    try {
+      final old = Directory('${dir.path}${Platform.pathSeparator}.local${Platform.pathSeparator}packs');
+      if (old.existsSync()) old.deleteSync(recursive: true);
+    } catch (_) {}
+  }
 
-  /// Copies seen for the first time: each is checked once against the copies seen before it (`same ... by: auto` for each match),
-  /// then a new book that matches nothing is shelved in its suggested division with the next free number, in (title, copy) order.
-  /// The copies checked are remembered in `.local/detected.json`. True when anything was written.
+  /// Copies seen for the first time (in the view, on this device): the core checks them once, against each other and every other
+  /// copy here (`same ... by: auto` for each match), then a new book that matches nothing is shelved in its suggested division
+  /// with the next free number, in (title, copy) order. The copies checked are remembered in `.local/detected.json`. True when
+  /// anything was written.
   Future<bool> _firstSeen(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
     final checked = _readChecked(dir);
-    final all = <String, Map<String, dynamic>>{};
     final locOf = <String, String>{};
-    for (final lb in libs) {
-      for (final d in lb.docs.entries) {
-        final copy = lb.copyOf(d.key);
-        all.putIfAbsent(copy, () => _facts(copy, lb.facts[d.key], d.value));
-        locOf.putIfAbsent(copy, () => '${lb.id}/${d.key}');
+    for (final b in (view['books'] as Map? ?? const {}).values) {
+      for (final c in ((b as Map)['copies'] as List? ?? const [])) {
+        final locs = (c as Map)['locs'] as List? ?? const [];
+        if (c['available'] == true && locs.isNotEmpty) locOf[c['copy'] as String] = '${locs.first}';
       }
     }
-    final fresh = [for (final c in all.keys) if (!checked.contains(c)) c]..sort();
+    final fresh = [for (final c in locOf.keys) if (!checked.contains(c)) c]..sort();
     if (fresh.isEmpty) return false;
     var wrote = false;
-    final seen = [for (final c in all.keys) if (checked.contains(c)) c];
-    final same = <Map<String, dynamic>>[];
-    for (final c in fresh) {
-      if (seen.isNotEmpty) {
-        for (final m in await calls.detect({'copy': all[c], 'against': [for (final s in seen) all[s]]})) {
-          same.add({'ev': 'same', 'copy': c, 'with': m['with'], 'by': 'auto', 'how': m['how'], 'score': ?m['score'], 'loc': ?locOf[c]});
-        }
-      }
-      seen.add(c);
-    }
+    final same = [
+      for (final m in await calls.detect({'libraries': _refs(libs), 'copies': fresh, 'known': [for (final c in locOf.keys) if (checked.contains(c)) c]}))
+        {'ev': 'same', 'copy': m['copy'], 'with': m['with'], 'by': 'auto', 'how': m['how'], 'score': ?m['score'], 'loc': ?locOf[m['copy']]},
+    ];
     if (same.isNotEmpty) {
       await calls.append({'dir': dir.path, 'dev': dev, 'events': [for (final e in same) {...e, 'at': _clock()}]});
       view = await calls.resolve({'dir': dir.path, 'libraries': _refs(libs)});
@@ -689,16 +642,6 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     return wrote;
   }
 
-  /// `.local/view.json`, written atomically (a temporary file beside it, then renamed over it).
-  static void _writeView(Directory dir, Map<String, dynamic> view) {
-    try {
-      final f = File('${dir.path}${Platform.pathSeparator}.local${Platform.pathSeparator}view.json');
-      f.parent.createSync(recursive: true);
-      final tmp = File('${f.path}.tmp')..writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(view)}\n', flush: true);
-      tmp.renameSync(f.path);
-    } catch (_) {}
-  }
-
   /// The books from the view (null: from the catalogues, read-only, in Unsorted).
   void _apply(List<_LibraryBooks> libs, Map<String, dynamic>? view) {
     _libs = libs;
@@ -706,6 +649,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     _byCopy.clear();
     _view.clear();
     _readOnly = view == null;
+    _gaps = const [];
     _next = {for (final e in (view?['next'] as Map? ?? const {}).entries) e.key as String: (e.value as num).toInt()};
     if (view == null) {
       for (final lb in libs) {
@@ -781,6 +725,19 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
           _byCopy[c['copy'] as String] = vb.id;
         }
       }
+    }
+    if (view != null) {
+      // books the view has no copy for: their library came without copies.jsonl and without packs
+      final seen = <String>{
+        for (final b in (view['books'] as Map? ?? const {}).values)
+          for (final c in ((b as Map)['copies'] as List? ?? const []))
+            for (final l in ((c as Map)['locs'] as List? ?? const [])) '$l',
+      };
+      _gaps = [
+        for (final lb in libs)
+          if (lb.docs.keys.where((doc) => !seen.contains('${lb.id}/$doc')).length case final n when n > 0)
+            ShelfGap(libraries?.titleOf(lb.item) ?? lb.item.folderName, n),
+      ];
     }
     _loading = false;
     notifyListeners();
