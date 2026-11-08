@@ -639,6 +639,12 @@ char *cs_notebook(cs_handle *h, const char *op, const char *args_json);
  *   samebook.mean_vector. A match is the same content hash, or MinHash Jaccard >= 0.85 with mean-vector cosine >= 0.95 (the
  *   build service's thresholds, "tuning" overrides {"same_jaccard","same_cosine","edition_jaccard","min_length_ratio"}). A new
  *   edition is not a match. score is 1.0 for blake3, else the Jaccard. Copies with the same key as "copy" are skipped.
+ * cs_shelves_detect({"libraries": [{"library_id","dir","packs_dir"?}], "copies"?: [copy keys to check, default all],
+ *   "known"?: [copy keys already detected], "tuning"?}) -> [{"copy","with","how","score"}]
+ *   The batch form (used when the request has "libraries"). It reads the features itself from each library's copies.jsonl, else
+ *   its packs, and returns every match between a checked copy and any other visible copy, checked ones included. Each unordered
+ *   pair appears once, "copy" the greater key and "with" the lesser, sorted by ("copy","with"). A pair with both copies in
+ *   "known" is skipped. Same rule and thresholds as the single form; a copy in two libraries is one copy.
  * cs_shelves_append({"dir": <bookshelves folder>, "dev", "events": [event]}) -> {"written": n, "last_at": ms}
  *   Appends to <dir>/log/<dev>.jsonl in one write, fsynced. An event is a log line's object ({"ev": "place", "copy", "div", "by"},
  *   "assign", "retire", "unsort", "title", "remove", "restore", "same" {"with","by","how","score"?}, "notsame" {"with","by"},
@@ -647,11 +653,13 @@ char *cs_notebook(cs_handle *h, const char *op, const char *args_json);
  *   fails the whole call and writes nothing.
  * cs_shelves_resolve({"dir", "libraries": [{"library_id", "dir", "packs_dir"?}]}) -> the view (format 1): {"format","built_from",
  *   "books": {<id>: {"title","title_from","aka","reading","copies","shelf","shelved","by","call","removed","suggested"}},
- *   "retired","next","folders"}. Reads every log in <dir>/log/ and the packs (<library dir>/packs unless "packs_dir") and the seed
- *   log (<library dir>/log/builder-*.jsonl) of each library. The same inputs give the same bytes.
+ *   "retired","next","folders"}. Reads every log in <dir>/log/ and, per library, <library dir>/copies.jsonl when it has one, else
+ *   its packs (<library dir>/packs unless "packs_dir"), and the seed log (<library dir>/log/builder-*.jsonl). The same inputs give
+ *   the same bytes. Also writes the view to <dir>/.local/view.json (a temporary file in that folder, then a rename), and fails if
+ *   it cannot.
  * cs_shelves_import({"dir", "dev", "libraries": [...]}) -> {"events","files":[{"library_id","file","size","events","unmapped","already"}]}
  *   Once per library log: this device's own events from <library dir>/log/<dev>.jsonl go into <dir>/log/<dev>.jsonl with "doc"
- *   mapped to the copy key; recorded in <dir>/.local/migrated.json. */
+ *   mapped to the copy key (through the library's copies.jsonl, else its packs); recorded in <dir>/.local/migrated.json. */
 char *cs_shelves_detect(const char *args_json);
 char *cs_shelves_append(const char *args_json);
 char *cs_shelves_resolve(const char *args_json);
