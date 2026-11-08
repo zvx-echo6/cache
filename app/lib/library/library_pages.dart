@@ -78,6 +78,7 @@ LibraryPageSpec bookshelvesSpec(LibraryDeps d) => LibraryPageSpec('bookshelves',
 LibraryPageSpec shelfSpec(LibraryDeps d, Shelf s) => LibraryPageSpec('shelf:${s.id}', (_) => ShelfPage(deps: d, shelfId: s.id));
 LibraryPageSpec bookSpec(LibraryDeps d, String id) => LibraryPageSpec('book:$id', (_) => BookPage(deps: d, bookId: id), leaf: true);
 LibraryPageSpec unsortedSpec(LibraryDeps d) => LibraryPageSpec('unsorted', (_) => UnsortedPage(deps: d));
+LibraryPageSpec hiddenSpec(LibraryDeps d) => LibraryPageSpec('hidden', (_) => HiddenBooksPage(deps: d), leaf: true);
 LibraryPageSpec catalogSpec(LibraryDeps d, {String? focus}) => LibraryPageSpec('catalog', (_) => CatalogPage(deps: d, focus: focus), leaf: true);
 LibraryPageSpec docsSpec(LibraryDeps d) => LibraryPageSpec('docs', (_) => DocsPage(deps: d), leaf: true);
 LibraryPageSpec creditsSpec() => LibraryPageSpec('credits', (_) => const AboutPage(), leaf: true);

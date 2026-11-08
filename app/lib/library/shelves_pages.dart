@@ -153,6 +153,21 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 ShelfLook.drawers => _Drawers(deps: d),
                 ShelfLook.spines => _Spines(deps: d),
               },
+              if (s.hidden.length case final n when n > 0) ...[
+                const SizedBox(height: 16),
+                SettingsGroup(
+                  rows: [
+                    SettingsRow(
+                      key: const ValueKey('shelves-hidden'),
+                      icon: Icons.visibility_off_outlined,
+                      title: 'Hidden books',
+                      status: [Part(booksWord(n))],
+                      selected: nav.isOpen('hidden'),
+                      onTap: () => nav.open(context, hiddenSpec(d)),
+                    ),
+                  ],
+                ),
+              ],
             ],
           );
         },
@@ -551,6 +566,99 @@ class ShelfPage extends StatelessWidget {
       },
     );
   }
+}
+
+/// Hidden books: the books hidden from Bookshelves on all of the person's devices, each with the number it had and its library,
+/// and Show on Bookshelves, which brings it back on all of them. It goes back to the number the logs resolve for it (numbers are
+/// never given out again, so it is its own; a clash with another device's claim shows its suffix), and says where it went.
+class HiddenBooksPage extends StatelessWidget {
+  const HiddenBooksPage({super.key, required this.deps});
+
+  final LibraryDeps deps;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = deps;
+    return Scaffold(
+      appBar: libraryAppBar(context, title: 'Hidden books'),
+      body: ListenableBuilder(
+        listenable: d.changes,
+        builder: (context, _) {
+          final k = context.t;
+          final s = d.shelves;
+          final books = s.hidden;
+          final canShow = s.copies != null;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+            children: [
+              LibraryCrumbs(crumbs: shelfCrumbs(context, d, null, last: 'Hidden books'), trail: booksWord(books.length)),
+              const SizedBox(height: 4),
+              if (books.isNotEmpty)
+                SettingsGroup(
+                  rows: [
+                    for (final b in books)
+                      Builder(builder: (context) {
+                        final sh = b.shelf == null ? null : s.shelf(b.shelf!);
+                        return SettingsRow(
+                          key: ValueKey('hidden-${b.id}'),
+                          leading: SizedBox(
+                            width: 74,
+                            child: Text(
+                              (b.callNumber ?? 'CDS —').replaceFirst('CDS ', ''),
+                              style: TextStyle(fontFamily: kCdsMono, fontSize: 13, fontWeight: FontWeight.w700, color: sh == null ? k.secondary : shelfColor(context, sh)),
+                            ),
+                          ),
+                          title: b.title,
+                          titleLines: 2,
+                          statusLines: null,
+                          chevron: false,
+                          statusWidget: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(b.libraryName ?? 'Not on this device', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary)),
+                              if (canShow)
+                                TextButton(
+                                  key: ValueKey('hidden-show-${b.id}'),
+                                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4), minimumSize: const Size(0, 40), alignment: Alignment.centerLeft),
+                                  onPressed: () => showOnBookshelves(context, d, b),
+                                  child: const Text('Show on Bookshelves'),
+                                ),
+                            ],
+                          ),
+                        );
+                      }),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Shows hidden book [b] on Bookshelves again, on all of the person's devices, and says where it went: its number and shelf as
+/// the logs now resolve them ("CDS 210-001 · First aid"), or Unsorted.
+Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b) async {
+  final copies = d.shelves.copies;
+  if (copies == null) return;
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await copies.hide(b, hidden: false);
+  } catch (_) {
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+    return;
+  }
+  final now = d.shelves.book(b.id);
+  final sh = now?.shelf == null ? null : d.shelves.shelf(now!.shelf!);
+  final where = now == null ? null : (sh == null || now.callNumber == null ? 'Unsorted' : '${now.callNumber} · ${sh.name}');
+  if (where == null) return;
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(key: const ValueKey('shown-snack'), content: Text(where)));
 }
 
 /// The book rows of a division: call number (without "CDS"), title, size, and one small state mark when needed.

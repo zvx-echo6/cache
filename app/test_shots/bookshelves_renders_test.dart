@@ -1,6 +1,7 @@
 // The Bookshelves log's screens for review, drawn by the app itself with sample data (no personal data): a division whose first-aid
 // book has two spare copies, that book's page (Spare copies, Also known as, Read this copy instead, Not the same book, Rename,
-// Hide from Bookshelves), the Rename sheet and the Same book as… picker, on a phone (390 x 844) and a desktop window (1440 x 900), light and dark. The books come from two sample
+// Hide from Bookshelves), the Rename sheet, the Same book as… picker, and Hidden books (its row at the foot of Bookshelves and its
+// list, with Show on Bookshelves), on a phone (390 x 844) and a desktop window (1440 x 900), light and dark. The books come from two sample
 // libraries as cache-build writes them; which files are one book is decided by a stand-in for the core (test/library/fake_shelves.dart).
 // flutter test test_shots/bookshelves_renders_test.dart --update-goldens  (pictures in test_shots/bookshelves/)
 
@@ -101,7 +102,9 @@ void main() {
     await _settle(tester);
     for (final k in path) {
       final f = find.byKey(ValueKey(k));
-      if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
+      // the page's own list, never a text field's (Go to a number holds a sideways Scrollable)
+      final list = find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last;
+      if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: list);
       await tester.ensureVisible(f.first);
       await _settle(tester, 2);
       await tester.tap(f.first);
@@ -139,6 +142,16 @@ void main() {
           await shoot(tester, size, 'book-spares-scrolled', book, theme, scroll: 520);
           await shoot(tester, size, 'book-rename-hide', book, theme, scroll: 1400);
         }
+      }
+      // two books hidden from Bookshelves: the Hidden books row at the foot of Bookshelves, and its list
+      await tester.runAsync(() async {
+        for (final id in ['burns', 'water']) {
+          await shelves.hide(shelves.book(id)!);
+        }
+      });
+      for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+        if (size == '390') await shoot(tester, size, 'bookshelves-hidden-books', const ['library-bookshelves'], theme, scroll: 1400);
+        await shoot(tester, size, 'hidden-books', const ['library-bookshelves', 'shelves-hidden'], theme);
       }
       await tester.pumpWidget(const SizedBox());
       shelves.dispose();
