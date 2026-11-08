@@ -9,6 +9,7 @@ import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/places.dart';
 import '../../theme.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// One control for a field (UX 3.3): text input, number keypad with its unit, Yes/No segments, choice chips, a place with
 /// Change, or photos. [last] is the field's value in the newest entry, shown as "last: 20" under numbers, choices and Yes/No.
@@ -201,7 +202,7 @@ class PhotoStrip extends StatelessWidget {
 
 /// "Take photo" or "Choose from phone", then the photo is stored.
 Future<NbPhoto?> choosePhoto(BuildContext context, NotebookState notebook) async {
-  final camera = await showModalBottomSheet<bool>(
+  final camera = await showFittedSheet<bool>(
     context: context,
     builder: (ctx) => SafeArea(
       child: Column(

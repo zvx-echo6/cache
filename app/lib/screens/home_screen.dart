@@ -15,6 +15,7 @@ import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'setup_card.dart';
 import 'weather_turn_on.dart';
+import '../layout/adaptive.dart' show showFittedSheet, ContentWidth;
 
 /// Home: the blocks the person chose, in the order they chose (Set up Cache while it is not done, the search box, Weather and alerts,
 /// Shortcuts by default), a gear for Settings at the top right, and "Edit Home" at the bottom. The search box searches all of Cache;
@@ -163,8 +164,8 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, _) {
           final blocks = layout.visibleBlocks;
           final setupShown = widget.setup != null && blocks.contains(HomeBlock.setup);
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          return LayoutBuilder(builder: (context, cts) => ListView(
+            padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
             children: [
               if (widget.updates != null && !typing) UpdateBanner(updates: widget.updates!),
               for (final b in blocks)
@@ -191,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
             ],
-          );
+          ));
         },
       ),
     );
@@ -358,8 +359,9 @@ class _HomeScreenState extends State<HomeScreen> {
           GridView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
+            // Two across on a phone, three on a wider page (the page keeps to the content width).
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 240,
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
               mainAxisExtent: 96,
@@ -382,7 +384,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _manage(BuildContext context, Shortcut s) async {
     final i = layout.shortcuts.indexWhere((x) => x.key == s.key);
     final last = layout.shortcuts.length - 1;
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(

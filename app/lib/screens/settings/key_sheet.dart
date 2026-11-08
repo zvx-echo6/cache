@@ -116,10 +116,17 @@ class _AddKeySheetState extends State<AddKeySheet> {
   Widget build(BuildContext context) {
     final k = context.t;
     final steps = [null, ...widget.steps, 'Paste it below'];
+    // The words and the key field scroll; Cancel and Check and save stay under them, always in view (a phone held sideways, the
+    // keyboard open).
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(18, 22, 18, 22),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(18, 22, 18, 0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -188,8 +195,13 @@ class _AddKeySheetState extends State<AddKeySheet> {
               ),
             const SizedBox(height: 14),
             Text(widget.savedNote, style: TextStyle(fontSize: 13, height: 1.5, color: k.secondary)),
-            const SizedBox(height: 14),
-            Wrap(
+          ],
+        ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+            child: Wrap(
               alignment: WrapAlignment.end,
               spacing: 10,
               runSpacing: 10,
@@ -209,8 +221,8 @@ class _AddKeySheetState extends State<AddKeySheet> {
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

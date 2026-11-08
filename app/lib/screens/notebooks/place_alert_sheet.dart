@@ -15,6 +15,7 @@ Future<PlaceAlertRule?> showPlaceAlertSheet(
     showModalBottomSheet<PlaceAlertRule>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       showDragHandle: true,
       builder: (ctx) => _PlaceAlertSheet(placeName: placeName, rule: rule, alertSetting: alertSetting, kinds: kinds),
     );
@@ -62,10 +63,16 @@ class _PlaceAlertSheetState extends State<_PlaceAlertSheet> {
     final custom = _rule.mode == PlaceAlertMode.custom;
     final kinds = {...widget.kinds, ..._rule.kinds}.where(kAlertKinds.containsKey).toList()
       ..sort((a, b) => kAlertKinds.keys.toList().indexOf(a).compareTo(kAlertKinds.keys.toList().indexOf(b)));
+    // The choices scroll; Done stays under them, always in view (a phone held sideways shows only a few rows).
     return SafeArea(
-      child: ListView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: ListView(
         shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
         children: [
           Text('Alerts for ${widget.placeName}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: k.text)),
           const SizedBox(height: 12),
@@ -106,8 +113,13 @@ class _PlaceAlertSheetState extends State<_PlaceAlertSheet> {
                 onChanged: (on) => _set(_rule.copyWith(kinds: on ? {..._rule.kinds, kind} : ({..._rule.kinds}..remove(kind)))),
               ),
           ],
-          const SizedBox(height: 8),
-          FilledButton(key: const ValueKey('alert-done'), onPressed: () => Navigator.pop(context, _rule), child: const Text('Done')),
+        ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: FilledButton(key: const ValueKey('alert-done'), onPressed: () => Navigator.pop(context, _rule), child: const Text('Done')),
+          ),
         ],
       ),
     );

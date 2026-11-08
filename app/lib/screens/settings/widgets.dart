@@ -80,17 +80,20 @@ class SettingsPage extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                children: [
-                  for (var i = 0; i < children.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 14),
-                    children[i],
+              // A wide pane keeps the rows to the content width, centred (see ContentWidth).
+              child: LayoutBuilder(
+                builder: (context, c) => ListView(
+                  padding: ContentWidth.padFor(c.maxWidth, min: 12).copyWith(top: 4, bottom: 24),
+                  children: [
+                    for (var i = 0; i < children.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 14),
+                      children[i],
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-            ?bottom,
+            if (bottom != null) ContentWidth(child: bottom!),
           ],
         ),
       ),

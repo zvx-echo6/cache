@@ -8,6 +8,7 @@ import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../theme.dart';
 import 'pdf_index_run.dart';
 import 'pdf_index_state.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// "340 of 5,768".
 String _of(PdfPart p) => '${formatCount(p.handled)} of ${formatCount(p.total)}';
@@ -187,7 +188,7 @@ class _Bar extends StatelessWidget {
 }
 
 /// The PDFs status on a sheet of its own (where the line under search results leads).
-Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim) => showModalBottomSheet<void>(
+Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim) => showFittedSheet<void>(
   context: context,
   showDragHandle: true,
   builder: (ctx) => SafeArea(

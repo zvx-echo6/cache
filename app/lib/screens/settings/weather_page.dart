@@ -284,6 +284,9 @@ class SourceRow extends StatelessWidget {
       key: ValueKey('source-${c.id}'),
       leading: Icon(sourceIcon(c), size: 22, color: k.secondary),
       title: c.title,
+      // A source's name and what it gives take two lines each, so a phone shows them whole beside the switch.
+      titleLines: 2,
+      statusLines: 2,
       status: status,
       trailing: w.keyReady(c)
           ? Switch(value: w.isOn(c.id), onChanged: (v) => w.setSourceOn(c, v))

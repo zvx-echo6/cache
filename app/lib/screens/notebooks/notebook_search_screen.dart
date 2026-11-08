@@ -70,17 +70,22 @@ class _NotebookSearchScreenState extends State<NotebookSearchScreen> {
     final name = widget.notebookId == null ? null : widget.deps.notebook.notebook(widget.notebookId!)?.name;
     return Scaffold(
       appBar: AppBar(
-        title: TextField(
-          key: const ValueKey('search-field'),
-          controller: _q,
-          autofocus: true,
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(hintText: name == null ? 'Search notebooks' : 'Search $name', border: InputBorder.none),
-          onChanged: _changed,
-          onSubmitted: _run,
+        // Kept to the results' reading width and centred over them on a wide window.
+        title: ReadingWidth(
+          style: const TextStyle(fontSize: 16),
+          alignment: Alignment.center,
+          child: TextField(
+            key: const ValueKey('search-field'),
+            controller: _q,
+            autofocus: true,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(hintText: name == null ? 'Search notebooks' : 'Search $name', border: InputBorder.none),
+            onChanged: _changed,
+            onSubmitted: _run,
+          ),
         ),
       ),
-      // A desktop window keeps the results and their snippets to a reading width.
+      // A wide window keeps the results and their snippets to a reading width.
       body: LayoutBuilder(
         builder: (context, c) => ListView(
         padding: ReadingWidth.padFor(context, c.maxWidth, style: const TextStyle(fontSize: 16)).copyWith(top: 8, bottom: 24),

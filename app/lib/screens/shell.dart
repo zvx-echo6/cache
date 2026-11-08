@@ -735,12 +735,18 @@ class _ShellState extends State<Shell> {
         // left, in the bar's order; a stable frame that stays with the keyboard open.
         // A tablet held sideways: the main destinations in a rail at the side, which slides away to give the page the whole
         // width (a menu button at the top left brings it back). Upright, the bottom bar, as on a phone.
-        if (isRegular(context) && !isPortrait(context)) {
+        // A short window (a phone held sideways, 390 high) keeps the rail, which scrolls when its destinations do not fit.
+        if (hasRailWidth(context) && !isPortrait(context)) {
           final hidden = _railHidden;
           final reduce = MediaQuery.disableAnimationsOf(context);
           final rail = SafeArea(
             right: false,
-            child: NavigationRail(
+            child: LayoutBuilder(
+              builder: (context, c) => SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: c.maxHeight),
+                  child: IntrinsicHeight(
+                    child: NavigationRail(
                     key: const ValueKey('nav-rail'),
                     minWidth: kRailWidth,
                     labelType: NavigationRailLabelType.all,
@@ -758,6 +764,10 @@ class _ShellState extends State<Shell> {
                       onPressed: () => _setRailHidden(true),
                     ),
                   ),
+                  ),
+                ),
+              ),
+            ),
           );
           return Scaffold(
             body: Row(

@@ -12,6 +12,7 @@ import '../video/format.dart';
 import 'browse_state.dart';
 import 'opds.dart';
 import 'web/device_api.dart' show DeviceException;
+import '../layout/adaptive.dart' show showFittedSheet;
 
 /// What the Library's hold menu (and the "..." of an opened item) offers for one item. An action that does not apply is null and
 /// is left out of the menu.
@@ -41,7 +42,7 @@ class LibraryActions {
 
 /// The one menu: Check for update, Change icon, Add to Home, Delete (which confirms first).
 Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
-  final choice = await showModalBottomSheet<String>(
+  final choice = await showFittedSheet<String>(
     context: context,
     showDragHandle: true,
     builder: (ctx) {

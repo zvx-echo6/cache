@@ -55,6 +55,9 @@ const double kWideWidth = 900;
 /// leave too little map on a 640 window).
 const double kSideCardWidth = 800;
 
+/// The map's left column from [kSideCardWidth] wide: the search bar and the card or the way to go under it.
+const double kMapSideWidth = 380;
+
 const double kRailWidth = 80;
 
 /// The narrowest page that takes two panes (a 640 window less the rail: list 280, detail 280).
@@ -65,8 +68,25 @@ const double kWideListWidth = 340;
 /// The detail pane's reading width at most; the page tint shows either side.
 const double kDetailMaxWidth = 640;
 
-/// The window is wide enough for the rail and two panes.
-bool isRegular(BuildContext context) => MediaQuery.sizeOf(context).width >= kRegularWidth;
+/// Under this window height a window is short (a phone held sideways, 390 high): however wide, its pages keep the phone layout
+/// (one pane), since two panes would each show only a few rows. The app's frame keeps its rail there, which scrolls.
+const double kShortHeight = 480;
+
+/// The window is short (see [kShortHeight]).
+bool isShort(BuildContext context) => MediaQuery.sizeOf(context).height < kShortHeight;
+
+/// The window is wide enough for two panes, and tall enough for them to be worth it (not [isShort]).
+bool isRegular(BuildContext context) {
+  final s = MediaQuery.sizeOf(context);
+  return s.width >= kRegularWidth && s.height >= kShortHeight;
+}
+
+/// The window is wide enough for the rail (on its side, see [isPortrait]); a short window has it too, scrolling.
+bool hasRailWidth(BuildContext context) => MediaQuery.sizeOf(context).width >= kRegularWidth;
+
+/// A two-pane list's width on a page [width] wide that is not a desktop window's: 40% of it, from [kListWidth] to
+/// [kWideListWidth], so an upright tablet's list (328 on an 820 window) has room for its names on one line.
+double listPaneWidth(double width) => (width * 0.4).clamp(kListWidth, kWideListWidth).toDouble();
 
 /// A list with its detail beside it on a regular window: the list on the left (280, or 340 from 900, 380 on a desktop window), the
 /// chosen item's page on the right (at most 640 wide, 1400 on a desktop window, centred), "Choose an item" while nothing is chosen
@@ -154,7 +174,7 @@ class TwoPaneState extends State<TwoPane> {
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) => _panes(context, c.maxWidth));
 
   Widget _panes(BuildContext context, double width) {
-    if (MediaQuery.sizeOf(context).width < kRegularWidth || width < kTwoPaneMinWidth) return widget.list;
+    if (!isRegular(context) || width < kTwoPaneMinWidth) return widget.list;
     final k = context.t;
     final desktop = isDesktop(context);
     // Nothing chosen yet: the list stays (there would be nothing to show), and a desktop window may show the starting page.
@@ -176,7 +196,7 @@ class TwoPaneState extends State<TwoPane> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  width: desktop ? kDesktopListWidth : (width >= kWideWidth ? kWideListWidth : kListWidth),
+                  width: desktop ? kDesktopListWidth : listPaneWidth(width),
                   // A hidden list is out of reach: no taps, and a screen reader skips it. Shown, it is a semantics container of its
                   // own beside the detail's (below), so the detail page's route barrier, which blocks the semantics of whatever
                   // was painted before it in its container, cannot take the list out of the screen reader's reach.
@@ -278,8 +298,9 @@ const double kTwoColumnGap = 24;
 /// The narrowest page that takes two columns: two of 380 and the gap.
 const double kTwoColumnMinWidth = 2 * kTwoColumnLeftMinWidth + kTwoColumnGap;
 
-/// Reading text (an article, search results with their snippets, a long answer) kept to about [chars] characters a line on a
-/// desktop window, where the detail can be 1400 wide; placed by [alignment] in the room it has. Narrower windows are not touched.
+/// Reading text (an article, search results with their snippets, a long answer) kept to about [chars] characters a line on any
+/// window wider than that (a tablet held sideways, a desktop window); placed by [alignment] in the room it has. A phone is narrower,
+/// so nothing changes there.
 /// A character is the width of "0" in [style] (the surrounding text style when null), as CSS's `ch`.
 class ReadingWidth extends StatelessWidget {
   const ReadingWidth({super.key, required this.child, this.chars = kReadingChars, this.style, this.alignment = Alignment.topCenter});
@@ -289,10 +310,8 @@ class ReadingWidth extends StatelessWidget {
   final TextStyle? style;
   final AlignmentGeometry alignment;
 
-  /// The widest reading text may be in the window [context] is in: infinity under [kDesktopMinWidth]. For a scrolling list, pad
-  /// it with [padFor] so it scrolls from anywhere across the page.
+  /// The widest reading text may be. For a scrolling list, pad it with [padFor] so it scrolls from anywhere across the page.
   static double maxWidthOf(BuildContext context, {double chars = kReadingChars, TextStyle? style}) {
-    if (!isDesktop(context)) return double.infinity;
     final base = DefaultTextStyle.of(context).style.merge(style);
     final tp = TextPainter(
       text: TextSpan(text: '0', style: base),
@@ -322,8 +341,48 @@ class ReadingWidth extends StatelessWidget {
   }
 }
 
-/// Characters a line of reading text keeps to on a desktop window.
+/// Characters a line of reading text keeps to.
 const double kReadingChars = 70;
+
+/// The widest a page's rows, forms and cards are (Settings, Home, Weather, Models...): a wider window centres them, with the page's
+/// background either side, so a label and its switch or chevron stay close. A phone is narrower.
+const double kContentMaxWidth = 720;
+
+/// A page's content kept to [maxWidth] (at most [kContentMaxWidth]) and placed by [alignment]; a narrower page is not touched.
+/// For a scrolling list, pad it with [padFor] instead, so it scrolls from anywhere across the page.
+class ContentWidth extends StatelessWidget {
+  const ContentWidth({super.key, required this.child, this.maxWidth = kContentMaxWidth, this.alignment = Alignment.topCenter});
+
+  final Widget child;
+  final double maxWidth;
+  final AlignmentGeometry alignment;
+
+  /// Side padding that keeps a list's content to [maxWidth] on a page [width] wide, at least [min] each side.
+  static EdgeInsets padFor(double width, {double min = 16, double maxWidth = kContentMaxWidth}) =>
+      EdgeInsets.symmetric(horizontal: ((width - maxWidth) / 2).clamp(min, double.infinity).toDouble());
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: alignment,
+    child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child),
+  );
+}
+
+/// A bottom sheet that fits any window: as tall as its content, up to the window's height (less the status bar), and scrolling
+/// when the content is taller (a phone held sideways), so no choice is ever off the screen. 560 wide at most, as every sheet.
+Future<T?> showFittedSheet<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool showDragHandle = false,
+  Color? backgroundColor,
+}) => showModalBottomSheet<T>(
+  context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
+  showDragHandle: showDragHandle,
+  backgroundColor: backgroundColor,
+  builder: (ctx) => SingleChildScrollView(child: builder(ctx)),
+);
 
 class _PaneScope extends InheritedWidget {
   const _PaneScope({required this.state, required this.inList, required this.selected, required this.hidden, required super.child});

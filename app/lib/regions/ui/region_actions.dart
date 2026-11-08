@@ -9,6 +9,7 @@ import '../problem_words.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
 import 'region_page.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// "Map, directions, places and off-road.": the parts a download brings, as one sentence.
 String partsSentence({bool map = false, bool routing = false, bool places = false, bool offroad = false}) {
@@ -340,7 +341,7 @@ Future<void> runRegionAction(BuildContext context, RegionsState regions, LocalRe
 
 /// The press-and-hold menu of a region on the phone: the same actions wherever the region is listed.
 Future<void> showRegionActions(BuildContext context, RegionsState regions, LocalRegion l, {bool open = true}) async {
-  final chosen = await showModalBottomSheet<RegionAction>(
+  final chosen = await showFittedSheet<RegionAction>(
     context: context,
     showDragHandle: true,
     builder: (ctx) => SafeArea(

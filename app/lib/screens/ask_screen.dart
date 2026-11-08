@@ -8,7 +8,7 @@ import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
 import '../history/share.dart';
-import '../layout/adaptive.dart' show ReadingWidth;
+import '../layout/adaptive.dart' show ReadingWidth, showFittedSheet;
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart' show LocationPermissionState;
@@ -138,7 +138,7 @@ class _AskScreenState extends State<AskScreen> {
   Future<void> _plusMenu() async {
     final location = widget.location;
     if (location == null) return;
-    await showModalBottomSheet<void>(
+    await showFittedSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => ListenableBuilder(
@@ -186,7 +186,7 @@ class _AskScreenState extends State<AskScreen> {
   /// The model name's menu: the model and the memory it takes, Switch model, Unload (frees the memory), Manage models.
   Future<void> _modelMenu() async {
     final app = widget.app;
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -223,7 +223,7 @@ class _AskScreenState extends State<AskScreen> {
     if (!mounted) return;
     switch (choice) {
       case 'switch':
-        final m = await showModalBottomSheet<ModelEntry>(
+        final m = await showFittedSheet<ModelEntry>(
           context: context,
           showDragHandle: true,
           builder: (ctx) => SafeArea(

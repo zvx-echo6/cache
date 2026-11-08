@@ -11,6 +11,7 @@ import '../models/search_model.dart' show kSearchModel;
 import '../platform/memory.dart' show modelMemoryNeed;
 import 'download_confirm.dart';
 import 'settings/widgets.dart' show GroupLabel;
+import '../layout/adaptive.dart' show ContentWidth;
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -84,7 +85,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
         child: ListenableBuilder(
         listenable: Listenable.merge([app, _recommended, ?downloads]),
         builder: (context, _) {
-          return Column(
+          return ContentWidth(child: Column(
             children: [
               Expanded(
                 child: ListView(
@@ -169,7 +170,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                   ),
                 ),
             ],
-          );
+          ));
         },
         ),
       ),

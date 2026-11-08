@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../layout/adaptive.dart' show ContentWidth, isShort;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 
@@ -45,7 +46,32 @@ class SourcesScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: sources,
         builder: (context, _) {
-          return Column(
+          final addBlock = Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.icon(
+                  onPressed: sources.copyProgress != null
+                      ? null
+                      : () => sources.pickAndAddZim(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add a ZIM…'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Files are copied to the app\'s own folder. Each new ZIM is indexed in the background, which can take a while.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: k.secondary),
+                ),
+              ],
+            ),
+          );
+          // A short window (a phone held sideways) has Add a ZIM at the end of the list, so the rows keep the height; a wide one
+          // keeps them to the content width.
+          final short = isShort(context);
+          return ContentWidth(
+            child: Column(
             children: [
               Expanded(
                 child: sources.zims.isEmpty
@@ -67,6 +93,7 @@ class SourcesScreen extends StatelessWidget {
                         ),
                         children: [
                           for (final z in sources.zims) _tile(context, z),
+                          if (short) addBlock,
                         ],
                       ),
               ),
@@ -101,31 +128,9 @@ class SourcesScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: sources.copyProgress != null
-                            ? null
-                            : () => sources.pickAndAddZim(),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add a ZIM…'),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Files are copied to the app\'s own folder. Each new ZIM is indexed in the background, which can take a while.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14, color: k.secondary),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              if (!short || sources.zims.isEmpty) SafeArea(top: false, child: addBlock),
             ],
+            ),
           );
         },
       ),

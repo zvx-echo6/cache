@@ -30,7 +30,7 @@ import '../notebook/notebook_text.dart';
 import '../nav/nav_state.dart';
 import '../nav/ui/guidance_panels.dart';
 import '../browse/place_about.dart';
-import '../layout/adaptive.dart' show kSideCardWidth;
+import '../layout/adaptive.dart' show kMapSideWidth, kSideCardWidth, showFittedSheet;
 import '../nav/ui/place_card.dart';
 import '../maps/ui/repeater_card.dart';
 import '../nav/ui/route_panel.dart';
@@ -517,7 +517,7 @@ class _MapsScreenState extends State<MapsScreen> {
   void _notebookCard(NbEntry e) {
     final book = widget.notebooks?.notebook(e.notebookId);
     final place = e.place!;
-    showModalBottomSheet<void>(
+    showFittedSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -973,7 +973,9 @@ class _MapsScreenState extends State<MapsScreen> {
               child: NoticePill(text: maps.baseProblem!),
             ),
           ),
-        if (!drawing) ...[
+        if (!drawing && MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null)
+          _sideLayers(context, fix, follow)
+        else if (!drawing) ...[
           _topLayer(context, fix, follow),
           if (_measure == null) _bottomLayer(context),
         ],
@@ -1010,31 +1012,7 @@ class _MapsScreenState extends State<MapsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Flexible(child: top),
-            if (!previewing && !guiding && nav.fromPlace != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Container(
-                  key: const ValueKey('from-chip'),
-                  padding: const EdgeInsets.only(left: 14),
-                  decoration: mapPanel(context, radius: 16),
-                  child: Row(
-                    children: [
-                      Icon(Icons.trip_origin, size: 18, color: context.t.accent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text('From ${nav.fromPlace!.name}: choose where to go',
-                            maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: context.t.text)),
-                      ),
-                      IconButton(
-                        tooltip: 'Start from your location',
-                        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                        icon: const Icon(Icons.close, size: 18),
-                        onPressed: nav.clearFrom,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
             if (!searching) ...[
               const SizedBox(height: 10),
               Row(
@@ -1090,20 +1068,117 @@ class _MapsScreenState extends State<MapsScreen> {
     );
   }
 
+  /// The place card, the way to go, the guidance bar or a repeater's card; null when none shows.
+  Widget? _panel(bool searching) {
+    final sel = nav.selected;
+    if (nav.guiding) return GuidanceBar(nav: nav, fmt: nav.fmt);
+    if (nav.phase == NavPhase.previewing) return RoutePanel(nav: nav, fmt: nav.fmt);
+    if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about);
+    if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
+    return null;
+  }
+
+  /// From [kSideCardWidth] wide (a tablet, a computer's window, a phone held sideways): a column on the left with the search bar
+  /// (or the directions header, or the turn banner) and under it the place card or the way to go (the guidance bar at its foot),
+  /// scrolling when taller than the room; beside it, over the map, the position and the buttons at the top and the scale and
+  /// credits at the foot. Nothing covers anything, and the map stays in view.
+  Widget _sideLayers(BuildContext context, Fix? fix, FollowMode follow) {
+    final guiding = nav.guiding;
+    final previewing = nav.phase == NavPhase.previewing;
+    final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
+    final Widget top = guiding
+        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+        : previewing
+            ? DirectionsHeader(nav: nav)
+            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
+    final panel = _panel(searching);
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 12, 12, 8 + (searching ? MediaQuery.viewInsetsOf(context).bottom : 0)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: kMapSideWidth,
+              child: LayoutBuilder(
+                builder: (context, c) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (panel == null) Flexible(child: top) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
+                    if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
+                    if (panel != null) ...[
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: Align(
+                          alignment: guiding ? Alignment.bottomCenter : Alignment.topCenter,
+                          child: SingleChildScrollView(child: SizedBox(width: double.infinity, child: panel)),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!searching)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (fix != null && !guiding) Flexible(child: _coordsChip(context, fix)),
+                        const Spacer(),
+                        _controls(context, fix, follow),
+                      ],
+                    ),
+                  const Spacer(),
+                  if (maps.notice != null && panel == null) ...[
+                    Center(child: NoticePill(text: maps.notice!)),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!searching) ...[
+                    ScaleBarWidget(lat: _lat, zoom: _zoom),
+                    const SizedBox(height: 6),
+                    AttributionChip(lines: maps.attributions, onTap: _showCredits),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "From <place>: choose where to go", with the way back to starting from where you are.
+  Widget _fromChip(BuildContext context) => Container(
+      key: const ValueKey('from-chip'),
+      padding: const EdgeInsets.only(left: 14),
+      decoration: mapPanel(context, radius: 16),
+      child: Row(
+        children: [
+          Icon(Icons.trip_origin, size: 18, color: context.t.accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('From ${nav.fromPlace!.name}: choose where to go',
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: context.t.text)),
+          ),
+          IconButton(
+            tooltip: 'Start from your location',
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: nav.clearFrom,
+          ),
+        ],
+      ),
+    );
+
   /// The bottom: the scale and credits, and above them the place card, the way to go, or the guidance bar.
   Widget _bottomLayer(BuildContext context) {
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
-    final sel = nav.selected;
-    Widget? panel;
-    if (nav.guiding) {
-      panel = GuidanceBar(nav: nav, fmt: nav.fmt);
-    } else if (nav.phase == NavPhase.previewing) {
-      panel = RoutePanel(nav: nav, fmt: nav.fmt);
-    } else if (sel != null && !searching) {
-      panel = PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about);
-    } else if (!searching && nav.phase == NavPhase.browsing) {
-      panel = _repeaterCard();
-    }
+    final panel = _panel(searching);
     return Align(
       alignment: Alignment.bottomCenter,
       child: Padding(
@@ -1125,10 +1200,10 @@ class _MapsScreenState extends State<MapsScreen> {
                 AttributionChip(lines: maps.attributions, onTap: _showCredits),
                 const SizedBox(height: 6),
               ],
-              // From 800 wide a place or repeater card sits on the left (360 wide) and the map stays in view beside it.
+              // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)
               if (panel != null && !searching)
                 SizedBox(
-                  width: MediaQuery.sizeOf(context).width >= kSideCardWidth && (panel is PlaceCard || panel is RepeaterCard) ? 360 : double.infinity,
+                  width: double.infinity,
                   child: Padding(padding: const EdgeInsets.only(bottom: 8), child: panel),
                 ),
             ],

@@ -7,6 +7,7 @@ import '../weather/places.dart';
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'weather_turn_on.dart';
+import '../layout/adaptive.dart' show ContentWidth;
 
 /// The Weather module: for each watched place, the forecast day by day and everything that is happening near it (warnings,
 /// fires, earthquakes, rivers, avalanches), each with its age. A thing that is happening opens with "Ask about this".
@@ -124,8 +125,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
           final st = w.status();
           return RefreshIndicator(
             onRefresh: _update,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+            child: LayoutBuilder(builder: (context, cts) => ListView(
+              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 4, bottom: 24),
               children: [
                 _statusBox(context, st),
                 const SizedBox(height: 12),
@@ -184,7 +185,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                   ),
                 ],
               ],
-            ),
+            )),
           );
         },
       ),
@@ -218,9 +219,12 @@ class _WeatherScreenState extends State<WeatherScreen> {
 
   Widget _empty(BuildContext context, String a, String b, {bool offerTurnOn = true}) {
     final k = context.t;
+    // The words and the buttons keep to a narrow column, centred, on a wide window.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
-      child: Column(
+      child: ContentWidth(
+        maxWidth: 440,
+        child: Column(
         children: [
           Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
@@ -236,6 +240,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 : TextButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
           ],
         ],
+        ),
       ),
     );
   }

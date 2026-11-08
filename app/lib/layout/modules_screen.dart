@@ -6,6 +6,7 @@ import '../screens/ask_off.dart' show askOffDetail;
 import '../theme.dart';
 import 'layout_state.dart';
 import 'modules.dart';
+import 'adaptive.dart' show ContentWidth, kContentMaxWidth, showFittedSheet;
 
 void _say(BuildContext context, String text) {
   final m = ScaffoldMessenger.of(context);
@@ -35,7 +36,7 @@ class ModulesScreen extends StatelessWidget {
 
   Future<void> _actions(BuildContext context, ModuleId m) async {
     final pinned = layout.isPinned(m);
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(
@@ -119,21 +120,24 @@ class ModulesScreen extends StatelessWidget {
     );
   }
 
-  Widget _grid(BuildContext context, CacheTokens k, double width) {
+  Widget _grid(BuildContext context, CacheTokens k, double page) {
     final large = app.largeModuleIcons;
+    // A wide window keeps the grid to the content width, centred; the small icons take a column per 150 there (3 on a phone).
+    final width = page < kContentMaxWidth ? page : kContentMaxWidth;
+    final columns = large ? 2 : ((width - 32) / 150).floor().clamp(3, 6);
     // Large: two columns 12 apart inside the 16 side margins, each square as wide as its column.
     final box = large ? ((width - 32 - 12) / 2).clamp(64.0, 240.0) : 64.0;
     // No model: Ask is greyed, with a line (up to two) under its name.
     final askOff = !app.askAvailable;
     final offDetail = askOff ? askOffDetail(app, downloads) : null;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+      padding: ContentWidth.padFor(page).copyWith(top: 20, bottom: 24),
       children: [
         GridView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: large ? 2 : 3,
+            crossAxisCount: columns,
             mainAxisSpacing: 20,
             crossAxisSpacing: 12,
             mainAxisExtent: box + (askOff ? 74 : 48),

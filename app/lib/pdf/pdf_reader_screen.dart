@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
-import '../layout/adaptive.dart' show kDesktopMinWidth;
+import '../layout/adaptive.dart' show isShort, kDesktopMinWidth;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
@@ -756,7 +756,8 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
               Expanded(child: _body(k)),
             ],
           ),
-          bottomNavigationBar: open && _barsShown ? _bottomBar(k) : null,
+          // A short window (a phone held sideways) has the page buttons in the top bar instead, so the page keeps the height.
+          bottomNavigationBar: open && _barsShown && !isShort(context) ? _bottomBar(k) : null,
         ),
       ),
     );
@@ -794,6 +795,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         ],
       ),
       actions: [
+        if (_phase == _Phase.open && isShort(context)) ..._pageButtons(),
         IconButton(
           key: const ValueKey('pdf-find'),
           tooltip: 'Find in this PDF',
@@ -823,17 +825,19 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  Widget _bottomBar(CacheTokens k) {
+  Widget _bottomBar(CacheTokens k) => BottomAppBar(
+    height: 56,
+    padding: EdgeInsets.zero,
+    color: k.surface,
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: _pageButtons()),
+  );
+
+  /// Previous page, Fit page or width, Next page: the bottom bar's buttons (the top bar's on a short window).
+  List<Widget> _pageButtons() {
     final atStart = _page <= 1;
     final atEnd = _page >= _pageCount;
     final toPage = _fit == _Fit.width;
-    return BottomAppBar(
-      height: 56,
-      padding: EdgeInsets.zero,
-      color: k.surface,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
+    return [
           IconButton(
             key: const ValueKey('pdf-prev'),
             tooltip: 'Previous page',
@@ -852,9 +856,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
             icon: const Icon(Icons.keyboard_arrow_down),
             onPressed: atEnd || !_ready ? null : () => _goToPage(_page + 1),
           ),
-        ],
-      ),
-    );
+    ];
   }
 
   Widget? _stripFor(CacheTokens k) {

@@ -7,6 +7,7 @@ import '../../notebook/sync/folder_access.dart';
 import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag;
 import '../../notebook/sync/sync_engine.dart';
 import '../../theme.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// Chooses a folder: its stored form and name, or null when none was chosen (tests give their own).
 typedef PickFolder = Future<({String path, String display})?> Function();
@@ -35,7 +36,7 @@ class ConnectionsScreen extends StatelessWidget {
     final messenger = ScaffoldMessenger.of(context);
     var k = kind;
     if (kind == SyncKind.logseq) {
-      final pick = await showModalBottomSheet<SyncKind>(
+      final pick = await showFittedSheet<SyncKind>(
         context: context,
         showDragHandle: true,
         builder: (ctx) => SafeArea(

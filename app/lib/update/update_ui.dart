@@ -227,35 +227,43 @@ Future<void> showWhatsNew(BuildContext context, {required String version, requir
   constraints: BoxConstraints(maxWidth: 560, maxHeight: MediaQuery.sizeOf(context).height * 0.85),
   builder: (ctx) {
     final k = ctx.t;
+    // The lines scroll; Got it stays under them, always in view (a phone held sideways has room for a few lines only).
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-        child: Column(
-          key: const ValueKey('whats-new'),
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("What's new in $version", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
-            const SizedBox(height: 12),
-            for (final l in lines)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(padding: const EdgeInsets.only(top: 7), child: Icon(Icons.circle, size: 6, color: k.accent)),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text.rich(_bold(l), style: TextStyle(fontSize: 14, height: 1.4, color: k.text))),
-                  ],
-                ),
+      child: Column(
+        key: const ValueKey('whats-new'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("What's new in $version", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                  const SizedBox(height: 12),
+                  for (final l in lines)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(padding: const EdgeInsets.only(top: 7), child: Icon(Icons.circle, size: 6, color: k.accent)),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text.rich(_bold(l), style: TextStyle(fontSize: 14, height: 1.4, color: k.text))),
+                        ],
+                      ),
+                    ),
+                ],
               ),
-            const SizedBox(height: 6),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(key: const ValueKey('whats-new-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
             ),
-          ],
-        ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 6, 24, 16),
+            child: FilledButton(key: const ValueKey('whats-new-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
+          ),
+        ],
       ),
     );
   },

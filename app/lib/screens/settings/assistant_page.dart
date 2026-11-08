@@ -12,6 +12,7 @@ import '../models_screen.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
 import 'widgets.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// Settings > Assistant: the model, the web search service and its switch, and the saved conversations.
 class AssistantPage extends StatelessWidget {
@@ -57,7 +58,7 @@ class AssistantPage extends StatelessWidget {
   }
 
   Future<void> _manage(BuildContext context) async {
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(

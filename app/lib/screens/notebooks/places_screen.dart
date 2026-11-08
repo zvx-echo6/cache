@@ -360,7 +360,7 @@ Future<bool> confirmDeletePlace(BuildContext context, String name) async =>
 
 /// The "Weather and alerts" switch and gear of a place that is not being edited ("Where I am").
 Future<void> showWeatherSheet(BuildContext context, PlaceNotebookDeps p, {required String placeId, required String name}) =>
-    showModalBottomSheet<void>(
+    showFittedSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => StatefulBuilder(
@@ -482,10 +482,10 @@ class PlaceView extends StatelessWidget {
                 ),
               ],
             ),
-            body: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            body: LayoutBuilder(builder: (context, cts) => ListView(
+              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
               children: [
-                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 200, child: pd!.map!(context, p, null))),
+                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null))),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -534,7 +534,7 @@ class PlaceView extends StatelessWidget {
                   ),
                 ],
               ],
-            ),
+            )),
           );
         },
       ),
@@ -715,8 +715,8 @@ class _PlaceFormState extends State<PlaceForm> {
           leading: IconButton(key: const ValueKey('place-close'), tooltip: 'Close', icon: const Icon(Icons.close), onPressed: _cancel),
           title: Text(_isNew ? 'Add place' : 'Edit place'),
         ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        body: LayoutBuilder(builder: (context, cts) => ListView(
+          padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 32),
           children: [
             TextField(
               key: const ValueKey('place-search'),
@@ -738,7 +738,11 @@ class _PlaceFormState extends State<PlaceForm> {
               ),
             if (pd?.map != null) ...[
               const SizedBox(height: 8),
-              ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 220, child: pd!.map!(context, pin, (p) => setState(() => _pin = p)))),
+              // 220 high, less on a short window (a phone held sideways), so the name and the switches show under it.
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p))),
+              ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
@@ -851,7 +855,7 @@ class _PlaceFormState extends State<PlaceForm> {
               ),
             ],
           ],
-        ),
+        )),
       ),
     );
   }

@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton;
+import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton, ContentWidth;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
@@ -638,7 +638,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           height: 56,
           padding: EdgeInsets.zero,
           color: k.surface,
-          child: Row(
+          child: ContentWidth(maxWidth: 400, alignment: Alignment.center, child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
@@ -668,7 +668,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 onPressed: _goHome,
               ),
             ],
-          ),
+          )),
         ),
       ),
     );

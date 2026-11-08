@@ -1611,7 +1611,8 @@ PlayerScreen _knots(_VideoPictures p, RecordingController c, {VideoPrefs? prefs}
   ),
   prefs: prefs ?? VideoPrefs(),
   channel: 'Field Skills',
-  mobileOverride: false,
+  // A phone's sizes are drawn as on a phone (turned sideways, a wide video goes full screen); the rest as a window.
+  mobileOverride: auditSize.shortestSide < 600,
   savedQuality: '480p',
   frame: Image.file(File(p.frame), fit: BoxFit.cover),
   controllerFactory: (_) => c,

@@ -13,6 +13,7 @@ import '../layers/layer_def.dart';
 import '../maps_state.dart';
 import '../user_layers.dart';
 import 'catalogue_screen.dart';
+import '../../layout/adaptive.dart' show isShort, showFittedSheet;
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
 Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers}) {
@@ -20,7 +21,9 @@ Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationServic
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
-    constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
+    useSafeArea: true,
+    // 560 wide at most, as every sheet; most of the window's height (all of a short window's, a phone held sideways).
+    constraints: BoxConstraints(maxWidth: 560, maxHeight: isShort(context) ? double.infinity : MediaQuery.sizeOf(context).height * 0.8),
     builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers),
   );
 }
@@ -205,7 +208,7 @@ class LayerSheet extends StatelessWidget {
 /// file picker. Reading a file shows "Reading file…" with a bar until it is done; the end says how many came in, with Show when
 /// [onShowList] is given (the list notebook).
 Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLayersState? userLayers, void Function(String listId)? onShowList}) async {
-  final kind = await showModalBottomSheet<String>(
+  final kind = await showFittedSheet<String>(
     context: context,
     showDragHandle: true,
     builder: (ctx) => SafeArea(
