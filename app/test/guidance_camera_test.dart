@@ -125,12 +125,13 @@ void main() {
       // Heading east: the centre is east of the position.
       expect(target[1], greaterThan(-114.46));
 
-      // Guidance over: back on the position.
-      final before = camera.cameras.length;
+      // Guidance over (the map then shows the place); following again, the camera is back on the position.
       await tester.runAsync(() => nav.end());
+      await tester.pump();
+      maps.setFollow(FollowMode.headingUp);
       location.publish(fixAt(42.561, -114.461, heading: 90));
       await tester.pump();
-      expect(camera.cameras.length, greaterThan(before));
+      expect(nav.guiding, isFalse);
       expect(lastPosition()['target'], [42.561, -114.461]);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
