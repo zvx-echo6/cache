@@ -85,6 +85,11 @@ flutter {
     source = "../.."
 }
 
+// The car screen's Robolectric tests read the merged assets, which the Flutter plugin's copy task writes: let it run first.
+tasks.configureEach {
+    if (name == "packageDebugUnitTestForUnitTest") dependsOn("copyFlutterAssetsDebug")
+}
+
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // Android Auto (approved 2026-11-08): the Android for Cars App Library, stable 1.7.0, and its Android Auto part.

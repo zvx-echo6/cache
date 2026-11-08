@@ -32,7 +32,7 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading}
     'voiceOn': nav.voiceOn,
     'arrived': nav.arrived,
     'rerouting': nav.rerouting,
-    if (position != null) 'position': {'lat': position.lat, 'lon': position.lon, if (heading != null) 'heading': heading},
+    if (position != null) 'position': {'lat': position.lat, 'lon': position.lon, 'heading': ?heading},
     if (nav.guiding && p != null && !nav.rerouting) ...{
       'step': p.next == null ? null : carStep(p.next!, nav.fmt),
       'then': p.then == null || (p.then!.isArrival && (p.next?.isArrival ?? false)) ? null : carStep(p.then!, nav.fmt),

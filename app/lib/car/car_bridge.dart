@@ -120,8 +120,8 @@ class CarBridge {
     final p = nav.progress;
     final f = nav.lastFix ?? nav.fix;
     final onRoute = nav.guiding && p != null && p.onRoute;
-    final pos = onRoute ? p!.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
-    final heading = onRoute ? p!.routeBearingDeg.toDouble() : f?.heading;
+    final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
+    final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     return carTrip(nav, position: pos, heading: heading);
   }
 
