@@ -5,6 +5,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../files.dart' as files;
+
 /// How much Cache writes to its own log (Settings > Storage > Advanced > Log level). Each level writes what the one before
 /// it writes, and more:
 /// - [minimal]: what failed and when (errors and crashes), with no file names or content;
@@ -134,12 +136,21 @@ class AppLog extends ChangeNotifier {
     }
   }
 
-  Future<void> _saveLevel() async {
+  /// The last write of level.json; each waits for the one before, so they land in the order they were asked for.
+  Future<void> _levelSaving = Future<void>.value();
+
+  /// Keeps the level on the device: written whole (a temp file renamed over it), so a log opened meanwhile reads the level
+  /// before or after, never an empty or half-written file (which read as Standard).
+  Future<void> _saveLevel() {
     final d = _dir;
-    if (d == null) return;
-    try {
-      await _levelFile.writeAsString(jsonEncode({'level': _level.name, 'before': _before.name, 'until': _everythingUntil?.toIso8601String()}));
-    } catch (_) {}
+    if (d == null) return _levelSaving;
+    final file = _levelFile;
+    final text = jsonEncode({'level': _level.name, 'before': _before.name, 'until': _everythingUntil?.toIso8601String()});
+    return _levelSaving = _levelSaving.then((_) async {
+      try {
+        await files.writeStringAtomic(file, text);
+      } catch (_) {}
+    });
   }
 
   /// Whether lines of [l] are written now.
@@ -223,6 +234,7 @@ class AppLog extends ChangeNotifier {
   /// Flushes and closes the current file. The logger may be opened again.
   Future<void> close() async {
     await flush();
+    await _levelSaving;
     final sink = _sink;
     _sink = null;
     _dir = null;
