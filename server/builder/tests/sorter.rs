@@ -1,6 +1,6 @@
 //! `cache-build library --classifier`: the books no label placed are filed by the sorter from their vectors. A confident book gets
 //! its division as `suggested` (source classifier) and a place and assign in the seed log; any other is left in Unsorted, with its
-//! best guess in the view and no place event. A labelled book is not touched. Packs are made up (vectors on axes), no PDFs.
+//! best guess in the view and no place event. A labeled book is not touched. Packs are made up (vectors on axes), no PDFs.
 
 use cache_builder::docs::{default_division_names, Overrides};
 use cache_builder::embed::DIMS;
@@ -77,7 +77,7 @@ fn pack(id: &str, title: &str, text: &str, vector: Vec<f32>, label: Option<&str>
 }
 
 fn packs(dir: &Path) {
-    // A: confident (axis 1 = division 120). B: between 110 and 130, not sure. C: labelled 440. D: no real text.
+    // A: confident (axis 1 = division 120). B: between 110 and 130, not sure. C: labeled 440. D: no real text.
     for p in [
         pack("a1", "Alpha", PROSE, axis(&[(1, 1.0)]), None),
         pack("b1", "Bravo", PROSE, axis(&[(0, 1.0), (2, 1.0)]), None),
@@ -105,7 +105,7 @@ fn the_sorter_files_the_unplaced_books_and_leaves_the_unsure_ones_in_unsorted() 
     let over = Overrides { names: default_division_names(), sorter: Some(load_model(&good_model()).unwrap()), ..Default::default() };
     let (report, _) = build_library_with(&pk, &lib, &opts(false), &over).unwrap();
 
-    // the report: the three the sorter looked at (not the labelled one)
+    // the report: the three the sorter looked at (not the labeled one)
     let mut rows = report.sorter.clone();
     rows.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
     assert_eq!(rows.iter().map(|r| r.doc_id.as_str()).collect::<Vec<_>>(), ["a1", "b1", "d1"]);
@@ -115,7 +115,7 @@ fn the_sorter_files_the_unplaced_books_and_leaves_the_unsure_ones_in_unsorted() 
     assert!(rows[1].score < 0.6 && !rows[1].top.is_empty());
     assert_eq!((rows[2].division.clone(), rows[2].unsure.as_deref(), rows[2].top.len()), (None, Some("no_text"), 0));
 
-    // the seed log: place and assign for the sorted book and the labelled one; nothing for the unsure ones
+    // the seed log: place and assign for the sorted book and the labeled one; nothing for the unsure ones
     let log = std::fs::read_to_string(lib.join("log").join("builder-sorted.jsonl")).unwrap();
     assert!(log.contains(r#""ev":"place","doc":"a1","div":"120","by":"auto""#), "{log}");
     assert!(log.contains(r#""ev":"place","doc":"c1","div":"440","by":"auto""#), "{log}");
@@ -145,7 +145,7 @@ fn without_a_classifier_the_unlabelled_books_stay_unsorted_as_before() {
     let (report, _) = build_library_with(&pk, &lib, &opts(false), &Overrides::default()).unwrap();
     assert!(report.sorter.is_empty());
     let log = std::fs::read_to_string(lib.join("log").join("builder-sorted.jsonl")).unwrap();
-    assert_eq!(log.lines().count(), 2, "only the labelled book is placed: {log}");
+    assert_eq!(log.lines().count(), 2, "only the labeled book is placed: {log}");
 }
 
 #[test]

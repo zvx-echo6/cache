@@ -337,7 +337,7 @@ pub fn f16_to_f32(h: u16) -> f32 {
     let bits = match (exp, man) {
         (0, 0) => sign,
         (0, m) => {
-            // subnormal: normalise
+            // subnormal: normalize
             let mut e = 113;
             let mut m = m;
             while m & 0x400 == 0 {
@@ -433,7 +433,7 @@ pub fn decode_vector(s: &str) -> Result<Vec<f32>> {
     Ok(bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
-/// Serialise a pack to its bytes (gzip of JSON Lines).
+/// Serialize a pack to its bytes (gzip of JSON Lines).
 pub fn pack_bytes(pack: &Pack) -> Result<Vec<u8>> {
     if pack.header.pieces != pack.pieces.len() {
         return Err(Error::new("the header's piece count does not match the pieces"));

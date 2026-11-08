@@ -1,5 +1,5 @@
 //! The text embedder on the server: bge-m3 (Q8_0) through cache_llama's `cl_embed`, loaded at run time by the `cache_embed` crate,
-//! so a vector made here is the vector the phone makes (same library code, same settings: context 512, normalised, CLS pooling
+//! so a vector made here is the vector the phone makes (same library code, same settings: context 512, normalized, CLS pooling
 //! read from the GGUF). Two callers:
 //!   * the library builder, through [`EmbedService::embed_batch`] (blocking; one loaded context, reused for the whole batch);
 //!   * the browser's query embedding, through `POST /api/embed {texts}` (at most [`MAX_TEXTS`] texts).
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!((e.status, e.code), (503, "model_missing"));
     }
 
-    /// A one-file origin on this machine that honours `Range`.
+    /// A one-file origin on this machine that honors `Range`.
     fn origin(body: Vec<u8>) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();

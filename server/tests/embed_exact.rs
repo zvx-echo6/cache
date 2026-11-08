@@ -1,4 +1,4 @@
-//! The embedder on the server must give the phone's vectors: bge-m3 Q8_0, context 512, normalised, CLS pooling, through the same
+//! The embedder on the server must give the phone's vectors: bge-m3 Q8_0, context 512, normalized, CLS pooling, through the same
 //! `cache_embed` code the `cs` command line and the places pack builder use. These tests need the real model and the Linux
 //! cache_llama library, so they are `#[ignore]`d and run by the CI workflow (and by hand on a build machine) with:
 //!

@@ -26,7 +26,7 @@
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
-//!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
+//!   GET  /api/fetch?url=<encoded>           -> the answer of a catalog host (allow-list in `fetch`), streamed, at most 50 MB
 //!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
 //!   /api/build/...                          -> building libraries from PDFs and the drop folder; the whole list is in server/BUILD-API.md
 //!                                              (libraries, books, upload, queue, drop folder)
@@ -88,7 +88,7 @@ pub struct App {
     /// `None` only in tests that never reach the core.
     pub helper: Option<Arc<Helper>>,
     pub web: PathBuf,
-    /// Library downloads, uploads, installed items and the catalogue fetch.
+    /// Library downloads, uploads, installed items and the catalog fetch.
     pub library: Arc<Library>,
     /// The bge-m3 embedder: the model download and the vectors (see `embed`).
     pub embed: Arc<EmbedService>,
@@ -102,7 +102,7 @@ pub struct Reply {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
     pub body: Vec<u8>,
-    /// A body that arrives in pieces (the catalogue fetch); when set, `body` is empty and the pieces are sent as they come.
+    /// A body that arrives in pieces (the catalog fetch); when set, `body` is empty and the pieces are sent as they come.
     pub stream: Option<tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>>,
 }
 
@@ -186,7 +186,7 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
                 status: 200,
                 headers: vec![
                     ("Content-Type", s.content_type.unwrap_or_else(|| "application/octet-stream".into())),
-                    // whatever the catalogue sends is data for the app to read, never a page of this origin
+                    // whatever the catalog sends is data for the app to read, never a page of this origin
                     ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
                 ],
                 body: vec![],

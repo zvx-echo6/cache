@@ -10,7 +10,7 @@ pub struct Page {
     pub picture: bool,
 }
 
-/// A page of ordinary text: `words` words of `topic`-flavoured sentences, wrapped to 70 characters.
+/// A page of ordinary text: `words` words of `topic`-flavored sentences, wrapped to 70 characters.
 pub fn text_page(topic: &str, page_no: usize, words: usize) -> Page {
     let mut text = String::new();
     let mut n = 0;

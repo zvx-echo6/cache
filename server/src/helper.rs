@@ -1,7 +1,7 @@
 //! The Dart helper (server/helper): a child process that hosts the app's core dispatcher. The server talks to it over its
 //! standard input and output, one JSON line each way (`{"id","op","args"}` in, `{"id","ok",...}` out), one request at a time.
 //!
-//! `Helper` starts it, waits for `{"ready":true}`, sends `open` with `{"sources": <sources.json, or null>}` (the helper builds the rest of the config on the app folders), and then serialises requests through
+//! `Helper` starts it, waits for `{"ready":true}`, sends `open` with `{"sources": <sources.json, or null>}` (the helper builds the rest of the config on the app folders), and then serializes requests through
 //! one lock. If the child dies or its pipe breaks, the request in flight fails with `Err(message)` (the route answers 503
 //! `core_unavailable`) and the child is started again in the background with a backoff, with `open` sent again.
 

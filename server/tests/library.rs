@@ -1,4 +1,4 @@
-//! Libraries on the server: download jobs, uploads, the installed items, the catalogue fetch proxy and the refused rescan op.
+//! Libraries on the server: download jobs, uploads, the installed items, the catalog fetch proxy and the refused rescan op.
 //! The downloads run against a small HTTP server on this machine (`Origin`); the helper is the fake one (testbin/fake_helper.rs),
 //! whose log shows that `sources.rescan` was sent.
 //! The 2 GB streaming test is in tests/upload_stream.rs (its own process, so memory can be measured).
@@ -606,7 +606,7 @@ async fn the_rescan_op_is_refused_from_a_browser_and_never_reaches_the_helper() 
     stop(&rig).await;
 }
 
-// ---- the catalogue fetch
+// ---- the catalog fetch
 
 async fn read_all(mut rx: tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>) -> (Vec<u8>, bool) {
     let mut got = vec![];

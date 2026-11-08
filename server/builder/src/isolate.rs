@@ -161,7 +161,7 @@ pub fn child_main() -> i32 {
     {
         if let Some(bytes) = std::env::var(ENV_MEM).ok().and_then(|v| v.parse::<u64>().ok()) {
             let lim = libc::rlimit { rlim_cur: bytes as libc::rlim_t, rlim_max: bytes as libc::rlim_t };
-            // SAFETY: setrlimit with a fully initialised struct.
+            // SAFETY: setrlimit with a fully initialized struct.
             unsafe {
                 libc::setrlimit(libc::RLIMIT_AS, &lim);
             }

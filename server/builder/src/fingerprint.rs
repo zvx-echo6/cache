@@ -1,7 +1,7 @@
 //! Content fingerprints: a MinHash of a book's words (to tell the same book in two files), and the mean meaning vector the
 //! server compares books by. Nothing here reads a clock or a random source, so the same text gives the same bytes.
 //!
-//! The MinHash is 128 minimums over 5-word shingles of the normalised text (lowercase, letters and digits only). The share of
+//! The MinHash is 128 minimums over 5-word shingles of the normalized text (lowercase, letters and digits only). The share of
 //! equal positions in two fingerprints estimates the Jaccard similarity of the two shingle sets.
 
 use crate::pack::PackPiece;
