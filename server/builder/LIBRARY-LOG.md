@@ -34,7 +34,7 @@ given with it. Another person's shelves number on their own.
 ```
 
 `cache_sync` never sends a name that starts with a dot, so `.local/` needs no rule of its own; keep it out of every allow-list. The Bookshelves
-log syncs only with linked devices set to **Match** (the same person's device); until that setting lands every linked device counts as Match.
+log syncs only with linked devices set to **Match** (the same person's device). A newly linked device starts as Off until someone answers the question after linking; links made before that setting existed were moved to Match once.
 
 ## The device id
 
