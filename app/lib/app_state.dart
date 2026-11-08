@@ -371,6 +371,28 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
+  String? get chosenModelFile => _lastModelFile;
+
+  /// Uses the model file [fileName] from now on, as a linked device's settings say (Settings > Sharing and sync > a device >
+  /// Settings): it loads at once when a model is loaded now, else when Ask opens. False when that file is not on this device;
+  /// nothing is downloaded for it.
+  Future<bool> useModelFile(String? fileName) async {
+    if (fileName == null) return true;
+    if (_lastModelFile == fileName && (active?.fileName == fileName || resting?.fileName == fileName)) return true;
+    final e = models.where((m) => m.fileName == fileName && !isUnsupported(m)).firstOrNull;
+    if (e == null) return false;
+    if (active != null && loading == null) {
+      await activate(e);
+      return active?.fileName == fileName;
+    }
+    _lastModelFile = fileName;
+    resting = e;
+    notifyListeners();
+    await _writeSettings();
+    return true;
+  }
+
   /// Unloads the active model to free its memory. Nothing is active after it, and the next start loads no model until
   /// one is chosen again.
   Future<void> unload() async {

@@ -5,6 +5,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'app_settings.dart';
 import 'data_policy.dart';
 import '../regions/regions_state.dart';
+import '../sharing/settings_sync.dart';
 import '../sharing/sharing_state.dart';
 import '../weather/weather_state.dart';
 import 'storage_usage.dart';
@@ -25,6 +26,7 @@ class SettingsHub {
     required this.storage,
     required this.weather,
     this.sharing,
+    this.settingsSync,
     this.regions,
     this.indexing,
     this.openUrl = openInSystemBrowser,
@@ -38,6 +40,9 @@ class SettingsHub {
 
   /// Sharing and sync between linked devices; null where the app has none (tests).
   final SharingState? sharing;
+
+  /// Settings between linked devices (each linked device's page); null where the app has none (tests).
+  final SettingsSync? settingsSync;
 
   /// Regions and downloads (road routing and map by region); null where the app has none (tests).
   final RegionsState? regions;
