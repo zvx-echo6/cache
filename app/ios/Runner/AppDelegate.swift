@@ -112,6 +112,21 @@ import workmanager_apple
       let answer: [String: Any] = ["percent": percent, "charging": charging, "thermal": thermal]
       result(answer)
     }
+    // Turn-by-turn guidance keeps the screen on (lib/nav/guidance_wakelock.dart): the idle timer is off while it asks, and back on
+    // as soon as it says so or the app goes to the background.
+    let screenAwake = FlutterMethodChannel(name: "co.cache/screen_awake", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    screenAwake.setMethodCallHandler { call, result in
+      guard call.method == "keepScreenOn" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let on = (call.arguments as? [String: Any])?["on"] as? Bool ?? false
+      UIApplication.shared.isIdleTimerDisabled = on
+      result(nil)
+    }
+    NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+      UIApplication.shared.isIdleTimerDisabled = false
+    }
     // The thermal state changed: the app reads it again at once (background index work eases off or pauses).
     NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in
       battery.invokeMethod("changed", arguments: nil)
