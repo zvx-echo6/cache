@@ -30,7 +30,7 @@ name: Linux build
 
 on:
   push:
-    branches: [server, 'server-*']
+    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
     paths:
       - 'server/**'
       - 'app/**'

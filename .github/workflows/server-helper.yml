@@ -3,7 +3,7 @@
 name: Linux helper
 on:
   push:
-    branches: [server, 'server-*']
+    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
     paths: ['server/helper/**', '.github/workflows/server-helper.yml']
   workflow_dispatch:
 permissions:

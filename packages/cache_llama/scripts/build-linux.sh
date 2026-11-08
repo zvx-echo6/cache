@@ -17,7 +17,7 @@ build="$1"
 avx2=""
 if [ "$(uname -m)" = "x86_64" ]; then avx2="-DCACHE_LLAMA_X86_AVX2=ON"; fi
 # libstdc++ and libgcc are linked in, so the installed library needs nothing but libc.
-cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release $avx2 \
+cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release $avx2 -DCACHE_LLAMA_GEMMA4_PREFILL_OPT=ON \
   -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 cmake --build "$build" --target cache_llama -j "$(nproc)"
 strip --strip-unneeded "$build/libcache_llama.so"
@@ -26,7 +26,9 @@ ls -l "$build/libcache_llama.so"
 ldd "$build/libcache_llama.so" || true
 # (the output is read whole: grep -q ending a pipe early would fail the script under pipefail)
 symbols=$(nm -D --defined-only "$build/libcache_llama.so")
-for s in cl_embed_load cl_embed_info cl_embed cl_embed_free; do
+# The embedder (cl_embed*) and the chat functions the server's /api/llm/* runs (cl_load ... cl_free, as llama_session_io.dart calls them).
+for s in cl_embed_load cl_embed_info cl_embed cl_embed_free \
+         cl_load cl_info cl_start cl_next cl_partial cl_finish cl_prompt_tokens cl_generated_tokens cl_stop cl_free; do
   grep -q " T $s\$" <<< "$symbols" || { echo "libcache_llama.so has no $s" >&2; exit 1; }
 done
 echo "max glibc: $(objdump -T "$build/libcache_llama.so" | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"

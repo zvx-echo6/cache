@@ -34,6 +34,12 @@
 //!   POST /api/models/embedder/download      -> the same; starts (or continues) the model download, 202-style: answers at once
 //!   POST /api/embed {texts:[...]}           -> {vectors:[[f32;1024]],model,dims}: 1 to 64 texts, in order; 503 model_missing while the
 //!                                              model is not there (the download is started), 503 embed_unavailable if it cannot load
+//!   GET  /api/llm/models                    -> {v,models:[{id,size,loaded,info?,n_ctx?}]}: the chat models (.gguf files) in <data>/models/, not the embedder
+//!   POST /api/llm/load {v:1,model,n_ctx?}   -> the loaded model's ModelInfo {description,n_ctx,chat_format,supports_tools}; by id only, never a path
+//!   POST /api/llm/generate {v:1,model?,request} -> application/x-ndjson, one event per line: queued {position}, started {id}, partial {...}, done {...}, error {code,message}
+//!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
+//!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
+//!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
@@ -55,6 +61,7 @@ use crate::helper::Helper;
 use crate::webfiles::{self, Resolved};
 use crate::embed::{self, EmbedService};
 use crate::libbuild::BuildService;
+use crate::llm::{self, LlmService};
 use crate::library::{ApiErr, Library};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, Limited};
@@ -85,6 +92,8 @@ pub struct App {
     pub library: Arc<Library>,
     /// The bge-m3 embedder: the model download and the vectors (see `embed`).
     pub embed: Arc<EmbedService>,
+    /// The chat model for the browser build of Ask (see `llm`).
+    pub llm: Arc<LlmService>,
     /// Building libraries from PDFs, and the drop folder (see `build`).
     pub build: Arc<BuildService>,
 }
@@ -325,6 +334,57 @@ async fn embedder(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Re
     })
 }
 
+/// `/api/llm/...` (the caller has checked the session). `None` when the path is not one of these.
+async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let rest = path.strip_prefix("/api/llm/")?;
+    let svc = app.llm.clone();
+    Some(match (method, rest) {
+        ("GET", "models") => {
+            // a `v` in the query, when given, must be 1 (there is no body to carry it)
+            if let Some(v) = crate::fetch::query_param(query, "v") {
+                if let Err(e) = llm::check_version(&json!({"v": v.parse::<i64>().ok()})) {
+                    return Some(api_error(e));
+                }
+            }
+            blocking(move || Ok(svc.models_json())).await
+        }
+        ("POST", "load") => {
+            let (id, n_ctx) = match llm::parse_load(body) {
+                Ok(x) => x,
+                Err(e) => return Some(api_error(e)),
+            };
+            blocking(move || svc.load(&id, n_ctx)).await
+        }
+        ("POST", "generate") => {
+            let (model, request) = match llm::parse_generate(body) {
+                Ok(r) => r,
+                Err(e) => return Some(api_error(e)),
+            };
+            if !svc.is_loaded() {
+                return Some(Reply::error(409, "no_model", "No model is loaded"));
+            }
+            // The events go out as they are made. If the client goes away the receiver is dropped, the write fails and the worker
+            // stops the generation.
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            tokio::task::spawn_blocking(move || svc.run_generation(model, request, tx));
+            Reply {
+                status: 200,
+                headers: vec![("Content-Type", "application/x-ndjson".into()), ("X-Accel-Buffering", "no".into())],
+                body: vec![],
+                stream: Some(rx),
+            }
+        }
+        ("POST", "stop") => {
+            let id = match llm::parse_stop(body) {
+                Ok(i) => i,
+                Err(e) => return Some(api_error(e)),
+            };
+            ok(json!({"stopped": svc.stop(id.as_deref())}))
+        }
+        _ => return None,
+    })
+}
+
 /// Linked roots are server-local; this route is reached only after the session gate.
 async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
     let rest = path.strip_prefix("/api/linked-folders/")?;
@@ -355,6 +415,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
         return r;
     }
     if let Some(r) = embedder(app, method, path, body).await {
+        return r;
+    }
+    if let Some(r) = llm_api(app, method, path, query, body).await {
         return r;
     }
     if let Some(r) = build_api(app, method, path, query, body).await {
@@ -757,6 +820,8 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
     let signed_in = cookie.as_deref().and_then(token_from_cookie).is_some_and(|t| app.auth.is_signed_in(t));
     let limit = if path == "/api/core" && signed_in {
         MAX_CORE_BODY
+    } else if path == "/api/llm/generate" && signed_in {
+        llm::MAX_GENERATE_BODY
     } else if path == "/auth/keyfile" {
         KEYFILE_MAX
     } else {
@@ -826,7 +891,9 @@ mod tests {
     fn test_app(dir: &TempDir, auth: Arc<Auth>, web: PathBuf) -> App {
         let library = Library::new(dir.0.clone(), None);
         let build = BuildService::new(dir.0.clone(), library.clone(), crate::libbuild::tests::FakeEmbed::new(true), crate::libbuild::BuildConfig::default());
-        App { auth, helper: None, web, library, embed: test_embed(dir), build }
+        let embed = test_embed(dir);
+        let llm = LlmService::new(dir.0.clone(), dir.0.join("none.so"), embed.model_id().to_string());
+        App { auth, helper: None, web, library, embed, llm, build }
     }
 
     fn app(dir: &TempDir) -> App {
@@ -927,6 +994,48 @@ mod tests {
         // a good call with no model on the server: asked to wait, and the download has started
         let (s, v) = json_call(&a, "POST", "/api/embed", &c, r#"{"texts":["hello"]}"#).await;
         assert_eq!((s, v["error"]["code"].clone()), (503, json!("model_missing")));
+    }
+
+    #[tokio::test]
+    async fn the_llm_routes_need_a_session_and_check_their_input() {
+        let d = TempDir::new("route-llm");
+        let a = file_app(&d);
+        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop")] {
+            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        }
+        let c = sign_in(&a).await;
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models").join("chat.gguf"), b"abc").unwrap();
+        std::fs::write(d.0.join("models").join("bge-m3-Q8_0.gguf"), b"e").unwrap();
+        let (s, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(s, 200);
+        assert_eq!(v["result"]["models"], json!([{"id": "chat.gguf", "size": 3, "loaded": false}]));
+        assert_eq!(json_call(&a, "GET", "/api/llm/models?v=2", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "GET", "/api/llm/models?v=1", &c, "").await.0, 200);
+        // every POST carries v:1
+        for p in ["load", "generate", "stop"] {
+            let (s, v) = json_call(&a, "POST", &format!("/api/llm/{p}"), &c, r#"{"v":2,"model":"chat.gguf","request":{}}"#).await;
+            assert_eq!((s, v["error"]["code"].clone()), (400, json!("unsupported_version")), "{p}");
+            assert_eq!(json_call(&a, "POST", &format!("/api/llm/{p}"), &c, "{}").await.0, 400, "{p}");
+        }
+        // an id, never a path
+        for bad in ["../chat.gguf", "/etc/passwd", "models/chat.gguf"] {
+            let body = json!({"v": 1, "model": bad}).to_string();
+            assert_eq!(json_call(&a, "POST", "/api/llm/load", &c, &body).await.0, 400, "{bad}");
+        }
+        let (s, v) = json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"nope.gguf"}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (404, json!("model_not_found")));
+        // the embedder is not a chat model
+        assert_eq!(json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"bge-m3-Q8_0.gguf"}"#).await.0, 404);
+        // a real file but no library: the load says why
+        let (s, v) = json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"chat.gguf"}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (503, json!("load_failed")));
+        // nothing loaded: generate is refused before any stream starts
+        let (s, v) = json_call(&a, "POST", "/api/llm/generate", &c, r#"{"v":1,"request":{"messages":[]}}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (409, json!("no_model")));
+        let (s, v) = json_call(&a, "POST", "/api/llm/stop", &c, r#"{"v":1}"#).await;
+        assert_eq!((s, v["result"]["stopped"].clone()), (200, json!(false)));
+        assert_eq!(json_call(&a, "GET", "/api/llm/other", &c, "").await.0, 404);
     }
 
     #[tokio::test]

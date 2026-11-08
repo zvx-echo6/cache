@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import 'app_fs.dart';
@@ -141,8 +142,24 @@ class AppState extends ChangeNotifier {
     await _readSettings();
 
     if (plat.isWeb) {
-      // No model files here: the browser runs no model itself, so the list stays empty and nothing is wrong.
+      // No model files here: the browser runs no model itself. The chat models are the ones on the server (GET /api/llm/models,
+      // server/docs/llm-protocol.md); a model's id is the "path" LlamaSession.load takes on the web. When the server has none
+      // (or cannot be asked) the list stays empty and nothing is wrong.
       await refreshModels();
+      try {
+        final r = await http.get(Uri.parse('/api/llm/models?v=1'));
+        if (r.statusCode == 200) {
+          final list = ((jsonDecode(utf8.decode(r.bodyBytes)) as Map)['result'] as Map)['models'] as List;
+          final found = [
+            for (final m in list.cast<Map>()) ModelEntry(path: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0),
+          ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          models = found;
+        } else {
+          logInfo('The server lists no chat models (HTTP ${r.statusCode})');
+        }
+      } catch (e) {
+        logInfo('The server\'s chat models could not be read', detail: '$e');
+      }
       started = true;
       notifyListeners();
       return;

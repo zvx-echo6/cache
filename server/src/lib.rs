@@ -15,6 +15,7 @@ pub mod helper;
 pub mod http;
 pub mod keys;
 pub mod library;
+pub mod llm;
 pub mod pages;
 pub mod tls;
 pub mod webfiles;
