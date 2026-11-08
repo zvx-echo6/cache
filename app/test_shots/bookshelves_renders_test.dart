@@ -102,7 +102,9 @@ void main() {
     await _settle(tester);
     for (final k in path) {
       final f = find.byKey(ValueKey(k));
-      if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
+      // the page's own list, never a text field's (Go to a number holds a sideways Scrollable)
+      final list = find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last;
+      if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: list);
       await tester.ensureVisible(f.first);
       await _settle(tester, 2);
       await tester.tap(f.first);

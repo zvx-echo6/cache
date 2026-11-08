@@ -234,7 +234,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('shelves-hidden')), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('shelves-hidden')), matching: find.textContaining('2 books', findRichText: true)), findsOneWidget);
-    expect(shelves.bookCount, 2, reason: 'hidden books are not on the shelves');
+    expect(shelves.bookCount, 1, reason: 'hidden books are not on the shelves (first aid is the one left)');
 
     await tapKey(tester, 'shelves-hidden');
     expect(find.byType(HiddenBooksPage), findsOneWidget);
@@ -274,6 +274,9 @@ void main() {
     await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
     await tester.pumpAndSettle();
     await tapKey(tester, 'library-bookshelves');
+    // the row is at the foot of the Bookshelves pane, below the ten classes
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('shelves-hidden')), 300,
+        scrollable: find.descendant(of: find.byType(BookshelvesPage), matching: find.byType(Scrollable)).first);
     await tapKey(tester, 'shelves-hidden');
     expect(find.byType(Dialog), findsNothing);
     expect(find.byType(BottomSheet), findsNothing);
