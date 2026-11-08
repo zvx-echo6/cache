@@ -72,7 +72,7 @@ class CacheLlamaBindings {
   final LlamaHandleIntCall clGeneratedTokens;
   final LlamaHandleIntCall? clReusedTokens;
 
-  /// Options for the next load (JSON: prefix_dir, mem_room_bytes); null in an older library.
+  /// Options for the next load (JSON: prefix_dir, repack_weights); null in an older library.
   final LlamaConfigureCall? clConfigure;
 
   /// What the last start did with the saved prompt prefix (one log line, or empty); null in an older library.
