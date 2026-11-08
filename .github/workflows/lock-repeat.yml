@@ -36,7 +36,7 @@ jobs:
       - name: Fixed code, build_lock tests x500 (all four in parallel each time)
         run: |
           cargo test --locked -p cache_search --lib --no-run
-          bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.profile.test==true and .target.kind==["lib"]) | .executable' | tail -n1)
+          bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.executable != null and .target.name=="cache_search" and .profile.test==true) | .executable' | tail -n1)
           test -x "$bin"
           fails=0
           for i in $(seq 1 500); do "$bin" build_lock:: -q > "$RUNNER_TEMP/out.txt" 2>&1 || { fails=$((fails+1)); cat "$RUNNER_TEMP/out.txt"; }; done
@@ -69,7 +69,7 @@ jobs:
         run: |
           git checkout ac9f1db4 -- cache_search/src/build_lock.rs cache_search/src/index.rs
           cargo test --locked -p cache_search --lib --no-run
-          bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.profile.test==true and .target.kind==["lib"]) | .executable' | tail -n1)
+          bin=$(cargo test --locked -p cache_search --lib --no-run --message-format=json | jq -r 'select(.executable != null and .target.name=="cache_search" and .profile.test==true) | .executable' | tail -n1)
           test -x "$bin"
           fails=0
           for i in $(seq 1 500); do "$bin" build_lock:: -q > "$RUNNER_TEMP/out.txt" 2>&1 || { fails=$((fails+1)); grep -m1 -A1 panicked "$RUNNER_TEMP/out.txt"; }; done
