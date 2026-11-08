@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../discover/discover_state.dart';
+import '../discover/ui/wizard.dart' show openSetupAgain;
 import '../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
 import '../search/index_overview.dart';
 
@@ -198,6 +200,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
+            // The setup wizard again, with what is chosen now picked (Discover's first-run wizard).
+            if (DiscoverState.shared case final discover?)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: SettingsGroup(
+                  rows: [
+                    SettingsRow(
+                      key: const ValueKey('settings-setup-again'),
+                      icon: Icons.restart_alt,
+                      title: 'Run setup again',
+                      status: const [Part('Your place, activities and a linked device')],
+                      onTap: () => openSetupAgain(context, discover),
+                    ),
+                  ],
+                ),
+              ),
             // While search indexes are being made or sealed for sync: the same progress bar as at the top of the Library.
             if (d.hub.indexing case final indexing?)
               Padding(

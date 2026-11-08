@@ -664,11 +664,14 @@ impl Inner {
     /// What this device offers the others of `share`: not what never syncs, not what is switched off here, and not its deletes
     /// that stay here.
     /// A delete waiting to be forgotten because its item was switched on again ([`Inner::refetch`]) is not offered either, so
-    /// the other devices never take it meanwhile.
-    fn offered(&self, share: &str, idx: &Index) -> Index {
+    /// the other devices never take it meanwhile. The waiting deletes are read before the index: a rescan stores the index
+    /// without them first and only then stops holding them back, so whichever index is read here, a delete in it that is
+    /// waiting to be forgotten is in `again`.
+    fn offered(&self, share: &str) -> Index {
         let skip = self.skip(share);
         let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
         let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
+        let idx = self.load_index(share);
         Index {
             files: idx
                 .files
@@ -907,19 +910,28 @@ impl Inner {
         let mut idx = self.load_index(&share.id);
         let mut seen = self.load_seen(&share.id);
         // Deletes made fetchable again since the last round ([`Inner::refetch`]): forgotten, so the merge below fetches them.
-        let again = self.refetch.lock().unwrap().remove(&share.id).unwrap_or_default();
+        let again = self.refetch.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
         let mut refetched = false;
-        for p in again {
-            if idx.files.get(&p).map(|e| e.deleted).unwrap_or(false) {
-                idx.files.remove(&p);
-                seen.remove(&p);
+        for p in &again {
+            if idx.files.get(p).map(|e| e.deleted).unwrap_or(false) {
+                idx.files.remove(p);
+                seen.remove(p);
                 refetched = true;
             }
         }
-        // Stored at once: no longer held back from what is offered ([`Inner::offered`]), these deletes must not be listed while
-        // the rest of the folder is scanned.
+        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered`]): until the index without
+        // them is on disk, an answer to another device reads the one with them, and must still leave them out.
         if refetched {
             self.store_index(&share.id, &idx, &seen)?;
+        }
+        if !again.is_empty() {
+            let mut refetch = self.refetch.lock().unwrap();
+            if let Some(v) = refetch.get_mut(&share.id) {
+                v.retain(|p| !again.contains(p));
+                if v.is_empty() {
+                    refetch.remove(&share.id);
+                }
+            }
         }
         if !share.path.is_dir() {
             bail!("{} is missing", share.path.display());
@@ -1037,7 +1049,7 @@ impl Inner {
                 .shares
                 .iter()
                 .filter(|sh| self.shares_with(&sh.id, peer))
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id, &self.load_index(&sh.id)) })
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
                 .collect(),
             link,
             links: true,
