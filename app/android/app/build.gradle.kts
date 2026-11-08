@@ -66,6 +66,13 @@ android {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
     }
+
+    // The car screen's JVM tests (src/test, Robolectric): android-car.yml runs them in CI.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -80,4 +87,15 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Android Auto (approved 2026-11-08): the Android for Cars App Library, stable 1.7.0, and its Android Auto part.
+    implementation("androidx.car.app:app:1.7.0")
+    implementation("androidx.car.app:app-projected:1.7.0")
+    // The car map draws with MapLibre Native Android: exactly the version the maplibre_gl plugin already ships in the app
+    // (0.27.1 uses org.maplibre.gl:android-sdk-opengl:13.5.0), declared here only so the app's own code compiles against it.
+    implementation("org.maplibre.gl:android-sdk-opengl:13.5.0")
+
+    // Tests only, never in the APK (android-car.yml checks the release classpath): approved 2026-11-08.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.car.app:app-testing:1.7.0")
 }

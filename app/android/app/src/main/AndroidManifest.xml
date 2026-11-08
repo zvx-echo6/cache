@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Android Auto: Cache's navigation on the car's screen (car/CacheCarAppService.kt). The navigation templates, and the
+         car surface the map is drawn on. -->
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
@@ -39,7 +43,32 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Navigation requests for Android Auto (Gemini, the Google Assistant, other apps: "geo:" addresses). Declared on
+                 this activity as Android Auto asks; the car session handles them (car/NavIntent.kt). -->
+            <intent-filter>
+                <action android:name="androidx.car.app.action.NAVIGATE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="geo"/>
+            </intent-filter>
         </activity>
+        <!-- Android Auto: a navigation app built with the Android for Cars App Library. -->
+        <service
+            android:name=".car.CacheCarAppService"
+            android:exported="true"
+            android:label="${appLabel}"
+            android:icon="@mipmap/ic_launcher">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService"/>
+                <category android:name="androidx.car.app.category.NAVIGATION"/>
+            </intent-filter>
+        </service>
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
+        <!-- MapWithContentTemplate needs Car App API level 7. -->
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="7"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

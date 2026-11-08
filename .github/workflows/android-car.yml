@@ -1,0 +1,89 @@
+# Android Auto: the car screen's JVM tests and the release dependency check, on every push that touches the Android app or the
+# car's Dart side (the Dart side's own tests, test/car_test.dart, run in tests.yml with the other app tests).
+#
+#   unit     the car screen's Robolectric tests (app/android/app/src/test): the templates the screens make against the Car App
+#            Library's test host (androidx.car.app:app-testing), the trip and intent parsing, the maneuver and distance mapping
+#   release  the release runtime classpath has the Car App Library (androidx.car.app:app and app-projected 1.7.0) and none of the
+#            test-only libraries (junit, Robolectric, app-testing): they are testImplementation and never reach the APK
+#
+# The core's native build is skipped (-PcacheSearchSkipCore=true): neither job compiles or packages native libraries. No secrets.
+name: Android car
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'app/android/**'
+      - 'app/lib/car/**'
+      - 'app/pubspec.yaml'
+      - '.github/workflows/android-car.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-car-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  car:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages and the Gradle project
+        working-directory: app
+        run: |
+          flutter --version
+          flutter pub get
+          # Writes local.properties and the Gradle wrapper without building anything.
+          flutter build apk --config-only
+      - name: Car screen tests (Robolectric)
+        working-directory: app/android
+        run: ./gradlew :app:testDebugUnitTest -PcacheSearchSkipCore=true --stacktrace
+      - name: Test report
+        if: always()
+        run: |
+          shopt -s nullglob
+          for f in app/build/app/test-results/testDebugUnitTest/*.xml; do
+            python3 - "$f" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          s = ET.parse(sys.argv[1]).getroot()
+          print(f"{s.get('name')}: {s.get('tests')} tests, {s.get('failures')} failures, {s.get('errors')} errors, {s.get('skipped')} skipped")
+          for c in s.iter('testcase'):
+              bad = c.find('failure') if c.find('failure') is not None else c.find('error')
+              print(('  FAIL ' if bad is not None else '  ok   ') + c.get('name'))
+              if bad is not None: print('       ' + (bad.get('message') or '')[:400])
+          PY
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: car-test-results
+          path: app/build/app/reports/tests/testDebugUnitTest
+          retention-days: 5
+      - name: Release dependencies (the Car App Library in, no test library)
+        working-directory: app/android
+        run: |
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath -PcacheSearchSkipCore=true > "$RUNNER_TEMP/release-deps.txt"
+          grep -E "androidx\.car\.app:(app|app-projected):1\.7\.0" "$RUNNER_TEMP/release-deps.txt" | sort -u
+          grep -q "androidx.car.app:app:1.7.0" "$RUNNER_TEMP/release-deps.txt" || { echo "::error::androidx.car.app:app:1.7.0 is not in the release classpath"; exit 1; }
+          grep -q "androidx.car.app:app-projected:1.7.0" "$RUNNER_TEMP/release-deps.txt" || { echo "::error::androidx.car.app:app-projected:1.7.0 is not in the release classpath"; exit 1; }
+          if grep -E "junit:junit|org\.robolectric|androidx\.car\.app:app-testing" "$RUNNER_TEMP/release-deps.txt"; then
+            echo "::error::A test-only library is in the release runtime classpath"; exit 1
+          fi
+          echo "release classpath: Car App Library 1.7.0 in, junit, Robolectric and app-testing out"

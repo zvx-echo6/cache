@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.PowerManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.SharedEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -26,6 +27,7 @@ class MainActivity : FlutterActivity() {
     private val restoreSystemBars = Runnable { applySystemBars() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        SharedEngine.activityStarted()
         super.onCreate(savedInstanceState)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
@@ -39,6 +41,12 @@ class MainActivity : FlutterActivity() {
             insets
         }
     }
+
+    // One engine for the phone screen and the car screen (Android Auto, see car/SharedEngine.kt): guidance runs once, in Dart.
+    // With no car the engine still goes with the activity, as before.
+    override fun provideFlutterEngine(context: Context): FlutterEngine = SharedEngine.obtain(context)
+
+    override fun shouldDestroyEngineWithHost(): Boolean = SharedEngine.releaseFromActivity()
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -130,6 +138,9 @@ class MainActivity : FlutterActivity() {
         systemUiChannel = null
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
+        // The engine can outlive this activity while the car screen uses it: let go of the handlers that need the activity.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery").setMethodCallHandler(null)
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

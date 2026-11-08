@@ -180,8 +180,13 @@ jobs:
           grep -E "^package:|^application-label:|^native-code:" "$RUNNER_TEMP/badging.txt"
           grep -q "^package: name='com.happylittlellc.cache.test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::Not the .test package"; exit 1; }
           grep -q "^application-label:'Cache test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::The label is not Cache test"; exit 1; }
-          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' || true
-          if "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' | grep -v 'com.happylittlellc.cache.test'; then
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-tree.txt"
+          grep -E 'android:authorities' "$RUNNER_TEMP/manifest-tree.txt" || true
+          # The app's own providers (under <application>) must be under the .test package. A <queries> entry only names another
+          # app's provider to look for (the Car App Library asks for androidx.car.app.connection there) and is not one of ours.
+          awk '/E: /{ind=index($0,"E:"); if (q && ind<=qind) q=0; if ($0 ~ /E: queries/) {q=1; qind=ind}} /android:authorities/ && !q {print}' \
+            "$RUNNER_TEMP/manifest-tree.txt" > "$RUNNER_TEMP/own-authorities.txt"
+          if grep -v 'com.happylittlellc.cache.test' "$RUNNER_TEMP/own-authorities.txt"; then
             echo "::error::A provider authority is not under the .test package"; exit 1
           fi
           for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do

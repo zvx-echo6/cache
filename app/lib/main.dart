@@ -16,6 +16,8 @@ import 'app_fs.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
+import 'car/car_bridge.dart';
+import 'car/car_drive.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -651,11 +653,16 @@ class _CacheAppState extends State<CacheApp> {
         ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
         : CoreMapBackend(() => sources.core!, embedder: searchModel.embedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
     location: location,
-    speaker: FlutterTtsSpeaker(),
-    positionSource: GeolocatorNavSource(),
+    speaker: CarAwareSpeaker(FlutterTtsSpeaker(), car: () => _car),
+    positionSource: carDrive,
+    simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
   );
+  // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
+  // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
+  CarBridge? _car;
   CacheThemeId _applied = CacheThemeId.dark;
 
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
@@ -842,6 +849,10 @@ class _CacheAppState extends State<CacheApp> {
     video.init();
     location.init();
     _mapsRead = maps.init();
+    if (plat.isAndroid) {
+      _car = CarBridge(nav: nav, maps: maps, drive: carDrive);
+      unawaited(_car!.start());
+    }
     _openHistory();
   }
 
@@ -938,6 +949,7 @@ class _CacheAppState extends State<CacheApp> {
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
+    _car?.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
     sources.removeListener(_kickIndexing);
