@@ -4,6 +4,7 @@ import 'package:cache/chat/citations.dart';
 import 'package:cache/chat/model_backend.dart';
 import 'package:cache/chat/tool.dart';
 import 'package:cache/chat/tool_call_text.dart';
+import 'package:cache/chat/system_prompt.dart';
 import 'package:cache/chat/tool_loop.dart';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -205,6 +206,34 @@ void main() {
       expect(updates.last.text, 'Answer from what I have [1].');
       expect([for (final m in loop.messages) m['role']], ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
       expect(loop.messages.last.containsKey('tool_calls'), isFalse);
+    });
+
+    test('two questions on the same day: the same system prompt and tools; each question keeps its own time line', () async {
+      final backend = FakeBackend([(_) => answer('One.'), (_) => answer('Two.')]);
+      final times = [DateTime(2026, 11, 8, 6, 5), DateTime(2026, 11, 8, 21, 40)];
+      var i = 0;
+      late DateTime now;
+      final loop = ToolLoop(
+        backend: backend,
+        tools: [FakeSearch([[]])],
+        systemPrompt: () => buildSystemPrompt(now: now, locationKnown: true),
+        timeLine: () => buildTimeLine(now),
+      );
+      now = times[i++];
+      await loop.ask('first?').toList();
+      now = times[i++];
+      await loop.ask('second?').toList();
+      final r0 = backend.requests[0], r1 = backend.requests[1];
+      final m0 = r0['messages'] as List, m1 = r1['messages'] as List;
+      // The prompt start the engine keeps: the system prompt and the tool schemas, byte for byte.
+      expect((m1[0] as Map)['content'], (m0[0] as Map)['content']);
+      expect(jsonEncode(r1['tools']), jsonEncode(r0['tools']));
+      expect((m0[0] as Map)['content'], isNot(contains('06:05')));
+      // The second request extends the first: the earlier question keeps the time it was asked at.
+      expect(jsonEncode(m1.sublist(0, m0.length)), jsonEncode(m0));
+      expect((m0[1] as Map)['content'], 'Local time: 06:05\n\nfirst?');
+      expect((m1.last as Map)['content'], 'Local time: 21:40\n\nsecond?');
+      expect(loop.messages.first, {'role': 'user', 'content': 'Local time: 06:05\n\nfirst?'});
     });
 
     test('after the cap, a tool call with no text gets one more request with tool calls off', () async {
