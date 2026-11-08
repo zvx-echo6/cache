@@ -12,7 +12,6 @@ import 'dart:io';
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/library/cds_shelf_source.dart' show libraryDeviceIdShared;
-import 'package:cache/library/library_prefs.dart' show ShelfLookPrefs;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/platform/battery.dart';
@@ -260,9 +259,11 @@ class _Rig {
 /// Opens the Library in the app's frame at [size], then taps [path] (keys) in turn, and draws it as [name].
 Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, List<String> path, CacheThemeId theme) async {
   phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
-  // each picture starts from the default Bookshelves look (the look a picture chose is kept in the support folder)
-  final look = File('${rig.support.path}/${ShelfLookPrefs.fileName}');
-  if (look.existsSync()) look.deleteSync();
+  // each picture starts from the defaults: what a picture chose (the Bookshelves look, a hidden list) is kept in files in the
+  // support folder, and only the Bookshelves log (bookshelves/) carries over
+  for (final f in rig.support.listSync().whereType<File>()) {
+    f.deleteSync();
+  }
   await tester.pumpWidget(shotApp(rig.shell(), theme: theme, insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero));
   await _settle(tester);
   await tester.tap(find.text('Library').first);
