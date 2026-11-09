@@ -195,8 +195,11 @@ fn base_headers(content_type: &str) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// The status and headers of an answer for [span] over a body of `len` bytes; None for the 416.
-fn span_head(content_type: &str, len: u64, span: &Span) -> Result<(u16, Vec<(&'static str, String)>, u64, u64), Reply> {
+/// Status, headers, first byte and byte count of an answer.
+type SpanHead = (u16, Vec<(&'static str, String)>, u64, u64);
+
+/// The status and headers of an answer for [span] over a body of `len` bytes; the 416 reply for a range nothing of the body is in.
+fn span_head(content_type: &str, len: u64, span: &Span) -> Result<SpanHead, Reply> {
     let mut h = base_headers(content_type);
     match span {
         Span::Whole => {
@@ -381,8 +384,9 @@ pub fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-/// The client's name lookup: only addresses [is_public] says are public get through (all of them or none), so what is connected to is
-/// what was checked, whatever redirect or DNS answer led there.
+/// The client's name lookup, installed on the one agent every request and every redirect hop of `stream` uses: only addresses [is_public] says are public get through (all of them or none), so what is connected to is
+/// what was checked, whatever redirect or DNS answer led there. (When ask-linux-fetch's `fetch_scope` (`guarded_agent`, `address_ok`)
+/// is merged, `open_upstream` takes its agent and this type and [is_public] go.)
 struct PublicOnly {
     allow_private: bool,
 }
@@ -662,7 +666,8 @@ mod tests {
         let r = media_reply(&root, "i/u/video.mp4", Some("bytes=700000-"), false);
         assert_eq!((r.status, header(&r, "Content-Range")), (416, Some("bytes */700000")));
         let r = media_reply(&root, "i/u/video.mp4", None, true);
-        assert_eq!((r.status, header(&r, "Content-Length"), collect(r).await.len()), (200, Some("700000"), 0));
+        assert_eq!((r.status, header(&r, "Content-Length")), (200, Some("700000")));
+        assert_eq!(collect(r).await.len(), 0);
         assert_eq!(media_reply(&root, "i/u/none.mp4", None, false).status, 404);
         assert_eq!(media_reply(&root, "../x", None, false).status, 404);
     }
