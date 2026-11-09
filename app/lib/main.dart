@@ -6,7 +6,6 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchC
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'actions/act_core.dart';
 import 'actions/action_registry.dart';
@@ -177,9 +176,10 @@ class _CacheAppState extends State<CacheApp> {
     device: device,
     // The setup guide ships compressed in the assets; it is copied out to be added like any library file.
     bundledGuide: () async {
+      if (plat.isWeb) return null; // a browser has no temporary folder to copy the guide into
       try {
         final bytes = await rootBundle.load('assets/guide/cache-guide.cache-library');
-        final f = File('${(await getTemporaryDirectory()).path}/cache-guide.cache-library');
+        final f = File('${await appTempPath()}/cache-guide.cache-library');
         await f.writeAsBytes(bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes), flush: true);
         return f;
       } catch (_) {
@@ -207,7 +207,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SearchModel searchModel = SearchModel(
     app: app,
     downloads: modelDownloads,
-    modelsDir: () async => Directory('${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+    modelsDir: () async => Directory('${await appFilesPath()}/models'),
   );
   late final PdfIndexState pdfIndex = appPdfIndex(sources: sources);
   late final MapsState maps = MapsState(
@@ -222,7 +222,7 @@ class _CacheAppState extends State<CacheApp> {
   late final VideoState video = VideoState(
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
-    indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/$kIndexesDirName'),
+    indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
@@ -249,7 +249,7 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
     secrets: const SecureTokenStore(),
-    catalogueDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/live-catalogues'),
+    catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
     liveDir: () async {
       await sources.whenCoreReady();
       final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
@@ -263,10 +263,10 @@ class _CacheAppState extends State<CacheApp> {
     regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
-    told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
+    told: ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
   )..placeAlerts = placeAlerts;
   /// Each place's own alert rule (Places notebook, the place's gear).
-  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${(await getApplicationSupportDirectory()).path}/$kPlaceAlertsFile'));
+  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -353,7 +353,7 @@ class _CacheAppState extends State<CacheApp> {
   // Sharing and sync: Cache's own folders, by kind.
   late final SharingState sharing = SharingState(
     policy: policy,
-    supportDir: getApplicationSupportDirectory,
+    supportDir: () async => Directory(await appSupportPath()),
     deviceName: plat.isAndroid ? 'Android device' : (plat.isIOS ? 'iPhone' : plat.hostName),
     kinds: dataKinds,
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
@@ -434,7 +434,7 @@ class _CacheAppState extends State<CacheApp> {
   );
 
   /// The models folder (the search model, bge-m3, is there).
-  Future<Directory> _modelsDir() async => Directory('${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models');
+  Future<Directory> _modelsDir() async => Directory('${await appFilesPath()}/models');
 
   /// Add PDF: one PDF becomes a book in the person's own library, by the core's ingest job, as index work the scheduler runs.
   late final AddPdfState addPdf = AddPdfState(
@@ -460,7 +460,7 @@ class _CacheAppState extends State<CacheApp> {
     onDone: (_) => libraries.rescan(),
   );
 
-  Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await getApplicationSupportDirectory()).path), modelsDir: await _modelsDir());
+  Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await appSupportPath())), modelsDir: await _modelsDir());
 
   late final IndexScheduler indexing = IndexScheduler(
     throttle: indexThrottle,
@@ -504,10 +504,10 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
-    supportDir: getApplicationSupportDirectory,
-    catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    supportDir: () async => Directory(await appSupportPath()),
+    catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
-    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     maps: maps,
     // A region downloads from where the phone is, outwards.
     position: () {
@@ -615,7 +615,7 @@ class _CacheAppState extends State<CacheApp> {
   // Notebooks: kept by the core (cs_notebook) in the support folder; their Log notebooks and the Journal publish act actions.
   late final NotebookState notebooks = NotebookState(
     backend: CoreNotebookBackend(sources.whenCoreReady),
-    mediaDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook'),
+    mediaDir: () async => Directory('${await appSupportPath()}/notebook'),
   );
   late final NotebookPublisher notebookActions = NotebookPublisher(registry: actionRegistry, notebook: notebooks);
   late final PlaceChoices notebookPlaces = PlaceChoices(
@@ -640,7 +640,7 @@ class _CacheAppState extends State<CacheApp> {
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
-    dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook-sync'),
+    dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
     storePhoto: (id, bytes) async {
@@ -791,8 +791,8 @@ class _CacheAppState extends State<CacheApp> {
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
     // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
-    final Future<void> supportRead = plat.isWeb ? Future.value() : getApplicationSupportDirectory().then((d) => _supportPath = d.path);
-    if (!plat.isWeb) getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    final Future<void> supportRead = plat.isWeb ? Future.value() : appSupportPath().then((p) => _supportPath = p);
+    if (!plat.isWeb) appTempPath().then((p) => _tempPath = p).catchError((_) => '');
     if (!plat.isWeb) {
       addPdfShared = addPdf;
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled

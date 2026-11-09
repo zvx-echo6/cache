@@ -5,7 +5,6 @@ import 'package:cache_llama/cache_llama.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 
 import 'app_fs.dart';
 import 'chat/model_name.dart';
@@ -175,9 +174,7 @@ class AppState extends ChangeNotifier {
     if (modelsDirOverride != null) {
       modelsDir = modelsDirOverride;
     } else {
-      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
-          await getApplicationDocumentsDirectory();
-      modelsDir = Directory('${base.path}/models');
+      modelsDir = Directory('${await appFilesPath()}/models');
     }
     try {
       await modelsDir!.create(recursive: true);
@@ -387,7 +384,7 @@ class AppState extends ChangeNotifier {
     String? prefixDir;
     if (!kIsWeb) {
       try {
-        prefixDir = '${(await getApplicationSupportDirectory()).path}/$kPromptPrefixDir';
+        prefixDir = '${await appSupportPath()}/$kPromptPrefixDir';
       } catch (_) {
         // Without a folder the model loads without the saved prefix.
       }

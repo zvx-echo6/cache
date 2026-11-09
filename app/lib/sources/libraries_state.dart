@@ -7,7 +7,6 @@ import 'package:cache_search/cache_search.dart';
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../app_fs.dart';
 import '../browse/web/device_api.dart' show DeviceException;
@@ -221,7 +220,7 @@ class LibrariesState extends ChangeNotifier {
     }
     final base = dirOverride ??
         Directory(
-          '${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}'
+          '${await appFilesPath()}'
           '${Platform.pathSeparator}libraries',
         );
     await base.create(recursive: true);
@@ -1179,7 +1178,7 @@ class LibrariesState extends ChangeNotifier {
   Future<LibraryItem> _makeOwn(String title) async {
     final core = sources.core ?? await sources.whenCoreReady();
     if (core == null || dir == null || _dev != null) throw StateError(sources.unavailable ?? 'Search is not ready yet. Try again in a moment.');
-    final tmp = await (tempDirOverride ?? await getTemporaryDirectory()).createTemp('own-library');
+    final tmp = await (tempDirOverride ?? Directory(await appTempPath())).createTemp('own-library');
     final stagePath = _child('.add-${DateTime.now().microsecondsSinceEpoch}');
     var installed = false;
     try {
@@ -1206,7 +1205,7 @@ class LibrariesState extends ChangeNotifier {
     error = null;
     notifyListeners();
     if (_dev != null) return _saveTemplateOnDevice(core);
-    final tmp = await (tempDirOverride ?? await getTemporaryDirectory()).createTemp('template');
+    final tmp = await (tempDirOverride ?? Directory(await appTempPath())).createTemp('template');
     try {
       final out = File('${tmp.path}${Platform.pathSeparator}$kLibraryTemplateName');
       final p = await _wait(await core.startJob('library_template', {'out_path': out.path}), (_) {});

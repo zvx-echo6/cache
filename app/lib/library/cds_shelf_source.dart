@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import '../browse/web/build_api.dart' show BuildBook;
 import '../browse/web/build_compression.dart' show compressionOutcomeWords;
@@ -233,7 +233,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   static Future<Directory?> _defaultDir() async {
     try {
-      return Directory('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}$kBookshelvesDir');
+      return Directory('${await appSupportPath()}${Platform.pathSeparator}$kBookshelvesDir');
     } catch (_) {
       return null;
     }

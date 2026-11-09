@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
+import '../../app_fs.dart';
 
 import '../../sources/sources_state.dart';
 import 'pdf_index_binding.dart';
@@ -23,9 +23,9 @@ PdfIndexState appPdfIndex({required SourcesState sources, PdfIndexCore? core}) =
       core: core ?? CorePdfIndex(sources),
       zims: () => [for (final z in sources.zims) pdfZimRef(sources, z)],
       changes: sources,
-      indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}$kIndexesDirName'),
+      indexesDir: () async => Directory('${await appSupportPath()}${Platform.pathSeparator}$kIndexesDirName'),
       // This device's own record (what it built, what the person paused), beside the other app files; never synced.
-      recordFile: () async => File('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}pdf-index.json'),
+      recordFile: () async => File('${await appSupportPath()}${Platform.pathSeparator}pdf-index.json'),
       // A new snapshot (built here or arrived): the core is given the sources again so it attaches it.
       onIndexReady: sources.refresh,
       // What the core says of each ZIM's PDF index (cs_status): a snapshot it cannot use is built again.
