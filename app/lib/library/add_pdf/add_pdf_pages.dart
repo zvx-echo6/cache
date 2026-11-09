@@ -188,11 +188,12 @@ class _Ghost extends StatelessWidget {
       minimumSize: const Size(0, 36),
       padding: const EdgeInsets.symmetric(horizontal: 14),
       shape: const StadiumBorder(),
-      textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
     );
+    // the size and weight on the text itself: the button keeps the theme's font
+    final text = Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500));
     return icon == null
-        ? OutlinedButton(onPressed: onPressed, style: style, child: Text(label))
-        : OutlinedButton.icon(onPressed: onPressed, style: style, icon: Icon(icon, size: 16), label: Text(label));
+        ? OutlinedButton(onPressed: onPressed, style: style, child: text)
+        : OutlinedButton.icon(onPressed: onPressed, style: style, icon: Icon(icon, size: 16), label: text);
   }
 }
 
@@ -209,8 +210,8 @@ class _Txt extends StatelessWidget {
     final k = context.t;
     return TextButton(
       onPressed: onPressed,
-      style: TextButton.styleFrom(foregroundColor: danger ? k.emergency : k.accent, textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-      child: Text(label),
+      style: TextButton.styleFrom(foregroundColor: danger ? k.emergency : k.accent),
+      child: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
     );
   }
 }
@@ -229,17 +230,17 @@ class _Big extends StatelessWidget {
     final k = context.t;
     final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
     const text = TextStyle(fontSize: 16, fontWeight: FontWeight.w700);
-    final child = busy ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: k.onPrimary)) : Text(label);
+    final child = busy ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: k.onPrimary)) : Text(label, style: text);
     if (outlined) {
       return OutlinedButton(
         onPressed: onPressed,
-        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48), shape: shape, foregroundColor: k.accent, side: BorderSide(color: k.accent, width: 1.5), textStyle: text),
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48), shape: shape, foregroundColor: k.accent, side: BorderSide(color: k.accent, width: 1.5)),
         child: child,
       );
     }
     return FilledButton(
       onPressed: onPressed,
-      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), shape: shape, backgroundColor: k.primary, foregroundColor: k.onPrimary, textStyle: text),
+      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), shape: shape, backgroundColor: k.primary, foregroundColor: k.onPrimary),
       child: child,
     );
   }
@@ -575,7 +576,8 @@ class AddPdfProgressPage extends StatelessWidget {
               final side = c.maxWidth > 680 ? (c.maxWidth - 640) / 2 : 12.0;
               return ListView(
                 key: const ValueKey('add-pdf-progress'),
-                padding: EdgeInsets.fromLTRB(12, 4, compact ? 12 : side.clamp(12.0, 400.0), 24),
+                // a reading width on a wide window; in the panes it starts at the pane's edge
+                padding: EdgeInsets.fromLTRB(compact ? side : 12, 4, compact ? side : side.clamp(12.0, 400.0), 24),
                 children: [
                   if (compact && s != null) IndexOverviewLine(scheduler: s, queueOnTap: true),
                   if (compact) const GroupLabel('Adding a PDF'),
