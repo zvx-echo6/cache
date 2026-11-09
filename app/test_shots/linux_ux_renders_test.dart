@@ -148,13 +148,13 @@ void main() {
         await draw(tester, IndexingSpeedPage(settings: settings, log: log));
         await snapAs(tester, '1b-advanced-log');
 
-        await tester.ensureVisible(find.byKey(const ValueKey('log-share')));
+        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-share')), 100);
         await tester.tap(find.byKey(const ValueKey('log-share')));
         await settle(tester);
         await snapAs(tester, '1c-share-log-snackbar');
 
         await draw(tester, IndexingSpeedPage(settings: settings, log: log));
-        await tester.ensureVisible(find.byKey(const ValueKey('log-clear')));
+        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-clear')), 100);
         await tester.runAsync(() async {
           await tester.tap(find.byKey(const ValueKey('log-clear')));
           await Future<void>.delayed(const Duration(milliseconds: 100));
