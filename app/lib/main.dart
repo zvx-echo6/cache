@@ -567,7 +567,7 @@ class _CacheAppState extends State<CacheApp> {
         ? null
         : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector, runAction: actionRegistry.run),
     numberingState: CoreNumberingState(() => sources.core),
-    locationKnown: () => chatLocation.known,
+    locationKnown: () => chatLocation.turnKnown,
     prepareTurn: chatLocation.prepare,
     actions: actionRegistry,
     actCore: actCore,
