@@ -249,16 +249,44 @@ fn is_public_v6(a: Ipv6Addr) -> bool {
 pub struct PublicResolver {
     /// Set when an address was refused, so the caller can say "not allowed" and not "unreachable".
     pub refused: Arc<AtomicBool>,
+    /// Host names that are looked up without the check: the catalog hosts, which the server has always read.
+    pub exempt: Vec<String>,
 }
 
 impl ureq::Resolver for PublicResolver {
     fn resolve(&self, netloc: &str) -> io::Result<Vec<SocketAddr>> {
         let addrs: Vec<SocketAddr> = netloc.to_socket_addrs()?.collect();
+        let host = netloc.rsplit_once(':').map_or(netloc, |(h, _)| h).to_ascii_lowercase();
+        if self.exempt.iter().any(|h| h.eq_ignore_ascii_case(&host)) && !addrs.is_empty() {
+            return Ok(addrs);
+        }
         if addrs.is_empty() || addrs.iter().any(|a| !is_public(a.ip())) {
             self.refused.store(true, Ordering::Relaxed);
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "that address is not on the public internet"));
         }
         Ok(addrs)
+    }
+}
+
+/// The client for a read of an address a tab supplied (a download, its checksum, its icon): it connects only to public addresses,
+/// on every hop, except for the `exempt` catalog hosts. The flag is set when it refused one. `allow_private` is for tests.
+pub fn guarded_agent(exempt: &[String], allow_private: bool) -> (ureq::Agent, Arc<AtomicBool>) {
+    let refused = Arc::new(AtomicBool::new(false));
+    if allow_private {
+        return (crate::fetch::agent(), refused);
+    }
+    (crate::fetch::agent_with(Some(PublicResolver { refused: refused.clone(), exempt: exempt.to_vec() })), refused)
+}
+
+/// The early answer for an address a tab supplied: false for one that cannot be public (an address in any spelling, `localhost`,
+/// `.local`). A name that looks public is still checked at connect time. The `exempt` catalog hosts and `allow_private` pass.
+pub fn address_ok(p: &Parsed, exempt: &[String], allow_private: bool) -> bool {
+    if allow_private || exempt.iter().any(|h| h.eq_ignore_ascii_case(&p.host)) {
+        return true;
+    }
+    match p.host.parse::<Ipv4Addr>() {
+        Ok(a) => is_public_v4(a),
+        Err(_) => public_name(&p.host),
     }
 }
 
@@ -388,6 +416,9 @@ mod tests {
         // a redirect to the site's object storage may go to any public host and any path, not to a private one
         assert!(p.check("https://s3.example.net/bucket/captions/x.vtt?sig=1", false).is_ok());
         assert!(matches!(p.check("https://192.168.1.1/x", false), Err(FetchError::Denied(_))));
+        for u in ["https://169.254.169.254/latest/meta-data", "http://localhost/x", "https://10.0.0.1/x", "https://100.64.0.4/x"] {
+            assert!(matches!(p.check(u, false), Err(FetchError::Denied(_))), "{u}");
+        }
         // http only when asked, and only on port 80
         assert_eq!(p.check("http://peertube.example/api/v1/videos", true).unwrap_err(), FetchError::BadUrl);
         let mut plain = pol(Scope::Video);
@@ -432,16 +463,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_supplied_download_address_must_be_able_to_be_public() {
+        let ex = vec!["data.cached.info".to_string()];
+        let ok = |u: &str| address_ok(&parse_url(u).unwrap(), &ex, false);
+        for u in ["https://download.kiwix.org/zim/x.zim", "https://example.com/x.zim", "https://8.8.8.8/x", "https://data.cached.info/x"] {
+            assert!(ok(u), "{u}");
+        }
+        for u in ["https://192.168.1.240/x.zim", "https://10.0.0.5/x", "https://127.0.0.1/x", "http://localhost:8080/x", "https://169.254.169.254/latest/meta-data", "https://100.64.0.4/x", "https://2130706433/x", "https://nas.local/x"] {
+            assert!(!ok(u), "{u}");
+        }
+        assert!(address_ok(&parse_url("http://127.0.0.1:1/x").unwrap(), &[], true));
+    }
+
+    #[test]
     fn the_resolver_refuses_a_name_that_resolves_to_this_machine() {
         use ureq::Resolver;
         let refused = Arc::new(AtomicBool::new(false));
-        let r = PublicResolver { refused: refused.clone() };
+        let r = PublicResolver { refused: refused.clone(), exempt: vec![] };
         assert!(r.resolve("localhost:80").is_err());
         assert!(refused.load(Ordering::Relaxed));
         // an address in any spelling the system accepts
         for n in ["127.0.0.1:80", "[::1]:80", "10.0.0.1:443", "169.254.169.254:80"] {
             assert!(r.resolve(n).is_err(), "{n}");
         }
-        assert!(PublicResolver { refused: Arc::new(AtomicBool::new(false)) }.resolve("8.8.8.8:443").is_ok());
+        // the catalog hosts are the one exception: a name on the exempt list is not checked
+        assert!(PublicResolver { refused: Arc::new(AtomicBool::new(false)), exempt: vec!["localhost".into()] }.resolve("localhost:80").is_ok());
+        assert!(PublicResolver { refused: Arc::new(AtomicBool::new(false)), exempt: vec![] }.resolve("8.8.8.8:443").is_ok());
     }
 }

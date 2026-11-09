@@ -6,6 +6,11 @@
 //!
 //! Which addresses may be read, and what may come back, is decided per scope in `fetch_scope` (catalog, models, video, user);
 //! the catalog scope is this file's [`FETCH_HOSTS`] and is the default of `GET /api/fetch`.
+//!
+//! The server only ever connects to public addresses for an address a tab supplied: the fetch scopes other than catalog, and the
+//! library downloads, their checksum files and icons (`fetch_scope::guarded_agent`). Private, loopback, link-local (including the
+//! metadata address 169.254.169.254) and Tailscale 100.64/10 are refused when the connection is made, on every redirect. The
+//! three catalog hosts are the one exception.
 
 use crate::fetch_scope::{Policy, PublicResolver, Scope};
 use std::io::Read;
@@ -213,7 +218,7 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
 /// is held to `max`, and its type to the scope's (see `fetch_scope`).
 pub fn open_with(policy: &Policy, url: &str, max: u64) -> Result<Opened, FetchError> {
     let refused = Arc::new(AtomicBool::new(false));
-    let agent = if policy.public_only() { agent_with(Some(PublicResolver { refused: refused.clone() })) } else { agent() };
+    let agent = if policy.public_only() { agent_with(Some(PublicResolver { refused: refused.clone(), exempt: vec![] })) } else { agent() };
     let mut cur = url.to_string();
     for hop in 0..7 {
         policy.check(&cur, hop == 0)?;

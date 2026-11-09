@@ -42,5 +42,9 @@ Dart: `fetchBytes(url, scope: FetchScope.video|models|user, httpsOnly:)`, `fetch
 - Videos: captions already use `FetchScope.video`. Thumbnails and avatars are not fetches (img tag); if CORS blocks them use `/api/fetch?scope=video&url=` as the Image.network address.
 - Models: search and file list already use `FetchScope.models` (hf_hub.dart). For the file download, use `Policy{scope: Models, download: true}` and the public resolver in the server job.
 
+## Decisions (coordinator, 2026-11-09)
+- The `user` scope is on by default, for parity with the phone.
+- The server only ever fetches public addresses. Private, loopback, link-local, Tailscale 100.64/10 and the metadata address 169.254.169.254 are refused at connect time, including after redirects. This covers `/api/fetch` (every scope but catalog) and the server downloads (`/api/library/download`, its checksum file and icon, and `icon_url`). The three catalog hosts are the one exception. Tests: LAN, loopback, 169.254.169.254, a redirect to loopback, a redirect to 169.254.169.254, and a public address that still passes (server/tests/library.rs, fetch_scope.rs).
+
 ## Left alone
-Server downloads (library.rs add_download, icons) do not apply the public-address rule yet; they accept any https address. Applying `PublicResolver` there is a one-line change but alters the download path, so it is reported, not done. io code paths are unchanged.
+The embedder model download (embed.rs) uses a fixed address the server owns, not one a tab supplies, so it is unchanged. io code paths in the app are unchanged.

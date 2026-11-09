@@ -25,7 +25,7 @@
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
 
 use crate::fetch::{self, FetchError};
-use crate::fetch_scope::{Policy, Scope};
+use crate::fetch_scope::{address_ok, guarded_agent, Policy, Scope};
 use crate::helper::Helper;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
@@ -534,7 +534,8 @@ impl Library {
     fn download_and_install(&self, job: &Job, part: &Path, cancel: &AtomicBool) -> Result<(), JobErr> {
         let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         std::fs::create_dir_all(self.tmp_dir()).map_err(io_job_err)?;
-        let agent = fetch::agent();
+        // The address came from a tab: connect only to public addresses, on every redirect too (the catalog hosts excepted).
+        let (agent, refused) = guarded_agent(&self.fetch_hosts, self.fetch_allow_private);
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         let mut restarted = false;
         let mut cur = job.url.clone();
@@ -565,6 +566,9 @@ impl Library {
                 }
                 Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.")),
                 Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}."))),
+                Err(_) if refused.load(Ordering::Relaxed) => {
+                    return Err(job_err("failed", "That address is not on the public internet, so the server will not download from it."))
+                }
                 Err(e) => return Err(job_err("network", format!("The connection failed: {e}"))),
             };
             let status = resp.status();
@@ -735,7 +739,10 @@ impl Library {
     pub fn add_download(self: &Arc<Self>, body: &[u8]) -> Result<Value, ApiErr> {
         let v: Value = serde_json::from_slice(body).map_err(|_| api_err(400, "bad_json", "the body is not JSON"))?;
         let url = v["url"].as_str().ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?.trim().to_string();
-        fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        let parsed = fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        if !address_ok(&parsed, &self.fetch_hosts, self.fetch_allow_private) {
+            return Err(api_err(400, "invalid", "That address is not on the public internet, so the server will not download from it."));
+        }
         let kind = v["kind"].as_str().unwrap_or("");
         if kind != "zim" && kind != "library" {
             return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\""));
@@ -761,7 +768,7 @@ impl Library {
         };
         let icon_url = match v["icon_url"].as_str() {
             None => None,
-            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p)) => Some(u.to_string()),
+            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p) && address_ok(&p, &self.fetch_hosts, self.fetch_allow_private)) => Some(u.to_string()),
             Some(_) => return Err(api_err(400, "invalid", "\"icon_url\" is not an address the server can read")),
         };
         let view = self.update_jobs(|jobs| {

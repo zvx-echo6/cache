@@ -19,6 +19,10 @@
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
+//!                                              The link (and `icon_url`) must be a public address: 400 invalid for a private, loopback,
+//!                                              link-local (169.254.169.254), Tailscale (100.64/10) or other non-public one, and the job fails
+//!                                              if the name or a redirect leads to one (checked at connect time; `fetch_scope::guarded_agent`).
+//!                                              The catalog hosts are the only exception.
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
