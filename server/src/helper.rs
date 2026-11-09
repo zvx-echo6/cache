@@ -27,6 +27,9 @@ pub struct HelperConfig {
     /// The app's support and documents folders on the server (`<data>/app/support`, `<data>/app/docs`), handed to the helper as
     /// `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`. The helper builds the core's whole config on them and serves `fs.*` from them.
     pub app_dirs: Option<(PathBuf, PathBuf)>,
+    /// The Valhalla shim (`libvalhalla_shim.so`), handed to the helper as `CACHE_VALHALLA_SHIM`: the full path the core's road
+    /// router opens (the core checks it with a plain file test, so a bare library name never routes). Default: [default_shim].
+    pub shim: PathBuf,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -41,6 +44,7 @@ impl HelperConfig {
     pub fn new(exe: PathBuf, core_lib: PathBuf, sources_file: PathBuf) -> HelperConfig {
         HelperConfig {
             exe,
+            shim: default_shim(&core_lib),
             core_lib,
             sources_file,
             app_dirs: None,
@@ -50,6 +54,14 @@ impl HelperConfig {
             stop_wait: Duration::from_secs(5),
         }
     }
+}
+
+/// The shim's file name on this system.
+pub const SHIM_NAME: &str = if cfg!(windows) { "valhalla_shim.dll" } else { "libvalhalla_shim.so" };
+
+/// Where the release puts the shim: next to the core library (`<install>/lib/libvalhalla_shim.so` beside `libcache_search.so`).
+pub fn default_shim(core_lib: &Path) -> PathBuf {
+    core_lib.parent().map(|d| d.join(SHIM_NAME)).unwrap_or_else(|| PathBuf::from(SHIM_NAME))
 }
 
 /// The server's sources: the array in `path`, or `null` when there is no such file (the helper then scans the app folders).
@@ -202,7 +214,7 @@ impl Helper {
     async fn launch(&self) -> Result<Running, String> {
         let sources = read_sources(&self.cfg.sources_file)?;
         let mut cmd = Command::new(&self.cfg.exe);
-        cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib);
+        cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
         }
@@ -282,5 +294,18 @@ impl Helper {
             }
             eprintln!("cache: helper stopped");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_shim_is_the_full_path_next_to_the_core_library() {
+        let cfg = HelperConfig::new("/opt/cache/helper/cache-core-helper".into(), "/opt/cache/lib/libcache_search.so".into(), "/d/sources.json".into());
+        assert_eq!(cfg.shim, PathBuf::from(format!("/opt/cache/lib/{SHIM_NAME}")));
+        assert!(cfg.shim.is_absolute());
+        assert_eq!(default_shim(Path::new("lib/libcache_search.so")), PathBuf::from("lib").join(SHIM_NAME));
     }
 }

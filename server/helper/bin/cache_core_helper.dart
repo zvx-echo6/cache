@@ -10,7 +10,7 @@ import 'line_protocol.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
 /// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
-/// the core's config work on them.
+/// the core's config work on them. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
 Future<void> main() async {
   final path = Platform.environment['CACHE_CORE_LIB'];
@@ -48,6 +48,7 @@ Future<void> main() async {
       OpenOp(dirs, dispatcher, log: log, indexer: indexer),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
+      FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
     ],
   );

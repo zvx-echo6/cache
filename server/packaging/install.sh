@@ -117,10 +117,12 @@ esac
 [ -f "$STAGE/lib/libcache_llama.so" ] || die "the tarball has no lib/libcache_llama.so"
 # libzim (with Xapian and ICU) sits next to the core, which finds it through its run path $ORIGIN
 [ -f "$STAGE/lib/libzim.so.9" ] || die "the tarball has no lib/libzim.so.9"
+# the road router (Valhalla and its C shim); the server hands the core its full path
+[ -f "$STAGE/lib/libvalhalla_shim.so" ] || die "the tarball has no lib/libvalhalla_shim.so"
 chown -R root:root "$STAGE"
 # the service runs as the cache user: it must execute the program and the helper and read the library and the web files
 chmod 755 "$STAGE/cache" "$STAGE/helper/cache-core-helper"
-chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so" "$STAGE/lib/libzim.so.9"
+chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so" "$STAGE/lib/libzim.so.9" "$STAGE/lib/libvalhalla_shim.so"
 chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
 chmod 755 "$STAGE"
 
