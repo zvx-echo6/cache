@@ -165,6 +165,8 @@ jobs:
         working-directory: app
         env:
           ORG_GRADLE_PROJECT_cacheTestApk: 'true'
+          # Android Auto is off by default (src/car/AndroidManifest.xml); the test APK turns it on for testing with the DHU.
+          ORG_GRADLE_PROJECT_cacheAndroidAuto: 'true'
         run: |
           flutter --version
           flutter pub get
@@ -189,6 +191,7 @@ jobs:
           if grep -v 'com.happylittlellc.cache.test' "$RUNNER_TEMP/own-authorities.txt"; then
             echo "::error::A provider authority is not under the .test package"; exit 1
           fi
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -q "CacheCarAppService" || { echo "::error::Android Auto is not in the test APK"; exit 1; }
           for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
             unzip -l "$apk" "lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from lib/arm64-v8a"; exit 1; }
           done

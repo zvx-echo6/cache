@@ -85,6 +85,16 @@ flutter {
     source = "../.."
 }
 
+// Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
+// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. The release on Play stays out of
+// Android Auto until it ships together with CarPlay (owner, 2026-11-08); the test APK and the car tests turn it on.
+val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
+if (androidAuto) {
+    androidComponents {
+        onVariants { variant -> variant.sources.manifests.addStaticManifestFile("src/car/AndroidManifest.xml") }
+    }
+}
+
 // The car screen's Robolectric tests read the merged assets, which the Flutter plugin's copy task writes: let it run first.
 tasks.configureEach {
     if (name == "packageDebugUnitTestForUnitTest") dependsOn("copyFlutterAssetsDebug")

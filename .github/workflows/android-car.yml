@@ -3,6 +3,8 @@
 #
 #   unit     the car screen's Robolectric tests (app/android/app/src/test): the templates the screens make against the Car App
 #            Library's test host (androidx.car.app:app-testing), the trip and intent parsing, the maneuver and distance mapping
+#   manifest Android Auto is off by default: the release manifest built without -PcacheAndroidAuto=true has no CarAppService
+#            (the release on Play stays out of Android Auto until it ships with CarPlay), and with it the service is there
 #   release  the release runtime classpath has the Car App Library (androidx.car.app:app and app-projected 1.7.0) and none of the
 #            test-only libraries (junit, Robolectric, app-testing): they are testImplementation and never reach the APK
 #
@@ -54,7 +56,7 @@ jobs:
           flutter build apk --config-only
       - name: Car screen tests (Robolectric)
         working-directory: app/android
-        run: ./gradlew :app:testDebugUnitTest -PcacheSearchSkipCore=true --stacktrace
+        run: ./gradlew :app:testDebugUnitTest -PcacheSearchSkipCore=true -PcacheAndroidAuto=true --stacktrace
       - name: Test report
         if: always()
         run: |
@@ -76,6 +78,21 @@ jobs:
           name: car-test-results
           path: app/build/app/reports/tests/testDebugUnitTest
           retention-days: 5
+      - name: Android Auto off by default (no CarAppService in the default release manifest)
+        working-directory: app/android
+        run: |
+          merged() { find ../build/app/intermediates/merged_manifest/release -name AndroidManifest.xml | head -n 1; }
+          ./gradlew :app:processReleaseMainManifest -PcacheSearchSkipCore=true -q
+          m=$(merged); test -n "$m" || { echo "::error::no merged release manifest"; exit 1; }
+          if grep -E "CacheCarAppService|androidx.car.app.CarAppService|androidx.car.app.category.NAVIGATION" "$m"; then
+            echo "::error::The default release manifest declares Android Auto"; exit 1
+          fi
+          echo "default release manifest: no CarAppService"
+          ./gradlew :app:processReleaseMainManifest -PcacheSearchSkipCore=true -PcacheAndroidAuto=true -q
+          m=$(merged)
+          grep -q "CacheCarAppService" "$m" || { echo "::error::-PcacheAndroidAuto=true did not add the CarAppService"; exit 1; }
+          grep -q "androidx.car.app.category.NAVIGATION" "$m" || { echo "::error::the navigation category is missing with the flag on"; exit 1; }
+          echo "with -PcacheAndroidAuto=true: CarAppService (navigation) declared"
       - name: Release dependencies (the Car App Library in, no test library)
         working-directory: app/android
         run: |
