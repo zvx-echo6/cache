@@ -234,6 +234,52 @@ jobs:
           path: bge-model
           key: ${{ steps.cache-3.outputs.cache-primary-key }}
 
+  # The phone's CPU backend path (CL_BACKEND_DL: the CPU backend is a set of libggml-cpu-*.so variants that cache_llama loads
+  # itself), built on Linux x86_64 with CACHE_LLAMA_TEST_BACKEND_DL so CI runs it. The test loads the search model with
+  # cl_embed_load and no chat model loaded first, as the app's query embedder and Add PDF's embedder do on a phone.
+  cache-llama-backend-dl:
+    name: cache-llama-backend-dl-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Embedding model cache
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: bge-model
+          key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+      - name: Embedding model
+        run: |
+          mkdir -p bge-model
+          f=bge-model/bge-m3-Q8_0.gguf
+          sha=c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+          if [[ ! -f "$f" ]]; then
+            curl -fL --retry 8 --retry-delay 5 --retry-all-errors -C - -o "$f.part" \
+              "https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf"
+            mv "$f.part" "$f"
+          fi
+          echo "$sha  $f" | sha256sum -c -
+      - name: Build with the CPU backend as loadable variants
+        run: |
+          out="$RUNNER_TEMP/dl/out"
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/dl/build" -DCMAKE_BUILD_TYPE=Release \
+            -DCACHE_LLAMA_TEST_BACKEND_DL=ON -DCACHE_LLAMA_TEST_CLI=ON \
+            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$out" -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$out"
+          cmake --build "$RUNNER_TEMP/dl/build" -j "$(nproc)"
+          ls -l "$out"
+          ls "$out"/libggml-cpu-*.so > /dev/null || { echo "::error::no CPU backend variants next to libcache_llama.so"; exit 1; }
+      - name: Test (embedder loads with no chat model loaded first)
+        run: |
+          out="$RUNNER_TEMP/dl/out"
+          "$out/cl_test" --embed bge-model/bge-m3-Q8_0.gguf "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
+          # the run must have gone through load_cpu_backend (its log line) and embedded both texts
+          grep -q 'native library folder' "$RUNNER_TEMP/dl.log" || { echo "::error::the CPU backend was not loaded by cache_llama"; exit 1; }
+          grep -q 'cl_embed_load failed' "$RUNNER_TEMP/dl.log" && { echo "::error::cl_embed_load failed"; exit 1; }
+          [[ $(grep -c '^\[[0-9]\]' "$RUNNER_TEMP/dl.log") -eq 2 ]] || { echo "::error::not both texts were embedded"; exit 1; }
+
   libzim-core-linux:
     strategy:
       fail-fast: false

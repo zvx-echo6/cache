@@ -29,6 +29,8 @@
 
 #if defined(__ANDROID__)
 #include <android/log.h>
+#endif
+#if defined(__ANDROID__) || defined(CL_BACKEND_DL)
 #include <dlfcn.h>
 #endif
 
@@ -354,6 +356,13 @@ void quiet_log(enum ggml_log_level level, const char * text, void *) {
 void backend_load_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_INFO) {
         __android_log_print(level >= GGML_LOG_LEVEL_WARN ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "cache_llama", "%s", text);
+    }
+}
+#elif defined(CL_BACKEND_DL)
+// The same off Android (only the CI test build of the CL_BACKEND_DL path): to stderr.
+void backend_load_log(enum ggml_log_level level, const char * text, void *) {
+    if (level >= GGML_LOG_LEVEL_INFO) {
+        fputs(text, stderr);
     }
 }
 #endif
