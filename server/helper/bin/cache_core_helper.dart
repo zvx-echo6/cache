@@ -7,6 +7,7 @@ import 'core_open.dart';
 import 'fs_ops.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
+import 'live_timer.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
 /// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
@@ -36,6 +37,8 @@ Future<void> main() async {
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
   final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
+  // Weather, alerts and fires stay fresh with no tab open (what a phone's background run does).
+  final liveTimer = LiveTimer(dispatcher, support: dirs.support, log: log)..start();
   await serveLines(
     stdin,
     (line) async {
@@ -53,6 +56,7 @@ Future<void> main() async {
     ],
   );
   indexer.stop();
+  liveTimer.stop();
   await stdout.flush();
   exit(0);
 }
