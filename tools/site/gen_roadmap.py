@@ -3,8 +3,10 @@ Usage: gen_roadmap.py out.html
 Needs `gh` signed in with read access to user projects, and ROADMAP_BLOCKLIST: a regular expression of words that must
 never reach the public page. It lives in a repository secret so this public file does not repeat what it guards.
 Any match in an item's title or body, the readme text used, or the finished page stops the build with an error.
+"Where things stand" is driven by status.json next to this script (cards of state-chip lines, an optional timing table, links);
+its text goes through the same blocked-word checks as the board text.
 A body line "Summary: ..." sets the item's one-line description; "Release: X" overrides the Release field (e.g. 1.3)."""
-import datetime, html, json, os, re, subprocess, sys
+import datetime, html, json, os, pathlib, re, subprocess, sys
 
 OWNER, NUMBER, RELEASE = "zvx-echo6", 4, "1.1"
 PROJECT_URL = f"https://github.com/users/{OWNER}/projects/{NUMBER}"
@@ -123,6 +125,116 @@ today = datetime.date.today().isoformat()
 done = sum(1 for i in cur for p in PLATFORMS if i.get(p) == "Done")
 total = sum(1 for i in cur for p in PLATFORMS if i.get(p) not in ("n/a", "Later", None))
 
+
+def load_status():
+    p = pathlib.Path(__file__).resolve().parent / "status.json"
+    if not p.exists(): sys.exit("STOP: tools/site/status.json is missing; nothing was written")
+    d = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(d, dict) or not isinstance(d.get("cards"), list): sys.exit("STOP: status.json has no cards; nothing was written")
+    return d
+
+def safe_link(u):
+    """Only plain https links are published."""
+    return u if isinstance(u, str) and re.match(r"https://[^\s\"'<>]+$", u) else ""
+
+TONES = ("ok", "warn", "bad", "info")
+E = lambda s: html.escape(str(s if s is not None else ""))
+
+def status_texts(d):
+    """Every string status.json can publish, for the blocked-word check."""
+    out = [d.get("updated"), d.get("lede")]
+    for c in d["cards"]:
+        out += [c.get("id"), c.get("title"), c.get("goals")]
+        t = c.get("table") or {}
+        out += list(t.get("head") or []) + [x for r in t.get("rows") or [] for x in r]
+        for g in c.get("groups") or []:
+            out.append(g.get("heading"))
+            for ln in g.get("lines") or []: out += [ln.get("chip"), ln.get("tone"), ln.get("text")]
+        for l in c.get("links") or []: out += [l.get("label"), l.get("href")]
+    return "\n".join(str(x) for x in out if x)
+
+def st_lines(lines):
+    rows = []
+    for ln in lines:
+        tone = ln.get("tone") if ln.get("tone") in TONES else "info"
+        rows.append(f'<li><span class="st-chip st-{tone}">{E(ln.get("chip"))}</span><span>{E(ln.get("text"))}</span></li>')
+    return '<ul class="st-list">\n' + "\n".join(rows) + "\n</ul>"
+
+def st_table(t):
+    head = "".join(f"<th>{E(h)}</th>" for h in t.get("head") or [])
+    rows = "\n".join(f'<tr><td>{E(r[0])}</td><td class="n{" f" if len(r) > 2 and r[2] == "bad" else ""}">{E(r[1])}</td></tr>'
+                     for r in t.get("rows") or [])
+    return f'<table class="st-tbl"><thead><tr>{head}</tr></thead><tbody>\n{rows}\n</tbody></table>'
+
+def st_card(c):
+    cid = E(c.get("id"))
+    h = [f'<section class="st-card{" st-wide" if c.get("wide") else ""}" aria-labelledby="{cid}">',
+         f'<h3 id="{cid}">{E(c.get("title"))}</h3>']
+    if c.get("goals"): h.append(f'<p class="st-bar">{E(c["goals"])}</p>')
+    groups, table = c.get("groups") or [], c.get("table")
+    if table and c.get("wide"):
+        cols = [f"<div>{st_table(table)}</div>"]
+        for g in groups:
+            cols.append("<div>" + (f'<h4>{E(g["heading"])}</h4>\n' if g.get("heading") else "") + st_lines(g.get("lines") or []) + "</div>")
+        h.append('<div class="st-cols">' + "\n".join(cols) + "</div>")
+    else:
+        if table: h.append(st_table(table))
+        for g in groups:
+            if g.get("heading"): h.append(f'<h4>{E(g["heading"])}</h4>')
+            h.append(st_lines(g.get("lines") or []))
+    links = [(safe_link(l.get("href")), l.get("label")) for l in c.get("links") or []]
+    links = [f'<a href="{E(u)}">{E(t)}</a>' for u, t in links if u]
+    if links: h.append('<div class="st-links">' + "".join(links) + "</div>")
+    h.append("</section>")
+    return "\n".join(h)
+
+status = load_status()
+check(status_texts(status), "status.json")
+standing = (f'<section class="st" aria-labelledby="standing">\n<h2 id="standing">Where things stand</h2>\n'
+            f'<p class="st-lede">Updated {E(status.get("updated"))}. {E(status.get("lede"))}</p>\n'
+            f'<div class="st-grid">\n\n' + "\n\n".join(st_card(c) for c in status["cards"]) + '\n</div>\n</section>')
+
+ST_CSS = r'''/* "Where things stand": one card per track, plain words, a state chip on every line (scoped st-). */
+.st{display:flex;flex-direction:column;gap:14px}
+.st-lede{color:var(--muted,#55594F);max-width:68ch;margin:0}
+.st-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:16px;align-items:start}
+.st-card{background:var(--card,#FFFDF8);border:1px solid var(--line,#DDD6C2);border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.st-card h3{font:700 19px/1.2 "Roboto Slab",Georgia,serif;margin:0;text-transform:none;letter-spacing:0;color:inherit}
+.st-card h4{font:600 12px/1 Roboto,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 0;opacity:.75}
+.st-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.st-list li{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline}
+.st-list li>span:last-child{min-width:0}
+.st-chip{font:600 11px/1 Roboto,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.06em;padding:4px 7px;border-radius:5px;white-space:nowrap;text-align:center;min-width:76px}
+.st-ok{background:#E4EEDC;color:#3F6B2E}.st-warn{background:#F4E8C8;color:#7A5200}.st-bad{background:#F6DDD8;color:#B3281E}.st-info{background:#DEE7F2;color:#2F5A8A}
+.st-bar{font:500 13px "Roboto Mono",ui-monospace,monospace;opacity:.8;margin:0}
+.st-tbl{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+.st-tbl td,.st-tbl th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#DDD6C2)}
+.st-tbl th{font:600 12px Roboto,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.05em;opacity:.75}
+.st-tbl td.n{font-family:"Roboto Mono",ui-monospace,monospace;white-space:nowrap}
+.st-tbl td.f{color:#B3281E;font-weight:700}
+.st-links{display:flex;flex-wrap:wrap;gap:8px}
+.st-links a{font:600 14px Roboto,system-ui,sans-serif;padding:8px 12px;border-radius:8px;border:1.5px solid currentColor;text-decoration:none}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .st-ok{background:#26331F;color:#8FB36A}:root:not([data-theme="light"]) .st-warn{background:#3A3020;color:#E0B45A}:root:not([data-theme="light"]) .st-bad{background:#3E2422;color:#FF7A6E}:root:not([data-theme="light"]) .st-info{background:#1F2B3A;color:#8FB3E0}:root:not([data-theme="light"]) .st-tbl td.f{color:#FF7A6E}}
+:root[data-theme="dark"] .st-ok{background:#26331F;color:#8FB36A}:root[data-theme="dark"] .st-warn{background:#3A3020;color:#E0B45A}:root[data-theme="dark"] .st-bad{background:#3E2422;color:#FF7A6E}:root[data-theme="dark"] .st-info{background:#1F2B3A;color:#8FB3E0}:root[data-theme="dark"] .st-tbl td.f{color:#FF7A6E}
+</style><style>
+/* polish pass */
+.st-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));align-items:stretch}
+.st-wide{grid-column:1/-1}
+.st-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px 28px;align-items:start}
+.st-cols h4{margin:0 0 8px}
+.st-list li{grid-template-columns:92px 1fr}
+.st-chip{min-width:0;width:100%;padding:5px 4px;font-size:10.5px;letter-spacing:.05em}
+.st-bar{font:500 14px Roboto,system-ui,sans-serif;opacity:.85}
+.st-card h3{font-size:18px}
+.st-links{margin-top:auto;padding-top:4px}
+.card h3 .status{display:table;margin:.45rem 0 0;white-space:nowrap}
+ul.parity{gap:.35rem}
+.chip{padding:.4rem .45rem}
+.chip .plat{white-space:nowrap;font-size:11.5px}
+.chip .state{font-size:10.5px;letter-spacing:.03em;white-space:nowrap}
+.list{align-items:stretch}
+.legend{grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))}'''
+
 page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -133,53 +245,76 @@ page = f"""<!doctype html>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@500;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@600;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
 <style>
-:root {{ --ground:#1a1d1f; --card:#2a3036; --text:#dcc9a3; --muted:#b0a58a; --clay:#cb7a3c; --clay-text:#db8a4b; --line:#3a4148;
-  --chip:#22272c; --done:#8fc19a; --building:#e0a868; --planned:#b0a58a; --later:#9fb6d6; --na:#7d7768; color-scheme: dark; }}
-@media (prefers-color-scheme: light) {{ :root:not([data-theme="dark"]) {{ --ground:#f5efe3; --card:#fffaf1; --text:#2b2722; --muted:#655b4b;
-  --clay:#cb7a3c; --clay-text:#9a4c14; --line:#ddd2bf; --chip:#f2eadb; --done:#2f7a43; --building:#9a5a10; --planned:#655b4b;
-  --later:#2f5d93; --na:#857c6c; color-scheme: light; }} }}
-:root[data-theme="light"] {{ --ground:#f5efe3; --card:#fffaf1; --text:#2b2722; --muted:#655b4b; --clay-text:#9a4c14; --line:#ddd2bf;
-  --chip:#f2eadb; --done:#2f7a43; --building:#9a5a10; --planned:#655b4b; --later:#2f5d93; --na:#857c6c; color-scheme: light; }}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--ground); color:var(--text); font:17px/1.6 Roboto, system-ui, -apple-system, "Segoe UI", sans-serif; }}
-a {{ color:var(--clay-text); }}
-.wrap {{ max-width:56rem; margin:0 auto; padding-left:max(16px, env(safe-area-inset-left)); padding-right:max(16px, env(safe-area-inset-right)); }}
-header {{ padding-block:2.5rem 1.5rem; }}
-header a.home {{ text-decoration:none; color:var(--muted); font-size:.95rem; }}
-.kicker {{ margin:1rem 0 0; color:var(--clay-text); font-weight:500; letter-spacing:.06em; text-transform:uppercase; font-size:.85rem; }}
-h1 {{ font:700 clamp(1.8rem, 5vw, 2.5rem)/1.2 "Roboto Slab", Georgia, serif; margin:.25rem 0 .5rem; text-wrap:balance; }}
-.lede {{ color:var(--muted); margin:0; max-width:60ch; }}
-.platforms {{ margin:.75rem 0 0; color:var(--text); }}
-main {{ display:flex; flex-direction:column; gap:2rem; padding-bottom:2.5rem; }}
-h2 {{ font:700 1.35rem/1.3 "Roboto Slab", Georgia, serif; margin:0 0 .25rem; }}
-.note {{ color:var(--muted); margin:0 0 1rem; max-width:65ch; }}
-.list {{ display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); gap:1rem; }}
-.card {{ background:var(--card); border-radius:18px; padding:1.1rem 1.1rem 1rem; min-width:0; display:flex; flex-direction:column; }}
-.card h3 {{ font:700 1.05rem/1.35 "Roboto Slab", Georgia, serif; margin:0 0 .3rem; }}
-.card p {{ margin:0 0 .85rem; color:var(--muted); font-size:.95rem; }}
-.status {{ font:500 .75rem/1 Roboto, sans-serif; padding:.2rem .45rem; border:1px solid var(--line); border-radius:6px; vertical-align:middle; color:var(--muted); }}
-ul.parity {{ list-style:none; margin:auto 0 0; padding:0; display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:.4rem; }}
-.chip {{ background:var(--chip); border-radius:10px; padding:.4rem .5rem; border-left:3px solid currentColor; min-width:0; }}
-.chip .plat {{ display:block; font-size:.75rem; color:var(--muted); line-height:1.3; }}
-.chip .state {{ display:flex; align-items:center; gap:.3rem; font-weight:500; font-size:.9rem; line-height:1.3; }}
-.chip.done {{ color:var(--done); }} .chip.building {{ color:var(--building); }} .chip.planned {{ color:var(--planned); }}
-.chip.later {{ color:var(--later); }} .chip.na {{ color:var(--na); }}
-.chip.na .state {{ font-weight:400; }}
-.ic {{ flex:none; }}
-.legend {{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap:.5rem; }}
-.legend .chip {{ display:flex; gap:.6rem; align-items:center; }}
-.legend .mean {{ color:var(--text); font-size:.85rem; }}
-.box {{ background:var(--card); border-radius:18px; padding:1.25rem; border:1px solid var(--line); }}
-.box ul {{ margin:.25rem 0 0; padding-left:1.2rem; }} .box li {{ margin:.2rem 0; max-width:65ch; }}
-.later-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap:1rem 2rem; }}
-.later-grid h3 {{ font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 .25rem; font-weight:500; }}
-.later-grid ul {{ margin:0; padding-left:1.2rem; color:var(--muted); }} .later-grid li {{ margin:.15rem 0; }}
-.meta {{ color:var(--muted); font-size:.9rem; margin:0; }}
-@media (max-width: 380px) {{ ul.parity {{ grid-template-columns:1fr; }} .chip .plat {{ display:inline; margin-right:.4rem; }} .chip {{ display:flex; justify-content:space-between; align-items:center; }} }}
-footer {{ padding-block:1.5rem 3rem; border-top:1px solid var(--line); color:var(--muted); font-size:.95rem; }}
-footer .wrap {{ display:flex; gap:1rem 1.5rem; flex-wrap:wrap; }}
+:root{{
+  --bg:#F3EBD9; --card:#FFFDF8; --text:#1A1D1F; --muted:#55594F; --line:#DDD6C2; --accent:#9C5320;
+  --ok:#3F6B2E; --okbg:#E4EEDC; --warn:#7A5200; --warnbg:#F4E8C8; --bad:#B3281E; --badbg:#F6DDD8; --info:#2F5A8A; --infobg:#DEE7F2;
+  --neutral:#55594F; --neutralbg:#ECE5D3; --dim:#7A7565; --track:#E4DCC6;
+  --display:"Roboto Slab",Georgia,serif; --body:Roboto,system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"Roboto Mono",ui-monospace,Menlo,monospace;
+}}
+@media (prefers-color-scheme: dark){{:root:not([data-theme="light"]){{
+  --bg:#1A1D1F; --card:#2A3036; --text:#DCC9A3; --muted:#B0A58A; --line:#3A4148; --accent:#DB8A4B;
+  --ok:#8FB36A; --okbg:#26331F; --warn:#E0B45A; --warnbg:#3A3020; --bad:#FF7A6E; --badbg:#3E2422; --info:#8FB3E0; --infobg:#1F2B3A;
+  --neutral:#B0A58A; --neutralbg:#22272C; --dim:#8A826F; --track:#1F2327; color-scheme:dark}}}}
+:root[data-theme="dark"]{{
+  --bg:#1A1D1F; --card:#2A3036; --text:#DCC9A3; --muted:#B0A58A; --line:#3A4148; --accent:#DB8A4B;
+  --ok:#8FB36A; --okbg:#26331F; --warn:#E0B45A; --warnbg:#3A3020; --bad:#FF7A6E; --badbg:#3E2422; --info:#8FB3E0; --infobg:#1F2B3A;
+  --neutral:#B0A58A; --neutralbg:#22272C; --dim:#8A826F; --track:#1F2327; color-scheme:dark}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 var(--body)}}
+a{{color:var(--accent)}}
+.wrap{{max-width:1100px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}}
+header{{padding-block:2rem 1rem}}
+header a.home{{text-decoration:none;color:var(--muted);font-size:.95rem}}
+.kicker{{margin:1rem 0 0;color:var(--accent);font:500 13px var(--mono);letter-spacing:.04em;text-transform:uppercase}}
+h1{{font:700 clamp(28px,5vw,38px)/1.15 var(--display);margin:.25rem 0 .5rem;text-wrap:balance}}
+.lede{{color:var(--muted);margin:0;max-width:68ch}}
+.platforms{{margin:.75rem 0 0}}
+main{{display:flex;flex-direction:column;gap:28px;padding-bottom:2.5rem}}
+h2{{font:700 20px/1.25 var(--display);margin:0 0 .25rem;text-wrap:balance}}
+.note{{color:var(--muted);font-size:14px;margin:0 0 .75rem;max-width:68ch}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px;align-items:start}}
+.grid.one{{margin-top:16px;grid-template-columns:minmax(0,1fr)}}
+.list{{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:16px}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;min-width:0;display:flex;flex-direction:column}}
+.card h3{{font:700 16px/1.35 var(--display);margin:0 0 .3rem}}
+.card p{{margin:0 0 .85rem;color:var(--muted);font-size:14.5px}}
+.card.wide .inner{{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:12px}}
+.card.wide .card{{background:transparent}}
+.big{{font:700 22px/1.2 var(--display);color:var(--text)!important;margin:.25rem 0 .6rem!important}}
+.mono{{font:500 13px var(--mono);color:var(--muted)}}
+ul.links{{list-style:none;margin:0 0 .75rem;padding:0;display:flex;flex-direction:column;gap:.4rem}}
+.status{{font:600 11px/1 var(--body);text-transform:uppercase;letter-spacing:.06em;padding:4px 7px;border-radius:5px;vertical-align:middle;background:var(--warnbg);color:var(--warn);margin-left:.3rem}}
+ul.parity{{list-style:none;margin:auto 0 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.4rem}}
+.chip{{border-radius:7px;padding:.4rem .5rem;min-width:0;background:var(--neutralbg);color:var(--neutral)}}
+.chip .plat{{display:block;font-size:12px;color:var(--muted);line-height:1.3}}
+.chip .state{{display:flex;align-items:center;gap:.3rem;font:600 11px/1.3 var(--body);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}}
+.chip.done{{background:var(--okbg);color:var(--ok)}} .chip.building{{background:var(--warnbg);color:var(--warn)}}
+.chip.planned{{background:var(--neutralbg);color:var(--neutral)}} .chip.later{{background:var(--infobg);color:var(--info)}}
+.chip.na{{background:transparent;color:var(--dim);border:1px dashed var(--line)}}
+.ic{{flex:none}}
+.legend{{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,15rem),1fr));gap:.5rem}}
+.legend .chip{{display:flex;gap:.6rem;align-items:center}}
+.legend .chip .state{{margin-top:0;min-width:5.2rem}}
+.legend .mean{{color:var(--text);font-size:13.5px}}
+ul.prog{{list-style:none;margin:.4rem 0 0;padding:0;display:flex;flex-direction:column;gap:.7rem}}
+ul.prog li{{display:grid;grid-template-columns:1fr auto;gap:.25rem .75rem;align-items:baseline}}
+.pname{{font-weight:500}} .pcount{{font:500 13px var(--mono);color:var(--muted)}}
+.meter{{grid-column:1/-1;height:10px;border-radius:5px;background:var(--track);overflow:hidden}}
+.meter span{{display:block;height:100%;background:var(--ok);border-radius:5px}}
+ul.prog.small .meter{{height:6px}} ul.prog.small .pname{{font-size:14px;font-weight:400}}
+.box{{background:var(--card);border-radius:10px;padding:16px 18px;border:1px solid var(--line)}}
+.box ul{{margin:.25rem 0 0;padding-left:1.2rem}}.box li{{margin:.2rem 0;max-width:65ch}}
+.later-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:1rem 2rem}}
+.later-grid h3{{font:600 12px/1 var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 .4rem}}
+.later-grid ul{{margin:0;padding-left:1.2rem;color:var(--muted)}}.later-grid li{{margin:.15rem 0}}
+.meta{{color:var(--muted);font-size:13.5px;margin:0}}
+@media (max-width:380px){{ul.parity{{grid-template-columns:1fr}}.chip .plat{{display:inline;margin-right:.4rem}}.chip{{display:flex;justify-content:space-between;align-items:center}}}}
+footer{{padding-block:1.25rem 3rem;border-top:1px solid var(--line);color:var(--muted);font-size:13.5px}}
+footer .wrap{{display:flex;gap:1rem 1.5rem;flex-wrap:wrap}}
+</style><style>
+{ST_CSS}
 </style>
 </head>
 <body>
@@ -190,6 +325,7 @@ footer .wrap {{ display:flex; gap:1rem 1.5rem; flex-wrap:wrap; }}
 <p class="platforms"><strong>Devices in {RELEASE}:</strong> Android, iPhone and iPad, and Linux and Raspberry Pi (the full app in a browser). Windows comes in 1.2.</p>
 </div></header>
 <main class="wrap">
+{standing}
 <section aria-labelledby="key"><h2 id="key">How to read this</h2><ul class="legend">{legend}</ul></section>
 {group("Must-have", "Must-have", f"The promise. Cache {RELEASE} is not stable until every one of these works.")}
 {group("Stretch", "Stretch", "Ride along if ready; never hold the release.")}

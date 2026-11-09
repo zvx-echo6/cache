@@ -1,0 +1,187 @@
+{
+ "updated": "9 Nov 2026",
+ "lede": "Cache 1.1 is in testing on phones. It becomes stable when every must-have below works on each kind of device and Ask is fast enough.",
+ "cards": [
+  {
+   "id": "st-test",
+   "title": "Testing now: Cache 1.1.0 (47)",
+   "wide": false,
+   "goals": null,
+   "table": null,
+   "groups": [
+    {
+     "heading": null,
+     "lines": [
+      {
+       "chip": "Checked",
+       "tone": "ok",
+       "text": "Launch check on a Pixel 8: the new Library, Bookshelves, adding a PDF with OCR, search inside it, Ask with a cited page, Discover, a route with guidance."
+      },
+      {
+       "chip": "Sending",
+       "tone": "info",
+       "text": "To TestFlight (public testers) and Google Play testing."
+      },
+      {
+       "chip": "Waiting",
+       "tone": "warn",
+       "text": "Google Play for everyone, until Ask meets its speed and accuracy goals."
+      }
+     ]
+    }
+   ],
+   "links": [
+    {
+     "label": "Join on iPhone",
+     "href": "https://testflight.apple.com/join/EcC7T8wx"
+    },
+    {
+     "label": "Join on Android",
+     "href": "https://play.google.com/apps/testing/com.happylittlellc.cache"
+    }
+   ]
+  },
+  {
+   "id": "st-phone",
+   "title": "Phones and tablets",
+   "wide": false,
+   "goals": null,
+   "table": null,
+   "groups": [
+    {
+     "heading": null,
+     "lines": [
+      {
+       "chip": "Works",
+       "tone": "ok",
+       "text": "New Library and Bookshelves, adding PDFs with OCR, search inside your books."
+      },
+      {
+       "chip": "Building",
+       "tone": "info",
+       "text": "Watched folders: new PDFs you drop in a folder are added on their own."
+      },
+      {
+       "chip": "Building",
+       "tone": "info",
+       "text": "A clearer log for problem reports."
+      },
+      {
+       "chip": "Later",
+       "tone": "warn",
+       "text": "Android Auto, released together with CarPlay."
+      }
+     ]
+    }
+   ],
+   "links": []
+  },
+  {
+   "id": "st-linux",
+   "title": "Cache on Linux and Raspberry Pi",
+   "wide": false,
+   "goals": null,
+   "table": null,
+   "groups": [
+    {
+     "heading": null,
+     "lines": [
+      {
+       "chip": "Works",
+       "tone": "ok",
+       "text": "Maps in the browser."
+      },
+      {
+       "chip": "Merged",
+       "tone": "info",
+       "text": "The new Library, routing, and meaning search, waiting for their browser checks."
+      },
+      {
+       "chip": "In review",
+       "tone": "info",
+       "text": "Downloads from other sites, directions, the PDF reader, regions, weather, chat history, models, videos, and the first part of sync."
+      },
+      {
+       "chip": "Designing",
+       "tone": "info",
+       "text": "The storage page, sharing, the update notice and location wording."
+      }
+     ]
+    }
+   ],
+   "links": []
+  },
+  {
+   "id": "st-ask",
+   "title": "Ask: speed and accuracy",
+   "wide": true,
+   "goals": "Goals: the first words within 15–20 s on a Pixel 8, then writing faster than you read · at least 85% of answers mostly correct",
+   "table": {
+    "head": [
+     "Pixel 8, build 47",
+     "Full answer"
+    ],
+    "rows": [
+     [
+      "First question",
+      "61 s",
+      "bad"
+     ],
+     [
+      "Follow-up in the same chat",
+      "127 s",
+      "bad"
+     ],
+     [
+      "Question in a new chat",
+      "158 s",
+      "bad"
+     ],
+     [
+      "Time to the first words (clean run)",
+      "about 30–35 s",
+      "bad"
+     ]
+    ]
+   },
+   "groups": [
+    {
+     "heading": "What we found",
+     "lines": [
+      {
+       "chip": "Slow",
+       "tone": "bad",
+       "text": "The phone reads the question and its sources far slower than it should."
+      },
+      {
+       "chip": "Slow",
+       "tone": "bad",
+       "text": "A changing line in the instructions throws away work Cache had saved between questions."
+      },
+      {
+       "chip": "Accuracy",
+       "tone": "bad",
+       "text": "Some answers skip searching your library when they shouldn't."
+      }
+     ]
+    },
+    {
+     "heading": "What we're doing",
+     "lines": [
+      {
+       "chip": "Measuring",
+       "tone": "info",
+       "text": "Timing older builds on the same phone to find where it slowed down."
+      },
+      {
+       "chip": "Testing",
+       "tone": "info",
+       "text": "Fixed instructions, checked against a set of real questions before they ship."
+      }
+     ]
+    }
+   ],
+   "links": []
+  }
+ ]
+}
