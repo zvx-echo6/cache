@@ -38,3 +38,10 @@ The phone copies `assets/guide/cache-guide.cache-library` out of the app and ins
 `POST /api/library/jobs/{id}/pause` and `/resume`. A paused job keeps its part file (the phone's `.part` resume); state `paused`;
 a running job stops at its next read and keeps the part; Resume queues it again and it continues with a Range request.
 `device_api.dart` gets `pauseJob` / `resumeJob` and the existing download row's Pause and Resume buttons use them on web.
+
+## Proposed, not built (new or changed screens)
+- A Pause / Resume button on the browser's own download cards (`device_widgets.dart` `_jobCard`): web-only cards, so a button there
+  would be new. Today a paused ZIM shows on its catalogue row (the phone's row: Resume, Remove). A paused library-package job has
+  no row to show it.
+- A per-index Pause in Catalog rows (the phone's row action comes from the scheduler's per-item state, which a browser does not have).
+  Only the "Pause all" / "Resume" button is wired.
