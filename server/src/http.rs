@@ -46,6 +46,10 @@
 //!                                              allow-popups` (no allow-same-origin), so a page in it has no origin and cannot use the
 //!                                              session. The URL's token is the only credential here (the cookie is not read), and the
 //!                                              token opens nothing under /api/. 401 for a missing, wrong or expired token.
+//!   GET|HEAD /api/video/media/<path>        -> a saved video, sound, caption or picture of <data>/app/docs/videos, with Range (see `video`)
+//!   GET|HEAD /api/video/zim/<zim id>/<entry> -> a video or caption entry of a ZIM, with Range
+//!   GET  /api/video/stream?u=<url>          -> a video site's stream, caption or picture read by the server (public hosts only), with Range;
+//!                                              an HLS playlist comes back with its parts rewritten to this route
 //!   GET  /api/tiles/layers/<id>/<z>/<x>/<y>[.ext] and /api/tiles/layers/<id>/tilejson.json
 //!                                           -> the core's local tile server's answer, unchanged (200 tile, 204 none, 503 + Retry-After for a
 //!                                              tile that may come later); the session cookie is the credential. See `tiles`.
@@ -848,6 +852,11 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.build.upload(&lib, replace.as_deref(), &query, len, req.into_body()).await)
+    } else if signed_in && matches!(method.as_str(), "GET" | "HEAD") && path.starts_with("/api/video/") {
+        // Videos: files, ZIM entries and streams, with Range (see `video`); the Range header is read here.
+        let range = req.headers().get(hyper::header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let query = req.uri().query().unwrap_or("").to_string();
+        crate::video::serve(app.helper.clone(), &method, &path, &query, range.as_deref()).await
     } else {
         match Limited::new(req.into_body(), limit).collect().await {
             Ok(b) => route(&app, &method, &target, cookie.as_deref(), &b.to_bytes()).await,
