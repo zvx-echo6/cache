@@ -3,7 +3,8 @@
 #
 # It checks the file first (parses, format cache-discover, a version this app reads, identical to the app's copy, and an
 # `updated` date not older than the published one), uploads only when the content changed (compared with the stored object's
-# MD5), then fetches the public address and checks the bytes. It writes ONE key, discover/catalogue.json, and nothing else.
+# MD5), then fetches the public address and checks the bytes. A change to this file also runs it (that is how GitHub first
+# registers it, since it is not on the default branch, so `gh workflow run` can find it). It writes ONE key, discover/catalogue.json, and nothing else.
 #
 # Secrets (an R2 key for the data bucket behind data.cached.info, separate from the cached-site key used by roadmap.yml):
 #   DATA_R2_ACCESS_KEY_ID, DATA_R2_SECRET_ACCESS_KEY, DATA_R2_ENDPOINT, DATA_R2_BUCKET
@@ -14,6 +15,7 @@ on:
     branches: [rel-1.1, main]
     paths:
       - docs/discover-catalogue.json
+      - .github/workflows/discover-publish.yml
   workflow_dispatch:
 
 permissions:
