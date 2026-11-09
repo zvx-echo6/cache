@@ -60,7 +60,7 @@ jobs:
         if: steps.out.outputs.cache-hit != 'true'
         run: bash packages/valhalla/scripts/build-android.sh "$RUNNER_TEMP/valhalla" "$RUNNER_TEMP/routing-out"
       - name: Save Valhalla dependencies
-        if: always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != ''
+        if: (always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != '') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1')
         uses: actions/cache/save@v4
         with:
           path: |
@@ -100,7 +100,7 @@ jobs:
       # restored from the newest entry, not only an exact match of the build files). Every branch writes, as setup-java's cache did.
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          cache-read-only: false
+          cache-read-only: ${{ !(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       # PDFium and SQLite for the app's build hooks (Android ABIs, and Linux for flutter test), from the Actions cache instead of
       # GitHub releases.
       - name: PDFium and SQLite (pinned, from the Actions cache)
@@ -117,7 +117,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
@@ -140,7 +140,8 @@ jobs:
         if: steps.cargo-ndk.outputs.cache-hit != 'true'
         run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
       - name: Cargo registry cache
-        uses: actions/cache@v4
+        id: cache-1
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -148,7 +149,8 @@ jobs:
           key: cargo-home-android-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-android-
       - name: Cargo target cache
-        uses: actions/cache@v4
+        id: cache-2
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-android-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -228,3 +230,17 @@ jobs:
           name: Cache-test-apk
           path: out/*.apk
           retention-days: 7
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}

@@ -128,7 +128,8 @@ jobs:
           echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           rustc --version
       - name: Cargo registry cache
-        uses: actions/cache@v4
+        id: cache-1
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -136,7 +137,8 @@ jobs:
           key: cargo-home-llama-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-llama-${{ matrix.arch }}-
       - name: Cargo target cache
-        uses: actions/cache@v4
+        id: cache-2
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-llama-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -150,7 +152,8 @@ jobs:
           arch: ${{ matrix.arch }}
       # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
       - name: Embedding model cache
-        uses: actions/cache@v4
+        id: cache-3
+        uses: actions/cache/restore@v4
         with:
           path: bge-model
           key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
@@ -210,6 +213,26 @@ jobs:
           name: cache-llama-${{ steps.llama.outputs.short }}-linux-${{ matrix.arch }}
           path: out/cache-llama-${{ steps.llama.outputs.short }}-linux-${{ matrix.arch }}
           if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}
+      - name: Save cache (Embedding model cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-3.outputs.cache-primary-key != '' && steps.cache-3.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bge-model
+          key: ${{ steps.cache-3.outputs.cache-primary-key }}
 
   libzim-core-linux:
     strategy:
@@ -280,7 +303,8 @@ jobs:
           echo "$line" >> "$GITHUB_ENV"
           echo "CS_TEST_REQUIRE_SMALL_ZIM=1" >> "$GITHUB_ENV"
       - name: Cargo registry cache
-        uses: actions/cache@v4
+        id: cache-4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -288,7 +312,8 @@ jobs:
           key: cargo-home-zimx-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-zimx-${{ matrix.arch }}-
       - name: Cargo target cache
-        uses: actions/cache@v4
+        id: cache-5
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-zimx-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -381,3 +406,17 @@ jobs:
           name: ${{ steps.pack.outputs.name }}
           path: ${{ steps.pack.outputs.dir }}
           if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-4.outputs.cache-primary-key != '' && steps.cache-4.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-4.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-5.outputs.cache-primary-key != '' && steps.cache-5.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-5.outputs.cache-primary-key }}

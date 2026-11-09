@@ -88,7 +88,8 @@ jobs:
           ls "$dest"/lib/*/libzim.so
           echo "LIBZIM_DIR=$dest" >> "$GITHUB_ENV"
       - name: Cargo registry cache
-        uses: actions/cache@v4
+        id: cache-1
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -96,7 +97,8 @@ jobs:
           key: cargo-home-corecs-x86_64-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-corecs-x86_64-
       - name: Cargo target cache
-        uses: actions/cache@v4
+        id: cache-2
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-corecs-x86_64-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -148,3 +150,17 @@ jobs:
           path: ${{ steps.pack.outputs.dir }}
           retention-days: 30
           if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}
