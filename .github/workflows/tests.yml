@@ -63,7 +63,14 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: x86_64
+      - name: openZIM testing suite (pinned, from the Actions cache)
+        id: zimsuite
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: zim-testing-suite-0.10.0.tar.gz
       - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
+        env:
+          ZIM_SUITE_TGZ: ${{ steps.zimsuite.outputs.dir }}/zim-testing-suite-0.10.0.tar.gz
         run: |
           line=$(bash zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
           echo "$line" >> "$GITHUB_ENV"
@@ -109,6 +116,14 @@ jobs:
         run: |
           flutter --version
           flutter pub get
+      # PDFium and SQLite for the app's build hooks and the PDF tests, from the Actions cache instead of GitHub releases.
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
       - name: MapLibre versions (the app's own and maplibre_gl's)
         run: python3 -I tools/check_maplibre_pin.py
       - name: Analyze

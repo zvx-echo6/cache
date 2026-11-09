@@ -1,0 +1,20 @@
+# Files CI downloads from GitHub releases, pinned by sha256 and kept in the GitHub Actions cache (.github/actions/pinned-downloads),
+# so a GitHub releases outage does not fail a run once a file has been fetched. One per line: name, sha256, URL.
+# A pin changes here, and the cache key changes with it.
+#
+# The openZIM testing suite (packages/cache_search/native/zimx/fetch-test-zim.sh holds the same pin and checks it again).
+zim-testing-suite-0.10.0.tar.gz              348821681a8f10eac8b7ca01dd48645d5b9a9c7d5b723edb0503d7d7f1042a96  https://github.com/openzim/zim-testing-suite/releases/download/0.10.0/zim-testing-suite-0.10.0.tar.gz
+# PDFium chromium/7811, the release pdfium_dart 0.2.5's build hook downloads (and app/test/support/pdfium_for_tests.dart).
+pdfium-chromium-7811-linux-x64.tgz           e76e0a37aefb843d56f04657475ce612157021b1ebc53d801f2fbfcc537ccf64  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7811/pdfium-linux-x64.tgz
+pdfium-chromium-7811-android-arm64.tgz       f51539cadeb5135534305b8bdf8685ce2fbe9991dbbc5b35f553108411b9ed14  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7811/pdfium-android-arm64.tgz
+pdfium-chromium-7811-android-arm.tgz         bb9250eefb33343f56f27f7e60c81ab3236d932c40e21557bf02ca4c276eb832  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7811/pdfium-android-arm.tgz
+pdfium-chromium-7811-android-x64.tgz         23faaf6f993a39524d9dc7fafbb760e295f8bd5e9ffa46139bad2299fb5c80f3  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7811/pdfium-android-x64.tgz
+pdfium-chromium-7811-mac-arm64.tgz           f9bbf1ebdc459e5f5ff25b2d457cc21db55ebfc0cf3d89fc1b90ce5445dac394  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7811/pdfium-mac-arm64.tgz
+# sqlite3 3.5.2's prebuilt libraries (the sha256s are the package's own, lib/src/hook/asset_hashes.dart; its hook checks them again).
+sqlite3-3.5.2-libsqlite3.x64.linux.so        b17729184e5a2818055ecbddd5ed6642521bfe6e56aafa472330e483c0e2e0d2  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.x64.linux.so
+sqlite3-3.5.2-libsqlite3.arm64.android.so    0c2d3bfc8c87abceb21ed72a4bb49964121c5fe1a8ef3848d83ba907d01b6161  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.android.so
+sqlite3-3.5.2-libsqlite3.arm.android.so      a42fa9d0f5c006d30b000d4904bc497705191c5d7330b178618546004295bb49  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm.android.so
+sqlite3-3.5.2-libsqlite3.x64.android.so      949965f0eba976f707ae364cdcb42c342b5f0626081f8d7f0378fb7b52848772  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.x64.android.so
+sqlite3-3.5.2-libsqlite3.arm64.macos.dylib   6d80ba56cff1fa44f62bebc3e6b6b71513cc628862a9745c223c7bea8bf813f3  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.macos.dylib
+sqlite3-3.5.2-libsqlite3.arm64.ios.dylib     f1bc69a4304a21e472c15f849c34ae46539483cfa7ce901f54175c6d6cc17991  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.ios.dylib
+sqlite3-3.5.2-libsqlite3.arm64.ios_sim.dylib 1ce8ac8ebbb3f61fd6282c45a4da15b9c6c6ec169eff40a918520357a502510b  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.ios_sim.dylib
