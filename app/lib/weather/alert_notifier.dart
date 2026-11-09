@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../platform.dart' as plat;
 import '../settings/app_settings.dart';
 import 'alert_watch.dart';
+import 'browser_notification.dart';
 
 /// Shows alert pop-ups (local notifications: nothing goes through a server) and reports which one was tapped.
 abstract class AlertNotifier {
@@ -50,6 +52,11 @@ class LocalAlertNotifier implements AlertNotifier {
   /// returned by [launchFocus].
   Future<void> init() async {
     if (_ready) return;
+    // A browser shows its own notifications (browser_notification.dart); the phone's plugin has nothing to set up there.
+    if (plat.isWeb) {
+      _ready = true;
+      return;
+    }
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('ic_stat_cache'),
@@ -69,6 +76,7 @@ class LocalAlertNotifier implements AlertNotifier {
 
   /// The pop-up that opened the app, if one did.
   Future<AlertFocus?> launchFocus() async {
+    if (plat.isWeb) return null;
     await init();
     final d = await _plugin.getNotificationAppLaunchDetails();
     if (d == null || !d.didNotificationLaunchApp) return null;
@@ -78,6 +86,19 @@ class LocalAlertNotifier implements AlertNotifier {
   @override
   Future<bool> show(NewAlert a, AlertDelivery delivery) async {
     if (delivery == AlertDelivery.none) return false;
+    if (plat.isWeb) {
+      final f = AlertFocus.fromPayload(a.payload);
+      return showBrowserNotification(
+        title: a.title,
+        body: a.body,
+        tag: a.item.address,
+        quiet: delivery == AlertDelivery.silent,
+        extreme: a.extreme,
+        onTap: () {
+          if (f != null) _taps.add(f);
+        },
+      );
+    }
     try {
       await init();
       final quiet = delivery == AlertDelivery.silent;

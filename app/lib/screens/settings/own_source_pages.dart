@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../browse/web/local_files.dart' show pickLocalFile;
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 import '../../weather/catalogue.dart';
 import '../../weather/catalogue_store.dart';
@@ -18,6 +20,13 @@ typedef PickText = Future<String?> Function();
 
 /// The phone's file chooser: one file, read as text (a source file is small; one over 4 MB is refused).
 Future<String?> pickTextFile() async {
+  // A browser gives a handle with no path: the file is read from the handle (called straight from the tap, as the chooser needs).
+  if (plat.isWeb) {
+    final f = await pickLocalFile(accept: const ['.json', 'application/json', 'text/plain']);
+    if (f == null) return null;
+    if (f.size > 4 * 1024 * 1024) throw const CatalogueException('That file is too large to be a source file.');
+    return utf8.decode(await f.readAll(), allowMalformed: true);
+  }
   final picked = await FilePicker.pickFile();
   if (picked == null || picked.path == null) return null;
   try {
