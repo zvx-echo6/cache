@@ -4,6 +4,7 @@ import '../downloads/download_row.dart';
 import '../models/hf_hub.dart';
 import '../models/model_downloads.dart';
 import '../models/search_model.dart';
+import '../platform.dart' as plat;
 import '../theme.dart';
 import 'download_confirm.dart';
 import '../layout/adaptive.dart' show ContentWidth;
@@ -150,9 +151,10 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
 /// search), as one more line in the same pop-up. Offers "Use it" when the model is ready.
 Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f) async {
   final dir = d.app.modelsDir;
-  if (dir == null) return;
+  // In a browser there is no folder here: the server keeps the files, and its free space is checked there.
+  if (dir == null && !plat.isWeb) return;
   final sm = d.searchModel;
-  final withSearch = sm != null && !d.isSearchModel(f) && d.app.searchModel == null && !d.searchModelQueued;
+  final withSearch = sm != null && !d.isSearchModel(f) && !d.hasSearchModel && !d.searchModelQueued;
   final choice = await askToDownload(
     context,
     title: 'Download ${d.labelOf(f)}?',
@@ -160,7 +162,7 @@ Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f) asy
       DownloadLine(d.labelOf(f), f.size),
       if (withSearch) DownloadLine('Search model (once, for searching by meaning)', sm.size),
     ],
-    dir: dir.path,
+    dir: dir?.path ?? '',
     policy: d.policy,
   );
   if (choice == DownloadChoice.cancel || !context.mounted) return;
@@ -233,7 +235,7 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
                     );
                   }
                   final d = widget.downloads;
-                  final withSearch = d.searchModel != null && d.app.searchModel == null && !d.searchModelQueued;
+                  final withSearch = d.searchModel != null && !d.hasSearchModel && !d.searchModelQueued;
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     children: [

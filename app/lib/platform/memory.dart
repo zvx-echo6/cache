@@ -1,7 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+
+import '../platform.dart' as plat;
 
 /// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2346 MB (anon 1200 MB, file
 /// 1146 MB), swap 2163 MB"; "memory unknown" where the system does not say. iOS gives its last native reading (phys_footprint
@@ -125,6 +129,8 @@ MemoryReading? _readingOf(Object? m) {
 /// The device's memory now: Android from the system (ActivityManager), Linux from /proc/meminfo (MemAvailable); null where it
 /// cannot be read (then nothing waits for memory).
 Future<MemoryReading?> readMemory() async {
+  // A browser has no memory of its own to read: the figures are the server's (GET /api/system/memory, from its /proc/meminfo).
+  if (plat.isWeb) return _readServerMemory();
   try {
     if (Platform.isAndroid || Platform.isIOS) {
       final reading = _readingOf(await kMemoryChannel.invokeMethod<Object?>('read'));
@@ -148,6 +154,25 @@ Future<MemoryReading?> readMemory() async {
     }
   } catch (_) {}
   return null;
+}
+
+Future<MemoryReading?> _readServerMemory() async {
+  try {
+    final r = await http.get(Uri.parse('/api/system/memory'));
+    return r.statusCode == 200 ? memoryFromServerBody(utf8.decode(r.bodyBytes)) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The reading in the body of `GET /api/system/memory` (`{"ok":true,"result":{"total","avail","threshold","low"}}`), or null.
+MemoryReading? memoryFromServerBody(String body) {
+  try {
+    final j = jsonDecode(body);
+    return _readingOf(j is Map ? j['result'] : null);
+  } catch (_) {
+    return null;
+  }
 }
 
 /// A fresh sample for diagnostic logs. A slow native probe never holds up indexing.

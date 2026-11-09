@@ -9,14 +9,17 @@ import '../downloads/download_row.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
-import '../platform/memory.dart' show modelMemoryNeed;
+import '../platform/memory.dart' show modelMemoryNeed, readMemory;
 import 'device_memory.dart';
 import 'hf_hub.dart';
+import 'server_models.dart';
 import '../platform.dart' as plat;
 
 /// The phone's total memory in bytes, when it can be read: Android and Linux from /proc/meminfo, iPhone (and Mac) from the
 /// system's hw.memsize.
 Future<int?> totalMemoryBytes() async {
+  // A browser: the memory of the server that runs the model.
+  if (plat.isWeb) return (await readMemory())?.total;
   if (plat.isIOS || plat.isMacOS) return sysctlMemsize();
   if (!(plat.isAndroid || plat.isLinux)) return null;
   try {
@@ -64,9 +67,12 @@ String? modelDownloadLine() {
 }
 
 class ModelDownloads extends ChangeNotifier {
-  ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader, this.searchModel})
+  ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader, this.searchModel, ServerModels? server})
     : hub = hub ?? HfHub(),
+      _server = server ?? (plat.isWeb ? ServerModels() : null),
       _downloader = downloader ?? ZimDownloader(freeSpace: usableBytesOnDisk) {
+    // In a browser the server runs the downloads: see what it is doing now (a tab opened while one runs shows it).
+    if (_server != null) unawaited(refreshRemote());
     // A download waiting for Wi-Fi starts by itself once the connection allows it.
     _net = policy?.probe.changes.listen((_) => _startWaiting());
     policy?.settings.addListener(_startWaiting);
@@ -86,6 +92,8 @@ class ModelDownloads extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _poll?.cancel();
     _net?.cancel();
     policy?.settings.removeListener(_startWaiting);
     super.dispose();
@@ -175,6 +183,7 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Bytes already downloaded for [f] in an earlier, stopped try.
   int partBytes(HfFile f) {
+    if (_server != null) return _remote[f.fileName]?.done ?? 0;
     try {
       for (final p in [_partFor(f), _oldPartFor(f)]) {
         if (p.existsSync()) return p.lengthSync();
@@ -185,6 +194,7 @@ class ModelDownloads extends ChangeNotifier {
 
   /// True when the file is already in the models folder.
   bool isInstalled(HfFile f) =>
+      (_server != null && isSearchModel(f) && _searchReady) ||
       app.models.any((m) => m.fileName == f.fileName && m.size == f.size) ||
       (app.searchModel?.fileName == f.fileName && app.searchModel?.size == f.size);
 
@@ -192,6 +202,7 @@ class ModelDownloads extends ChangeNotifier {
   /// "Waiting for (the running one) to finish"). A chat model brings the search model after it when that is missing; it starts once
   /// the chat model has finished.
   Future<void> start(HfFile f, {bool anyway = false}) async {
+    if (_server != null) return _startRemote(f, anyway: anyway);
     if (app.modelsDir == null) return;
     final search = isSearchModel(f);
     paused.remove(f.fileName);
@@ -316,6 +327,7 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Pauses the download of [f]: it stops and keeps what it has; [resume] continues it. What waits after it waits on.
   void pause(HfFile f) {
+    if (_server != null) return _pauseRemote(f);
     if (current?.fileName != f.fileName || _pausing != null) return;
     _pausing = f.fileName;
     DlMeter.reset(_meterKey(f));
@@ -328,6 +340,7 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Removes the download of [f] and what it saved: a running one stops first, a waiting one leaves the queue.
   Future<void> remove(HfFile f) async {
+    if (_server != null) return _removeRemote(f);
     queue.removeWhere((q) => q.fileName == f.fileName);
     paused.remove(f.fileName);
     failed.remove(f.fileName);
@@ -348,6 +361,7 @@ class ModelDownloads extends ChangeNotifier {
   /// Where the download of [f] stands, as its row shows it.
   DlState stateOf(HfFile f) {
     final name = f.fileName;
+    if (_server != null) return _remoteStateOf(f);
     if (current?.fileName == name) {
       if (_pausing == name || _discardAfter == name) return DlState(DlPhase.pausing, done: done, total: total);
       if (verifying) return DlState(DlPhase.verifying, done: done, total: total);
@@ -377,6 +391,15 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Stops the download that runs; what waits after it is dropped too.
   void cancel() {
+    if (_server != null) {
+      for (final d in _remote.values.where((d) => d.active)) {
+        final f = _fileOf(d.name);
+        if (f != null) unawaited(_removeRemote(f));
+      }
+      waiting = null;
+      blocked = null;
+      return;
+    }
     queue.clear();
     waiting = null;
     blocked = null;
@@ -386,11 +409,247 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Throws away the partly downloaded file of [f].
   void discardPart(HfFile f) {
+    if (_server != null) {
+      unawaited(_removeRemote(f));
+      return;
+    }
     for (final p in [_partFor(f), _oldPartFor(f)]) {
       try {
         if (p.existsSync()) p.deleteSync();
       } catch (_) {}
     }
     notifyListeners();
+  }
+
+  // ---- A browser: the server runs the downloads (server/src/models.rs). Nothing below runs on a phone.
+
+  final ServerModels? _server;
+  bool _disposed = false;
+  Timer? _poll;
+
+  /// What the server last said, by file name.
+  Map<String, ServerDownload> _remote = {};
+  final Map<String, HfFile> _known = {};
+  bool _searchReady = false;
+
+  /// The server has the search model.
+  bool get searchModelReady => _searchReady;
+
+  /// The search model is on this device (a browser: on the server).
+  bool get hasSearchModel => _server != null ? _searchReady : app.searchModel != null;
+
+  HfFile? _fileOf(String name) {
+    final k = _known[name];
+    if (k != null) return k;
+    final sm = searchModel;
+    if (sm != null && sm.fileName == name) return sm;
+    final d = _remote[name];
+    return d == null ? null : HfFile(repo: '', path: name, size: d.total);
+  }
+
+  /// Asks the server how its downloads stand and brings this object to it; keeps asking every second while one is active.
+  Future<void> refreshRemote() async {
+    final server = _server;
+    if (server == null || _disposed) return;
+    try {
+      final list = await server.downloads();
+      final ready = await server.searchModelReady();
+      if (_disposed) return;
+      await _applyRemote(list, ready);
+    } catch (e) {
+      // not reachable now: what is shown stays, and the next ask may work
+      if (!_disposed && error == null && _remote.values.any((d) => d.active)) notifyListeners();
+    }
+    _schedule();
+  }
+
+  void _schedule() {
+    final busy = _starting.isNotEmpty || _remote.values.any((d) => d.active) || _pausing != null || _discardAfter != null;
+    if (busy && _poll == null && !_disposed) {
+      _poll = Timer.periodic(const Duration(seconds: 1), (_) => unawaited(refreshRemote()));
+    } else if (!busy) {
+      _poll?.cancel();
+      _poll = null;
+    }
+  }
+
+  Future<void> _applyRemote(List<ServerDownload> list, bool searchReady) async {
+    final before = _remote;
+    _remote = {for (final d in list) d.name: d};
+    _searchReady = searchReady;
+    // what has finished since the last look: it was going, and is now done or gone
+    final finishedNow = <String>[
+      for (final b in before.values)
+        if (b.active && (_remote[b.name] == null || _remote[b.name]!.state == 'done')) b.name,
+    ];
+    if (finishedNow.isNotEmpty) await app.refreshModels();
+    for (final name in finishedNow) {
+      final f = _fileOf(name);
+      if (f != null && !isSearchModel(f)) {
+        for (final m in app.models) {
+          if (m.fileName == name) finished = m;
+        }
+      }
+    }
+    HfFile? now;
+    done = 0;
+    total = 0;
+    verifying = false;
+    queue.clear();
+    for (final d in list) {
+      final f = _fileOf(d.name);
+      if (f == null) continue;
+      final search = isSearchModel(f);
+      switch (d.state) {
+        case 'running' || 'verifying':
+          now = f;
+          done = d.done;
+          total = d.total > 0 ? d.total : f.size;
+          verifying = d.state == 'verifying';
+          _gotBytes = d.done > 0;
+        case 'queued':
+          queue.add(f);
+        case 'paused':
+          paused.add(d.name);
+        case 'failed':
+          final why = d.error ?? 'The download stopped.';
+          failed[d.name] = why;
+          if (search) {
+            searchModelError = why;
+          } else {
+            error = why;
+          }
+      }
+      if (d.state != 'paused') paused.remove(d.name);
+      if (d.state != 'failed' && d.state != 'done') failed.remove(d.name);
+    }
+    current = now;
+    if (_pausing != null && _remote[_pausing!]?.state != 'running' && _remote[_pausing!]?.state != 'verifying') _pausing = null;
+    if (_discardAfter != null && _remote[_discardAfter!] == null) _discardAfter = null;
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _startRemote(HfFile f, {bool anyway = false}) async {
+    final server = _server!;
+    final name = f.fileName;
+    final search = isSearchModel(f);
+    paused.remove(name);
+    failed.remove(name);
+    _known[name] = f;
+    // The row changes on the frame of the tap, before the mobile-data check and the server's answer.
+    _starting.add(name);
+    notifyListeners();
+    if (search) {
+      searchModelError = null;
+    } else {
+      error = null;
+      blocked = null;
+      finished = null;
+    }
+    try {
+      await policy?.checkDownload(anyway: anyway);
+    } on MobileDataBlocked catch (b) {
+      _starting.remove(name);
+      if (search) {
+        searchModelError = b.message;
+      } else {
+        blocked = b;
+        waiting = f;
+      }
+      notifyListeners();
+      return;
+    }
+    try {
+      if (search) {
+        await server.startSearchModel();
+      } else {
+        // The first chat model brings the search model: the server starts it when this file is done, with no tab open.
+        final sm = searchModel;
+        final withSearch = sm != null && !_searchReady && !searchModelQueued;
+        await server.add(f, search: withSearch);
+      }
+    } on ServerModelsException catch (e) {
+      failed[name] = e.message;
+      if (search) {
+        searchModelError = e.message;
+      } else {
+        error = e.message;
+      }
+    } finally {
+      _starting.remove(name);
+    }
+    await refreshRemote();
+  }
+
+  void _pauseRemote(HfFile f) {
+    // The search model's download belongs to the server's embedder, which cannot pause.
+    if (isSearchModel(f) || _pausing != null) return;
+    final d = _remote[f.fileName];
+    if (d == null || !d.active) return;
+    _pausing = f.fileName;
+    DlMeter.reset(_meterKey(f));
+    notifyListeners();
+    unawaited(() async {
+      try {
+        await _server!.pause(f.fileName);
+      } catch (_) {
+        _pausing = null;
+      }
+      await refreshRemote();
+    }());
+  }
+
+  Future<void> _removeRemote(HfFile f) async {
+    final name = f.fileName;
+    paused.remove(name);
+    failed.remove(name);
+    if (waiting?.fileName == name) {
+      waiting = null;
+      blocked = null;
+    }
+    if (isSearchModel(f)) {
+      searchModelError = null;
+      notifyListeners();
+      return;
+    }
+    if (_remote[name]?.state == 'running' || _remote[name]?.state == 'verifying') _discardAfter = name;
+    notifyListeners();
+    try {
+      await _server!.remove(name);
+    } catch (_) {
+      _discardAfter = null;
+    }
+    await refreshRemote();
+  }
+
+  DlState _remoteStateOf(HfFile f) {
+    final name = f.fileName;
+    final r = _remote[name];
+    if (r != null) {
+      final size = r.total > 0 ? r.total : f.size;
+      switch (r.state) {
+        case 'running' || 'verifying':
+          if (_pausing == name || _discardAfter == name) return DlState(DlPhase.pausing, done: r.done, total: size);
+          if (r.state == 'verifying') return DlState(DlPhase.verifying, done: r.done, total: size);
+          if (r.done == 0) return DlState(DlPhase.starting, done: r.done, total: size);
+          return DlState(DlPhase.running, done: r.done, total: size, speed: DlMeter.speed(_meterKey(f), r.done));
+        case 'queued':
+          String? other;
+          for (final d in _remote.values) {
+            if (d.state == 'running' || d.state == 'verifying') other = nameOf(_fileOf(d.name) ?? f);
+          }
+          return DlState(DlPhase.waiting, done: r.done, total: size, waitingFor: other);
+      }
+    }
+    if (_starting.contains(name)) return DlState(DlPhase.starting, done: r?.done ?? 0, total: f.size);
+    if (waiting?.fileName == name) return DlState(DlPhase.waiting, done: r?.done ?? 0, total: f.size, waitLine: 'Waiting for Wi-Fi');
+    if (isInstalled(f)) return DlState(DlPhase.done, total: f.size);
+    final why = failed[name];
+    if (why != null) {
+      final own = why.contains('Hugging Face account') ? 'this model needs a Hugging Face account' : null;
+      return DlState(DlPhase.failed, done: r?.done ?? 0, total: f.size, reason: DlReason.of(why), reasonText: own);
+    }
+    if (r != null && r.state == 'paused') return DlState(DlPhase.paused, done: r.done, total: r.total > 0 ? r.total : f.size);
+    return DlState(DlPhase.idle, total: f.size);
   }
 }
