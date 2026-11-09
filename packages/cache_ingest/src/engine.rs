@@ -55,6 +55,10 @@ pub trait Embedder: Send + Sync {
     }
     /// One vector per text. `threads` is `opts.embed_threads`. Failure is the `embed` code.
     fn embed(&self, texts: &[String], threads: usize) -> Result<Vec<Vec<f32>>>;
+    /// Frees the model `embed` loaded, if it holds one; the next `embed` loads it again. The service calls it when a job ends
+    /// (done, failed, cancelled) and when the jobs using it have been idle for `opts.embed_idle_ms`. It must be safe to call at
+    /// any time, from any thread, also while another call embeds (it may wait for that call), and more than once.
+    fn release(&self) {}
 }
 
 /// What the sorter made of a book: its best guess, and whether it is confident enough to file the book there.

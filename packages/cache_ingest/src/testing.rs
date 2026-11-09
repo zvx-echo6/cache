@@ -156,6 +156,18 @@ pub struct FakeEmbedder {
     pub fail_call: Mutex<Option<usize>>,
     /// When set, the embedder's identity (the model file).
     pub ident: Mutex<Option<String>>,
+    /// Whether the "model" is loaded: `embed` loads it when it is not, `release` frees it.
+    pub loaded: Mutex<bool>,
+    /// How many times the model was loaded.
+    pub loads: AtomicUsize,
+    /// How many times a loaded model was released.
+    pub releases: AtomicUsize,
+}
+
+impl FakeEmbedder {
+    pub fn is_loaded(&self) -> bool {
+        *self.loaded.lock().unwrap()
+    }
 }
 
 impl Embedder for FakeEmbedder {
@@ -169,10 +181,24 @@ impl Embedder for FakeEmbedder {
         let mut calls = self.calls.lock().unwrap();
         let n = calls.len();
         calls.push((texts.len(), threads));
+        {
+            let mut l = self.loaded.lock().unwrap();
+            if !*l {
+                *l = true;
+                self.loads.fetch_add(1, Ordering::SeqCst);
+            }
+        }
         if *self.fail_call.lock().unwrap() == Some(n) {
             return Err(Error::new(Code::Embed, "the model failed"));
         }
         Ok(texts.iter().map(|t| cache_pack::embed::fake_vector(t)).collect())
+    }
+    fn release(&self) {
+        let mut l = self.loaded.lock().unwrap();
+        if *l {
+            *l = false;
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
