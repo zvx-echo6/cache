@@ -75,6 +75,9 @@ void main() {
         await tester.enterText(find.byKey(const ValueKey('own-address')), 'https://sensors.example.org/api/creek?site=12');
         FocusManager.instance.primaryFocus?.unfocus();
         // a short window (a phone held sideways) has the button below the fold
+        if (find.byKey(const ValueKey('own-try')).evaluate().isEmpty) {
+          await tester.scrollUntilVisible(find.byKey(const ValueKey('own-try')), 200, scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last);
+        }
         await tester.ensureVisible(find.byKey(const ValueKey('own-try')));
         await _settle(tester);
         await tester.tap(find.byKey(const ValueKey('own-try')));
