@@ -204,6 +204,11 @@ fn serve(argv: &[String]) -> Result<(), String> {
         // The text embedder (bge-m3): the model is fetched on first need; a loaded model is let go when idle.
         let llm = cache_server::llm::LlmService::new(data.clone(), embed_lib.clone(), cache_server::embed::ModelSpec::bge_m3().file_name);
         let embed = cache_server::embed::EmbedService::new(data.clone(), embed_lib);
+        // A model download that asked for the search model starts it when it is done, with no browser open.
+        let follower = embed.clone();
+        llm.jobs().set_after(Arc::new(move || {
+            follower.start_download();
+        }));
         let reaper = embed.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
