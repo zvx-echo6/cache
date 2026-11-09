@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdio>
 #include <cmath>
@@ -20,12 +21,17 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -35,6 +41,15 @@
 #endif
 
 namespace {
+
+// One tensor of the model file, for the memmap diagnostic: where its data lies in the file, and its group.
+struct MemTensor {
+    std::string name;
+    int         group    = 7;
+    uint64_t    off      = 0;      // absolute file offset of the data
+    uint64_t    size     = 0;
+    bool        repacked = false;  // loaded into the CPU_REPACK buffer (repack_tensors): not backed by the file mapping
+};
 
 struct Handle {
     llama_model *             model = nullptr;
@@ -70,6 +85,17 @@ struct Handle {
 
     // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
     std::string engine_line;  // the "engine: ..." line of this load (cl_info)
+    // repack_tensors: the override list handed to llama.cpp (NULL-terminated) and the pattern it points to; both must outlive the load.
+    std::string                      repack_pat;
+    llama_model_tensor_buft_override repack_override[2] = {{nullptr, nullptr}, {nullptr, nullptr}};
+    // memmap diagnostic (engine "memmap": true)
+    bool                   memmap = false;
+    std::string            model_path;
+    std::vector<MemTensor> mem_tensors;
+    bool                   mem_reported = true;  // the answer's report is made once, by cl_finish
+    // ple_advise: the page-aligned range of per_layer_token_embd inside the mapping (0 length: none), and the mode
+    std::string            ple_mode;
+    uint64_t               ple_addr = 0, ple_len = 0;
     std::string weights        = "default";
     std::string weights_reason;
 
@@ -218,6 +244,9 @@ struct EngineOpts {
     std::string      type_v          = "f16";
     int              n_ubatch        = 0;      // 0: llama.cpp's default
     int              repack_weights  = -1;     // -1: the process-wide repack_weights option
+    std::string      repack_tensors;           // "": none. A regex over tensor names (only the safe subset is repacked)
+    bool             memmap          = false;  // log where the weights live and how much of them is resident
+    std::string      ple_advise;               // "": nothing; "random" | "normal" | "dontneed_after": madvise on per_layer_token_embd
     int              use_mmap        = -1;     // -1: load_mode stays as llama_model_default_params sets it (AUTO); 1: MMAP; 0: NONE
 };
 EngineOpts g_engine;
@@ -478,6 +507,328 @@ CpuPlan plan_cpus() {
     return plan;
 }
 
+// ---------------- engine test helpers: partial repack, the memory diagnostic, madvise on the per-layer table ----------------
+
+// Long log lists go out in lines of at most ~900 bytes (logcat cuts a line near 4 KB).
+void log_list(const std::string & head, const std::vector<std::string> & items) {
+    std::string line;
+    int part = 0;
+    for (const auto & it : items) {
+        if (!line.empty() && line.size() + it.size() > 900) { cl_logi("%s [%d]: %s", head.c_str(), ++part, line.c_str()); line.clear(); }
+        line += (line.empty() ? "" : ",") + it;
+    }
+    if (!line.empty() || items.empty()) cl_logi("%s%s: %s", head.c_str(), part ? (" [" + std::to_string(part + 1) + "]").c_str() : "", line.empty() ? "(none)" : line.c_str());
+}
+
+// The names the CPU backend variant that is loaded reports ("NEON", "DOTPROD", "AVX2" ...), or none when it cannot say.
+std::set<std::string> cpu_feature_names() {
+    std::set<std::string> out;
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    auto * fn = reg ? (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features") : nullptr;
+    if (fn) {
+        for (auto * ft = fn(reg); ft && ft->name; ft++) {
+            if (std::string(ft->value) != "0") out.insert(ft->name);
+        }
+    }
+    return out;
+}
+
+// The CPU backend's repack buffer type (the one named "CPU_REPACK" among the CPU device's extra buffer types), or null.
+ggml_backend_buffer_type_t find_repack_buft() {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    auto * fn = reg ? (ggml_backend_dev_get_extra_bufts_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts") : nullptr;
+    if (!fn) return nullptr;
+    for (ggml_backend_buffer_type_t * b = fn(dev); b && *b; b++) {
+        if (strcmp(ggml_backend_buft_name(*b), "CPU_REPACK") == 0) return *b;
+    }
+    return nullptr;
+}
+
+// Whether the CPU backend's repack code (ggml-cpu/repack.cpp, ggml_repack_get_optimal_repack_type) has a layout for a 2-D tensor of
+// this type with ne[1] a multiple of 8 on the CPU features reported. That code is private, so this mirrors it; where unsure it says no
+// (a tensor sent to the repack buffer that has no layout crashes the load). ne[1] % 8 is stricter than its 4 and 8.
+bool repack_has_layout(ggml_type t, const std::set<std::string> & f) {
+    auto has = [&](const char * n) { return f.count(n) > 0; };
+    const bool neon_mm = has("NEON") && (has("MATMUL_INT8") || has("DOTPROD"));
+    switch (t) {
+        case GGML_TYPE_Q4_0:   return has("AVX2") || neon_mm;
+        case GGML_TYPE_Q4_K:   return has("AVX2") || neon_mm;
+        case GGML_TYPE_Q5_K:   return neon_mm;
+        case GGML_TYPE_Q6_K:   return neon_mm;
+        case GGML_TYPE_Q8_0:   return neon_mm;
+        case GGML_TYPE_Q2_K:   return has("AVX512");
+        case GGML_TYPE_IQ4_NL: return has("AVX2") || (has("NEON") && has("DOTPROD"));
+        case GGML_TYPE_MXFP4:  return has("AVX2") || (has("NEON") && has("DOTPROD"));
+        default:               return false;
+    }
+}
+
+std::string regex_escape(const std::string & s) {
+    std::string o;
+    for (char c : s) {
+        if (!(isalnum((unsigned char) c) || c == '_')) o += '\\';
+        o += c;
+    }
+    return o;
+}
+
+int tensor_group(const std::string & n) {
+    auto at0 = [&](const char * p) { return n.rfind(p, 0) == 0; };
+    if (at0("per_layer_token_embd")) return 0;
+    if (at0("token_embd")) return 1;
+    if (n.find("norm") != std::string::npos) return 3;
+    // Gemma 4 per-layer inputs: per_layer_model_proj, blk.N.inp_gate, blk.N.proj (per_layer_proj_norm and blk.N.post_norm are norms)
+    if (at0("per_layer_model_proj") || n.find(".inp_gate.") != std::string::npos || (at0("blk.") && n.find(".proj.") != std::string::npos)) return 2;
+    if (n.find("attn_") != std::string::npos) return 4;
+    if (n.find("ffn_") != std::string::npos) return 5;
+    if (at0("output")) return 6;
+    return 7;
+}
+constexpr const char * kMemGroups[] = {"per_layer_token_embd", "token_embd", "per_layer_proj", "norms", "attn", "ffn", "output", "other"};
+
+// The model file's tensors (name, group, data offset, size). Empty when the file cannot be read.
+std::vector<MemTensor> read_tensor_table(const char * path) {
+    std::vector<MemTensor> out;
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = nullptr;
+    gguf_context * g = gguf_init_from_file(path, gp);
+    if (!g) return out;
+    const uint64_t base = gguf_get_data_offset(g);
+    for (int64_t i = 0; i < gguf_get_n_tensors(g); i++) {
+        MemTensor t;
+        t.name  = gguf_get_tensor_name(g, i);
+        t.group = tensor_group(t.name);
+        t.off   = base + gguf_get_tensor_offset(g, i);
+        t.size  = gguf_get_tensor_size(g, i);
+        out.push_back(std::move(t));
+    }
+    gguf_free(g);
+    return out;
+}
+
+// repack_tensors: of the tensors the regex matches, the ones that are safe to send to the repack buffer: 2-D, a type with a layout on
+// this CPU, ne[1] % 8 == 0, and not an embedding table (token_embd, per_layer_token_embd: GET_ROWS reads them by row, which repacked
+// data breaks). Fills h->repack_pat/override and returns the chosen names; logs the counts, bytes and the matched-but-skipped names.
+bool plan_repack_tensors(Handle * h, const char * path, const std::string & regex_text, std::set<std::string> & chosen) {
+    ggml_backend_buffer_type_t buft = find_repack_buft();
+    if (!buft) { cl_logi("repack_tensors ignored: the CPU backend has no CPU_REPACK buffer type"); return false; }
+    const auto feats = cpu_feature_names();
+    if (feats.empty()) { cl_logi("repack_tensors ignored: the CPU backend does not report its features"); return false; }
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = nullptr;
+    gguf_context * g = gguf_init_from_file(path, gp);
+    if (!g) { cl_logi("repack_tensors ignored: cannot read the model file's tensor list"); return false; }
+    std::regex re(regex_text);
+    std::vector<std::string> skipped;
+    uint64_t bytes = 0;
+    for (int64_t i = 0; i < gguf_get_n_tensors(g); i++) {
+        const std::string name = gguf_get_tensor_name(g, i);
+        if (!std::regex_search(name, re)) continue;
+        const int64_t * ne = gguf_get_tensor_ne(g, i);
+        const ggml_type ty = gguf_get_tensor_type(g, i);
+        const char * why = nullptr;
+        if (name.find("token_embd") != std::string::npos) why = "embedding table";
+        else if (ne[2] != 1 || ne[3] != 1 || ne[1] <= 1) why = "not 2-D";
+        else if (ne[1] % 8 != 0) why = "ne1 not a multiple of 8";
+        else if (!repack_has_layout(ty, feats)) why = "type without a layout here";
+        if (why) { skipped.push_back(name + "(" + why + ", " + ggml_type_name(ty) + ")"); continue; }
+        chosen.insert(name);
+        bytes += gguf_get_tensor_size(g, i);
+    }
+    gguf_free(g);
+    cl_logi("repack_tensors: pattern %s matched %d safe tensors (%llu MB) and %d skipped", regex_text.c_str(), (int) chosen.size(),
+            (unsigned long long) (bytes >> 20), (int) skipped.size());
+    log_list("repack_tensors skipped", skipped);
+    if (chosen.empty()) return false;
+    std::string pat = "^(?:";
+    bool first = true;
+    for (const auto & n : chosen) { pat += (first ? "" : "|") + regex_escape(n); first = false; }
+    pat += ")$";
+    h->repack_pat         = pat;
+    h->repack_override[0] = { h->repack_pat.c_str(), buft };
+    return true;
+}
+
+#if !defined(_WIN32)
+// A line of /proc/self/status ("VmRSS:  1234 kB") in bytes, or -1.
+long long proc_status_bytes(const char * key) {
+    FILE * f = fopen("/proc/self/status", "r");
+    if (!f) return -1;
+    char line[256];
+    long long v = -1;
+    const size_t kl = strlen(key);
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, key, kl) == 0) { long long kb = 0; if (sscanf(line + kl, " %lld", &kb) == 1) v = kb * 1024; break; }
+    }
+    fclose(f);
+    return v;
+}
+
+struct Vma { uint64_t start, end, off; };
+
+// Bytes of [addr, addr+len) whose pages are in memory (mincore).
+uint64_t resident_bytes(uint64_t addr, uint64_t len, long ps) {
+    const uint64_t lo = addr & ~(uint64_t) (ps - 1);
+    const uint64_t hi = (addr + len + ps - 1) & ~(uint64_t) (ps - 1);
+    std::vector<unsigned char> vec((hi - lo) / ps);
+#if defined(__APPLE__)
+    if (mincore((void *) lo, hi - lo, (char *) vec.data()) != 0) return 0;
+#else
+    if (mincore((void *) lo, hi - lo, vec.data()) != 0) return 0;
+#endif
+    uint64_t sum = 0;
+    for (size_t i = 0; i < vec.size(); i++) {
+        if (!(vec[i] & 1)) continue;
+        const uint64_t ps0 = lo + i * (uint64_t) ps, pe0 = ps0 + ps;
+        sum += std::min(pe0, addr + len) - std::max(ps0, addr);
+    }
+    return sum;
+}
+
+// The mappings of the model file in this process (llama.cpp's mmap of the weights), from /proc/self/maps.
+std::vector<Vma> read_vmas(const std::string & model_path) {
+    std::vector<Vma> vmas;
+    std::error_code ec;
+    const std::string real = std::filesystem::weakly_canonical(model_path, ec).string();
+    if (FILE * f = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long st, en, off;
+            int n = 0;
+            if (sscanf(line, "%llx-%llx %*4s %llx %*s %*s %n", &st, &en, &off, &n) < 3 || n <= 0) continue;
+            std::string path = line + n;
+            while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) path.pop_back();
+            if (path == model_path || (!real.empty() && path == real)) vmas.push_back({st, en, off});
+        }
+        fclose(f);
+    }
+    return vmas;
+}
+
+// Where a tensor's data is in memory when the weights are mapped (false when it is not inside a mapping of the model file).
+bool tensor_in_mapping(const std::vector<Vma> & vmas, const MemTensor & t, uint64_t & addr) {
+    for (const auto & v : vmas) {
+        if (t.off >= v.off && t.off + t.size <= v.off + (v.end - v.start)) { addr = v.start + (t.off - v.off); return true; }
+    }
+    return false;
+}
+
+const MemTensor * find_mem_tensor(const std::vector<MemTensor> & ts, const char * prefix) {
+    for (const auto & t : ts) { if (t.name.rfind(prefix, 0) == 0) return &t; }
+    return nullptr;
+}
+
+// ple_advise: madvise on the per-layer embedding table's pages (page-aligned inside the tensor, so no neighbouring tensor is touched).
+// "random" and "dontneed_after" apply MADV_RANDOM now, "normal" MADV_NORMAL; "dontneed_after" also drops the pages after each answer.
+// Logs the range sizes (the plain token_embd's too, for comparison), the result, and the table's resident bytes before and after.
+void ple_setup(Handle * h, const std::vector<MemTensor> & ts) {
+    const long ps = sysconf(_SC_PAGESIZE);
+    const auto vmas = read_vmas(h->model_path);
+    const MemTensor * ple = find_mem_tensor(ts, "per_layer_token_embd");
+    const MemTensor * tok = find_mem_tensor(ts, "token_embd");
+    uint64_t addr = 0;
+    if (tok && tensor_in_mapping(vmas, *tok, addr)) cl_logi("ple_advise: token_embd range %llu MB in the mapping (not advised)", (unsigned long long) (tok->size >> 20));
+    if (!ple) { cl_logi("ple_advise: no per_layer_token_embd tensor in this model: nothing done"); return; }
+    if (ple->repacked || !tensor_in_mapping(vmas, *ple, addr)) {
+        cl_logi("ple_advise: per_layer_token_embd is not in an mmapped buffer (%s): nothing done", vmas.empty() ? "the weights are not mapped" : "not in the mapping");
+        return;
+    }
+    const uint64_t lo = (addr + ps - 1) & ~(uint64_t) (ps - 1);
+    const uint64_t hi = (addr + ple->size) & ~(uint64_t) (ps - 1);
+    if (hi <= lo) { cl_logi("ple_advise: the table's page range is empty: nothing done"); return; }
+    const uint64_t before = resident_bytes(lo, hi - lo, ps);
+    const bool normal = h->ple_mode == "normal";
+    const int rc  = madvise((void *) lo, hi - lo, normal ? MADV_NORMAL : MADV_RANDOM);
+    const int err = rc != 0 ? errno : 0;
+    const uint64_t after = resident_bytes(lo, hi - lo, ps);
+    cl_logi("ple_advise: per_layer_token_embd range %llu MB, mode=%s -> madvise(%s) result=%d%s; resident before=%llu MB after=%llu MB",
+            (unsigned long long) ((hi - lo) >> 20), h->ple_mode.c_str(), normal ? "MADV_NORMAL" : "MADV_RANDOM", rc,
+            rc != 0 ? (" errno " + std::to_string(err)).c_str() : "", (unsigned long long) (before >> 20), (unsigned long long) (after >> 20));
+    if (rc == 0) { h->ple_addr = lo; h->ple_len = hi - lo; }
+}
+
+// dontneed_after: drop the table's (clean, file-backed) pages at the end of an answer. Logged with the resident bytes around it.
+void ple_drop(Handle * h) {
+    if (h->ple_mode != "dontneed_after" || h->ple_len == 0) return;
+    const long ps = sysconf(_SC_PAGESIZE);
+    const uint64_t before = resident_bytes(h->ple_addr, h->ple_len, ps);
+    const int rc = madvise((void *) h->ple_addr, h->ple_len, MADV_DONTNEED);
+    const uint64_t after = resident_bytes(h->ple_addr, h->ple_len, ps);
+    cl_logi("ple_advise: answer done, madvise(MADV_DONTNEED) result=%d on %llu MB; per_layer_token_embd resident before=%llu MB after=%llu MB",
+            rc, (unsigned long long) (h->ple_len >> 20), (unsigned long long) (before >> 20), (unsigned long long) (after >> 20));
+}
+#endif
+
+// The memmap diagnostic: per tensor group, the bytes in the file and the bytes resident now. Tensors in the mapping of the model file
+// are counted with mincore on their pages; tensors the loader put in other buffers (CPU_REPACK from repack_tensors, or anonymous
+// memory when the weights were not mapped) count as resident in full. The loader's own buffer lines ("model buffer size", "KV buffer
+// size", "compute buffer size") are forwarded to the same log (forward_log), so they appear beside these.
+void memmap_report(Handle * h, const char * stage) {
+#if !defined(_WIN32)
+    if (!h->memmap || h->mem_tensors.empty()) return;
+    const long ps = sysconf(_SC_PAGESIZE);
+    const std::vector<Vma> vmas = read_vmas(h->model_path);
+    struct Acc { int n = 0; uint64_t file = 0, res = 0; std::set<std::string> bufs; };
+    Acc acc[8];
+    uint64_t t_file = 0, t_res = 0;
+    for (const auto & t : h->mem_tensors) {
+        Acc & a = acc[t.group];
+        a.n++;
+        a.file += t.size;
+        uint64_t res = 0;
+        if (t.repacked) {
+            res = t.size;
+            a.bufs.insert("CPU_REPACK");
+        } else if (vmas.empty()) {
+            res = t.size;
+            a.bufs.insert("CPU(anon)");
+        } else {
+            a.bufs.insert("mmap");
+            for (const auto & v : vmas) {
+                const uint64_t vlen = v.end - v.start;
+                const uint64_t lo = std::max<uint64_t>(t.off, v.off), hi = std::min<uint64_t>(t.off + t.size, v.off + vlen);
+                if (hi > lo) res += resident_bytes(v.start + (lo - v.off), hi - lo, ps);
+            }
+        }
+        a.res += res;
+        t_file += t.size;
+        t_res += res;
+    }
+    for (int g = 0; g < 8; g++) {
+        if (acc[g].n == 0) continue;
+        std::string bufs;
+        for (const auto & b : acc[g].bufs) bufs += (bufs.empty() ? "" : "+") + b;
+        cl_logi("memmap: %s %s tensors=%d file=%llu MB resident=%llu MB (%d%%) buffer=%s", stage, kMemGroups[g], acc[g].n,
+                (unsigned long long) (acc[g].file >> 20), (unsigned long long) (acc[g].res >> 20),
+                acc[g].file ? (int) (acc[g].res * 100 / acc[g].file) : 0, bufs.c_str());
+    }
+    cl_logi("memmap: %s total tensors=%d file=%llu MB resident=%llu MB mapped_regions=%d process rss=%lld MB (anon %lld, file %lld) swap=%lld MB",
+            stage, (int) h->mem_tensors.size(), (unsigned long long) (t_file >> 20), (unsigned long long) (t_res >> 20), (int) vmas.size(),
+            proc_status_bytes("VmRSS:") >> 20, proc_status_bytes("RssAnon:") >> 20, proc_status_bytes("RssFile:") >> 20,
+            proc_status_bytes("VmSwap:") >> 20);
+#else
+    (void) h; (void) stage;
+#endif
+}
+
+// With the memmap diagnostic on, llama.cpp's own INFO lines about buffers, the load mode and mmap go to the log too (a handful per
+// load); everything else at INFO stays quiet. Warnings and errors always show, as with quiet_log.
+void forward_log(enum ggml_log_level level, const char * text, void *) {
+    if (level >= GGML_LOG_LEVEL_WARN) { fputs(text, stderr); return; }
+    if (level != GGML_LOG_LEVEL_INFO) return;
+    if (strstr(text, "buffer size") || strstr(text, "load_mode") || strstr(text, "mmap") || strstr(text, "KV self size") ||
+        strstr(text, "model size")) {
+        std::string s = text;
+        while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+        const size_t b = s.find_first_not_of(' ');
+        cl_logi("llama: %s", b == std::string::npos ? "" : s.c_str() + b);
+    }
+}
+
 }  // namespace
 
 // Every chat handle not freed yet, for cl_free_all: the process outlives the app's Dart side when Android destroys the
@@ -542,6 +893,19 @@ static EngineOpts parse_engine(const common_json & e) {
         if (e.at("repack_weights").is_boolean()) o.repack_weights = e.at("repack_weights").get<bool>() ? 1 : 0;
         else bad("repack_weights");
     }
+    if (e.contains("repack_tensors")) {
+        const auto & v = e.at("repack_tensors");
+        bool ok = v.is_string() && !v.get<std::string>().empty();
+        if (ok) {
+            try { std::regex re(v.get<std::string>()); } catch (const std::exception &) { ok = false; }
+        }
+        if (ok) o.repack_tensors = v.get<std::string>(); else bad("repack_tensors");
+    }
+    if (e.contains("memmap")) {
+        if (e.at("memmap").is_boolean()) o.memmap = e.at("memmap").get<bool>();
+        else bad("memmap");
+    }
+    choice("ple_advise", {"random", "normal", "dontneed_after"}, o.ple_advise);
     if (e.contains("use_mmap")) {
         if (e.at("use_mmap").is_boolean()) o.use_mmap = e.at("use_mmap").get<bool>() ? 1 : 0;
         else bad("use_mmap");
@@ -590,6 +954,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
         EngineOpts eng;
+        std::set<std::string> repack_chosen;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
@@ -597,6 +962,15 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             eng           = g_engine;
         }
         if (eng.repack_weights >= 0) repack_opt_in = eng.repack_weights == 1;
+        // llama.cpp's own buffer lines go to the log only with the memmap diagnostic (test APK).
+        llama_log_set(eng.memmap ? forward_log : quiet_log, nullptr);
+        // repack_tensors: only the safe subset of the matching tensors goes to the repack buffer; it wins over repack_weights.
+        bool partial = false;
+        if (!eng.repack_tensors.empty()) {
+            if (repack_opt_in) cl_logi("repack_tensors wins over repack_weights: only the matching tensors are repacked");
+            repack_opt_in = false;
+            partial = plan_repack_tensors(h.get(), model_path, eng.repack_tensors, repack_chosen);
+        }
         // The effective thread counts: the engine's, else the caller's or the automatic plan's (batch follows generation).
         const int n_gen   = eng.n_threads > 0 ? eng.n_threads : n_threads;
         const int n_batch_threads = eng.n_threads_batch > 0 ? eng.n_threads_batch : n_gen;
@@ -625,11 +999,19 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
+        if (partial) {
+            // only the chosen tensors go to the CPU_REPACK buffer, through the override list; everything else stays as loaded
+            mp.use_extra_bufts       = false;
+            mp.tensor_buft_overrides = h->repack_override;
+            h->weights        = "partly repacked (" + eng.repack_tensors + ")";
+            h->weights_reason = "repack_tensors: " + std::to_string(repack_chosen.size()) + " tensors";
+        }
         if (eng.use_mmap >= 0) {
             mp.load_mode = eng.use_mmap == 1 ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
             // the label says what happened, e.g. "repacked, load_mode none"
             h->weights += std::string(", load_mode ") + (eng.use_mmap == 1 ? "mmap" : "none");
         }
+        h->model_path = model_path;
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
@@ -699,13 +1081,29 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             std::string cpu_list;
             for (int c : pin) cpu_list += (cpu_list.empty() ? "" : ",") + std::to_string(c);
             char line[384];
-            snprintf(line, sizeof(line), "engine: threads gen=%d batch=%d cpus=%s flash_attn=%s kv=%s/%s n_batch=%u n_ubatch=%u load_mode=%s weights=%s (source: %s)",
+            snprintf(line, sizeof(line), "engine: threads gen=%d batch=%d cpus=%s flash_attn=%s kv=%s/%s n_batch=%u n_ubatch=%u load_mode=%s repack_tensors=%s weights=%s (source: %s)",
                      n_gen, n_batch_threads, cpu_list.empty() ? "none" : cpu_list.c_str(), eng.flash_attn.c_str(), eng.type_k.c_str(),
                      eng.type_v.c_str(), (unsigned) cp.n_batch, (unsigned) llama_n_ubatch(h->ctx),
-                     eng.use_mmap < 0 ? "default:auto" : eng.use_mmap == 1 ? "mmap" : "none", h->weights.c_str(),
+                     eng.use_mmap < 0 ? "default:auto" : eng.use_mmap == 1 ? "mmap" : "none",
+                     partial ? eng.repack_tensors.c_str() : "none", h->weights.c_str(),
                      eng.set ? "intent" : "default");
             h->engine_line = line;
             cl_logi("%s", line);
+            if (eng.memmap || !eng.ple_advise.empty()) {
+                h->mem_tensors = read_tensor_table(model_path);
+                for (auto & t : h->mem_tensors) t.repacked = repack_chosen.count(t.name) > 0;
+            }
+            if (eng.memmap) {
+                h->memmap = true;
+                memmap_report(h.get(), "load");
+            }
+#if !defined(_WIN32)
+            if (!eng.ple_advise.empty()) {
+                h->ple_mode = eng.ple_advise;
+                ple_setup(h.get(), h->mem_tensors);
+                if (h->memmap) memmap_report(h.get(), "after-advise");
+            }
+#endif
         }
         Handle * out = h.release();
         {
@@ -967,6 +1365,8 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
+        h->mem_reported = false;
+        memmap_report(h, "prompt");
         return 0;
     } catch (const std::exception & e) {
         set_err(err, err_len, e.what());
@@ -1065,6 +1465,17 @@ int cl_partial(void * hp, char * out_json, int len) {
 
 int cl_finish(void * hp, char * out_json, int len) {
     auto * h = (Handle *) hp;
+    if (!h->mem_reported) {
+        // end of an answer (once): the memory report, then the per-layer table's pages are dropped when ple_advise says so
+        h->mem_reported = true;
+        try {
+            memmap_report(h, "answer");
+#if !defined(_WIN32)
+            ple_drop(h);
+#endif
+            if (h->memmap && h->ple_len > 0 && h->ple_mode == "dontneed_after") memmap_report(h, "after-drop");
+        } catch (const std::exception &) {}
+    }
     auto j = common_json::object();
     j["role"] = std::string("assistant");
     try {

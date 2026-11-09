@@ -147,9 +147,9 @@ static int configure_main() {
     };
     check("no engine object", "{\"prefix_dir\":\"\",\"repack_weights\":false}", 0);
     fprintf(stderr, "MARK after-no-engine\n");
-    check("good engine object", "{\"engine\":{\"n_threads\":4,\"n_threads_batch\":5,\"cpus\":[4,5],\"flash_attn\":\"on\",\"type_k\":\"q8_0\",\"type_v\":\"q4_0\",\"n_ubatch\":256,\"use_mmap\":false,\"repack_weights\":false}}", 0);
+    check("good engine object", "{\"engine\":{\"n_threads\":4,\"n_threads_batch\":5,\"cpus\":[4,5],\"flash_attn\":\"on\",\"type_k\":\"q8_0\",\"type_v\":\"q4_0\",\"n_ubatch\":256,\"use_mmap\":false,\"repack_tensors\":\"ffn_\",\"memmap\":true,\"ple_advise\":\"dontneed_after\",\"repack_weights\":false}}", 0);
     fprintf(stderr, "MARK after-good-engine\n");
-    check("bad engine values", "{\"engine\":{\"n_threads\":0,\"n_threads_batch\":\"x\",\"cpus\":[-1],\"flash_attn\":\"maybe\",\"type_k\":\"q5_0\",\"type_v\":7,\"n_ubatch\":-3,\"use_mmap\":\"no\",\"repack_weights\":\"yes\"}}", 0);
+    check("bad engine values", "{\"engine\":{\"n_threads\":0,\"n_threads_batch\":\"x\",\"cpus\":[-1],\"flash_attn\":\"maybe\",\"type_k\":\"q5_0\",\"type_v\":7,\"n_ubatch\":-3,\"use_mmap\":\"no\",\"repack_tensors\":\"(\",\"memmap\":\"x\",\"ple_advise\":\"sometimes\",\"repack_weights\":\"yes\"}}", 0);
     fprintf(stderr, "MARK after-bad-engine\n");
     check("engine cleared", "{\"engine\":null}", 0);
     check("not JSON", "{", -1);

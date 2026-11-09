@@ -26,7 +26,7 @@ extern "C" {
 //                     optional; a key left out keeps today's behaviour, a bad value is ignored and logged) that replaces the earlier
 //                     engine setting, or null to clear it. "n_threads" (generation threads), "n_threads_batch" (prompt reading;
 //                     default: the generation count), "cpus" (core numbers to pin the threadpool to; default: the automatic plan),
-//                     "flash_attn" ("auto"|"on"|"off"), "type_k" and "type_v" ("f16"|"q8_0"|"q4_0"), "n_ubatch", "use_mmap" (true: load_mode MMAP, false: NONE; left out: llama.cpp's default, AUTO), "repack_weights"
+//                     "flash_attn" ("auto"|"on"|"off"), "type_k" and "type_v" ("f16"|"q8_0"|"q4_0"), "n_ubatch", "repack_tensors" (a regex; only its safe, repackable matches go to the repack buffer), "memmap" (true: log per tensor group file and resident bytes), "ple_advise" ("random"|"normal"|"dontneed_after": madvise on the per-layer embedding table), "use_mmap" (true: load_mode MMAP, false: NONE; left out: llama.cpp's default, AUTO), "repack_weights"
 //                     (as the key above, and it wins over it). Non-default KV types or flash attention change the saved prompt
 //                     prefix's identity, so a file saved with other ones is never reused. Every cl_load logs one "engine: ..." line.
 // Returns 0, or -1 when the JSON does not parse.
