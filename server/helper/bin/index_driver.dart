@@ -91,6 +91,43 @@ class IndexDriver {
 
   bool get busy => _job != null || _pdfBusy;
 
+  /// The person's Pause (the phone's Catalog "Pause all", IndexScheduler.pauseAll): what runs stops and keeps what it did, and nothing
+  /// starts until [resume]. Kept in memory, as on the phone: a restart of the server resumes.
+  bool _paused = false;
+  bool get paused => _paused;
+
+  /// Whether there is index work, running or still to start (the Catalog shows Pause only while there is).
+  bool get hasWork {
+    if (busy || _waiting) return true;
+    try {
+      return _next() != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Stops the running job (the core honours cs_job_cancel and keeps what it did) or PDF run; it is started again by [resume].
+  void pause() {
+    if (_paused) return;
+    _paused = true;
+    final job = _job;
+    if (job != null) {
+      try {
+        dispatcher.handle('jobCancel', {'job': job});
+      } catch (_) {}
+    }
+    _pdfRun?.cancel();
+    log?.call('indexing paused');
+  }
+
+  /// Carries on: what was stopped is started again, and the rest in order.
+  void resume() {
+    if (!_paused) return;
+    _paused = false;
+    log?.call('indexing resumed');
+    kick();
+  }
+
   /// Whether the timer is running (it stops when nothing is left to start or wait for).
   bool get running => _timer != null;
 
@@ -107,7 +144,7 @@ class IndexDriver {
         _advance();
         if (_job != null) return;
       }
-      if (_pdfBusy) return;
+      if (_paused || _pdfBusy) return;
       // The host is too hot or short of memory: nothing new starts now (the timer goes on and looks again).
       if (load?.duty().paused ?? false) return;
       final next = _next();
@@ -155,6 +192,10 @@ class IndexDriver {
     if (p.state == JobState.failed) {
       failures[path] = p.errorMessage ?? 'Indexing failed';
       log?.call('index of $path failed: ${failures[path]}');
+    } else if (p.state == JobState.cancelled && _paused) {
+      // Stopped by Pause: it is tried again at Resume.
+      _tried.remove(path);
+      log?.call('index of $path paused');
     } else {
       log?.call('index of $path ${p.state.name}');
     }

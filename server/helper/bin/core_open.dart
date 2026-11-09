@@ -104,6 +104,29 @@ class IndexStateOp implements OpHandler {
       };
 }
 
+/// The helper's `index.pause`, which a browser may call through `/api/core`: the Catalog's Pause and Resume for the server's index
+/// work. `{"paused": true}` pauses, `{"paused": false}` resumes, no `paused` only reads. Replies `{"paused": bool, "busy": bool}`:
+/// `busy` is whether there is index work (running, waiting, or held by the pause).
+class IndexPauseOp implements OpHandler {
+  IndexPauseOp(this.indexer);
+
+  final IndexDriver indexer;
+
+  @override
+  bool handles(String op) => op == 'index.pause';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) {
+    switch (a['paused']) {
+      case true:
+        indexer.pause();
+      case false:
+        indexer.resume();
+    }
+    return {'paused': indexer.paused, 'busy': indexer.hasWork};
+  }
+}
+
 /// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), and the full path of the Valhalla shim
 /// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library).
 class AppDirs {

@@ -234,4 +234,66 @@ void main() {
     driver.tick();
     expect(jobs(), hasLength(1));
   });
+
+  group('pause and resume', () {
+    const cancelled = '{"state":"cancelled","done":2,"total":4}';
+
+    test('Pause cancels the running job and nothing starts until Resume, which starts the same source again', () {
+      status['a.zim'] = _st('a.zim');
+      status['b.zim'] = _st('b.zim');
+      fake.progressScript.addAll([_running(1), _running(2)]);
+      driver.useSources([_src('a.zim'), _src('b.zim')]);
+      driver.tick();
+      expect(jobs(), hasLength(1));
+      expect(driver.hasWork, isTrue);
+
+      driver.pause();
+      expect(driver.paused, isTrue);
+      expect(fake.calls, contains('jobCancel:100'));
+      fake.progressScript
+        ..clear()
+        ..add(cancelled);
+      driver.tick();
+      expect(driver.busy, isFalse, reason: 'the cancelled job is let go');
+      expect(driver.failures, isEmpty, reason: 'a pause is not a failure');
+      driver.tick();
+      driver.tick();
+      expect(jobs(), hasLength(1), reason: 'nothing new starts while paused');
+      expect(driver.hasWork, isTrue, reason: 'held work still counts, so Resume stays on offer');
+
+      fake.progressScript
+        ..clear()
+        ..add(_running(1));
+      driver.resume();
+      expect(driver.paused, isFalse);
+      driver.tick();
+      expect(jobs(), hasLength(2));
+      expect(jobs().last, contains('/docs/a.zim'), reason: 'the stopped source is the first to start again');
+    });
+
+    test('Pause before anything has started holds every start; Resume lets them go', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript.add(_done);
+      driver.pause();
+      driver.useSources([_src('a.zim')]);
+      driver.tick();
+      expect(jobs(), isEmpty);
+      driver.resume();
+      driver.tick();
+      expect(jobs(), hasLength(1));
+    });
+
+    test('index.pause pauses, resumes and reads, and says whether there is work', () {
+      status['a.zim'] = _st('a.zim');
+      driver.useSources([_src('a.zim')]);
+      final op = IndexPauseOp(driver);
+      expect(op.handles('index.pause'), isTrue);
+      expect(op.handle('index.pause', const {}), {'paused': false, 'busy': true});
+      expect(op.handle('index.pause', {'paused': true}), {'paused': true, 'busy': true});
+      expect(op.handle('index.pause', const {}), {'paused': true, 'busy': true});
+      expect(op.handle('index.pause', {'paused': false}), {'paused': false, 'busy': true});
+      status['a.zim'] = _st('a.zim', indexed: true);
+      expect(op.handle('index.pause', const {}), {'paused': false, 'busy': false});
+    });
+  });
 }

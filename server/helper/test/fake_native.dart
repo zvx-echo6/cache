@@ -58,7 +58,10 @@ class FakeNative implements CsNative, CsLiveNative, CsJobNative {
   }
 
   @override
-  int jobCancel(int job) => 0;
+  int jobCancel(int job) {
+    calls.add('jobCancel:$job');
+    return 0;
+  }
   @override
   void jobFree(int job) => calls.add('jobFree:$job');
   @override

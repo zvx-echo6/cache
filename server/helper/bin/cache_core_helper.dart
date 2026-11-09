@@ -58,6 +58,7 @@ Future<void> main() async {
       OpenOp(dirs, dispatcher, log: log, indexer: indexer),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
+      IndexPauseOp(indexer),
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
     ],
