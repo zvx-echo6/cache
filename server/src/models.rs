@@ -606,7 +606,7 @@ pub fn memory_from(meminfo: &str) -> Option<Value> {
     let kb = |key: &str| {
         meminfo.lines().find_map(|l| {
             let rest = l.strip_prefix(key)?.strip_prefix(':')?;
-            rest.trim().split_whitespace().next()?.parse::<u64>().ok()
+            rest.split_whitespace().next()?.parse::<u64>().ok()
         })
     };
     let total = kb("MemTotal")?.checked_mul(1024)?;

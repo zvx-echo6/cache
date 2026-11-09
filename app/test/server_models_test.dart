@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -15,7 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// A stand-in for the server's model routes (server/src/models.rs): it keeps what it was asked and answers as the server does.
 class _FakeServer {
   final calls = <String>[];
-  final bodies = <String, Object?>{};
+  final bodies = <String, Map<String, dynamic>>{};
   final jobs = <String, Map<String, Object?>>{};
   final files = <String, int>{'chat-a.gguf': 100};
   bool searchReady = false;

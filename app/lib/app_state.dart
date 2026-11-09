@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
-import 'browse/web/local_files.dart' show LocalFile, UploadCancelled, pickLocalFile, setLeaveWarning;
+import 'browse/web/local_files.dart' show UploadCancelled, pickLocalFile, setLeaveWarning;
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
