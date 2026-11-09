@@ -5,10 +5,14 @@
 //! with `loc` set to `<library_id>/<doc_id>`, and records the file and its size in `bookshelves/.local/migrated.json`. Other
 //! devices' library logs are ignored (they import their own), and so is the seed log. After the import, library logs are not
 //! written again.
+//!
+//! An `assign` or `retire` whose `doc` has no pack in the library (a deleted book) is written as a `retire` of its division and
+//! number, keyed by the fallback copy key (the `doc_id`), so the number counts toward next free and is never given out again. It
+//! is counted as `reserved`, not `unmapped`. Other events about a missing pack are dropped and counted as `unmapped`.
 
 use crate::error::{Error, Result};
-use crate::events::{valid_device_id, Event};
-use crate::library::{LibraryInput, LibraryRef};
+use crate::events::{valid_device_id, Event, Kind};
+use crate::library::{copy_key, LibraryInput, LibraryRef};
 use crate::store::{parse_legacy_log, parse_log, write_atomic, LogWriter, LOCAL_DIR, LOG_DIR, LOG_EXT};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -24,8 +28,10 @@ pub struct ImportedFile {
     pub size: u64,
     /// Events written to the Bookshelves log.
     pub events: usize,
-    /// Events whose `doc` has no pack in the library (not imported).
+    /// Events whose `doc` has no pack in the library, other than `assign` and `retire` (dropped; the file stays eligible).
     pub unmapped: usize,
+    /// `assign` and `retire` events whose `doc` has no pack in the library, kept as `retire` events that reserve the number.
+    pub reserved: usize,
     /// The file was recorded as imported before, and was left alone.
     pub already: bool,
 }
@@ -40,7 +46,7 @@ impl ImportReport {
     pub fn to_json(&self) -> Value {
         json!({
             "events": self.events,
-            "files": self.files.iter().map(|f| json!({"library_id": f.library_id, "file": f.file, "size": f.size, "events": f.events, "unmapped": f.unmapped, "already": f.already})).collect::<Vec<_>>(),
+            "files": self.files.iter().map(|f| json!({"library_id": f.library_id, "file": f.file, "size": f.size, "events": f.events, "unmapped": f.unmapped, "reserved": f.reserved, "already": f.already})).collect::<Vec<_>>(),
         })
     }
 }
@@ -65,7 +71,7 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
     order.sort_by(|a, b| a.0.library_id.cmp(&b.0.library_id));
     let mut report = ImportReport::default();
     let mut to_write: Vec<Event> = Vec::new();
-    let mut fresh: Vec<(String, u64, usize, usize)> = Vec::new();
+    let mut fresh: Vec<(String, u64, usize, usize, usize)> = Vec::new();
     for (lref, lib) in order {
         let file = format!("{dev}.{LOG_EXT}");
         let path = lref.dir.join(LOG_DIR).join(&file);
@@ -77,25 +83,38 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
         let size = bytes.len() as u64;
         let record_key = format!("{}/{file}", lref.library_id);
         if migrated.contains_key(&record_key) {
-            report.files.push(ImportedFile { library_id: lref.library_id.clone(), file, size, events: 0, unmapped: 0, already: true });
+            report.files.push(ImportedFile { library_id: lref.library_id.clone(), file, size, events: 0, unmapped: 0, reserved: 0, already: true });
             continue;
         }
         let map: BTreeMap<&str, &str> = lib.copies.iter().map(|p| (p.doc_id.as_str(), p.copy.as_str())).collect();
         let (events, _) = parse_legacy_log(&String::from_utf8_lossy(&bytes));
-        let (mut kept, mut unmapped) = (0, 0);
+        let (mut kept, mut unmapped, mut reserved) = (0, 0, 0);
         for mut e in events {
             if e.dev != dev {
                 continue;
             }
             if let Some(doc) = e.kind.copy().map(str::to_string) {
-                let Some(copy) = map.get(doc.as_str()) else {
-                    unmapped += 1;
-                    continue;
-                };
-                if let Some(c) = e.kind.copy_mut() {
-                    *c = (*copy).to_string();
-                }
                 e.loc = Some(format!("{}/{doc}", lref.library_id));
+                match map.get(doc.as_str()) {
+                    Some(copy) => {
+                        if let Some(c) = e.kind.copy_mut() {
+                            *c = (*copy).to_string();
+                        }
+                    }
+                    None => {
+                        let number = match &e.kind {
+                            Kind::Assign { div, seq, .. } | Kind::Retire { div, seq, .. } => Some((div.clone(), *seq)),
+                            _ => None,
+                        };
+                        // a deleted book's number: kept as a retire so it is never given out again
+                        let Some((div, seq)) = number else {
+                            unmapped += 1;
+                            continue;
+                        };
+                        e.kind = Kind::Retire { copy: copy_key(None, &doc), div, seq };
+                        reserved += 1;
+                    }
+                }
             }
             if present.contains(&e) || to_write.contains(&e) {
                 continue;
@@ -105,9 +124,9 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
         }
         // a file with unmapped events stays eligible: a later import maps them once their pack is here
         if unmapped == 0 {
-            fresh.push((record_key, size, kept, unmapped));
+            fresh.push((record_key, size, kept, unmapped, reserved));
         }
-        report.files.push(ImportedFile { library_id: lref.library_id.clone(), file, size, events: kept, unmapped, already: false });
+        report.files.push(ImportedFile { library_id: lref.library_id.clone(), file, size, events: kept, unmapped, reserved, already: false });
     }
     // oldest first; ties keep the library and line order
     to_write.sort_by_key(|e| e.at);
@@ -117,8 +136,8 @@ pub fn import_own(bookshelves_dir: &Path, dev: &str, libs: &[(LibraryRef, Librar
     }
     report.events = events.len();
     if !fresh.is_empty() {
-        for (key, size, kept, unmapped) in fresh {
-            migrated.insert(key, json!({"size": size, "events": kept, "unmapped": unmapped}));
+        for (key, size, kept, unmapped, reserved) in fresh {
+            migrated.insert(key, json!({"size": size, "events": kept, "unmapped": unmapped, "reserved": reserved}));
         }
         let rec = serde_json::to_string_pretty(&json!({"format": 1, "files": Value::Object(migrated)})).map_err(|e| Error::ctx("migrated.json", e))?;
         write_atomic(&migrated_path, format!("{rec}\n").as_bytes())?;

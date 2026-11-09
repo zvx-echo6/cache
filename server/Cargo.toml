@@ -24,7 +24,7 @@ test = false
 [dependencies]
 # The embedder loader (libloading + cl_embed settings shared with the cs command line and the places pack builder); workspace member.
 cache_embed = { path = "../packages/cache_search/native/cache_embed" }
-# The device identity (the iroh key pair in <data>/sync/identity.key); its id names this server's library log. Nothing else of cache_sync is used.
+# The device identity (the iroh key pair in <data>/sync/identity.key); its id names this server's Bookshelves log. Nothing else of cache_sync is used.
 cache_sync = { path = "../packages/cache_search/native/cache_sync" }
 serde.workspace = true
 serde_json.workspace = true
@@ -46,6 +46,10 @@ base64 = "0.22"
 cache_builder = { path = "builder" }
 # The division classifier (pure Rust, shared with the core); its weights are a data file in <data>/models/.
 cache_classify = { path = "../packages/cache_classify" }
+# The person's Bookshelves log (events, resolution, same-book detection, the import of old library logs, the view); pure Rust.
+cache_shelves = { path = "../packages/cache_shelves" }
+# The Add PDF job's library files: its line of copies.jsonl (one implementation with the phones).
+cache_ingest = { path = "../packages/cache_ingest" }
 blake3 = "1.8"
 # Security keys (WebAuthn). 0.5.5 is the newest stable release at least two weeks old (0.6.2 is a day old). The feature lets a
 # key sign in with one touch (user presence) instead of also demanding a PIN.

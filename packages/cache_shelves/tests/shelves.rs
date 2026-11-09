@@ -767,6 +767,66 @@ fn an_unmapped_event_maps_once_its_pack_appears() {
     assert!(rep.files[0].already);
 }
 
+#[test]
+fn a_deleted_books_number_is_kept_and_never_given_out_again() {
+    let tmp = Tmp::new("importgone");
+    let shelves = tmp.path().join("bookshelves");
+    // "gone" was shelved as 210-005, moved off 210-002 earlier, and its pack was then deleted from the library
+    let log = [
+        legacy(1, "me", "assign", "gone", ",\"div\":\"210\",\"seq\":2"),
+        legacy(2, "me", "retire", "gone", ",\"div\":\"210\",\"seq\":2"),
+        legacy(3, "me", "assign", "gone", ",\"div\":\"210\",\"seq\":5"),
+        legacy(4, "me", "assign", "wm", ",\"div\":\"210\",\"seq\":1"),
+    ]
+    .concat();
+    let lib = old_log_library(tmp.path(), true, &log);
+    let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((rep.events, rep.files[0].unmapped, rep.files[0].reserved), (4, 0, 3));
+    let set = read_logs(&shelves.join("log")).unwrap();
+    let reserves: Vec<&Event> = set.events.iter().filter(|e| matches!(e.kind, Kind::Retire { .. })).collect();
+    assert_eq!(reserves.len(), 3);
+    for e in &reserves {
+        assert_eq!((e.kind.copy(), e.loc.as_deref()), (Some(copy_key(None, "gone").as_str()), Some("one/gone")));
+    }
+    assert_eq!(reserves.iter().map(|e| e.at).collect::<Vec<_>>(), [1, 2, 3], "a reserve keeps the original at");
+    // no book appears for it, and its numbers count toward next free
+    let r = resolve(&set.events, std::slice::from_ref(&lib.1));
+    assert_eq!(r.books.len(), 1);
+    assert!(r.book_of("gone").is_none());
+    assert_eq!(r.next_seq("210"), 6);
+    // the file is recorded: nothing in it waits for a pack
+    let rec: Value = serde_json::from_slice(&std::fs::read(shelves.join(".local/migrated.json")).unwrap()).unwrap();
+    assert_eq!(rec["files"]["one/me.jsonl"]["reserved"], json!(3));
+    // a second import writes nothing, also when the record is lost
+    let again = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((again.events, again.files[0].already), (0, true));
+    std::fs::remove_file(shelves.join(".local/migrated.json")).unwrap();
+    let again = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((again.events, again.files[0].reserved), (0, 3));
+    assert_eq!(read_logs(&shelves.join("log")).unwrap().events, set.events);
+}
+
+#[test]
+fn an_unmapped_place_is_dropped_but_its_books_number_is_reserved() {
+    let tmp = Tmp::new("importgoneplace");
+    let shelves = tmp.path().join("bookshelves");
+    let log = [legacy(1, "me", "place", "gone", ",\"div\":\"210\",\"by\":\"user\""), legacy(1, "me", "assign", "gone", ",\"div\":\"210\",\"seq\":4")].concat();
+    let lib = old_log_library(tmp.path(), false, &log);
+    let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((rep.events, rep.files[0].unmapped, rep.files[0].reserved), (1, 1, 1));
+    let json = rep.to_json();
+    assert_eq!((json["files"][0]["unmapped"].clone(), json["files"][0]["reserved"].clone()), (json!(1), json!(1)));
+    let set = read_logs(&shelves.join("log")).unwrap();
+    assert!(set.events.iter().all(|e| matches!(e.kind, Kind::Retire { .. })), "the place is not written");
+    let r = resolve(&set.events, std::slice::from_ref(&lib.1));
+    assert!(r.books.is_empty());
+    assert_eq!(r.next_seq("210"), 5);
+    // the file stays eligible because of the dropped place, and a second import writes nothing new
+    let again = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
+    assert_eq!((again.events, again.files[0].already), (0, false));
+    assert_eq!(read_logs(&shelves.join("log")).unwrap().events.len(), 1);
+}
+
 
 // ------------------------------------------------------------------------------------- copies.jsonl, the batch detect, the view file
 
