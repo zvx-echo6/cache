@@ -43,7 +43,7 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 | `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in,compression}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
 | `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number does not change; the filed PDF takes the new title in its name. |
 | `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
-| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to this device's library log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
+| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to this device's Bookshelves log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
 | `DELETE /api/build/libraries/{id}/books/{doc}` | | `{removed:true,id}`. The person's own PDF is not touched. |
 | `POST /api/build/libraries/{id}/books/{doc}/replace?name=<file name>` | the PDF, streamed, `Content-Length` required | the queue item (`replace` set). The old book stays searchable until the new one is published; `doc_version` + 1. |
 
@@ -187,12 +187,16 @@ both). Nothing of this is in the pack or the search payloads. With no usable mod
 and no `classifier_version` (`unsure_reason`: "This book has not been looked at yet."), and is sorted when a model file appears and the queue is idle.
 There are no keyword rules.
 
-Every shelving change is appended to this device's library log, `<data>/app/docs/libraries/<library_id>/log/<device_id>.jsonl` (the library's
-root, beside `packs/` and `shard/`, so no search payload carries it): a book built gets `place` and `assign` (by `auto`, or `unsort` when the sorter was
-unsure); a placement by hand (`place`, below) gets `place` (by `user`), `retire` of the old number and `assign` of a new one; a rename gets `title`.
+Every shelving change is appended to this device's Bookshelves log, `<data>/bookshelves/log/<device_id>.jsonl` (the person's shelves, outside every
+library, so no library and no search payload carries it), keyed by the copy (the pack's `book.original_blake3`): a book built is first looked at by
+same-book detection (a match writes `same` by `auto`, and the book then takes the shelf and number of the book it is a copy of); otherwise it gets
+`place` and `assign` (by `auto`, or `unsort` when the sorter was unsure). A better file that replaces a book writes `same`, "Keep both" writes
+`notsame`; a placement by hand (`place`, below) gets `place` (by `user`), `retire` of the old number and `assign` of a new one; a rename gets `title`.
+Each library also gets `copies.jsonl` at its root (one line per book, what the log reads). The events this device wrote to the per-library logs of
+earlier builds (`<library>/log/<device_id>.jsonl`) are imported once at start-up; those logs are not written again.
 The device id is the server's cache_sync identity, kept in `<data>/sync` (`identity.key`; the one folder for this device's sync identity, also for any later sync), shown as the EndpointId's text. The random id of earlier builds in `<data>/build/device_id` is no longer used; its log file stays. The format, the resolution
-rules and the local view `.local/docs.json` are in server/builder/LIBRARY-LOG.md. This log replaces the corrections log: a user `place` whose division
-differs from the pack's `book.suggested` is a training correction. The `"device"` name in a placement body is no longer used.
+rules and the view `<data>/bookshelves/.local/view.json` are in server/builder/LIBRARY-LOG.md. A user `place` whose division differs from the pack's
+`book.suggested` is a training correction. The `"device"` name in a placement body is no longer used.
 
 A call number is `CDS ` + the division + `-` + a sequence number of at least three digits: `CDS 530-001`. The numbers of a division run 1, 2, 3
 in the order books are shelved there, are never reused when a book moves away, and a book in Unsorted has none (`call_number` is null). When two

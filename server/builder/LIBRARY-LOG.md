@@ -2,9 +2,9 @@
 
 **Status: agreed with the app orchestrator (2026-11-08); for 1.1.** It replaces the per-library, per-device log of 2026-11-02. Code: the
 `cache_shelves` crate (`packages/cache_shelves`: events, writer, resolution, same-book decision, import, view), its core ops
-(`cs_shelves_*`, `cache_search.h`), `cache_builder::bookshelves` and `cache-build view --bookshelves`. The seed log is still written by
-`cache-build library` (`cache_builder::log`), and `cache_builder::view` still makes a library's `.local/docs.json` for the Linux build
-service, which is not switched to the Bookshelves log yet.
+(`cs_shelves_*`, `cache_search.h`), `cache_builder::bookshelves`, `cache-build view --bookshelves` and the Linux build service
+(`server/src/libbuild/booklog.rs`, see "The build service" below). The seed log is still written by `cache-build library`
+(`cache_builder::log`), and `cache_builder::view` still makes the `.local/docs.json` of a library `cache-build library` writes.
 
 ## The rule
 
@@ -30,7 +30,7 @@ given with it. Another person's shelves number on their own.
   packs/<doc_id>@<version>.cdoc  facts (synced)
   log/builder-<library_id>.jsonl the publisher's seed log (synced, read-only suggestions)
   log/<device_id>.jsonl          old per-device library logs (imported once, then never written)
-  .local/docs.json               the library's local view (build service; never synced)
+  .local/docs.json               the local view `cache-build library` writes (never synced; the build service no longer does)
 ```
 
 `cache_sync` never sends a name that starts with a dot, so `.local/` needs no rule of its own; keep it out of every allow-list. The Bookshelves
@@ -83,8 +83,8 @@ one line per document, **sorted by `doc_id`**, compact JSON in a fixed key order
   `unreadable`; of several lines for one `doc_id` the highest `doc_version` is used.
 - A library whose documents were not built with a fingerprint has lines without `samebook`: it can still match by content hash, and its copies rank below
   those with a fingerprint when the reading copy is chosen.
-- A library changed by other means than `cache-build library` (documents added by the build service or by a linked folder) has a stale or missing copies
-  file until it is rebuilt; with no copies file and no packs it resolves to nothing.
+- The Linux build service keeps the copies file of each library it builds up to date itself (see "The build service"). A library changed by other means
+  (documents added by a linked folder) has a stale or missing copies file until it is rebuilt; with no copies file and no packs it resolves to nothing.
 
 ## Events
 
@@ -341,15 +341,36 @@ events), and its `assign` numbers are **never** call numbers and never count tow
 
 ### The library's local view (`.local/docs.json`, format 2)
 
-`<library>/.local/docs.json` is the Linux build service's per-library view, made from the packs and the library's own logs
-(`cache_builder::view`, `cache-build view --library <dir> [--packs <packs dir>]`). It is unchanged for now and not part of the Bookshelves log: it
-keeps the old `doc` keys and its own call numbers until the build service moves to the Bookshelves log.
+`<library>/.local/docs.json` is the per-library view `cache-build library` writes, made from the packs and the library's own logs
+(`cache_builder::view`, `cache-build view --library <dir> [--packs <packs dir>]`). It is not part of the Bookshelves log: it keeps the old `doc`
+keys. The Linux build service no longer writes it (an old one in a built library is left alone and goes stale); its view is the Bookshelves view.
 
-## The build service (until it moves)
+## The build service
 
-`server/src/libbuild` still writes the old per-library log and `docs.json` (`place`, `assign`, `retire`, `unsort`, `title` by `doc`). Moving it to the
-Bookshelves log (it writes there, and runs same-book detection at build time to write `same`) is a later task. When it moves, the one-time import above
-brings its existing events across.
+The Linux build service (`server/src/libbuild`, `booklog.rs`) is one device of the person, with its `cache_sync` identity in `<data>/sync`. Its
+Bookshelves folder is `<data>/bookshelves/` (`log/<device_id>.jsonl`, `.local/view.json`, `.local/migrated.json`). It resolves against every
+library folder in `<data>/app/docs/libraries`: the ones it builds and the ones that were installed, whose seed logs count only as suggestions.
+
+- **Start-up.** It makes each built library's `copies.jsonl` again from its live packs (the format above; the root of the library), then runs the
+  import above once for its own `log/<device_id>.jsonl` of every library. It never writes a library log after that.
+- **A new book.** The pack's line goes into `copies.jsonl` (other versions of the same `doc_id` go). Same-book detection runs once for the new copy,
+  in the batch form, against every copy the service can see, with the service's tuning (`build/tuning.json`); each match whose pair has no `same` or
+  `notsame` yet is written as `same` by `auto` with its `how` and `score`. A copy that then belongs to a book already on a shelf (also the same file in
+  another library, which is the same copy) takes that book's shelf and number and is not shelved again. Any other copy is shelved: `place` (by `auto`)
+  in the classifier's division and `assign` of the next free number, or `unsort` (by `auto`) when the classifier was unsure.
+- **The service's own same-book handling.** A better file that replaces a book (the next `doc_version`) writes `same` from the new copy to the copy it
+  replaces (by `auto`, `how` `text`; by `user`, `how` `user` when the person chose "Replace the older one"), so the book keeps its shelf and number. A
+  possible new edition the person chose to keep beside the other writes `notsame` by `user`. A worse file or an exact copy is not kept and writes
+  nothing.
+- **Changes.** "Place it" and every move write `place` (by `user`), `retire` of the old number and `assign` of the next free one, the last two against
+  the copy that holds the book's number; Unsorted writes `unsort` and `retire`. A rename writes `title` and the new line of `copies.jsonl`; a delete
+  takes the book's line out of `copies.jsonl` (its events stay: the shelves are the person's).
+- **Publishing** makes `copies.jsonl` again from the packs, shelves books no event has shelved, refreshes the call numbers it keeps with each book
+  (`call_text` in `build/libs/<id>.json`, which file names and lists use), and writes the view. The view is also written after a placement, a rename
+  and a delete.
+- The service writes no `SHA256SUMS` and no `.cache-library` archive for the libraries it builds, so `copies.jsonl` is in neither there.
+- Call numbers count across the whole Bookshelves, so two built libraries that each had `210-001` in their own logs show the later claim as
+  `210-001.1` after the import.
 
 ## Later: compaction
 

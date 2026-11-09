@@ -206,7 +206,7 @@ impl BuildService {
             Some(v) => {
                 let line = header_line(&self.packs_dir(lib).join(cache_builder::pack::pack_file_name(doc, v)))?;
                 let facts = PackFacts::from_header_line(&line).map_err(|e| e.to_string())?;
-                cache_ingest::files::copies_with(Some(&kept), &facts)
+                cache_ingest::files::copies_with(Some(kept.as_str()), &facts)
             }
             None => kept,
         };
