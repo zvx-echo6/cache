@@ -271,13 +271,18 @@ jobs:
           cmake --build "$RUNNER_TEMP/dl/build" -j "$(nproc)"
           mkdir -p "$out"
           find "$RUNNER_TEMP/dl/build" \( -name '*.so' -o -name '*.so.*' \) -exec cp -P {} "$out/" \;
-          cp "$(find "$RUNNER_TEMP/dl/build" -type f -name cl_test -perm -u+x | head -n 1)" "$out/cl_test"
+          # cl_test in a folder of its own: llama_backend_init's fallback searches the executable's folder and the working
+          # folder for backends, which on a phone are /system/bin and /, so neither may hold the variants here either
+          mkdir -p "$RUNNER_TEMP/dl/exe"
+          cp "$(find "$RUNNER_TEMP/dl/build" -type f -name cl_test -perm -u+x | head -n 1)" "$RUNNER_TEMP/dl/exe/cl_test"
           ls -l "$out"
           ls "$out"/libggml-cpu-*.so > /dev/null || { echo "::error::no CPU backend variants next to libcache_llama.so"; exit 1; }
       - name: Test (embedder loads with no chat model loaded first)
         run: |
           out="$RUNNER_TEMP/dl/out"
-          LD_LIBRARY_PATH="$out" "$out/cl_test" --embed bge-model/bge-m3-Q8_0.gguf "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
+          model="$PWD/bge-model/bge-m3-Q8_0.gguf"
+          cd "$RUNNER_TEMP/dl/exe"
+          LD_LIBRARY_PATH="$out" ./cl_test --embed "$model" "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
           # the run must have gone through load_cpu_backend (its log line) and embedded both texts
           grep -q 'native library folder' "$RUNNER_TEMP/dl.log" || { echo "::error::the CPU backend was not loaded by cache_llama"; exit 1; }
           grep -q 'cl_embed_load failed' "$RUNNER_TEMP/dl.log" && { echo "::error::cl_embed_load failed"; exit 1; }
