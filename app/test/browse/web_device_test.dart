@@ -200,6 +200,27 @@ void main() {
       d.dispose();
     });
 
+    test('Pause keeps a transfer in the list and Resume queues it again; a paused one can still be cancelled', () async {
+      final d = make();
+      await d.start();
+      const url = 'https://dl.example/p1.zim';
+      api.jobList = [job('p1', 'running', url: url, bytes: 5, total: 20)];
+      await d.refresh();
+      expect(d.jobForUrl(url)!.paused, isFalse);
+      await d.pauseJob(d.jobs.single);
+      expect(api.paused, ['p1']);
+      expect(d.jobs.single.state, 'paused');
+      expect(d.jobForUrl(url), isNotNull, reason: 'a paused transfer is still the one for its link');
+      expect(d.anyActive, isFalse, reason: 'nothing is downloading while it is paused');
+      await d.resumeJob(d.jobs.single);
+      expect(api.resumed, ['p1']);
+      expect(d.jobs.single.state, 'queued');
+      await d.pauseJob(d.jobs.single);
+      await d.cancelJob(d.jobs.single);
+      expect(api.cancelled.where((c) => c == 'p1').length, 2, reason: 'cancelled, then taken off the list');
+      d.dispose();
+    });
+
     test('a library link is a library download; the words for a failure never name the machine', () async {
       final d = make();
       await d.start();
@@ -356,6 +377,8 @@ void main() {
             expect(jsonDecode(r.body), {'url': 'https://x/a.zim', 'kind': 'zim', 'name': 'a.zim'});
             return http.Response(jsonEncode({'ok': true, 'result': {'id': 'j', 'url': 'https://x/a.zim', 'kind': 'zim', 'name': 'a.zim', 'bytes': 0, 'total': 0, 'state': 'queued', 'error': null}}), 200);
           case 'DELETE /api/library/jobs/j':
+          case 'POST /api/library/jobs/j/pause':
+          case 'POST /api/library/jobs/j/resume':
           case 'POST /api/library/rescan':
             return http.Response(jsonEncode({'ok': true, 'result': {}}), 200);
           case 'GET /api/fetch':
@@ -371,6 +394,9 @@ void main() {
       expect((s.free, s.total), (10, null));
       expect((await a.download(url: 'https://x/a.zim', kind: 'zim', name: 'a.zim')).state, 'queued');
       await a.cancelJob('j');
+      await a.pauseJob('j');
+      await a.resumeJob('j');
+      expect(seen, containsAll(['POST /api/library/jobs/j/pause', 'POST /api/library/jobs/j/resume']));
       await a.rescan();
       expect(utf8.decode(await a.fetch(Uri.parse('https://opds.library.kiwix.org/a b'))), 'feed');
       await expectLater(a.fetch(Uri.parse('https://evil.example/')), throwsA(isA<DeviceException>().having((e) => e.code, 'code', 'host_not_allowed')));

@@ -162,10 +162,10 @@ class DeviceLibrary extends ChangeNotifier {
     return t is String && t.isNotEmpty ? t : j.name;
   }
 
-  /// The transfer for [url] that is waiting, running or failed, or null.
+  /// The transfer for [url] that is waiting, running, paused or failed, or null.
   DeviceJob? jobForUrl(String url) {
     for (final j in jobs) {
-      if (j.url == url && (j.active || j.failed)) return j;
+      if (j.url == url && (j.active || j.paused || j.failed)) return j;
     }
     return null;
   }
@@ -338,11 +338,26 @@ class DeviceLibrary extends ChangeNotifier {
     await _download(req);
   }
 
+  /// Pauses a waiting or running transfer: it keeps what it has downloaded. [resumeJob] continues it.
+  Future<void> pauseJob(DeviceJob j) async {
+    try {
+      await api.pauseJob(j.id);
+    } on DeviceException catch (_) {}
+    await refresh();
+  }
+
+  Future<void> resumeJob(DeviceJob j) async {
+    try {
+      await api.resumeJob(j.id);
+    } on DeviceException catch (_) {}
+    await refresh();
+  }
+
   /// Stops a waiting or running transfer, or takes a failed one off the list.
   Future<void> cancelJob(DeviceJob j) async {
     try {
       await api.cancelJob(j.id);
-      if (j.active) await api.cancelJob(j.id); // the cancelled one is then taken off the list as well
+      if (j.active || j.paused) await api.cancelJob(j.id); // the cancelled one is then taken off the list as well
     } on DeviceException catch (_) {}
     await refresh();
   }

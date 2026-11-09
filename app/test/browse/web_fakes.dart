@@ -13,6 +13,8 @@ class FakeDeviceApi implements DeviceApi {
   DeviceSpaceInfo spaceInfo = const DeviceSpaceInfo(free: 100 << 30, total: 500 << 30);
   final List<Map<String, dynamic>> downloads = [];
   final List<String> cancelled = [];
+  final List<String> paused = [];
+  final List<String> resumed = [];
   final List<String> removed = [];
   int rescans = 0;
   int jobsReads = 0;
@@ -61,6 +63,25 @@ class FakeDeviceApi implements DeviceApi {
       for (final x in jobList)
         if (x.id != id || j.active) x.id == id ? DeviceJob(id: id, url: j.url, kind: j.kind, name: j.name, bytes: j.bytes, total: j.total, state: 'cancelled') : x,
     ];
+  }
+
+  void _setState(String id, String state) {
+    jobList = [
+      for (final j in jobList)
+        if (j.id == id) DeviceJob(id: id, url: j.url, kind: j.kind, name: j.name, bytes: j.bytes, total: j.total, state: state) else j,
+    ];
+  }
+
+  @override
+  Future<void> pauseJob(String id) async {
+    paused.add(id);
+    _setState(id, 'paused');
+  }
+
+  @override
+  Future<void> resumeJob(String id) async {
+    resumed.add(id);
+    _setState(id, 'queued');
   }
 
   @override
@@ -181,6 +202,10 @@ class FakeDeviceApiView implements DeviceApi {
       inner.download(url: url, kind: kind, name: name, sha256: sha256, origin: origin, iconUrl: iconUrl);
   @override
   Future<void> cancelJob(String id) => inner.cancelJob(id);
+  @override
+  Future<void> pauseJob(String id) => inner.pauseJob(id);
+  @override
+  Future<void> resumeJob(String id) => inner.resumeJob(id);
   @override
   Future<void> removeItem(String id) => inner.removeItem(id);
   @override
