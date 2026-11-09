@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:cache_search/cache_search.dart' show CacheSearchException, SearchCore;
 import 'package:flutter/foundation.dart';
