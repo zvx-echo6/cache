@@ -5,7 +5,7 @@
 //! base64 of little-endian f32. Plain text under gzip was chosen over zstd/CBOR because it is inspectable with `zcat`, needs
 //! no new crate (flate2 is already in the lockfile), and is deterministic: the same inputs give the same bytes.
 
-use crate::compress::CompressionOutcome;
+use crate::compression::CompressionOutcome;
 use crate::error::{Error, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -156,6 +156,9 @@ pub struct OcrInfo {
     pub engine: String,
     pub version: String,
     pub pages_ocrd: u32,
+    /// The mean confidence (0 to 1) the engine reported for the pages it read, when it reports one. Written only when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
 /// The `book` block of a revision 4 header: facts that belong to the book and never change after it is built.

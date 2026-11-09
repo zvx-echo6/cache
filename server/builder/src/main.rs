@@ -421,7 +421,7 @@ fn parse_page_list(s: &str) -> Option<Vec<usize>> {
 fn ocr_from_flags(a: &Args) -> Result<Option<OcrInfo>, i32> {
     match (a.get("--ocr-engine"), a.get("--ocr-version")) {
         (Some(engine), Some(version)) => match a.get("--ocr-pages").map_or(Ok(0), |p| p.parse::<u32>()) {
-            Ok(pages_ocrd) => Ok(Some(OcrInfo { engine, version, pages_ocrd })),
+            Ok(pages_ocrd) => Ok(Some(OcrInfo { engine, version, pages_ocrd, confidence: None })),
             Err(_) => {
                 eprintln!("error: --ocr-pages needs a number");
                 Err(2)
@@ -651,7 +651,7 @@ fn cmd_pack(a: &Args) -> i32 {
 fn ocr_entry(v: &Value) -> (Option<OcrInfo>, Option<String>) {
     let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string).filter(|s| !s.is_empty());
     let ocr = match (text("engine"), text("version")) {
-        (Some(engine), Some(version)) => Some(OcrInfo { engine, version, pages_ocrd: v.get("pages_ocrd").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0) }),
+        (Some(engine), Some(version)) => Some(OcrInfo { engine, version, pages_ocrd: v.get("pages_ocrd").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0), confidence: None }),
         _ => None,
     };
     (ocr, text("original_blake3"))

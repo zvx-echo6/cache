@@ -39,7 +39,7 @@ pub struct Layout {
 pub const LAYOUT_VERSION: u32 = 2;
 
 /// A page with fewer text characters than this, and pictures, needs OCR.
-pub const MIN_PAGE_CHARS: usize = 30;
+pub use cache_pack::pagewriter::MIN_PAGE_CHARS;
 /// A line this much above the body size (12%) is a heading.
 pub const HEADING_RATIO: f32 = 1.12;
 

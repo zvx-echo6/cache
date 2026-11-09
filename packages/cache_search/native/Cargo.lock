@@ -776,6 +776,7 @@ dependencies = [
  "cache_chunk",
  "cache_classify",
  "cache_embed",
+ "cache_pack",
  "cache_search",
  "cache_shelves",
  "edge",
@@ -817,6 +818,22 @@ dependencies = [
  "libloading",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "cache_ingest"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "cache_chunk",
+ "cache_pack",
+ "cache_shelves",
+ "flate2",
+ "libloading",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
@@ -898,6 +915,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_pack"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "cache_chunk",
+ "cache_classify",
+ "cache_shelves",
+ "flate2",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "cache_places"
 version = "0.1.0"
 dependencies = [
@@ -934,6 +966,10 @@ dependencies = [
  "cache_act",
  "cache_calc",
  "cache_chunk",
+ "cache_classify",
+ "cache_embed",
+ "cache_ingest",
+ "cache_pack",
  "cache_layers",
  "cache_live",
  "cache_navigate",

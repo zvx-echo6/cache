@@ -141,36 +141,18 @@ impl Compression {
     }
 }
 
-/// What happened to one book. The field names are the ones the build record and `docs.json` use.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CompressionOutcome {
-    /// The size of the file as it arrived.
-    pub original_size: u64,
-    /// The size of the file that is kept.
-    pub stored_size: u64,
-    /// `off`, `lossless` or `smaller_scans` (what was asked for).
-    pub level: String,
-    /// `high`, `balanced` or `smallest` for `smaller_scans`.
-    pub preset: Option<String>,
-    /// The original was kept (compression off, not smaller enough, below the quality floor, or it failed).
-    pub kept_original: bool,
-    /// Why the original was kept.
-    pub kept_reason: Option<String>,
-    /// The lowest PSNR (dB) over the pages checked, at [`CHECK_DPI`]; [`PSNR_IDENTICAL`] means pixel-identical. None when no check ran.
-    pub psnr_min: Option<f64>,
-}
+pub use cache_pack::compression::CompressionOutcome;
 
-impl CompressionOutcome {
-    pub(crate) fn kept(c: &Compression, size: usize, why: impl Into<String>, psnr: Option<f64>) -> CompressionOutcome {
-        CompressionOutcome {
-            original_size: size as u64,
-            stored_size: size as u64,
-            level: c.level.name().into(),
-            preset: c.effective_preset().map(|p| p.name().into()),
-            kept_original: true,
-            kept_reason: Some(why.into()),
-            psnr_min: psnr,
-        }
+/// The outcome for a file that was kept as it came.
+pub(crate) fn kept_outcome(c: &Compression, size: usize, why: impl Into<String>, psnr: Option<f64>) -> CompressionOutcome {
+    CompressionOutcome {
+        original_size: size as u64,
+        stored_size: size as u64,
+        level: c.level.name().into(),
+        preset: c.effective_preset().map(|p| p.name().into()),
+        kept_original: true,
+        kept_reason: Some(why.into()),
+        psnr_min: psnr,
     }
 }
 
@@ -178,7 +160,7 @@ impl CompressionOutcome {
 /// outcome. (A crash of MuPDF itself is not catchable here; the callers run this in a child process, see `isolate`.)
 pub fn compress_pdf(input: &[u8], c: &Compression) -> (Vec<u8>, CompressionOutcome) {
     if c.level == Level::Off {
-        return (input.to_vec(), CompressionOutcome::kept(c, input.len(), "compression is off", None));
+        return (input.to_vec(), kept_outcome(c, input.len(), "compression is off", None));
     }
     match try_compress(input, c) {
         Ok(Tried::Done { out, psnr, note }) => {
@@ -193,8 +175,8 @@ pub fn compress_pdf(input: &[u8], c: &Compression) -> (Vec<u8>, CompressionOutco
             };
             (out, outcome)
         }
-        Ok(Tried::Kept(why, psnr)) => (input.to_vec(), CompressionOutcome::kept(c, input.len(), why, psnr)),
-        Err(e) => (input.to_vec(), CompressionOutcome::kept(c, input.len(), format!("compression failed: {}", e.0), None)),
+        Ok(Tried::Kept(why, psnr)) => (input.to_vec(), kept_outcome(c, input.len(), why, psnr)),
+        Err(e) => (input.to_vec(), kept_outcome(c, input.len(), format!("compression failed: {}", e.0), None)),
     }
 }
 

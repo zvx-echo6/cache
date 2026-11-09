@@ -166,7 +166,7 @@ fn one_body_block_per_page_is_the_simplest_input_and_chunks_like_the_phones_plai
     let texts: Vec<String> = (1..=4).map(sentence_page).collect();
     let pages: Vec<PageIn> = texts.iter().enumerate().map(|(i, t)| page(i + 1, t, TextSource::Ocr)).collect();
     let mut o = BuildOptions::new("scan.pdf", STAMP);
-    o.ocr = Some(cache_builder::pack::OcrInfo { engine: "apple-vision".into(), version: "17".into(), pages_ocrd: 4 });
+    o.ocr = Some(cache_builder::pack::OcrInfo { engine: "apple-vision".into(), version: "17".into(), pages_ocrd: 4, confidence: None });
     let (pack, report) = build_pack_from_pages(&plain_source(), &pages, &o, &FakeEmbedder, &mut |_| {}).unwrap();
     assert_eq!((report.pages, report.text_pages, report.ocr_pages.len()), (4, 4, 0));
     assert!(pack.pieces.len() >= 4);

@@ -91,7 +91,7 @@ impl ChildExtractor {
         let arg = serde_json::to_string(c).map_err(|e| Error::ctx("compression settings", e))?;
         match self.run_job("compress", &arg, pdf)? {
             JobOutput::Complete(bytes) => decode_compressed(&bytes).ok_or_else(|| Error::new(CRASH_MSG)),
-            JobOutput::TimedOut => Ok((pdf.to_vec(), CompressionOutcome::kept(c, pdf.len(), "timed out", None))),
+            JobOutput::TimedOut => Ok((pdf.to_vec(), crate::compress::kept_outcome(c, pdf.len(), "timed out", None))),
         }
     }
 

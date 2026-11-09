@@ -15,6 +15,7 @@ pub mod epub;
 pub mod html;
 pub mod idxsnap;
 pub mod index;
+pub mod ingest;
 pub mod job;
 pub mod kwbuild;
 pub mod kwindex;

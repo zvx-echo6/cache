@@ -19,8 +19,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// UUIDv5(URL namespace, "https://github.com/zvx-echo6/cache/library-point"), docs/LIBRARY-FORMAT.md.
-pub const POINT_NAMESPACE: &str = "c4b95b91-e641-5c16-91a0-13ba2f6f7970";
+pub use cache_pack::points::{payload_of, point_uuid, POINT_NAMESPACE, SOURCE_KIND};
 /// The settings file, beside the shard and at the root of a `.cache-library`.
 pub const SETTINGS_FILE: &str = "cache-library.json";
 /// The per-document table written beside the shard.
@@ -29,22 +28,6 @@ pub const DOCUMENTS_FILE: &str = "documents.tsv";
 pub use cache_shelves::library::COPIES_FILE;
 /// The checksums of every other file in the folder.
 pub const SUMS_FILE: &str = "SHA256SUMS";
-/// The `source` payload value of every point (mapped as the library's source type).
-pub const SOURCE_KIND: &str = "book";
-
-/// The id of passage `index` of a document version.
-pub fn point_uuid(doc_id: &str, doc_version: u32, index: u32) -> uuid::Uuid {
-    let ns = uuid::Uuid::parse_str(POINT_NAMESPACE).expect("namespace");
-    uuid::Uuid::new_v5(&ns, format!("{doc_id}:{doc_version}:{index}").as_bytes())
-}
-
-fn page_value(label: &str) -> Value {
-    match label.parse::<u64>() {
-        Ok(n) if label == n.to_string() => json!(n),
-        _ => json!(label),
-    }
-}
-
 /// Where a document came from inside a ZIM, recorded in two unmapped payload fields (`zim_id`, `zim_path`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZimRef {
@@ -115,42 +98,16 @@ impl LibDoc {
 /// `page_end` (a page label, only when the piece crosses a page), `source_blake3`, and, when given, `author`, `zim_id` and
 /// `zim_path`.
 pub fn doc_payload(doc: &LibDoc, i: usize) -> Value {
-    let p = &doc.pieces[i];
-    let mut v = json!({
-        "title": doc.title,
-        "text": p.text,
-        "page": page_value(&p.page),
-        "source": SOURCE_KIND,
-        "link": doc.link,
-        "doc_id": doc.doc_id,
-        "doc_version": doc.doc_version,
-        "heading_path": p.heading_path,
-        "source_blake3": doc.source_blake3,
-    });
-    if let Some(n) = p.pdf_page {
-        v["pdf_page"] = json!(n);
-    }
-    if let Some(pe) = &p.page_end {
-        v["page_end"] = page_value(pe);
-    }
-    if let Some(n) = p.pdf_page_end {
-        v["pdf_page_end"] = json!(n);
-    }
-    if let Some(a) = &doc.author {
-        v["author"] = json!(a);
-    }
-    if let Some(z) = &doc.zim {
-        v["zim_id"] = json!(z.id);
-        v["zim_path"] = json!(z.path);
-    }
-    v
-}
-
-/// The payload of piece `i` of a pack.
-pub fn payload_of(pack: &Pack, i: usize) -> Value {
-    let mut d = LibDoc::from_pack(pack);
-    d.pieces = vec![pack.pieces[i].clone()];
-    doc_payload(&d, 0)
+    let fields = cache_pack::points::DocFields {
+        title: &doc.title,
+        doc_id: &doc.doc_id,
+        doc_version: doc.doc_version,
+        source_blake3: &doc.source_blake3,
+        link: &doc.link,
+        author: doc.author.as_deref(),
+        zim: doc.zim.as_ref().map(|z| (z.id.as_str(), z.path.as_str())),
+    };
+    cache_pack::points::piece_payload(&fields, &doc.pieces[i])
 }
 
 /// How the shard stores its vectors. Packs always hold f32; this changes only the written shard. Queries are f32 either way.

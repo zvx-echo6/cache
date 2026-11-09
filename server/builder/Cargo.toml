@@ -22,6 +22,8 @@ path = "src/main.rs"
 mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
 # The core: the blank library shard, the snapshot packer and the library check, so a built library is the one the app opens.
 cache_search = { path = "../../packages/cache_search/native/cache_search" }
+# The pack format and its one writer (pages in, pack out), shared with the ingest job in the core.
+cache_pack = { path = "../../packages/cache_pack" }
 # The passage chunker, shared with the core (cs_pdf_chunk): one implementation.
 cache_chunk = { path = "../../packages/cache_chunk" }
 # The division classifier (pure Rust), for `cache-build library --classifier`; cache_embed only for the id of the embedding model

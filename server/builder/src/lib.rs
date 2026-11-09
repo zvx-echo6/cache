@@ -1,23 +1,21 @@
 //! Cache library builder core: PDFs to document packs, and packs to a normal Cache library. No UI and no server endpoints;
 //! the embedder is a trait (the real one comes from the core's embedding code).
 
+// Moved to the shared cache_pack crate (packages/cache_pack) so the core can write packs too; the old paths stay.
+pub use cache_pack::{embed, error, fingerprint, pack, pagewriter};
+
 pub mod bookshelves;
 pub mod build;
 pub mod chunk;
 pub mod compress;
-pub mod embed;
 pub mod embed_http;
-pub mod error;
 pub mod extract;
-pub mod fingerprint;
 pub mod incremental;
 pub mod isolate;
 pub mod layout;
 pub mod docs;
 pub mod library;
 pub mod log;
-pub mod pack;
-pub mod pagewriter;
 pub mod samebook;
 pub mod sorter;
 pub mod source_identity;

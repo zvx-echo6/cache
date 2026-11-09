@@ -15,16 +15,18 @@
 //!              {"text": "\"Dig deep.\"", "kind": "aside"}]}]
 //! ```
 
-use crate::build::{first_big_heading, tidy_file_title, usable_metadata_title, BuildOptions, Progress, Report, EMBED_BATCH};
-use crate::chunk::{chunk, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
+use crate::build_types::{first_big_heading, tidy_file_title, usable_metadata_title, BuildOptions, Progress, Report, EMBED_BATCH};
+use cache_chunk::text::{normalize_ws, word_count};
+use cache_chunk::{chunk, Element, Piece, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::fingerprint::{fingerprint, mean_vector};
-use crate::layout::{Element, MIN_PAGE_CHARS};
 use crate::pack::{valid_doc_id, BookBlock, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Samebook, Source, Tool, PACK_FORMAT};
-use crate::text::{normalize_ws, word_count};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// A page with fewer characters of text than this has no real text on it (it is a picture, or a blank page).
+pub const MIN_PAGE_CHARS: usize = 30;
 
 /// Where a page's text came from: the PDF's own text layer, or OCR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -125,9 +127,59 @@ pub fn normalize_pages(pages: &mut [PageIn]) {
     }
 }
 
-/// Make the pack of a document from its pages: chunk them (the shared `cache_chunk` rule), embed the passages, and write the
-/// header with the book facts. `on` is told how far it has got.
-pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOptions, embedder: &dyn Embedder, on: &mut dyn FnMut(Progress)) -> Result<(Pack, Report)> {
+/// A document's pages chunked into pieces, before any embedding: everything [`finish_pack`] needs besides the vectors. Splitting
+/// the writer here lets a caller that embeds in small steps (the ingest job) keep its place; [`build_pack_from_pages`] is the two
+/// halves with the embedding between.
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    src: PagesSource,
+    opts: BuildOptions,
+    doc_id: String,
+    hash: String,
+    page_count: usize,
+    elements: Vec<Element>,
+    pieces: Vec<Piece>,
+    ocr_pages: Vec<usize>,
+    text_pages: usize,
+    /// 0-based page index to its label.
+    labels: HashMap<usize, String>,
+    text_source_ocr_pages: Vec<usize>,
+}
+
+impl Prepared {
+    /// The pieces' texts, in order: what is embedded.
+    pub fn texts(&self) -> Vec<String> {
+        self.pieces.iter().map(|p| p.text.clone()).collect()
+    }
+
+    pub fn piece_count(&self) -> usize {
+        self.pieces.len()
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.page_count
+    }
+
+    /// 1-based pages that have no text and still need OCR.
+    pub fn ocr_pages(&self) -> &[usize] {
+        &self.ocr_pages
+    }
+
+    /// The error for a document with no pieces to make.
+    pub fn check_not_empty(&self) -> Result<()> {
+        if self.pieces.is_empty() {
+            return Err(Error::new(if self.ocr_pages.is_empty() {
+                "no text found in the PDF".to_string()
+            } else {
+                format!("no text layer: {} page(s) need OCR", self.ocr_pages.len())
+            }));
+        }
+        Ok(())
+    }
+}
+
+/// Chunk the pages of a document (the shared `cache_chunk` rule) and check the choices; no embedding yet.
+pub fn prepare_pack(src: &PagesSource, pages: &[PageIn], opts: &BuildOptions) -> Result<Prepared> {
     let hash = src.blake3.clone();
     let doc_id = opts.doc_id.clone().unwrap_or_else(|| hash.clone());
     if !valid_doc_id(&doc_id) {
@@ -173,15 +225,21 @@ pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOp
     let text_pages = src
         .text_pages
         .unwrap_or_else(|| sorted.iter().filter(|p| p.blocks.iter().map(|b| b.text.chars().count()).sum::<usize>() >= MIN_PAGE_CHARS).count());
-    on(Progress::Extracted { pages: page_count, pieces: pieces.len(), ocr_pages: ocr_pages.len() });
-    if pieces.is_empty() {
-        return Err(Error::new(if ocr_pages.is_empty() {
-            "no text found in the PDF".to_string()
-        } else {
-            format!("no text layer: {} page(s) need OCR", ocr_pages.len())
-        }));
+    let mut labels: HashMap<usize, String> = HashMap::new();
+    for p in &sorted {
+        labels.insert(p.pdf_page - 1, if p.label.is_empty() { p.pdf_page.to_string() } else { p.label.clone() });
     }
-    let texts: Vec<String> = pieces.iter().map(|p| p.text.clone()).collect();
+    let text_source_ocr_pages: Vec<usize> = sorted.iter().filter(|p| p.text_source == TextSource::Ocr).map(|p| p.pdf_page).collect();
+    Ok(Prepared { src: src.clone(), opts: opts.clone(), doc_id, hash, page_count, elements, pieces, ocr_pages, text_pages, labels, text_source_ocr_pages })
+}
+
+/// Make the pack of a document from its pages: chunk them (the shared `cache_chunk` rule), embed the passages, and write the
+/// header with the book facts. `on` is told how far it has got.
+pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOptions, embedder: &dyn Embedder, on: &mut dyn FnMut(Progress)) -> Result<(Pack, Report)> {
+    let prep = prepare_pack(src, pages, opts)?;
+    on(Progress::Extracted { pages: prep.page_count, pieces: prep.pieces.len(), ocr_pages: prep.ocr_pages.len() });
+    prep.check_not_empty()?;
+    let texts = prep.texts();
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for batch in texts.chunks(EMBED_BATCH) {
         let v = embedder.embed_batch(batch);
@@ -191,13 +249,20 @@ pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOp
         vectors.extend(v);
         on(Progress::Embedded { done: vectors.len(), total: texts.len() });
     }
+    finish_pack(prep, vectors, &embedder.name())
+}
+
+/// The second half of the writer: the pack of [`Prepared`] pages with one vector per piece, made by the embedder named
+/// `embedder_name`.
+pub fn finish_pack(prep: Prepared, vectors: Vec<Vec<f32>>, embedder_name: &str) -> Result<(Pack, Report)> {
+    let Prepared { src, opts, doc_id, hash, page_count, elements, pieces, ocr_pages, text_pages, labels, text_source_ocr_pages } = prep;
+    prepare_nonempty(&pieces, &ocr_pages)?;
+    if vectors.len() != pieces.len() {
+        return Err(Error::new("the embedder returned a different number of vectors than texts"));
+    }
     let dims = vectors[0].len();
     if dims == 0 || vectors.iter().any(|v| v.len() != dims) {
         return Err(Error::new("the embedder returned vectors of different sizes"));
-    }
-    let mut labels: HashMap<usize, String> = HashMap::new();
-    for p in &sorted {
-        labels.insert(p.pdf_page - 1, if p.label.is_empty() { p.pdf_page.to_string() } else { p.label.clone() });
     }
     let label = |i: usize| labels.get(&i).cloned().unwrap_or_else(|| (i + 1).to_string());
     let first_heading = first_big_heading(&elements);
@@ -241,11 +306,11 @@ pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOp
         source: Source { blake3: hash.clone(), size: src.size, file_name: opts.file_name.clone(), https: opts.https.clone() },
         extractor: src.extractor.clone(),
         chunker: Chunker { version: CHUNKER_VERSION, target_words: TARGET_WORDS as u32, max_words: MAX_WORDS as u32 },
-        embedding: EmbeddingInfo { embedder: embedder.name(), dims },
+        embedding: EmbeddingInfo { embedder: embedder_name.to_string(), dims },
         created_at: opts.created_at.clone(),
         page_count,
         ocr_pages: ocr_pages.clone(),
-        text_source_ocr_pages: sorted.iter().filter(|p| p.text_source == TextSource::Ocr).map(|p| p.pdf_page).collect(),
+        text_source_ocr_pages,
         pieces: pack_pieces.len(),
         division: None,
         book: None,
@@ -283,4 +348,15 @@ pub fn build_pack_from_pages(src: &PagesSource, pages: &[PageIn], opts: &BuildOp
     // Revision 3: the same-book fingerprint travels in the pack, so every device can compare copies without the PDF.
     header.samebook = Some(Samebook::new(report.minhash.clone(), &report.mean_vector, report.text_pages as u32, report.pages as u32, report.ppi, src.size));
     Ok((Pack { header, pieces: pack_pieces }, report))
+}
+
+fn prepare_nonempty(pieces: &[Piece], ocr_pages: &[usize]) -> Result<()> {
+    if pieces.is_empty() {
+        return Err(Error::new(if ocr_pages.is_empty() {
+            "no text found in the PDF".to_string()
+        } else {
+            format!("no text layer: {} page(s) need OCR", ocr_pages.len())
+        }));
+    }
+    Ok(())
 }
