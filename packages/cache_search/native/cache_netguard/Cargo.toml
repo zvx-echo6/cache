@@ -1,0 +1,10 @@
+[package]
+name = "cache_netguard"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's public-address guard: the one rule for which addresses an outbound HTTP client may connect to, shared by the Linux server and the core crates"
+
+[dependencies]
+# Only the Resolver trait and AgentBuilder: the same ureq every core crate builds its client with.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }

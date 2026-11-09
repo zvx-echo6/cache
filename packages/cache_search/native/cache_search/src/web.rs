@@ -324,7 +324,9 @@ pub const fn tls_roots() -> TlsRoots {
 /// the request's own timeout is the remaining time to the deadline.
 fn web_agent(timeout: Duration) -> ureq::Agent {
     // ureq's limit counts the final request too: `redirects(n)` follows n - 1 redirects, so one more than MAX_REDIRECTS
-    ureq::AgentBuilder::new().timeout(timeout).redirects(MAX_REDIRECTS as u32 + 1).user_agent(&user_agent()).build()
+    // Always guarded, on every platform: what the model reads is public by definition, so a redirect to a LAN or metadata address
+    // is never legitimate. A refusal is a connect-layer failure, which the read and the search already report as unavailable.
+    cache_netguard::always(ureq::AgentBuilder::new()).timeout(timeout).redirects(MAX_REDIRECTS as u32 + 1).user_agent(&user_agent()).build()
 }
 
 /// `s` with `url`'s query string taken out wherever the URL (or just its query) appears.
@@ -918,6 +920,8 @@ mod tests {
 
     /// A server that accepts one connection, sends `reply` (or nothing) and closes.
     fn one_shot_server(reply: &'static [u8]) -> String {
+        // the web client is always guarded; these tests use a server on this machine, so loopback is let through for this process
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -961,6 +965,7 @@ mod tests {
 
     #[test]
     fn a_refused_connection_names_the_connect_layer() {
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         drop(l);
@@ -978,6 +983,7 @@ mod tests {
 
     #[test]
     fn a_silent_server_is_a_timeout() {
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {

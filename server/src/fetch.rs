@@ -218,7 +218,7 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
 /// is held to `max`, and its type to the scope's (see `fetch_scope`).
 pub fn open_with(policy: &Policy, url: &str, max: u64) -> Result<Opened, FetchError> {
     let refused = Arc::new(AtomicBool::new(false));
-    let agent = if policy.public_only() { agent_with(Some(PublicResolver { refused: refused.clone(), exempt: vec![] })) } else { agent() };
+    let agent = if policy.public_only() { agent_with(Some(PublicResolver::new(refused.clone(), vec![]))) } else { agent() };
     let mut cur = url.to_string();
     let started = Instant::now();
     for hop in 0..7 {
