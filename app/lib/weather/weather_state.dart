@@ -1280,7 +1280,7 @@ class WeatherState extends ChangeNotifier {
   Future<UpdateReport?> updateIfDue(Duration every) async {
     if (!_started || _updating || enabledSources.isEmpty) return null;
     // The server's own timer writes this file too (a browser); a phone has nothing to read again.
-    await _store?.files.reload(_statusFile);
+    if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
     final last = _lastRunAt;
