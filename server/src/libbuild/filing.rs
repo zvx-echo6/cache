@@ -163,7 +163,7 @@ impl BuildService {
     }
 
     /// Move a book's files to `division` (None is Unsorted) and record it. The caller holds `ops`.
-    fn refile(&self, lib: &str, doc: &str, division: Option<String>, by_hand: bool) -> Result<(), String> {
+    pub(crate) fn refile(&self, lib: &str, doc: &str, division: Option<String>, by_hand: bool) -> Result<(), String> {
         let cls = self.classes();
         let book = self.book_of(lib, doc).ok_or("no such book")?;
         let division = division.filter(|d| cls.find(d).is_some_and(|(_, x)| x.assigned()));

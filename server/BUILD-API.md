@@ -209,6 +209,32 @@ the first five pages, else the file name tidied. It can be edited with the book 
 | `GET /api/build/classes[?library_id=]` | `{classes:[{number,name,count,divisions:[{number,name,description,assigned,count}]}], unsorted:{name,count}, libraries:[{id,title,books,unsorted,classes:{"500":n},divisions:{"530":n}}], settings:{classifier_version,threshold}}`; with `library_id` the counts and `libraries` are that library's. |
 | `POST /api/build/classes/reclassify` | `{"library_id"?, "scope"?: "all"\|"unsorted"}` looks at the books again (after a new classifier model file was installed); books placed by hand stay. `{checked,moved,failed}`. 409 `classifier_missing` without a classifier model file. |
 
+## Bookshelves in the browser
+
+The Library of Cache for Linux shows the person's Bookshelves (the log of server/builder/LIBRARY-LOG.md) from this server's side of it: the
+browser has no files of its own, so it never writes a log. Every change a book page makes is appended to this server's own file,
+`<data>/bookshelves/log/<device_id>.jsonl`, the one the service already writes (the device id is the cache_sync identity in `<data>/sync`).
+These calls cover every library in `<data>/app/docs/libraries`, the ones built here and the ones installed from a `.cache-library`.
+
+| Call | Body | Result |
+|---|---|---|
+| `GET /api/build/bookshelves` | | `{device, stamp, view}`: `device` is this server's id in the log; `view` is the view of LIBRARY-LOG.md, format 1 (what `cs_shelves_resolve` gives a phone) |
+| `GET /api/build/bookshelves/stamp` | | `{stamp}`: a short text that differs whenever a log file, a library's `documents.tsv` or `copies.jsonl`, or its packs folder changes. A page polls this and asks for the rest only when it changes. |
+| `GET /api/build/bookshelves/facts` | | `{libraries: {<library_id>: {<doc_id>: <the first line of the book's newest pack>}}}`, without the bulky `samebook` block. What a phone reads from its packs itself (suggested divisions, compression, source size, page count, author, edition, year). A library with no packs has none. |
+| `POST /api/build/bookshelves/events` | `{"events": [event]}` | `{written, moved, titled, stamp}` |
+
+An event is a log line's object (`ev`, `copy`, and the fields of that event; `at` is now when left out; `v` and `dev` are the server's). The
+events a book page writes are `place`, `unsort`, `assign`, `retire`, `title`, `remove`, `restore`, `same`, `notsame` and `prefer`; any other
+`ev` is a 400 `invalid`, so is an event that is not valid, or a `place` into a division that does not exist or is unassigned (nothing is written
+then). What the server does with them:
+
+- `place` and `unsort` for a book built here are shelved the way "Place it" shelves it: the files move, the call number takes the new division and
+  the book is marked placed by hand. The server numbers the book itself (the next free number counting every device's log), so the `assign` and
+  `retire` events that go with them are not written as they came. `moved` counts the books shelved.
+- `title` for a book built here is the book's rename (`PATCH .../books/{doc}`), `titled` counts them.
+- Everything else, and every event for a copy that no built library holds (an installed library's books), is appended as it came; `written`
+  counts them. The calls kept in the built libraries' books are refreshed and the view is made again.
+
 ## Same book, different file
 
 After a book is read, its text is fingerprinted (MinHash, 128 hashes over 5-word shingles of lowercase letters and digits) and compared with the

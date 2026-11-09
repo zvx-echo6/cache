@@ -530,9 +530,12 @@ class BookPage extends StatelessWidget {
     // whether the PDF is here is the file itself; which other device has it, when this device knows (stream-back)
     final from = d.files.stateOf(b).from;
     final here = _pdfBytes(b);
-    final String pdf = here != null
-        ? 'On this device · ${formatBytes(here)}'
-        : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
+    final String pdf = b.onServer
+        // in a browser the device is the server the page is signed in to: the PDF is kept there
+        ? ['On this device', if (b.bytes case final n? when n > 0) formatBytes(n)].join(' · ')
+        : here != null
+            ? 'On this device · ${formatBytes(here)}'
+            : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
     return [
       _Fact(
         'Subject',
@@ -663,6 +666,8 @@ class BookPage extends StatelessWidget {
     final here = path != null && _pdfBytes(b) != null;
     final original = d.originals?.available(b) ?? false;
     final buttons = <Widget>[
+      // in a browser the PDF is on the server: nothing to open or download here
+      if (!b.onServer) ...[
       // Open: the book's own PDF in the app's PDF reader, at its first page
       if (here)
         Expanded(
@@ -692,6 +697,7 @@ class BookPage extends StatelessWidget {
             child: const Text('Download to this device', textAlign: TextAlign.center),
           ),
         ),
+      ],
     ];
     return [
       if (buttons.isNotEmpty) Row(children: [for (var i = 0; i < buttons.length; i++) ...[if (i > 0) const SizedBox(width: 8), buttons[i]]]),

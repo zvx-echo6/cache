@@ -368,6 +368,10 @@ library folder in `<data>/app/docs/libraries`: the ones it builds and the ones t
 - **Publishing** makes `copies.jsonl` again from the packs, shelves books no event has shelved, refreshes the call numbers it keeps with each book
   (`call_text` in `build/libs/<id>.json`, which file names and lists use), and writes the view. The view is also written after a placement, a rename
   and a delete.
+- **The browser's Library.** A browser has no log of its own. It reads the view from the service and the service writes what a book page changes
+  (`GET /api/build/bookshelves`, `POST /api/build/bookshelves/events`; server/BUILD-API.md "Bookshelves in the browser"), always as this device,
+  so the log keeps one writer. A move or a first placement of a book built here goes through the service's own filing (the files move, and the
+  number is the service's next free one); hiding, showing, "same book" corrections and the preferred copy are appended as they came.
 - The service writes no `SHA256SUMS` and no `.cache-library` archive for the libraries it builds, so `copies.jsonl` is in neither there.
 - Call numbers count across the whole Bookshelves, so two built libraries that each had `210-001` in their own logs show the later claim as
   `210-001.1` after the import.

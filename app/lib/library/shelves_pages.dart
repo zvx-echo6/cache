@@ -729,6 +729,6 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
     default:
       break;
   }
-  if (b.pdfPath == null) return 'Not on this device';
+  if (b.pdfPath == null && !b.onServer) return 'Not on this device';
   return null;
 }

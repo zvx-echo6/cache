@@ -9,6 +9,7 @@ import '../search/index_scheduler.dart';
 import '../search/index_status.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
+import '../platform.dart' as plat;
 import '../theme.dart';
 import 'library_pages.dart';
 import 'library_panes.dart';
@@ -137,7 +138,8 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
       ),
     );
     final pdf = pdfIndexShared;
-    if (pdf != null && id != null) {
+    // a browser makes no PDF index of its own (the server builds none for ZIM PDFs yet), so there is nothing to list or pause
+    if (pdf != null && id != null && !plat.isWeb) {
       final ref = pdfZimRef(sources, z);
       final part = pdf.partOf(ref);
       if (part != null) {

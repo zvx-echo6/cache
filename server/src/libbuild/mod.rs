@@ -71,6 +71,7 @@ pub mod linked_api;
 pub mod linked_checks;
 pub mod removed;
 pub mod same;
+pub mod shelves_api;
 #[cfg(test)]
 pub(crate) mod testpdf;
 #[cfg(test)]

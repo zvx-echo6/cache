@@ -22,6 +22,7 @@ import '../library/cds_shelf_source.dart';
 import '../library/library_pages.dart';
 import '../library/library_panes.dart';
 import '../library/library_prefs.dart';
+import '../library/shelf_server.dart';
 import '../library/shelf_source.dart';
 import '../regions/regions_state.dart';
 import '../sharing/sharing_state.dart';
@@ -56,7 +57,9 @@ import 'zim_urls.dart';
 /// The Library module (1.1, UX-library-11b): four rows, ZIM Collections, Bookshelves, Catalog and Cache Documentation, with the
 /// search progress above them and "Add to Library", the one way to add anything. ZIM Collections is the list people know (each ZIM
 /// with its icon, name, a short description and its size, and a badge only for an exception; tap opens it, press and hold opens
-/// its menu). In a browser (Cache for Linux) the Library is still the one list of everything, as the browser build has it.
+/// its menu). In a browser (Cache for Linux) it is the same Library over Cache Server's data: Bookshelves are the server's (its
+/// Bookshelves log, read and written through the server), and what only a browser has (uploads, downloads the server runs, libraries
+/// built from PDFs) sits with the rows.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({
     super.key,
@@ -69,9 +72,18 @@ class BrowseScreen extends StatefulWidget {
     this.files,
     this.originals,
     this.looks,
+    this.shelfServer,
+    this.structured,
   });
 
   final BrowseState browse;
+
+  /// A browser: Cache Server's Bookshelves (the browser's own [HttpShelfServer] when null); a test gives its own.
+  final ShelfServer? shelfServer;
+
+  /// Whether this is the 1.1 Library with its four rows (null: it is, except for the old browser list in tests with a device; a
+  /// browser always has it).
+  final bool? structured;
 
   /// The regions, for Catalog's places and routing; null leaves them out.
   final RegionsState? regions;
@@ -108,11 +120,12 @@ class _BrowseScreenState extends State<BrowseScreen> {
   SourcesState get sources => b.sources;
   LibrariesState? get libs => b.libraries;
 
-  /// The 1.1 Library (a phone, a tablet, a computer's app); a browser keeps the one list.
-  bool get _structured => b.device == null;
+  /// The 1.1 Library (a phone, a tablet, a computer's app, and a browser).
+  bool get _structured => widget.structured ?? (b.device == null || plat.isWeb);
 
   CdsShelfSource? _ownShelves;
-  late final ShelfSource _shelves = widget.shelves ?? (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10)));
+  late final ShelfSource _shelves = widget.shelves ??
+      (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10), server: b.device == null ? null : (widget.shelfServer ?? (plat.isWeb ? HttpShelfServer() : null))));
   late final BookFiles _files = widget.files ?? BookFilesUnavailable();
   late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
 
@@ -138,7 +151,12 @@ class _BrowseScreenState extends State<BrowseScreen> {
       final CdsShelfSource c => c.holdsBooks(l),
       _ => false,
     },
-    rootTop: (ctx) => [if (libs?.task case final t?) _taskRow(ctx.t, t)],
+    rootTop: (ctx) => [
+      if (libs?.task case final t?) _taskRow(ctx.t, t),
+      // a browser: what the device is doing for this tab (uploads, downloads, a library being built)
+      if (b.device case final dv?) DeviceLibraryTop(device: dv, onAddPackage: _addPackage, onOpenBuilt: (id) => _openBuiltFrom(ctx, id)),
+    ],
+    rootBottom: (ctx) => _builtRows(ctx.t, from: ctx, heading: true),
   );
 
   @override
@@ -440,6 +458,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'built:$id', builder: (_) => BuiltLibraryPage(build: bc, libraryId: id));
   }
 
+  /// A library built from PDFs (a browser), opened in the panes from the Library's own pages.
+  void _openBuiltFrom(BuildContext from, String id) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    LibraryNav.of(from).open(from, LibraryPageSpec('built:$id', (_) => BuiltLibraryPage(build: bc, libraryId: id), leaf: true));
+  }
+
   /// PDFs (or a folder of them) dropped anywhere on the Library: the build page holds them until the person says where they go.
   void _dropPdfs(List<LocalFile> files) {
     final bc = b.device?.build;
@@ -455,7 +480,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   @override
   Widget build(BuildContext context) {
     if (_structured) {
-      return LibraryPanes(
+      final panes = LibraryPanes(
         // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
         desktopInitial: widget.active ? (_) => _addPage() : null,
         root: (c) {
@@ -463,6 +488,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
           return LibraryRootPage(deps: _deps);
         },
       );
+      final dv = b.device;
+      // In a browser a file dropped anywhere on the Library is added from this computer; PDFs build a library.
+      return dv == null
+          ? panes
+          : DropOverlay(
+              onFile: (f) => addFromComputer(context, device: dv, libraries: libs, dropped: f),
+              onPdfs: dv.build == null ? null : _dropPdfs,
+              child: panes,
+            );
     }
     final pane = TwoPane(
       id: 'library',
@@ -567,6 +601,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: libraryAppBar(context, title: 'ZIM Collections'),
+      bottomNavigationBar: b.device == null ? null : DeviceStorageFooter(device: b.device!),
       body: ListenableBuilder(
         listenable: Listenable.merge([b, sources, ?pdfIndexShared, ?indexSchedulerShared, ?coreIndexShared?.progress]),
         builder: (context, _) {
@@ -668,11 +703,17 @@ class _BrowseScreenState extends State<BrowseScreen> {
     );
   }
 
-  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built.
-  List<Widget> _builtRows(CacheTokens k) {
+  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built. [from]: the
+  /// rows of the Library's own page (they open in its panes), with [heading] over them.
+  List<Widget> _builtRows(CacheTokens k, {BuildContext? from, bool heading = false}) {
     final bc = b.device?.build;
-    if (bc == null) return const [];
+    if (bc == null || (heading && bc.libraries.isEmpty)) return const [];
     return [
+      if (heading)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+          child: Text('Libraries built from your PDFs', style: TextStyle(fontSize: 13, color: k.secondary)),
+        ),
       for (final l in bc.libraries)
         LibraryRow(
           key: ValueKey('built-${l.id}'),
@@ -682,8 +723,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
             final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
             _ => null,
           },
-          selected: isPaneSelected(context, 'built:${l.id}'),
-          onTap: () => _openBuilt(l.id),
+          selected: from != null ? LibraryNav.of(from).isOpen('built:${l.id}') : isPaneSelected(context, 'built:${l.id}'),
+          onTap: () => from != null ? _openBuiltFrom(from, l.id) : _openBuilt(l.id),
         ),
     ];
   }

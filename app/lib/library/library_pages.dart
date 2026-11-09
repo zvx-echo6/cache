@@ -40,6 +40,7 @@ class LibraryDeps {
     this.regions,
     this.sharing,
     this.rootTop,
+    this.rootBottom,
     this.whatsNew = currentWhatsNew,
   });
 
@@ -66,6 +67,9 @@ class LibraryDeps {
 
   /// What shows above the four rows besides the search progress (a library being added).
   final List<Widget> Function(BuildContext context)? rootTop;
+
+  /// What shows under the four rows, above Add to Library (in a browser, the libraries built from PDFs).
+  final List<Widget> Function(BuildContext context)? rootBottom;
   final Future<List<String>> Function() whatsNew;
 
   /// Everything a Library page listens to.
@@ -240,6 +244,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                 ],
               ),
+              if (d.rootBottom?.call(context) case final below? when below.isNotEmpty) ...[const SizedBox(height: 16), ...below],
               if (!addBeside) ...[
                 const SizedBox(height: 16),
                 Align(
