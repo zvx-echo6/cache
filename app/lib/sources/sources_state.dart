@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import '../browse/opds.dart';
 import '../chat/system_prompt.dart';
@@ -168,7 +168,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       zimsDir = zimsDirOverride ?? await _defaultZimsDir();
       indexesDir =
           indexesDirOverride ??
-          Directory('${(await getApplicationSupportDirectory()).path}/indexes');
+          Directory('${await appSupportPath()}/indexes');
       await zimsDir!.create(recursive: true);
       await indexesDir!.create(recursive: true);
       _scan();
@@ -210,10 +210,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   static CsNative _defaultNative() => FfiCsNative.open();
 
   Future<Map<String, dynamic>> _defaultExtras() async {
-    final files =
-        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
-        await getApplicationDocumentsDirectory();
-    final support = await getApplicationSupportDirectory();
+    final files = Directory(await appFilesPath());
+    final support = Directory(await appSupportPath());
     // libzim reads its ICU data from the folder ICU_DATA names, so this comes before the first cs_open.
     try {
       await installIcuData(supportDir: support);
@@ -278,10 +276,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   }
 
   Future<Directory> _defaultZimsDir() async {
-    final base =
-        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
-        await getApplicationDocumentsDirectory();
-    return Directory('${base.path}/zims');
+    return Directory('${await appFilesPath()}/zims');
   }
 
   String _indexDir(ZimFile z) => '${indexesDir!.path}/${z.fileName}.idx';

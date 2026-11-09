@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import 'pdf_address.dart';
 
@@ -141,7 +141,7 @@ Future<(String path, PdfTempCopy? copy)> preparePdf(
       onCopying?.call(null);
       final bytes = await source.read(source.address);
       if (cancelled?.call() ?? false) throw const PdfCancelled();
-      final dir = await (source.tempDir ?? getTemporaryDirectory)();
+      final dir = await (source.tempDir ?? () async => Directory(await appTempPath()))();
       try {
         final copy = await PdfTempCopy.write(bytes, dir, progress: onCopying, cancelled: cancelled);
         return (copy.file.path, copy);

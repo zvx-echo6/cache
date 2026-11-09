@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
@@ -162,14 +162,13 @@ class VideoState extends ChangeNotifier {
     if (dirOverride != null) {
       dir = dirOverride!;
     } else {
-      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
-      dir = Directory('${base.path}/videos');
+      dir = Directory('${await appFilesPath()}/videos');
     }
     this.dir = dir;
     await dir.create(recursive: true);
     if (_prefs == null && dirOverride == null) {
       try {
-        _prefs = VideoPrefs(file: File('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}video-prefs.json'));
+        _prefs = VideoPrefs(file: File('${await appSupportPath()}${Platform.pathSeparator}video-prefs.json'));
       } catch (_) {}
     }
     await prefs.load();

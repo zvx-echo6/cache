@@ -10,6 +10,12 @@ import 'platform.dart' as plat;
 AppFs createAppFs({Directory? supportOverride, Directory? docsOverride}) =>
     IoAppFs(supportOverride: supportOverride, docsOverride: docsOverride);
 
+Future<String> appSupportPath() async => (await getApplicationSupportDirectory()).path;
+Future<String> appDocumentsPath() async => (await getApplicationDocumentsDirectory()).path;
+Future<String> appFilesPath() async =>
+    ((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path;
+Future<String> appTempPath() async => (await getTemporaryDirectory()).path;
+
 /// The phone (and desktop) side: today's dart:io code. The roots are found the way the app always found them (the application
 /// support folder; the external-storage folder on Android, else the documents folder), and files are written with files.dart.
 class IoAppFs implements AppFs {

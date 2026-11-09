@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:math';
 
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import '../sharing/sharing_state.dart';
+
+Future<Directory> _supportDir() async => Directory(await appSupportPath());
 
 /// The file beside the settings that keeps this install's own Bookshelves log id, used while sharing is not set up.
 const String kLibraryDeviceIdFile = 'library-device-id';
@@ -15,7 +17,7 @@ bool validDeviceId(String id) => id.isNotEmpty && id.length <= 64 && !id.startsW
 /// sharing was set up, so its old library logs are imported too. Never made here.
 Future<String?> libraryLocalDeviceId({Future<Directory> Function()? supportDir}) async {
   try {
-    final dir = await (supportDir ?? getApplicationSupportDirectory)();
+    final dir = await (supportDir ?? _supportDir)();
     final f = File('${dir.path}${Platform.pathSeparator}$kLibraryDeviceIdFile');
     if (!f.existsSync()) return null;
     final t = f.readAsStringSync().trim();
@@ -33,7 +35,7 @@ Future<String?> libraryDeviceId({SharingState? sharing, Future<Directory> Functi
   final id = sharing != null && sharing.running ? sharing.status['id'] : null;
   if (id is String && validDeviceId(id)) return id;
   try {
-    final dir = await (supportDir ?? getApplicationSupportDirectory)();
+    final dir = await (supportDir ?? _supportDir)();
     final f = File('${dir.path}${Platform.pathSeparator}$kLibraryDeviceIdFile');
     if (f.existsSync()) {
       final t = f.readAsStringSync().trim();
