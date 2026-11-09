@@ -59,6 +59,7 @@ jobs:
           cargo clippy --version
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           # A cancelled or failed run still saves what it built, so the next push starts warm.
           cache-on-failure: true
@@ -90,7 +91,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Packages
         working-directory: app
         run: |
@@ -121,6 +122,7 @@ jobs:
           rustup default "$RUST_VERSION"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           key: embed-parity
           cache-on-failure: true
@@ -148,7 +150,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Phone parity (app)
         working-directory: app
         run: |
