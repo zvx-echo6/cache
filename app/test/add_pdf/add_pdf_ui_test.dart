@@ -284,8 +284,10 @@ void main() {
     expect(find.text('Add 3 PDFs'), findsOneWidget);
     expect(find.textContaining('They are added one at a time. A book you already have becomes a spare copy.'), findsOneWidget);
     await tester.tap(find.text('Add 3 PDFs'));
-    await settle(tester);
-    await settle(tester);
+    // each is queued in turn (a write of the jobs list each): wait until all are
+    for (var i = 0; i < 100 && w.state.jobs.length < 3; i++) {
+      await settle(tester);
+    }
     expect([for (final j in w.state.jobs) j.title]..sort(), ['Field radio handbook', 'Root cellar plans', 'Water purification manual']);
     expect({for (final j in w.state.jobs) j.libraryTitle}, {'My books'});
     expect({for (final j in w.state.jobs) j.id}, hasLength(3), reason: 'each its own job');
@@ -306,8 +308,10 @@ void main() {
     expect(find.text('2 PDFs · 70.0 MB · About 7 min while charging'), findsOneWidget);
     expect(find.textContaining('2 files that are not a PDF are left out.'), findsOneWidget);
     await tester.tap(find.text('Add 2 PDFs'));
-    await settle(tester);
-    await settle(tester);
+    // each is queued in turn (a write of the jobs list each): wait until all are
+    for (var i = 0; i < 100 && w.state.jobs.length < 2; i++) {
+      await settle(tester);
+    }
     final jobs = w.state.jobs;
     expect(jobs, hasLength(2));
     expect({for (final j in jobs) j.folderRoot}, {'/tmp/field-manuals'});
