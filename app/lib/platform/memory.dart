@@ -28,7 +28,7 @@ String procStatusSummary(String source) {
   return 'RSS ${rss ~/ 1024} MB${parts.isEmpty ? '' : ' (${parts.join(', ')})'}${swap == null ? '' : ', swap ${swap ~/ 1024} MB'}';
 }
 
-/// The memory counters of /proc/self/status or /proc/meminfo [source], in the kernel's kB, keyed "<name>_kb"; only these
+/// The memory counters of /proc/self/status or /proc/meminfo [source], in the kernel's kB, keyed by name plus "_kb"; only these
 /// names are taken, and a line whose value is not a number is left out.
 Map<String, int> procMemoryCounters(String source) {
   const keys = {'VmRSS', 'VmSwap', 'RssAnon', 'RssFile', 'MemAvailable', 'SwapFree'};
