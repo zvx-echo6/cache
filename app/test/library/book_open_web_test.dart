@@ -74,8 +74,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('book-open')), findsOneWidget, reason: 'the PDF is on the server: Open is offered');
     expect(find.byKey(const ValueKey('book-download')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('book-open')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('book-open')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
     final reader = tester.widget<PdfReaderScreen>(find.byType(PdfReaderScreen));
     final source = reader.source as PdfServerSource;
     expect((source.id, source.title, reader.initialPage), ('field/aid', 'Wilderness first aid', 1));
