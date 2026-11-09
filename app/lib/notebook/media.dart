@@ -8,6 +8,10 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../app_fs.dart';
+import '../platform.dart' as plat;
+import '../pdf/pdf_address.dart' show looksLikePdf;
+import 'save_bytes.dart';
 import 'notebook_model.dart';
 import 'notebook_state.dart';
 
@@ -40,9 +44,16 @@ String newMediaId() {
 
 /// Stores [bytes] as a photo in the Notebook's media folder (under [id] when given: a photo that came by sync keeps its id).
 Future<NbPhoto?> storePhoto(NotebookState nb, Uint8List bytes, {String? id}) async {
-  final out = await Isolate.run(() => encodePhoto(bytes));
+  // A browser has no isolates to run on: it encodes here, then writes the two files on the server.
+  final out = plat.isWeb ? encodePhoto(bytes) : await Isolate.run(() => encodePhoto(bytes));
   if (out == null) return null;
   id ??= newMediaId();
+  if (plat.isWeb) {
+    final fs = nb.webFs;
+    await fs.writeBytesAtomic(AppRoot.support, NotebookState.photoRel(id), out.photo);
+    await fs.writeBytesAtomic(AppRoot.support, NotebookState.thumbRel(id), out.thumb);
+    return NbPhoto(id: id, width: out.width, height: out.height, bytes: out.photo.length);
+  }
   final f = await nb.photoFile(id);
   final t = await nb.thumbFile(id);
   await f.parent.create(recursive: true);
@@ -62,6 +73,13 @@ Future<NbPhoto?> addPhoto(NotebookState nb, {required bool camera}) async {
 /// A file from the phone (a scan, a PDF) copied into the Notebook's media folder with its own name.
 Future<NbFile?> addFile(NotebookState nb) async {
   final picked = await FilePicker.pickFile();
+  if (plat.isWeb) {
+    final bytes = picked?.bytes;
+    if (picked == null || bytes == null) return null;
+    final id = newMediaId();
+    await nb.webFs.writeBytesAtomic(AppRoot.support, NotebookState.attachedRel(id), bytes);
+    return NbFile(id: id, name: picked.name, bytes: bytes.length);
+  }
   if (picked == null || picked.path == null) return null;
   try {
     final id = newMediaId();
@@ -80,6 +98,11 @@ Future<NbFile?> addFile(NotebookState nb) async {
 /// was chosen. Any file can be chosen: the core says when it is not one it reads.
 Future<T?> withPickedFile<T>(Future<T> Function(String path, String name) use) async {
   final picked = await FilePicker.pickFile();
+  if (plat.isWeb) {
+    final bytes = picked?.bytes;
+    if (picked == null || bytes == null) return null;
+    return withStagedFiles([(name: picked.name, bytes: bytes)], (paths) => use(paths.first, picked.name));
+  }
   if (picked == null || picked.path == null) return null;
   try {
     return await use(picked.path!, picked.name);
@@ -93,6 +116,11 @@ Future<T?> withPickedFile<T>(Future<T> Function(String path, String name) use) a
 /// Like [withPickedFile] with one or more files (a repeater list can be a KML and a CSV together).
 Future<T?> withPickedFiles<T>(Future<T> Function(List<String> paths) use) async {
   final picked = await FilePicker.pickFiles();
+  if (plat.isWeb) {
+    final files = [for (final f in picked) if (f.bytes != null) (name: f.name, bytes: f.bytes!)];
+    if (files.isEmpty) return null;
+    return withStagedFiles(files, use);
+  }
   final paths = [for (final f in picked) ?f.path];
   if (paths.isEmpty) return null;
   try {
@@ -104,14 +132,60 @@ Future<T?> withPickedFiles<T>(Future<T> Function(List<String> paths) use) async 
   }
 }
 
+/// A browser's picked bytes handed to the core, which reads files by path: they are written under `import-tmp/` in the server's
+/// support folder (the folder the core runs next to), [use] gets their paths there, and they are removed after.
+Future<T> withStagedFiles<T>(List<({String name, Uint8List bytes})> files, Future<T> Function(List<String> paths) use, {AppFs? fs}) async {
+  fs ??= createAppFs();
+  final dir = 'import-tmp/${newMediaId()}';
+  try {
+    final root = await fs.rootPath(AppRoot.support);
+    final paths = <String>[];
+    for (var i = 0; i < files.length; i++) {
+      // Only the file's own name (the core goes by its extension); the folder keeps files of one pick apart.
+      final base = files[i].name.split(RegExp(r'[\\/]')).last.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
+      final rel = '$dir/$i/${base.isEmpty ? 'file' : base}';
+      await fs.writeBytesAtomic(AppRoot.support, rel, files[i].bytes);
+      paths.add('$root/$rel');
+    }
+    return await use(paths);
+  } finally {
+    try {
+      await fs.delete(AppRoot.support, dir, recursive: true);
+    } catch (_) {}
+  }
+}
+
 /// Opens an attached file in another app (through the share sheet, under its own name).
 Future<void> openFile(NotebookState nb, NbFile f) async {
+  if (plat.isWeb) {
+    // A browser has no share sheet: the file goes to the person as a download (a PDF opens in a new tab).
+    final bytes = await nb.attachedBytes(f.id);
+    if (bytes == null) throw const FileSystemException('This file is no longer on the server');
+    final pdf = (f.mime ?? '').toLowerCase().startsWith('application/pdf') || f.name.toLowerCase().endsWith('.pdf') || looksLikePdf(bytes);
+    saveBytesInBrowser(f.name, pdf ? 'application/pdf' : (f.mime ?? 'application/octet-stream'), bytes, inTab: pdf);
+    return;
+  }
   final file = await nb.attachedFile(f.id);
   await SharePlus.instance.share(ShareParams(files: [XFile(file.path, name: f.name, mimeType: f.mime)], fileNameOverrides: [f.name]));
 }
 
 /// Deletes the files of photos and files that were never saved with an entry (taken out before the entry was saved).
 Future<void> discardUnsaved(NotebookState nb, {Iterable<NbPhoto> photos = const [], Iterable<NbFile> files = const []}) async {
+  if (plat.isWeb) {
+    for (final p in photos) {
+      for (final rel in [NotebookState.photoRel(p.id), NotebookState.thumbRel(p.id)]) {
+        try {
+          await nb.webFs.delete(AppRoot.support, rel);
+        } catch (_) {}
+      }
+    }
+    for (final x in files) {
+      try {
+        await nb.webFs.delete(AppRoot.support, NotebookState.attachedRel(x.id));
+      } catch (_) {}
+    }
+    return;
+  }
   for (final p in photos) {
     for (final f in [await nb.photoFile(p.id), await nb.thumbFile(p.id)]) {
       try {

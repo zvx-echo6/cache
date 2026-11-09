@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/places.dart';
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
@@ -237,7 +239,7 @@ class NbThumb extends StatelessWidget {
         child: SizedBox(
           width: size,
           height: size,
-          child: FutureBuilder<File>(
+          child: plat.isWeb ? _WebThumb(notebook: notebook, id: id, size: size) : FutureBuilder<File>(
             future: notebook.thumbFile(id),
             builder: (context, snap) {
               final f = snap.data;
@@ -246,5 +248,37 @@ class NbThumb extends StatelessWidget {
             },
           ),
         ),
+      );
+}
+
+/// A thumbnail in a browser: read from the server's media folder (photos that came by sync are there too), once per photo.
+class _WebThumb extends StatefulWidget {
+  const _WebThumb({required this.notebook, required this.id, required this.size});
+
+  final NotebookState notebook;
+  final String id;
+  final double size;
+
+  @override
+  State<_WebThumb> createState() => _WebThumbState();
+}
+
+class _WebThumbState extends State<_WebThumb> {
+  late Future<Uint8List?> _bytes = widget.notebook.thumbBytes(widget.id);
+
+  @override
+  void didUpdateWidget(_WebThumb old) {
+    super.didUpdateWidget(old);
+    if (old.id != widget.id || old.notebook != widget.notebook) _bytes = widget.notebook.thumbBytes(widget.id);
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List?>(
+        future: _bytes,
+        builder: (context, snap) {
+          final b = snap.data;
+          if (b == null) return ColoredBox(color: context.t.surface, child: Icon(Icons.photo_outlined, color: context.t.secondary));
+          return Image.memory(b, fit: BoxFit.cover, width: widget.size, height: widget.size);
+        },
       );
 }

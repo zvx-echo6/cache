@@ -1,9 +1,12 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache_search/cache_search.dart' show CacheSearchException, SearchCore;
 import 'package:flutter/foundation.dart';
 
 import 'notebook_model.dart';
+import '../app_fs.dart';
+import '../platform.dart' as plat;
 import '../platform/app_log.dart';
 
 /// The core's Notebook calls (cs_notebook): one op with its arguments, the answer as JSON. Tests use an in-memory one.
@@ -45,7 +48,12 @@ abstract class PrivateSharing {
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
 /// read again; [revision] counts the changes (an open notebook reads its entries again), and [onChanged] runs after each one.
 class NotebookState extends ChangeNotifier {
-  NotebookState({required this.backend, required this.mediaDir});
+  NotebookState({required this.backend, required this.mediaDir, AppFs? fs}) : _fsOverride = fs;
+
+  final AppFs? _fsOverride;
+
+  /// How a browser reaches the media folder on Cache Server (`<support>/notebook`, the same folder the core and sync use).
+  late final AppFs webFs = _fsOverride ?? createAppFs();
 
   final NotebookBackend backend;
 
@@ -242,4 +250,23 @@ class NotebookState extends ChangeNotifier {
   Future<File> photoFile(String id) async => File('${(await mediaDir()).path}/photos/$id.jpg');
   Future<File> thumbFile(String id) async => File('${(await mediaDir()).path}/thumbs/$id.jpg');
   Future<File> attachedFile(String id) async => File('${(await mediaDir()).path}/files/$id');
+
+  // A browser cannot open a File of the server; it reads the same media folder (`notebook/` under the support root) as bytes.
+  static String photoRel(String id) => 'notebook/photos/$id.jpg';
+  static String thumbRel(String id) => 'notebook/thumbs/$id.jpg';
+  static String attachedRel(String id) => 'notebook/files/$id';
+
+  /// A photo's thumbnail bytes, null when it is not there. Phone: the file; browser: the server's media folder.
+  Future<Uint8List?> thumbBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, thumbRel(id));
+    final f = await thumbFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
+
+  /// An attached file's bytes, null when it is not there.
+  Future<Uint8List?> attachedBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, attachedRel(id));
+    final f = await attachedFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
 }
