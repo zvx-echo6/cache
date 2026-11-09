@@ -1,0 +1,38 @@
+name: Pinned downloads
+description: Files from .github/pinned-downloads.txt (pinned by sha256), restored from the GitHub Actions cache and checked, or on a miss downloaded (3 tries with backoff), checked and saved to the cache straight away (not at the end of the job, so a later failing step still keeps them). Output dir holds each file under its name.
+inputs:
+  names:
+    description: Space-separated names from .github/pinned-downloads.txt
+    required: true
+outputs:
+  dir:
+    description: The folder holding the files
+    value: ${{ steps.key.outputs.dir }}
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        NAMES: ${{ inputs.names }}
+      run: |
+        # shellcheck disable=SC2086
+        echo "key=pinned-downloads-$(bash "$GITHUB_ACTION_PATH/../../scripts/pinned-download.sh" key $NAMES)" >> "$GITHUB_OUTPUT"
+        echo "dir=$HOME/.cache/cache-ci-pinned" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/cache-ci-pinned
+        key: ${{ steps.key.outputs.key }}
+    - shell: bash
+      env:
+        NAMES: ${{ inputs.names }}
+        DIR: ${{ steps.key.outputs.dir }}
+      run: |
+        # shellcheck disable=SC2086
+        bash "$GITHUB_ACTION_PATH/../../scripts/pinned-download.sh" fetch "$DIR" $NAMES
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/cache-ci-pinned
+        key: ${{ steps.key.outputs.key }}

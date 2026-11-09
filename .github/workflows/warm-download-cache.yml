@@ -1,0 +1,62 @@
+name: Warm download cache
+
+# Saves the pinned downloads (.github/pinned-downloads.txt) to the GitHub Actions cache from main, the default branch. A branch
+# reads only caches saved on itself or on the default branch, so caches saved on rel-1.1 are not visible to feature branches off
+# it; caches saved here are visible to every branch. Each job below asks for exactly the same names (so the same cache key) on
+# the same kind of runner as the workflows on rel-1.1 that use .github/actions/pinned-downloads. The pins file, the action and its
+# script must stay identical to rel-1.1's; the first step fails if the pins differ.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # tests.yml (rust), native-libs.yml (libzim-core-linux)
+          - set: zim-suite
+            runner: ubuntu-latest
+            names: zim-testing-suite-0.10.0.tar.gz
+          # tests.yml (flutter), renders.yml
+          - set: linux
+            runner: ubuntu-latest
+            names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+          # android-test-apk.yml, android-play.yml
+          - set: android
+            runner: ubuntu-latest
+            names: >-
+              pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz pdfium-chromium-7811-android-arm.tgz
+              pdfium-chromium-7811-android-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
+              sqlite3-3.5.2-libsqlite3.arm.android.so sqlite3-3.5.2-libsqlite3.x64.android.so
+          # ios-*.yml
+          - set: apple
+            runner: macos-26
+            names: pdfium-chromium-7811-mac-arm64.tgz sqlite3-3.5.2-libsqlite3.arm64.macos.dylib sqlite3-3.5.2-libsqlite3.arm64.ios.dylib
+    name: warm-${{ matrix.set }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pins match rel-1.1
+        run: |
+          git fetch -q --depth=1 origin rel-1.1
+          git diff --exit-code FETCH_HEAD -- .github/pinned-downloads.txt .github/actions/pinned-downloads .github/scripts/pinned-download.sh \
+            || { echo "::error::The pins, action or script on main differ from rel-1.1; the cache keys would not match"; exit 1; }
+      - id: pinned
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: ${{ matrix.names }}
+      - name: Cache key
+        env:
+          NAMES: ${{ matrix.names }}
+        run: |
+          # shellcheck disable=SC2086
+          echo "pinned-downloads-$(bash .github/scripts/pinned-download.sh key $NAMES)"
+          ls -l "${{ steps.pinned.outputs.dir }}"
