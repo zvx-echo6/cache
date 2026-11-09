@@ -94,8 +94,15 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
         main.removeCallbacks(retry)
     }
 
-    // The saved places list does not change with every position update.
-    override fun onTrip(trip: CarTrip) {}
+    private var shownImperial: Boolean? = null
+
+    // The saved places list does not change with every position update; only the units its distances are in can (the first trip
+    // the phone pushes says which).
+    override fun onTrip(trip: CarTrip) {
+        if (shownImperial == trip.imperial) return
+        shownImperial = trip.imperial
+        invalidate()
+    }
 
     override fun onGetTemplate(): Template {
         val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.APP_ICON).build()
