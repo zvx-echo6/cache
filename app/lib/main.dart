@@ -793,7 +793,9 @@ class _CacheAppState extends State<CacheApp> {
         final s = _supportPath;
         if (s == null || !mounted) return;
         await addPdfSelfCheck(addPdf.calls, await _addPdfEngines(), memo: File('$s/ingest/probe.json'));
-      }).catchError((Object e) => logError('Add PDF self-check', error: e)));
+      }).catchError((Object e) {
+        logError('Add PDF self-check', error: e);
+      }));
     }
     // Weather starts from what it keeps on the phone (the sources that are on, the last data shown, the saved places) as soon as
     // the settings are read, so Home's card and the Weather screen show it before the core is open; the steps that need the core

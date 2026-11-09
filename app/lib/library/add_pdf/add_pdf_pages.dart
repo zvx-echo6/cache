@@ -10,7 +10,7 @@ import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../screens/settings/widgets.dart' show GroupLabel, say;
 import '../../search/index_overview.dart';
 import '../../search/index_scheduler.dart';
-import '../../search/index_status.dart' show indexWaitWords;
+import '../../search/index_status.dart' show indexSlowedWords, indexWaitWords;
 import '../../sources/libraries_state.dart';
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
@@ -32,7 +32,7 @@ Future<PickedPdf?> pickPdfWithPicker() async {
   final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: const ['pdf']);
   final path = f?.path;
   if (f == null || path == null) return null;
-  return (path: path, name: f.name, bytes: f.size);
+  return (path: path, name: f.name, bytes: await f.length() ?? await File(path).length());
 }
 
 /// What the tests and renders use in place of the system picker.
@@ -52,8 +52,9 @@ Future<void> startAddPdfOn(NavigatorState nav) async {
     logError('Add PDF: the file picker failed', error: e);
     return;
   }
-  if (picked == null || !nav.mounted) return;
-  await nav.push(MaterialPageRoute<void>(builder: (_) => AddPdfConfirmPage(state: state, pdf: picked)));
+  final pdf = picked;
+  if (pdf == null || !nav.mounted) return;
+  await nav.push(MaterialPageRoute<void>(builder: (_) => AddPdfConfirmPage(state: state, pdf: pdf)));
 }
 
 /// The libraries a PDF may go to: My books (made on first use) and the other libraries the person made.
@@ -97,14 +98,13 @@ class _FileTile extends StatelessWidget {
 
 /// A white card.
 class _Card extends StatelessWidget {
-  const _Card({required this.child, this.padding = const EdgeInsets.all(14)});
+  const _Card({required this.child});
 
   final Widget child;
-  final EdgeInsets padding;
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: padding,
+    padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(color: context.t.surface, borderRadius: BorderRadius.circular(16)),
     child: child,
   );
@@ -321,9 +321,9 @@ class _ErrIcon extends StatelessWidget {
 
 /// The green check.
 class _DoneDot extends StatelessWidget {
-  const _DoneDot({this.size = 24});
+  const _DoneDot();
 
-  final double size;
+  static const double size = 24;
 
   @override
   Widget build(BuildContext context) {
@@ -642,7 +642,11 @@ class AddPdfJobCard extends StatelessWidget {
     final running = item?.state == IndexState.running && item?.why == IndexWait.none;
     if (job.busy) return _BusyCard(state: state, job: job);
     if (job.pausedByPerson) return _HeldCard(state: state, job: job, words: 'Paused by you · Resume', action: ('Resume', Icons.play_arrow_outlined, () => state.resume(job)));
-    if (running || item == null || item.state == IndexState.queued) return _PhaseCard(state: state, job: job, full: full, slowed: item?.slowed == true ? item : null);
+    // slowed for heat: the short card, in the indexing rules' words, with Pause
+    if (running && item!.slowed) {
+      return _HeldCard(state: state, job: job, words: indexSlowedWords(item.warm), action: ('Pause', Icons.pause, () => state.pause(job)));
+    }
+    if (running || item == null || item.state == IndexState.queued) return _PhaseCard(state: state, job: job, full: full);
     final why = item.why;
     final words = indexWaitWords(why, battery: scheduler?.reading, bytesNeeded: item.bytesNeeded, warm: item.warm) ?? 'Waiting';
     final (String, IconData, VoidCallback) action = switch (why) {
@@ -664,12 +668,11 @@ Future<void> _cancel(BuildContext context, AddPdfState state, AddPdfJob job) asy
 
 /// The PDF running now: its phases in order (done, running, to come), the time left, Pause and Cancel.
 class _PhaseCard extends StatelessWidget {
-  const _PhaseCard({required this.state, required this.job, this.full = false, this.slowed});
+  const _PhaseCard({required this.state, required this.job, this.full = false});
 
   final AddPdfState state;
   final AddPdfJob job;
   final bool full;
-  final IndexItem? slowed;
 
   @override
   Widget build(BuildContext context) {
@@ -736,8 +739,6 @@ class _PhaseCard extends StatelessWidget {
               ],
               const SizedBox(height: 6),
               for (final p in phases) phase(p),
-              if (slowed != null)
-                Text(slowed!.warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool', style: TextStyle(fontSize: 13, color: k.warning)),
               Text(leftWords, key: const ValueKey('add-pdf-left'), style: TextStyle(fontSize: 13, color: k.secondary)),
               const SizedBox(height: 10),
               Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [

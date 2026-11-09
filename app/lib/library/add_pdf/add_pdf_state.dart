@@ -303,6 +303,24 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// Being added (shown on Bookshelves' row: "1 being added").
   int get adding => active.length;
 
+  /// Tests and renders: puts [job] in the list as it is.
+  @visibleForTesting
+  void debugAdd(AddPdfJob job) {
+    _loaded = true;
+    _jobs.add(job);
+    notifyListeners();
+  }
+
+  /// Tests and renders: the list is [jobs], as they are.
+  @visibleForTesting
+  void debugSet(List<AddPdfJob> jobs) {
+    _loaded = true;
+    _jobs
+      ..clear()
+      ..addAll(jobs);
+    notifyListeners();
+  }
+
   AddPdfJob? byId(String id) => _jobs.where((j) => j.id == id).firstOrNull;
 
   /// The job whose book is [copy] and whose note has not been seen on the book's page yet.

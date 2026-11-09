@@ -75,7 +75,7 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     // a PDF whose adding stopped: the card stays, its line in the danger color ("Water purification manual · Stopped: no readable
     // text"), until it is tried again or put away on the progress page
     final stopped = addPdfShared?.failed.firstOrNull;
-    final line = s.line ?? (stopped == null ? null : 'Getting search ready · ${s.doneCount} of ${s.totalCount + addPdfShared!.failed.length} done');
+    final line = stopped == null ? s.line : 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done';
     final done = _doneTotal;
     if (line == null && done == null) return const SizedBox.shrink();
     final held = line != null && s.reason != IndexWait.none && stopped == null;
