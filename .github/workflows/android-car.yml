@@ -46,7 +46,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Packages and the Gradle project
         working-directory: app
         run: |

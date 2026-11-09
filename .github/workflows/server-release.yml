@@ -66,7 +66,7 @@ jobs:
         with:
           flutter-version: 3.44.8
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Build web
         working-directory: app
         run: |
@@ -153,7 +153,8 @@ jobs:
           dart pub get
           dart test
       - name: Cargo registry cache
-        uses: actions/cache@v4
+        id: cache-1
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -161,7 +162,8 @@ jobs:
           key: cargo-home-server-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-server-${{ matrix.arch }}-
       - name: Cargo target cache
-        uses: actions/cache@v4
+        id: cache-2
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -193,7 +195,8 @@ jobs:
           echo "max glibc: $(objdump -T build-llama/libcache_llama.so | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"
       # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
       - name: Embedding model cache
-        uses: actions/cache@v4
+        id: cache-3
+        uses: actions/cache/restore@v4
         with:
           path: bge-model
           key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
@@ -375,3 +378,23 @@ jobs:
           path: ${{ runner.temp }}/cache-build/cache-build
           retention-days: 14
           if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}
+      - name: Save cache (Embedding model cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-3.outputs.cache-primary-key != '' && steps.cache-3.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bge-model
+          key: ${{ steps.cache-3.outputs.cache-primary-key }}

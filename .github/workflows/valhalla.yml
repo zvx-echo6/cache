@@ -87,8 +87,9 @@ jobs:
         with:
           dir: work/src
       - name: Dependency cache (vcpkg downloads and built packages)
+        id: cache-1
         if: steps.built.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             work/downloads
@@ -96,8 +97,9 @@ jobs:
           key: valhalla-linux-deps-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/vcpkg.json', 'packages/valhalla/triplets/*-linux-rel.cmake', 'packages/valhalla/scripts/build-linux.sh') }}
           restore-keys: valhalla-linux-deps-${{ matrix.arch }}-
       - name: Compiler cache
+        id: cache-2
         if: steps.built.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /github/home/ccache
           key: valhalla-linux-ccache-${{ matrix.arch }}-${{ github.run_id }}
@@ -135,3 +137,17 @@ jobs:
           name: valhalla-shim-3.7.0-linux-${{ matrix.arch }}
           path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
           if-no-files-found: error
+      - name: Save cache (Dependency cache (vcpkg downloads and built packages)) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/downloads
+            work/vcpkg-archives
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Compiler cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /github/home/ccache
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}

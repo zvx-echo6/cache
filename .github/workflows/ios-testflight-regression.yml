@@ -152,8 +152,9 @@ jobs:
           path: packages/cache_search/ios/native
           key: core-routing-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/**/*.rs', 'packages/cache_search/native/**/Cargo.toml', 'packages/cache_search/native/Cargo.lock', 'packages/cache_search/native/zimx/**', 'packages/cache_search/ios/build-core.sh', 'packages/valhalla/**', '.github/workflows/ios-testflight.yml') }}
       - name: Cargo registry cache
+        id: cache-1
         if: steps.out.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -161,8 +162,9 @@ jobs:
           key: cargo-home-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
           restore-keys: cargo-home-
       - name: Cargo target cache
+        id: cache-2
         if: steps.out.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: packages/cache_search/native/target
           key: cargo-target-ios-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
@@ -202,6 +204,20 @@ jobs:
           name: native-core
           path: packages/cache_search/ios/native
           retention-days: 2
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}
 
 
   app:
@@ -226,7 +242,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: CocoaPods cache
         uses: actions/cache@v4
         with:
