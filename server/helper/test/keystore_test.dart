@@ -60,9 +60,11 @@ void main() {
 
   test('references in core args are swapped for the value, nested; a missing key is not_found', () {
     keys.set('k.one', 'SECRET');
-    final out = keys.before('x', {'a': KeyStore.refOf('k.one'), 'n': 3, 'l': [KeyStore.refOf('k.one'), 'plain']});
+    final out = keys.before('liveSetKey', {'a': KeyStore.refOf('k.one'), 'n': 3, 'l': [KeyStore.refOf('k.one'), 'plain']});
     expect(out, {'a': 'SECRET', 'n': 3, 'l': ['SECRET', 'plain']});
-    expect(codeOf(() => keys.before('x', {'a': KeyStore.refOf('nope')})), 'not_found');
+    expect(codeOf(() => keys.before('liveSetKey', {'a': KeyStore.refOf('nope')})), 'not_found');
+    final chat = {'content': KeyStore.refOf('k.one')};
+    expect(keys.before('convTool', chat), chat, reason: 'what the model or person wrote is never touched');
   });
 
   test('setWeb with a reference reaches the engine with the key, and is replayed after a restart; a raw key is not kept', () async {

@@ -17,7 +17,7 @@ import 'line_protocol.dart';
 ///                                      sign-in name) and `app.pin` (a salted hash the page checks). Any other name: `forbidden`.
 ///
 /// References: a browser that wants to hand a key to the engine uses [refOf] (`keystore://<name>`) instead of the value. [CoreHook]
-/// swaps every string argument that is exactly a reference for the stored value before a core op runs, so the browser never holds
+/// swaps every string argument that is exactly a reference for the stored value before one of the key-carrying core ops ([keyOps]) runs, so the browser never holds
 /// the key. `setWeb` is also remembered (provider, reference, online; never a raw key) and [replay]ed after the engine opens.
 ///
 /// Inside the helper, other code (the sharing host's `set_secrets` and `take_secrets`) calls [get], [set], [delete] and [names]
@@ -143,8 +143,12 @@ class KeyStore implements OpHandler, CoreHook {
     return v;
   }
 
+  /// The core ops that carry a key or token. Only these get references swapped: an op that carries what the person or the model
+  /// wrote (`convTool`, `convImport`, `search`, `notebook`, ...) is passed on exactly as it came, so nothing the model sees changes.
+  static const Set<String> keyOps = {'setWeb', 'liveSetKey', 'liveFetch', 'liveFetchStart', 'liveGet', 'jobStart', 'jobSet'};
+
   @override
-  Map<String, dynamic> before(String op, Map<String, dynamic> args) => (resolve(args) as Map).cast<String, dynamic>();
+  Map<String, dynamic> before(String op, Map<String, dynamic> args) => keyOps.contains(op) ? (resolve(args) as Map).cast<String, dynamic>() : args;
 
   @override
   void after(String op, Map<String, dynamic> args) {
