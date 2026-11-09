@@ -3,7 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../pdf/open_pdf.dart' show openPdfReader;
-import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom;
+import '../browse/web/device_api.dart' show DeviceException;
+import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom, PdfGone, PdfServerSource;
 
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
@@ -663,10 +664,35 @@ class BookPage extends StatelessWidget {
     final f = d.files;
     final download = f.download(b);
     final path = b.pdfPath;
+    final fetch = d.shelves.pdfFetcher(b);
     final here = path != null && _pdfBytes(b) != null;
     final original = d.originals?.available(b) ?? false;
     final buttons = <Widget>[
-      // in a browser the PDF is on the server: nothing to open or download here
+      // in a browser the PDF is on the server: Open reads it from there, in the reader, from its bytes (no file, nothing to download)
+      if (b.onServer && fetch != null)
+        Expanded(
+          child: FilledButton(
+            key: const ValueKey('book-open'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+            onPressed: () => openPdfReader(
+              context,
+              PdfServerSource(
+                id: '${b.libraryId}/${b.docId}',
+                title: b.title,
+                fetch: () async {
+                  try {
+                    return await fetch();
+                  } on DeviceException catch (e) {
+                    if (e.status == 404) throw const PdfGone();
+                    rethrow;
+                  }
+                },
+              ),
+              page: 1,
+            ),
+            child: const Text('Open'),
+          ),
+        ),
       if (!b.onServer) ...[
       // Open: the book's own PDF in the app's PDF reader, at its first page
       if (here)

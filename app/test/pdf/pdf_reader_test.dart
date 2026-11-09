@@ -77,6 +77,55 @@ void main() {
     expect(disposed, isTrue, reason: 'a closed reader releases its document after metadata completes');
   });
 
+  group('in a browser (opened from bytes, no temporary file)', () {
+    readerTest('a ZIM PDF opens at the cited page from the entry\'s bytes; the temporary folder is never asked for', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      var tempAsked = false;
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          initialPage: 3,
+          source: PdfZimSource(
+            address: 'zim:x/handbook.pdf#page=3',
+            title: 'Water and Shelter Handbook',
+            read: (a) async => bytes,
+            tempDir: () async {
+              tempAsked = true;
+              throw StateError('a browser has no temporary folder');
+            },
+          ),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('3 of 6')));
+      expect(find.text('3 of 6'), findsOneWidget);
+      expect(tempAsked, isFalse);
+    });
+
+    readerTest('a book PDF fetched from the server opens at its first page', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          initialPage: 1,
+          source: PdfServerSource(id: 'field/aid', title: 'Water and Shelter Handbook', fetch: () async => bytes),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('1 of 6')));
+      expect(find.text('1 of 6'), findsOneWidget);
+    });
+
+    readerTest('a PDF the server no longer has shows the gone page', (tester) async {
+      await show(
+        tester,
+        PdfReaderScreen(openFromBytes: true, source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const PdfGone())),
+      );
+      await settleUntil(tester, () => _has(find.text('This file is no longer on this device.')));
+      expect(find.text('This file is no longer on this device.'), findsOneWidget);
+    });
+  });
+
   readerTest('opens at the asked page; the count opens Go to page, which refuses a page that is not there', (tester) async {
     await show(tester, reader(six, page: 3));
     await settleUntil(tester, () => _has(find.text('3 of 6')));

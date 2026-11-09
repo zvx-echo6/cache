@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -22,7 +23,14 @@ abstract class ShelfServer {
   /// Sends the events a book page writes (a log line's object each). The server shelves a book it built by its own filing, renames
   /// through the book's rename and appends the rest as they came.
   Future<void> events(List<Map<String, dynamic>> events);
+
+  /// The PDF of book [doc] in library [library] (`GET /api/build/libraries/{id}/books/{doc}/pdf`), whole: the browser's reader opens it
+  /// from these bytes. A [DeviceException] with status 404 when the server has no such PDF.
+  Future<Uint8List> bookPdf(String library, String doc);
 }
+
+/// How long a book's PDF may take to come (it can be large).
+const Duration kBookPdfTimeout = Duration(minutes: 5);
 
 /// The browser's [ShelfServer]: same origin, so the session goes along.
 class HttpShelfServer implements ShelfServer {
@@ -73,6 +81,20 @@ class HttpShelfServer implements ShelfServer {
     return {
       for (final lib in j.entries) lib.key: {for (final d in _map(lib.value).entries) d.key: _map(d.value)},
     };
+  }
+
+  @override
+  Future<Uint8List> bookPdf(String library, String doc) async {
+    final path = '/api/build/libraries/${Uri.encodeComponent(library)}/books/${Uri.encodeComponent(doc)}/pdf';
+    http.Response r;
+    try {
+      r = await _client.get(Uri.parse(path)).timeout(kBookPdfTimeout);
+    } catch (_) {
+      throw const DeviceException('unreachable', 'This device could not be reached.');
+    }
+    if (r.statusCode == 401) throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode != 200) throw DeviceException(r.statusCode == 404 ? 'not_found' : 'failed', 'This device answered ${r.statusCode}.', status: r.statusCode);
+    return r.bodyBytes;
   }
 
   @override

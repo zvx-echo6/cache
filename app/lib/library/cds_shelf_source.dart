@@ -909,6 +909,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       // a browser has no file of the book: its PDF is on the server, which the page says
       pdfPath: _server != null || lb == null || doc == null ? null : localPdfOf(lb.item, doc, d?.hash),
       onServer: _server != null && lb != null && doc != null,
+      libraryId: _server != null && lb != null && doc != null ? lb.id : null,
       spares: spares,
       aka: aka,
       reading: reading,
@@ -951,6 +952,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   LibraryItem? libraryOf(ShelfBook book) => _libs.where((x) => x.item.path == book.sourceKey).firstOrNull?.item;
 
   // ---- writing
+
+  @override
+  Future<List<int>> Function()? pdfFetcher(ShelfBook book) {
+    final server = _server, lib = book.libraryId, doc = book.docId;
+    if (server == null || !book.onServer || lib == null || doc == null) return null;
+    return () => server.bookPdf(lib, doc);
+  }
 
   @override
   String? nextNumber(String shelfId) => cdsDivision(shelfId) == null ? null : cdsCallText(shelfId, _next[shelfId] ?? 1);
