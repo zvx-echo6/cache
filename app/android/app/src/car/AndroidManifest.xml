@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto: Cache's navigation on the car's screen (car/CacheCarAppService.kt and the rest of the car package). Merged into
+     the app's manifest only when the build has -PcacheAndroidAuto=true (build.gradle.kts). The default (and so the Play release)
+     leaves it out: Android Auto ships together with CarPlay, so until then the release APK does not appear in Android Auto. The
+     test APK (android-test-apk.yml) and the car screen's tests (android-car.yml) turn it on. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The navigation templates, and the car surface the map is drawn on. -->
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE"/>
+    <application>
+        <activity android:name=".MainActivity">
+            <!-- Navigation requests for Android Auto (Gemini, the Google Assistant, other apps: "geo:" addresses). Declared on
+                 this activity as Android Auto asks; the car session handles them (car/NavIntent.kt). -->
+            <intent-filter>
+                <action android:name="androidx.car.app.action.NAVIGATE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="geo"/>
+            </intent-filter>
+        </activity>
+        <!-- A navigation app built with the Android for Cars App Library. -->
+        <service
+            android:name=".car.CacheCarAppService"
+            android:exported="true"
+            android:label="${appLabel}"
+            android:icon="@mipmap/ic_launcher">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService"/>
+                <category android:name="androidx.car.app.category.NAVIGATION"/>
+            </intent-filter>
+        </service>
+        <!-- The position while the car screen is attached and the phone is locked (car/CarLocationService.kt). -->
+        <service
+            android:name=".car.CarLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location"/>
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
+        <!-- MapWithContentTemplate needs Car App API level 7. -->
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="7"/>
+    </application>
+</manifest>

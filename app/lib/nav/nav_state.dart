@@ -84,6 +84,7 @@ class NavState extends ChangeNotifier {
     required this.positionSource,
     required this.fmt,
     this.onFollow,
+    this.simulatedDrive,
     DateTime Function()? clock,
     this.searchDebounce = const Duration(milliseconds: 220),
     this.meaningDebounce = const Duration(milliseconds: 700),
@@ -102,6 +103,10 @@ class NavState extends ChangeNotifier {
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
   final void Function(FollowMode mode)? onFollow;
+
+  /// True while [positionSource] gives a simulated drive (the car's test drive): the phone's last real fix is then not fed to
+  /// guidance when it starts, so the drive is not taken off its route by where the phone really is.
+  final bool Function()? simulatedDrive;
 
   NavPhase phase = NavPhase.browsing;
 
@@ -595,7 +600,7 @@ class NavState extends ChangeNotifier {
     _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
-    if (f != null) unawaited(_handleFix(f));
+    if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
   }
 
   void _onFix(Fix f) {

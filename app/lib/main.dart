@@ -16,6 +16,8 @@ import 'app_fs.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
+import 'car/car_bridge.dart';
+import 'car/car_drive.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -652,11 +654,16 @@ class _CacheAppState extends State<CacheApp> {
         ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
         : CoreMapBackend(() => sources.core!, embedder: searchModel.embedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
     location: location,
-    speaker: FlutterTtsSpeaker(),
-    positionSource: GeolocatorNavSource(),
+    speaker: CarAwareSpeaker(FlutterTtsSpeaker(), car: () => _car),
+    positionSource: carDrive,
+    simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
   );
+  // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
+  // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
+  CarBridge? _car;
   // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
   late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
   CacheThemeId _applied = CacheThemeId.dark;
@@ -846,6 +853,19 @@ class _CacheAppState extends State<CacheApp> {
     video.init();
     location.init();
     _mapsRead = maps.init();
+    if (plat.isAndroid) {
+      _car = CarBridge(
+        nav: nav,
+        maps: maps,
+        drive: carDrive,
+        ready: () => sources.whenCoreReady(),
+        // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
+        onConnected: () async {
+          await location.request(explain: () async => false);
+        },
+      );
+      unawaited(_car!.start());
+    }
     _openHistory();
   }
 
@@ -942,6 +962,7 @@ class _CacheAppState extends State<CacheApp> {
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
+    _car?.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
