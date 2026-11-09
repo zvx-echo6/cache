@@ -116,6 +116,7 @@ class ModelInfo {
     required this.supportsTools,
     this.weights,
     this.weightsReason,
+    this.engine,
   });
 
   factory ModelInfo.fromJson(Map<String, dynamic> j) => ModelInfo(
@@ -125,6 +126,7 @@ class ModelInfo {
         supportsTools: (j['supports_tools'] ?? false) as bool,
         weights: j['weights'] as String?,
         weightsReason: j['weights_reason'] as String?,
+        engine: j['engine'] as String?,
       );
 
   final String description;
@@ -136,4 +138,8 @@ class ModelInfo {
   /// (null from an older library or a remote model), and why.
   final String? weights;
   final String? weightsReason;
+
+  /// The effective engine settings of this load, one line (threads, cores, flash attention, KV types, batch sizes, weights and
+  /// whether they came from a test intent or are the defaults); null from an older library or a remote model.
+  final String? engine;
 }

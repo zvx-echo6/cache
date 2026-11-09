@@ -22,6 +22,13 @@ extern "C" {
 //   "repack_weights": Android only, for measurement: true repacks the CPU weights (an anonymous copy that can be swapped).
 //                     false (the default) keeps them file-backed through mmap, as every Android load does unless this is set.
 //                     It is never set automatically. Other platforms ignore it.
+//   "engine":         test builds only; the app sends it only when a test APK's launch intent carries one. An object (keys all
+//                     optional; a key left out keeps today's behaviour, a bad value is ignored and logged) that replaces the earlier
+//                     engine setting, or null to clear it. "n_threads" (generation threads), "n_threads_batch" (prompt reading;
+//                     default: the generation count), "cpus" (core numbers to pin the threadpool to; default: the automatic plan),
+//                     "flash_attn" ("auto"|"on"|"off"), "type_k" and "type_v" ("f16"|"q8_0"|"q4_0"), "n_ubatch", "repack_weights"
+//                     (as the key above, and it wins over it). Non-default KV types or flash attention change the saved prompt
+//                     prefix's identity, so a file saved with other ones is never reused. Every cl_load logs one "engine: ..." line.
 // Returns 0, or -1 when the JSON does not parse.
 CL_API int cl_configure(const char * options_json);
 
@@ -31,7 +38,8 @@ CL_API int cl_configure(const char * options_json);
 // Returns a handle, or NULL with the reason in err.
 CL_API void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len);
 
-// Writes JSON {"description","n_ctx","chat_format","supports_tools","engine_build","weights","weights_reason"}. weights:
+// Writes JSON {"description","n_ctx","chat_format","supports_tools","engine_build","weights","weights_reason","engine"}
+// (engine: the one "engine: ..." line this load logged). weights:
 // "mmap" (file-backed, no repack: the Android default, reason "default on Android"), "repacked" (CPU repacked copy: Android
 // only with the repack_weights opt-in) or "default" (the platform's own choice, not Android).
 // Returns the length, or -1 if out is too small.

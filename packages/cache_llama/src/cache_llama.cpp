@@ -43,6 +43,7 @@ struct Handle {
     common_chat_templates_ptr tmpls;
     int                       n_ctx = 0;
     ggml_threadpool_t         pool  = nullptr;  // pinned threadpool (Android with several CPU clusters), else null
+    ggml_threadpool_t         pool_batch = nullptr;  // second pinned pool for prompt reading, only when its thread count differs
     void                   (* pool_free)(ggml_threadpool_t) = nullptr;
 
     // Tokens whose keys/values are in the KV cache, in order (the prompt of the last cl_start plus
@@ -68,12 +69,14 @@ struct Handle {
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
 
     // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
+    std::string engine_line;  // the "engine: ..." line of this load (cl_info)
     std::string weights        = "default";
     std::string weights_reason;
 
     // The saved prompt prefix (cl_configure prefix_dir): the folder, the model file's identity, and the last cl_start's note.
     std::string prefix_dir;
     std::string model_id;
+    std::string engine_key;  // "" with the default KV types and flash attention, else them: part of the saved prefix's identity
     std::string prefix_note;
     // The prompt start of the last request shape (system prompt + tools + thinking switch): its key and tokens, and how much
     // of it is stable (the part it shares with the shape before it; all of it once the same shape comes again).
@@ -204,6 +207,20 @@ std::mutex  g_opt_mu;
 std::string g_prefix_dir;
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
 
+// Test-build tuning (cl_configure "engine"). Every field left unset means the behaviour the app always had.
+struct EngineOpts {
+    bool             set             = false;  // an engine object was given (the log line says "intent" instead of "default")
+    int              n_threads       = 0;      // 0: as before (the caller's count or the automatic plan)
+    int              n_threads_batch = 0;      // 0: the same as the generation threads
+    std::vector<int> cpus;                     // empty: the automatic plan's cores
+    std::string      flash_attn      = "auto";
+    std::string      type_k          = "f16";
+    std::string      type_v          = "f16";
+    int              n_ubatch        = 0;      // 0: llama.cpp's default
+    int              repack_weights  = -1;     // -1: the process-wide repack_weights option
+};
+EngineOpts g_engine;
+
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
     return "cache-gemma4-prefill-31356";
@@ -279,7 +296,9 @@ std::string hex64(uint64_t v) {
 }
 
 std::string prefix_model_key(const Handle * h) {
-    const std::string head = h->model_id + "\n" + engine_build() + "\n" + std::to_string(h->n_ctx) + "\n";
+    // Non-default KV types or flash attention add to the identity (the default adds nothing, so today's files stay valid).
+    const std::string head = h->model_id + "\n" + engine_build() + "\n" + std::to_string(h->n_ctx) + "\n" +
+                             (h->engine_key.empty() ? std::string() : h->engine_key + "\n");
     return hex64(fnv1a(1469598103934665603ull, head.data(), head.size()));
 }
 
@@ -471,6 +490,7 @@ static void free_handle(Handle * h) {
     h->session.reset();
     h->tmpls.reset();
     if (h->ctx)   llama_free(h->ctx);
+    if (h->pool_batch) h->pool_free(h->pool_batch);
     if (h->pool)  h->pool_free(h->pool);
     if (h->model) llama_model_free(h->model);
     delete h;
@@ -478,10 +498,64 @@ static void free_handle(Handle * h) {
 
 extern "C" {
 
+// Reads the "engine" object. A key with a value that cannot be used is ignored (and logged); the others still apply.
+static EngineOpts parse_engine(const common_json & e) {
+    EngineOpts o;
+    o.set = true;
+    auto bad = [](const char * key) { cl_logi("engine option ignored (bad value): %s", key); };
+    auto pos_int = [&](const char * key, int max, int & dst) {
+        if (!e.contains(key)) return;
+        const auto & v = e.at(key);
+        if (v.is_number_integer() && v.get<long long>() >= 1 && v.get<long long>() <= max) dst = (int) v.get<long long>();
+        else bad(key);
+    };
+    pos_int("n_threads", GGML_MAX_N_THREADS, o.n_threads);
+    pos_int("n_threads_batch", GGML_MAX_N_THREADS, o.n_threads_batch);
+    pos_int("n_ubatch", 65536, o.n_ubatch);
+    if (e.contains("cpus")) {
+        const auto & v = e.at("cpus");
+        std::vector<int> cpus;
+        bool ok = v.is_array() && !v.empty();
+        if (ok) {
+            for (const auto & c : v) {
+                if (c.is_number_integer() && c.get<long long>() >= 0 && c.get<long long>() < GGML_MAX_N_THREADS) cpus.push_back((int) c.get<long long>());
+                else { ok = false; break; }
+            }
+        }
+        if (ok) o.cpus = cpus; else bad("cpus");
+    }
+    auto choice = [&](const char * key, std::initializer_list<const char *> allowed, std::string & dst) {
+        if (!e.contains(key)) return;
+        const auto & v = e.at(key);
+        if (v.is_string()) {
+            for (const char * a : allowed) {
+                if (v.get<std::string>() == a) { dst = a; return; }
+            }
+        }
+        bad(key);
+    };
+    choice("flash_attn", {"auto", "on", "off"}, o.flash_attn);
+    choice("type_k", {"f16", "q8_0", "q4_0"}, o.type_k);
+    choice("type_v", {"f16", "q8_0", "q4_0"}, o.type_v);
+    if (e.contains("repack_weights")) {
+        if (e.at("repack_weights").is_boolean()) o.repack_weights = e.at("repack_weights").get<bool>() ? 1 : 0;
+        else bad("repack_weights");
+    }
+    return o;
+}
+
+static ggml_type kv_type(const std::string & n) { return n == "q8_0" ? GGML_TYPE_Q8_0 : n == "q4_0" ? GGML_TYPE_Q4_0 : GGML_TYPE_F16; }
+
 int cl_configure(const char * options_json) {
     try {
         auto j = common_json::parse(options_json ? options_json : "{}");
         std::lock_guard<std::mutex> lock(g_opt_mu);
+        // "engine" (test builds only, see cache_llama.h): an object replaces the whole engine setting, null clears it; left out keeps it.
+        if (j.contains("engine")) {
+            if (j.at("engine").is_object()) g_engine = parse_engine(j.at("engine"));
+            else if (j.at("engine").is_null()) g_engine = EngineOpts();
+            else cl_logi("engine option ignored (not an object)");
+        }
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
         return 0;
@@ -510,10 +584,21 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
+        EngineOpts eng;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
             h->prefix_dir = g_prefix_dir;
+            eng           = g_engine;
+        }
+        if (eng.repack_weights >= 0) repack_opt_in = eng.repack_weights == 1;
+        // The effective thread counts: the engine's, else the caller's or the automatic plan's (batch follows generation).
+        const int n_gen   = eng.n_threads > 0 ? eng.n_threads : n_threads;
+        const int n_batch_threads = eng.n_threads_batch > 0 ? eng.n_threads_batch : n_gen;
+        const std::vector<int> & pin = !eng.cpus.empty() ? eng.cpus : plan.cpus;
+        {
+            std::string kk = eng.type_k + "/" + eng.type_v;
+            if (eng.type_k != "f16" || eng.type_v != "f16" || eng.flash_attn != "auto") h->engine_key = kk + " fa=" + eng.flash_attn;
         }
         (void) repack_opt_in;
 #if defined(__ANDROID__)
@@ -547,8 +632,12 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = (uint32_t) n_ctx;
         cp.n_batch         = 512;
-        cp.n_threads       = n_threads;
-        cp.n_threads_batch = n_threads;
+        cp.n_threads       = n_gen;
+        cp.n_threads_batch = n_batch_threads;
+        cp.flash_attn_type = eng.flash_attn == "on" ? LLAMA_FLASH_ATTN_TYPE_ENABLED : eng.flash_attn == "off" ? LLAMA_FLASH_ATTN_TYPE_DISABLED : LLAMA_FLASH_ATTN_TYPE_AUTO;
+        cp.type_k          = kv_type(eng.type_k);
+        cp.type_v          = kv_type(eng.type_v);
+        if (eng.n_ubatch > 0) cp.n_ubatch = (uint32_t) eng.n_ubatch;
         h->ctx = llama_init_from_model(h->model, cp);
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
@@ -557,20 +646,28 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
 
-        if (!plan.cpus.empty()) {
+        if (!pin.empty()) {
             // A threadpool whose threads are each pinned to one of the chosen cores.
             ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
             auto * pool_new  = reg ? (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new") : nullptr;
             auto * pool_free = reg ? (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free") : nullptr;
             if (pool_new && pool_free) {
-                ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
-                for (int c : plan.cpus) tpp.cpumask[c] = true;
+                ggml_threadpool_params tpp = ggml_threadpool_params_default(n_gen);
+                for (int c : pin) tpp.cpumask[c] = true;
                 tpp.strict_cpu = true;
                 h->pool = pool_new(&tpp);
                 if (h->pool) {
                     h->pool_free = pool_free;
-                    llama_attach_threadpool(h->ctx, h->pool, nullptr);
+                    if (n_batch_threads != n_gen) {
+                        // prompt reading uses its own pinned pool when its thread count differs
+                        ggml_threadpool_params tpb = ggml_threadpool_params_default(n_batch_threads);
+                        for (int c : pin) tpb.cpumask[c] = true;
+                        tpb.strict_cpu = true;
+                        h->pool_batch = pool_new(&tpb);
+                        if (!h->pool_batch) cl_logi("cannot create the pinned batch threadpool: prompt reading uses the generation pool");
+                    }
+                    llama_attach_threadpool(h->ctx, h->pool, h->pool_batch);
                 } else {
                     cl_logi("cannot create the pinned threadpool: threads not pinned");
                 }
@@ -583,9 +680,21 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         if (!h->tmpls) {
             set_err(err, err_len, "model has no usable chat template");
             llama_free(h->ctx);
+            if (h->pool_batch) h->pool_free(h->pool_batch);
             if (h->pool) h->pool_free(h->pool);
             llama_model_free(h->model);
             return nullptr;
+        }
+        {
+            std::string cpu_list;
+            for (int c : pin) cpu_list += (cpu_list.empty() ? "" : ",") + std::to_string(c);
+            char line[384];
+            snprintf(line, sizeof(line), "engine: threads gen=%d batch=%d cpus=%s flash_attn=%s kv=%s/%s n_batch=%u n_ubatch=%u weights=%s (source: %s)",
+                     n_gen, n_batch_threads, cpu_list.empty() ? "none" : cpu_list.c_str(), eng.flash_attn.c_str(), eng.type_k.c_str(),
+                     eng.type_v.c_str(), (unsigned) cp.n_batch, (unsigned) llama_n_ubatch(h->ctx), h->weights.c_str(),
+                     eng.set ? "intent" : "default");
+            h->engine_line = line;
+            cl_logi("%s", line);
         }
         Handle * out = h.release();
         {
@@ -627,6 +736,7 @@ int cl_info(void * hp, char * out_json, int len) {
         j["engine_build"]   = engine_build();
         j["weights"]        = h->weights;
         j["weights_reason"] = h->weights_reason;
+        j["engine"]         = h->engine_line;
         return put(j.dump(), out_json, len);
     } catch (const std::exception &) {
         return -1;

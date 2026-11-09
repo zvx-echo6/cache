@@ -287,6 +287,22 @@ jobs:
           grep -q 'native library folder' "$RUNNER_TEMP/dl.log" || { echo "::error::the CPU backend was not loaded by cache_llama"; exit 1; }
           grep -q 'cl_embed_load failed' "$RUNNER_TEMP/dl.log" && { echo "::error::cl_embed_load failed"; exit 1; }
           [[ $(grep -c '^\[[0-9]\]' "$RUNNER_TEMP/dl.log") -eq 2 ]] || { echo "::error::not both texts were embedded"; exit 1; }
+      - name: Test (cl_configure: no engine object changes nothing, bad engine values are ignored)
+        run: |
+          out="$RUNNER_TEMP/dl/out"
+          cd "$RUNNER_TEMP/dl/exe"
+          LD_LIBRARY_PATH="$out" ./cl_test --configure > "$RUNNER_TEMP/cfg.out" 2> "$RUNNER_TEMP/cfg.err"
+          cat "$RUNNER_TEMP/cfg.out" "$RUNNER_TEMP/cfg.err"
+          grep -q 'FAIL' "$RUNNER_TEMP/cfg.out" && { echo "::error::a cl_configure check failed"; exit 1; }
+          [[ $(grep -c 'PASS' "$RUNNER_TEMP/cfg.out") -eq 5 ]] || { echo "::error::not all cl_configure checks ran"; exit 1; }
+          # nothing about the engine is logged before the engine object arrives (so with none, the defaults stand untouched)
+          seg() { awk -v a="$1" -v b="$2" '$0 ~ a {on=1; next} $0 ~ b {on=0} on' "$RUNNER_TEMP/cfg.err"; }
+          [[ -z "$(awk '/MARK after-no-engine/ {exit} {print}' "$RUNNER_TEMP/cfg.err")" ]] || { echo "::error::cl_configure without an engine object logged something"; exit 1; }
+          [[ -z "$(seg 'MARK after-no-engine' 'MARK after-good-engine')" ]] || { echo "::error::a good engine object logged a rejection"; exit 1; }
+          bad="$(seg 'MARK after-good-engine' 'MARK after-bad-engine')"
+          for k in n_threads n_threads_batch cpus flash_attn type_k type_v n_ubatch repack_weights; do
+            grep -q "ignored (bad value): $k\$" <<< "$bad" || { echo "::error::bad engine key $k was not ignored and logged"; exit 1; }
+          done
 
   libzim-core-linux:
     strategy:

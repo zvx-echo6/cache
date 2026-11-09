@@ -12,6 +12,7 @@ import 'files.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/bench_engine.dart';
 import 'platform/memory.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
@@ -340,6 +341,7 @@ class AppState extends ChangeNotifier {
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
+      if (info.engine != null) logInfo(info.engine!);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -389,7 +391,9 @@ class AppState extends ChangeNotifier {
         // Without a folder the model loads without the saved prefix.
       }
     }
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
+    // Only a test APK's launch intent can give an engine object (null everywhere else: nothing changes).
+    final engine = kIsWeb ? null : await benchEngineConfig();
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, engine: engine);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.

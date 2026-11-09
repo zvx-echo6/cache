@@ -1,5 +1,6 @@
 // Command line test for the Cache native layer. Uses only the C API in cache_llama.h.
 // Usage: cl_test <model.gguf> [n_threads]
+//        cl_test --configure   (no model: cl_configure with and without an "engine" object, prints what it logged)
 //        cl_test --embed <embedding-model.gguf> "text one" "text two" ...
 #include "cache_llama.h"
 
@@ -135,7 +136,28 @@ static int embed_main(int argc, char ** argv) {
     return 0;
 }
 
+// cl_configure needs no model: with no engine object it logs nothing about the engine, and an engine object with bad values is
+// accepted (return 0) with each bad key logged as ignored. The checks read this process's stderr in the workflow.
+static int configure_main() {
+    int fails = 0;
+    auto check = [&](const char * name, const char * json, int want) {
+        int r = cl_configure(json);
+        printf("CONFIGURE %s: returned %d (want %d): %s\n", name, r, want, r == want ? "PASS" : "FAIL");
+        fails += r != want;
+    };
+    check("no engine object", "{\"prefix_dir\":\"\",\"repack_weights\":false}", 0);
+    fprintf(stderr, "MARK after-no-engine\n");
+    check("good engine object", "{\"engine\":{\"n_threads\":4,\"n_threads_batch\":5,\"cpus\":[4,5],\"flash_attn\":\"on\",\"type_k\":\"q8_0\",\"type_v\":\"q4_0\",\"n_ubatch\":256,\"repack_weights\":false}}", 0);
+    fprintf(stderr, "MARK after-good-engine\n");
+    check("bad engine values", "{\"engine\":{\"n_threads\":0,\"n_threads_batch\":\"x\",\"cpus\":[-1],\"flash_attn\":\"maybe\",\"type_k\":\"q5_0\",\"type_v\":7,\"n_ubatch\":-3,\"repack_weights\":\"yes\"}}", 0);
+    fprintf(stderr, "MARK after-bad-engine\n");
+    check("engine cleared", "{\"engine\":null}", 0);
+    check("not JSON", "{", -1);
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char ** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--configure") return configure_main();
     if (argc >= 2 && std::string(argv[1]) == "--embed") return embed_main(argc, argv);
     if (argc < 2) { fprintf(stderr, "usage: cl_test <model.gguf> [n_threads]\n"); return 2; }
     int threads = argc > 2 ? atoi(argv[2]) : 4;

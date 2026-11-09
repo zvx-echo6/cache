@@ -24,6 +24,8 @@ android {
         val testApk = (project.findProperty("cacheTestApk") as String?) == "true"
         applicationId = if (testApk) "com.happylittlellc.cache.test" else "com.happylittlellc.cache"
         manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
+        // Only the test APK reads the "cache_engine" launch extra (BenchEngine.kt, MainActivity.kt); a release build never does.
+        buildConfigField("boolean", "CACHE_TEST_APK", testApk.toString())
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
@@ -65,6 +67,10 @@ android {
         release {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
+    }
+
+    buildFeatures {
+        buildConfig = true  // BuildConfig.CACHE_TEST_APK
     }
 
     // The car screen's JVM tests (src/test, Robolectric): android-car.yml runs them in CI.

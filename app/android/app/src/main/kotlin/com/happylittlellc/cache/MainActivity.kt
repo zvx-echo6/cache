@@ -137,6 +137,14 @@ class MainActivity : FlutterActivity() {
         }
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
+        // The engine settings a test APK was launched with (lib/platform/bench_engine.dart). Always null in any other build.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "engineConfig" -> result.success(benchEngineExtra(BuildConfig.CACHE_TEST_APK) { intent?.getStringExtra(BENCH_ENGINE_EXTRA) })
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -144,6 +152,12 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    // A new launch intent while the app runs (adb am start): only the test APK takes it, so that a later model load reads its extra.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (BuildConfig.CACHE_TEST_APK) setIntent(intent)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -155,6 +169,7 @@ class MainActivity : FlutterActivity() {
         // The engine can outlive this activity while the car screen uses it: let go of the handlers that need the activity.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
