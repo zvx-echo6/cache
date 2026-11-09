@@ -745,7 +745,7 @@ class BrowseState extends ChangeNotifier {
 
 Future<Uint8List?> _fetchIcon(Uri url) async {
   try {
-    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15)));
+    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15), scope: FetchScope.user));
   } catch (_) {
     return null;
   }

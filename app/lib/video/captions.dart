@@ -71,7 +71,7 @@ class CaptionTrack {
   Future<List<Cue>> load() async {
     // A caption file is small (at most 5 MB): read at once, so the first cue is there when playback starts.
     if (path != null) return parseCues(File(path!).readAsStringSync());
-    if (url != null) return parseCues(await fetchText(Uri.parse(url!), httpsOnly: false));
+    if (url != null) return parseCues(await fetchText(Uri.parse(url!), httpsOnly: false, scope: FetchScope.video));
     return const [];
   }
 }
