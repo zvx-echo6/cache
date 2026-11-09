@@ -169,6 +169,42 @@ class CarSessionTest {
     }
 
     @Test
+    fun theCarStartsCacheWithNoPhoneActivitySavedPlacesComeFromDartAndThePositionServiceRuns() {
+        // No Flutter engine and no MainActivity: Dart answers through the test seam, after a moment as a cold start would.
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app).grantPermissions(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            if (method == "saved") {
+                android.os.Handler(Looper.getMainLooper()).postDelayed({
+                    done(listOf(mapOf("id" to "place:42.6,-113.7", "name" to "Twin Falls Public Library", "address" to "", "lat" to 42.6, "lon" to -113.7, "distanceM" to 11700.0)))
+                }, 2000)
+            } else {
+                done(null)
+            }
+        }
+        val c = start()
+        val home = screens.top as HomeScreen
+        assertTrue(((templateOf(home) as MapWithContentTemplate).contentTemplate as ListTemplate).isLoading)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3))
+        val list = ((templateOf(home) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!
+        assertEquals(1, list.items.size)
+        assertTrue("saved" in asked)
+        val started = shadowOf(app).nextStartedService
+        assertEquals(CarLocationService::class.java.name, started.component!!.className)
+        c.moveToState(Lifecycle.State.DESTROYED)
+        assertEquals(CarLocationService::class.java.name, shadowOf(app).nextStoppedService.component!!.className)
+    }
+
+    @Test
+    fun withoutLocationPermissionNoPositionServiceStarts() {
+        CarLink.dartForTests = { _, _, done -> done(null) }
+        start()
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+    }
+
+    @Test
     fun aListenerThatFailsDoesNotStopTheOthers() {
         var heard = 0
         CarLink.addListener(object : CarLink.Listener {

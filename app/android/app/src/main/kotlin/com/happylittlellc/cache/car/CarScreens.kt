@@ -86,6 +86,7 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
                 return@call
             }
             places = CarPlace.list(r)
+            android.util.Log.i("CacheCar", "saved places for the car: ${places?.size}")
             invalidate()
         }
     }

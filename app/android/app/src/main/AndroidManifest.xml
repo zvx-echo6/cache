@@ -62,6 +62,11 @@
                 <category android:name="androidx.car.app.category.NAVIGATION"/>
             </intent-filter>
         </service>
+        <!-- The position while the car screen is attached and the phone is locked (car/CarLocationService.kt). -->
+        <service
+            android:name=".car.CarLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location"/>
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc"/>

@@ -76,8 +76,15 @@ object CarLink {
         if (dartReady) channel?.invokeMethod("connected", mapOf("on" to on))
     }
 
+    /** For the tests: answers in place of Dart (a car session with no Flutter engine). */
+    internal var dartForTests: ((method: String, args: Any?, done: (Any?) -> Unit) -> Unit)? = null
+
     /** Asks Dart; [done] gets the answer, or null when Dart is not there yet or failed. */
     fun call(method: String, args: Any? = null, done: (Any?) -> Unit = {}) {
+        dartForTests?.let { fake ->
+            main.post { fake(method, args, done) }
+            return
+        }
         val ch = channel
         if (ch == null || !dartReady) {
             main.post { done(null) }
@@ -155,6 +162,7 @@ object CarLink {
         dartReady = false
         channel = null
         audio = null
+        dartForTests = null
     }
 
     const val EMPTY_GEOJSON = "{\"type\":\"FeatureCollection\",\"features\":[]}"

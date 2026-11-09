@@ -11,6 +11,7 @@ import '../maps/ui/map_assets.dart';
 import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
 import '../nav/speaker.dart';
+import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
 import 'car_trip.dart';
@@ -255,8 +256,10 @@ class CarBridge {
   Future<List<MapPlace>> savedPlaces() async {
     try {
       final saved = await nav.backend.savedPlaces();
+      logInfo('Car: ${saved.length} saved places');
       return [for (final s in saved) _savedPlace(s)];
-    } catch (_) {
+    } catch (e, st) {
+      logError('Car: saved places could not be read', error: e, stack: st);
       return const [];
     }
   }

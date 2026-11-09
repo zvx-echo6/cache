@@ -104,6 +104,8 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         })
         CarLink.addListener(this)
         CarLink.setCarConnected(true)
+        // The position keeps coming with the phone locked and the phone app closed (the normal way to use Android Auto).
+        CarLocationService.start(carContext)
     }
 
     override fun onCreateScreen(intent: Intent): Screen {
@@ -201,6 +203,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         audio?.release()
         CarLink.audio = null
         renderer.release()
+        CarLocationService.stop(carContext)
         SharedEngine.carEnded()
     }
 
