@@ -195,7 +195,7 @@ mod tests {
             kept_reason: None,
             psnr_min: Some(41.5),
         });
-        a.ocr = Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12 });
+        a.ocr = Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12, confidence: None });
         m.insert("a".to_string(), a);
         m.insert("b".to_string(), BookFacts::new("Stone", None));
         m

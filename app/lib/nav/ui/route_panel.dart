@@ -71,10 +71,13 @@ class DirectionsHeader extends StatelessWidget {
 
 /// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// The chosen route's elevation (RouteElevationSummary), under the routes; null leaves it out.
+  final Widget? elevation;
 
   /// The most the panel may take (the map's side column); null: the choices take up to half the window, as a bottom panel.
   final double? maxHeight;
@@ -208,6 +211,7 @@ class RoutePanel extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: 8),
                           child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
                         ),
+                      if (nav.routes.isNotEmpty && elevation != null) elevation!,
                       if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
                     ],
                   ],

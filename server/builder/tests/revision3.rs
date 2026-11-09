@@ -104,7 +104,7 @@ fn a_revision_4_pack_round_trips_and_revision_2_and_3_packs_still_load() {
     {
         let b = pack.header.book.as_mut().unwrap();
         b.suggested = Some(suggestion("440", "Water", "classifier"));
-        b.ocr = Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12 });
+        b.ocr = Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12, confidence: None });
     }
     let bytes = pack_bytes(&pack).unwrap();
     assert_eq!(read_pack_bytes(&bytes).unwrap(), pack, "a revision 4 pack reads back equal");
@@ -235,7 +235,7 @@ fn the_cli_pdf_command_writes_the_book_block() {
     assert_eq!((h.title.as_str(), h.source.blake3.as_str()), ("How Water Moves", hash.as_str()));
     let b = h.book.expect("book");
     assert_eq!((b.title.as_str(), b.source_title.as_deref(), b.original_blake3.as_str()), ("How Water Moves", Some("Water cycle"), original.as_str()));
-    assert_eq!(b.ocr, Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12 }));
+    assert_eq!(b.ocr, Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12, confidence: None }));
     let sg = b.suggested.expect("suggested from the label");
     assert_eq!((sg.div.as_str(), sg.label.as_str(), sg.source.as_str(), sg.second_div.as_deref(), sg.score), ("440", "Canning", "label", Some("450"), None));
 
@@ -246,7 +246,7 @@ fn the_cli_pdf_command_writes_the_book_block() {
     let out = cli().arg("pdf").arg(pdf_path.as_path()).arg("--out").arg(keyed.as_path()).args(["--fake-embedder", "--in-process", "--created-at", STAMP, "--ocr-json"]).arg(side.as_path()).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let b = read_header(&keyed.join(format!("{hash}@1.cdoc"))).unwrap().book.unwrap();
-    assert_eq!(b.ocr, Some(OcrInfo { engine: "tesseract".into(), version: "5.5".into(), pages_ocrd: 3 }));
+    assert_eq!(b.ocr, Some(OcrInfo { engine: "tesseract".into(), version: "5.5".into(), pages_ocrd: 3, confidence: None }));
     assert_eq!(b.original_blake3, original);
 
     // --ocr-engine without --ocr-version is refused
@@ -787,7 +787,7 @@ fn a_compression_outcome_and_ocr_travel_in_the_view_when_the_caller_has_them() {
         kept_reason: None,
         psnr_min: Some(41.5),
     };
-    let ocr = OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 7 };
+    let ocr = OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 7, confidence: None };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("lib");
     write_library(&out, &library_opts(), [doc("with", Some(outcome), Some(ocr)), doc("without", None, None)]).unwrap();

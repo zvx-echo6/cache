@@ -145,7 +145,7 @@ the book afterwards (where it is shelved, its call number, a new title, hiding i
 | `source_title` | The title before a caller's title or a titles file replaced it, `null` when it was not replaced. |
 | `original_blake3` | BLAKE3 (hex) of the file **as it arrived**. This is the book's identity, even if the stored file was compressed (`source.blake3` is then the stored file's hash) or the text came from an OCR copy that is never shipped. |
 | `compression` | What compression did, as the build record has it (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`), or `null`. |
-| `ocr` | `{engine, version, pages_ocrd}`: the text came from OCR (`pages_ocrd` is how many pages it read), or `null`. |
+| `ocr` | `{engine, version, pages_ocrd, confidence?}`: the text came from OCR (`pages_ocrd` is how many pages it read; `confidence` is the mean of the confidences the engine gave, 0 to 1, written only when it gave any), or `null`. |
 | `suggested` | `{div, label, score, classifier_version, source, second_div}` or `null`. `source` is `classifier` or `label` (readers refuse other values). `score`, `classifier_version` and `second_div` are `null` when unknown (a label has no score). It is a suggestion, not a shelf: the shelf is the latest `place` in the log. |
 | `author` | Optional. Who wrote the book: a string of 1 to 200 characters. |
 | `edition` | Optional. The edition, for example `"7th edition"`: a string of 1 to 60 characters. |
@@ -168,7 +168,7 @@ Every other key of `book` is always written (`null` when unknown). `cache-build 
 
 ## Pages in, pack out (`pages.json`)
 
-There is one pack writer (`cache_builder::pagewriter::build_pack_from_pages`). It takes the text of a document page by page and
+There is one pack writer (`cache_pack::pagewriter::build_pack_from_pages`, in packages/cache_pack; `cache_builder::pagewriter` re-exports it). It takes the text of a document page by page and
 makes the pack with the shared chunker (`cache_chunk`); it reads no PDF and has no MuPDF dependency, so the core can call it
 later. **Any OCR engine's output, a phone's text extractor and `cache-build pdf` all enter here**, so the same pages give the
 same passages wherever they were made. `cache-build pdf` reads the PDF with MuPDF, lays it out, converts what the layout step
@@ -210,6 +210,8 @@ same fact flags as `pdf` (`--doc-version`, `--title`, `--https`, `--created-at`,
 and `--layout-version N` (only when the producer laid the pages out with a layout version of its own). A page marked
 `"text_source": "ocr"` needs the OCR record (`book.ocr`); `pages_ocrd` defaults to the number of such pages.
 `cache-build pages <in.pdf> --out pages.json` writes the pages the layout step makes of a PDF (for debugging and the equality test).
+
+The Add PDF job in the core (packages/cache_ingest, API in its INGEST-API.md) makes its packs with the same writer, one `body` block per paragraph of each page's text. It records `pdfium` as the pack's extractor where `cache-build pdf` records `mupdf`; that is the only intended difference between a pack made on a phone and one made on Linux from the same PDF.
 
 ## Layout version
 

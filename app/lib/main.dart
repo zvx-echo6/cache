@@ -39,6 +39,7 @@ import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'nav/demo_backend.dart';
+import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
@@ -663,6 +664,8 @@ class _CacheAppState extends State<CacheApp> {
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
+  // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
+  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
   CacheThemeId _applied = CacheThemeId.dark;
 
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
@@ -693,6 +696,7 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
+    _guidanceAwake;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(
@@ -950,6 +954,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     browse.dispose();
     _car?.dispose();
+    _guidanceAwake.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
     sources.removeListener(_kickIndexing);

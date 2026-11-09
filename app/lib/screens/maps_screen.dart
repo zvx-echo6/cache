@@ -22,6 +22,12 @@ import '../maps/ui/map_widgets.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
+import '../nav/elevation/route_elevation.dart';
+import '../nav/guidance_camera.dart';
+import '../nav/overview/overview_camera.dart';
+import '../nav/overview/route_overview.dart';
+import '../nav/ui/elevation_dock.dart';
+import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
 import '../notebook/notebook_map.dart';
 import '../notebook/notebook_model.dart';
@@ -42,7 +48,13 @@ import '../theme.dart';
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter});
+
+  /// The route's elevation profile; null: worked out from the layer engine's elevation tiles (tests give their own).
+  final RouteElevation? elevation;
+
+  /// Renders the whole-route picture; null: the app's native snapshotter (tests give their own).
+  final RouteSnapshotter? snapshotter;
 
   /// "Open in notebook" on a repeater's card: its list notebook at its row; null leaves the button out.
   final void Function(Repeater repeater)? onOpenRepeaterList;
@@ -94,6 +106,37 @@ class _MapsScreenState extends State<MapsScreen> {
   double? _lastHeading;
   Offset? _downAt;
 
+  /// The map's size on the screen (for where the position sits while guiding).
+  Size _mapSize = Size.zero;
+
+  // ---- guidance: the elevation panel and the route mini map ----
+
+  late final RouteElevation _elevation = widget.elevation ?? RouteElevation(loader: tileServerElevationLoader(maps.engine));
+  RouteSnapshotter get _snapshotter => widget.snapshotter ?? const ChannelRouteSnapshotter();
+
+  /// The style the live map has (the whole-route picture is rendered from it).
+  String? _styleJson;
+
+  /// Swapped: the whole-route picture fills the screen and the live map is the small one in the corner.
+  bool _swapped = false;
+
+  /// The whole-route pictures: the corner's, and the full screen's (made the first time it is swapped), with what they were made
+  /// for (route, theme and style, size, pixel ratio).
+  OverviewPicture? _insetPicture;
+  OverviewPicture? _fullPicture;
+  String? _insetFor;
+  String? _fullFor;
+
+  /// The position for the dot on the picture; it follows every fix, and the picture draws it by the distance rule.
+  final ValueNotifier<({double lat, double lon, double? heading})?> _overviewPosition = ValueNotifier(null);
+
+  final GlobalKey _stackKey = GlobalKey();
+  final GlobalKey _insetKey = GlobalKey();
+
+  /// Where the corner inset is in the screen's stack (the live map goes there while swapped), and the stack's size.
+  Rect? _insetRect;
+  Size _stackSize = Size.zero;
+
   /// Drawing an area to download as a region.
   bool _drawing = false;
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
@@ -117,6 +160,7 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.notebooks?.addListener(_notebooksChanged);
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
+    _elevation.addListener(_onElevation);
     _lifecycle;
     // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
     // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
@@ -133,6 +177,7 @@ class _MapsScreenState extends State<MapsScreen> {
       if (c == null) _zoom = 14;
     }
     if (fix != null || c != null) nav.setMapCentre(_lat, _lon);
+    if (fix != null) _overviewPosition.value = (lat: fix.lat, lon: fix.lon, heading: fix.heading);
     // A draw asked for before this screen was first built (the Regions sheet opened from Home) starts it now.
     if (maps.drawRequest) {
       maps.clearDrawRequest();
@@ -157,6 +202,11 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.notebooks?.removeListener(_notebooksChanged);
     widget.userLayers?.removeListener(_pushUser);
     widget.userLayers?.selectedRepeater.removeListener(_onRepeater);
+    _elevation.removeListener(_onElevation);
+    if (widget.elevation == null) _elevation.dispose();
+    _overviewPosition.dispose();
+    _insetPicture?.image.dispose();
+    _fullPicture?.image.dispose();
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
@@ -179,6 +229,7 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     setState(() {
       _initialStyle = json;
+      _styleJson = json;
       _appliedKey = key;
     });
   }
@@ -208,6 +259,7 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     _appliedKey = key;
     _styleReady = false;
+    _styleJson = json;
     await c.setStyle(json);
   }
 
@@ -293,6 +345,8 @@ class _MapsScreenState extends State<MapsScreen> {
   void _onLocation() {
     if (!mounted) return;
     _pushPosition();
+    final f = location.fix;
+    _overviewPosition.value = f == null ? null : (lat: f.lat, lon: f.lon, heading: f.heading ?? _lastHeading);
     final fix = location.fix;
     if (fix != null && maps.follow != FollowMode.free) _followTo(fix);
     setState(() {});
@@ -335,10 +389,19 @@ class _MapsScreenState extends State<MapsScreen> {
     // While guiding and standing still the map keeps pointing along the route.
     final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
     final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
+    final zoom = math.max(_zoom, guiding ? 16 : 14).toDouble();
+    var target = LatLng(fix.lat, fix.lon);
+    // Guiding heading-up, the position sits low on the map so more of the road ahead shows (lib/nav/guidance_camera.dart).
+    if (guiding && maps.follow == FollowMode.headingUp && !_mapSize.isEmpty && mounted) {
+      final side = MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null && !_swapped;
+      final anchor = guidanceAnchor(_mapSize, side: side, leftInset: MediaQuery.paddingOf(context).left);
+      final (lat, lon) = cameraCentreFor(fix.lat, fix.lon, bearing: bearing, zoom: zoom, map: _mapSize, anchor: anchor);
+      target = LatLng(lat, lon);
+    }
     await c.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(fix.lat, fix.lon),
-        zoom: math.max(_zoom, guiding ? 16 : 14),
+        target: target,
+        zoom: zoom,
         bearing: bearing,
       )),
       duration: Duration(milliseconds: guiding ? 900 : 400),
@@ -363,6 +426,11 @@ class _MapsScreenState extends State<MapsScreen> {
   void _onNav() {
     if (!mounted) return;
     _pushNav();
+    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    if (!nav.guiding || nav.arrived) {
+      _swapped = false;
+      if (!nav.guiding) _elevation.setOpen(false);
+    }
     final r = nav.route;
     // A new set of routes: show all of the chosen one.
     if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
@@ -875,6 +943,164 @@ class _MapsScreenState extends State<MapsScreen> {
     );
   }
 
+  // ---- guidance: elevation and the route mini map ------------------------------------------------------
+
+  void _onElevation() {
+    if (mounted) setState(() {});
+  }
+
+  /// A phone (upright or sideways), as opposed to a tablet or a computer.
+  bool get _phone => MediaQuery.sizeOf(context).shortestSide < 600;
+
+  /// The corner inset shows while guiding (on phones and tablets; car screens have their own), and hides while the elevation
+  /// panel is pulled up on a phone.
+  bool get _insetOn => nav.guiding && !nav.arrived && nav.route != null;
+  bool get _insetHidden => _elevation.open && _phone;
+
+  /// The inset's side: 112 on a phone upright, 96 sideways, 160 on a tablet or a computer.
+  double get _insetSide {
+    final size = MediaQuery.sizeOf(context);
+    if (!_phone) return 160;
+    return size.width > size.height ? 96 : 112;
+  }
+
+  /// Tap on the inset: the whole-route picture and the live close-up change places.
+  void _toggleSwap() {
+    setState(() => _swapped = !_swapped);
+    // The live map changed size: put the position where it belongs on it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final f = location.fix;
+      if (mounted && f != null && maps.follow != FollowMode.free) _followTo(f);
+    });
+  }
+
+  /// The padding of the full-screen picture: the route stays clear of the banner, the card and the buttons.
+  EdgeInsets _fullPadding(Size size) {
+    final pad = MediaQuery.paddingOf(context);
+    if (size.width >= kSideCardWidth) return EdgeInsets.fromLTRB(pad.left + kMapSideWidth + 40, pad.top + 72, pad.right + 76, pad.bottom + 72);
+    return EdgeInsets.fromLTRB(32, pad.top + 150, 32, pad.bottom + 210);
+  }
+
+  /// Makes the whole-route pictures that are missing or out of date (another route, theme, style, size or pixel ratio). The live
+  /// map is not involved: the native snapshotter renders offscreen.
+  void _ensurePictures(Size stack) {
+    final r = nav.route;
+    final style = _styleJson;
+    if (!_insetOn || r == null || style == null || r.points.length < 2) return;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    final side = _insetSide - 4; // inside the 2-point border
+    final b = r.bounds;
+    final insetFor = '${r.routeId}|$_key|$side|$ratio';
+    if (_insetFor != insetFor) {
+      _insetFor = insetFor;
+      final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: Size(side, side), padding: const EdgeInsets.fromLTRB(14, 16, 14, 16));
+      unawaited(_render(style, r, cam, ratio, full: false, sig: insetFor));
+    }
+    if (_swapped && !stack.isEmpty) {
+      final fullFor = '${r.routeId}|$_key|${stack.width.round()}x${stack.height.round()}|$ratio';
+      if (_fullFor != fullFor) {
+        _fullFor = fullFor;
+        final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: stack, padding: _fullPadding(stack));
+        unawaited(_render(style, r, cam, ratio, full: true, sig: fullFor));
+      }
+    }
+  }
+
+  Future<void> _render(String style, MapRoute r, OverviewCamera cam, double ratio, {required bool full, required String sig}) async {
+    OverviewPicture? pic;
+    try {
+      pic = await _snapshotter.render(styleJson: overviewStyleJson(style, r), camera: cam, pixelRatio: ratio);
+    } catch (_) {
+      pic = null;
+    }
+    if (!mounted || (full ? _fullFor : _insetFor) != sig) {
+      pic?.image.dispose();
+      return;
+    }
+    // Not made (no native snapshotter here, or it failed): the land colour and the dot show, and it is tried again when the route,
+    // the theme or the size changes.
+    if (pic == null) return;
+    setState(() {
+      if (full) {
+        _fullPicture?.image.dispose();
+        _fullPicture = pic;
+      } else {
+        _insetPicture?.image.dispose();
+        _insetPicture = pic;
+      }
+    });
+  }
+
+  /// Reads where the inset sits after a layout (the live map is moved there while swapped).
+  void _measureInset() {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = _insetKey.currentContext?.findRenderObject() as RenderBox?;
+    Rect? rect;
+    if (stack != null && stack.hasSize) _stackSize = stack.size;
+    if (stack != null && box != null && box.hasSize && stack.hasSize) {
+      final o = box.localToGlobal(Offset.zero, ancestor: stack);
+      rect = o & box.size;
+    }
+    if (rect != _insetRect && mounted) setState(() => _insetRect = rect);
+  }
+
+  /// The corner inset: in its normal state the whole-route picture with the dot; swapped, the frame the live map shows through.
+  /// A tap swaps them (the only gesture: the live map in the corner does not pan or zoom).
+  Widget _inset(BuildContext context) {
+    final k = context.t;
+    final side = _insetSide;
+    return Semantics(
+      button: true,
+      label: _swapped ? 'Swap to the close-up' : 'Swap to the whole route',
+      child: GestureDetector(
+        key: const ValueKey('route-inset'),
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleSwap,
+        child: SizedBox(
+          key: _insetKey,
+          width: side,
+          height: side,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: k.surface, width: 2),
+              boxShadow: _swapped ? null : const [BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 2))],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (!_swapped) RouteOverview(key: const ValueKey('route-overview-inset'), picture: _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const []),
+                  Positioned(
+                    left: 5,
+                    top: 5,
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(color: k.surface, shape: BoxShape.circle, boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 3, offset: Offset(0, 1))]),
+                      child: Icon(Icons.open_in_full, size: 14, color: k.text),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The scale bar's latitude and zoom: the picture's while it fills the screen, else the live map's.
+  (double, double) get _scaleView {
+    final full = _swapped && _insetOn ? _fullPicture ?? _insetPicture : null;
+    if (full == null) return (_lat, _zoom);
+    final size = _stackSize;
+    final cam = full.camera;
+    final cover = size.isEmpty ? 1.0 : math.max(size.width / cam.size.width, size.height / cam.size.height);
+    return (cam.lat, cam.zoom + math.log(cover) / math.ln2);
+  }
+
   // ---- build --------------------------------------------------------------------------------------------
 
   void _copy(String text) {
@@ -934,36 +1160,73 @@ class _MapsScreenState extends State<MapsScreen> {
     final fix = location.fix;
     final follow = maps.follow;
     final drawing = _drawing;
+    final inset = _insetOn && !drawing && _measure == null;
+    final swapped = inset && _swapped;
+    if (inset) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _measureInset();
+        _ensurePictures(_stackSize);
+      });
+    }
+    // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
+    // but not drawn.
+    final corner = swapped ? _insetRect?.deflate(2) : null;
+    final hideLive = swapped && (_insetHidden || corner == null);
     return Stack(
+      key: _stackKey,
       children: [
-        Positioned.fill(
-          child: Listener(
-            // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
-            onPointerDown: (e) => _downAt = e.position,
-            onPointerMove: (e) {
-              final d = _downAt;
-              if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
-                maps.setFollow(FollowMode.free);
-              }
-            },
-            child: MapLibreMap(
-              styleString: style,
-              initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
-              onMapCreated: _onMapCreated,
-              onStyleLoadedCallback: _onStyleLoaded,
-              onCameraMove: _onCameraMove,
-              onCameraIdle: _onCameraIdle,
-              onMapClick: _onMapTap,
-              onMapLongClick: _onMapLongPress,
-              trackCameraPosition: true,
-              compassEnabled: false,
-              tiltGesturesEnabled: false,
-              logoEnabled: false,
-              // Credits are shown by the app (below), so the SDK's own button is moved out of sight.
-              attributionButtonMargins: const math.Point(-200, -200),
-              myLocationEnabled: false,
-              rotateGesturesEnabled: true,
-            ),
+        if (swapped)
+          Positioned.fill(
+            key: const ValueKey('route-overview-full'),
+            child: RouteOverview(picture: _fullPicture ?? _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const [], dotScale: 1.6),
+          ),
+        Positioned(
+          key: const ValueKey('live-map'),
+          left: corner?.left ?? 0,
+          top: corner?.top ?? 0,
+          right: corner == null ? 0 : null,
+          bottom: corner == null ? 0 : null,
+          width: corner?.width,
+          height: corner?.height,
+          child: Visibility(
+            visible: !hideLive,
+            maintainState: true,
+            child: ClipRRect(
+            borderRadius: BorderRadius.circular(corner == null ? 0 : 16),
+            clipBehavior: corner == null ? Clip.none : Clip.antiAlias,
+            child: LayoutBuilder(builder: (context, box) {
+            _mapSize = box.biggest;
+              return Listener(
+              // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
+              onPointerDown: (e) => _downAt = e.position,
+              onPointerMove: (e) {
+                final d = _downAt;
+                if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
+                  maps.setFollow(FollowMode.free);
+                }
+              },
+              child: MapLibreMap(
+                styleString: style,
+                initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
+                onMapCreated: _onMapCreated,
+                onStyleLoadedCallback: _onStyleLoaded,
+                onCameraMove: _onCameraMove,
+                onCameraIdle: _onCameraIdle,
+                onMapClick: _onMapTap,
+                onMapLongClick: _onMapLongPress,
+                trackCameraPosition: true,
+                compassEnabled: false,
+                tiltGesturesEnabled: false,
+                logoEnabled: false,
+                // Credits are shown by the app (below), so the SDK's own button is moved out of sight.
+                attributionButtonMargins: const math.Point(-200, -200),
+                myLocationEnabled: false,
+                rotateGesturesEnabled: true,
+              ),
+            );
+          }),
+          ),
           ),
         ),
         if (!drawing && maps.baseProblem != null)
@@ -1072,8 +1335,10 @@ class _MapsScreenState extends State<MapsScreen> {
   /// [maxHeight]: the room in the map's side column, which the card or the way to go fills before it scrolls.
   Widget? _panel(bool searching, {double? maxHeight}) {
     final sel = nav.selected;
-    if (nav.guiding) return GuidanceBar(nav: nav, fmt: nav.fmt);
-    if (nav.phase == NavPhase.previewing) return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight);
+    if (nav.guiding) return GuidanceDock(nav: nav, elevation: _elevation, palette: _palette);
+    if (nav.phase == NavPhase.previewing) {
+      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette));
+    }
     if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight);
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;
@@ -1141,11 +1406,24 @@ class _MapsScreenState extends State<MapsScreen> {
                     Center(child: NoticePill(text: maps.notice!)),
                     const SizedBox(height: 8),
                   ],
-                  if (!searching) ...[
-                    ScaleBarWidget(lat: _lat, zoom: _zoom),
-                    const SizedBox(height: 6),
-                    AttributionChip(lines: maps.attributions, onTap: _showCredits),
-                  ],
+                  if (!searching)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2),
+                              const SizedBox(height: 6),
+                              AttributionChip(lines: maps.attributions, onTap: _showCredits),
+                            ],
+                          ),
+                        ),
+                        if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -1188,7 +1466,8 @@ class _MapsScreenState extends State<MapsScreen> {
         padding: EdgeInsets.fromLTRB(12, 0, 12, panel == null ? 8 : 0),
         child: SafeArea(
           top: false,
-          bottom: panel == null,
+          // The guidance card sits above the home indicator (the card itself has no empty strip at its foot).
+          bottom: panel == null || nav.guiding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1198,10 +1477,24 @@ class _MapsScreenState extends State<MapsScreen> {
                 const SizedBox(height: 8),
               ],
               if (!searching) ...[
-                ScaleBarWidget(lat: _lat, zoom: _zoom),
-                const SizedBox(height: 6),
-                AttributionChip(lines: maps.attributions, onTap: _showCredits),
-                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2),
+                          const SizedBox(height: 6),
+                          AttributionChip(lines: maps.attributions, onTap: _showCredits),
+                        ],
+                      ),
+                    ),
+                    if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                  ],
+                ),
+                const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)
               if (panel != null && !searching)

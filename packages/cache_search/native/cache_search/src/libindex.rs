@@ -310,3 +310,57 @@ pub fn build_library_index(
     progress(meta.total, meta.total);
     Ok(Outcome::Done)
 }
+
+/// One point to add to a finished device index.
+pub struct IndexDoc {
+    pub point_id: String,
+    pub title: String,
+    pub body: String,
+    pub source_type: String,
+}
+
+/// What [`append_documents`] found in the index folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appended {
+    /// The documents were added and committed.
+    Yes,
+    /// There is no device index in the folder (the library has none yet): nothing to add to.
+    NoIndex,
+    /// The folder holds an index that is not finished (or of another format): it cannot be extended and must be built again.
+    Unfinished,
+}
+
+/// Adds points to the finished device index in `dir` (the Add PDF job: a new book). A point already in the index is replaced
+/// (deleted by its id first), so adding the same book twice leaves one copy of each passage. The index is not searched meanwhile:
+/// the caller owns the folder (the job works on a copy and swaps it in).
+pub fn append_documents(dir: &Path, docs: &[IndexDoc]) -> Result<Appended> {
+    let Some(m) = read_meta(dir) else { return Ok(Appended::NoIndex) };
+    if m.index_format != LIB_INDEX_FORMAT || m.state != "done" || !dir.join("meta.json").exists() {
+        return Ok(Appended::Unfinished);
+    }
+    let index = tv(Index::open_in_dir(dir))?;
+    index.tokenizers().register(ANALYZER, make_analyzer(&m.tokenizer));
+    let f = fields_of(&index)?;
+    let mut cp = Checkpoint::from_index(&index);
+    let mut writer = tv(index.writer_with_num_threads::<TantivyDocument>(1, 15_000_000))?;
+    for d in docs {
+        writer.delete_term(tantivy::Term::from_field_text(f.point_id, &d.point_id));
+        tv(writer.add_document(doc!(
+            f.point_id => d.point_id.clone(),
+            f.title => d.title.clone(),
+            f.body => cap_bytes(&d.body, MAX_BODY_BYTES),
+            f.source_type => d.source_type.clone()
+        )))?;
+    }
+    cp.scrolled += docs.len() as u64;
+    cp.indexed += docs.len() as u64;
+    cp.finished = true;
+    commit(&mut writer, &cp)?;
+    tv(writer.wait_merging_threads())?;
+    let mut meta = m;
+    meta.total += docs.len() as u64;
+    meta.next_entry = cp.scrolled;
+    write_meta(dir, &meta)?;
+    Ok(Appended::Yes)
+}
+

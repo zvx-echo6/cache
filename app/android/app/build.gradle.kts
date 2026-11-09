@@ -92,12 +92,16 @@ tasks.configureEach {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // Android Auto (approved 2026-11-08): the Android for Cars App Library, stable 1.7.0, and its Android Auto part.
+    // The whole-route picture during guidance (RouteSnapshot.kt) uses MapLibre's offscreen map snapshotter. This is the same
+    // artifact, at the same version, that the maplibre_gl plugin already brings in, so no new code ships; tools/check_maplibre_pin.py
+    // (run by the Tests workflow) fails if the two ever differ. The plugin leaves out the Vulkan "android-sdk" for the same reason.
+    implementation("org.maplibre.gl:android-sdk-opengl:13.5.0") {
+        exclude(group = "org.maplibre.gl", module = "android-sdk")
+    }
+    // Android Auto (approved 2026-11-08): the Android for Cars App Library, stable 1.7.0, and its Android Auto part. The car map
+    // (car/CarMapRenderer.kt) draws with the MapLibre artifact above.
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.car.app:app-projected:1.7.0")
-    // The car map draws with MapLibre Native Android: exactly the version the maplibre_gl plugin already ships in the app
-    // (0.27.1 uses org.maplibre.gl:android-sdk-opengl:13.5.0), declared here only so the app's own code compiles against it.
-    implementation("org.maplibre.gl:android-sdk-opengl:13.5.0")
 
     // Tests only, never in the APK (android-car.yml checks the release classpath): approved 2026-11-08.
     testImplementation("junit:junit:4.13.2")

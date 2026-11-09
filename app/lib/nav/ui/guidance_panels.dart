@@ -69,10 +69,12 @@ class GuidanceBanner extends StatelessWidget {
       key: const ValueKey('guidance-banner'),
       decoration: BoxDecoration(
         color: k.surface,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 8, offset: Offset(0, 2))],
       ),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      // Compact, so more of the map shows: how far and the turn on one line. The type stays large enough to read from the
+      // dashboard and grows with the phone's text size. Solid surface and text colours, so it holds its contrast in sunlight.
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       child: body,
     );
   }
@@ -93,23 +95,48 @@ class GuidanceBanner extends StatelessWidget {
 
   Widget _row(BuildContext context, {required IconData icon, required String big, required String small, String? then}) {
     final k = context.t;
+    return _layout(
+      context,
+      icon: Icon(icon, size: 26, color: k.accent),
+      tint: k.accent,
+      big: big,
+      small: small,
+      then: then,
+    );
+  }
+
+  /// The icon, then "0.4 mi · Turn left onto Road 1" on one line (on two only when the street's name is long), then the small
+  /// "Then ..." line.
+  Widget _layout(BuildContext context, {required Widget icon, required Color tint, required String big, required String small, String? then, Key? key}) {
+    final k = context.t;
+    final text = small.endsWith('.') ? small.substring(0, small.length - 1) : small;
     return Row(
+      key: key,
       children: [
         Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(color: k.accent.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(14)),
-          child: Icon(icon, size: 36, color: k.accent),
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(color: tint.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(12)),
+          child: icon,
         ),
-        const SizedBox(width: 14),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(big, key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
-              if (small.isNotEmpty) Text(small, key: const ValueKey('banner-instruction'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, height: 1.2, color: k.text)),
-              if (then != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(then, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, color: k.secondary))),
+              Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: big, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  if (text.isNotEmpty) TextSpan(text: ' · $text', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w400)),
+                ]),
+                key: const ValueKey('banner-distance'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(height: 1.15, color: k.text),
+              ),
+              if (then != null && then.isNotEmpty)
+                Text(then, key: const ValueKey('banner-then'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.2, color: k.secondary)),
             ],
           ),
         ),
@@ -131,38 +158,28 @@ class GuidanceBanner extends StatelessWidget {
       ?climb,
       if (leg.gradeClass != null && leg.gradeClass != 'flat') leg.gradeClass!.replaceAll('_', ' '),
     ];
-    return Row(
+    return _layout(
+      context,
       key: const ValueKey('banner-offroad'),
-      children: [
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(color: k.warning.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
-          child: Transform.rotate(angle: angle, child: Icon(Icons.navigation, size: 36, color: k.warning)),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(fmt.distance(leg.distanceM), key: const ValueKey('banner-distance'), style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, height: 1.1, color: k.text)),
-              Text('Head ${leg.cardinal} · ${leg.bearingDeg}°', key: const ValueKey('banner-instruction'), style: TextStyle(fontSize: 18, color: k.text)),
-              if (info.isNotEmpty) Text(info.join(' · '), style: TextStyle(fontSize: 15, color: k.secondary)),
-            ],
-          ),
-        ),
-      ],
+      icon: Transform.rotate(angle: angle, child: Icon(Icons.navigation, size: 26, color: k.warning)),
+      tint: k.warning,
+      big: fmt.distance(leg.distanceM),
+      small: 'Head ${leg.cardinal} · ${leg.bearingDeg}°',
+      then: info.isEmpty ? null : info.join(' · '),
     );
   }
 }
 
 /// The strip at the bottom while guiding: arrival time, time and distance left, the voice switch, and End.
 class GuidanceBar extends StatelessWidget {
-  const GuidanceBar({super.key, required this.nav, required this.fmt});
+  const GuidanceBar({super.key, required this.nav, required this.fmt, this.bare = false});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// Inside the guidance card (GuidanceDock in elevation_dock.dart), which draws the card: no background of its own and no top
+  /// padding (the elevation handle is above it).
+  final bool bare;
 
   @override
   Widget build(BuildContext context) {
@@ -186,11 +203,11 @@ class GuidanceBar extends StatelessWidget {
         );
     return Container(
       key: const ValueKey('guidance-bar'),
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-      child: SafeArea(
-        top: false,
-        child: nav.arrived
+      decoration: bare ? null : mapPanel(context, radius: 20, alpha: 0.98),
+      // The screen's bottom inset (the home indicator) is kept below the card by the Maps screen, not inside it as an empty strip.
+      // Inside the guidance card the elevation handle is above, so no top padding.
+      padding: EdgeInsets.fromLTRB(8, bare ? 0 : 4, 8, 4),
+      child: nav.arrived
             ? Row(
                 children: [
                   const SizedBox(width: 8),
@@ -223,7 +240,6 @@ class GuidanceBar extends StatelessWidget {
                   ),
                 ],
               ),
-      ),
     );
   }
 }
