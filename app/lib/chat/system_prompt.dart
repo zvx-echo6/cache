@@ -36,7 +36,7 @@ String buildSystemPrompt({
     'For small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.',
     // Keep changing context after the reusable instructions.
     'Current local date: ${weekdays[now.weekday - 1]}, $date (UTC${utcOffset(now)}).',
-    "Tools that take a place use the phone's current location when you leave the place out; don't ask the person where they are unless a tool says the location is not known.",
+    "Tools use the phone's location when you leave the place out; ask where the person is only if a tool says the location is unknown.",
     if (voice) kVoiceLine,
   ].join('\n');
 }

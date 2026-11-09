@@ -85,14 +85,14 @@
  },
  {
   "file": "system-date-loc-text.txt",
-  "bytes": 1051,
-  "sha256": "4a2331af187236f70c040c992db83f6f939e05190221eaa92e80b4a99dbc3004",
+  "bytes": 1012,
+  "sha256": "6b9fe73ad4ad91b80f4fbbbc6e3115638d94c3b932d30ed9d2cde6d0428668c0",
   "what": "build 48 candidate c2 prompt (build 47 compact wording and date line, one fixed location line), now=2026-10-29T14:30:00-06:00, voice=False; same text for location known or not; harness-askperf prompt_app.py system_c2"
  },
  {
   "file": "system-date-noloc-voice.txt",
-  "bytes": 1270,
-  "sha256": "f7df6e6d3ddbb32e72fe769d998eabb8a8051736bd4bad12a21da9dac9994deb",
+  "bytes": 1231,
+  "sha256": "e106c645050f4c746e125caeedd07c43e3ecacdc087fecb18784627a85f09ccb",
   "what": "build 48 candidate c2 prompt (build 47 compact wording and date line, one fixed location line), now=2026-10-29T14:30:00-06:00, voice=True; same text for location known or not; harness-askperf prompt_app.py system_c2"
  },
  {

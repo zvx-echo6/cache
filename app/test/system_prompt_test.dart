@@ -39,7 +39,9 @@ void main() {
     },
   );
 
-  test('date and location remain fresh after the reusable instructions', () {
+  test('date changes after the reusable instructions; the text is the same whether the location is known or not', () {
+    const locationLine =
+        "Tools use the phone's location when you leave the place out; ask where the person is only if a tool says the location is unknown.";
     final first = buildSystemPrompt(
       now: DateTime(2026, 10, 26, 9, 5),
       locationKnown: true,
@@ -53,8 +55,16 @@ void main() {
     expect(prefix.length, greaterThan(first.length * .75));
     expect(next, contains('Tuesday, 2026-10-27 (UTC'));
     expect(next, isNot(contains('10:06')));
-    expect(next, contains("The phone's current location is not known."));
     expect(next, isNot(contains('Monday, 2026-10-26')));
+    expect(first, contains(locationLine));
+    expect(next, contains(locationLine));
+    final day = DateTime(2026, 10, 27, 10, 6);
+    for (final voice in [false, true]) {
+      expect(
+        buildSystemPrompt(now: day, locationKnown: true, voice: voice),
+        buildSystemPrompt(now: day, locationKnown: false, voice: voice),
+      );
+    }
   });
 
   test('the same day gives the same bytes at any time of day, so the prompt start is reused all day', () {
