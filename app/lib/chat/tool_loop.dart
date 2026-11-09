@@ -12,6 +12,7 @@ import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_call_text.dart';
 import '../platform/app_log.dart';
+import '../platform/ask_diagnostics.dart';
 
 /// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
 const String kSystemPrompt =
@@ -244,18 +245,23 @@ class ToolLoop {
             'system_chars=${prompt.length}, tools_chars=${jsonEncode(request['tools'] ?? const []).length}, '
             'thinking_requested=$enableThinking, tool_calls_off=${request['tool_choice'] == 'none'}');
         PartialMessage? last;
-        await for (final p in backend.generate(request)) {
-          last = p;
-          if (p.isFinal) break;
-          if (p.hasToolCalls) {
-            yield TurnUpdate(phase: TurnPhase.searching, text: _clean(p.content), activeTool: p.toolCalls.first.name);
-          } else if (p.content.isNotEmpty) {
-            final text = _clean(p.content);
-            if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
-            yield TurnUpdate(phase: TurnPhase.answering, text: text);
-          } else {
-            yield const TurnUpdate(phase: TurnPhase.thinking);
+        final diagnostics = AskDiagnostics.start(requestNumber);
+        try {
+          await for (final p in backend.generate(request)) {
+            last = p;
+            if (p.isFinal) break;
+            if (p.hasToolCalls) {
+              yield TurnUpdate(phase: TurnPhase.searching, text: _clean(p.content), activeTool: p.toolCalls.first.name);
+            } else if (p.content.isNotEmpty) {
+              final text = _clean(p.content);
+              if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
+              yield TurnUpdate(phase: TurnPhase.answering, text: text);
+            } else {
+              yield const TurnUpdate(phase: TurnPhase.thinking);
+            }
           }
+        } finally {
+          diagnostics?.stop();
         }
         if (last == null || !last.isFinal) {
           throw StateError('The model stopped without an answer');

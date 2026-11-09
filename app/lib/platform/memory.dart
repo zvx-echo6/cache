@@ -3,29 +3,61 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2,346 MB, swap 2,163 MB"; "memory
-/// unknown" where the system does not say. For the log, to see what the model and the index work take.
+/// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2346 MB (anon 1200 MB, file
+/// 1146 MB), swap 2163 MB"; "memory unknown" where the system does not say. iOS gives its last native reading (phys_footprint
+/// and resident size). For the log, to see what the model and the index work take.
 MemoryReading? _lastAppleMemory;
 
 String memoryNow() {
   try {
     if (Platform.isIOS) return _lastAppleMemory?.diagnostics ?? 'memory not read yet';
     if (!(Platform.isAndroid || Platform.isLinux)) return 'memory unknown';
-    final status = File('/proc/self/status').readAsLinesSync();
-    int? kb(String key) {
-      for (final l in status) {
-        if (l.startsWith('$key:')) return int.tryParse(l.substring(key.length + 1).trim().split(RegExp(r'\s+')).first);
-      }
-      return null;
-    }
-
-    final rss = kb('VmRSS');
-    final swap = kb('VmSwap');
-    if (rss == null) return 'memory unknown';
-    return 'RSS ${rss ~/ 1024} MB${swap == null ? '' : ', swap ${swap ~/ 1024} MB'}';
+    return procStatusSummary(File('/proc/self/status').readAsStringSync());
   } catch (_) {
     return 'memory unknown';
   }
+}
+
+/// The log text for a /proc/self/status [source]: RSS with its anonymous (RssAnon) and file-backed (RssFile) parts, and swap.
+String procStatusSummary(String source) {
+  final c = procMemoryCounters(source);
+  final rss = c['VmRSS_kb'];
+  if (rss == null) return 'memory unknown';
+  final anon = c['RssAnon_kb'], file = c['RssFile_kb'], swap = c['VmSwap_kb'];
+  final parts = [if (anon != null) 'anon ${anon ~/ 1024} MB', if (file != null) 'file ${file ~/ 1024} MB'];
+  return 'RSS ${rss ~/ 1024} MB${parts.isEmpty ? '' : ' (${parts.join(', ')})'}${swap == null ? '' : ', swap ${swap ~/ 1024} MB'}';
+}
+
+/// The memory counters of /proc/self/status or /proc/meminfo [source], in the kernel's kB, keyed "<name>_kb"; only these
+/// names are taken, and a line whose value is not a number is left out.
+Map<String, int> procMemoryCounters(String source) {
+  const keys = {'VmRSS', 'VmSwap', 'RssAnon', 'RssFile', 'MemAvailable', 'SwapFree'};
+  final values = <String, int>{};
+  for (final line in source.split('\n')) {
+    final colon = line.indexOf(':');
+    if (colon < 0) continue;
+    final key = line.substring(0, colon);
+    if (!keys.contains(key)) continue;
+    final number = int.tryParse(line.substring(colon + 1).trim().split(RegExp(r'\s+')).first);
+    if (number != null) values['${key}_kb'] = number;
+  }
+  return values;
+}
+
+/// Fault and CPU counters of /proc/self/stat [source]. Fields after the parenthesized command start at field 3; CPU is in
+/// raw ticks.
+Map<String, int> procProcessCounters(String source) {
+  final end = source.lastIndexOf(')');
+  if (end < 0) return {};
+  final fields = source.substring(end + 1).trim().split(RegExp(r'\s+'));
+  final result = <String, int>{};
+  for (final field in const {10: 'minor_faults', 12: 'major_faults', 14: 'user_ticks', 15: 'system_ticks'}.entries) {
+    final index = field.key - 3;
+    if (index >= fields.length) continue;
+    final value = int.tryParse(fields[index]);
+    if (value != null) result[field.value] = value;
+  }
+  return result;
 }
 
 /// The device's memory as the system tells it: what is free now ([avail], what apps can still get without the system killing
