@@ -10,6 +10,7 @@ import '../settings/space.dart';
 import 'caption_search.dart';
 import 'format.dart';
 import 'token_store.dart';
+import '../platform.dart' as plat;
 import 'video_prefs.dart';
 
 /// What a person is told when a video call fails.
@@ -151,11 +152,17 @@ class VideoState extends ChangeNotifier {
   static CsNative _defaultNative() => FfiCsNative.open();
 
   Future<void> init() async {
+    if (plat.isWeb) {
+      // Videos are saved into a folder on the phone; there is none in a browser.
+      unavailable = 'Videos are not available on this device';
+      notifyListeners();
+      return;
+    }
     final Directory dir;
     if (dirOverride != null) {
       dir = dirOverride!;
     } else {
-      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
+      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
       dir = Directory('${base.path}/videos');
     }
     this.dir = dir;

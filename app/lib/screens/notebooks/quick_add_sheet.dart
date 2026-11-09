@@ -23,6 +23,7 @@ Future<void> showQuickAdd(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
     showDragHandle: true,
     builder: (ctx) => QuickAddSheet(notebook: notebook, log: log, places: places, entry: entry, now: now ?? DateTime.now, messenger: messenger),
   );
@@ -140,10 +141,16 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
     final k = context.t;
     final now = widget.now();
     final when = _when;
+    // The fields scroll; Save stays under them, always in view (a phone held sideways, the keyboard open).
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 16 + MediaQuery.viewInsetsOf(context).bottom),
-        child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -198,19 +205,22 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
               ),
               if (_error != null)
                 Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: TextStyle(color: k.emergency))),
-              const SizedBox(height: 12),
-              FilledButton(
-                key: const ValueKey('quick-save'),
-                onPressed: _saving ? null : _save,
-                child: Text(_error == null ? 'Save' : 'Try again'),
-              ),
-              if (widget.entry == null && _last != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text('Values start from your last entry. Change nothing and tap Save.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: k.secondary)),
-                ),
             ],
           ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              key: const ValueKey('quick-save'),
+              onPressed: _saving ? null : _save,
+              child: Text(_error == null ? 'Save' : 'Try again'),
+            ),
+            if (widget.entry == null && _last != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('Values start from your last entry. Change nothing and tap Save.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: k.secondary)),
+              ),
+          ],
         ),
       ),
     );

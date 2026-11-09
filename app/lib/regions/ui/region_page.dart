@@ -135,8 +135,8 @@ class RegionPage extends StatelessWidget {
           ),
           body: SafeArea(
             top: false,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+            child: LayoutBuilder(builder: (context, cts) => ListView(
+              padding: ContentWidth.padFor(cts.maxWidth, min: 12).copyWith(top: 8, bottom: 24),
               children: [
                 if (l.phase != RegionPhase.ready) ...[
                   Padding(
@@ -224,7 +224,7 @@ class RegionPage extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
+            )),
           ),
         );
       },

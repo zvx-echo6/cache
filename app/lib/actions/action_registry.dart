@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'action_def.dart';
+import '../platform/app_log.dart';
 
 /// Runs one action with its fields as the core resolved them and returns the module's result JSON. Throws [ActionFailure].
 typedef ActionHandler = Future<Map<String, dynamic>> Function(Map<String, dynamic> fields);
@@ -67,7 +68,7 @@ class ActionRegistry extends ChangeNotifier {
     try {
       return f(fields, summary);
     } catch (e) {
-      debugPrint('cache actions: card lines of $action failed ($e)');
+      logError('Actions: card lines failed', error: e, detail: action);
       return null;
     }
   }
@@ -101,7 +102,7 @@ class ActionRegistry extends ChangeNotifier {
     }
     _rejected = [..._rejected.where((r) => r.module != module), ...rejected];
     for (final r in rejected) {
-      debugPrint('cache actions: $r');
+      logDetail('Actions: $r');
     }
     notifyListeners();
     return rejected;

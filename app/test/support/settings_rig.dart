@@ -220,12 +220,13 @@ class SettingsRig {
       position: () => r.here,
       regions: () => r.regionList,
       fetch: r.web.fetch,
+      ownFetch: r.web.tryFetch,
       clock: () => r.clock,
     );
     r.sharing = SharingState(
       policy: r.policy,
       supportDir: () async => r.dir,
-      kinds: [DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': Directory('${r.dir.path}/Shared')}, inStorage: false)],
+      kinds: [DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': r.modelsDir})],
       opener: (_) async => r.sync,
     );
     r.hub = SettingsHub(

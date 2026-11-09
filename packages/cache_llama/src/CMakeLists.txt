@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(CACHE_LLAMA_TEST_CLI "Build the cl_test command line test" OFF)
+option(CACHE_LLAMA_GEMMA4_PREFILL_OPT "Test the isolated Gemma 4 prefill optimization" OFF)
 # Desktop/server x86_64 only (not Android): let ggml use AVX2/FMA/F16C. Off = baseline x86-64, runs anywhere, slower.
 option(CACHE_LLAMA_X86_AVX2 "Enable AVX2/FMA/F16C on non-Android x86_64 builds" OFF)
 
@@ -59,6 +60,42 @@ endif()
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp" llama.cpp)
 
+# Use a checked source overlay instead of changing the engine pin or its working tree.
+if (CACHE_LLAMA_GEMMA4_PREFILL_OPT)
+  set(_gemma_base "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/src/models/gemma4.cpp")
+  file(READ "${_gemma_base}" _gemma_base_text)
+  string(REPLACE "\r\n" "\n" _gemma_base_text "${_gemma_base_text}")
+  string(SHA256 _gemma_base_hash "${_gemma_base_text}")
+  if (NOT _gemma_base_hash STREQUAL "247d458f93ddace3091141d7d7e4da0c0b589bc843e5737d3b39f804eb889339")
+    message(FATAL_ERROR "Gemma 4 overlay needs review: the pinned base file changed")
+  endif()
+  set(_gemma_overlay "${CMAKE_CURRENT_BINARY_DIR}/cache-gemma4-prefill/gemma4.cpp")
+  configure_file("${CMAKE_CURRENT_LIST_DIR}/../patches/gemma4-prefill/gemma4.cpp"
+                 "${_gemma_overlay}" COPYONLY)
+  get_target_property(_llama_source_dir llama SOURCE_DIR)
+  get_target_property(_llama_sources llama SOURCES)
+  set(_llama_patched_sources "")
+  set(_gemma_replaced 0)
+  foreach (_source IN LISTS _llama_sources)
+    get_filename_component(_source_abs "${_source}" ABSOLUTE BASE_DIR "${_llama_source_dir}")
+    get_filename_component(_base_abs "${_gemma_base}" ABSOLUTE)
+    if (_source_abs STREQUAL _base_abs)
+      math(EXPR _gemma_replaced "${_gemma_replaced} + 1")
+    else()
+      list(APPEND _llama_patched_sources "${_source}")
+    endif()
+  endforeach()
+  if (NOT _gemma_replaced EQUAL 1)
+    message(FATAL_ERROR "Expected exactly one Gemma 4 graph source in the llama target")
+  endif()
+  list(APPEND _llama_patched_sources "${_gemma_overlay}")
+  set_property(TARGET llama PROPERTY SOURCES "${_llama_patched_sources}")
+  set_source_files_properties("${_gemma_overlay}" TARGET_DIRECTORY llama PROPERTIES
+    INCLUDE_DIRECTORIES "${_llama_source_dir};${_llama_source_dir}/models")
+  message(STATUS "Cache engine: cache-gemma4-prefill-31356")
+endif()
+
+
 if (CACHE_LLAMA_BACKEND_DL)
   # Keep only the armv8.x CPU variants. On the Pixel 8 (Tensor G3) the SVE2 variant (armv9.*) read
   # prompts at about half the speed of armv8.6_1, and ggml prefers it because it scores higher.
@@ -76,6 +113,9 @@ else()
   add_library(cache_llama SHARED cache_llama.cpp)
 endif()
 target_link_libraries(cache_llama PRIVATE llama llama-common)
+if (CACHE_LLAMA_GEMMA4_PREFILL_OPT)
+  target_compile_definitions(cache_llama PRIVATE CACHE_GEMMA4_PREFILL_OPT=1)
+endif()
 # common/ does not export its include path, so add it (chat.h, common.h, sampling.h, json.h ...)
 target_include_directories(cache_llama PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}"
@@ -107,4 +147,11 @@ if (CACHE_LLAMA_TEST_CLI)
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
   target_link_libraries(cl_cases PRIVATE cache_llama)
+
+  # Prompt reuse timing (saved prefix, tool_choice "none" rounds): C API + the vendored JSON library.
+  add_executable(cl_prefix "${CMAKE_CURRENT_LIST_DIR}/../test/cl_prefix.cpp")
+  target_include_directories(cl_prefix PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
+  target_link_libraries(cl_prefix PRIVATE cache_llama)
 endif()

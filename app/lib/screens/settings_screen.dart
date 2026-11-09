@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../discover/discover_state.dart';
+import '../discover/ui/wizard.dart' show openSetupAgain;
+import '../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
+import '../search/index_overview.dart';
+
 import '../nav/units.dart';
 import '../layout/adaptive.dart';
 import '../theme.dart';
 import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
-import '../version.dart';
 import '../video/format.dart';
-import 'settings/about_pages.dart';
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
@@ -18,7 +21,8 @@ import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings/widgets.dart';
 
-/// Settings: eight rows, only things that can be changed, each with its state in one line and opening one page.
+/// Settings: only things that can be changed, each row with its state in one line and opening one page. What's new and Credits
+/// and licences are in Library > Cache Documentation (1.1: each has one home).
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.deps});
 
@@ -30,7 +34,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingsDeps get d => widget.deps;
-  late final Future<String> _version = installedVersion();
 
   @override
   void initState() {
@@ -52,6 +55,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return joinParts([
       if (app.loading != null)
         const [Part('Loading…')]
+      else if (app.active == null && modelDownloadLine() != null)
+        [Part(modelDownloadLine()!)]
       else if (app.active == null)
         const [Part('Choose a model', Tone.warn)]
       else
@@ -64,7 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Part> _maps() {
     if (d.maps.engine.problem != null) return const [Part('Not available', Tone.warn)];
     final names = [for (final r in d.hub.regions?.local ?? const []) r.name];
-    final units = unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale) == UnitSystem.imperial ? 'miles' : 'kilometres';
+    final units = unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale) == UnitSystem.imperial ? 'miles' : 'kilometers';
     return joinParts([
       [Part(names.isEmpty ? 'No regions yet' : names.join(', '))],
       [Part(units)],
@@ -133,7 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions, ?ModelDownloads.shared]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
@@ -182,7 +187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'Sharing and sync',
                       status: _sharing(sharing),
                       selected: isPaneSelected(context, 'settings-sharing'),
-                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing)),
+                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing, settingsSync: d.hub.settingsSync)),
                     ),
                   ),
                 SettingsRow(
@@ -193,32 +198,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   selected: isPaneSelected(context, 'settings-appearance'),
                   onTap: () => _open(context, 'settings-appearance', AppearancePage(app: d.app)),
                 ),
-                FutureBuilder<String>(
-                  future: _version,
-                  initialData: kAppVersion,
-                  builder: (context, snap) => SettingsRow(
-                    key: const ValueKey('settings-credits'),
-                    icon: Icons.info_outline,
-                    title: 'Credits and licences',
-                    status: [Part('${snap.data ?? kAppVersion} · $kAppLicenceShort')],
-                    selected: isPaneSelected(context, 'settings-credits'),
-                  onTap: () => _open(context, 'settings-credits', const AboutPage()),
-                  ),
-                ),
               ],
             ),
-            // One quiet line while search indexes are being made or sealed for sync.
+            // The setup wizard again, with what is chosen now picked (Discover's first-run wizard).
+            if (DiscoverState.shared case final discover?)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: SettingsGroup(
+                  rows: [
+                    SettingsRow(
+                      key: const ValueKey('settings-setup-again'),
+                      icon: Icons.restart_alt,
+                      title: 'Run setup again',
+                      status: const [Part('Your place, activities and a linked device')],
+                      onTap: () => openSetupAgain(context, discover),
+                    ),
+                  ],
+                ),
+              ),
+            // While search indexes are being made or sealed for sync: the same progress bar as at the top of the Library.
             if (d.hub.indexing case final indexing?)
-              ListenableBuilder(
-                listenable: indexing,
-                builder: (context, _) {
-                  final line = indexing.line;
-                  if (line == null) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
-                    child: Text(line, key: const ValueKey('index-status'), style: TextStyle(fontSize: 12, color: context.t.secondary)),
-                  );
-                },
+              Padding(
+                key: const ValueKey('index-status'),
+                padding: const EdgeInsets.only(top: 12),
+                child: IndexOverviewLine(scheduler: indexing),
               ),
           ],
         ),

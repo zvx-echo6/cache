@@ -20,6 +20,8 @@ pub struct UserCfg {
 #[derive(Default)]
 pub struct Ext {
     pub user: Option<UserStore>,
+    /// The user.sqlite of [`Ext::user`], for a live fetch on a thread of its own (`cs_live_fetch_start`).
+    pub user_db: Option<String>,
     /// The user's map layers and imported repeater lists, in the same user.sqlite (`cs_userlayer*`).
     pub map_data: Option<std::sync::Arc<cache_user::mapdata::MapStore>>,
     /// The same store as the tools see it: `nearby` (repeater and layer categories), `navigate` and `locate` (layer points).
@@ -121,6 +123,7 @@ impl crate::handle::Handle {
     ) {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
+            self.ext.user_db = Some(u.db_path.clone());
             self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
             let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
             *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
@@ -347,6 +350,25 @@ impl Ext {
         self.live()?.fetch_with(req, self.places(), source.as_deref().and_then(|s| s.geocoder())).map_err(live_err)
     }
 
+    /// `cs_live_fetch_start`: `cs_live_fetch` on a thread of its own, as a job whose "result" is what `cs_live_fetch` answers (a
+    /// failed fetch makes it `failed` with the same error). The download's network wait never holds the core's worker, so a
+    /// search, a read or the Weather screen's stored data are answered meanwhile, and several sources download at once.
+    /// `not_configured` (no job) without a "live" section.
+    pub fn live_fetch_job(&self, req: &str) -> Result<crate::job::Job> {
+        let live = Live::new(self.live()?.cfg.clone());
+        let (user_db, slot, req) = (self.user_db.clone(), self.places.clone(), req.to_string());
+        crate::job::Job::spawn_result("cs-live-fetch", move |_cancelled| {
+            let user = user_db.as_deref().map(UserStore::new);
+            let places: &dyn cache_tool::SavedPlaces = match &user {
+                Some(u) => u,
+                None => &cache_tool::NoSavedPlaces,
+            };
+            let source = slot.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let out = live.fetch_with(&req, places, source.as_deref().and_then(|s| s.geocoder())).map_err(live_err)?;
+            Ok(serde_json::from_str(&out)?)
+        })
+    }
+
     pub fn live_get(&self, req: &str) -> Result<String> {
         self.live()?.get(req, self.places()).map_err(live_err)
     }
@@ -406,6 +428,7 @@ impl Ext {
             TileOut::Tile { bytes, mime, .. } => Ok(Some((bytes, mime))),
             TileOut::Empty => Ok(None),
             TileOut::Miss => Err(Error::not_found("this tile is not on the device and there is no connection")),
+            TileOut::Busy => Err(Error::busy("the tile's source is busy; ask again")),
             TileOut::NeedsConnection => Err(Error::new(ErrorCode::Offline, "this layer needs a connection")),
         }
     }

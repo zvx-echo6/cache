@@ -2,9 +2,10 @@
 //! symbols (a linker version script), so dependencies' `#[no_mangle]` symbols stay private. Other targets
 //! (macOS, Windows, wasm) use different linkers with other mechanisms and are not handled here.
 //!
-//! Cargo feature `xapian` (default): on Windows, Android and iOS, compile the C++ shim `../zimx` over the official prebuilt
+//! Cargo feature `xapian` (default): on Windows, Android, iOS and Linux, compile the C++ shim `../zimx` over the official prebuilt
 //! libzim (its built-in Xapian full-text index) and link it; the `zimx` cfg is set when that happened. On any other
-//! target the feature does nothing. (iOS also builds the shim, over the headers of Kiwix's CoreKiwix.xcframework.) The prebuilt libzim is found through the environment variable `LIBZIM_DIR`: the
+//! target the feature does nothing. On Linux the prebuilt is `fetch-libzim-linux.sh` (glibc build, ICU and Xapian inside
+//! `libzim.so.9`, which must sit next to the core: the cdylib gets RPATH `$ORIGIN`). (iOS also builds the shim, over the headers of Kiwix's CoreKiwix.xcframework.) The prebuilt libzim is found through the environment variable `LIBZIM_DIR`: the
 //! folder `native/zimx/fetch-libzim.ps1` (Windows) or `fetch-libzim.sh` (Android) unpacks, holding `include/`, `lib/`
 //! and, on Windows, `bin/` (zim-9.dll and the ICU DLLs, copied next to the built binaries).
 
@@ -20,7 +21,7 @@ fn main() {
         println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={dir}/cache_search.map");
         println!("cargo:rustc-cdylib-link-arg=-Wl,--exclude-libs,ALL");
     }
-    if std::env::var_os("CARGO_FEATURE_XAPIAN").is_some() && (os == "windows" || os == "android" || os == "ios") {
+    if std::env::var_os("CARGO_FEATURE_XAPIAN").is_some() && (os == "windows" || os == "android" || os == "ios" || os == "linux") {
         build_zimx(&os);
     }
 }
@@ -34,7 +35,7 @@ fn build_zimx(os: &str) {
     let Some(dir) = std::env::var_os("LIBZIM_DIR").map(PathBuf::from) else {
         panic!(
             "the `xapian` feature needs the official prebuilt libzim: run native/zimx/fetch-libzim.ps1 (Windows) or \
-             fetch-libzim.sh (Android), set LIBZIM_DIR to the folder it prints, or build with --no-default-features"
+             fetch-libzim.sh (Android) or fetch-libzim-linux.sh (Linux), set LIBZIM_DIR to the folder it prints, or build with --no-default-features"
         );
     };
     // iOS: LIBZIM_DIR is the ios-arm64 slice of Kiwix's CoreKiwix.xcframework (merged.a + Headers/), see fetch-libzim-ios.sh.
@@ -61,6 +62,24 @@ fn build_zimx(os: &str) {
         println!("cargo:rustc-link-search=native={}", lib.display());
         println!("cargo:rustc-link-lib=dylib=zim");
         copy_dlls(&dir.join("bin"));
+    } else if os == "linux" {
+        // Linux: the official prebuilt keeps libzim.so in one folder under lib/ named after the build machine's triple
+        // (x86_64-linux-gnu, aarch64-rpi3-linux-gnu), so take the one that holds it. libzim.so.9 carries ICU (with its data) and
+        // Xapian and needs only libc and libstdc++, but it must be found at run time: the cdylib gets RPATH $ORIGIN (put
+        // libzim.so.9 next to libcache_search.so), the test executables the unpacked libzim folder, so they run without LD_LIBRARY_PATH.
+        let lib = dir.join("lib");
+        let found = std::fs::read_dir(&lib)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.join("libzim.so").exists())
+            .or_else(|| lib.join("libzim.so").exists().then(|| lib.clone()));
+        let Some(libdir) = found else { panic!("LIBZIM_DIR={}: no libzim.so under lib/", dir.display()) };
+        println!("cargo:rustc-link-search=native={}", libdir.display());
+        println!("cargo:rustc-link-lib=dylib=zim");
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-rpath,$ORIGIN");
+        println!("cargo:rustc-link-arg-tests=-Wl,-rpath,{}", libdir.display());
     } else {
         // Android: the official prebuilt keeps one folder per ABI under lib/. libzim.so needs libc++_shared.so from the
         // NDK next to it in the app (see DESIGN.md); not exercised by the Windows-first work.

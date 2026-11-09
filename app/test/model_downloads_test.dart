@@ -123,6 +123,20 @@ void main() {
   ModelDownloads downloads() =>
       ModelDownloads(app: app, policy: DataPolicy(settings: settings, probe: probe), hub: HfHub(base: fake.base));
 
+  test('while a chat model downloads, Settings names it as Models does, with its share done', () {
+    final d = downloads();
+    ModelDownloads.shared = d;
+    addTearDown(() => ModelDownloads.shared = null);
+    expect(modelDownloadLine(), isNull, reason: 'nothing downloading');
+    d
+      ..current = const HfFile(repo: 'acme/e2b-GGUF', path: 'e2b-stock-cache-1.0-Q6_K.gguf', size: 100)
+      ..done = 40
+      ..total = 100;
+    expect(modelDownloadLine(), 'Downloading e2b-stock-cache-1.0-Q6_K · 40%', reason: 'no list: the file name without .gguf');
+    d.nameOf = (f) => f.fileName == 'e2b-stock-cache-1.0-Q6_K.gguf' ? 'Gemma 4 E2B (Cache)' : f.fileName;
+    expect(modelDownloadLine(), 'Downloading Gemma 4 E2B (Cache) · 40%');
+  });
+
   test('search lists GGUF repositories, leaving out private ones, and marks gated ones', () async {
     final r = await HfHub(base: fake.base).search('tiny');
     expect(r.map((m) => m.id), ['acme/tiny-GGUF', 'acme/locked-GGUF']);
@@ -240,5 +254,8 @@ void main() {
     expect(ModelFit.of(5 * gb, 8 * gb), ModelFit.tight);
     expect(ModelFit.of(7 * gb, 8 * gb), ModelFit.tooBig);
     expect(ModelFit.of(gb, null), ModelFit.unknown);
+    // fits the phone, but not the memory free now: tight
+    expect(ModelFit.of(3 * gb + gb ~/ 2, 8 * gb, room: 2 * gb), ModelFit.tight);
+    expect(ModelFit.of(3 * gb + gb ~/ 2, 8 * gb, room: 4 * gb), ModelFit.fits);
   });
 }

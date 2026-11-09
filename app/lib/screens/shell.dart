@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
@@ -15,6 +14,10 @@ import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
+import '../discover/discover_device.dart';
+import '../discover/discover_state.dart';
+import '../discover/ui/discover_screen.dart';
+import '../discover/ui/place_page.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
@@ -61,6 +64,7 @@ import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
+import 'settings/own_source_pages.dart' show OwnSourceFormPage;
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -71,6 +75,7 @@ import 'videos/video_nav.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
+import '../platform.dart' as plat;
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -90,7 +95,15 @@ class Shell extends StatefulWidget {
     required this.hub,
     this.notebooks,
     this.railPrefs,
+    this.firstRunWizard = false,
+    this.discoverFetch,
   });
+
+  /// On a device set up for the first time, Discover's wizard opens by itself once (the app sets it; tests leave it off).
+  final bool firstRunWizard;
+
+  /// Reads the published Discover file (the app's fetch of kDiscoverUrl); null: only the copy in the app.
+  final Future<String> Function()? discoverFetch;
 
   /// Where the rail's hidden-in-portrait choice is kept (the app's support folder when null).
   final RailPrefs? railPrefs;
@@ -205,10 +218,74 @@ class _ShellState extends State<Shell> {
     _railPrefs.hidden().then((h) {
       if (mounted && h != _railHidden) setState(() => _railHidden = h);
     });
+    DiscoverState.shared = _discover;
+    discoverLinks = _discoverLinks;
+    unawaited(_startDiscover());
   }
 
-  late final AppUpdates? _updates = Platform.isIOS || Platform.isAndroid
-      ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: Platform.isAndroid, dismissed: DismissedUpdate())
+  /// Discover: what activities added, and whether first run is done. A device with a model, a library or a region on it already
+  /// was set up before Discover came: its first run counts as done (no wizard).
+  late final DiscoverState _discover = DiscoverState(
+    device: AppDiscoverDevice(
+      browse: widget.browse,
+      settings: widget.hub.settings,
+      weather: widget.hub.weather,
+      layout: widget.layout,
+      regions: widget.hub.regions,
+      notebooks: widget.notebooks?.notebook,
+      location: widget.location,
+      indexing: widget.hub.indexing,
+    ),
+    fetch: widget.discoverFetch,
+  );
+
+  Future<void> _startDiscover() async {
+    final app = widget.app;
+    if (!app.started) {
+      final started = Completer<void>();
+      void on() {
+        if (app.started && !started.isCompleted) started.complete();
+      }
+
+      app.addListener(on);
+      await started.future;
+      app.removeListener(on);
+    }
+    final libs = widget.browse.libraries;
+    final setUpBefore = app.models.isNotEmpty ||
+        widget.sources.zims.isNotEmpty ||
+        (widget.hub.regions?.local.isNotEmpty ?? false) ||
+        (libs != null && libs.libraries.any((l) => !libs.isGuide(l)));
+    await _discover.init(setUpBefore: setUpBefore);
+    if (widget.firstRunWizard && !_discover.firstRunDone && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(openDiscover(context, _discover));
+      });
+    }
+  }
+
+  /// Where Discover's links go.
+  DiscoverLinks get _discoverLinks => DiscoverLinks(
+    allLibraries: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse))),
+    allMaps: widget.hub.regions == null ? null : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: widget.hub.regions!))),
+    ownSource: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => OwnSourceFormPage(deps: _settingsDeps))),
+    linkDevice: widget.hub.sharing == null
+        ? null
+        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync))),
+    searchLibraries: (c, q) {
+      unawaited(widget.browse.setFilter(query: q));
+      Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse)));
+    },
+    askLocation: (c) async {
+      await widget.location.request(explain: () async => true);
+    },
+    choosePlace: widget.hub.regions == null
+        ? null
+        : (c) => Navigator.of(c).push<DiscoverPlace>(MaterialPageRoute<DiscoverPlace>(builder: (_) => PlacePage(catalogue: widget.hub.regions!.catalogue))),
+  );
+
+  late final AppUpdates? _updates = plat.isIOS || plat.isAndroid
+      ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: plat.isAndroid, dismissed: DismissedUpdate())
       : null;
 
   bool _whatsNewAsked = false;
@@ -248,6 +325,7 @@ class _ShellState extends State<Shell> {
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     if (askCacheInstead == _askFromGuide) askCacheInstead = null;
+    if (DiscoverState.shared == _discover) DiscoverState.shared = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -266,11 +344,15 @@ class _ShellState extends State<Shell> {
         _onModules = true;
       });
 
-  void _goModule(ModuleId m) => setState(() {
-        _module = m;
-        _onModules = false;
-        _built.add(m);
-      });
+  void _goModule(ModuleId m) {
+    // Ask opens: the chosen model, let go to leave memory free, loads again.
+    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    setState(() {
+      _module = m;
+      _onModules = false;
+      _built.add(m);
+    });
+  }
 
   void _openNavigation(NavigationAction action) {
     final route = action.route;
@@ -341,7 +423,7 @@ class _ShellState extends State<Shell> {
       AppPlace.weatherSettings => WeatherPage(deps: d),
       AppPlace.notifications => NotificationsPage(deps: d),
       AppPlace.storage => StoragePage(deps: d),
-      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync),
       AppPlace.appearance => AppearancePage(app: widget.app),
       AppPlace.credits => const AboutPage(),
       AppPlace.models => ModelsScreen(app: widget.app),
@@ -658,7 +740,7 @@ class _ShellState extends State<Shell> {
             onLeave: _goHome,
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
-        ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
+        ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
@@ -687,6 +769,8 @@ class _ShellState extends State<Shell> {
     onOpenShortcut: _openShortcut,
     updates: _updates,
     onOpenWeatherSettings: _openWeatherSettings,
+    discover: _discover,
+    onOpenDiscover: () => openDiscover(context, _discover),
   );
 
   @override
@@ -731,12 +815,18 @@ class _ShellState extends State<Shell> {
         // left, in the bar's order; a stable frame that stays with the keyboard open.
         // A tablet held sideways: the main destinations in a rail at the side, which slides away to give the page the whole
         // width (a menu button at the top left brings it back). Upright, the bottom bar, as on a phone.
-        if (isRegular(context) && !isPortrait(context)) {
+        // A short window (a phone held sideways, 390 high) keeps the rail, which scrolls when its destinations do not fit.
+        if (hasRailWidth(context) && !isPortrait(context)) {
           final hidden = _railHidden;
           final reduce = MediaQuery.disableAnimationsOf(context);
           final rail = SafeArea(
             right: false,
-            child: NavigationRail(
+            child: LayoutBuilder(
+              builder: (context, c) => SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: c.maxHeight),
+                  child: IntrinsicHeight(
+                    child: NavigationRail(
                     key: const ValueKey('nav-rail'),
                     minWidth: kRailWidth,
                     labelType: NavigationRailLabelType.all,
@@ -754,6 +844,10 @@ class _ShellState extends State<Shell> {
                       onPressed: () => _setRailHidden(true),
                     ),
                   ),
+                  ),
+                ),
+              ),
+            ),
           );
           return Scaffold(
             body: Row(

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/net/fetch.dart' show FetchException, FetchFailure;
 import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_core.dart';
 import 'package:cache_search/cache_search.dart';
@@ -120,6 +121,15 @@ class FakeWeb {
     if (offline) throw const NetworkProblem("Couldn't reach the server.");
     final b = files[u.toString()];
     if (b == null) throw NetworkProblem('${u.host} answered with an error (HTTP 404).');
+    return b;
+  }
+
+  /// The same server as Try it of Add your own source reads it (net/fetch.dart's failures).
+  Future<List<int>> tryFetch(Uri u, Duration timeout) async {
+    requested.add(u);
+    if (offline) throw FetchException(FetchFailure.unreachable, u.host);
+    final b = files[u.toString()];
+    if (b == null) throw FetchException(FetchFailure.status, u.host, status: 404);
     return b;
   }
 }

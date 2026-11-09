@@ -6,6 +6,7 @@ import '../models/model_downloads.dart';
 import '../models/search_model.dart';
 import '../theme.dart';
 import 'download_confirm.dart';
+import '../layout/adaptive.dart' show ContentWidth;
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -83,7 +84,7 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
       appBar: AppBar(title: const Text('Find a model')),
       body: SafeArea(
         top: false,
-        child: Column(
+        child: ContentWidth(child: Column(
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -139,7 +140,7 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
                     ),
             ),
           ],
-        ),
+        )),
       ),
     );
   }
@@ -215,7 +216,7 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
       appBar: AppBar(title: Text(widget.model.name)),
       body: SafeArea(
         top: false,
-        child: Column(
+        child: ContentWidth(child: Column(
           children: [
             Expanded(
               child: ListenableBuilder(
@@ -277,7 +278,7 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
               ),
             ),
           ],
-        ),
+        )),
       ),
     );
   }

@@ -278,7 +278,7 @@ void main() {
       await m.init();
       expect(m.baseProblem, isNull);
       m.setDefinitionEnabled('basemap', false);
-      expect(m.baseProblem, 'No base map yet. Connect once to get the catalogue.');
+      expect(m.baseProblem, 'No base map yet. Connect once to get the catalog.');
       m.setDefinitionEnabled('basemap', true);
       m.setOn('basemap', true);
       expect(m.baseProblem, isNull);

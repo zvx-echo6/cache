@@ -7,6 +7,7 @@ import '../weather/places.dart';
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'weather_turn_on.dart';
+import '../layout/adaptive.dart' show ContentWidth;
 
 /// The Weather module: for each watched place, the forecast day by day and everything that is happening near it (warnings,
 /// fires, earthquakes, rivers, avalanches), each with its age. A thing that is happening opens with "Ask about this".
@@ -83,18 +84,35 @@ class _WeatherScreenState extends State<WeatherScreen> {
   Future<void> _load() async {
     // (A focus from a pop-up may name a place first; keep it if it is watched.)
     _seenRevision = _revision;
+    // The places and what was last shown for them, at once, from what the app keeps (build 46: the page stayed empty for 9 s
+    // at start while the core was busy); the core's answers replace them when they come.
+    if (_places == null) {
+      final now = w.watchedPlacesNow();
+      if (now.isNotEmpty) {
+        setState(() {
+          _places = now;
+          _pick(now);
+          final p = now.where((p) => p.id == _placeId).firstOrNull;
+          _kept = p == null ? null : w.keptViewFor(p);
+        });
+      }
+    }
     final places = await w.watchedPlaces();
     if (!mounted) return;
     setState(() {
       _places = places;
-      if (_placeId == null || !places.any((p) => p.id == _placeId)) {
-        _placeId = places.isEmpty ? null : places.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => places.first).id;
-      }
+      _pick(places);
       final p = places.where((p) => p.id == _placeId).firstOrNull;
       _view = p == null ? null : w.viewFor(p);
       // What was last shown shows at once, with its age; the core's answer replaces it when it comes.
       _kept = p == null ? null : w.keptViewFor(p);
     });
+  }
+
+  void _pick(List<WatchPlace> places) {
+    if (_placeId == null || !places.any((p) => p.id == _placeId)) {
+      _placeId = places.isEmpty ? null : places.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => places.first).id;
+    }
   }
 
   Future<void> _update() async {
@@ -124,8 +142,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
           final st = w.status();
           return RefreshIndicator(
             onRefresh: _update,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+            child: LayoutBuilder(builder: (context, cts) => ListView(
+              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 4, bottom: 24),
               children: [
                 _statusBox(context, st),
                 const SizedBox(height: 12),
@@ -184,7 +202,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                   ),
                 ],
               ],
-            ),
+            )),
           );
         },
       ),
@@ -218,9 +236,12 @@ class _WeatherScreenState extends State<WeatherScreen> {
 
   Widget _empty(BuildContext context, String a, String b, {bool offerTurnOn = true}) {
     final k = context.t;
+    // The words and the buttons keep to a narrow column, centred, on a wide window.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
-      child: Column(
+      child: ContentWidth(
+        maxWidth: 440,
+        child: Column(
         children: [
           Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
@@ -236,6 +257,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 : TextButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
           ],
         ],
+        ),
       ),
     );
   }

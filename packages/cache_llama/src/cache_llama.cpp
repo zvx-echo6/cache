@@ -4,17 +4,20 @@
 #include "common.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "gguf.h"
 #include "llama.h"
 #include "sampling.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -22,10 +25,11 @@
 #include <utility>
 #include <vector>
 
+#include <sys/stat.h>
+
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <dlfcn.h>
-#include <sys/stat.h>
 #endif
 
 namespace {
@@ -59,6 +63,22 @@ struct Handle {
     int                                  n_generated = 0;
     bool                                 finished    = true;
     std::atomic<bool>                    stop{false};
+    std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
+
+    // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
+    std::string weights        = "default";
+    std::string weights_reason;
+
+    // The saved prompt prefix (cl_configure prefix_dir): the folder, the model file's identity, and the last cl_start's note.
+    std::string prefix_dir;
+    std::string model_id;
+    std::string prefix_note;
+    // The prompt start of the last request shape (system prompt + tools + thinking switch): its key and tokens, and how much
+    // of it is stable (the part it shares with the shape before it; all of it once the same shape comes again).
+    std::string              probe_key;
+    std::vector<llama_token> probe_tokens;
+    size_t                   stable = 0;
+    bool                     stable_known = false;
 };
 
 void cl_logi(const char * fmt, ...);
@@ -177,6 +197,152 @@ void cl_logi(const char * fmt, ...) {
 #endif
 }
 
+// ---------------- options (cl_configure) ----------------
+std::mutex  g_opt_mu;
+std::string g_prefix_dir;
+bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
+
+std::string engine_build() {
+#if defined(CACHE_GEMMA4_PREFILL_OPT)
+    return "cache-gemma4-prefill-31356";
+#else
+    return "cache-llama-620d222";
+#endif
+}
+
+// The repacked copy's size: the 2-D matrix weights (not the embedding tables, which are read by row) of the types the CPU
+// backend can repack (ggml-cpu/repack.cpp), the ones whose row count suits the repacked layouts. An upper bound: a CPU may
+// repack fewer types. -1 when the file cannot be read.
+long long estimate_repack_bytes(const char * path) {
+    ggml_context * meta = nullptr;
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = &meta;
+    gguf_context * g = gguf_init_from_file(path, gp);
+    if (!g) return -1;
+    long long sum = 0;
+    for (int64_t i = 0; i < gguf_get_n_tensors(g); i++) {
+        const char * name = gguf_get_tensor_name(g, i);
+        ggml_tensor * t = meta ? ggml_get_tensor(meta, name) : nullptr;
+        if (!t || ggml_n_dims(t) != 2) continue;
+        if (strstr(name, "token_embd") != nullptr) continue;  // token_embd, per_layer_token_embd: GET_ROWS, never repacked
+        switch (t->type) {
+            case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K: case GGML_TYPE_Q6_K: case GGML_TYPE_Q2_K:
+            case GGML_TYPE_IQ4_NL: case GGML_TYPE_Q8_0: case GGML_TYPE_MXFP4:
+                break;
+            default:
+                continue;
+        }
+        if (t->ne[1] % 4 != 0) continue;
+        sum += (long long) ggml_nbytes(t);
+    }
+    gguf_free(g);
+    if (meta) ggml_free(meta);
+    return sum;
+}
+
+uint64_t fnv1a(uint64_t h, const void * data, size_t n) {
+    const unsigned char * b = (const unsigned char *) data;
+    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+// "name|size|mtime" of the model file: a different file (or the same name rewritten) gives a different saved prefix.
+std::string file_identity(const char * path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p(path ? path : "");
+    std::string id = p.filename().string();
+    auto size = fs::file_size(p, ec);
+    if (ec) return id;
+    auto mtime = fs::last_write_time(p, ec);
+    if (ec) return id + "|" + std::to_string((unsigned long long) size);
+    return id + "|" + std::to_string((unsigned long long) size) + "|" + std::to_string((long long) mtime.time_since_epoch().count());
+}
+
+// ---------------- the saved prompt prefix ----------------
+// The KV state of a prompt start, saved by llama_state_seq_save_file (its magic and version, the tokens, then seq 0's KV state)
+// to a .part file and renamed, so a file under its final name is complete. The name is
+// prefix-<model key>-<tokens hash>.kv: the model key (FNV-1a 64 of the model file's identity, the engine build and n_ctx) makes a
+// file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used for as many of
+// its tokens as the prompt shares (the cache after that is dropped), so a file saved with a part that later changed still
+// gives the part before it. At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
+constexpr size_t kPrefixFiles  = 2;
+constexpr size_t kPrefixMinLen = 32;  // shorter prefixes are not worth a file
+
+std::string hex64(uint64_t v) {
+    char b[17];
+    snprintf(b, sizeof(b), "%016llx", (unsigned long long) v);
+    return b;
+}
+
+std::string prefix_model_key(const Handle * h) {
+    const std::string head = h->model_id + "\n" + engine_build() + "\n" + std::to_string(h->n_ctx) + "\n";
+    return hex64(fnv1a(1469598103934665603ull, head.data(), head.size()));
+}
+
+std::string prefix_path(const Handle * h, const llama_token * toks, size_t n) {
+    const std::string name = "prefix-" + prefix_model_key(h) + "-" + hex64(fnv1a(1469598103934665603ull, toks, n * sizeof(llama_token))) + ".kv";
+    return (std::filesystem::path(h->prefix_dir) / name).string();
+}
+
+// This model's saved prefix files and their tokens (read from the file header). A file whose header does not read is deleted.
+std::vector<std::pair<std::string, std::vector<llama_token>>> prefix_files(const Handle * h) {
+    namespace fs = std::filesystem;
+    std::vector<std::pair<std::string, std::vector<llama_token>>> out;
+    const std::string start = "prefix-" + prefix_model_key(h) + "-";
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(h->prefix_dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.rfind(start, 0) != 0 || name.size() < 3 || name.compare(name.size() - 3, 3, ".kv") != 0) continue;
+        std::vector<llama_token> toks;
+        bool ok = false;
+        if (FILE * f = fopen(it->path().string().c_str(), "rb")) {
+            uint32_t hdr[3];
+            if (fread(hdr, sizeof(uint32_t), 3, f) == 3 && hdr[0] == LLAMA_STATE_SEQ_MAGIC && hdr[1] == LLAMA_STATE_SEQ_VERSION && hdr[2] > 0 && hdr[2] < (1u << 20)) {
+                toks.resize(hdr[2]);
+                ok = fread(toks.data(), sizeof(llama_token), toks.size(), f) == toks.size();
+            }
+            fclose(f);
+        }
+        if (ok) {
+            out.emplace_back(it->path().string(), std::move(toks));
+        } else {
+            std::error_code e2;
+            fs::remove(it->path(), e2);
+        }
+    }
+    return out;
+}
+
+size_t common_prefix(const std::vector<llama_token> & a, const std::vector<llama_token> & b, size_t limit) {
+    size_t n = 0;
+    limit = std::min({ limit, a.size(), b.size() });
+    while (n < limit && a[n] == b[n]) n++;
+    return n;
+}
+
+// Keeps the kPrefixFiles most recently used prefix files of the folder (and removes stale .part files).
+void prune_prefix_files(const std::string & dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        const auto name = it->path().filename().string();
+        if (name.rfind("prefix-", 0) != 0) continue;
+        if (name.size() > 5 && name.compare(name.size() - 5, 5, ".part") == 0) {
+            fs::remove(it->path(), ec);
+            continue;
+        }
+        if (name.size() < 3 || name.compare(name.size() - 3, 3, ".kv") != 0) continue;
+        std::error_code e2;
+        files.emplace_back(fs::last_write_time(it->path(), e2), it->path());
+    }
+    if (files.size() <= kPrefixFiles) return;
+    std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
+    for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
+}
+
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
         fputs(text, stderr);
@@ -285,7 +451,35 @@ CpuPlan plan_cpus() {
 
 }  // namespace
 
+// Every chat handle not freed yet, for cl_free_all: the process outlives the app's Dart side when Android destroys the
+// window and makes a new one (a new Flutter engine in the same process). The old engine's handle is never freed by it,
+// and its model would stay in memory beside the one the new engine loads.
+static std::mutex          g_live_mu;
+static std::set<Handle *>  g_live;
+
+static void free_handle(Handle * h) {
+    h->smpl.reset();
+    h->session.reset();
+    h->tmpls.reset();
+    if (h->ctx)   llama_free(h->ctx);
+    if (h->pool)  h->pool_free(h->pool);
+    if (h->model) llama_model_free(h->model);
+    delete h;
+}
+
 extern "C" {
+
+int cl_configure(const char * options_json) {
+    try {
+        auto j = common_json::parse(options_json ? options_json : "{}");
+        std::lock_guard<std::mutex> lock(g_opt_mu);
+        if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
+        if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
+        return 0;
+    } catch (const std::exception &) {
+        return -1;
+    }
+}
 
 void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len) {
     try {
@@ -306,6 +500,33 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
 
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
+        bool repack_opt_in = false;
+        {
+            std::lock_guard<std::mutex> lock(g_opt_mu);
+            repack_opt_in = g_repack_weights;
+            h->prefix_dir = g_prefix_dir;
+        }
+        (void) repack_opt_in;
+#if defined(__ANDROID__)
+        // Android always keeps the CPU weights in the file-backed mmap (use_extra_bufts=false). Repacking makes an anonymous copy
+        // of the matrix weights that Android swaps out when memory is short, and every later prompt then waits on swap. On a
+        // Galaxy S22 (build 46, repack off) the mmap load took 6.2 s against 9-16 s, swap fell from 1.7-1.9 GB to 0.3 GB, and
+        // prompt reading stayed at about 42 tok/s (30-50 repacked): the copy cost about a GB and gave no speed. Repacking stays
+        // available for measurement only (cl_configure "repack_weights"); it is never chosen automatically.
+        if (repack_opt_in) {
+            const long long est = estimate_repack_bytes(model_path);
+            mp.use_extra_bufts = true;
+            h->weights         = "repacked";
+            h->weights_reason  = std::string("opt-in for measurement, repacked copy ") +
+                                (est >= 0 ? "about " + std::to_string(est >> 20) + " MB" : "size not known");
+        } else {
+            mp.use_extra_bufts = false;
+            h->weights         = "mmap";
+            h->weights_reason  = "default on Android";
+        }
+        cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
+#endif
+        h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
             set_err(err, err_len, std::string("cannot load model: ") + model_path);
@@ -357,7 +578,12 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             llama_model_free(h->model);
             return nullptr;
         }
-        return h.release();
+        Handle * out = h.release();
+        {
+            std::lock_guard<std::mutex> lock(g_live_mu);
+            g_live.insert(out);
+        }
+        return out;
     } catch (const std::exception & e) {
         set_err(err, err_len, e.what());
         return nullptr;
@@ -389,6 +615,9 @@ int cl_info(void * hp, char * out_json, int len) {
         j["n_ctx"]          = h->n_ctx;
         j["chat_format"]    = std::string(common_chat_format_name(probe.format));
         j["supports_tools"] = probe.format != COMMON_CHAT_FORMAT_CONTENT_ONLY;
+        j["engine_build"]   = engine_build();
+        j["weights"]        = h->weights;
+        j["weights_reason"] = h->weights_reason;
         return put(j.dump(), out_json, len);
     } catch (const std::exception &) {
         return -1;
@@ -407,6 +636,8 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_generated = 0;
         h->n_reused = 0;
         h->stop = false;
+        h->stop_tokens.clear();
+        h->prefix_note.clear();
 
         auto req = common_json::parse(request_json);
         common_chat_templates_inputs in;
@@ -419,6 +650,19 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         }
         if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
             in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
+        }
+        // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
+        // tool-call grammar off; the tool-call opening tokens then end the generation (below).
+        if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
+            in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
+        }
+        if (in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !in.tools.empty()) {
+            for (const char * open : { "<|tool_call>", "<tool_call>" }) {
+                auto t = common_tokenize(h->vocab, open, /*add_special*/ false, /*parse_special*/ true);
+                if (t.size() == 1 && (llama_vocab_get_attr(h->vocab, t[0]) & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED))) {
+                    h->stop_tokens.push_back(t[0]);
+                }
+            }
         }
 
         // The session wraps common_chat_templates_apply and keeps the parser for cl_finish.
@@ -453,6 +697,43 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
             return -1;
         }
 
+        // The stable prompt start. The prompt start of this request shape is the system prompt and the tool schemas the template
+        // renders after it, up to where the first user message begins: found by rendering the request's system message and tools
+        // with two different one-word questions (the tokens both share), once per shape. Its stable part is what it shares with
+        // the shape before it (a clock in the system prompt makes that the text before the clock), or all of it once the same
+        // shape comes again. Only with a prefix folder, tools and a system message.
+        size_t want = 0;  // the stable start of this prompt, in tokens
+        if (!h->prefix_dir.empty() && !in.tools.empty() && !in.messages.empty() && in.messages[0].role == "system") {
+            const std::string key = in.messages[0].content + '\x1f' + req.at("tools").dump() + '\x1f' + (in.enable_thinking ? "1" : "0");
+            if (key != h->probe_key) {
+                common_chat_templates_inputs pa = in;
+                pa.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+                common_chat_msg u;
+                u.role    = "user";
+                u.content = "a";
+                pa.messages = { in.messages[0], u };
+                auto ta = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+                pa.messages[1].content = "b";
+                auto tb = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+                ta.resize(common_prefix(ta, tb, ta.size()));
+                if (!h->probe_tokens.empty()) {
+                    h->stable       = common_prefix(h->probe_tokens, ta, ta.size());
+                    h->stable_known = true;
+                } else {
+                    h->stable_known = false;  // the first shape since the load: see the saved files below
+                }
+                h->probe_key    = key;
+                h->probe_tokens = std::move(ta);
+            } else {
+                h->stable       = h->probe_tokens.size();
+                h->stable_known = true;
+            }
+            // The request's own tokens must agree (a merge across the boundary could differ), and the last prompt token is
+            // always decoded.
+            want = common_prefix(h->probe_tokens, tokens, tokens.size() - 1);
+            if (h->stable_known) want = std::min(want, h->stable);
+        }
+
         // Keep what the KV cache already holds for the start of this prompt: find the longest common
         // token prefix, drop the cache after it and decode only the rest. At least the last prompt
         // token is always decoded, because the first generated token needs its logits.
@@ -470,11 +751,63 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
             keep = 0;
         }
         h->cached.resize(keep);
+
+        // The cache does not hold the stable start (the first question after a load, or a different start before): take what a
+        // saved file shares with this prompt.
+        using sclock = std::chrono::steady_clock;
+        auto ms_since = [](sclock::time_point t0) { return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count(); };
+        std::error_code fec;
+        bool covered = true;  // a saved file already holds the stable start
+        if (want >= kPrefixMinLen && keep < want) {
+            auto files = prefix_files(h);
+            size_t best = 0, best_file_len = 0;
+            std::string best_path;
+            for (auto & f : files) {
+                const size_t l = common_prefix(f.second, tokens, tokens.size() - 1);
+                if (l > best) { best = l; best_path = f.first; best_file_len = f.second.size(); }
+            }
+            if (!h->stable_known) {
+                // The first shape since the load: a saved file of this model tells how much of it stayed the same before. With
+                // none, all of it is taken as stable (and saved once).
+                if (!best_path.empty()) want = std::min(want, best);
+                h->stable       = want;
+                h->stable_known = true;
+            }
+            covered = best >= want;
+            if (best > keep && best >= kPrefixMinLen) {
+                const auto t0 = sclock::now();
+                llama_memory_clear(mem, true);
+                h->cached.clear();
+                keep = 0;
+                std::vector<llama_token> got(best_file_len);
+                size_t n_got = 0;
+                const size_t rd = llama_state_seq_load_file(h->ctx, best_path.c_str(), 0, got.data(), got.size(), &n_got);
+                const bool loaded = rd > 0 && n_got == best_file_len && std::equal(got.begin(), got.begin() + (long) best, tokens.begin());
+                if (loaded && (n_got == best || llama_memory_seq_rm(mem, 0, (llama_pos) best, -1))) {
+                    h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
+                    keep = best;
+                    std::filesystem::last_write_time(best_path, std::filesystem::file_time_type::clock::now(), fec);
+                    h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+                } else {
+                    llama_memory_clear(mem, true);
+                    if (!loaded) std::filesystem::remove(best_path, fec);
+                    covered = false;
+                    h->prefix_note = loaded ? "Prompt prefix file could not be trimmed; the prompt is read as usual"
+                                            : "Prompt prefix file did not load and was removed; the prompt is read as usual";
+                }
+                cl_logi("%s", h->prefix_note.c_str());
+            }
+        }
         h->n_reused = (int) keep;
+        // Saved when no file holds the stable start yet and this start decodes it itself.
+        const size_t prefix = want;
+        const bool   save   = want >= kPrefixMinLen && keep < want && !covered;
+        const std::string prefix_file = save ? prefix_path(h, tokens.data(), prefix) : std::string();
 
         const int n_batch = 512;
-        for (int i = (int) keep; i < h->n_prompt; i += n_batch) {
+        for (int i = (int) keep; i < h->n_prompt;) {
             int n = std::min(n_batch, h->n_prompt - i);
+            if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
             if (llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n)) != 0) {
                 llama_memory_clear(mem, true);
                 h->cached.clear();
@@ -483,6 +816,24 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
                 return -1;
             }
             h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
+            i += n;
+            if (save && (size_t) i == prefix) {
+                const auto t0 = sclock::now();
+                std::filesystem::create_directories(h->prefix_dir, fec);
+                const std::string part = prefix_file + ".part";
+                const size_t wr = llama_state_seq_save_file(h->ctx, part.c_str(), 0, tokens.data(), prefix);
+                std::error_code rec;
+                if (wr > 0) std::filesystem::rename(part, prefix_file, rec);
+                if (wr > 0 && !rec) {
+                    prune_prefix_files(h->prefix_dir);
+                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix saved (") + std::to_string(prefix) +
+                                      " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+                } else {
+                    std::filesystem::remove(part, fec);
+                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix could not be saved");
+                }
+                cl_logi("%s", h->prefix_note.c_str());
+            }
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
@@ -502,7 +853,9 @@ int cl_next(void * hp, char * buf, int buf_len) {
         }
         llama_token tok = common_sampler_sample(h->smpl.get(), h->ctx, -1);
         common_sampler_accept(h->smpl.get(), tok, /*is_generated*/ true);
-        if (llama_vocab_is_eog(h->vocab, tok)) {
+        // tool_choice "none": a tool-call opening ends the answer (the text before it is the answer).
+        if (llama_vocab_is_eog(h->vocab, tok) ||
+            std::find(h->stop_tokens.begin(), h->stop_tokens.end(), tok) != h->stop_tokens.end()) {
             h->finished = true;
             return -1;
         }
@@ -596,6 +949,7 @@ int cl_finish(void * hp, char * out_json, int len) {
 }
 
 int cl_prompt_tokens(void * hp)    { return ((Handle *) hp)->n_prompt; }
+int cl_prefix_note(void * hp, char * out, int len) { return put(((Handle *) hp)->prefix_note, out, len); }
 int cl_generated_tokens(void * hp) { return ((Handle *) hp)->n_generated; }
 int cl_reused_tokens(void * hp)    { return ((Handle *) hp)->n_reused; }
 int cl_first_prompt_token(void * hp) { return ((Handle *) hp)->first_token; }
@@ -609,13 +963,22 @@ void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
 void cl_free(void * hp) {
     auto * h = (Handle *) hp;
     if (!h) return;
-    h->smpl.reset();
-    h->session.reset();
-    h->tmpls.reset();
-    if (h->ctx)   llama_free(h->ctx);
-    if (h->pool)  h->pool_free(h->pool);
-    if (h->model) llama_model_free(h->model);
-    delete h;
+    {
+        std::lock_guard<std::mutex> lock(g_live_mu);
+        // already freed (by cl_free_all): nothing to do
+        if (g_live.erase(h) == 0) return;
+    }
+    free_handle(h);
+}
+
+int cl_free_all(void) {
+    std::set<Handle *> all;
+    {
+        std::lock_guard<std::mutex> lock(g_live_mu);
+        all.swap(g_live);
+    }
+    for (Handle * h : all) free_handle(h);
+    return (int) all.size();
 }
 
 // ---------------- embeddings ----------------

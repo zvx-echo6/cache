@@ -11,7 +11,7 @@ import 'support/act_core_stand_in.dart';
 
 String _prompt(Map<String, dynamic> request) => ((request['messages'] as List).first as Map)['content'] as String;
 
-const _clockLine = 'Current local date and time: ';
+const _clockLine = 'Current local date: ';
 
 /// The prompt without its clock line, which is the current time on every turn.
 String _fixed(String prompt) => [for (final l in prompt.split('\n')) if (!l.startsWith(_clockLine)) l].join('\n');
@@ -99,8 +99,8 @@ void main() {
       await chat.whenIdle();
       final after = _prompt(backend.requests.last);
       expect(_fixed(after), _fixed(before));
-      // The clock line is the current time, as on every turn.
-      expect(after.split('\n')[1], startsWith(_clockLine));
+      // The date line is today's date, as on every turn.
+      expect(after.split('\n').where((line) => line.startsWith(_clockLine)), hasLength(1));
     }
   });
 

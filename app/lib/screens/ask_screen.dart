@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
-import '../chat/answer_markdown.dart';
+import '../chat/answer_progress.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
-import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
 import '../history/share.dart';
-import '../layout/adaptive.dart' show ReadingWidth;
+import '../layout/adaptive.dart' show ReadingWidth, showFittedSheet;
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart' show LocationPermissionState;
@@ -139,7 +138,7 @@ class _AskScreenState extends State<AskScreen> {
   Future<void> _plusMenu() async {
     final location = widget.location;
     if (location == null) return;
-    await showModalBottomSheet<void>(
+    await showFittedSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => ListenableBuilder(
@@ -187,7 +186,7 @@ class _AskScreenState extends State<AskScreen> {
   /// The model name's menu: the model and the memory it takes, Switch model, Unload (frees the memory), Manage models.
   Future<void> _modelMenu() async {
     final app = widget.app;
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -224,7 +223,7 @@ class _AskScreenState extends State<AskScreen> {
     if (!mounted) return;
     switch (choice) {
       case 'switch':
-        final m = await showModalBottomSheet<ModelEntry>(
+        final m = await showFittedSheet<ModelEntry>(
           context: context,
           showDragHandle: true,
           builder: (ctx) => SafeArea(
@@ -451,7 +450,12 @@ class _AskScreenState extends State<AskScreen> {
     } else {
       final usable = [for (final m in app.models) if (!app.isUnsupported(m)) m];
       line = 'No model is loaded.';
-      if (usable.isEmpty) {
+      final resting = app.resting;
+      if (resting != null) {
+        // the chosen model, let go to leave memory free: it loads again
+        button = 'Load ${app.displayName(resting)}';
+        onPressed = app.wake;
+      } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;
       } else {
@@ -642,20 +646,19 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   Widget build(BuildContext context) {
     final k = context.t;
     final m = widget.msg;
-    final showText =
-        m.phase == TurnPhase.answering || m.phase == TurnPhase.done;
-    final status = switch (m.phase) {
-      TurnPhase.starting => 'Starting…',
-      TurnPhase.thinking => 'Thinking…',
-      TurnPhase.searching => 'Searching your sources…',
-      _ => null,
-    };
     return Padding(
       padding: const EdgeInsets.only(top: 12, bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showText && m.text.isNotEmpty) AnswerMarkdown(m.text),
+          AnswerProgress(
+            phase: m.phase,
+            activeTool: m.activeTool,
+            notes: m.toolNotes,
+            text: m.text,
+            failed: m.error != null,
+            queuePosition: m.queuePosition,
+          ),
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
@@ -684,28 +687,6 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                         label: const Text('Open navigation'),
                       ),
                     ),
-                ],
-              ),
-            ),
-          if (status != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: k.secondary,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    status,
-                    style: TextStyle(fontSize: 15, color: k.secondary),
-                  ),
                 ],
               ),
             ),

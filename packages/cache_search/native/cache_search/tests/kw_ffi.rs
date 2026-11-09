@@ -860,6 +860,30 @@ fn zim_captions_skip_hls_pair_videos_and_cite_the_zim() {
 // zim-epub
 
 #[test]
+fn a_zim_with_no_caption_files_needs_no_captions_build_and_a_job_on_it_ends_at_once() {
+    const U0: &str = "0badc0de-0000-4000-8000-000000000a00";
+    let t = TempDir::new("zimcap0");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let zim = t.0.join("plain.zim");
+    let entries: Vec<(&str, &str, &str, Vec<u8>)> = vec![
+        ("Alpha", "Alpha", "text/html", b"<html><body><p>Alpha.</p></body></html>".to_vec()),
+        ("Media/clip.mp4", "", "video/mp4", b"not really a video".to_vec()),
+    ];
+    write_zim(&zim, U0, "plain_test", &entries);
+    let mut h = open(&[&zim], &idx, &vdir);
+    // the look through its entries finishes; with no caption files there is nothing to build: no key, never queued
+    let st = wait_status(&mut h, |v| v["sources"].as_array().is_some_and(|a| !a.is_empty()));
+    std::thread::sleep(Duration::from_millis(1500));
+    let st2: Value = serde_json::from_str(&h.status_json()).unwrap();
+    assert!(st2["sources"][0].get("captionsindex").is_none(), "{st} {st2}");
+    // a job asked for anyway ends at once, done, with nothing in it, and reports its look through the entries
+    let t0 = Instant::now();
+    let done = run(job_params(&idx, "zim-captions", U0));
+    assert!(t0.elapsed() < Duration::from_secs(10), "{done}");
+    assert_eq!(done["result"]["items"].as_u64(), Some(0), "{done}");
+}
+
+#[test]
 fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
     const U1: &str = "0badc0de-0000-4000-8000-000000000b01";
     const U2: &str = "0badc0de-0000-4000-8000-000000000b02";

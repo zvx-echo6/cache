@@ -248,8 +248,8 @@ class _NotebookScreenState extends State<NotebookScreen> {
       ),
       body: _entries == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          : LayoutBuilder(builder: (context, cts) => ListView(
+              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 96),
               children: [
                 if (book.isLog) _lastDone(book, now, k),
                 if (draft != null)
@@ -263,7 +263,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
                 if (entries.isEmpty && draft == null) _empty(book, k),
                 ..._rows(book, entries, now, k),
               ],
-            ),
+            )),
     );
   }
 

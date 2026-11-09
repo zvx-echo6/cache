@@ -70,7 +70,7 @@ If Cache can't get a position yet, chat still works. Go outdoors or near a windo
 
 On the Models screen (tap the model name in "Ask", then "Manage models"):
 - "Not supported: Cache needs a model that can use tools": pick another. Your current model stays loaded.
-- "Too big for this device": choose a smaller one. "May be tight on this device" may be slow or fail to load.
+- "Too large for device RAM": choose a smaller one. "May be tight on RAM" may be slow or fail to load.
 - "Can't read the models folder": restart Cache. Check free space.
 - "Could not copy the file: [reason]": check free space and try again.
 
@@ -102,22 +102,24 @@ On a library's menu (press and hold it in "Library"):
 - `PDFs: searching ready` with a small line `12 could not be read`: a few files could not be read. The rest work.
 - "Waiting to make PDFs searchable": another library goes first. It starts by itself.
 - "Making PDFs searchable…": starting.
-- "Making PDFs searchable: 340 of 5,768": working. Tap "Pause" to stop it yourself.
-- "Making PDFs searchable: finishing": nearly done.
+- `Making PDFs searchable · 340 of 5,768`: working. Tap "Pause" to stop it yourself.
+- "Making PDFs searchable · finishing": nearly done.
 - "Pausing…": stopping because you asked.
-- "Paused · 340 of 5,768": you paused it. Tap "Resume".
-- "Paused: Cache was closed · 340 of 5,768": Cache was closed while it worked. Tap "Resume".
-- `Waits for charging · 340 of 5,768`: a long job waits for charge or more than half a battery.
-- "Paused, battery low": under 20% and not plugged in. It goes on when you charge.
-- `Slowed down, phone is warm · 340 of 5,768`: it eases off until the device cools.
-- `Paused, not enough space · 340 of 5,768`: free space in ["Settings" > "Storage"](cache://settings/storage).
-- "Needs 1.2 GB free" or "Needs more free space": tap "Free space".
+- `Paused by you · Resume · 340 of 5,768`: you paused it. Tap "Resume".
+- `Paused · Cache is in the background · 340 of 5,768`: Cache was closed while it worked. It goes on when you open Cache.
+- `Waits for charging (long job) · 340 of 5,768`: a long job waits for charge or more than half a battery.
+- `Paused · battery low (12%) · plug in to continue`: under 20% and not plugged in. It goes on when you charge.
+- `Slowed down · device is warm · 340 of 5,768`: it eases off until the device cools.
+- `Slowed down · keeping the device cool · 340 of 5,768`: it eases off before the device gets warm.
+- "Paused · while Ask answers": it goes on when the answer is written.
+- "Stuck · skipped for now · Retry": it made no progress for 5 minutes and Cache went on with the rest. Tap the bar at the top of the Library, then tap the item to try again. A PDF that takes over 2 minutes to open or to read one page is skipped as one that could not be read.
+- `Needs 1.2 GB free · Free space` or "Needs more free space · Free space": tap "Free space".
 - "Stopped: the library could not be read": tap "Resume". If it repeats, delete the library and add it again.
-- "Making EPUBs searchable: 40 of 85", "Waiting to make EPUBs searchable" or "EPUBs: searching ready": the same, for EPUB books.
+- `Making EPUBs searchable · 40 of 85`, "Waiting to make EPUBs searchable" or "EPUBs: searching ready": the same, for EPUB books. Captions say the same with "captions".
 
-On a library's row, after its size: "Making PDFs searchable", "PDFs paused", "PDFs need more space" or "PDFs stopped".
+On a library's row, after its size: what runs on it now with its progress, else why it waits, else "Waiting to make PDFs searchable". Only one library at a time says it is making something searchable. "PDFs stopped" means it could not be read.
 
-At the foot of "Settings": "Getting search ready: 3 of 12", then maybe `waits for charging`, `paused, battery low`, `paused, not enough space` or `slowed down, phone is warm`. It goes away by itself.
+At the top of "Library" and the foot of "Settings": a bar with `Getting search ready · 3 of 12 done`, and why it waits when it does. Tap it for the queue. It goes away by itself, after `Search ready · 12 of 12`.
 
 "Another device finished this. Using its index.": a linked device built the index first, and this device took it. See Search indexes on linked devices in chapter 3.
 
@@ -157,16 +159,16 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 - "Update ready": press and hold the item, then "Check for update".
 - "That source is not on this device any more.": download it again.
 - "Indexing", "Waiting to index" or "Building index": see An index still building.
-- "Making PDFs searchable: 340 of 5,768", "Waiting to make PDFs searchable" or "PDFs: searching ready": see Search indexing messages.
+- `Making PDFs searchable · 340 of 5,768`, "Waiting to make PDFs searchable" or "PDFs: searching ready": see Search indexing messages.
 - "Nothing found. Try another word, language or category.": change the search or chips.
 
-## Kiwix catalogue messages
+## Kiwix catalog messages
 
-When the catalogue in ["Library" > "Add to Library"](cache://library/add) can't load:
+When the catalog in ["Library" > "Add to Library"](cache://library/add) can't load:
 - "Cannot reach the Kiwix library. Check the connection.": connect and tap "Try again".
 - "Cannot make a secure connection to the Kiwix library.": the network may block it, or the device's date is wrong. Try another network.
 - "The Kiwix library took too long to answer.": try later.
-- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalogue." or "The library could not be read: [reason]": try later or on another network.
+- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalog." or "The library could not be read: [reason]": try later or on another network.
 
 ## ZIM download messages
 
@@ -178,7 +180,7 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 - "The connection failed: [reason]": check the connection.
 - "Could not make a secure connection to the download server.": try another network.
 - "The download server took too long to answer.": try later.
-- "That file is no longer on the download server.": search the catalogue again.
+- "That file is no longer on the download server.": search the catalog again.
 - "The download server answered [code].", "The download server did not say how big the file is.", "The download server redirected too many times.", "The download server sent a redirect with no address." or "The download server continued from the wrong place. Try again.": try later.
 - "Could not write the file: [reason]": check free space.
 - "Could not finish the download: [reason]": tap "Try again".
@@ -188,7 +190,7 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 Models, regions, Library items and videos show their progress the same way.
 
 - "Starting…": you tapped it and it has not begun yet.
-- "1.7 of 4.6 GB · 6.2 MB/s · about 8 min left": the size so far, the speed and the time left. The speed and time appear after about 5 seconds. The time reads "less than a minute", "about 8 min" or "about 2 hr". If the size is not known, the line reads "1.7 GB so far".
+- "1.7 of 4.6 GB · 6.2 MB/s · about 8 min left": the size so far, the speed and the time left. The speed and time appear after about 2 seconds; if nothing arrives for a while, the line says "Waiting for the server". The time reads "less than a minute", "about 8 min" or "about 2 hr". If the size is not known, the line reads "1.7 GB so far".
 - "Pausing…": it is stopping because you asked.
 - "Paused", then how much is downloaded and the full size: tap "Resume" to carry on.
 - "Stopped: [reason] · [done] of [total]": the reason is "no connection", "this device is full", "server did not answer" or "download was cut off". A model that needs an account says "this model needs a Hugging Face account". On a region the line ends with its places instead of the size. Fix the cause, then tap "Resume".
@@ -229,7 +231,7 @@ States are "Getting ready", "Waiting to index", "Building index" and "Not availa
 ## Map and layer messages
 
 In "Maps":
-- "No base map yet. Connect once to get the catalogue.": connect once.
+- "No base map yet. Connect once to get the catalog.": connect once.
 - "[layer] needs a connection here" or "[layer] needs a connection or a download here": connect, or download the region.
 - "Maps need network access": tap "Allow". If it still fails, tap "Open settings".
 
@@ -271,9 +273,9 @@ On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/r
 - "This country's regions need a connection the first time." or "Search needs a connection the first time.": connect once.
 - "This region could not be read. Connect and try again."
 - `No region called "[name]".`: try another spelling, or browse "Countries".
-- "No region here in the catalogue. Search for one in Regions.": search by name.
+- "No region here in the catalog. Search for one in Regions.": search by name.
 - "Nothing downloaded yet": pick a region under "Downloads".
-- "Size unknown": the catalogue has no size for it.
+- "Size unknown": the catalog has no size for it.
 - "Waiting for Wi-Fi": it will download on Wi-Fi.
 - "On this device": already here.
 
@@ -367,7 +369,7 @@ In the "Choose a place" sheet:
 On a source's page (tap its row in ["Settings" > "Weather and alerts"](cache://settings/weather)):
 - "Data" "Out of date": update when online.
 - "Last update" "Nothing downloaded yet": tap "Update now" on "Weather".
-- "This source is no longer in the catalogue.": its catalogue dropped it.
+- "This source is no longer offered.": the source list dropped it.
 - "Needs your own key": tap "Get key".
 
 In the source list:
@@ -413,21 +415,26 @@ In the key sheet from "Get key" on a source's row (["Settings" > "Weather and al
 - "[source] is on" or "Key replaced": it worked.
 - "Key removed": its sources are off.
 
-## Catalogue messages
+## Your own source messages
 
-In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a link"](cache://settings/weather):
-- "Enter an address that starts with https://": paste the full link.
-- "No connection. Connect to add a catalogue."
-- "Couldn't check that link. Try again."
-- "That address didn't give a connector catalogue.": ask whoever gave you the link.
-- "That catalogue is already added." or `A catalogue called "[name]" is already added.`
-- "None of the sources in this catalogue can be used by this version of Cache."
-- "This catalogue is in a newer format than this version of Cache can read. Update Cache to use it."
-- "This catalogue is in a format Cache does not know."
-- "Couldn't reach [site]. Check your connection.", "Couldn't make a secure connection to [site].", "Couldn't read from [site].", "[site] answered with an error (HTTP [code]).", "The file is larger than expected.": a network or server problem. Try later.
-- "Left out ([n])": some sources couldn't be used. The reason is under each. Tell the publisher.
-- "[name] added", "Removed", "Sources are up to date": it worked.
-- "Couldn't load the catalogue.": the last good copy is kept.
+In ["Settings" > "Weather and alerts" > "More sources" > "Add your own source"](cache://settings/weather):
+- "Give the source a name." or "Enter the web address of the service."
+- "Enter an address that starts with https://": paste the full address.
+- "The address has { } in it that Cache doesn't fill in. Use the Latitude and Longitude buttons for the place."
+- "Put your key in the web address where the service asks for it." or "This address needs your key. Type it under Key."
+- "No connection. Connect to the internet and try again."
+- "[site] answered with an error (HTTP [code]).": check the address, or try later.
+- "[site] answered, but not with JSON. This version of Cache only reads JSON.": this kind of service can't be added yet.
+- "[site] answered, but there are no values in it.", "[site] didn't answer in time.", "Couldn't reach [site]. Check the address and your connection.": check the address and tap "Try again".
+- "Tick at least one value to show."
+- "Cache can't use this source: [reason]": the source was not saved.
+
+When you import a source file:
+- "This isn't a source file." or "This isn't a source file: it is neither a source nor a list of sources.": ask whoever gave it to you.
+- "None of its sources can be added. [reason]"
+- "This source list is in a newer format than this version of Cache can read. Update Cache to use it."
+- "Left out ([n])": some sources couldn't be used, or you have them already. The reason is under each.
+- "Couldn't load the list of sources.": the last good copy is kept.
 
 ## Notification messages
 
@@ -458,7 +465,7 @@ In "Videos":
 ## Video sign-in messages
 
 In the sheet from the account button on a site:
-- "Sign-in with [name] was cancelled.": you closed the site's page. Tap the button again.
+- "Sign-in with [name] was canceled.": you closed the site's page. Tap the button again.
 - "[site] couldn't sign you in with [name]. Try again."
 - "That sign-in took too long or was already used. Try again.": start the sign-in again.
 - "Sign in to [site] to play this video": a private video. Tap "Sign in".
@@ -507,7 +514,7 @@ In ["Settings" > "Storage"](cache://settings/storage):
 - "Nothing to clean up": nothing to remove.
 - "Freed [size]": "Clean up" finished.
 
-In ["Settings" > "Credits and licences"](cache://settings/credits):
+In ["Library" > "Cache Documentation" > "Credits and licenses"](cache://settings/credits):
 - "Couldn't load the credits.": restart Cache.
 
 ## Notebook messages
@@ -549,7 +556,7 @@ These need a connection:
 - downloads;
 - map layers that "Streams when online" or "Needs a connection" outside downloaded areas;
 - web search;
-- the first look at the region list and Kiwix catalogue;
+- the first look at the region list and Kiwix catalog;
 - linking devices over the internet.
 
 ## Mobile data: why a download did not start

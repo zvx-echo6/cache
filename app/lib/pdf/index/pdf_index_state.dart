@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 
 import '../../settings/space.dart';
 import '../../platform/battery.dart';
+import '../../platform/app_log.dart';
+import 'pdf_diagnostics.dart';
 import 'pdf_index_core.dart';
 import 'pdf_index_run.dart';
 import 'pdf_pages.dart';
@@ -33,8 +35,10 @@ enum PdfPartPhase { waiting, starting, running, pausing, finishing, paused, need
 /// Who paused it: the person, a low battery (the run's own check), Cache closing, or the app's index scheduler ([held]).
 enum PdfPause { person, battery, closed, held }
 
-/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words.
-enum PdfHold { waiting, charging, warm, battery, storage }
+/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words: queued behind other
+/// work, long work waiting for charging, the device warm, the battery low, not enough room, Cache in the background, Ask
+/// answering, or the person's Pause all.
+enum PdfHold { waiting, charging, warm, battery, storage, closed, model, person, stuck }
 
 /// What the PDFs part of one library shows.
 class PdfPart {
@@ -176,6 +180,10 @@ class PdfIndexState extends ChangeNotifier {
   /// app where the scheduler is made.
   PdfPermit? permit;
 
+  /// Steps the running loop has taken (before each PDF and between pages): its sign of life for the scheduler's watchdog, so a
+  /// long PDF read page by page is never taken for stuck.
+  int beats = 0;
+
   /// Shows a short message (a snackbar): set by the app shell.
   void Function(String text)? say;
 
@@ -188,6 +196,80 @@ class PdfIndexState extends ChangeNotifier {
   final Map<String, (DateTime, PdfSnapshot?)> _snaps = {};
   final Map<String, PdfEstimate> _estimates = {};
   final Map<String, PdfRunFailure> _failures = {};
+  final Set<Timer> _diagnosticTimers = {};
+  final Set<PdfIndexRun> _samples = {};
+  final Map<String, String> _earlyStep = {};
+  final Map<String, int> _earlySteps = {};
+
+  String _job(PdfZimRef z) => 'zim-pdf/${z.uuid}';
+
+  void _startingStep(PdfZimRef z, String step) {
+    if (_earlyStep[z.path] == step) return;
+    _earlyStep[z.path] = step;
+    _earlySteps[z.path] = (_earlySteps[z.path] ?? 0) + 1;
+    notifyListeners();
+  }
+
+  Future<T> _trace<T>(PdfZimRef z, String step, Future<T> Function() action) {
+    _startingStep(z, step);
+    return tracePdfOperation(step, action, job: _job(z), alive: () => !_disposed, timers: _diagnosticTimers);
+  }
+
+  /// [z]'s PDF list: the one kept for its uuid when there is one (a ZIM file never changes, so its list never does), else listed
+  /// by the core once and kept. Build 46 listed every ZIM at every start: 15 s of the core for a full Wikipedia each time.
+  /// A listing in progress, by uuid: the start's listing and a [listOf] at the same time share one.
+  final Map<String, Future<ZimPdfList>> _reading = {};
+
+  Future<ZimPdfList> _readList(PdfZimRef z) {
+    final uuid = z.uuid!;
+    final kept = _keptList(uuid);
+    if (kept != null) return Future.value(kept);
+    return _reading[uuid] ??= () async {
+      try {
+        final list = await _trace(z, 'Listing PDFs', () => core.zimPdfs(uuid));
+        logInfo('PDF list contains ${list.pdfs.length} PDFs, ${list.bytes} bytes', job: _job(z));
+        await _keepList(list);
+        return list;
+      } finally {
+        _reading.remove(uuid);
+      }
+    }();
+  }
+
+  /// Where the PDF lists are kept: `pdf-lists/` beside the record (never synced); known once [init] has read the record.
+  String? _listsDir;
+
+  /// Where the PDF list of the ZIM [uuid] is kept: `pdf-lists/<uuid>.json`.
+  File? _listFile(String uuid) => _listsDir == null ? null : File('$_listsDir${Platform.pathSeparator}$uuid.json');
+
+  ZimPdfList? _keptList(String uuid) {
+    try {
+      final f = _listFile(uuid);
+      if (f == null || !f.existsSync()) return null;
+      final l = ZimPdfList.fromJson((jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>());
+      return l.zimUuid == uuid ? l : null;
+    } catch (_) {
+      // unreadable: listed again
+      return null;
+    }
+  }
+
+  Future<void> _keepList(ZimPdfList l) async {
+    try {
+      final f = _listFile(l.zimUuid);
+      if (f == null) return;
+      await f.parent.create(recursive: true);
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsString(jsonEncode(l.toJson()), flush: true);
+      await tmp.rename(f.path);
+    } catch (_) {}
+  }
+
+  void _listingFailed(PdfZimRef z, Object error, StackTrace stack) {
+    logError('The PDF list could not be read', error: error, stack: stack, job: _job(z));
+    // Keep the current retry policy; this diagnostic build exposes the error instead of guessing a recovery.
+    notifyListeners();
+  }
 
   /// Libraries held back before they start: no room (with the room needed), or a long job on a low battery.
   final Map<String, (PdfPartPhase, int)> _blocked = {};
@@ -212,11 +294,13 @@ class PdfIndexState extends ChangeNotifier {
   Future<void> init() async {
     if (_loaded) return;
     try {
-      await core.prepare();
+      await tracePdfOperation('Preparing PDF indexing', core.prepare, alive: () => !_disposed, timers: _diagnosticTimers);
       _indexes = (await indexesDir()).path;
       final f = await recordFile();
+      _listsDir = '${f.parent.path}${Platform.pathSeparator}pdf-lists';
       if (f.existsSync()) _record = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
-    } catch (_) {
+    } catch (error, stack) {
+      logError('PDF index initialization failed', error: error, stack: stack);
       _record = {};
     }
     _loaded = true;
@@ -238,6 +322,13 @@ class PdfIndexState extends ChangeNotifier {
     _disposed = true;
     changes?.removeListener(_onZims);
     _watch?.cancel();
+    for (final timer in _diagnosticTimers) {
+      timer.cancel();
+    }
+    _diagnosticTimers.clear();
+    for (final sample in _samples) {
+      sample.stop(PdfRunStop.person);
+    }
     _run?.stop(PdfRunStop.person);
     super.dispose();
   }
@@ -293,10 +384,11 @@ class PdfIndexState extends ChangeNotifier {
     _listing.add(z.path);
     unawaited(() async {
       try {
-        final l = await core.zimPdfs(z.uuid!);
+        final l = await _readList(z);
         _lists[z.path] = l;
         await _put(z.fileName, {'count': l.pdfs.length, 'count_uuid': l.zimUuid, 'zim_name': l.zimName});
-      } catch (_) {
+      } catch (error, stack) {
+        _listingFailed(z, error, stack);
       } finally {
         _listing.remove(z.path);
         _schedule();
@@ -311,10 +403,11 @@ class PdfIndexState extends ChangeNotifier {
     if (have != null && have.zimUuid == z.uuid) return have;
     if (z.uuid == null) return null;
     try {
-      final l = await core.zimPdfs(z.uuid!);
+      final l = await _readList(z);
       _lists[z.path] = l;
       return l;
-    } catch (_) {
+    } catch (error, stack) {
+      _listingFailed(z, error, stack);
       return null;
     }
   }
@@ -450,6 +543,12 @@ class PdfIndexState extends ChangeNotifier {
   }
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
+  /// The step the run on [z] is on now ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when none runs on it.
+  String? stepOf(PdfZimRef z) => (_runPath == z.path ? _run?.step : null) ?? _earlyStep[z.path];
+
+  /// Steps the run on [z] has taken (a sign of life for the watchdog).
+  int stepsOf(PdfZimRef z) => (_earlySteps[z.path] ?? 0) + (_runPath == z.path ? (_run?.steps ?? 0) : 0);
+
   PdfPart? partOf(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null || _indexes == null) return null;
     final total = _total(z);
@@ -538,7 +637,19 @@ class PdfIndexState extends ChangeNotifier {
         stage: false,
         onTiming: rows.add,
       );
-      await run.run();
+      final sampleNumber = rows.length + 1;
+      void sampleStep() {
+        if (run.step != null) _startingStep(z, 'Sample $sampleNumber of ${picks.length}: ${run.step}');
+      }
+      _samples.add(run);
+      run.addListener(sampleStep);
+      try {
+        final result = await _trace(z, 'Timing PDF sample $sampleNumber of ${picks.length}', run.run);
+        logInfo('PDF sample $sampleNumber ended ${result.name}${run.failure == null ? '' : ': ${run.failure!.message}'}', job: _job(z));
+      } finally {
+        run.removeListener(sampleStep);
+        _samples.remove(run);
+      }
       if (clock().difference(clockStart) > budget) break;
     }
     final ms = rows.fold(0, (s, r) => s + r.totalMs);
@@ -592,7 +703,7 @@ class PdfIndexState extends ChangeNotifier {
         _pickingPath = path;
         final z = _zim(path);
         if (z == null || z.uuid == null) continue;
-        final e = _estimates[path] ?? await measure(z);
+        final e = _estimates[path] ?? await _trace(z, 'Estimating PDF work', () => measure(z));
         if (e == null) continue;
         final usable = space(File(z.path).parent.path).usable;
         if (usable != null && e.needBytes > usable) {
@@ -648,7 +759,10 @@ class PdfIndexState extends ChangeNotifier {
       battery: battery,
       spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
       // This device's note of the PDF being extracted (never synced), beside its record.
-      permit: permit,
+      permit: () {
+        beats++;
+        return permit?.call() ?? Future<void>.value();
+      },
       attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
     );
@@ -745,6 +859,8 @@ class PdfIndexState extends ChangeNotifier {
   /// running for it, and the person has not paused it. Null while that is not known yet (not listed).
   bool? needsIndex(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null) return null;
+    // A failed run waits for the person's Retry; the scheduler must not clear its failure by starting it again.
+    if (_failures.containsKey(z.path)) return false;
     final total = _total(z);
     if (total == null) {
       _ensureList(z);
@@ -787,7 +903,7 @@ class PdfIndexState extends ChangeNotifier {
     _failures.remove(z.path);
     _blocked.remove(z.path);
     _holds.remove(z.path);
-    await _put(z.fileName, {'pause': null});
+    await _trace(z, 'Saving PDF start state', () => _put(z.fileName, {'pause': null}));
     if (!_queue.contains(z.path) && z.path != _runPath) _queue.insert(0, z.path);
     notifyListeners();
     unawaited(_next(forced: z.path));
@@ -832,7 +948,15 @@ class PdfIndexState extends ChangeNotifier {
         } catch (_) {}
       }
     }
-    _lists.remove(zimPath);
+    // the kept PDF list of a ZIM no longer here
+    final gone = _lists.remove(zimPath)?.zimUuid;
+    for (final u in {...uuids, ?gone}) {
+      if (kept.contains(u)) continue;
+      try {
+        final f = _listFile(u);
+        if (f != null && f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
     _snaps.remove(zimPath);
     notifyListeners();
     _sweep(afterRemove: true);

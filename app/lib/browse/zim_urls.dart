@@ -81,6 +81,55 @@ String? addressOfUrl(Uri url) {
   return 'zim:$id/$rest${url.hasQuery ? '?${url.query}' : ''}';
 }
 
+/// The address a browser's reader gives the frame for the page at [address]: `/zim/<token>/<zim id>/<path>[?query]`, the path
+/// percent-encoded as [readerUrl] has it. The server answers it with the entry's bytes. Null when [address] is not a ZIM address.
+String? zimFrameUrl(String token, String address) {
+  final u = readerUrl(address);
+  if (u == null) return null;
+  return '/zim/$token${u.path}${u.hasQuery ? '?${u.query}' : ''}';
+}
+
+final RegExp _framePath = RegExp(r'^/zim/[^/?#]+/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^#]+)');
+
+/// The `zim:<uuid>/<path>` address of a frame address (what [zimFrameUrl] made, as the frame reports it), or null. A #fragment is dropped.
+String? addressOfFramePath(String framePath) {
+  final m = _framePath.firstMatch(framePath);
+  return m == null ? null : 'zim:${m.group(1)!.toLowerCase()}/${m.group(2)}';
+}
+
+/// Where the pages of a browser's reader frame stand: the addresses visited and the one on show. The frame's own history cannot be
+/// read from outside (the page has no origin), so the reader keeps this from what the frame reports. [requested] says a back or
+/// forward was asked for, so the next report moves along the list instead of adding to it.
+class FrameHistory {
+  final List<String> pages = [];
+  int index = -1;
+  String? _pending;
+
+  bool get canBack => index > 0;
+  bool get canForward => index >= 0 && index < pages.length - 1;
+  String? get current => index < 0 ? null : pages[index];
+
+  void requested(String direction) => _pending = direction;
+
+  /// The frame settled on [address].
+  void reported(String address) {
+    if (current == address) {
+      _pending = null;
+      return;
+    }
+    if (_pending == 'back' && index > 0 && pages[index - 1] == address) {
+      index--;
+    } else if (_pending == 'forward' && index < pages.length - 1 && pages[index + 1] == address) {
+      index++;
+    } else {
+      pages.removeRange(index + 1, pages.length);
+      pages.add(address);
+      index = pages.length - 1;
+    }
+    _pending = null;
+  }
+}
+
 class ServedEntry {
   const ServedEntry(this.status, this.mime, this.bytes);
 

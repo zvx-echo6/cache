@@ -122,11 +122,36 @@ void main() {
     job.now = const JobProgress(state: JobState.running, done: 40, total: 85, phase: 'read');
     await _ticks();
     expect(calls.progress.value['zim-epub/u2'], (40, 85));
-    expect(epubLine(const ZimSubIndex(state: 'none', needsBuild: true), calls.progress.value['zim-epub/u2']), 'Making EPUBs searchable: 40 of 85');
+    expect(epubLine(const ZimSubIndex(state: 'none', needsBuild: true), calls.progress.value['zim-epub/u2']), 'Making EPUBs searchable · 40 of 85');
     job.now = const JobProgress(state: JobState.done, done: 85, total: 85);
     expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
     expect(calls.progress.value, isEmpty);
     expect(job.freed, isTrue);
+  });
+
+  test('a job that finished is not listed again while the status read before it still says it needs a build; the status is read again', () async {
+    var reads = 0;
+    calls = AppIndexCoreCalls(
+      statuses: () => statuses,
+      videos: () => videos,
+      startJob: (kind, params) async {
+        started.add((kind, params));
+        return job;
+      },
+      indexesDir: () => '/s/shared-indexes',
+      poll: const Duration(milliseconds: 10),
+      onJobDone: () => reads++,
+      clock: () => now,
+    );
+    // a ZIM with EPUBs none of which could be read: the build publishes an empty index and is done at once
+    statuses = [_zim('u2', epub: {'state': 'none', 'kind': 'zim-epub', 'source_id': 'u2', 'entries': 3, 'needs_build': true})];
+    final first = await CoreIndexWork(calls).pending();
+    expect([for (final t in first) t.key], ['zim-epub/u2']);
+    final run = await first.single.start();
+    job.now = const JobProgress(state: JobState.done, done: 0, total: 3);
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
+    expect(reads, 1, reason: 'the status is read again');
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'not run again every second');
   });
 
   test("the throttle's duty reaches a running job through cs_job_set; the scheduler's pause cancels it (it keeps what it did)", () async {

@@ -44,7 +44,7 @@ To get a key:
 One email address gets one key. To resend or change it, log in at the FIRMS download page.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
+1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
 2. Tap "Get key" on "Satellite fire detections near the place (NASA FIRMS)".
 3. Paste the key and tap "Check and save".
 
@@ -117,7 +117,7 @@ To switch it on:
 1. Tap "Turn on weather". It switches on "Emergency alerts" with "Weather alerts".
 2. Or go to ["Settings" > "Weather and alerts"](cache://settings/weather) and turn on "Emergency alerts".
 
-If "Weather alerts" was already on, Cache switches it on once when the catalogue offers it. After that it is your switch.
+If "Weather alerts" was already on, Cache switches it on once when the source list offers it. After that it is your switch.
 
 The same alert can come from the Weather Service and from IPAWS. Cache shows and pops it up once.
 
@@ -184,21 +184,21 @@ To switch it on:
 1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
 2. Turn on "Road work zones near the place, Idaho (WZDx)".
 
-## Adding more sources: the catalogue
+## Adding more sources
 
-Every source comes from the Cache connectors catalogue, which the app downloads when online. Nothing is on until you choose it.
+Every source comes from Cache's source list, which the app downloads when online. Nothing is on until you choose it.
 
 - Featured sources are first in ["Settings" > "Weather and alerts"](cache://settings/weather). The rest are under "More sources".
 - A source that needs a key has a "Get key" button.
-- To add someone else's catalogue, tap "Add sources from a link" at the bottom of "More sources" and paste its address. Cache checks every source and adds nothing until you say so.
-- "Catalogues in use" lists the catalogues. "Check for updates" looks for new and changed sources.
+- To add a web service of your own, tap "Add your own source" at the bottom of "More sources". See chapter 3, Add your own source.
+- To add a source file or a list someone gives you, tap "Or import a source file" on that page. Cache checks every source and adds nothing until you say so.
 
 ## Libraries from Kiwix
 
 Kiwix publishes free offline copies of Wikipedia, medical guides and how-to sites as ZIM files.
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
-2. Search the catalogue, or use the language and category chips such as "Medicine" or "Preparedness".
+2. Search the catalog, or use the language and category chips such as "Medicine" or "Preparedness".
 3. Download from "Ready-made collections · free from Kiwix".
 
 Every download asks first, with its size. Large files can be several gigabytes. Wikipedia comes with pictures (maxi) or without (nopic). The versions without pictures are much smaller.

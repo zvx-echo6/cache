@@ -1,0 +1,13 @@
+[package]
+name = "cache_shelves"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's Bookshelves log: the person's own shelves, call numbers, same-book groups and linked-folder locations as events, and the pure function that resolves them. One implementation, shared by the library builder, Cache for Linux and the phones"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../cache_search/native"
+
+# Pure Rust: no PDF engine, no model, no native library, so phones link it. serde and serde_json only.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

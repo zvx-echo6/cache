@@ -80,17 +80,20 @@ class SettingsPage extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                children: [
-                  for (var i = 0; i < children.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 14),
-                    children[i],
+              // A wide pane keeps the rows to the content width, centred (see ContentWidth).
+              child: LayoutBuilder(
+                builder: (context, c) => ListView(
+                  padding: ContentWidth.padFor(c.maxWidth, min: 12).copyWith(top: 4, bottom: 24),
+                  children: [
+                    for (var i = 0; i < children.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 14),
+                      children[i],
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-            ?bottom,
+            if (bottom != null) ContentWidth(child: bottom!),
           ],
         ),
       ),
@@ -167,7 +170,11 @@ class SettingsRow extends StatelessWidget {
     this.onHold,
     this.holdLabel = 'Options',
     this.selected = false,
+    this.titleLines = 1,
   });
+
+  /// Lines the name may take (a book's title in a narrow list: 2).
+  final int titleLines;
 
   /// The row whose page is open beside the list (a tablet's two panes): tinted.
   final bool selected;
@@ -236,7 +243,7 @@ class SettingsRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: titleColor)),
+                        Text(title, maxLines: titleLines, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: titleColor)),
                         if (status != null || statusWidget != null) ...[
                           const SizedBox(height: 2),
                           statusWidget ?? statusText(context, status!, maxLines: statusLines),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../actions/act_core.dart';
@@ -13,6 +15,7 @@ import 'navigation_action.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
+import '../platform/app_log.dart';
 
 /// One message in the Ask screen.
 class ChatMessage {
@@ -42,12 +45,20 @@ class ChatMessage {
   final bool isUser;
   String text;
   TurnPhase phase;
+
+  /// Ephemeral work shown continuously above the final answer, not model history.
+  List<String> toolNotes = const [];
+  String? activeTool;
   List<NumberedResult> sources = const [];
   String? error;
   List<NavigationAction> navigationActions = const [];
 
   /// The confirm cards this answer asked for, in order.
   List<ConfirmCard> confirms = const [];
+
+  /// While this answer waits on a server for others to finish: how many are ahead (1 is next); null when it runs or never waits.
+  /// Shown on screen only; not stored and never sent to the model.
+  int? queuePosition;
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
@@ -140,10 +151,13 @@ class ChatController extends ChangeNotifier {
   void _bump() => historyRevision.value++;
 
   /// The model for the next answers. A different model keeps the open conversation: its transcript is
-  /// sent to the new model, which rebuilds its context.
-  void setBackend(ModelBackend? backend, {String modelName = ''}) {
+  /// sent to the new model, which rebuilds its context. [queuePosition] is where its generation waits on a server
+  /// (LlamaSession.queuePosition); the answer being produced shows it while it waits.
+  void setBackend(ModelBackend? backend, {String modelName = '', Stream<int?>? queuePosition}) {
     if (identical(backend, _backend)) return;
     _backend = backend;
+    unawaited(_queueSub?.cancel());
+    _queueSub = queuePosition?.listen(_onQueuePosition);
     _modelName = modelName;
     _dropLoop();
     _turn = null;
@@ -152,6 +166,23 @@ class ChatController extends ChangeNotifier {
   }
 
   bool get canSend => _backend != null && !busy;
+
+  StreamSubscription<int?>? _queueSub;
+
+  void _onQueuePosition(int? position) {
+    if (messages.isEmpty) return;
+    final reply = messages.last;
+    // A title written after the answer also waits; only an answer still being produced shows it.
+    if (reply.isUser || reply.isDone || reply.queuePosition == position) return;
+    reply.queuePosition = position;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_queueSub?.cancel());
+    super.dispose();
+  }
 
   /// The open conversation is in voice mode: every request's system prompt carries the voice line. The mode is fixed when the
   /// conversation is made and stored with it, so a reopened chat keeps it. A new chat starts in text.
@@ -283,6 +314,7 @@ class ChatController extends ChangeNotifier {
       numbering: numbering,
       host: newHost?.call(numbering),
       systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false, voice: _voice),
+      timeLine: () => buildTimeLine(DateTime.now()),
       history: history,
       knownResults: cited.values,
     );
@@ -306,6 +338,7 @@ class ChatController extends ChangeNotifier {
     text = text.trim();
     final backend = _backend;
     if (text.isEmpty || backend == null || busy) return;
+    logContent('Ask: $text');
     busy = true;
     final epoch = _epoch;
     final turn = _turn = Object();
@@ -365,9 +398,11 @@ class ChatController extends ChangeNotifier {
       }
       loop = made;
       await _installActions();
+      // The question as the model reads it (its time line first), stored as sent so a reopened chat renders it the same.
+      final question = loop.userMessage(text);
       if (store != null && convId != null) {
         try {
-          store.addMessage(convId, role: 'user', content: text, message: {'role': 'user', 'content': text}, model: _modelName);
+          store.addMessage(convId, role: 'user', content: text, message: question, model: _modelName);
         } catch (_) {}
       }
       if (cancelled()) return;
@@ -397,20 +432,17 @@ class ChatController extends ChangeNotifier {
         if (epoch == _epoch) notifyListeners();
       };
       final seeded = seed == null || loop.host == null ? null : (name: seed.toolName, arguments: spacedJson(seed.arguments));
-      await for (final u in loop.ask(text, seed: seeded)) {
+      await for (final u in loop.ask(text, seed: seeded, message: question)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
-        reply
-          ..phase = u.phase
-          ..error = u.error;
-        if (u.phase == TurnPhase.answering || u.phase == TurnPhase.done) reply.text = u.text;
-        if (u.phase == TurnPhase.done) reply.sources = u.cited;
+        _applyUpdate(reply, u);
         notifyListeners();
       }
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
       reply.phase = TurnPhase.done;
+      reply.queuePosition = null;
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, actionDraft);
       }
@@ -438,7 +470,7 @@ class ChatController extends ChangeNotifier {
     try {
       await actCore.install(_definitions);
     } catch (e) {
-      debugPrint('cache act: definitions not installed ($e)');
+      logError('Actions: definitions not installed', error: e);
     }
   }
 
@@ -446,7 +478,7 @@ class ChatController extends ChangeNotifier {
     try {
       return await actCore.outcome(numbering, outcome);
     } catch (e) {
-      debugPrint('cache act: outcome not numbered ($e)');
+      logError('Actions: outcome not numbered', error: e);
       return hostEventContent(outcome);
     }
   }
@@ -564,17 +596,14 @@ class ChatController extends ChangeNotifier {
       await for (final u in loop.resume()) {
         if (epoch != _epoch) return;
         last = u;
-        reply
-          ..phase = u.phase
-          ..error = u.error;
-        if (u.phase == TurnPhase.answering || u.phase == TurnPhase.done) reply.text = u.text;
-        if (u.phase == TurnPhase.done) reply.sources = u.cited;
+        _applyUpdate(reply, u);
         notifyListeners();
       }
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
       reply.phase = TurnPhase.done;
+      reply.queuePosition = null;
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, null);
       }
@@ -586,6 +615,21 @@ class ChatController extends ChangeNotifier {
       if (epoch == _epoch) busy = false;
       notifyListeners();
     }
+  }
+
+  void _applyUpdate(ChatMessage reply, TurnUpdate update) {
+    reply
+      ..phase = update.phase
+      ..error = update.error
+      ..activeTool = update.activeTool;
+    final note = update.completedToolText;
+    if (note != null) {
+      if (note.isNotEmpty) reply.toolNotes = [...reply.toolNotes, note];
+      reply.text = '';
+    } else if (update.phase == TurnPhase.answering || update.phase == TurnPhase.done || update.text.isNotEmpty) {
+      reply.text = update.text;
+    }
+    if (update.phase == TurnPhase.done) reply.sources = update.cited;
   }
 
   /// Stores what the turn added to the transcript from [start], with the shown answer, its citations and its stats.

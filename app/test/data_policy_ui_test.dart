@@ -59,6 +59,9 @@ void main() {
       await tester.runAsync(() => r.browse.download(entry));
       expect(r.browse.transfers[entry.id]!.phase, TransferPhase.blockedByMobileData);
       await r.show(tester, BrowseScreen(browse: r.browse, active: true));
+      // downloads are ZIM Collections' rows
+      await tester.tap(find.byKey(const ValueKey('library-zims')));
+      await tester.pumpAndSettle();
       expect(find.textContaining('Waiting for Wi-Fi'), findsOneWidget);
       expect(find.byKey(const ValueKey('transfer-e-1-download-now')), findsOneWidget);
       // Wi-Fi comes: it starts without being asked.

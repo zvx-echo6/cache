@@ -253,6 +253,7 @@ impl Job {
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_seal" => Self::start_index_seal(params_json),
             "test_pace" => Self::start_test_pace(params_json),
+            "zim_pdfs" => Self::start_zim_pdfs(params_json),
             "index_source" => Self::start_index_source(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
@@ -309,6 +310,45 @@ impl Job {
                 *g = Some(r);
             }
             Ok(outcome)
+        })
+    }
+
+    /// Start a `zim_pdfs` job: `{"zim_path"}`. Lists the ZIM's PDFs (what `cs_zim_pdfs` answers, see zimpdfs.rs) on a thread of
+    /// its own, so the core's worker is free meanwhile; the list is in the progress JSON as "result" when done. Progress is
+    /// directory entries looked at, of all. `bad_json` for bad parameters; an unreadable ZIM makes the job `failed`.
+    fn start_zim_pdfs(params_json: &str) -> Result<Job> {
+        #[derive(Deserialize)]
+        struct P {
+            zim_path: String,
+        }
+        let p: P = serde_json::from_str(params_json)?;
+        if p.zim_path.is_empty() {
+            return Err(Error::bad_json("zim_path must not be empty"));
+        }
+        let path = PathBuf::from(p.zim_path);
+        Self::spawn("cs-zim-pdfs", (), 0, move |sh| {
+            match crate::zimpdfs::list_path(&path, None, &|d, t| sh.set_progress(d, t), &|| sh.cancel.load(Ordering::SeqCst))? {
+                Some(v) => {
+                    if let Ok(mut g) = sh.result.lock() {
+                        *g = Some(v);
+                    }
+                    Ok(Outcome::Done)
+                }
+                None => Ok(Outcome::Cancelled),
+            }
+        })
+    }
+
+    /// Run `work` on a thread of its own, reporting through a job: for the handle's own long calls (`cs_live_fetch_start`).
+    /// The answer `work` gives is the progress JSON's "result".
+    pub(crate) fn spawn_result(name: &str, work: impl FnOnce(&dyn Fn() -> bool) -> Result<Value> + Send + 'static) -> Result<Job> {
+        Self::spawn(name, (), 1, move |sh| {
+            let v = work(&|| sh.cancel.load(Ordering::SeqCst))?;
+            if let Ok(mut g) = sh.result.lock() {
+                *g = Some(v);
+            }
+            sh.set_progress(1, 1);
+            Ok(Outcome::Done)
         })
     }
 

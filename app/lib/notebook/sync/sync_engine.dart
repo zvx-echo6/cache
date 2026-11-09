@@ -10,6 +10,7 @@ import '../notebook_state.dart';
 import 'folder.dart';
 import 'formats.dart';
 import 'merge.dart';
+import '../../platform/app_log.dart';
 
 /// Where notebooks are kept outside Cache:
 /// - [obsidian]: one Markdown file per entry, two-way;
@@ -202,7 +203,7 @@ class NotebookSync {
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
     } catch (e) {
-      debugPrint('cache notebook sync: state unreadable ($e)');
+      logError('Notebook sync: state unreadable', error: e);
     }
   }
 
@@ -702,7 +703,7 @@ class NotebookSync {
           try {
             await _markOff(s);
           } catch (e) {
-            debugPrint('cache notebook sync: could not mark ${s.path} ($e)');
+            logError('Notebook sync: could not mark a note', error: e, detail: s.path);
             continue;
           }
           _items.remove(id);
@@ -966,7 +967,7 @@ class NotebookSync {
     try {
       await folder.writeText(u.path, newText);
     } catch (e) {
-      debugPrint('cache notebook sync: could not import ${u.path} ($e)');
+      logError('Notebook sync: could not import a note', error: e, detail: u.path);
       r.notAdded++;
       return;
     }
@@ -979,7 +980,7 @@ class NotebookSync {
       try {
         if (await folder.readText(u.path) == newText) await folder.writeText(u.path, cur);
       } catch (_) {}
-      debugPrint('cache notebook sync: could not import ${u.path} ($e)');
+      logError('Notebook sync: could not import a note', error: e, detail: u.path);
       r.notAdded++;
       return;
     }

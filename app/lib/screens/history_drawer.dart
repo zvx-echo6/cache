@@ -7,6 +7,7 @@ import '../history/share.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../theme.dart';
+import '../layout/adaptive.dart' show showFittedSheet;
 
 /// The list of past conversations, opened from the Ask top bar: New chat, a search box, then Pinned and
 /// the conversations grouped by date.
@@ -79,7 +80,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
   }
 
   Future<void> _longPress(Conversation c) async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showFittedSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(

@@ -6,6 +6,7 @@ import '../history/conversation_store.dart';
 import '../models/model_downloads.dart';
 import '../theme.dart';
 import 'settings/widgets.dart' show GroupLabel;
+import '../layout/adaptive.dart' show ContentWidth;
 
 /// A chat model is on its way to this device (downloading or being copied in), with how far it has got (0..1, null when not known).
 ({double? fraction})? modelArriving(AppState app, [ModelDownloads? downloads]) {
@@ -109,8 +110,8 @@ class _AskOffPageState extends State<AskOffPage> {
         builder: (context, _, _) {
           final open = widget.onOpenChat;
           final chats = open == null ? const <Conversation>[] : widget.chat.store?.list() ?? const <Conversation>[];
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          return LayoutBuilder(builder: (context, cts) => ListView(
+            padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 12, bottom: 24),
             children: [
               AskOffNote(app: widget.app, downloads: widget.downloads, onChooseModel: widget.onChooseModel, onClose: widget.onClose),
               if (chats.isNotEmpty) ...[
@@ -134,7 +135,7 @@ class _AskOffPageState extends State<AskOffPage> {
                   ),
               ],
             ],
-          );
+          ));
         },
       ),
     );

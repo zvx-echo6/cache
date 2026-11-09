@@ -1,0 +1,26 @@
+name: cache_ocr_example
+description: "Runs cache_ocr's real-engine tests on an Android emulator and an iOS simulator (CI: .github/workflows/ocr.yml)."
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cache_ocr:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # The page images and their text, made in CI by tool/make_fixtures.py.
+    - assets/fixtures/

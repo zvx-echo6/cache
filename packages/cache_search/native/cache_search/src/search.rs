@@ -897,13 +897,15 @@ impl Handle {
                     Shown::Pdf(pi, hi) => {
                         let (k, h) = (&pdf_kw[pi], &pdf_kw[pi].hits[hi]);
                         let address = pdfindex::address_of(&k.zim_id, &h.pid);
+                        let link = pdfindex::link_of(&k.zim_id, &h.zim_path, h.pdf_page);
+                        let quote = pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS);
                         self.last_cites.push((
                             address.clone(),
                             Cite {
-                                link: Some(pdfindex::link_of(&k.zim_id, &h.zim_path, h.pdf_page)),
+                                link: Some(link.clone()),
                                 time: None,
                                 pdf_page: Some(h.pdf_page),
-                                quote: Some(pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS)),
+                                quote: Some(quote.clone()),
                                 ..Default::default()
                             },
                         ));
@@ -919,6 +921,10 @@ impl Handle {
                             "source_title": k.zim_title,
                             "page": page_value(&h.label),
                             "pdf_page": h.pdf_page,
+                            // where it opens, as its citation (the PDF at the page) and the passage's first words to mark there;
+                            // never shown to the model
+                            "link": link,
+                            "quote": quote,
                         }));
                         break 'item;
                     }

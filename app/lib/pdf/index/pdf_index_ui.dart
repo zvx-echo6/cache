@@ -8,6 +8,7 @@ import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../theme.dart';
 import 'pdf_index_run.dart';
 import 'pdf_index_state.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// "340 of 5,768".
 String _of(PdfPart p) => '${formatCount(p.handled)} of ${formatCount(p.total)}';
@@ -15,32 +16,38 @@ String _of(PdfPart p) => '${formatCount(p.handled)} of ${formatCount(p.total)}';
 /// " · 22 new PDFs" for a new edition reusing its older one; nothing otherwise.
 String _new(PdfPart p) => p.newCount > 0 ? ' · ${formatCount(p.newCount)} new PDF${p.newCount == 1 ? '' : 's'}' : '';
 
-/// The status line of a library's PDFs (always on: a status, not an action).
+/// The status line of a library's PDFs (always on: a status, not an action), in the words of the Library rows, the Library's
+/// overview and the Settings line (search/index_status.dart). Only a run says "Making": waiting says so, and a pause says why
+/// and what makes it go on.
 String pdfPartLine(PdfPart p) => switch (p.phase) {
   PdfPartPhase.done => 'PDFs: searching ready',
   PdfPartPhase.waiting => 'Waiting to make PDFs searchable${_new(p)}',
   PdfPartPhase.starting => 'Making PDFs searchable…${_new(p)}',
-  PdfPartPhase.running when p.hold != null => '${pdfHoldWords(p.hold!)} · ${_of(p)}',
-  PdfPartPhase.running => 'Making PDFs searchable: ${_of(p)}${_new(p)}',
+  PdfPartPhase.running when p.hold != null && p.hold != PdfHold.waiting => '${pdfHoldWords(p.hold!)} · ${_of(p)}',
+  PdfPartPhase.running => 'Making PDFs searchable · ${_of(p)}${_new(p)}',
   PdfPartPhase.pausing => 'Pausing…',
-  PdfPartPhase.finishing => 'Making PDFs searchable: finishing',
+  PdfPartPhase.finishing => 'Making PDFs searchable · finishing',
   PdfPartPhase.paused => switch (p.pause) {
-    PdfPause.battery => 'Paused, battery low',
+    PdfPause.battery => 'Paused · battery low · plug in to continue · ${_of(p)}',
     PdfPause.held => '${pdfHoldWords(p.hold ?? PdfHold.waiting)} · ${_of(p)}',
-    PdfPause.closed => 'Paused: Cache was closed · ${_of(p)}',
-    _ => 'Paused · ${_of(p)}',
+    PdfPause.closed => 'Paused · Cache is in the background · ${_of(p)}',
+    _ => 'Paused by you · Resume · ${_of(p)}',
   },
-  PdfPartPhase.needsSpace => p.needBytes > 0 ? 'Needs ${formatBytes(p.needBytes)} free' : 'Needs more free space',
+  PdfPartPhase.needsSpace => p.needBytes > 0 ? 'Needs ${formatBytes(p.needBytes)} free · Free space' : 'Needs more free space · Free space',
   PdfPartPhase.failed => 'Stopped: the library could not be read',
 };
 
-/// The index scheduler's reason, in the Settings line's words.
+/// The index scheduler's reason, in the Settings line's words (search/index_status.dart's indexWaitWords).
 String pdfHoldWords(PdfHold h) => switch (h) {
-  PdfHold.waiting => 'Waiting',
-  PdfHold.charging => 'Waits for charging',
-  PdfHold.warm => 'Slowed down, phone is warm',
-  PdfHold.battery => 'Paused, battery low',
-  PdfHold.storage => 'Paused, not enough space',
+  PdfHold.waiting => 'Waiting to make PDFs searchable',
+  PdfHold.charging => 'Waits for charging (long job)',
+  PdfHold.warm => 'Slowed down · keeping the device cool',
+  PdfHold.battery => 'Paused · battery low · plug in to continue',
+  PdfHold.storage => 'Needs more free space · Free space',
+  PdfHold.closed => 'Paused · Cache is in the background',
+  PdfHold.model => 'Paused · while Ask answers',
+  PdfHold.person => 'Paused by you · Resume',
+  PdfHold.stuck => 'Stuck · skipped for now · Retry',
 };
 
 /// Why a run stopped, in plain words.
@@ -49,13 +56,12 @@ String pdfStopWords(PdfRunFailure f) => switch (f.kind) {
   PdfRunFailureKind.other => 'the library could not be read',
 };
 
-/// The few words the Library list adds to a ZIM's detail line; null adds none (searchable PDFs are the normal case).
+/// The few words the Library list adds to a ZIM's detail line when there is no index scheduler to ask; null adds none
+/// (searchable PDFs are the normal case). The same words as the status line: only a run says "Making".
 String? pdfRowNote(PdfPart? p) => switch (p?.phase) {
   null || PdfPartPhase.done => null,
-  PdfPartPhase.paused || PdfPartPhase.pausing => 'PDFs paused',
-  PdfPartPhase.needsSpace => 'PDFs need more space',
   PdfPartPhase.failed => 'PDFs stopped',
-  _ => 'Making PDFs searchable',
+  _ => pdfPartLine(p!),
 };
 
 /// The part as the one download pattern draws its control and bar.
@@ -74,19 +80,27 @@ DlState pdfDlState(PdfPart p) => switch (p.phase) {
 /// stopped, Free space when there is not enough room; none when searchable or waiting. Nothing when the library has no PDFs or
 /// this device cannot index them.
 class PdfIndexPartRow extends StatelessWidget {
-  const PdfIndexPartRow({super.key, required this.state, required this.zim});
+  const PdfIndexPartRow({super.key, required this.state, required this.zim, this.schedulerLine, this.changes});
 
   final PdfIndexState state;
   final PdfZimRef zim;
 
+  /// What the index scheduler says of this library's PDFs (running with progress, queued, or held with its reason), when it
+  /// has them; null leaves the part's own line.
+  final String? Function(PdfPart part)? schedulerLine;
+
+  /// The scheduler, so the line follows it too.
+  final Listenable? changes;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: state,
+    listenable: Listenable.merge([state, ?changes]),
     builder: (context, _) {
       final p = state.partOf(zim);
       if (p == null) return const SizedBox.shrink();
       return PdfPartView(
         part: p,
+        line: schedulerLine?.call(p),
         onPause: () => state.pause(zim),
         onResume: () => state.resume(zim),
         onFreeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
@@ -97,9 +111,12 @@ class PdfIndexPartRow extends StatelessWidget {
 
 /// The part drawn from a [PdfPart] (the renders draw it straight from a state).
 class PdfPartView extends StatelessWidget {
-  const PdfPartView({super.key, required this.part, this.onPause, this.onResume, this.onFreeSpace});
+  const PdfPartView({super.key, required this.part, this.onPause, this.onResume, this.onFreeSpace, this.line});
 
   final PdfPart part;
+
+  /// The line to show instead of [pdfPartLine] (the index scheduler's words).
+  final String? line;
   final VoidCallback? onPause;
   final VoidCallback? onResume;
   final VoidCallback? onFreeSpace;
@@ -135,7 +152,7 @@ class PdfPartView extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      pdfPartLine(p),
+                      line ?? pdfPartLine(p),
                       key: const ValueKey('$_key-line'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -171,7 +188,7 @@ class _Bar extends StatelessWidget {
 }
 
 /// The PDFs status on a sheet of its own (where the line under search results leads).
-Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim) => showModalBottomSheet<void>(
+Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim) => showFittedSheet<void>(
   context: context,
   showDragHandle: true,
   builder: (ctx) => SafeArea(

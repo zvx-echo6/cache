@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/pdf/index/pdf_index_fake.dart';
+import 'package:cache/pdf/index/pdf_index_core.dart';
 import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
 import 'package:cache/platform/battery.dart';
@@ -21,6 +22,19 @@ FakeZim _zim() => FakeZim(
         FakePdf('A/two.pdf', pages: [_words(120, 'shelter')]),
       ],
     );
+
+class _BusyIndexCore extends FakePdfIndexCore {
+  _BusyIndexCore() : super(zims: {'u1': _zim()});
+  bool busy = true;
+  int opens = 0;
+
+  @override
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language}) async {
+    opens++;
+    if (busy) throw StateError('Synthetic index writer is busy');
+    return super.open(indexesDir: indexesDir, zimUuid: zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language);
+  }
+}
 
 /// The ZIMs' PDFs as the scheduler runs them: it decides when, the PDF state queues nothing by itself.
 void main() {
@@ -120,9 +134,9 @@ void main() {
       changes: ValueNotifier(0),
       indexesDir: () async => Directory('${dir.path}/shared-indexes'),
       recordFile: () async => File('${dir.path}/pdf-index.json'),
-      readPages: (bytes, name, {betweenPages}) async {
+      readPages: (bytes, name, {betweenPages, onStep}) async {
         await Future<void>.delayed(const Duration(milliseconds: 30));
-        return readFakePdfPages(bytes, name, betweenPages: betweenPages);
+        return readFakePdfPages(bytes, name, betweenPages: betweenPages, onStep: onStep);
       },
       battery: () async => battery,
       space: (_) => const Space(free: 100 << 30, reserve: 0),
@@ -140,9 +154,9 @@ void main() {
     }
     // Slowed by heat while it runs.
     run.setDuty(IndexDuty.share(0.3, hold: IndexHold.heat));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down, phone is warm · '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down · keeping the device cool · '));
     run.setDuty(IndexDuty.share(2 / 3));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable: '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable · '));
     // Held because it waits for charging: not "low battery".
     await run.pause(IndexWait.charging);
     expect(await run.finished.timeout(const Duration(seconds: 10)), isFalse);
@@ -151,28 +165,74 @@ void main() {
     }
     final held = pdf.partOf(z)!;
     expect(held.pause, PdfPause.held);
-    expect(pdfPartLine(held), startsWith('Waits for charging · '));
+    expect(pdfPartLine(held), startsWith('Waits for charging (long job) · '));
     expect(File('${dir.path}/pdf-index.json').readAsStringSync(), contains('"pause":"held"'));
     expect(pdf.needsIndex(z), isTrue, reason: 'the scheduler starts it again');
     // The app went to the back: just waiting.
     await pdf.hold(z, pdfHoldOf(IndexWait.closed));
-    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Waiting · '));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Paused · Cache is in the background · '));
     // Started again: the reason goes.
     await pdf.start(z);
     expect(pdf.partOf(z)!.pause, isNot(PdfPause.held));
     await pdf.hold(z);
   });
 
+  test('failed PDF work stays failed until an explicit retry, without scheduler churn', () async {
+    s.dispose();
+    pdf.dispose();
+    final core = _BusyIndexCore();
+    pdf = PdfIndexState(
+      core: core,
+      zims: () => zims,
+      changes: ValueNotifier(0),
+      indexesDir: () async => Directory('${dir.path}/shared-indexes'),
+      recordFile: () async => File('${dir.path}/pdf-index.json'),
+      readPages: readFakePdfPages,
+      battery: () async => battery,
+      space: (_) => const Space(free: 100 << 30, reserve: 0),
+      watchEvery: const Duration(hours: 1),
+    )..autoStart = null;
+    await pdf.init();
+    s = IndexScheduler(
+      sources: [PdfIndexWork(pdf, () => zims)],
+      space: () => const Space(free: 100 << 30, reserve: 0),
+      battery: () async => battery,
+      every: const Duration(hours: 1),
+    );
+    await until((p) => p != null);
+    await pdf.start(zims.single);
+    expect(await until((p) => p == PdfPartPhase.failed), PdfPartPhase.failed);
+    expect(core.opens, 1);
+    expect(await PdfIndexWork(pdf, () => zims).pending(), isEmpty);
+    s.setOpen(true);
+    for (var i = 0; i < 5; i++) {
+      await s.kick();
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    expect(core.opens, 1, reason: 'failed work must not be automatically restarted');
+    expect(pdf.partOf(zims.single)?.phase, PdfPartPhase.failed);
+    core.busy = false;
+    await pdf.resume(zims.single);
+    expect(await until((p) => p == PdfPartPhase.done), PdfPartPhase.done);
+    expect(core.opens, 2);
+  });
+
   test('the words for each reason', () {
-    expect(pdfHoldWords(PdfHold.waiting), 'Waiting');
-    expect(pdfHoldWords(PdfHold.charging), 'Waits for charging');
-    expect(pdfHoldWords(PdfHold.warm), 'Slowed down, phone is warm');
-    expect(pdfHoldWords(PdfHold.battery), 'Paused, battery low');
-    expect(pdfHoldWords(PdfHold.storage), 'Paused, not enough space');
+    expect(pdfHoldWords(PdfHold.waiting), 'Waiting to make PDFs searchable');
+    expect(pdfHoldWords(PdfHold.charging), 'Waits for charging (long job)');
+    expect(pdfHoldWords(PdfHold.warm), 'Slowed down · keeping the device cool');
+    expect(pdfHoldWords(PdfHold.battery), 'Paused · battery low · plug in to continue');
+    expect(pdfHoldWords(PdfHold.storage), 'Needs more free space · Free space');
+    expect(pdfHoldWords(PdfHold.closed), 'Paused · Cache is in the background');
+    expect(pdfHoldWords(PdfHold.model), 'Paused · while Ask answers');
+    expect(pdfHoldWords(PdfHold.person), 'Paused by you · Resume');
     expect(pdfHoldOf(IndexWait.storage), PdfHold.storage);
     expect(pdfHoldOf(IndexWait.heat), PdfHold.warm);
     expect(pdfHoldOf(IndexWait.battery), PdfHold.battery);
-    expect(pdfHoldOf(IndexWait.closed), PdfHold.waiting);
-    expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 10, handled: 3, pause: PdfPause.battery)), 'Paused, battery low');
+    expect(pdfHoldOf(IndexWait.closed), PdfHold.closed);
+    expect(pdfHoldOf(IndexWait.model), PdfHold.model);
+    expect(pdfHoldOf(IndexWait.person), PdfHold.person);
+    expect(pdfHoldOf(IndexWait.none), PdfHold.waiting);
+    expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 10, handled: 3, pause: PdfPause.battery)), 'Paused · battery low · plug in to continue · 3 of 10');
   });
 }

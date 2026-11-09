@@ -171,6 +171,9 @@ struct LockInfo {
     boot_id: Option<String>,
     /// Unix seconds when the job started (informational).
     started: u64,
+    /// New locks use a kernel-owned guard; a leftover marker never blocks recovery.
+    #[serde(default)]
+    guarded: bool,
 }
 
 fn proc_start_ticks(pid: u32) -> Option<u64> {
@@ -185,18 +188,40 @@ fn boot_id() -> Option<String> {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok().map(|s| s.trim().to_string())
 }
 
-/// Is the lock file at `dir` held by a live job?
-///
-/// Detection: the lock records the owner's pid, its process start time (clock ticks, from /proc) and the boot
-/// id. It is stale (dead owner) when the boot id differs, when /proc/<pid> does not exist, or when that pid's
-/// start time differs (the pid was reused). When the owner is this very process, it is live only if a job here
-/// currently holds the directory (an in-process registry), so a leaked lock from a crashed job thread does not
-/// block. If /proc is unreadable the owner of another pid cannot be checked and is assumed live only if the lock
-/// is younger than 24 hours; an unparsable lock file is stale.
+/// A kernel-owned guard is authoritative for new jobs, including after a crash,
+/// PID reuse or a reboot. Old markers are checked by their recorded owner.
 pub fn lock_is_live(dir: &Path) -> bool {
+    guard_is_held(dir) || legacy_lock_is_live(dir)
+}
+
+/// Whether a build holds the kernel guard of `dir`. The check takes the guard *shared*: a build holds it exclusive, so a running
+/// build is still seen, but two checks at once (two handles, or two threads, looking at the same index) never see each other as
+/// a build. An exclusive check did: the second one got WouldBlock, the index read as building, and its library searched as if it
+/// had no keyword index. A missing guard (an old index) is not held; an unreadable one counts as held and is never stolen.
+fn guard_is_held(dir: &Path) -> bool {
+    let path = match crate::build_lock::guard_path(dir) {
+        Ok(p) => p,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    if file.try_lock_shared().is_err() {
+        return true;
+    }
+    // released explicitly, so a process forked meanwhile (which shares the description until it execs) does not keep it
+    let _ = file.unlock();
+    false
+}
+
+fn legacy_lock_is_live(dir: &Path) -> bool {
     let p = dir.join(LOCK_FILE);
     let Ok(s) = std::fs::read_to_string(&p) else { return false };
     let Ok(info) = serde_json::from_str::<LockInfo>(&s) else { return false };
+    if info.guarded {
+        return false; // Caller holds the kernel guard (or it does not exist).
+    }
     if info.pid == std::process::id() {
         return active_contains(dir);
     }
@@ -208,8 +233,7 @@ pub fn lock_is_live(dir: &Path) -> bool {
         _ => {}
     }
     if !Path::new("/proc/self/stat").exists() {
-        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        return now.saturating_sub(info.started) < 24 * 3600;
+        return owner_without_proc(&info);
     }
     match proc_start_ticks(info.pid) {
         None => false,
@@ -217,10 +241,31 @@ pub fn lock_is_live(dir: &Path) -> bool {
     }
 }
 
+fn owner_without_proc(info: &LockInfo) -> bool {
+    #[cfg(unix)]
+    {
+        // Darwin/iOS has no /proc. ESRCH proves the old owner is gone;
+        // EPERM preserves a live, protected process.
+        if let Ok(pid) = libc::pid_t::try_from(info.pid) {
+            if pid <= 0 { return false; }
+            let rc = unsafe { libc::kill(pid, 0) };
+            if rc == 0 { return true; }
+            match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ESRCH) => return false,
+                Some(libc::EPERM) => return true,
+                _ => {}
+            }
+        }
+    }
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    now.saturating_sub(info.started) < 24 * 3600
+}
+
 /// Held by a running job; removes the lock file and the registry entry on drop.
 pub struct Lock {
     dir: PathBuf,
     canon: PathBuf,
+    _guard: crate::build_lock::Guard,
 }
 
 impl Lock {
@@ -228,6 +273,15 @@ impl Lock {
     /// replaced.
     pub fn acquire(dir: &Path) -> Result<Lock> {
         std::fs::create_dir_all(dir).map_err(|e| Error::io(format!("{}: {e}", dir.display())))?;
+        let guard = crate::build_lock::try_guard(dir, true)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    Error::new(ErrorCode::Busy, format!("{} is being indexed", dir.display()))
+                } else {
+                    Error::io(format!("locking {}: {e}", dir.display()))
+                }
+            })?
+            .ok_or_else(|| Error::internal("index guard was not created"))?;
         let canon = canon(dir);
         let path = dir.join(LOCK_FILE);
         let info = LockInfo {
@@ -235,6 +289,7 @@ impl Lock {
             start_ticks: proc_start_ticks(std::process::id()),
             boot_id: boot_id(),
             started: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+            guarded: true,
         };
         let body = serde_json::to_string(&info).map_err(|e| Error::internal(e.to_string()))?;
         for attempt in 0..2 {
@@ -252,7 +307,7 @@ impl Lock {
                 Ok(mut f) => {
                     use std::io::Write;
                     let _ = f.write_all(body.as_bytes());
-                    return Ok(Lock { dir: dir.to_path_buf(), canon });
+                    return Ok(Lock { dir: dir.to_path_buf(), canon, _guard: guard });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let unregister = || {
@@ -264,7 +319,7 @@ impl Lock {
                     };
                     // evaluate with ourselves unregistered, so a leaked same-process lock reads as stale
                     unregister();
-                    if lock_is_live(dir) {
+                    if legacy_lock_is_live(dir) {
                         return Err(Error::new(ErrorCode::Busy, format!("{} is being indexed", dir.display())));
                     }
                     let _ = std::fs::remove_file(&path);
@@ -613,6 +668,32 @@ mod tests {
     }
 
     #[test]
+    fn a_check_does_not_take_another_check_for_a_build() {
+        let d = std::env::temp_dir().join(format!("cs-lock-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        drop(Lock::acquire(&d).unwrap()); // leaves the guard file, as a finished build does
+        assert!(!lock_is_live(&d));
+        // another check is in progress: it holds the guard shared
+        let other = std::fs::File::open(crate::build_lock::guard_path(&d).unwrap()).unwrap();
+        other.try_lock_shared().unwrap();
+        assert!(!lock_is_live(&d), "a check in progress is not a build");
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let d = d.clone();
+                std::thread::spawn(move || (0..500).all(|_| !lock_is_live(&d)))
+            })
+            .collect();
+        assert!(threads.into_iter().all(|t| t.join().unwrap()), "checks at once never see a build");
+        other.unlock().unwrap();
+        // a build is still seen
+        let l = Lock::acquire(&d).unwrap();
+        assert!(lock_is_live(&d));
+        drop(l);
+        let _ = std::fs::remove_file(crate::build_lock::guard_path(&d).unwrap());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn lock_lifecycle_and_stale_detection() {
         let d = std::env::temp_dir().join(format!("cs-lock-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -625,14 +706,14 @@ mod tests {
         // a leaked lock of this process (no registry entry) is stale
         std::fs::write(
             d.join(LOCK_FILE),
-            serde_json::to_string(&LockInfo { pid: std::process::id(), start_ticks: None, boot_id: None, started: 0 }).unwrap(),
+            serde_json::to_string(&LockInfo { pid: std::process::id(), start_ticks: None, boot_id: None, started: 0, guarded: false }).unwrap(),
         )
         .unwrap();
         assert!(!lock_is_live(&d));
         // a dead pid is stale
         std::fs::write(
             d.join(LOCK_FILE),
-            serde_json::to_string(&LockInfo { pid: 4_000_000_000, start_ticks: Some(1), boot_id: None, started: 0 }).unwrap(),
+            serde_json::to_string(&LockInfo { pid: 4_000_000_000, start_ticks: Some(1), boot_id: None, started: 0, guarded: false }).unwrap(),
         )
         .unwrap();
         assert!(!lock_is_live(&d));
@@ -641,13 +722,13 @@ mod tests {
         if let Some(t) = t {
             std::fs::write(
                 d.join(LOCK_FILE),
-                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t + 5), boot_id: None, started: 0 }).unwrap(),
+                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t + 5), boot_id: None, started: 0, guarded: false }).unwrap(),
             )
             .unwrap();
             assert!(!lock_is_live(&d));
             std::fs::write(
                 d.join(LOCK_FILE),
-                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t), boot_id: None, started: 0 }).unwrap(),
+                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t), boot_id: None, started: 0, guarded: false }).unwrap(),
             )
             .unwrap();
             assert!(lock_is_live(&d));
@@ -658,7 +739,38 @@ mod tests {
         assert!(!lock_is_live(&d));
         let l = Lock::acquire(&d).unwrap();
         drop(l);
+        let _ = std::fs::remove_file(crate::build_lock::guard_path(&d).unwrap());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_lock_without_proc_checks_owner_not_age() {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let mut info = LockInfo { pid: std::process::id(), start_ticks: None, boot_id: None, started: now, guarded: false };
+        assert!(owner_without_proc(&info));
+        info.pid = i32::MAX as u32;
+        assert!(!owner_without_proc(&info), "a freshly written dead-owner marker is stale immediately");
+    }
+
+    #[test]
+    fn unlocked_guard_recovers_marker_even_when_pid_is_reused() {
+        let root = std::env::temp_dir().join(format!("cs-reused-pid-{}", std::process::id()));
+        let d = root.join("index");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("checkpoint"), b"resume-at-20").unwrap();
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let info = LockInfo { pid: std::process::id(), start_ticks: None, boot_id: None, started: now, guarded: true };
+        std::fs::write(d.join(LOCK_FILE), serde_json::to_string(&info).unwrap()).unwrap();
+        assert!(!lock_is_live(&d));
+        let owner = Lock::acquire(&d).unwrap();
+        assert!(lock_is_live(&d));
+        assert_eq!(Lock::acquire(&d).err().unwrap().code, ErrorCode::Busy);
+        assert_eq!(std::fs::read(d.join("checkpoint")).unwrap(), b"resume-at-20");
+        drop(owner);
+        assert!(!lock_is_live(&d));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

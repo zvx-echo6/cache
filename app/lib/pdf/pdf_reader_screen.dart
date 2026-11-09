@@ -9,11 +9,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
-import '../layout/adaptive.dart' show kDesktopMinWidth;
+import '../layout/adaptive.dart' show isShort, kDesktopMinWidth;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
 import '../video/format.dart';
+import 'index/pdf_pages.dart' show cleanPdfTitle, readPdfMeta;
 import 'pdf_find.dart';
 import 'pdf_settings.dart';
 import 'pdf_source.dart';
@@ -58,6 +59,7 @@ class PdfReaderScreen extends StatefulWidget {
     this.debugFindStallAfter,
     this.debugPlaceholders = false,
     this.debugBrowser = false,
+    this.debugReadTitle,
   });
 
   final PdfSource source;
@@ -86,6 +88,9 @@ class PdfReaderScreen extends StatefulWidget {
   /// Renders and tests: word the slow-opening line as in a browser.
   final bool debugBrowser;
 
+  /// Tests: hold metadata reading to verify that closing cannot dispose its document.
+  final Future<String?> Function(PdfDocument document)? debugReadTitle;
+
   @override
   State<PdfReaderScreen> createState() => PdfReaderScreenState();
 }
@@ -100,7 +105,12 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
   int? _fileBytes;
   bool _cancelled = false;
   PdfDocument? _doc;
+  bool _readingTitle = false;
   PdfDocumentRef? _ref;
+
+  /// The PDF's own title (its metadata Title, cleaned as the search index cleans it), once read: the reader shows the title its
+  /// search results and citations show. Null: the source's (the file name).
+  String? _ownTitle;
   final PdfViewerController _controller = PdfViewerController();
 
   bool _showOpening = false;
@@ -269,7 +279,24 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         await doc.dispose();
         return;
       }
+      // Keep ownership local until the metadata worker has finished. Publishing
+      // the viewer first lets its reference dispose the raw handle during this read.
+      _readingTitle = true;
+      String? ownTitle;
+      try {
+        ownTitle = await (widget.debugReadTitle?.call(doc) ?? _readOwnTitle(doc));
+      } catch (_) {
+        // Metadata is optional; a readable PDF still opens without a title.
+      } finally {
+        _readingTitle = false;
+      }
+      if (!mounted) {
+        await doc.dispose();
+        await _copy?.dispose();
+        return;
+      }
       _doc = doc;
+      _ownTitle = ownTitle;
       _pageCount = doc.pages.length;
       _ref = PdfDocumentRefDirect(doc);
       final start = widget.initialPage ?? 1;
@@ -670,7 +697,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     // The viewer's document reference closes the document when the viewer goes; a document that never reached the viewer is
     // closed here.
     if (_ref == null) unawaited(_doc?.dispose());
-    unawaited(_copy?.dispose());
+    if (!_readingTitle) unawaited(_copy?.dispose());
     super.dispose();
   }
 
@@ -687,12 +714,24 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // ---- building
 
+  Future<String?> _readOwnTitle(PdfDocument doc) async {
+    try {
+      // PDFium stays on its own worker; the caller retains the document until
+      // this queued read completes, even if the reader is closed in the meantime.
+      final handle = await doc.useNativeDocumentHandle((h) => h);
+      final t = cleanPdfTitle((await readPdfMeta(handle, 0)).title);
+      return t.isEmpty ? null : t;
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     final nav = Navigator.of(context);
     final open = _phase == _Phase.open;
-    final title = widget.source.title;
+    final title = _ownTitle ?? widget.source.title;
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () => _openFind(),
@@ -717,7 +756,8 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
               Expanded(child: _body(k)),
             ],
           ),
-          bottomNavigationBar: open && _barsShown ? _bottomBar(k) : null,
+          // A short window (a phone held sideways) has the page buttons in the top bar instead, so the page keeps the height.
+          bottomNavigationBar: open && _barsShown && !isShort(context) ? _bottomBar(k) : null,
         ),
       ),
     );
@@ -755,6 +795,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         ],
       ),
       actions: [
+        if (_phase == _Phase.open && isShort(context)) ..._pageButtons(),
         IconButton(
           key: const ValueKey('pdf-find'),
           tooltip: 'Find in this PDF',
@@ -784,17 +825,19 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  Widget _bottomBar(CacheTokens k) {
+  Widget _bottomBar(CacheTokens k) => BottomAppBar(
+    height: 56,
+    padding: EdgeInsets.zero,
+    color: k.surface,
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: _pageButtons()),
+  );
+
+  /// Previous page, Fit page or width, Next page: the bottom bar's buttons (the top bar's on a short window).
+  List<Widget> _pageButtons() {
     final atStart = _page <= 1;
     final atEnd = _page >= _pageCount;
     final toPage = _fit == _Fit.width;
-    return BottomAppBar(
-      height: 56,
-      padding: EdgeInsets.zero,
-      color: k.surface,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
+    return [
           IconButton(
             key: const ValueKey('pdf-prev'),
             tooltip: 'Previous page',
@@ -813,9 +856,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
             icon: const Icon(Icons.keyboard_arrow_down),
             onPressed: atEnd || !_ready ? null : () => _goToPage(_page + 1),
           ),
-        ],
-      ),
-    );
+    ];
   }
 
   Widget? _stripFor(CacheTokens k) {

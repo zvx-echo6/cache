@@ -1,0 +1,6 @@
+{
+  global:
+    valhalla_shim_*;
+  local:
+    *;
+};

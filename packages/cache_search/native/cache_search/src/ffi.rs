@@ -670,6 +670,73 @@ pub unsafe extern "C" fn cs_userlayer_export(h: *mut Handle, export_json: *const
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_export(arg_str(export_json, "export_json")?)?))
 }
 
+// ---- the Bookshelves log (logic in cache_shelves; see shelves.rs). Handle-less. ----
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_detect(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::detect(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_append(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::append(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_resolve(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::resolve(arg_str(args_json, "args_json")?))
+}
+
+/// # Safety
+/// `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_shelves_import(args_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::shelves::import(arg_str(args_json, "args_json")?))
+}
+
+// ---- the Add PDF job (logic in the cache_ingest crate, wired in ingest.rs). Handle-less. ----
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_start(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::start(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_step(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::step(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_ocr(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::ocr(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_cancel(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::cancel(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_ingest_probe(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::ingest::probe(arg_str(params_json, "params_json")?))
+}
+
 // ---- the Notebook (logic in cache_notebook; see ext.rs) ----
 
 /// # Safety
@@ -718,6 +785,15 @@ pub unsafe extern "C" fn cs_live_sources(h: *mut Handle) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn cs_live_fetch(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_fetch(arg_str(request_json, "request_json")?)?))
+}
+
+/// `cs_live_fetch` as a job on a thread of its own (see `Ext::live_fetch_job`). NULL on error (`cs_last_error(h)`).
+///
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_fetch_start(h: *mut Handle, request_json: *const c_char) -> *mut Job {
+    with_handle(h, ptr::null_mut(), |h| Ok(Box::into_raw(Box::new(h.ext.live_fetch_job(arg_str(request_json, "request_json")?)?))))
 }
 
 /// # Safety

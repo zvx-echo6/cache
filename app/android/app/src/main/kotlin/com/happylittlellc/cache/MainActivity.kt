@@ -1,18 +1,62 @@
 package com.happylittlellc.cache
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.Context
 import android.os.BatteryManager
+import android.os.Bundle
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.os.Build
 import android.os.PowerManager
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var systemUiChannel: MethodChannel? = null
+    private var systemBarsConfigured = false
+    private var hideStatusBar = false
+    private var keyboardVisible = false
+    private val restoreSystemBars = Runnable { applySystemBars() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
+            val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
+            if (keyboardVisible && !keyboardNow) {
+                view.removeCallbacks(restoreSystemBars)
+                // Android prevents hiding navigation for one second after text input ends.
+                view.postDelayed(restoreSystemBars, 1100)
+            }
+            keyboardVisible = keyboardNow
+            insets
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) window.decorView.post(restoreSystemBars)
+    }
+
+    private fun applySystemBars() {
+        if (!systemBarsConfigured || keyboardVisible || isFinishing) return
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.navigationBars())
+        if (hideStatusBar) controller.hide(WindowInsetsCompat.Type.statusBars())
+        else controller.show(WindowInsetsCompat.Type.statusBars())
+    }
+
+    private var memoryChannel: MethodChannel? = null
+    private var routeSnapshot: RouteSnapshot? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
 
@@ -21,6 +65,29 @@ class MainActivity : FlutterActivity() {
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "apply" -> {
+                        hideStatusBar = call.argument<Boolean>("hideStatusBar") == true
+                        systemBarsConfigured = true
+                        window.decorView.post(restoreSystemBars)
+                        result.success(null)
+                    }
+                    // Turn-by-turn guidance keeps the screen on (lib/nav/guidance_wakelock.dart). The flag only holds while
+                    // this window is shown, so the background lets the screen sleep as usual.
+                    "keepScreenOn" -> {
+                        if (call.argument<Boolean>("on") == true) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -46,6 +113,22 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // The device's free memory (lib/platform/memory.dart): the model loads only when it fits what is free now, and is let go
+        // when Android says memory is low.
+        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/memory").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "read" -> result.success(memory())
+                    // The log's header: the phone's maker and model.
+                    "device" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
+                    // The log: why the app's process ended the last times (Android 11 and later).
+                    "exits" -> result.success(exits())
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        // The whole-route picture during guidance (RouteSnapshot.kt).
+        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -53,6 +136,55 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        window.decorView.removeCallbacks(restoreSystemBars)
+        systemUiChannel?.setMethodCallHandler(null)
+        systemUiChannel = null
+        memoryChannel?.setMethodCallHandler(null)
+        memoryChannel = null
+        routeSnapshot?.dispose()
+        routeSnapshot = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun exits(): List<Map<String, Any>> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyList()
+        return try {
+            am.getHistoricalProcessExitReasons(packageName, 0, 8).map { e ->
+                val reason = when (e.reason) {
+                    android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+                    android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native crash"
+                    android.app.ApplicationExitInfo.REASON_ANR -> "not responding"
+                    android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low memory"
+                    android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "closed itself"
+                    android.app.ApplicationExitInfo.REASON_SIGNALED -> "stopped by a signal"
+                    android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
+                    android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
+                    android.app.ApplicationExitInfo.REASON_OTHER -> "other"
+                    else -> "reason ${e.reason}"
+                }
+                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun memory(): Map<String, Any> {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyMap()
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+        return mapOf("avail" to info.availMem, "total" to info.totalMem, "threshold" to info.threshold, "low" to info.lowMemory)
+    }
+
+    // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not
+    // the one killed. Delivered on top of what Flutter does with it.
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + memory())
     }
 
     // Battery level and whether the phone is plugged in (lib/platform/battery.dart): long automatic work (search indexes)

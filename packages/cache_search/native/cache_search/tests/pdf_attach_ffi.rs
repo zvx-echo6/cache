@@ -365,8 +365,11 @@ fn the_snapshot_is_attached_and_its_hits_cite_the_page() {
             let want = if t.starts_with("Manual A") { 2 } else { 7 };
             assert_eq!(r["pdf_page"], want, "{r}");
             assert_eq!(r["page"], want, "{r}");
+            // where it opens and the passage to mark, as its citation
+            assert!(r["link"].as_str().unwrap().ends_with(&format!(".pdf#page={want}")), "{r}");
+            assert!(!r["quote"].as_str().unwrap().is_empty(), "{r}");
         } else {
-            assert!(r.get("pdf_page").is_none(), "{r}");
+            assert!(r.get("pdf_page").is_none() && r.get("quote").is_none(), "{r}");
         }
     }
     let s = call(unsafe { cs_search(h, cstr("flood").as_ptr(), o.as_ptr()) });
@@ -490,12 +493,22 @@ fn publishing_is_atomic_and_a_partial_snapshot_is_never_used() {
     let built = finish(&e.idx, UUID)["result"].clone();
     let name = built["snapshot"].as_str().unwrap().to_string();
     assert_eq!(snapshots(&e.idx, UUID), vec![name.clone()]);
-    let leftovers: Vec<String> = std::fs::read_dir(e.idx.join("zim-pdf").join(UUID))
+    let mut leftovers: Vec<String> = std::fs::read_dir(e.idx.join("zim-pdf").join(UUID))
         .unwrap()
         .flatten()
         .map(|d| d.file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(leftovers, vec!["snap".to_string()], "no .build and no temp folder left: {leftovers:?}");
+    leftovers.sort();
+    assert_eq!(
+        leftovers,
+        vec![".build.cache-search-index.guard".to_string(), "snap".to_string()],
+        "only the permanent guard and published snapshots remain: {leftovers:?}"
+    );
+    assert_eq!(
+        std::fs::metadata(e.idx.join("zim-pdf").join(UUID).join(".build.cache-search-index.guard")).unwrap().len(),
+        0,
+        "the guard is empty local bookkeeping, never an unfinished index"
+    );
 
     // a copy without its manifest (a sync in progress), and one with a damaged file, are ignored
     let good = snap_dir(&e.idx, UUID).join(&name);

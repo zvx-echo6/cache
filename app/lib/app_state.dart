@@ -4,14 +4,19 @@ import 'dart:io';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/memory.dart';
 import 'theme.dart';
+import 'platform/app_log.dart';
+import 'platform.dart' as plat;
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -51,8 +56,19 @@ LoadFailure loadFailureOf(String error) {
 /// The model's context window, in tokens. Set on every load (the default of the native layer is the same).
 const int kContextTokens = 8192;
 
+/// The folder under app support where the native layer keeps the saved prompt prefix (at most two files).
+const String kPromptPrefixDir = 'prompt-prefix';
+
+/// Android, for measurement builds only: true repacks the chat model's CPU weights (an anonymous copy) instead of keeping them
+/// file-backed in the mmap, the default. On a Galaxy S22 the copy cost about a GB of memory, pushed the app into swap and gave no
+/// speed, so a released build keeps this false; nothing chooses it at run time.
+const bool kRepackChatWeightsForMeasurement = false;
+
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride});
+  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
+
+  /// The device's free memory (a test hook; the system's reading by default).
+  final Future<MemoryReading?> Function() memory;
 
   /// Test hooks.
   final Directory? settingsDirOverride;
@@ -77,6 +93,10 @@ class AppState extends ChangeNotifier {
   ModelEntry? active;
   ModelInfo? activeInfo;
   ModelEntry? loading;
+
+  /// The chosen model, not in memory now so the phone has room: at start there was not enough free memory for it, or it was
+  /// let go when Android said memory was short. It loads again when Ask opens ([wake]); it stays the chosen model.
+  ModelEntry? resting;
   String? loadError;
 
   /// The model whose last load failed, and why; null once a model loads, is unloaded or that file is deleted.
@@ -109,7 +129,8 @@ class AppState extends ChangeNotifier {
   /// Bumped when the active model changes so the chat can start fresh.
   int modelGeneration = 0;
 
-  File? _settingsFile;
+  AppFs? _fs;
+  static const String _settingsName = 'settings.json';
 
   bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
 
@@ -123,15 +144,38 @@ class AppState extends ChangeNotifier {
   ModelSettings activeSettings = ModelSettings.none;
 
   Future<void> init() async {
-    final settingsDir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await settingsDir.create(recursive: true);
-    _settingsFile = File('${settingsDir.path}/settings.json');
-    _readSettings();
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
+    await _readSettings();
 
+    if (plat.isWeb) {
+      // No model files here: the browser runs no model itself. The chat models are the ones on the server (GET /api/llm/models,
+      // server/docs/llm-protocol.md); a model's id is the "path" LlamaSession.load takes on the web. When the server has none
+      // (or cannot be asked) the list stays empty and nothing is wrong.
+      await refreshModels();
+      try {
+        final r = await http.get(Uri.parse('/api/llm/models?v=1'));
+        if (r.statusCode == 200) {
+          final list = ((jsonDecode(utf8.decode(r.bodyBytes)) as Map)['result'] as Map)['models'] as List;
+          final found = [
+            for (final m in list.cast<Map>()) ModelEntry(path: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0),
+          ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          models = found;
+        } else {
+          logInfo('The server lists no chat models (HTTP ${r.statusCode})');
+        }
+      } catch (e) {
+        logInfo('The server\'s chat models could not be read', detail: '$e');
+      }
+      started = true;
+      notifyListeners();
+      return;
+    }
     if (modelsDirOverride != null) {
       modelsDir = modelsDirOverride;
     } else {
-      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
           await getApplicationDocumentsDirectory();
       modelsDir = Directory('${base.path}/models');
     }
@@ -148,18 +192,27 @@ class AppState extends ChangeNotifier {
     if (last != null) {
       for (final e in models) {
         if (e.fileName == last && !isUnsupported(e)) {
-          await activate(e);
+          // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
+          // room for it makes Android kill Cache (or everything else) while it answers.
+          final r = await memory();
+          if (r != null && modelMemoryNeed(e.size) > r.room) {
+            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+            resting = e;
+            notifyListeners();
+          } else {
+            await activate(e);
+          }
           break;
         }
       }
     }
   }
 
-  void _readSettings() {
+  Future<void> _readSettings() async {
     try {
-      final f = _settingsFile!;
-      if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = await _fs!.readString(AppRoot.support, _settingsName);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       _lastModelFile = j['lastModel'] as String?;
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
@@ -180,9 +233,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _writeSettings() async {
     try {
-      final f = _settingsFile;
-      if (f == null) return;
-      await writeStringAtomic(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      await fs.writeStringAtomic(AppRoot.support, _settingsName, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
@@ -224,6 +277,12 @@ class AppState extends ChangeNotifier {
   Future<void> refreshModels() async {
     final found = <ModelEntry>[];
     ModelEntry? search;
+    if (modelsDir == null) {
+      models = found;
+      searchModel = null;
+      notifyListeners();
+      return;
+    }
     try {
       for (final f in modelsDir!.listSync().whereType<File>()) {
         if (f.path.toLowerCase().endsWith('.gguf')) {
@@ -273,12 +332,17 @@ class AppState extends ChangeNotifier {
   Future<void> activate(ModelEntry entry) async {
     if (loading != null || isUnsupported(entry)) return;
     final previous = active;
+    resting = null;
     loading = entry;
     loadError = null;
     notifyListeners();
     try {
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
-      final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
+      final sw = Stopwatch()..start();
+      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
+      final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
+      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
+      if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -288,7 +352,7 @@ class AppState extends ChangeNotifier {
         activeInfo = null;
         if (previous != null) {
           try {
-            activeInfo = await session.load(previous.path, nCtx: kContextTokens);
+            activeInfo = await _loadModel(previous.path, kContextTokens);
             active = previous;
           } catch (_) {}
         }
@@ -304,6 +368,7 @@ class AppState extends ChangeNotifier {
       if (active?.path != previous?.path) modelGeneration++;
     } catch (e) {
       loadError = e.toString().replaceFirst('Bad state: ', '');
+      logError('Model did not load', error: e, detail: entry.fileName);
       failed = entry;
       failure = loadFailureOf(loadError!);
       active = null;
@@ -315,10 +380,48 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Loads [path] into the session. On Android the CPU weights stay file-backed in the mmap (repacked only in a measurement build,
+  /// [kRepackChatWeightsForMeasurement]); the native layer is also given the folder where the fixed prompt start is saved between
+  /// runs (app support/[kPromptPrefixDir]).
+  Future<ModelInfo> _loadModel(String path, int nCtx) async {
+    String? prefixDir;
+    if (!kIsWeb) {
+      try {
+        prefixDir = '${(await getApplicationSupportDirectory()).path}/$kPromptPrefixDir';
+      } catch (_) {
+        // Without a folder the model loads without the saved prefix.
+      }
+    }
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
+  }
+
+  /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
+  String? get chosenModelFile => _lastModelFile;
+
+  /// Uses the model file [fileName] from now on, as a linked device's settings say (Settings > Sharing and sync > a device >
+  /// Settings): it loads at once when a model is loaded now, else when Ask opens. False when that file is not on this device;
+  /// nothing is downloaded for it.
+  Future<bool> useModelFile(String? fileName) async {
+    if (fileName == null) return true;
+    if (_lastModelFile == fileName && (active?.fileName == fileName || resting?.fileName == fileName)) return true;
+    final e = models.where((m) => m.fileName == fileName && !isUnsupported(m)).firstOrNull;
+    if (e == null) return false;
+    if (active != null && loading == null) {
+      await activate(e);
+      return active?.fileName == fileName;
+    }
+    _lastModelFile = fileName;
+    resting = e;
+    notifyListeners();
+    await _writeSettings();
+    return true;
+  }
+
   /// Unloads the active model to free its memory. Nothing is active after it, and the next start loads no model until
   /// one is chosen again.
   Future<void> unload() async {
     if (loading != null || active == null) return;
+    resting = null;
     active = null;
     activeInfo = null;
     loadError = null;
@@ -328,7 +431,28 @@ class AppState extends ChangeNotifier {
     modelGeneration++;
     notifyListeners();
     await session.unload();
+    logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
+  }
+
+  /// Lets the model go from memory, keeping it the chosen one ([resting]): Android said memory is short. It loads again when Ask
+  /// opens ([wake]). Not while one loads.
+  Future<void> release() async {
+    final a = active;
+    if (loading != null || a == null) return;
+    resting = a;
+    active = null;
+    activeInfo = null;
+    modelGeneration++;
+    notifyListeners();
+    await session.unload();
+  }
+
+  /// Loads the [resting] model again (Ask opened, or its question was sent).
+  Future<void> wake() async {
+    final r = resting;
+    if (r == null || active != null || loading != null) return;
+    await activate(r);
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.

@@ -1,0 +1,44 @@
+{
+ "ok": true,
+ "result": [
+  {
+   "id": "893c960784e6d1bd089b3ced900d8518bbaaf2c659a9165e75ef5f8fd6b2c953",
+   "doc_version": 1,
+   "title": "Prepper 101",
+   "pages": 21,
+   "passages": 16,
+   "ocr_pages": 0,
+   "partial": null,
+   "file_name": "dup-of-prepper-101.pdf",
+   "size": 465011,
+   "added_at": "2026-11-01T23:22:26Z",
+   "status": "ready"
+  },
+  {
+   "id": "9bcf527e379ad64563e456dca3e6d248dfd545e278d26dc87b14c28e61528d66",
+   "doc_version": 1,
+   "title": "Prepping",
+   "pages": 47,
+   "passages": 55,
+   "ocr_pages": 2,
+   "partial": "partial: 2 pages need OCR",
+   "file_name": "Prepping Survival Basics.pdf",
+   "size": 500309,
+   "added_at": "2026-11-01T23:23:22Z",
+   "status": "ready"
+  },
+  {
+   "id": "dfdf29dc43f5527ee66de5d0aeeb0b36fa89e05b95f3598a11df401affa60e82",
+   "doc_version": 1,
+   "title": "Survival Kit Cold Climate",
+   "pages": 41,
+   "passages": 27,
+   "ocr_pages": 1,
+   "partial": "partial: 1 pages need OCR",
+   "file_name": "Survival Kit Cold Climate.pdf",
+   "size": 221458,
+   "added_at": "2026-11-01T23:23:49Z",
+   "status": "ready"
+  }
+ ]
+}

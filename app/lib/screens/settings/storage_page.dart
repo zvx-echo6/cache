@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../platform/app_log.dart';
+import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
 import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
 import '../../video/format.dart';
+import '../../weather/catalogue.dart' show isAllowedAddress;
+import '../../weather/weather_state.dart';
 import 'deps.dart';
 import 'widgets.dart';
 
@@ -116,8 +120,8 @@ class _StoragePageState extends State<StoragePage> {
             ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'}',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s))),
+              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather))),
             ),
           ],
         );
@@ -179,18 +183,41 @@ class _Bar extends StatelessWidget {
   }
 }
 
-/// Settings > Storage > Advanced: how fast search indexes are made in the background. Either way the work eases off when the
-/// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer.
+/// Settings > Storage > Advanced: how fast search indexes are made in the background (either way the work eases off when the
+/// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer), and Cache's
+/// own log: how much it keeps, Share log and Clear log; and the Source list address, where the list of weather and alerts sources
+/// comes from.
 class IndexingSpeedPage extends StatelessWidget {
-  const IndexingSpeedPage({super.key, required this.settings});
+  const IndexingSpeedPage({super.key, required this.settings, this.log, this.weather});
 
   final AppSettings settings;
+
+  /// The log (the app's own by default).
+  final AppLog? log;
+
+  /// Weather and alerts, for the Source list address (left out where there is none).
+  final WeatherState? weather;
+
+  /// Asks for the address of the source list; Use the default puts the published one back. An address that is not https is refused.
+  Future<void> _changeSourceList(BuildContext context, WeatherState w) async {
+    final r = await showDialog<(String, String)>(context: context, builder: (_) => _SourceListDialog(initial: w.catalogueUrl));
+    if (r == null) return;
+    if (r.$1 == 'save') {
+      final u = Uri.tryParse(r.$2);
+      if (u == null || !isAllowedAddress(u)) {
+        if (context.mounted) say(context, 'Enter an address that starts with https://');
+        return;
+      }
+    }
+    await w.setCatalogueUrl(r.$1 == 'default' ? null : r.$2);
+  }
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final log = this.log ?? appLog;
     return ListenableBuilder(
-      listenable: settings,
+      listenable: Listenable.merge([settings, log, ?weather]),
       builder: (context, _) {
         Widget choice(String key, String title, String status, bool normal) => SettingsRow(
               key: ValueKey(key),
@@ -210,9 +237,92 @@ class IndexingSpeedPage extends StatelessWidget {
                 choice('indexing-normal', 'Normal', 'Finishes sooner, uses more battery', true),
               ],
             ),
+            SettingsGroup(
+              label: 'Log level',
+              rows: [
+                for (final l in LogLevel.values)
+                  SettingsRow(
+                    key: ValueKey('log-${l.name}'),
+                    title: l == LogLevel.standard ? '${logLevelTitle(l)} (default)' : logLevelTitle(l),
+                    status: [Part(logLevelDetail(l))],
+                    trailing: log.level == l ? Icon(Icons.check, color: k.accent) : null,
+                    chevron: false,
+                    onTap: () => log.setLevel(l),
+                  ),
+              ],
+            ),
+            const NoteText('The log stays on this device. Nothing leaves it unless you tap Share log.'),
+            SettingsGroup(
+              rows: [
+                SettingsRow(
+                  key: const ValueKey('log-share'),
+                  icon: Icons.ios_share,
+                  title: 'Share log',
+                  status: [Part(log.dir == null ? 'No log yet' : appLogSize())],
+                  onTap: log.dir == null ? null : () => shareAppLog(context),
+                ),
+                SettingsRow(
+                  key: const ValueKey('log-clear'),
+                  icon: Icons.delete_outline,
+                  title: 'Clear log',
+                  chevron: false,
+                  onTap: log.dir == null ? null : log.clear,
+                ),
+              ],
+            ),
+            if (weather case final w?) ...[
+              SettingsGroup(
+                label: 'Weather and alerts',
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('source-list-address'),
+                    icon: Icons.link,
+                    title: 'Source list address',
+                    status: [
+                      Part(settings.catalogueUrl == null ? 'Default · ${w.catalogueUrl}' : w.catalogueUrl),
+                      if (w.catalogueErrors[w.catalogueUrl] case final e?) Part(' · $e', Tone.warn),
+                    ],
+                    statusLines: 3,
+                    onTap: () => _changeSourceList(context, w),
+                  ),
+                ],
+              ),
+              const NoteText('Where Cache gets the list of weather and alerts sources. Change it only if someone gives you another address.'),
+            ],
           ],
         );
       },
     );
   }
+}
+
+/// Asks for the source list's address. Answers ("save", address) or ("default", ""), or nothing when cancelled.
+class _SourceListDialog extends StatefulWidget {
+  const _SourceListDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_SourceListDialog> createState() => _SourceListDialogState();
+}
+
+class _SourceListDialogState extends State<_SourceListDialog> {
+  late final TextEditingController _ctl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Source list address'),
+    content: TextField(key: const ValueKey('source-list-field'), controller: _ctl, keyboardType: TextInputType.url, autocorrect: false, style: const TextStyle(fontFamily: 'monospace', fontSize: 14)),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      TextButton(key: const ValueKey('source-list-default'), onPressed: () => Navigator.pop(context, ('default', '')), child: const Text('Use the default')),
+      TextButton(key: const ValueKey('source-list-save'), onPressed: () => Navigator.pop(context, ('save', _ctl.text.trim())), child: const Text('Save')),
+    ],
+  );
 }

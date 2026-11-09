@@ -9,7 +9,22 @@ class FakeSync implements SyncCoreLike {
   final shares = <Map<String, Object?>>[];
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
+
+  /// This device's key.
+  String id = 'me';
   bool closed = false;
+
+  /// The keys given for each device (`set_secrets`), as last set.
+  final secrets = <String, Map<String, String>>{};
+
+  /// What `take_secrets` hands over next, by device.
+  final inbox = <String, Map<String, String>>{};
+
+  /// What `share_items` answers, by share id (rows as the engine gives them: name, files, bytes, peers).
+  final items = <String, List<Map<String, Object?>>>{};
+
+  /// The items switched off, by share id, as `set_off` last left them.
+  final off = <String, List<String>>{};
 
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
@@ -19,14 +34,14 @@ class FakeSync implements SyncCoreLike {
     switch (method) {
       case 'status':
         return {
-          'id': 'me',
+          'id': id,
           'name': name,
           'relay': 'https://relay.example',
           'network': true,
           'free_bytes': 10 << 30,
           'reserve_bytes': 1 << 30,
           'peers': peers,
-          'shares': [for (final s in shares) {...s, 'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0}],
+          'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],
           'transfer': null,
           'paused': null,
@@ -35,8 +50,13 @@ class FakeSync implements SyncCoreLike {
       case 'link_code':
         return {'code': 'CACHE1-TESTCODE', 'valid_secs': 900};
       case 'link':
-        peers.add({'id': 'peer1', 'name': 'Desk', 'linked': 1, 'last_seen': null, 'via': null, 'error': null});
-        return {'ok': true, 'name': 'Desk'};
+        peers.removeWhere((p) => p['id'] == 'peer1');
+        // As the engine makes a link: Off, waiting for the answer.
+        peers.add({
+          'id': 'peer1', 'name': 'Desk', 'linked': DateTime.now().millisecondsSinceEpoch, 'last_seen': null, 'via': null, 'error': null,
+          'link': {'mode': 'off', 'ask': true}, 'link_t': 0,
+        });
+        return {'ok': true, 'peer': 'peer1', 'name': 'Desk'};
       case 'share_add':
         shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
         return {'ok': true, 'id': args['id']};
@@ -46,6 +66,42 @@ class FakeSync implements SyncCoreLike {
       case 'set_name':
         name = args['name'] as String;
         return {'ok': true};
+      case 'set_peer_name':
+        final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+        if (p == null) throw Exception('that device is not linked');
+        p['name'] = args['name'];
+        return {'ok': true};
+      case 'unlink':
+        peers.removeWhere((p) => p['id'] == args['peer']);
+        return {'ok': true};
+      case 'set_off':
+        final list = [for (final x in (args['off'] as List? ?? const [])) '$x'];
+        if (list.isEmpty) {
+          off.remove(args['id']);
+        } else {
+          off[args['id'] as String] = list;
+        }
+        return {'ok': true};
+      case 'set_link':
+        final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+        if (p == null) throw Exception('that device is not linked');
+        p['link'] = Map<String, Object?>.of((args['link'] as Map).cast<String, Object?>());
+        p['link_t'] = ((p['link_t'] as int?) ?? 0) + 1;
+        return {'ok': true, 't': p['link_t']};
+      case 'set_secrets':
+        final m = {for (final e in ((args['secrets'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'};
+        if (m.isEmpty) {
+          secrets.remove(args['peer']);
+        } else {
+          secrets[args['peer'] as String] = m;
+        }
+        return {'ok': true};
+      case 'take_secrets':
+        final out = {for (final e in inbox.entries) e.key: Map.of(e.value)};
+        inbox.clear();
+        return {'secrets': out};
+      case 'share_items':
+        return {'items': items[args['id']] ?? const []};
       default:
         return {'ok': true};
     }

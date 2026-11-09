@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
@@ -403,7 +404,7 @@ void main() {
         nav.poke();
         await tester.pumpWidget(host(theme, live(nav, () => Column(mainAxisSize: MainAxisSize.min, children: [GuidanceBanner(nav: nav, fmt: fmt), const SizedBox(height: 8), GuidanceBar(nav: nav, fmt: fmt)]))));
         expect(find.byKey(const ValueKey('banner-distance')), findsOneWidget);
-        expect(find.text('Turn left onto Road 1.'), findsOneWidget);
+        expect(find.textContaining('· Turn left onto Road 1'), findsOneWidget);
         expect(find.textContaining('Then turn right onto Road 2'), findsOneWidget);
         expect(find.byIcon(Icons.turn_left), findsOneWidget);
         expect(find.text('left'), findsOneWidget);
@@ -417,6 +418,72 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      for (final scale in [1.0, 1.5, 2.0]) {
+        testWidgets('guidance banner at text size ${scale}x: the turn, how far and the street on one line, then the next turn', (tester) async {
+          final route = fakeRouteJson();
+          await _startGuiding(nav, backend, route);
+          nav.progress = MapProgress.fromJson(fakeProgressJson(route, 0.3));
+          nav.poke();
+          await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt)), scale: scale));
+          expect(tester.takeException(), isNull);
+          expect(find.byIcon(Icons.turn_left), findsOneWidget);
+          final line = find.byKey(const ValueKey('banner-distance'));
+          final then = find.byKey(const ValueKey('banner-then'));
+          expect(line, findsOneWidget);
+          // "0.4 mi · Turn left onto Road 1": how far in bold, the turn in regular, on one line (two for a long street name).
+          final rich = tester.widget<Text>(line);
+          final spans = (rich.textSpan! as TextSpan).children!.cast<TextSpan>();
+          expect(spans.first.style!.fontWeight, FontWeight.w800);
+          expect(spans.last.text, ' · Turn left onto Road 1');
+          expect(spans.last.style!.fontWeight, FontWeight.w400);
+          expect(rich.maxLines, 2);
+          // The next turn: smaller, one line, cut with an ellipsis.
+          final next = tester.widget<Text>(then);
+          expect(next.data, startsWith('Then turn right onto Road 2'));
+          expect(next.maxLines, 1);
+          expect(next.overflow, TextOverflow.ellipsis);
+          expect(next.style!.fontSize, lessThan(spans.last.style!.fontSize!));
+          // The phone's text size is respected, not capped: the lines grow with it.
+          expect(tester.getSize(line).height, greaterThanOrEqualTo(22 * 1.15 * scale - 1));
+          expect(tester.getSize(then).height, greaterThanOrEqualTo(13 * 1.2 * scale - 1));
+          final banner = tester.getRect(find.byKey(const ValueKey('guidance-banner')));
+          // At the usual text size it is about 40-45% lower than the two-line banner it replaced (about 100 pt).
+          if (scale == 1.0) expect(banner.height, lessThanOrEqualTo(62));
+          // Inside the window, nothing cut off at the sides.
+          expect(banner.left, greaterThanOrEqualTo(0));
+          expect(banner.right, lessThanOrEqualTo(tester.getSize(find.byType(Scaffold)).width));
+          for (final f in [line, then, find.byIcon(Icons.turn_left)]) {
+            expect(banner.contains(tester.getRect(f).center), isTrue);
+          }
+          // Readable in sunlight: solid surface, and the line in the theme's main text colour.
+          final k = Theme.of(tester.element(line)).extension<CacheTokens>()!;
+          final box = tester.widget<Container>(find.byKey(const ValueKey('guidance-banner'))).decoration as BoxDecoration;
+          expect(box.color, k.surface);
+          expect(box.color!.a, 1.0);
+          expect(rich.style!.color, k.text);
+          double contrast(Color a, Color b) {
+            final (x, y) = (a.computeLuminance(), b.computeLuminance());
+            return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+          }
+
+          expect(contrast(k.text, k.surface), greaterThanOrEqualTo(4.5));
+        });
+      }
+
+      testWidgets('guidance banner: a long street name wraps to a second line, never a third', (tester) async {
+        final route = fakeRouteJson();
+        await _startGuiding(nav, backend, route);
+        final json = fakeProgressJson(route, 0.3);
+        (json['next'] as Map)['instruction'] = 'Turn left onto the Old Oregon Trail Highway Frontage Road toward Twin Falls Regional Airport.';
+        nav.progress = MapProgress.fromJson(json);
+        nav.poke();
+        await tester.pumpWidget(host(theme, live(nav, () => SizedBox(width: 340, child: GuidanceBanner(nav: nav, fmt: fmt)))));
+        expect(tester.takeException(), isNull);
+        final line = find.byKey(const ValueKey('banner-distance'));
+        expect(tester.getSize(line).height, greaterThan(22 * 1.15 + 1));
+        expect(tester.getSize(line).height, lessThanOrEqualTo(2 * 22 * 1.15 + 1));
+      });
+
       testWidgets('guidance: on open ground it shows the bearing, how far, and the climb', (tester) async {
         final route = fakeRouteJson(offroad: true);
         await _startGuiding(nav, backend, route);
@@ -424,7 +491,7 @@ void main() {
         nav.poke();
         await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt))));
         expect(find.byKey(const ValueKey('banner-offroad')), findsOneWidget);
-        expect(find.text('Head E · 87°'), findsOneWidget);
+        expect(find.textContaining('· Head E · 87°'), findsOneWidget);
         expect(find.textContaining('Climb'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
@@ -433,16 +500,16 @@ void main() {
         final route = fakeRouteJson();
         await _startGuiding(nav, backend, route);
         await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt))));
-        expect(find.text('Getting your position'), findsOneWidget);
+        expect(find.textContaining('Getting your position'), findsOneWidget);
         nav.rerouting = true;
         nav.poke();
         await tester.pump();
-        expect(find.text('Rerouting'), findsOneWidget);
+        expect(find.textContaining('Rerouting'), findsOneWidget);
         nav.rerouting = false;
         nav.arrived = true;
         nav.poke();
         await tester.pump();
-        expect(find.text('You have arrived'), findsOneWidget);
+        expect(find.textContaining('You have arrived'), findsOneWidget);
         await tester.pumpWidget(host(theme, live(nav, () => GuidanceBar(nav: nav, fmt: fmt))));
         expect(find.text('Done'), findsOneWidget);
         expect(tester.takeException(), isNull);

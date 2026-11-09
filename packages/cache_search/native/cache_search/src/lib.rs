@@ -4,6 +4,7 @@
 
 pub mod act;
 pub mod budget;
+mod build_lock;
 pub mod conv;
 pub mod duty;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod epub;
 pub mod html;
 pub mod idxsnap;
 pub mod index;
+pub mod ingest;
 pub mod job;
 pub mod kwbuild;
 pub mod kwindex;
@@ -27,11 +29,13 @@ pub mod nbplaces;
 pub mod pdfbuild;
 pub mod pdfindex;
 pub mod search;
+pub mod shelves;
 pub mod snapshot;
 pub mod suggest;
 pub mod tools;
 pub mod vtt;
 pub mod web;
+pub mod zimpdfs;
 pub mod zimsrc;
 pub mod zimx;
 

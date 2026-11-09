@@ -1,0 +1,153 @@
+# Publishes the recommended-models list (docs/models-recommended.json) to https://data.cached.info/models/recommended.json, the
+# address the app reads (kRecommendedModelsUrl, app/lib/models/recommendations.dart). The app's built-in copy is
+# app/assets/models/recommended.json; app/test/models_screen_test.dart keeps the two equal.
+#
+# It checks the file first (parses, a format the app reads, every entry one the app's parser takes, identical to the app's copy,
+# and every model address answers a HEAD with 200), uploads only when the content changed (compared with the stored object's
+# MD5), then fetches the public address and checks the bytes. A change to this file also runs it. It writes ONE key,
+# models/recommended.json, and nothing else.
+#
+# Secrets (the same data-bucket key as discover-publish.yml):
+#   DATA_R2_ACCESS_KEY_ID, DATA_R2_SECRET_ACCESS_KEY, DATA_R2_ENDPOINT, DATA_R2_BUCKET
+name: Models publish
+
+on:
+  push:
+    branches: [rel-1.1, main]
+    paths:
+      - docs/models-recommended.json
+      - .github/workflows/models-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DATA_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DATA_R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.DATA_R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.DATA_R2_BUCKET }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      PUBLIC_BASE: https://data.cached.info
+      KEY: models/recommended.json
+      SRC: docs/models-recommended.json
+    steps:
+      - name: Check secrets
+        run: |
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+            if [ -z "${!v}" ]; then echo "::error::$v is missing"; exit 1; fi
+          done
+      - uses: actions/checkout@v4
+      - name: Check the bucket is the one behind data.cached.info
+        # The stored connector catalogue must be the one the public address serves (same ETag), or nothing is uploaded.
+        run: |
+          stored=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key connectors/catalogue.json \
+                     --query ETag --output text | tr -d '"')
+          public=$(curl -fsSI "$PUBLIC_BASE/connectors/catalogue.json" | tr -d '\r' | awk 'tolower($1)=="etag:"{print $2}' | tr -d '"')
+          if [ -z "$stored" ] || [ "$stored" != "$public" ]; then
+            echo "::error::The bucket's connectors/catalogue.json ($stored) is not the one $PUBLIC_BASE serves ($public)."; exit 1
+          fi
+          echo "Bucket matches $PUBLIC_BASE."
+      - name: Validate
+        # The same rules as parseRecommendations / ModelRecommendation.fromJson, except that an entry the app would leave out
+        # fails here instead, and every model address must answer.
+        run: |
+          python3 -I - "$SRC" app/assets/models/recommended.json app/lib/models/recommendations.dart <<'PY'
+          import json, re, sys, urllib.parse, urllib.request
+          src, app_copy, dart = sys.argv[1:4]
+          def fail(msg):
+              print(f"::error::{msg}"); sys.exit(1)
+          raw = open(src, 'rb').read()
+          try:
+              d = json.loads(raw)
+          except ValueError as e:
+              fail(f"{src} does not parse: {e}")
+          m = re.search(r'const int kRecommendationsFormat = (\d+);', open(dart).read())
+          if not m:
+              fail(f"kRecommendationsFormat not found in {dart}")
+          fmt = int(m.group(1))
+          if not isinstance(d, dict) or d.get('format') not in (fmt, 1) or isinstance(d.get('format'), bool):
+              fail(f"{src}: format {d.get('format') if isinstance(d, dict) else None!r} is not one this app reads (1 or {fmt})")
+          models = d.get('models')
+          if not isinstance(models, list) or not models:
+              fail(f"{src}: models is not a non-empty list")
+          if open(app_copy, 'rb').read() != raw:
+              fail(f"{src} and {app_copy} differ")
+          kinds = {'tuned_for_cache', 'works_not_tuned'}
+          is_int = lambda v: isinstance(v, int) and not isinstance(v, bool)
+          urls = []
+          for i, e in enumerate(models):
+              where = f"{src}: models[{i}]"
+              if not isinstance(e, dict):
+                  fail(f"{where} is not an object")
+              where += f" ({e.get('name')!r})"
+              name, repo, file, size, sha, url = (e.get(k) for k in ('name', 'repo', 'file', 'size', 'sha256', 'url'))
+              direct = False
+              if isinstance(url, str):
+                  u = urllib.parse.urlparse(url)
+                  direct = u.scheme == 'https' and bool(u.hostname)
+              if not isinstance(name, str):
+                  fail(f"{where}: name is not a string")
+              if not isinstance(file, str) or not file.lower().endswith('.gguf'):
+                  fail(f"{where}: file is not a .gguf name")
+              if url is not None and not direct:
+                  fail(f"{where}: url is not an https address")
+              if not direct and (not isinstance(repo, str) or '/' not in repo):
+                  fail(f"{where}: neither an https url nor an owner/name repo")
+              if not is_int(size) or size <= 0:
+                  fail(f"{where}: size is not a positive integer")
+              if e.get('kind') not in kinds:
+                  fail(f"{where}: kind {e.get('kind')!r} is not one of {sorted(kinds)}")
+              sha_ok = isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{64}', sha) is not None
+              if direct and not sha_ok:
+                  fail(f"{where}: a direct-address entry needs a sha256")
+              if sha is not None and not sha_ok:
+                  fail(f"{where}: sha256 is not 64 lowercase hex characters")
+              if direct:
+                  urls.append((where, url))
+              else:
+                  rev = e.get('revision') if isinstance(e.get('revision'), str) and e.get('revision') else 'main'
+                  path = '/'.join(urllib.parse.quote(p, safe='') for p in file.split('/'))
+                  urls.append((where, f"https://huggingface.co/{repo}/resolve/{rev}/{path}"))
+          for where, url in urls:
+              req = urllib.request.Request(url, method='HEAD', headers={'User-Agent': 'cache-models-publish'})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      code = r.status
+              except urllib.error.HTTPError as err:
+                  code = err.code
+              except Exception as err:
+                  fail(f"{where}: HEAD {url} failed: {err}")
+              if code != 200:
+                  fail(f"{where}: HEAD {url} gave HTTP {code}")
+              print(f"200 {url}")
+          print(f"OK: format {d['format']}, updated {d.get('updated', '(none)')}, {len(models)} models")
+          PY
+      - name: Upload if changed
+        run: |
+          new=$(md5sum "$SRC" | cut -d' ' -f1)
+          old=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY" \
+                  --query ETag --output text 2>/dev/null | tr -d '"' || true)
+          if [ "$new" = "$old" ]; then echo "Unchanged; nothing uploaded."; exit 0; fi
+          aws s3 cp "$SRC" "s3://$R2_BUCKET/$KEY" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json --cache-control 'public, max-age=300' --only-show-errors
+          echo "Uploaded $KEY (${old:-none} -> $new)."
+      - name: Check the public file
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS -o live.json "$PUBLIC_BASE/$KEY" && cmp -s live.json "$SRC"; then
+              echo "$PUBLIC_BASE/$KEY matches $SRC ($(wc -c < live.json) bytes)."; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$PUBLIC_BASE/$KEY does not match $SRC"; exit 1

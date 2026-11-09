@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../video/token_store.dart';
 import 'app_settings.dart';
 import 'data_policy.dart';
+import '../platform/app_log.dart';
 
 /// The answer of checking a key with its provider.
 class KeyCheck {
@@ -155,6 +156,16 @@ class WebSearchSetup extends ChangeNotifier {
     return r;
   }
 
+  /// Keeps a key a linked device sent (it was checked there) and uses it at once; the switch stays as the settings say.
+  Future<void> keepKey(String raw) async {
+    final key = raw.trim();
+    if (key.isEmpty) return;
+    await secrets.write(keyName, key);
+    _hasKey = true;
+    notifyListeners();
+    await apply();
+  }
+
   /// Forgets the key and switches web search off.
   Future<void> removeKey() async {
     try {
@@ -189,7 +200,7 @@ class WebSearchSetup extends ChangeNotifier {
       final online = await probe.current() != ConnectionKind.none;
       await setWeb(provider, key, online);
     } catch (e) {
-      debugPrint('Web search setup: ${e.runtimeType}');
+      logError('Web search setup', error: e);
     }
   }
 

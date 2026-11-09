@@ -243,7 +243,17 @@ int main(int argc, char ** argv) {
         fails += !p6;
     }
 
+    {
+        // TEST 7: what an earlier engine left is freed by cl_free_all; cl_free after it does nothing
+        void * h3 = cl_load(argv[1], 2048, threads, err, sizeof(err));
+        int freed = cl_free_all();
+        cl_free(h3);
+        cl_free(h);
+        bool p7 = h3 && freed == 2;
+        printf("TEST 7 cl_free_all frees every handle left (%d): %s\n\n", freed, p7 ? "PASS" : "FAIL");
+        fails += !p7;
+    }
+
     printf("\n%s (%d failed)\n", fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED", fails);
-    cl_free(h);
     return fails ? 1 : 0;
 }

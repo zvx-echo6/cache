@@ -67,38 +67,43 @@ class _PinPadState extends State<PinPad> {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    Widget key(String label, {VoidCallback? onTap, Widget? child, String? semantic}) => Padding(
-          padding: const EdgeInsets.all(6),
-          child: SizedBox(
-            width: 72,
-            height: 60,
-            child: Semantics(
-              button: true,
-              label: semantic ?? label,
-              onTap: onTap,
-              excludeSemantics: true,
-              child: Material(
-                color: k.surface,
-                borderRadius: BorderRadius.circular(14),
-                child: InkWell(
-                  key: ValueKey('pin-$label'),
-                  borderRadius: BorderRadius.circular(14),
+    // A window too short for the pad under the title (a phone held sideways) has them side by side, the keys as tall as fit
+    // (44 at least), so every key shows without scrolling.
+    return LayoutBuilder(
+      builder: (context, c) {
+        final side = c.maxHeight < 470 && c.maxWidth > c.maxHeight;
+        final keyH = side ? (c.maxHeight / 4 - 12).clamp(44.0, 60.0).toDouble() : 60.0;
+        Widget key(String label, {VoidCallback? onTap, Widget? child, String? semantic}) => Padding(
+              padding: const EdgeInsets.all(6),
+              child: SizedBox(
+                width: 72,
+                height: keyH,
+                child: Semantics(
+                  button: true,
+                  label: semantic ?? label,
                   onTap: onTap,
-                  child: Center(child: child ?? Text(label, style: TextStyle(fontSize: 24, color: k.text))),
+                  excludeSemantics: true,
+                  child: Material(
+                    color: k.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      key: ValueKey('pin-$label'),
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: onTap,
+                      child: Center(child: child ?? Text(label, style: TextStyle(fontSize: 24, color: k.text))),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-        );
-    return Center(
-      child: SingleChildScrollView(
-        child: Column(
+            );
+        final head = Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.lock_outline, size: 36, color: k.accent),
             const SizedBox(height: 12),
-            Text(widget.title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: k.text)),
-            if (widget.subtitle != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(widget.subtitle!, style: TextStyle(fontSize: 14, color: k.secondary))),
+            Text(widget.title, textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: k.text)),
+            if (widget.subtitle != null)
+              Padding(padding: const EdgeInsets.only(top: 4), child: Text(widget.subtitle!, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: k.secondary))),
             const SizedBox(height: 16),
             Semantics(
               label: '${_typed.length} digits typed',
@@ -115,7 +120,12 @@ class _PinPadState extends State<PinPad> {
                 ],
               ),
             ),
-            SizedBox(height: 24, child: _error == null ? null : Text(_error!, key: const ValueKey('pin-error'), style: TextStyle(fontSize: 14, color: k.warning))),
+            SizedBox(height: 24, child: _error == null ? null : Text(_error!, key: const ValueKey('pin-error'), textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: k.warning))),
+          ],
+        );
+        final pad = Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
             for (final row in const [
               ['1', '2', '3'],
               ['4', '5', '6'],
@@ -131,8 +141,27 @@ class _PinPadState extends State<PinPad> {
               ],
             ),
           ],
-        ),
-      ),
+        );
+        if (side) {
+          return Center(
+            child: SingleChildScrollView(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: head)),
+                  const SizedBox(width: 24),
+                  pad,
+                ],
+              ),
+            ),
+          );
+        }
+        return Center(
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [head, pad]),
+          ),
+        );
+      },
     );
   }
 }

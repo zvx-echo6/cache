@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +10,8 @@ import 'package:cache/video/token_store.dart';
 import 'package:cache/weather/alert_notifier.dart';
 import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/curated.dart';
+import 'package:cache/weather/own_source.dart';
+import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/weather/places.dart';
@@ -18,6 +21,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
 import 'support/weather_fakes.dart';
+
+/// A key for the sources of your own: it must never show up in a definition or anything the core is told.
+const ownSecret = 'SENTINEL-OWN-KEY-5e2b-do-not-leak';
 
 /// The weather part on fakes: no core, no network, files in a temp folder.
 class Harness {
@@ -73,6 +79,7 @@ class Harness {
     position: () => here,
     regions: () => regions,
     fetch: web.fetch,
+    ownFetch: web.tryFetch,
     clock: () => clock,
   );
 
@@ -270,35 +277,123 @@ void main() {
       expect(h.weather.catalogueErrors, isEmpty);
     });
 
-    test('another catalogue is checked and shown first, then added, and can be removed', () async {
+    test('an old link from "Add sources from a link" moves to Your own at start: its sources keep their switch and key', () async {
       h = await Harness.create();
       const other = 'https://example.org/c/';
-      h.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends catalogue', base: other, connectors: [entry('river-x', 'hydrology', 'River X', provider: 'Friends')]));
-      final p = await h.weather.previewCatalogue('${other}catalogue.json');
-      expect(p.catalogue.title, 'Friends catalogue');
-      expect(p.connectors.single.id, 'river-x');
-      expect(h.weather.sourceById('river-x'), isNull, reason: 'nothing is kept until it is added');
-      expect(h.settings.extraCatalogues, isEmpty);
-      await h.weather.addCatalogue(p);
-      expect(h.weather.sourceById('river-x'), isNotNull);
-      expect(h.settings.extraCatalogues, ['${other}catalogue.json']);
-      await h.weather.setSourceOn(h.weather.sourceById('river-x')!, true);
-      expect(h.inFolder, contains('river-x.json'));
-      await h.weather.removeCatalogue('${other}catalogue.json');
-      expect(h.weather.sourceById('river-x'), isNull);
-      expect(h.weather.isOn('river-x'), isFalse);
-      expect(h.inFolder, isNot(contains('river-x.json')));
-      expect(h.settings.extraCatalogues, isEmpty);
+      const link = '${other}catalogue.json';
+      h.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends', base: other, connectors: [
+        entry('river-x', 'hydrology', 'River X', provider: 'Friends'),
+        entry('river-k', 'hydrology', 'River K', provider: 'Friends', keyAlias: 'friendskey'),
+        // a source the main list has too stays the main list's
+        entry('usgs-quakes-near', 'earthquakes', 'Quakes again', provider: 'Friends'),
+      ]));
+      // what 1.0.x kept: the link in the settings and its copy in the store
+      final kept = await CatalogueLoader(fetch: h.web.fetch, check: (_) async {}).load(link);
+      CatalogueStore(Directory('${h.dir.path}/live-catalogues')).save(kept);
+      h.settings.addCatalogue(link);
+      h.settings.setLiveSourcesOn({'river-x'}, true);
+      await h.secrets.write(WeatherState.secretName('friendskey'), ownSecret);
+      h = await h.restart();
+      expect(h.settings.extraCatalogues, isEmpty, reason: 'the link is gone');
+      expect([for (final c in h.weather.ownSources) c.id], ['river-x', 'river-k']);
+      expect(h.weather.isOwn(h.weather.sourceById('river-x')!), isTrue);
+      expect(h.weather.sourceById('usgs-quakes-near')!.title, isNot('Quakes again'));
+      expect(h.weather.isOn('river-x'), isTrue, reason: 'still on');
+      expect(h.inFolder, contains('river-x.json'), reason: 'still fetched');
+      expect(h.weather.hasKey('friendskey'), isTrue, reason: 'its key still there');
+      expect(h.weather.sourceById('river-x')!.featured, isFalse);
+      expect(h.weather.catalogues.map((c) => c.url), [kDefaultCatalogueUrl], reason: 'no list of its own any more');
+      // and it stays so
+      h = await h.restart();
+      expect([for (final c in h.weather.ownSources) c.id], ['river-x', 'river-k']);
+      expect(h.weather.isOn('river-x'), isTrue);
     });
 
-    test('a catalogue where nothing passes the checker, or one already added, is refused with a reason', () async {
+    test('a link not downloaded yet moves once a refresh brings its copy', () async {
       h = await Harness.create();
       const other = 'https://example.org/c/';
-      h.web.serve(other, buildCatalogue(id: 'bad', title: 'Bad', base: other, connectors: [entry('x', 'weather', 'X')]));
-      h.core.invalid.add('x');
-      await expectLater(h.weather.previewCatalogue('${other}catalogue.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('None of the sources'))));
-      await expectLater(h.weather.previewCatalogue('https://data.cached.info/connectors/catalogue.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('already added'))));
-      await expectLater(h.weather.previewCatalogue('http://example.org/c.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('https'))));
+      h.settings.addCatalogue('${other}catalogue.json');
+      h.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends', base: other, connectors: [entry('river-x', 'hydrology', 'River X')]));
+      await h.weather.refreshCatalogues();
+      expect(h.settings.extraCatalogues, isEmpty);
+      expect(h.weather.isOwn(h.weather.sourceById('river-x')!), isTrue);
+    });
+
+    test('a source made with the form: checked by the core, the key in secure storage only, on, kept across a restart, removed whole', () async {
+      h = await Harness.create();
+      const d = OwnDraft(name: 'Creek', address: 'https://sensors.example.org/api?lat={lat}&key=$ownSecret', key: ownSecret, refreshMinutes: 60);
+      expect(await h.weather.saveOwnSource(d, const []), 'Tick at least one value to show.');
+      expect(await h.weather.saveOwnSource(d, const [OwnPick('water.level', 'Water level')]), isNull);
+      final c = h.weather.ownSources.single;
+      expect(c.id, 'own-creek');
+      expect(c.refreshMinutes, 60);
+      expect(h.core.checked.last, c.defText);
+      expect(c.defText, isNot(contains(ownSecret)));
+      expect(c.keyAlias, 'own-creek');
+      expect(await h.secrets.read(WeatherState.secretName('own-creek')), ownSecret);
+      expect(h.weather.isOn('own-creek'), isTrue);
+      expect(h.inFolder, contains('own-creek.json'));
+      expect(h.lastPolicy['enabled_sources'], ['own-creek']);
+      expect(h.core.everythingSeen(), isNot(contains(ownSecret)));
+      // a second one by the same name gets its own id
+      expect(await h.weather.saveOwnSource(const OwnDraft(name: 'Creek', address: 'https://other.example.org/x'), const [OwnPick('v', 'V')]), isNull);
+      expect([for (final c in h.weather.ownSources) c.id], ['own-creek', 'own-creek-2']);
+      h = await h.restart();
+      expect(h.weather.sourceById('own-creek'), isNotNull);
+      expect(h.weather.hasKey('own-creek'), isTrue);
+      expect(h.core.keys['own-creek'], ownSecret);
+      // a definition the core refuses is not saved
+      h.core.invalid.add('own-bad');
+      expect(await h.weather.saveOwnSource(const OwnDraft(name: 'Bad', address: 'https://x.example.org/'), const [OwnPick('v', 'V')]), contains("Cache can't use this source"));
+      expect(h.weather.sourceById('own-bad'), isNull);
+      await h.weather.removeOwnSource('own-creek');
+      expect(h.weather.sourceById('own-creek'), isNull);
+      expect(h.weather.isOn('own-creek'), isFalse);
+      expect(h.inFolder, isNot(contains('own-creek.json')));
+      expect(await h.secrets.read(WeatherState.secretName('own-creek')), isNull);
+    });
+
+    test('Try it: offline says so without asking anything; the place and the key are filled in for the request', () async {
+      h = await Harness.create();
+      const d = OwnDraft(name: 'Creek', address: 'https://sensors.example.org/api?lat={lat}&lon={lon:2}&key=$ownSecret', key: ownSecret);
+      h.web.files['https://sensors.example.org/api?lat=42.5400&lon=-113.79&key=$ownSecret'] = utf8.encode('{"water": {"level": 1.42}}');
+      final t = await h.weather.tryOwnSource(d);
+      expect(t.ok, isTrue);
+      expect(t.values.single.path, 'water.level');
+      h.probe.change(ConnectionKind.none);
+      final asked = h.web.requested.length;
+      final off = await h.weather.tryOwnSource(d);
+      expect(off.failure, OwnTryFailure.offline);
+      expect(h.web.requested.length, asked);
+    });
+
+    test('import: one definition, or a list; what is here already or refused is left out with the reason', () async {
+      h = await Harness.create();
+      final one = await h.weather.previewImport(text: miniDefinition('my-quakes', title: 'My quakes'));
+      expect(one.definitions.keys, ['my-quakes']);
+      expect(h.weather.sourceById('my-quakes'), isNull, reason: 'nothing kept yet');
+      await h.weather.addImported(one);
+      expect(h.weather.isOwn(h.weather.sourceById('my-quakes')!), isTrue);
+      expect(h.weather.isOn('my-quakes'), isFalse);
+      await expectLater(h.weather.previewImport(text: miniDefinition('my-quakes')), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('You have this source already'))));
+      await expectLater(h.weather.previewImport(text: miniDefinition('usgs-quakes-near')), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('already'))));
+      h.core.invalid.add('broken');
+      await expectLater(h.weather.previewImport(text: miniDefinition('broken')), throwsA(isA<Exception>().having((e) => '$e', 'text', contains("Cache can't use this source"))));
+      await expectLater(h.weather.previewImport(text: 'hello'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains("isn't a source file"))));
+      await expectLater(h.weather.previewImport(text: '{"a": 1}'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('neither a source nor a list'))));
+      const other = 'https://example.org/c/';
+      h.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends', base: other, connectors: [entry('river-x', 'hydrology', 'River X'), entry('usgs-quakes-near', 'earthquakes', 'Q'), entry('bad', 'weather', 'Bad')]));
+      h.core.invalid.add('bad');
+      // the list as a file: its sources are read from the address it gives
+      final list = await h.weather.previewImport(text: utf8.decode(h.web.files['${other}catalogue.json']!));
+      expect(list.definitions.keys, ['river-x']);
+      expect(list.skipped.keys, containsAll(['usgs-quakes-near', 'bad']));
+      final byLink = await h.weather.previewImport(link: '${other}catalogue.json');
+      expect(byLink.definitions.keys, ['river-x']);
+      await h.weather.addImported(byLink);
+      expect(h.weather.sourceById('river-x')!.category, 'hydrology', reason: 'what the list says about it is kept');
+      expect(h.settings.extraCatalogues, isEmpty);
+      await expectLater(h.weather.previewImport(link: 'http://example.org/c.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('https'))));
     });
 
     test('the main catalogue\'s address can be changed in Advanced, and put back', () async {
@@ -685,6 +780,34 @@ void main() {
       expect(h.weather.status().headline, 'Updated just now · USGS for Where I am failed: the service answered HTTP 500');
     });
 
+    test('every failing source is in the line, not only the first', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      // one that updates, so the line has an age and the failures beside it
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
+      h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      await h.weather.updateNow();
+      final line = h.weather.status().headline;
+      expect(line, contains('2 updates failed'));
+      expect(line, contains('USGS for Where I am failed'));
+      expect(line, contains('NWS for Where I am failed'));
+    });
+
+    test('an update writes the definitions of every source that is on first, however it was switched on', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      // the folder lost them (a source switched on another way, before its definition was there): the update puts them back
+      for (final f in h.liveDir.listSync().whereType<File>()) {
+        if (f.path.endsWith('.json')) f.deleteSync();
+      }
+      expect(h.inFolder, isEmpty);
+      await h.weather.updateNow();
+      expect(h.inFolder, containsAll(['nws-alerts-point.json', 'usgs-quakes-near.json']));
+    });
+
     test('the age is kept across a restart', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather alerts'), true);
@@ -820,6 +943,36 @@ void main() {
       expect(h.weather.waitingForPosition, isFalse);
       expect(await homeWeather(h.weather), 'Choose a place to watch in Settings');
       expect(await homeAlerts(h.weather), 'Choose a place to watch in Settings');
+    });
+
+    // build 46: at start Home's card and the Weather screen waited 10-15 s for the core (busy listing PDFs) for data the app
+    // already had.
+    test('after a restart Home and the Weather screen have the last data and the saved places before the core answers', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
+      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Where I am', 'Cabin']));
+
+      h = await h.restart();
+      // The new core has nothing yet and is busy: nothing it says arrives.
+      h.core.busy = Completer<void>();
+      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Where I am', 'Cabin']));
+      final now = h.weather.homeCardNow();
+      expect(now?.temperature, '45 °F');
+      expect(now?.place, 'Where I am');
+      expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2));
+      h.core.busy!.complete();
+    });
+
+    test('Update now fetches every source at once and counts each', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      final r = await h.weather.updateNow();
+      expect(r.fetched, h.core.fetches.length);
+      expect(h.core.fetches.map((f) => f['source']).toSet(), containsAll(['openmeteo-forecast', 'wfigs-incidents-near']));
     });
 
     test('Home weather: an expired forecast says it needs a connection', () async {

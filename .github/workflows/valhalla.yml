@@ -1,0 +1,111 @@
+# Builds Valhalla 3.7.0 + valhalla_shim for every platform, one job per platform. Today: linux-x86_64 and linux-aarch64 (each on a native runner, no cross-compiling). Each job runs the shim's own
+# test (test/shim_test.c: init, route, matrix, locate over the Idaho tile extract), checks the library needs only glibc <= 2.35, and
+# uploads valhalla-shim-3.7.0-linux-<arch> (lib/libvalhalla_shim.so, include/, LICENSE-NOTICE.txt, BUILD-INFO.txt). No GitHub Release.
+# Built in an ubuntu:22.04 container so the library runs on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+.
+# GCC 13 comes from the ubuntu-toolchain-r/test PPA (Valhalla 3.7.0 uses <format>); libstdc++ and libgcc are linked statically.
+name: Valhalla
+
+on:
+  push:
+    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
+    paths:
+      - 'packages/valhalla/**'
+      - '.github/workflows/valhalla.yml'
+      - '.github/actions/valhalla-source/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shared by every platform job: the composite action .github/actions/valhalla-source checks out the pinned Valhalla 3.7.0 commit (with
+# submodules) and applies the patch set (today only the pre-generated tz leapseconds file; no Valhalla source is modified), via
+# packages/valhalla/scripts/fetch-source.sh, the single place that holds the pin. A composite action beats a "prepare source" job
+# that uploads the tree as an artifact: nothing big to upload/download, it runs inside the ubuntu:22.04 container and on Windows/macOS
+# runners alike, and each job still ends up with byte-identical source because the commit is pinned.
+#
+# Each platform job must: build the shim (+ test) from packages/valhalla/scripts, run test/shim_test.c (init, route, matrix, locate),
+# and upload an artifact named valhalla-shim-3.7.0-<platform>-<arch> holding lib/ (the shared or static library), include/,
+# LICENSE-NOTICE.txt and BUILD-INFO.txt. A later job compares the route results across platforms (route-equality check).
+#
+# Placeholders (comments only; the app side adds them after 1.0.29 from packages/valhalla/scripts):
+#   windows-x86_64 : runs build-windows.bat; outputs valhalla-shim-3.7.0-windows-x86_64 (valhalla_shim.dll + .lib + headers)
+#   android-arm64  : runs build-android.sh;  outputs valhalla-shim-3.7.0-android-arm64 (stripped libvalhalla_shim.so + headers)
+#   ios-arm64      : runs build-ios.sh;      outputs valhalla-shim-3.7.0-ios-arm64 (libcache_valhalla.a + headers)
+#   route-equality : needs all platform jobs; same request over the same tiles must give equal routes on every platform
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: /github/home/ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - name: Build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -q
+          apt-get install -y -q build-essential pkg-config curl git ca-certificates unzip zip xz-utils zstd tar gzip python3 python3-pip software-properties-common gawk ccache file
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update -q
+          apt-get install -y -q gcc-13 g++-13
+          # vcpkg needs cmake >= 3.21 and ninja; 22.04 ships 3.22, but vcpkg's tool build wants newer, so take both from PyPI (wheels for both arches).
+          pip3 install --no-cache-dir 'cmake==3.31.6' 'ninja==1.11.1.4'
+          g++-13 --version | sed -n 1p
+          cmake --version | sed -n 1p
+          ldd --version | sed -n 1p
+      - uses: actions/checkout@v4
+      - name: Pinned Valhalla source
+        uses: ./.github/actions/valhalla-source
+        with:
+          dir: work/src
+      - name: Dependency cache (vcpkg downloads and built packages)
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/downloads
+            work/vcpkg-archives
+          key: valhalla-linux-deps-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/vcpkg.json', 'packages/valhalla/triplets/*-linux-rel.cmake', 'packages/valhalla/scripts/build-linux.sh') }}
+          restore-keys: valhalla-linux-deps-${{ matrix.arch }}-
+      - name: Compiler cache
+        uses: actions/cache@v4
+        with:
+          path: /github/home/ccache
+          key: valhalla-linux-ccache-${{ matrix.arch }}-${{ github.run_id }}
+          restore-keys: valhalla-linux-ccache-${{ matrix.arch }}-
+      - name: Build
+        run: |
+          ccache --zero-stats
+          bash packages/valhalla/scripts/build-linux.sh "$PWD/work" "$PWD/out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}"
+          ccache --show-stats
+      - name: Shim test (init, route, matrix, locate)
+        run: bash packages/valhalla/scripts/test-linux.sh "$PWD/out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}" "$PWD/work/src" "$PWD/testwork"
+      - name: Check glibc and symbols
+        run: |
+          so=out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}/lib/libvalhalla_shim.so
+          file "$so"
+          ldd "$so"
+          objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tr '\n' ' '; echo
+          max=$(objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "max GLIBC $max"
+          [[ $(printf '%s\n2.35\n' "$max" | sort -V | tail -1) == 2.35 ]] || { echo "::error::needs glibc $max"; exit 1; }
+          nm -D --defined-only "$so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          if-no-files-found: error

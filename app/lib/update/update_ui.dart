@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:path_provider/path_provider.dart';
 
+import '../app_fs.dart';
 import '../theme.dart';
 import '../version.dart';
 import 'app_update.dart';
@@ -26,13 +26,13 @@ class DismissedUpdate {
 
   final Directory? _dir;
 
-  Future<File> _file() async => File('${(_dir ?? await getApplicationSupportDirectory()).path}/update_banner.json');
+  AppFs get _fs => createAppFs(supportOverride: _dir);
 
   Future<int?> read() async {
     try {
-      final f = await _file();
-      if (!f.existsSync()) return null;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = await _fs.readString(AppRoot.support, 'update_banner.json');
+      if (text == null) return null;
+      final j = jsonDecode(text);
       return j is Map && j['dismissed_build'] is num ? (j['dismissed_build'] as num).toInt() : null;
     } catch (_) {
       return null;
@@ -41,7 +41,7 @@ class DismissedUpdate {
 
   Future<void> write(int build) async {
     try {
-      (await _file()).writeAsStringSync(jsonEncode({'dismissed_build': build}));
+      await _fs.writeString(AppRoot.support, 'update_banner.json', jsonEncode({'dismissed_build': build}));
     } catch (_) {}
   }
 }
@@ -163,13 +163,13 @@ class WhatsNewSeen {
 
   final Directory? _dir;
 
-  Future<File> _file() async => File('${(_dir ?? await getApplicationSupportDirectory()).path}/whats_new.json');
+  AppFs get _fs => createAppFs(supportOverride: _dir);
 
   Future<String?> lastSeen() async {
     try {
-      final f = await _file();
-      if (!f.existsSync()) return null;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = await _fs.readString(AppRoot.support, 'whats_new.json');
+      if (text == null) return null;
+      final j = jsonDecode(text);
       return j is Map && j['seen'] is String ? j['seen'] as String : null;
     } catch (_) {
       return null;
@@ -178,8 +178,7 @@ class WhatsNewSeen {
 
   Future<void> markSeen(String version) async {
     try {
-      final f = await _file();
-      f.writeAsStringSync(jsonEncode({'seen': version}));
+      await _fs.writeString(AppRoot.support, 'whats_new.json', jsonEncode({'seen': version}));
     } catch (_) {}
   }
 }
@@ -228,35 +227,43 @@ Future<void> showWhatsNew(BuildContext context, {required String version, requir
   constraints: BoxConstraints(maxWidth: 560, maxHeight: MediaQuery.sizeOf(context).height * 0.85),
   builder: (ctx) {
     final k = ctx.t;
+    // The lines scroll; Got it stays under them, always in view (a phone held sideways has room for a few lines only).
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-        child: Column(
-          key: const ValueKey('whats-new'),
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("What's new in $version", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
-            const SizedBox(height: 12),
-            for (final l in lines)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(padding: const EdgeInsets.only(top: 7), child: Icon(Icons.circle, size: 6, color: k.accent)),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text.rich(_bold(l), style: TextStyle(fontSize: 14, height: 1.4, color: k.text))),
-                  ],
-                ),
+      child: Column(
+        key: const ValueKey('whats-new'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("What's new in $version", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                  const SizedBox(height: 12),
+                  for (final l in lines)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(padding: const EdgeInsets.only(top: 7), child: Icon(Icons.circle, size: 6, color: k.accent)),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text.rich(_bold(l), style: TextStyle(fontSize: 14, height: 1.4, color: k.text))),
+                        ],
+                      ),
+                    ),
+                ],
               ),
-            const SizedBox(height: 6),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(key: const ValueKey('whats-new-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
             ),
-          ],
-        ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 6, 24, 16),
+            child: FilledButton(key: const ValueKey('whats-new-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
+          ),
+        ],
       ),
     );
   },

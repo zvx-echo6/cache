@@ -31,6 +31,10 @@
  *   "otp_required"   the video account has two-factor login on: repeat the login with the "otp" code
  *   "limit_exceeded" a layer download is over the layer's limit (tiles or bytes per download)
  *   "offline"        a layer or action needs a connection and the engine is offline (or the layer is online only)
+ *   "not_pdf"        (cs_ingest_*) the file is not a PDF
+ *   "locked"         (cs_ingest_*) the PDF is password-protected
+ *   "embed"          (cs_ingest_*) the embedder failed or is not configured
+ *   "no_text"        (cs_ingest_*) no page of the PDF has any text (OCR off, or every OCR'd page empty)
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -233,7 +237,8 @@ void cs_close(cs_handle *h);
  * "[mm:ss] text" line each; of an EPUB address the chapter's text from a few blocks before the passage, after "Chapter: <heading>".
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
- *          "page", the printed label; no other result has that key)
+ *          "page", the printed label, and "link" (the PDF at that page) and "quote" (the passage's first words, for the reader to
+ *          mark); no other result has "pdf_page")
  *          (a caption or EPUB result, address "cap:", "zimcap:" or "zimepub:", also has where it opens, as its citation:
  *          "link" (the video, or the EPUB chapter with its "#cache-b<n>" anchor), "quote" (the passage's first words), and for
  *          a caption "time" and "time_end" (seconds) and "lang" when known; never shown to the model)
@@ -320,7 +325,10 @@ char *cs_zim_main_page(cs_handle *h, const char *zim_id);
  * ZIM's own keyword list (both BM25), not against its own best hit.
  *
  * cs_zim_pdfs: {"zim_uuid","zim_name" (the ZIM's metadata Name),"pdfs":[{"path","title","size"}]} for the entries whose mime type
- * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
+ * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id.
+ * A ZIM whose mime list has no application/pdf answers at once; otherwise it is a pass over every directory entry (reading
+ * each one's mime type through bounded mapping windows, a few MiB mapped at a time), which for a large ZIM takes seconds on
+ * the caller's thread: the job kind "zim_pdfs" (cs_job_start) makes the same list on a thread of its own. */
 char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
 
 /* cs_pdf_chunk: pure (no handle, nothing read or written): the shared passage chunker (packages/cache_chunk) on the text of a
@@ -626,6 +634,102 @@ char *cs_place_delete(cs_handle *h, const char *key);
  * "unsupported" for an unknown op or a notebook.sqlite made by a newer Cache, "io". */
 char *cs_notebook(cs_handle *h, const char *op, const char *args_json);
 
+/* --- the Bookshelves log (logic in packages/cache_shelves; format in server/builder/LIBRARY-LOG.md) ---
+ *
+ * The person's own shelves, call numbers, same-book groups and linked-folder locations, as events in one log file per device
+ * (<dir>/log/<dev>.jsonl). All four calls are handle-less (nothing is opened; the arguments name the folders) and take one JSON
+ * object. They return JSON, or NULL with cs_last_error(NULL) ("bad_json" for a bad request, "io" for a file problem).
+ *
+ * cs_shelves_detect({"copy": facts, "against": [facts], "tuning"?}) -> [{"with": copy key, "how": "blake3" | "text", "score"}]
+ *   Pure. facts = {"copy": key, "blake3"?: content hash, "minhash"?: [128 numbers] or base64, "mean_vector"?: base64 f16 as in the pack
+ *   or a list of numbers, "words"?: n}; the pack header's book.original_blake3 (else source.blake3), samebook.minhash and
+ *   samebook.mean_vector. A match is the same content hash, or MinHash Jaccard >= 0.85 with mean-vector cosine >= 0.95 (the
+ *   build service's thresholds, "tuning" overrides {"same_jaccard","same_cosine","edition_jaccard","min_length_ratio"}). A new
+ *   edition is not a match. score is 1.0 for blake3, else the Jaccard. Copies with the same key as "copy" are skipped.
+ * cs_shelves_detect({"libraries": [{"library_id","dir","packs_dir"?}], "copies"?: [copy keys to check, default all],
+ *   "known"?: [copy keys already detected], "tuning"?}) -> [{"copy","with","how","score"}]
+ *   The batch form (used when the request has "libraries"). It reads the features itself from each library's copies.jsonl, else
+ *   its packs, and returns every match between a checked copy and any other visible copy, checked ones included. Each unordered
+ *   pair appears once, "copy" the greater key and "with" the lesser, sorted by ("copy","with"). A pair with both copies in
+ *   "known" is skipped. Same rule and thresholds as the single form; a copy in two libraries is one copy.
+ * cs_shelves_append({"dir": <bookshelves folder>, "dev", "events": [event]}) -> {"written": n, "last_at": ms}
+ *   Appends to <dir>/log/<dev>.jsonl in one write, fsynced. An event is a log line's object ({"ev": "place", "copy", "div", "by"},
+ *   "assign", "retire", "unsort", "title", "remove", "restore", "same" {"with","by","how","score"?}, "notsame" {"with","by"},
+ *   "prefer", "folder", "locate", "unlocate"; an optional "loc": "<library_id>/<doc_id>"); "v" and "at" (now) and "dev" may be
+ *   left out. A clock set back is held at the device's last "at". An event the log does not take, or one from another device,
+ *   fails the whole call and writes nothing.
+ * cs_shelves_resolve({"dir", "libraries": [{"library_id", "dir", "packs_dir"?}]}) -> the view (format 1): {"format","built_from",
+ *   "books": {<id>: {"title","title_from","aka","reading","copies","shelf","shelved","by","call","removed","suggested"}},
+ *   "retired","next","folders"}. Reads every log in <dir>/log/ and, per library, <library dir>/copies.jsonl when it has one, else
+ *   its packs (<library dir>/packs unless "packs_dir"), and the seed log (<library dir>/log/builder-*.jsonl). The same inputs give
+ *   the same bytes. Also writes the view to <dir>/.local/view.json (a temporary file in that folder, then a rename), and fails if
+ *   it cannot.
+ * cs_shelves_import({"dir", "dev", "libraries": [...]}) -> {"events","files":[{"library_id","file","size","events","unmapped","already"}]}
+ *   Once per library log: this device's own events from <library dir>/log/<dev>.jsonl go into <dir>/log/<dev>.jsonl with "doc"
+ *   mapped to the copy key (through the library's copies.jsonl, else its packs); recorded in <dir>/.local/migrated.json. */
+char *cs_shelves_detect(const char *args_json);
+char *cs_shelves_append(const char *args_json);
+char *cs_shelves_resolve(const char *args_json);
+char *cs_shelves_import(const char *args_json);
+
+/* --- Add PDF: the ingest job (packages/cache_ingest/INGEST-API.md; logic in the cache_ingest crate, wired in ingest.rs) ---
+ *
+ * One PDF becomes one book in a library: pack, shard points, keyword index, a copies.jsonl line and (optionally) Bookshelves
+ * events, as the Linux builder makes them. The app drives it: there are no core threads and no callbacks. Each cs_ingest_step does a
+ * bounded amount of work and returns; to pause, stop calling. The job is checkpointed in "job_dir" after every page and every embed
+ * batch, so cs_ingest_start with the same "job_dir" after a kill carries on (same BLAKE3 of the file) or starts fresh (another file).
+ * One job per "job_dir"; several jobs may run with different job_dirs, but only one writes a given library at a time. All four calls
+ * are handle-less, take one JSON object and return JSON, or NULL with cs_last_error(NULL): "bad_json", "io", "not_found" (no such
+ * job), "busy", "cancelled", "not_pdf", "locked", "damaged", "no_space" (with "needed" and "available"), "embed", "no_text" (a failed status only).
+ *
+ * cs_ingest_start({"library_dir","pdf_path","job_dir","bookshelves"?:{"dir","dev","libraries"?:[{"library_id","dir","packs_dir"?}]},"opts"?:{"title","ocr":"host"|"off","ocr_batch":8,
+ *   "ocr_dpi":300,"embed_batch":8,"embed_threads":2},"engines"?:{...}}) -> {"job","resumed","copy","pages"}
+ *   "library_dir" is the library's folder (its shard/, index/, packs/, copies.jsonl). Without "bookshelves" no Bookshelves events are
+ *   written. "bookshelves.libraries" (the shape cs_shelves_resolve takes) lists the libraries whose copies the new book is compared with, besides
+ *   the target library; without it only the target library is compared. Defaults: title = the PDF's metadata title, else the file name without ".pdf"; ocr "host" (the app does the OCR; "off":
+ *   pages without text are skipped and counted); ocr_batch pages per needs_ocr; ocr_dpi the resolution of the page images;
+ *   embed_batch passages per embed call; embed_threads for the model. "copy" is the file's BLAKE3 (the copy key). The PDF is never
+ *   modified. The library gets the pack, points, keyword index, a copies.jsonl line, a documents.tsv row and SHA256SUMS (source-identities.json
+ *   is not touched). Errors at start: "not_pdf", "locked", "damaged" (cannot be read, or no pages), "io".
+ *   "engines" (optional, not part of INGEST-API.md): where the host's engines are. {"pdfium_lib": path of libpdfium (default: the
+ *   usual library name, then this process), "pdfium_version": text recorded in the pack, "embed_lib": the built libcache_llama,
+ *   "embed_model": the bge-m3 GGUF, "embed_sha256"?: its expected sha256, "classifier"?: a cache-classifier-N.bin}. Without embed_lib and embed_model the embedding step
+ *   fails with "embed".
+ * cs_ingest_step({"job","budget_ms"}) -> status
+ *   Works for about budget_ms (the smallest unit is one page, one embed batch or the write, so a step can run over by one unit),
+ *   checkpoints and returns {"state","progress":{"pages","pages_done","pieces","pieces_done"}, ...}. "state": "reading", "needs_ocr"
+ *   (plus "needs_ocr":[{"page","image_path","width","height","dpi"}]: grayscale PNGs of the pages with fewer than 20 non-space
+ *   characters; stepping again returns the same list until cs_ingest_ocr has taken them), "embedding", "writing", "done" (plus
+ *   "result":{"doc_id","copy","title","pieces","pages_without_text","ocr":{"engine","version","pages_ocrd"}|null, and with
+ *   "bookshelves" "same":[{"with","how","score"}],"shelf":{"div","by"}|null}; the job_dir is then removed and later calls return
+ *   "not_found") or "failed" (plus "error":{"code","message"}; the job_dir is kept). "pieces" is 0 until reading is finished.
+ *   The library is written in one step, all or nothing: it is "updating" (search skips it, as during update_library) while it
+ *   writes, then reopens. If another job is writing the same library the step returns NULL with "busy": step again later.
+ *   With "bookshelves": a copy of a book already on the shelves gets "same" (by auto) events; a new book gets "place" and "assign"
+ *   when the sorter (the Linux builder's, from "engines.classifier") is confident; otherwise the book is in Unsorted ("shelf" null).
+ *   "result.suggested" is the sorter's best guess ({"div","score","second_div","classifier_version"}, also kept in the pack and copies.jsonl), null
+ *   without a usable classifier or for a same-book match. A classifier trained on another embedding model than "embed_sha256" is refused.
+ * cs_ingest_ocr({"job","engine","version","pages":[{"page","text","confidence"?}]}) -> {"accepted","remaining"}
+ *   The text of pages the last needs_ocr asked for (an empty text is a blank page; confidence is 0 to 1 and is averaged into the
+ *   pack's book.ocr.confidence). Each page's PNG is deleted once its text is accepted. A page that was not asked for, or a
+ *   different engine or version than an earlier call of the job, is "bad_json". The OCR text goes into the pieces and indexes only.
+ * cs_ingest_cancel({"job"}) -> {"cancelled":true}
+ *   Stops the job and deletes its job_dir (a folder the job did not mark as its own is never removed; start fails with "bad_json" on one). A
+ *   cancel that loses the race to "done" returns {"cancelled":false,"done":true}; a job whose book is already in the library is kept
+ *   ({"cancelled":false,"done":false,"committed":true}). "cancelled":true is never returned for a book that was added. Nothing is in the library before "writing", so there is nothing else to undo; after
+ *   "done" the job is gone ("not_found"). The pack records its text extractor ("pdfium"). */
+char *cs_ingest_start(const char *params_json);
+char *cs_ingest_step(const char *params_json);
+char *cs_ingest_ocr(const char *params_json);
+char *cs_ingest_cancel(const char *params_json);
+/* cs_ingest_probe({"engines":{...as cs_ingest_start...},"hash_model"?:true}) -> {"pdfium":{"ok","version","from":"path"|"name"|"process"|null,"error"?},
+ *   "embedder":{"ok","error"?},"model":{"ok","sha256","expected","matches","error"?},"classifier":{"ok","version","error"?}}
+ *   Tries to load PDFium and the embedder (the model is loaded, then released) with those paths; writes nothing and keeps nothing
+ *   loaded. A missing engine is reported in the result, never an error: only malformed JSON returns NULL ("bad_json"). "model"
+ *   reads the whole GGUF file (about 600 MB) to give its sha256 (reported even without "embed_sha256"; "matches" is null then),
+ *   which takes seconds on a phone: pass "hash_model":false at app start to skip it (sha256 and matches are then null). */
+char *cs_ingest_probe(const char *params_json);
+
 /* --- the user's map layers and repeater lists (user.sqlite; logic in cache_user's mapdata) ---
  *
  * A map layer (id "y<n>") holds pins, lines and areas with a name and notes, imported from KML, KMZ, GPX, GeoJSON or a layer
@@ -701,6 +805,11 @@ char *cs_live_sources(cs_handle *h);
  * like "HTTP 404: No such site"; a rate limit is waited for as the provider asks, inside the quotas).
  * Returns what cs_live_get returns plus "fetched":true|false. */
 char *cs_live_fetch(cs_handle *h, const char *request_json);
+
+/* cs_live_fetch as a job, on a thread of its own: the download never holds the caller (the app's one core worker), and several
+ * run at once. Poll cs_job_progress: when "done", "result" is what cs_live_fetch returns; a failed fetch is "failed" with
+ * cs_live_fetch's error. Free it with cs_job_free. NULL on error (cs_last_error(h)): "not_configured" without "live". */
+cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
 
 /* request_json: {"source","place","params"?,"now"?}. The stored data for Home cards and map layers, expired or not:
  * {"source":{"id","title","provider","description","attribution"},"place":{"key","name","lat","lon"},
@@ -1088,6 +1197,10 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "zim_pdfs": {"zim_path"}
+ *   the list cs_zim_pdfs gives, made on the job's thread (the ZIM is opened by path; "zim_name" is its metadata Name, else the
+ *   file name). Progress is directory entries looked at, of all; when done the progress JSON adds "result" (the list).
+ *   Cancellable. The ZIM's list never changes (a ZIM file never does): the app keeps it per uuid and lists a ZIM once.
  * kind "pdfindex_finish": {"indexes_dir","zim_uuid"}
  *   publishes the PDF index build of a ZIM: merges .build/ to one segment, moves its files into
  *   .build/publish-<build-id>/ (hashing them with sha256 as they are read), writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,

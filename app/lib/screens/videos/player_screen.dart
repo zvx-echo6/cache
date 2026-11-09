@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../platform/system_ui.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../layout/adaptive.dart';
@@ -21,6 +23,11 @@ const double kTranscriptPaneWidth = 320;
 
 /// A window shorter than this has no room for the transcript beside the video: it opens from the Captions sheet instead.
 const double kTranscriptMinHeight = 600;
+
+/// An upright window at least this tall (and [kTranscriptBelowMinWidth] wide, a tablet held upright) has the transcript under the
+/// video and its title, in the room a phone's layout would leave empty.
+const double kTranscriptBelowMinHeight = 900;
+const double kTranscriptBelowMinWidth = 600;
 
 /// The soft shadow behind every icon and word on the picture, so white stays readable over a bright frame.
 const List<Shadow> kOverlayShadows = [Shadow(color: Color(0xA6000000), blurRadius: 6, offset: Offset(0, 1))];
@@ -322,10 +329,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final citedTrack = widget.citedLang == null ? -1 : _tracks.indexWhere((x) => x.language == widget.citedLang);
     if (widget.cited && citedTrack >= 0) {
       // the cited language: on the picture on a phone, in the transcript on a wide window
-      if (on != null || !_transcriptBeside(context)) on = citedTrack;
+      if (on != null || !_transcriptShown(context)) on = citedTrack;
       _citedTrack = citedTrack;
     }
-    if (widget.cited && on == null && !_transcriptBeside(context)) on = 0;
+    if (widget.cited && on == null && !_transcriptShown(context)) on = 0;
     if (on != null) await _cuesOf(on);
     _on = on;
   }
@@ -358,16 +365,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (_match != null && c.value.position >= cues[_match!].end) _match = null;
       if (i != _lastCue) {
         _lastCue = i;
-        if (i >= 0 && _transcriptBeside(context)) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(i));
+        if (i >= 0 && _transcriptShown(context)) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(i));
       }
     }
-    if (!c.value.isPlaying && c.value.isInitialized) {
+    if ((!c.value.isPlaying || _ended(c)) && c.value.isInitialized) {
       _remember();
-      // paused: the controls stay
+      // paused or at the end: the controls stay (at the end, Replay)
       if (!_overlay) _overlay = true;
     }
     setState(() {});
   }
+
+  /// The video played to its end. Some players then report the position back at 0:00 and still "playing" (Android): their
+  /// completed flag says it; else the position at the length.
+  static bool _ended(VideoPlayerController c) =>
+      c.value.isInitialized &&
+      (c.value.isCompleted || (c.value.duration > Duration.zero && c.value.position >= c.value.duration - const Duration(milliseconds: 250)));
 
   void _remember() {
     final c = _c;
@@ -416,7 +429,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _showOverlay();
     if (on) {
       final wide = c == null || !c.value.isInitialized || c.value.aspectRatio >= 1;
-      unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+      unawaited(setSystemBars(hideStatusBar: true));
       unawaited(SystemChrome.setPreferredOrientations(
         wide ? const [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight] : const [DeviceOrientation.portraitUp],
       ));
@@ -426,7 +439,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   static Future<void> _restoreSystem() async {
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    await setSystemBars();
     await SystemChrome.setPreferredOrientations(const []);
   }
 
@@ -435,7 +448,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _hide?.cancel();
     if (mounted) setState(() => _overlay = true);
     _hide = Timer(kControlsHide, () {
-      if (mounted && (_c?.value.isPlaying ?? false) && !_dragging) setState(() => _overlay = false);
+      final c = _c;
+      if (mounted && c != null && c.value.isPlaying && !_ended(c) && !_dragging) setState(() => _overlay = false);
     });
   }
 
@@ -456,7 +470,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _pickSpeed() async {
     final c = _c;
     if (c == null) return;
-    final v = await showModalBottomSheet<double>(
+    final v = await showFittedSheet<double>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -501,7 +515,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// The quality sheet (a stream): Auto and each quality; the choice is kept on this device.
   Future<void> _pickQuality() async {
-    final picked = await showModalBottomSheet<String>(
+    final picked = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -612,8 +626,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final c = _c;
     if (c == null) return;
     _hide?.cancel();
-    final hiddenTranscript = _hasCaptions && !_transcriptBeside(context) && _wide(context);
-    final picked = await showModalBottomSheet<String>(
+    final hiddenTranscript = _hasCaptions && !_transcriptShown(context) && _wide(context);
+    final picked = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -680,7 +694,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// The captions sheet: Off and each language (from the gear, or a long press on CC when there are two or more languages).
   Future<void> _captionSheet() async {
-    final picked = await showModalBottomSheet<int>(
+    final picked = await showFittedSheet<int>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -750,7 +764,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _playPause() {
     final c = _c;
     if (c == null || !c.value.isInitialized) return;
-    c.value.isPlaying ? c.pause() : c.play();
+    if (_ended(c)) {
+      // Replay: from the start
+      unawaited(c.seekTo(Duration.zero).then((_) => c.play()));
+    } else {
+      c.value.isPlaying ? c.pause() : c.play();
+    }
     _showOverlay();
   }
 
@@ -759,6 +778,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// The transcript has its own pane beside the video: a wide, tall enough window and a video with captions.
   bool _transcriptBeside(BuildContext context) =>
       _hasCaptions && _wide(context) && MediaQuery.sizeOf(context).height >= kTranscriptMinHeight;
+
+  /// The transcript has its own pane under the video: an upright tablet's window (narrower than [kTranscriptMinWidth]).
+  bool _transcriptBelow(BuildContext context) {
+    final s = MediaQuery.sizeOf(context);
+    return _hasCaptions && !_wide(context) && s.width >= kTranscriptBelowMinWidth && s.height >= kTranscriptBelowMinHeight;
+  }
+
+  /// The transcript shows in a pane of its own, beside or under the video.
+  bool _transcriptShown(BuildContext context) => _transcriptBeside(context) || _transcriptBelow(context);
 
   /// "Play (Space)" on a desktop window, where the keys work; "Play" elsewhere.
   String _tip(BuildContext context, String words, String key) => isDesktop(context) ? '$words ($key)' : words;
@@ -833,31 +861,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _body(BuildContext context, VideoPlayerController? c, bool ready) {
     final beside = _transcriptBeside(context);
-    final left = LayoutBuilder(
-      builder: (context, box) => ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          ColoredBox(
-            color: Colors.black,
-            // as tall as the video, and a tall (vertical) video leaves room for the controls below
-            child: Center(
-              heightFactor: 1,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * (beside ? 0.62 : 0.55)),
-                child: AspectRatio(
-              aspectRatio: ready && !t.isAudio ? c!.value.aspectRatio : 16 / 9,
-                  child: !ready ? const Center(child: CircularProgressIndicator()) : _videoStack(context, c!, full: false),
-                ),
-              ),
-            ),
+    final below = _transcriptBelow(context);
+    final video = ColoredBox(
+      color: Colors.black,
+      // as tall as the video, and a tall (vertical) video leaves room for the controls below
+      child: Center(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * (beside ? 0.62 : 0.55)),
+          child: AspectRatio(
+            aspectRatio: ready && !t.isAudio ? c!.value.aspectRatio : 16 / 9,
+            child: !ready ? const Center(child: CircularProgressIndicator()) : _videoStack(context, c!, full: false),
           ),
-          if (_resumedAt != null) _resumedBar(context),
-          _info(context),
-        ],
+        ),
       ),
     );
-    if (!beside) return left;
     final k = context.t;
+    if (below) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          video,
+          if (_resumedAt != null) _resumedBar(context),
+          _info(context),
+          Divider(height: 1, color: k.secondary.withValues(alpha: 0.25)),
+          Expanded(child: _transcript(context)),
+        ],
+      );
+    }
+    final left = ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        video,
+        if (_resumedAt != null) _resumedBar(context),
+        _info(context),
+      ],
+    );
+    if (!beside) return left;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1219,9 +1259,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             key: const ValueKey('player-play'),
             iconSize: big ? 52 : 34,
             color: k.onPrimary,
-            tooltip: _tip(context, c.value.isPlaying ? 'Pause' : 'Play', 'Space'),
+            tooltip: _tip(context, _ended(c) ? 'Replay' : (c.value.isPlaying ? 'Pause' : 'Play'), 'Space'),
             onPressed: _playPause,
-            icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
+            icon: Icon(_ended(c) ? Icons.replay : (c.value.isPlaying ? Icons.pause : Icons.play_arrow)),
           ),
         ),
         SizedBox(width: big ? 40 : 28),

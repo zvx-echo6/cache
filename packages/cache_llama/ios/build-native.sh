@@ -13,6 +13,7 @@ cmake -S "$here/../src" -B "$build" \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCACHE_LLAMA_GEMMA4_PREFILL_OPT="${CACHE_LLAMA_GEMMA4_PREFILL_OPT:-OFF}" \
   -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
 cmake --build "$build" --config Release --target cache_llama -j "$(sysctl -n hw.ncpu)"
 # cache_llama is a static library that does not carry its dependencies: merge them all into one archive.

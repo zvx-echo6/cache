@@ -1,0 +1,28 @@
+[package]
+name = "cache_ingest"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's Add PDF job: one PDF becomes one book in a library (pack, points, keyword index, copies.jsonl line, Bookshelves events). Generic over a text extractor, an embedder and a library store; the core wires PDFium, cache_embed and its shard"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../cache_search/native"
+
+# No shard code and no model here: the core (cache_search) supplies the library store, and the PDF engine and embedder are traits.
+[dependencies]
+cache_pack = { path = "../cache_pack" }
+cache_chunk = { path = "../cache_chunk" }
+cache_shelves = { path = "../cache_shelves" }
+serde.workspace = true
+serde_json.workspace = true
+# The file's BLAKE3 (the copy key), as the builder and cache_sync.
+blake3 = "1.8"
+# Reading the first line of a gzip pack (same-book detection against libraries that have packs and no copies.jsonl); the PNG of a
+# page to OCR (zlib + CRC). The same pure-Rust flate2 as cache_search.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# SHA256SUMS of the library folder (the same sha2 the other crates use).
+sha2 = "0.10"
+# Loads PDFium at run time (the app ships it with its PDF viewer), as cache_embed loads cache_llama.
+libloading = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

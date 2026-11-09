@@ -1,0 +1,25 @@
+[package]
+name = "cache_pack"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's document pack (.cdoc): the format, its one writer (pages in, pack out) and the point ids and payloads of a library. Shared by the library builder (server/builder) and the ingest job (cache_ingest); no PDF engine, no shard"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../cache_search/native"
+
+# Pure Rust: no PDF engine, no model, no native library, so phones link it.
+[dependencies]
+cache_chunk = { path = "../cache_chunk" }
+# The division classifier (pure Rust), for the sorter that files a book from its piece vectors.
+cache_classify = { path = "../cache_classify" }
+# The MinHash Jaccard and the vector cosine the same-book decision uses (fingerprint.rs): one definition.
+cache_shelves = { path = "../cache_shelves" }
+serde.workspace = true
+serde_json.workspace = true
+# Packs are gzip-compressed JSON Lines; the same pure-Rust flate2 as cache_search (already in the lockfile).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+base64 = "0.22"
+# The deterministic stand-in embedder hashes words with BLAKE3.
+blake3 = "1.8"
+# Point ids (UUIDv5, docs/LIBRARY-FORMAT.md).
+uuid = { version = "1", features = ["v5"] }

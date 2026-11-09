@@ -33,11 +33,24 @@ FakeZim _zim({String uuid = 'u1'}) => FakeZim(
 /// Reads pages as the fake does, and calls [onRead] with the count of PDFs read so far (to pause or cancel mid-run).
 PdfBytesReader _reader(void Function(int n) onRead) {
   var n = 0;
-  return (Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
+  return (Uint8List bytes, String name, {PdfPermit? betweenPages, void Function(String step)? onStep}) async {
     n++;
     onRead(n);
-    return readFakePdfPages(bytes, name, betweenPages: betweenPages);
+    return readFakePdfPages(bytes, name, betweenPages: betweenPages, onStep: onStep);
   };
+}
+
+/// Counts the core's PDF listings.
+class _CountingCore extends FakePdfIndexCore {
+  _CountingCore({required super.zims});
+
+  int listed = 0;
+
+  @override
+  Future<ZimPdfList> zimPdfs(String zimId) {
+    listed++;
+    return super.zimPdfs(zimId);
+  }
 }
 
 /// Stands in for a native crash inside PDFium (which in the app ends the process).
@@ -377,6 +390,38 @@ void main() {
     });
     tearDown(() => state.dispose());
 
+    // build 46: every ZIM was listed again at every start (15 s of the core for a full Wikipedia). A ZIM never changes, so its
+    // list is kept by uuid and the core lists a ZIM once.
+    test('a ZIM is listed once: its PDF list is kept by uuid and read from there at the next start', () async {
+      final counting = _CountingCore(zims: {'u1': _zim()});
+      state = make(withCore: counting);
+      await state.init();
+      final kept = File('${dir.path}/support/pdf-lists/u1.json');
+      for (var i = 0; i < 400 && !kept.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(kept.existsSync(), isTrue);
+      expect((await state.listOf(zims.single))?.pdfs.length, 5);
+      expect(counting.listed, 1);
+
+      final next = make(withCore: counting);
+      await next.init();
+      final l = await next.listOf(zims.single);
+      expect([for (final p in l!.pdfs) p.path], [for (final p in _zim().pdfs) p.path]);
+      expect(l.zimName, 'guide');
+      expect(counting.listed, 1, reason: 'the kept list is used; the core is not asked again');
+      next.dispose();
+
+      // A new edition (another uuid) is listed.
+      zims = [PdfZimRef(path: zimPath, uuid: 'u2', title: 'Guide')];
+      counting.zims['u2'] = _zim(uuid: 'u2');
+      final third = make(withCore: counting);
+      await third.init();
+      await third.listOf(zims.single);
+      expect(counting.listed, 2);
+      third.dispose();
+    });
+
     test('nothing shows while the core cannot index PDFs', () async {
       state = make(withCore: const PdfIndexCoreMissing());
       await state.init();
@@ -419,7 +464,7 @@ void main() {
       final z = zims.single;
       final p = (await until(z, (p) => p.phase == PdfPartPhase.needsSpace))!;
       expect(pdfPartLine(p), startsWith('Needs '));
-      expect(pdfPartLine(p), endsWith(' free'));
+      expect(pdfPartLine(p), endsWith(' free · Free space'));
       expect(core.calls.where((c) => c == 'open'), isEmpty);
       free = 100 << 30;
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
@@ -431,7 +476,7 @@ void main() {
       await state.init();
       final z = zims.single;
       final p = (await until(z, (p) => p.phase == PdfPartPhase.paused))!;
-      expect(pdfPartLine(p), 'Paused, battery low');
+      expect(pdfPartLine(p), startsWith('Paused · battery low · plug in to continue · '));
       batteryNow = const BatteryReading(percent: 10, charging: true);
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
     });
@@ -529,15 +574,20 @@ void main() {
   group('words', () {
     test('every state has its line', () {
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768)), 'PDFs: searching ready');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)), 'Making PDFs searchable: 340 of 5,768');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused, battery low');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused · 340 of 5,768');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189)), 'Needs 1.2 GB free');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)), 'Making PDFs searchable · 340 of 5,768');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused · battery low · plug in to continue · 340 of 5,768');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused by you · Resume · 340 of 5,768');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189)), 'Needs 1.2 GB free · Free space');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5768)), 'Waiting to make PDFs searchable');
       // A new edition reusing its older one: the PDFs it does not hold.
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5790, handled: 5768, newCount: 22)), 'Making PDFs searchable: 5,768 of 5,790 · 22 new PDFs');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5790, handled: 5768, newCount: 22)), 'Making PDFs searchable · 5,768 of 5,790 · 22 new PDFs');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5790, newCount: 1)), 'Waiting to make PDFs searchable · 1 new PDF');
-      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.running, total: 5768)), 'Making PDFs searchable');
+      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)), 'Making PDFs searchable · 340 of 5,768');
+      // only a run says "Making": waiting, and every pause, says so
+      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.waiting, total: 5768)), 'Waiting to make PDFs searchable');
+      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused by you · Resume · 340 of 5,768');
+      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.paused, total: 9, handled: 3, pause: PdfPause.held, hold: PdfHold.battery)), 'Paused · battery low · plug in to continue · 3 of 9');
+      expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.done, total: 9, handled: 9)), isNull);
       expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.done, total: 5768)), isNull);
       expect(pdfRowNote(null), isNull);
     });
@@ -572,15 +622,15 @@ void main() {
       var paused = 0, resumed = 0, freed = 0;
       Future<void> pump(PdfPart p) => tester.pumpWidget(host(PdfPartView(part: p, onPause: () => paused++, onResume: () => resumed++, onFreeSpace: () => freed++)));
       await pump(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340));
-      expect(find.text('Making PDFs searchable: 340 of 5,768'), findsOneWidget);
+      expect(find.text('Making PDFs searchable · 340 of 5,768'), findsOneWidget);
       await tester.tap(find.text('Pause'));
       expect(paused, 1);
       await pump(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery));
-      expect(find.text('Paused, battery low'), findsOneWidget);
+      expect(find.text('Paused · battery low · plug in to continue · 340 of 5,768'), findsOneWidget);
       await tester.tap(find.text('Resume'));
       expect(resumed, 1);
       await pump(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189));
-      expect(find.text('Needs 1.2 GB free'), findsOneWidget);
+      expect(find.text('Needs 1.2 GB free · Free space'), findsOneWidget);
       await tester.tap(find.text('Free space'));
       expect(freed, 1);
       await pump(const PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768, unreadable: 12));

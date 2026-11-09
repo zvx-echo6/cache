@@ -10,10 +10,11 @@ void main() {
   group('the status line (UX-downloads-29 wording)', () {
     final total = (4.6 * _gb).round(), done = (1.7 * _gb).round();
     test('every state', () {
-      expect(dlLine(DlState(DlPhase.idle, total: total), idle: '4.6 GB · May be tight on this device'), '4.6 GB · May be tight on this device');
+      expect(dlLine(DlState(DlPhase.idle, total: total), idle: '4.6 GB · May be tight on RAM'), '4.6 GB · May be tight on RAM');
       expect(dlLine(DlState(DlPhase.starting, total: total)), 'Starting…');
       expect(dlLine(DlState(DlPhase.running, done: done, total: total, speed: 6.2 * _mb)), '1.7 of 4.6 GB · 6.2 MB/s · about 8 min left');
-      expect(dlLine(DlState(DlPhase.running, done: done, total: total)), '1.7 of 4.6 GB', reason: 'no speed before 5 seconds of data');
+      expect(dlLine(DlState(DlPhase.running, done: done, total: total)), '1.7 of 4.6 GB', reason: 'no speed before 2 seconds of data');
+      expect(dlLine(DlState(DlPhase.running, done: done, total: total, speed: 0)), '1.7 of 4.6 GB · Waiting for the server', reason: 'measured, and nothing came');
       expect(dlLine(DlState(DlPhase.pausing, done: done, total: total)), 'Pausing…');
       expect(dlLine(DlState(DlPhase.paused, done: done, total: total)), 'Paused · 1.7 of 4.6 GB');
       expect(dlLine(DlState(DlPhase.failed, done: done, total: total, reason: DlReason.noConnection)), 'Stopped: no connection · 1.7 of 4.6 GB');
@@ -39,15 +40,15 @@ void main() {
     });
   });
 
-  test('speed shows only after 5 seconds of data', () {
+  test('speed shows only after 2 seconds of data', () {
     var t = DateTime(2026, 11, 1);
     DlMeter.now = () => t;
     addTearDown(() => DlMeter.now = DateTime.now);
     expect(DlMeter.speed('k', 0), isNull);
-    t = t.add(const Duration(seconds: 3));
-    expect(DlMeter.speed('k', 30 * _mb), isNull);
-    t = t.add(const Duration(seconds: 3));
-    expect(DlMeter.speed('k', 60 * _mb)! / _mb, closeTo(10, 0.01));
+    t = t.add(const Duration(seconds: 1));
+    expect(DlMeter.speed('k', 10 * _mb), isNull);
+    t = t.add(const Duration(seconds: 2));
+    expect(DlMeter.speed('k', 30 * _mb)! / _mb, closeTo(10, 0.01));
   });
 
   Widget host(Widget row) => MaterialApp(theme: buildTheme(CacheThemeId.light), home: Scaffold(body: row));

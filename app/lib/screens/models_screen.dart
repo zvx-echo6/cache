@@ -8,8 +8,10 @@ import 'model_search_screen.dart';
 import '../browse/zim_download.dart' show freeBytesOnDisk;
 import '../downloads/download_row.dart';
 import '../models/search_model.dart' show kSearchModel;
+import '../platform/memory.dart' show modelMemoryNeed;
 import 'download_confirm.dart';
 import 'settings/widgets.dart' show GroupLabel;
+import '../layout/adaptive.dart' show ContentWidth;
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -43,6 +45,7 @@ class ModelsScreen extends StatefulWidget {
 class _ModelsScreenState extends State<ModelsScreen> {
   late final RecommendedModels _recommended = widget.recommended ?? RecommendedModels.shared;
   int? _memory;
+  int? _room;
 
   AppState get app => widget.app;
 
@@ -51,6 +54,12 @@ class _ModelsScreenState extends State<ModelsScreen> {
     super.initState();
     _memory = widget.memory;
     if (_memory == null) totalMemoryBytes().then((m) => mounted ? setState(() => _memory = m) : null);
+    // What is free now, with the model Cache holds counted as free (choosing another lets it go)
+    app.memory().then((r) {
+      if (r == null || !mounted) return;
+      final held = app.active;
+      setState(() => _room = r.room + (held == null ? 0 : modelMemoryNeed(held.size)));
+    });
     if (ModelDownloads.shared != null) _recommended.load();
     // A waiting row names the download it waits for by the name its own row shows.
     final d = ModelDownloads.shared;
@@ -71,10 +80,12 @@ class _ModelsScreenState extends State<ModelsScreen> {
     final downloads = ModelDownloads.shared;
     return Scaffold(
       appBar: AppBar(title: const Text('Models')),
-      body: ListenableBuilder(
+      body: SafeArea(
+        top: false,
+        child: ListenableBuilder(
         listenable: Listenable.merge([app, _recommended, ?downloads]),
         builder: (context, _) {
-          return Column(
+          return ContentWidth(child: Column(
             children: [
               Expanded(
                 child: ListView(
@@ -85,7 +96,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
                         child: Text(
-                          'The model is the AI that answers your questions. It runs on this device, so it works with no signal.',
+                          'The model is the AI that answers your questions. It runs on this device, so it works with no signal. File sizes use storage; fit labels refer to RAM (working memory).',
                           style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
                       ),
@@ -159,8 +170,9 @@ class _ModelsScreenState extends State<ModelsScreen> {
                   ),
                 ),
             ],
-          );
+          ));
         },
+        ),
       ),
     );
   }
@@ -168,7 +180,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
   Widget _recommendedTile(BuildContext context, ModelDownloads d, ModelRecommendation r) {
     final k = context.t;
     final f = r.hfFile;
-    final fit = ModelFit.of(r.size, _memory);
+    final fit = ModelFit.of(r.size, _memory, room: _room);
     final colour = switch (fit) {
       ModelFit.fits => k.ok,
       ModelFit.tight => k.warning,

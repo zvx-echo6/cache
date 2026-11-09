@@ -1453,7 +1453,9 @@ class RegionsState extends ChangeNotifier {
   // ---- map downloads from before regions -----------------------------------------------------------------------------------
 
   bool _migrated = false;
-  bool _migrating = false;
+
+  /// The migration running now: a call meanwhile waits for it (and returns when it is done), instead of returning at once.
+  Future<void>? _migration;
 
   /// Said once after old map downloads were tidied up ("Removed 2 duplicate map downloads..."); the screen that shows it clears it.
   String? tidyNote;
@@ -1464,81 +1466,80 @@ class RegionsState extends ChangeNotifier {
   /// box and zooms as another download the region keeps), whose tiles stay because the other one covers them. Runs once the map
   /// layers are read, and only once.
   @visibleForTesting
-  Future<void> migrateOldDownloads() async {
-    if (_migrated || _migrating || !maps.engine.ready) return;
-    _migrating = true;
-    try {
-      final engine = maps.engine;
-      final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain]};
-      final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running) a];
-      // Each region's box: kept with it, else around its map areas, else the catalogue's.
-      final boxes = <String, List<double>>{};
-      for (final k in _kept.values) {
-        var b = k.bbox ?? _boxOfAreas(k);
-        if (b == null && k.kind == null) {
+  Future<void> migrateOldDownloads() {
+    if (_migrated || !maps.engine.ready) return Future<void>.value();
+    return _migration ??= _migrateOldDownloads().whenComplete(() => _migration = null);
+  }
+
+  Future<void> _migrateOldDownloads() async {
+    final engine = maps.engine;
+    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain]};
+    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running) a];
+    // Each region's box: kept with it, else around its map areas, else the catalogue's.
+    final boxes = <String, List<double>>{};
+    for (final k in _kept.values) {
+      var b = k.bbox ?? _boxOfAreas(k);
+      if (b == null && k.kind == null) {
+        try {
+          b = (await catalogue.record(k.id))?.bbox;
+        } catch (_) {}
+      }
+      if (b != null) {
+        k.bbox ??= b;
+        boxes[k.id] = b;
+      }
+    }
+    bool inside(GeoBounds a, List<double> b) =>
+        a.west >= b[0] - 0.01 && a.south >= b[1] - 0.01 && a.east <= b[2] + 0.01 && a.north <= b[3] + 0.01;
+    double size(List<double> b) => (b[2] - b[0]) * (b[3] - b[1]);
+    var moved = 0;
+    for (final a in loose) {
+      final into = [for (final e in boxes.entries) if (inside(a.bounds, e.value)) e]..sort((x, y) => size(x.value).compareTo(size(y.value)));
+      if (into.isNotEmpty) {
+        _kept[into.first.key]!.areas.add(a.id);
+        moved++;
+        continue;
+      }
+      final b = a.bounds;
+      String r(double v) => v.toStringAsFixed(3);
+      final id = 'area-${_safeId('${r(b.west)}_${r(b.south)}_${r(b.east)}_${r(b.north)}')}';
+      final k = _kept[id] ??= _Kept(id: id, name: a.label, kind: kAreaRegionKind, bbox: [b.west, b.south, b.east, b.north]);
+      k.areas.add(a.id);
+      moved++;
+    }
+    // Exact duplicates: the same layer's tiles, box and zooms. The one kept is the finished one (else the one furthest along).
+    var removed = 0;
+    for (final k in _kept.values) {
+      final groups = <String, List<DownloadedArea>>{};
+      for (final a in _areasOf(k)) {
+        final b = a.bounds;
+        final key = '${engine.downloadLayerOf(a.layerId)}|${b.west.toStringAsFixed(4)}|${b.south.toStringAsFixed(4)}|'
+            '${b.east.toStringAsFixed(4)}|${b.north.toStringAsFixed(4)}|${a.minZoom}|${a.maxZoom}';
+        (groups[key] ??= []).add(a);
+      }
+      for (final g in groups.values.where((g) => g.length > 1)) {
+        if (g.any((a) => a.phase == AreaPhase.running)) continue;
+        g.sort((x, y) {
+          final done = (y.phase == AreaPhase.done ? 1 : 0) - (x.phase == AreaPhase.done ? 1 : 0);
+          return done != 0 ? done : y.doneTiles.compareTo(x.doneTiles);
+        });
+        for (final extra in g.skip(1)) {
           try {
-            b = (await catalogue.record(k.id))?.bbox;
+            await engine.delete(extra.id);
+            k.areas.remove(extra.id);
+            removed++;
           } catch (_) {}
         }
-        if (b != null) {
-          k.bbox ??= b;
-          boxes[k.id] = b;
-        }
       }
-      bool inside(GeoBounds a, List<double> b) =>
-          a.west >= b[0] - 0.01 && a.south >= b[1] - 0.01 && a.east <= b[2] + 0.01 && a.north <= b[3] + 0.01;
-      double size(List<double> b) => (b[2] - b[0]) * (b[3] - b[1]);
-      var moved = 0;
-      for (final a in loose) {
-        final into = [for (final e in boxes.entries) if (inside(a.bounds, e.value)) e]..sort((x, y) => size(x.value).compareTo(size(y.value)));
-        if (into.isNotEmpty) {
-          _kept[into.first.key]!.areas.add(a.id);
-          moved++;
-          continue;
-        }
-        final b = a.bounds;
-        String r(double v) => v.toStringAsFixed(3);
-        final id = 'area-${_safeId('${r(b.west)}_${r(b.south)}_${r(b.east)}_${r(b.north)}')}';
-        final k = _kept[id] ??= _Kept(id: id, name: a.label, kind: kAreaRegionKind, bbox: [b.west, b.south, b.east, b.north]);
-        k.areas.add(a.id);
-        moved++;
-      }
-      // Exact duplicates: the same layer's tiles, box and zooms. The one kept is the finished one (else the one furthest along).
-      var removed = 0;
-      for (final k in _kept.values) {
-        final groups = <String, List<DownloadedArea>>{};
-        for (final a in _areasOf(k)) {
-          final b = a.bounds;
-          final key = '${engine.downloadLayerOf(a.layerId)}|${b.west.toStringAsFixed(4)}|${b.south.toStringAsFixed(4)}|'
-              '${b.east.toStringAsFixed(4)}|${b.north.toStringAsFixed(4)}|${a.minZoom}|${a.maxZoom}';
-          (groups[key] ??= []).add(a);
-        }
-        for (final g in groups.values.where((g) => g.length > 1)) {
-          if (g.any((a) => a.phase == AreaPhase.running)) continue;
-          g.sort((x, y) {
-            final done = (y.phase == AreaPhase.done ? 1 : 0) - (x.phase == AreaPhase.done ? 1 : 0);
-            return done != 0 ? done : y.doneTiles.compareTo(x.doneTiles);
-          });
-          for (final extra in g.skip(1)) {
-            try {
-              await engine.delete(extra.id);
-              k.areas.remove(extra.id);
-              removed++;
-            } catch (_) {}
-          }
-        }
-      }
-      if (moved > 0 || removed > 0) await _save();
-      if (removed > 0) {
-        tidyNote = removed == 1
-            ? 'Removed 1 duplicate map download. Its tiles are kept by the other one.'
-            : 'Removed $removed duplicate map downloads. Their tiles are kept by the others.';
-      }
-      _migrated = true;
-      notifyListeners();
-    } finally {
-      _migrating = false;
     }
+    if (moved > 0 || removed > 0) await _save();
+    if (removed > 0) {
+      tidyNote = removed == 1
+          ? 'Removed 1 duplicate map download. Its tiles are kept by the other one.'
+          : 'Removed $removed duplicate map downloads. Their tiles are kept by the others.';
+    }
+    _migrated = true;
+    notifyListeners();
   }
 
   /// Asks the core whether a newer road routing or places build is out.

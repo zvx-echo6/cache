@@ -5,35 +5,47 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 typedef _LoadC = Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Pointer<Utf8>, Int32);
-typedef _Load = Pointer<Void> Function(Pointer<Utf8>, int, int, Pointer<Utf8>, int);
+typedef LlamaLoadCall = Pointer<Void> Function(Pointer<Utf8>, int, int, Pointer<Utf8>, int);
 typedef _BufC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int32);
-typedef _Buf = int Function(Pointer<Void>, Pointer<Utf8>, int);
+typedef LlamaBufferCall = int Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _StartC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Int32);
-typedef _Start = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef LlamaStartCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
 typedef _IntHC = Int32 Function(Pointer<Void>);
-typedef _IntH = int Function(Pointer<Void>);
+typedef LlamaHandleIntCall = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
-typedef _VoidH = void Function(Pointer<Void>);
+typedef LlamaHandleVoidCall = void Function(Pointer<Void>);
+typedef _ConfigureC = Int32 Function(Pointer<Utf8>);
+typedef LlamaConfigureCall = int Function(Pointer<Utf8>);
 typedef _EmbedC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, Int32, Int32);
-typedef _Embed = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, int, int);
+typedef LlamaEmbedCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, int, int);
 
 /// Thin typed wrapper over the native library. Every method is a direct call.
 class CacheLlamaBindings {
   CacheLlamaBindings(DynamicLibrary lib)
-      : clLoad = lib.lookupFunction<_LoadC, _Load>('cl_load'),
-        clInfo = lib.lookupFunction<_BufC, _Buf>('cl_info'),
-        clStart = lib.lookupFunction<_StartC, _Start>('cl_start'),
-        clNext = lib.lookupFunction<_BufC, _Buf>('cl_next'),
-        clPartial = lib.lookupFunction<_BufC, _Buf>('cl_partial'),
-        clFinish = lib.lookupFunction<_BufC, _Buf>('cl_finish'),
-        clPromptTokens = lib.lookupFunction<_IntHC, _IntH>('cl_prompt_tokens'),
-        clGeneratedTokens = lib.lookupFunction<_IntHC, _IntH>('cl_generated_tokens'),
-        clStop = lib.lookupFunction<_VoidHC, _VoidH>('cl_stop'),
-        clFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_free'),
-        clEmbedLoad = lib.lookupFunction<_LoadC, _Load>('cl_embed_load'),
-        clEmbedInfo = lib.lookupFunction<_BufC, _Buf>('cl_embed_info'),
-        clEmbed = lib.lookupFunction<_EmbedC, _Embed>('cl_embed'),
-        clEmbedFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_embed_free');
+      : clLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_load'),
+        clInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_info'),
+        clStart = lib.lookupFunction<_StartC, LlamaStartCall>('cl_start'),
+        clNext = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_next'),
+        clPartial = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_partial'),
+        clFinish = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_finish'),
+        clPromptTokens = lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_prompt_tokens'),
+        clGeneratedTokens = lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_generated_tokens'),
+        clReusedTokens = lib.providesSymbol('cl_reused_tokens')
+            ? lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_reused_tokens')
+            : null,
+        clConfigure = lib.providesSymbol('cl_configure')
+            ? lib.lookupFunction<_ConfigureC, LlamaConfigureCall>('cl_configure')
+            : null,
+        clPrefixNote = lib.providesSymbol('cl_prefix_note')
+            ? lib.lookupFunction<_BufC, LlamaBufferCall>('cl_prefix_note')
+            : null,
+        clStop = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_stop'),
+        clFree = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_free'),
+        clFreeAll = lib.lookupFunction<Int32 Function(), int Function()>('cl_free_all'),
+        clEmbedLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_embed_load'),
+        clEmbedInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_embed_info'),
+        clEmbed = lib.lookupFunction<_EmbedC, LlamaEmbedCall>('cl_embed'),
+        clEmbedFree = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_embed_free');
 
   /// Opens the native library of the current platform.
   factory CacheLlamaBindings.open() {
@@ -50,18 +62,28 @@ class CacheLlamaBindings {
     return CacheLlamaBindings(lib);
   }
 
-  final _Load clLoad;
-  final _Buf clInfo;
-  final _Start clStart;
-  final _Buf clNext;
-  final _Buf clPartial;
-  final _Buf clFinish;
-  final _IntH clPromptTokens;
-  final _IntH clGeneratedTokens;
-  final _VoidH clStop;
-  final _VoidH clFree;
-  final _Load clEmbedLoad;
-  final _Buf clEmbedInfo;
-  final _Embed clEmbed;
-  final _VoidH clEmbedFree;
+  final LlamaLoadCall clLoad;
+  final LlamaBufferCall clInfo;
+  final LlamaStartCall clStart;
+  final LlamaBufferCall clNext;
+  final LlamaBufferCall clPartial;
+  final LlamaBufferCall clFinish;
+  final LlamaHandleIntCall clPromptTokens;
+  final LlamaHandleIntCall clGeneratedTokens;
+  final LlamaHandleIntCall? clReusedTokens;
+
+  /// Options for the next load (JSON: prefix_dir, repack_weights); null in an older library.
+  final LlamaConfigureCall? clConfigure;
+
+  /// What the last start did with the saved prompt prefix (one log line, or empty); null in an older library.
+  final LlamaBufferCall? clPrefixNote;
+  final LlamaHandleVoidCall clStop;
+  final LlamaHandleVoidCall clFree;
+
+  /// Frees every chat handle of the process not freed yet (one an earlier engine of the process left); how many.
+  final int Function() clFreeAll;
+  final LlamaLoadCall clEmbedLoad;
+  final LlamaBufferCall clEmbedInfo;
+  final LlamaEmbedCall clEmbed;
+  final LlamaHandleVoidCall clEmbedFree;
 }

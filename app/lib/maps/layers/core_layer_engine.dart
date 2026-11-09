@@ -4,13 +4,14 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../settings/data_policy.dart';
 import '../geo.dart';
 import 'layer_def.dart';
 import 'layer_engine.dart';
 import 'tile_math.dart';
+import '../../platform/app_log.dart';
 
 /// The layer engine in the Rust core (cs_layers_*, see packages/cache_search/DESIGN-LAYERS.md): the catalogue and
 /// the starter definitions, the tile server on 127.0.0.1 the map reads from, area downloads into one merged tile
@@ -59,6 +60,8 @@ class CoreLayerEngine extends LayerEngine {
   int _port = 0;
   bool _ready = false;
   bool _online = true;
+  int _generation = 0;
+  StreamSubscription<ConnectionKind>? _connection;
   String? _problem;
   bool _blocked = false;
   DateTime _lastProbe = DateTime.fromMillisecondsSinceEpoch(0);
@@ -93,6 +96,9 @@ class CoreLayerEngine extends LayerEngine {
   @override
   bool get online => _online;
 
+  @override
+  int get sourcesGeneration => _generation;
+
   int get port => _port;
 
   @override
@@ -110,12 +116,16 @@ class CoreLayerEngine extends LayerEngine {
       await _loadSaved();
       final s = await core.layers('server', jsonEncode({'online': _online}));
       _port = (s['port'] as num).toInt();
+      // The connection coming back is heard at once, not only when the map next moves: the map then loads its sources again.
+      try {
+        _connection ??= policy?.probe.changes.listen((_) => unawaited(refreshOnline(force: true)));
+      } catch (_) {}
       await _reload();
       _ready = true;
       notifyListeners();
       unawaited(refreshCatalogue());
     } catch (e, st) {
-      debugPrint('CoreLayerEngine.start failed: $e\n$st');
+      logError('Map layers could not start', error: e, stack: st);
       final m = e.toString().toLowerCase();
       _blocked = m.contains('operation not permitted') || m.contains('permission denied') || m.contains('os error 1)');
       _problem = 'Layers are not available on this device';
@@ -134,6 +144,7 @@ class CoreLayerEngine extends LayerEngine {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _connection?.cancel();
     _dropPlanner();
     // Nothing will look at the running downloads again, so nobody may wait for them (a cancel in progress returns).
     for (final r in _running.values) {
@@ -210,7 +221,7 @@ class CoreLayerEngine extends LayerEngine {
       await _reload();
       notifyListeners();
     } catch (e) {
-      debugPrint('Layer catalogue refresh: $e');
+      logError('Layer catalog refresh', error: e);
     }
   }
 
@@ -240,11 +251,15 @@ class CoreLayerEngine extends LayerEngine {
 
   // ---- addresses ----------------------------------------------------------------------------------------
 
-  @override
-  String tilesUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/{z}/{x}/{y}';
+  // After the connection came back the addresses carry its count (the tile server ignores the query), so they are new sources to
+  // MapLibre and it asks again for the tiles it had no answer for.
+  String get _again => _generation == 0 ? '' : '?g=$_generation';
 
   @override
-  String tileJsonUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/tilejson.json';
+  String tilesUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/{z}/{x}/{y}$_again';
+
+  @override
+  String tileJsonUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/tilejson.json$_again';
 
   // ---- connection ---------------------------------------------------------------------------------------
 
@@ -255,6 +270,7 @@ class CoreLayerEngine extends LayerEngine {
     final now = await _connected();
     if (now == _online) return;
     _online = now;
+    if (now) _generation++;
     // The engine uses the network only when told it may.
     try {
       await _core?.layers('server', jsonEncode({'online': now}));
@@ -375,7 +391,7 @@ class CoreLayerEngine extends LayerEngine {
         if (s != null) _saved.putIfAbsent(e.key as String, () => s);
       }
     } catch (e) {
-      debugPrint('Unfinished downloads: $e');
+      logError('Unfinished map downloads', error: e);
     }
   }
 
@@ -386,7 +402,7 @@ class CoreLayerEngine extends LayerEngine {
       await f.parent.create(recursive: true);
       await f.writeAsString(jsonEncode({for (final e in _saved.entries) e.key: e.value.toJson()}));
     } catch (e) {
-      debugPrint('Unfinished downloads: $e');
+      logError('Unfinished map downloads', error: e);
     }
   }
 
@@ -423,7 +439,7 @@ class CoreLayerEngine extends LayerEngine {
     final open = openPlanner;
     if (open == null || !_online) return plan(_core!);
     final pf = _planner ??= open({...layersConfig(), 'online': true}).catchError((Object e) {
-      debugPrint('Layer size planner: $e');
+      logError('Layer size planner', error: e);
       return null;
     });
     _planning[pf] = (_planning[pf] ?? 0) + 1;

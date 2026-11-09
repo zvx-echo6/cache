@@ -70,7 +70,8 @@ android {
             cmake {
                 // c++_shared: on arm64 the native code is several .so files (the CPU variants are
                 // loaded at run time) that must share one C++ runtime.
-                arguments "-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared"
+                arguments "-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared",
+                    "-DCACHE_LLAMA_GEMMA4_PREFILL_OPT=" + (System.getenv("CACHE_LLAMA_GEMMA4_PREFILL_OPT") ?: "OFF")
             }
         }
     }

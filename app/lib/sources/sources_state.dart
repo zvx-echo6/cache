@@ -15,6 +15,8 @@ import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
 import '../search/search_access.dart';
+import '../platform/app_log.dart';
+import '../platform.dart' as plat;
 
 /// One ZIM file in the sources folder.
 class ZimFile {
@@ -71,6 +73,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Directory? zimsDir;
   Directory? indexesDir;
   List<ZimFile> zims = [];
+
+  /// In a browser: removes a ZIM on the device (its files and index). Set by the app at start; null on a phone.
+  Future<void> Function(ZimFile z)? removeOnDevice;
+
+  /// In a browser: the size of each ZIM on the device, by file name (the core's status does not carry it).
+  Map<String, int> _deviceSizes = const {};
+
+  /// A browser: the sizes of the device's ZIM files, by file name, for the Library list.
+  void setDeviceSizes(Map<String, int> sizes) {
+    if (!plat.isWeb || mapEquals(_deviceSizes, sizes)) return;
+    _deviceSizes = sizes;
+    _scan();
+    notifyListeners();
+  }
 
   /// The libraries' source entries (set by the libraries' state, libraries_state.dart); they join the ZIMs in the list the
   /// core is given.
@@ -146,13 +162,17 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Map<String, dynamic> get openedExtra => _extra;
 
   Future<void> init() async {
-    zimsDir = zimsDirOverride ?? await _defaultZimsDir();
-    indexesDir =
-        indexesDirOverride ??
-        Directory('${(await getApplicationSupportDirectory()).path}/indexes');
-    await zimsDir!.create(recursive: true);
-    await indexesDir!.create(recursive: true);
-    _scan();
+    // In a browser the server owns the sources and their folders: nothing is scanned or created here, and the list comes from
+    // the core's status.
+    if (!plat.isWeb) {
+      zimsDir = zimsDirOverride ?? await _defaultZimsDir();
+      indexesDir =
+          indexesDirOverride ??
+          Directory('${(await getApplicationSupportDirectory()).path}/indexes');
+      await zimsDir!.create(recursive: true);
+      await indexesDir!.create(recursive: true);
+      _scan();
+    }
     notifyListeners();
     final core = await _openCore();
     if (!_coreOpened.isCompleted) _coreOpened.complete(core);
@@ -165,14 +185,15 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
     try {
-      final extra = _extra = coreExtras ?? await _defaultExtras();
+      // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
+      final extra = _extra = coreExtras ?? (plat.isWeb ? const <String, dynamic>{} : await _defaultExtras());
       core = await SearchCore.open(
-        _configs(),
+        plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
         native: nativeFactory ?? _defaultNative,
       );
     } catch (e, stack) {
-      debugPrint('Search core startup failed: $e\n$stack');
+      logError('Search core startup failed', error: e, stack: stack);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -190,14 +211,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<Map<String, dynamic>> _defaultExtras() async {
     final files =
-        (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     final support = await getApplicationSupportDirectory();
     // libzim reads its ICU data from the folder ICU_DATA names, so this comes before the first cs_open.
     try {
       await installIcuData(supportDir: support);
     } catch (e) {
-      debugPrint('ICU data: $e');
+      logError('ICU data', error: e);
     }
     final defs = Directory('${support.path}/layer-defs');
     await installStarterLayers(defs);
@@ -205,13 +226,13 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       await Directory('${files.path}/live-defs').create(recursive: true);
     } catch (e) {
-      debugPrint('Live sources: $e');
+      logError('Live sources', error: e);
     }
     return buildCoreExtras(
       filesDir: files,
       supportDir: support,
       layerDefsDir: defs,
-      shim: shimPath(Platform.isAndroid ? nativeLibraryDir() : null),
+      shim: shimPath(plat.isAndroid ? nativeLibraryDir() : null),
     );
   }
 
@@ -258,7 +279,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<Directory> _defaultZimsDir() async {
     final base =
-        (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     return Directory('${base.path}/zims');
   }
@@ -305,12 +326,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   /// The icon saved when the ZIM came from the catalogue, or null.
   File? iconOf(ZimFile z) {
+    if (plat.isWeb) return null;
     final f = _iconFile(z.path);
     return f.existsSync() ? f : null;
   }
 
   /// What this ZIM is in the catalogue's terms: the record saved at install, else the file name's.
   ZimOrigin? originOf(ZimFile z) {
+    if (plat.isWeb) return z.nameOrigin;
     try {
       final f = _originFile(z.path);
       if (f.existsSync()) {
@@ -343,6 +366,15 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   void _scan() {
     final found = <ZimFile>[];
+    if (plat.isWeb) {
+      // The server's ZIMs, as the core lists them.
+      for (final s in _status.values) {
+        if (s.kind == 'zim') found.add(ZimFile(path: s.path, size: _deviceSizes[s.path.split(RegExp(r'[\\/]')).last] ?? 0));
+      }
+      found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      zims = found;
+      return;
+    }
     for (final f in zimsDir!.listSync().whereType<File>()) {
       if (f.path.toLowerCase().endsWith('.zim')) {
         found.add(ZimFile(path: f.path, size: f.lengthSync()));
@@ -363,7 +395,60 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   }
 
   /// Indexing progress 0..1, or null if not known.
-  double? indexFraction(ZimFile z) => _progress[z.path]?.fraction;
+  double? indexFraction(ZimFile z) => _progress[z.path]?.fraction ?? _serverFraction[z.path];
+
+  // ---- in a browser: the server indexes, this only watches
+
+  /// The server's index jobs (server/helper/bin/index_driver.dart) are started and driven there, after it opens and after every
+  /// rescan; a browser does not start index jobs. It reads the core's status again every 2 seconds while a ZIM or library is
+  /// still waiting for its index, and asks the server how far each job is (`index.state`), so the Library moves from "Waiting to
+  /// index" to the progress to ready by itself. A job the server could not finish is shown as "Can't be read".
+  Timer? _serverWatch;
+  bool _watchReading = false;
+  final Map<String, double?> _serverFraction = {};
+
+  bool get _serverWorkLeft => _status.values.any((s) {
+        if (s.building || s.opening || s.updating) return true;
+        return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
+      });
+
+  void _watchServerIndexing() {
+    if (!plat.isWeb) return;
+    if (!_serverWorkLeft) {
+      _serverWatch?.cancel();
+      _serverWatch = null;
+      return;
+    }
+    _serverWatch ??= Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_readServerIndexing()));
+  }
+
+  Future<void> _readServerIndexing() async {
+    final core = _core;
+    if (core == null || _watchReading) return;
+    _watchReading = true;
+    try {
+      await _readStatus(core);
+      try {
+        final state = await core.indexState();
+        _serverFraction
+          ..clear()
+          ..addEntries([for (final e in state.entries) if (e.value.error == null) MapEntry(e.key, e.value.fraction)]);
+        // On a browser nothing else puts a ZIM in _failed: it mirrors what the server says.
+        _failed
+          ..clear()
+          ..addEntries([for (final e in state.entries) if (e.value.error != null) MapEntry(e.key, e.value.error!)]);
+      } on CacheSearchException {
+        // A server older than index.state: only the status is read.
+      }
+      _scan();
+    } catch (e) {
+      error = _words(e);
+    } finally {
+      _watchReading = false;
+      _watchServerIndexing();
+      notifyListeners();
+    }
+  }
 
   /// Why a ZIM failed, in words for people.
   String? failureOf(ZimFile z) =>
@@ -416,9 +501,16 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<void> _refreshOnce() async {
     try {
-      _scan();
+      if (!plat.isWeb) _scan();
       final core = _core;
       if (core == null) return;
+      if (plat.isWeb) {
+        // The server keeps the source list and builds the indexes; only its status is read.
+        await _readStatus(core);
+        _scan();
+        _watchServerIndexing();
+        return;
+      }
       await core.setSources(_configs(), extra: _setSourcesExtra);
       await _refreshPlaces(core);
       await _readStatus(core);
@@ -462,11 +554,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         try {
           d.deleteSync(recursive: true);
         } catch (e) {
-          debugPrint('Could not remove the index $name: $e');
+          logError('Could not remove an index', error: e, detail: name);
         }
       }
     } catch (e) {
-      debugPrint('Could not read the indexes folder: $e');
+      logError('Could not read the indexes folder', error: e);
     }
   }
 
@@ -486,8 +578,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     // One line per change, for logcat: where each source's keyword search comes from (the ZIM's own Xapian index through libzim).
     for (final s in _status.values) {
-      final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}';
-      if (_loggedStatus.add(line)) debugPrint(line);
+      final problem = s.error;
+      final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}${problem == null ? '' : ' error=${problem.code}'}';
+      if (_loggedStatus.add(line)) {
+        logInfo(line);
+        if (problem != null) logError('Source opening failed (${problem.code})', error: problem, detail: s.path);
+      }
     }
   }
 
@@ -734,7 +830,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       try {
         return await e.vectorFor(m, query);
       } catch (err) {
-        debugPrint('Query embedding with $m: $err');
+        logError('Query embedding', error: err, detail: m);
         return null;
       }
     }
@@ -755,6 +851,16 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   /// Removes a ZIM and its index from the phone.
   Future<void> remove(ZimFile z) async {
+    final onDevice = removeOnDevice;
+    if (onDevice != null) {
+      try {
+        await onDevice(z);
+      } catch (e) {
+        error = 'Could not remove the file.';
+      }
+      await refresh();
+      return;
+    }
     final job = _jobs.remove(z.path);
     if (job != null) {
       try {
@@ -814,7 +920,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     final core =
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
-    return ReadPage(title: r.title, text: r.text, truncated: r.truncated);
+    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page);
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).
@@ -825,6 +931,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   @override
   void dispose() {
     _poll?.cancel();
+    _serverWatch?.cancel();
     _core?.close();
     super.dispose();
   }

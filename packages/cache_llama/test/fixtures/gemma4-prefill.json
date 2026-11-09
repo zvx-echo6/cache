@@ -1,0 +1,193 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "description": "Search the offline library and reference articles (encyclopedias, manuals, medical and how-to guides) on this phone. Returns up to 5 numbered results. Use it before answering any question about facts or how to do something.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What to search for, in plain words."
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read",
+        "description": "Open the full text of one numbered result when its snippet is not enough.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The number of a result shown earlier in this conversation, e.g. 2 for [2]."
+            }
+          },
+          "required": [
+            "n"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "factual_search",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are Cache, an offline survival and preparedness assistant on this phone.\nFor facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.\nCite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.\nUse results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.\nFor small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.\nCurrent local date and time: Thursday, 2026-10-29 14:30 (UTC-06:00).\nThe phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are."
+        },
+        {
+          "role": "user",
+          "content": "How does a compass indicate direction?"
+        }
+      ],
+      "expected_tool": "search"
+    },
+    {
+      "name": "sourced_answer",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are Cache, an offline survival and preparedness assistant on this phone.\nFor facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.\nCite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.\nUse results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.\nFor small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.\nCurrent local date and time: Thursday, 2026-10-29 14:30 (UTC-06:00).\nThe phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are."
+        },
+        {
+          "role": "user",
+          "content": "How does a compass indicate direction?"
+        },
+        {
+          "role": "assistant",
+          "content": "I'll check the library for this.",
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "search",
+                "arguments": "{\"query\":\"how a compass works\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "content": "[1] Field navigation guide — A magnetic compass needle aligns with the local magnetic field. Its marked end indicates magnetic north. Magnetic north differs from true north."
+        }
+      ],
+      "citation": true
+    },
+    {
+      "name": "small_talk",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are Cache, an offline survival and preparedness assistant on this phone.\nFor facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.\nCite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.\nUse results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.\nFor small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.\nCurrent local date and time: Thursday, 2026-10-29 14:30 (UTC-06:00).\nThe phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are."
+        },
+        {
+          "role": "user",
+          "content": "Thanks for being here. I feel less alone."
+        }
+      ]
+    },
+    {
+      "name": "necessary_read",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are Cache, an offline survival and preparedness assistant on this phone.\nFor facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.\nCite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.\nUse results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.\nFor small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.\nCurrent local date and time: Thursday, 2026-10-29 14:30 (UTC-06:00).\nThe phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are."
+        },
+        {
+          "role": "user",
+          "content": "According to the expedition radio handbook, what are the battery replacement steps?"
+        },
+        {
+          "role": "assistant",
+          "content": "I'll search the library for this.",
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "search",
+                "arguments": "{\"query\":\"expedition radio battery replacement\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "content": "[1] Expedition radio handbook — Battery replacement is described in section 4.2. This search excerpt does not include the procedure."
+        }
+      ],
+      "expected_tool": "read"
+    },
+    {
+      "name": "procedure_answer",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are Cache, an offline survival and preparedness assistant on this phone.\nFor facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.\nCite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.\nUse results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.\nFor small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers.\nCurrent local date and time: Thursday, 2026-10-29 14:30 (UTC-06:00).\nThe phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are."
+        },
+        {
+          "role": "user",
+          "content": "According to the expedition radio handbook, what are the battery replacement steps?"
+        },
+        {
+          "role": "assistant",
+          "content": "I'll search the library for this.",
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "search",
+                "arguments": "{\"query\":\"expedition radio battery replacement\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "content": "[1] Expedition radio handbook — Battery replacement is described in section 4.2. This search excerpt does not include the procedure."
+        },
+        {
+          "role": "assistant",
+          "content": "The search only found that the battery replacement is described in section 4.2 of the handbook, but it didn't return the procedure itself. I'll open that section.",
+          "tool_calls": [
+            {
+              "id": "call_2",
+              "type": "function",
+              "function": {
+                "name": "read",
+                "arguments": "{\"n\":1}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_2",
+          "content": "[1] Expedition radio handbook — Turn the radio off. Open the battery cover. Insert the replacement following the marked polarity. Close the cover."
+        }
+      ],
+      "citation": true
+    }
+  ]
+}

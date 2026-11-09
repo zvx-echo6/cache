@@ -1,0 +1,194 @@
+# Real text recognition for packages/cache_ocr: its integration test (example/integration_test/ocr_test.dart) on an Android
+# emulator (Google ML Kit, bundled Latin model) and an iOS simulator (Apple Vision). The fixtures job makes grayscale 300 dpi
+# page images from known text (example/tool/make_fixtures.py); the test reads them with the device's engine, checks the phrases
+# come back, and prints each page's time and memory (OCR-MEASURE lines), copied into the run's summary. The unit tests
+# (fake engine) run in tests.yml.
+#
+# The example's Android and iOS folders are not in the repository: `flutter create --platforms=android,ios .` makes them here.
+# Emulator and simulator timings are not a phone's: see packages/cache_ocr/README.md for what needs a real-device check.
+name: OCR engines
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - packages/cache_ocr/**
+      - .github/workflows/ocr.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Page images from known text (grayscale, 300 dpi, scanned look)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pillow==12.1.0
+          "$RUNNER_TEMP/venv/bin/python" packages/cache_ocr/example/tool/make_fixtures.py "$RUNNER_TEMP/fixtures"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocr-fixtures
+          path: ${{ runner.temp }}/fixtures
+          retention-days: 7
+
+  android:
+    needs: fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_ocr/example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk space
+        working-directory: .
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: KVM for the emulator
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ocr-fixtures
+          path: packages/cache_ocr/example/assets/fixtures
+      - name: Example app
+        run: |
+          flutter create --platforms=android --org co.cache --project-name cache_ocr_example .
+          rm -rf test
+          flutter pub get
+      - name: Build the test APK first (so the emulator's time limit is spent on the test)
+        run: flutter build apk --debug
+      - name: Real OCR on the emulator (API 34, x86_64, 4 GB)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # One more try only when the tool never got the test going (a run sat after installing the APK until the job's
+          # limit); a test that ran and failed is not tried again.
+          script: bash packages/cache_ocr/example/tool/android_test.sh
+      - name: Measurements
+        if: always()
+        run: |
+          {
+            echo '### Android (ML Kit), emulator'
+            echo '```'
+            grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' "$RUNNER_TEMP/ocr-android.log" | sed 's/^.*OCR-/OCR-/' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    needs: fixtures
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_ocr/example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ocr-fixtures
+          path: packages/cache_ocr/example/assets/fixtures
+      - name: Example app
+        run: |
+          flutter create --platforms=ios --org co.cache --project-name cache_ocr_example .
+          rm -rf test
+          flutter pub get
+      - name: Simulator
+        id: sim
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          # the newest iPhone simulator
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for k in reversed(ios):
+              for dev in d[k]:
+                  if dev["name"].startswith("iPhone"):
+                      print(dev["udid"]); sys.exit()
+          ')
+          [ -n "$udid" ] || { xcrun simctl list devices available; echo 'no iPhone simulator'; exit 1; }
+          xcrun simctl list devices | grep "$udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      # Not `flutter test -d <simulator>`: on the runner's iOS 26 simulators the tool sat at "Waiting for VM Service port to be
+      # available" until the time limit, twice. The test app is built with the test as its entry point and launched on its
+      # own; the test prints OCR-RESULT when it is done, and its output is read from the app's console and the unified log.
+      - name: Build the test app for the simulator
+        run: flutter build ios --simulator --debug -t integration_test/ocr_test.dart
+      - name: Real OCR on the simulator
+        timeout-minutes: 30
+        run: |
+          udid="${{ steps.sim.outputs.udid }}"
+          xcrun simctl install "$udid" build/ios/iphonesimulator/Runner.app
+          # Dart's print reaches the console and the unified log (either may carry it); both are kept.
+          xcrun simctl spawn "$udid" log stream --style compact --predicate 'processImagePath ENDSWITH "Runner"' \
+            > "$RUNNER_TEMP/ocr-ios-oslog.log" 2>&1 &
+          sleep 3
+          xcrun simctl launch --console-pty --terminate-running-process "$udid" co.cache.cacheOcrExample \
+            > "$RUNNER_TEMP/ocr-ios-console.log" 2>&1 &
+          both() { cat "$RUNNER_TEMP/ocr-ios-console.log" "$RUNNER_TEMP/ocr-ios-oslog.log" 2>/dev/null; }
+          end=$((SECONDS + 1500))
+          until both | grep -q 'OCR-RESULT'; do
+            [ "$SECONDS" -lt "$end" ] || { echo 'no OCR-RESULT in 25 min'; tail -n 80 "$RUNNER_TEMP/ocr-ios-console.log"; exit 1; }
+            sleep 10
+          done
+          sleep 5
+          xcrun simctl terminate "$udid" co.cache.cacheOcrExample || true
+          { cat "$RUNNER_TEMP/ocr-ios-console.log"; grep -E 'OCR-|\[[0-9.]+ s\]' "$RUNNER_TEMP/ocr-ios-oslog.log"; } > "$RUNNER_TEMP/ocr-ios.log"
+          # the test's own lines (the console stays empty on iOS 26: Dart's print goes to the unified log)
+          both | grep -E 'OCR-|\[[0-9.]+ s\]' | sed -E 's/^.*(OCR-|\[[0-9.]+ s\])/\1/' | awk '!seen[$0]++'
+          both | grep -q 'OCR-RESULT pass'
+      - name: Logs when it fails
+        if: failure() || cancelled()
+        run: |
+          echo '--- the app console (last 150 lines)'; tail -n 150 "$RUNNER_TEMP/ocr-ios-console.log" || true
+          echo '--- unified log, OCR lines'; grep -E 'OCR-|\[[0-9.]+ s\]' "$RUNNER_TEMP/ocr-ios-oslog.log" | tail -n 80 || true
+      - name: Measurements
+        if: always()
+        run: |
+          {
+            echo '### iOS (Apple Vision), simulator'
+            echo '```'
+            cat "$RUNNER_TEMP"/ocr-ios-console.log "$RUNNER_TEMP"/ocr-ios-oslog.log 2>/dev/null | grep -h -E 'OCR-(ENGINE|MEASURE|MEMORY)' | sed 's/^.*OCR-/OCR-/' | sort -u || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

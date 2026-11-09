@@ -92,7 +92,6 @@ import 'package:cache/weather/weather_state.dart';
 import 'package:cache/screens/settings/about_pages.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
 import 'package:cache/screens/settings/assistant_page.dart';
-import 'package:cache/screens/settings/catalogues_page.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/screens/settings/notifications_page.dart';
 import 'package:cache/screens/settings/sharing_page.dart';
@@ -213,7 +212,7 @@ void main() {
       await r.storage.measure();
     });
     // Search indexes are being made in the background: the one quiet line at the foot of Settings.
-    final indexing = _ShotIndexing('Getting search ready: 3 of 12');
+    final indexing = _ShotIndexing('Getting search ready · 3 of 12 done');
     addTearDown(indexing.dispose);
     final h = r.hub;
     r.hub = SettingsHub(
@@ -334,7 +333,6 @@ void main() {
     final zims = folder('library', {'wikivoyage_en_idaho.zim': 180 << 20, 'wikipedia_en_medicine.zim': 940 << 20});
     final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
     final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
-    final shared = folder('shared', const {});
     final sync = _CountingSync()..peers.addAll(r.sync.peers);
     final sharing = SharingState(
       policy: r.policy,
@@ -343,7 +341,6 @@ void main() {
         DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'library': zims}),
         DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': models}),
         DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => {'notebooks': notebooks}),
-        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
       ],
       deviceName: 'Android device',
       opener: (_) async => sync,
@@ -359,7 +356,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('settings-weather, source-page, key-sheet, add-catalogue', (tester) async {
+  testWidgets('settings-weather, source-page, key-sheet', (tester) async {
     final r = await _rig(tester);
     await tester.runAsync(() async {
       await r.weather.setRowOn(kCurated.first, true);
@@ -386,9 +383,6 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
-    await show(tester, CataloguesPage(deps: r.deps));
-    await tester.pumpAndSettle();
-    await shot(tester, 'add-catalogue');
     await r.dispose(tester);
   });
 
@@ -1082,9 +1076,20 @@ void main() {
 
     final browse = BrowseState(sources: sources, libraries: libs, catalog: catalogWith(recorded), policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     await tester.runAsync(browse.init);
+    // Search indexes are being made: the overview line and bar at the top of the Library (the same one as in Settings).
+    final medicineId = sources.ids.entries.firstWhere((e) => e.key.contains('medicine')).value;
+    final libraryIndexing = _ShotIndexing('Getting search ready · 3 of 12 done', shown: [
+      IndexItem(key: 'zim-pdf/$medicineId', state: IndexState.running, title: 'Wikipedia Medicine', progress: (340, 5768)),
+    ]);
+    indexSchedulerShared = libraryIndexing;
+    addTearDown(() {
+      indexSchedulerShared = null;
+      libraryIndexing.dispose();
+    });
     await show(tester, BrowseScreen(browse: browse, active: true));
     await settle(tester);
     await shot(tester, 'library');
+    indexSchedulerShared = null;
 
     await show(tester, AddToLibraryScreen(browse: browse));
     await tester.pumpAndSettle();
@@ -1638,12 +1643,24 @@ class _MemFolder implements SyncFolder {
 
 /// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
 class _ShotIndexing extends IndexScheduler {
-  _ShotIndexing(this._line) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
+  _ShotIndexing(this._line, {this.shown = const []}) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
 
   final String _line;
 
+  /// The work the picture shows (the rows and the overview read it); none: only the line.
+  final List<IndexItem> shown;
+
   @override
   String? get line => _line;
+
+  @override
+  List<IndexItem> get items => shown;
+
+  @override
+  IndexItem? statusOf(String key) => shown.where((i) => i.key == key).firstOrNull;
+
+  @override
+  double get fraction => 0.3;
 }
 
 /// The Library's PDF indexing as the rows read it: each ZIM's PDFs part (by file name), set by the picture (no work is run).

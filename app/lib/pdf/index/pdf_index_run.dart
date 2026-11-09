@@ -9,6 +9,8 @@ import '../pdf_source.dart' show isNoSpace;
 import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
+import '../../platform/app_log.dart';
+import 'pdf_diagnostics.dart';
 
 /// Why a run stopped before the end.
 enum PdfRunStop { none, person, battery, cancel, superseded }
@@ -200,6 +202,27 @@ class PdfIndexRun extends ChangeNotifier {
 
   int get total => list.pdfs.length;
   int get handled => done + skipped;
+
+  /// The step the run is on now, in words for the queue ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"): what a stuck run
+  /// was doing when it stopped moving.
+  String? step;
+
+  /// Steps taken so far: a sign of life for the scheduler's watchdog (a page read, an entry read, a PDF added).
+  int steps = 0;
+  final Set<Timer> _diagnosticTimers = {};
+
+  void _step(String words) {
+    step = words;
+    steps++;
+    // each step, timed by the log's clock (Detailed); the queue's Details show the last ones
+    logDetail(words, job: 'zim-pdf/${list.zimUuid}');
+    notifyListeners();
+  }
+
+  /// "PDF 3 of 37 · 12 MB": which PDF, of all, and its size.
+  String _which(ZimPdf pdf) => 'PDF ${handled + 1} of ${list.pdfs.length} · ${_mb(pdf.size)}';
+
+  static String _mb(int bytes) => bytes >= 1 << 20 ? '${(bytes / (1 << 20)).toStringAsFixed(bytes >= 10 << 20 ? 0 : 1)} MB' : '${(bytes >> 10).clamp(1, 1023)} KB';
   double get fraction => total == 0 ? 1 : (handled / total).clamp(0.0, 1.0);
 
   /// Time since this run started.
@@ -224,6 +247,10 @@ class PdfIndexRun extends ChangeNotifier {
   void stop(PdfRunStop why) {
     if (_stop != PdfRunStop.none || why == PdfRunStop.none) return;
     if (finishing && (why == PdfRunStop.person || why == PdfRunStop.battery)) return;
+    for (final timer in _diagnosticTimers) {
+      timer.cancel();
+    }
+    _diagnosticTimers.clear();
     _stop = why;
     if (finishing && _finishCancellable) unawaited(_job?.cancel());
     notifyListeners();
@@ -256,7 +283,10 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language);
+        _step('Opening PDF search index');
+        final s = await tracePdfOperation('Opening PDF search index',
+          () => core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language),
+          job: 'zim-pdf/${list.zimUuid}', timers: _diagnosticTimers);
         for (final r in s.reusable) {
           reusable[r.path] = r.size;
         }
@@ -299,6 +329,7 @@ class PdfIndexRun extends ChangeNotifier {
         Uint8List? read;
         if (session != null && reusable[pdf.path] == pdf.size && pdf.size > 0) {
           try {
+            _step('Reading from the library · ${_which(pdf)}');
             read = await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
             final r = await core.reuse(session, path: pdf.path, sha256: crypto.sha256.convert(read).toString());
             if (r.reused) {
@@ -331,6 +362,7 @@ class PdfIndexRun extends ChangeNotifier {
           skipped++;
         } else {
           if (session != null) {
+            _step('Adding to the search index · ${_which(pdf)}');
             // The PDF's own Title when it has a real one, else "" (the core names it from its file name).
             final a = await core.add(session, path: pdf.path, title: one.title, pieces: one.pieces, pages: one.pages, size: one.size, sha256: one.sha256);
             pieces = a.pieces;
@@ -361,7 +393,8 @@ class PdfIndexRun extends ChangeNotifier {
       failure = e.failure;
       await _close(session);
       return PdfRunEnd.failed;
-    } catch (e) {
+    } catch (e, stack) {
+      logError('PDF indexing failed at ${step ?? 'startup'}', error: e, stack: stack, job: 'zim-pdf/${list.zimUuid}');
       failure = _failureOf(e);
       await _close(session);
       return PdfRunEnd.failed;
@@ -395,6 +428,7 @@ class PdfIndexRun extends ChangeNotifier {
 
   Future<PdfRunEnd> _finish() async {
     finishing = true;
+    _step('Finishing the index');
     notifyListeners();
     final job = _job = await core.finish(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
     try {
@@ -426,11 +460,22 @@ class PdfIndexRun extends ChangeNotifier {
   }
 
   Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
+    // Each PDF's start and end in the log (with what came of it and how long it took), so a device's logs show where work stands.
+    final all = Stopwatch()..start();
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size >> 10} KB) starts', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
+    final one = await _indexOneLogged(pdf, row, bytes: bytes);
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
+    return one;
+  }
+
+  Future<_OnePdf> _indexOneLogged(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     final sw = Stopwatch()..start();
     final Uint8List data;
     try {
-      data = bytes ?? await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
-    } catch (e) {
+      if (bytes == null) _step('Reading from the library · ${_which(pdf)}');
+      data = bytes ?? await tracePdfOperation('Reading PDF entry', () => core.readEntry('zim:${list.zimUuid}/${pdf.path}'), job: 'zim-pdf/${list.zimUuid}', timers: _diagnosticTimers);
+    } catch (e, stack) {
+      logError('PDF entry read failed', error: e, stack: stack, detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
       if (_isFull(e)) rethrow;
       row.readMs = -1;
       row.skipped = PdfSkipReason.damaged;
@@ -447,7 +492,7 @@ class PdfIndexRun extends ChangeNotifier {
       pages = await readPages(data, pdf.path, betweenPages: permit == null ? null : () async {
         await permit!();
         _checkStop();
-      });
+      }, onStep: (s) => _step('$s · ${_which(pdf)}'));
     } finally {
       // Extraction returned (or threw): no native crash on this PDF, whatever comes next.
       _clearAttempt();
@@ -463,6 +508,7 @@ class PdfIndexRun extends ChangeNotifier {
     _checkStop();
     sw.reset();
     final labels = pages.labels;
+    _step('Splitting into passages · ${_which(pdf)}');
     final chunks = await core.chunk([
       for (var i = 0; i < pages.pages.length; i++) PdfPageText(i, pages.pages[i], label: labels != null && i < labels.length ? labels[i] : null),
     ]);

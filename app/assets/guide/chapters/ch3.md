@@ -2,7 +2,7 @@
 
 ## Opening Settings
 
-Settings has eight rows, each with a one-line status.
+Settings has seven rows, each with a one-line status.
 
 ![The Settings page](shot:settings)
 
@@ -15,13 +15,12 @@ Settings has eight rows, each with a one-line status.
    - "Storage"
    - "Sharing and sync"
    - "Appearance"
-   - "Credits and licences"
 
 The status lines show the state without opening the row. For example, "Storage" shows how much Cache uses and what is free.
 
-There is no Library or Videos page here. Open them from "Modules".
+There is no Library or Videos page here. Open them from "Modules". "What's new in [version]" and "Credits and licenses" are in "Library" > "Cache Documentation". See Cache Documentation in chapter 2.
 
-At the foot of the page, a small grey line shows while Cache makes search ready in the background. For example "Getting search ready: 3 of 12". It can add why it waits: `waits for charging`, `paused, battery low`, `paused, not enough space` or `slowed down, phone is warm`. It goes away when the work is done. You do not need to do anything. See Background indexing speed.
+At the foot of the page, a bar shows while Cache makes search ready in the background, for example `Getting search ready · 3 of 12 done`. It adds why it waits, for example `Paused · battery low (12%) · plug in to continue` or "Waits for charging (long job)". Tap it to see the queue. It goes away when the work is done. You do not need to do anything. See Background indexing speed, and Search inside PDFs, EPUBs and captions in chapter 2.
 
 - If a row says "Not available", that part of Cache couldn't start. Restart Cache. See When part of Cache is not available in chapter 6.
 
@@ -92,13 +91,13 @@ This page turns weather sources on and off.
 ![The Weather and alerts settings](shot:settings-weather)
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
-2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. If data is old, the line warns, for example "Updated 3 days ago".
-3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
+2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. It also looks for new sources in the source list. If data is old, the line warns, for example "Updated 3 days ago".
+3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts" and "Wildfires". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
 4. Turn its switch on or off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
 
-The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions and space weather. Its bottom has "Add sources from a link" and "Catalogues in use".
+The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Under them is "Your own", with the sources you added, and at the bottom "Add your own source".
 
 - If the row has a "Get key" button, the source needs a free key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.
@@ -148,27 +147,51 @@ Keys stay on this device, in secure storage. They are never shown again and are 
 
 - Removing a key turns off every source that uses it.
 
-## Add sources from a link
+## Add your own source
 
-Other people can publish lists of data sources, called catalogues. You can add one by its link.
-
-![Add sources from a link](shot:add-catalogue)
+You can plug in any web service that answers with data in JSON, such as a sensor, a gauge or a club's own server. It then works like every other source: on "Weather", in Ask, and with its own switch.
 
 1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
-2. At the bottom, tap "Add sources from a link".
-3. Paste the link and tap "Check this link". Nothing is added yet.
-4. Read the card: who publishes it, how many sources it adds, and any it left out.
+2. At the bottom, tap "Add your own source".
+3. Type a "Name" and the "Web address" of the service.
+4. If the service answers for a location, put the place in the address: tap "Latitude" and "Longitude" where the address needs them. It then works for every place weather watches.
+5. If the service needs a key, type it under "Key (if the service needs one)", and put it in the address where the service asks for it.
+6. Choose "Check every": 15 minutes, 30 minutes, 1 hour or 6 hours.
+7. Tap "Try it". Cache calls the address once. Nothing is saved yet.
+8. On "Pick what to show", tick the values to show. Tap a name to rename it. The card at the bottom shows how it will look in "Weather and alerts".
+9. Tap "Save source". It turns on and is listed under "Your own".
+
+- If it did not work, Cache says why, for example "[site] answered with an error (HTTP [code]).", "[site] answered, but not with JSON. This version of Cache only reads JSON." or "[site] didn't answer in time." Check the address and tap "Try again".
+- The key stays on this device, in secure storage. It is never part of the source.
+
+## Import a source file
+
+Someone may give you a source file: one source, or a list of sources. A link to a list of sources works too.
+
+1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather) and tap "Add your own source".
+2. At the bottom, tap "Or import a source file".
+3. Tap "Choose a file", or paste the link and tap "Check this link". Nothing is added yet.
+4. Read the card: how many sources it adds, and any it left out with the reason.
 5. Tap "Add these sources", or "Cancel".
 
-New sources stay off until you switch them on. Only add links from people you trust.
+The sources go under "Your own" and stay off until you switch them on. Only add files from people you trust.
 
-## Manage catalogues
+## Edit or remove your own source
 
-"Catalogues in use" is at the bottom of the "More sources" list. It lists every catalogue on the device.
+1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
+2. Under "Your own", tap the source.
+3. Tap "Edit" to change it, then "Try it" and "Save source". A source from a file has no "Edit".
+4. Or tap "Remove this source". Its key is removed too.
 
-- Tap "Remove" on one you added to take its sources off.
-- The main catalogue has "Address" instead, to change where it comes from.
-- Tap "Check for updates" to download every catalogue again. Cache says "Sources are up to date" or what went wrong.
+Sources added from a link in earlier versions are under "Your own" now, and keep their switches and keys.
+
+## Source list address
+
+The sources Cache offers come from its source list, which it downloads when online. You only change its address if someone gives you another one.
+
+1. Go to ["Settings" > "Storage"](cache://settings/storage) and tap "Advanced".
+2. Under "Weather and alerts", tap "Source list address".
+3. Paste the address and tap "Save", or tap "Use the default".
 
 ## Notifications
 
@@ -216,7 +239,7 @@ This page shows what Cache uses and lets you free space.
 3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather". "Videos and weather" opens the list "Saved videos".
 4. Remove an item. A pop-up shows what it frees. Confirm.
 
-The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows "Background indexing: Gentle" or "Background indexing: Normal". See Background indexing speed.
+The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows the background indexing speed and the log level, for example `Background indexing: Gentle · Log: Standard`. See Background indexing speed, and The log.
 
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
@@ -245,7 +268,7 @@ A note explains: "Each state's off-road data is downloaded once and kept while a
 Cache makes your PDFs, EPUBs, captions and libraries searchable in the background. You choose how fast.
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
-2. At the foot, tap "Advanced". It shows `Background indexing: Gentle` or `Background indexing: Normal`.
+2. At the foot, tap "Advanced". It shows, for example, `Background indexing: Gentle · Log: Standard`.
 3. Under "Background indexing speed", tap one:
    - "Gentle": "Keeps the device cool and the battery longer". This is the start setting;
    - "Normal": "Finishes sooner, uses more battery".
@@ -256,7 +279,22 @@ Changes apply at once. Either way the work eases off when the device warms up, w
 
 On a computer, with no battery to read, Cache uses the faster pace.
 
-The grey line at the foot of "Settings" shows the progress, for example "Getting search ready: 3 of 12". See Search inside PDFs, EPUBs and captions in chapter 2.
+The bar at the top of "Library" and at the foot of "Settings" shows the progress, for example `Getting search ready · 3 of 12 done`. Tap it for the queue. Each item there says the step it is on, for example "Reading page 12 of 300 · PDF 3 of 37 · 12 MB", and "Details" shows its last log lines. See Search inside PDFs, EPUBs and captions in chapter 2.
+
+## The log
+
+Cache keeps a log on this device: what it does, and what goes wrong. It helps find a problem. Nothing leaves the device unless you share it.
+
+1. Go to ["Settings" > "Storage"](cache://settings/storage) and tap "Advanced".
+2. Under "Log level", tap one:
+   - "Minimal": "Only what goes wrong";
+   - "Standard (default)": "What Cache does, without names or content";
+   - "Detailed": "Also file names, links and timings";
+   - "Everything": "Also what you search, ask and write. For 24 hours". While it is on, a line at the top of every screen says so, with "Turn off". After 24 hours the level goes back to the one before.
+3. To send the log, tap "Share log". Your phone's share sheet opens with the log files and a short note: the app version, the device, its free memory and storage. With "Everything" on, Cache first warns that the log holds what you searched, asked and wrote.
+4. "Clear log" removes it.
+
+The log takes at most about 10 MB. The oldest lines go first.
 
 ## Mobile data downloads
 
@@ -294,10 +332,21 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 3. On the first device, tap "Show my link code". It works once, for 15 minutes.
 4. Tap "Copy code" and get the text to the other device.
 5. On the other device, tap "Enter a link code", then "Paste", then "Link".
+6. Each device then asks once, for example "Sync Cache settings with Desk?". Choose:
+   - "Match": "Changes on either device go to both.";
+   - "Send mine": for example "Desk follows my settings.";
+   - "Off": for example "Each keeps its own. You can change this on Desk's page."
+
+Closing the question is the same as "Off", except that it keeps the other device's answer if that device has already answered. Until one device answers, no settings go between the two.
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
-Under "Linked devices", each device shows whether it is connected directly or through a relay. To stop one, tap it, then "Unlink". Files already here stay.
+Under "Linked devices", each device shows whether it is connected directly or through a relay. Tap a device to open its page:
+- how it is connected, when it was last seen, and its free space, if it says;
+- "Settings": whether settings go between the two. See Sharing and sync: settings between devices;
+- "Sync now" syncs with that device only;
+- "Rename" changes what this device calls it;
+- "Unlink" stops it connecting. Files already here stay.
 
 - If a device shows "Not reachable", open Cache on it.
 
@@ -308,28 +357,74 @@ After linking, pick what to share.
 ![Sharing and sync](shot:settings-sharing)
 
 1. On each device, go to ["Settings" > "Sharing and sync"](cache://settings/sharing).
-2. Under "Shared with linked devices", tick:
+2. Under "Shared with linked devices", switch on the kinds to share:
    - "Library": ZIM files and your own libraries;
-   - "Maps": downloaded regions;
+   - "Maps": downloaded map layers, and the regions' directions, places and off-road;
    - "Models": chat models and the search model;
-   - "Videos": saved videos (not where you left off in them);
    - "Notebooks": notebooks, with their photos;
-   - "Shared folder": any files you want on every device.
-3. Tick the same kinds on both devices.
+   - "Videos": saved videos (not where you left off in them).
+3. Switch on the same kinds on both devices.
 
-"Transfer" shows progress. "Sync now" checks straight away. "Activity" lists what happened.
+Each kind's line says how many of its items are shared and their size, or "Not shared".
 
-Unticking stops sharing. The files stay. Files whose names start with a dot are never shared.
+To choose single items, tap the kind. Its page lists every item, on this device and on your linked devices, each with its own switch:
+- the switch at the top turns the whole kind on or off;
+- new items you add follow that switch;
+- private notebooks are listed, but start off;
+- turning an item off keeps your copy and theirs.
+
+Sync now works at three levels:
+- "Sync all now" on "Sharing and sync": everything, with every device;
+- "Sync all" on a kind's page: that kind only;
+- the sync button on an item's row: that item only, for example to update one ZIM.
+
+"Transfer" shows progress. "Activity" lists what happened.
+
+Switching a kind or an item off stops sharing it. The files stay. Files whose names start with a dot are never shared.
+
+The Shared folder of Cache 1.0 is gone. Its files stay where they were; they are just not shared any more.
 
 - If sharing waits, "Mobile data downloads" may be off. Sync waits for Wi-Fi.
 - If the other device offers more than fits, Cache fetches what fits and pauses.
 - Private notebooks are left out by default. See Private notebooks in chapter 5.
 
+## Sharing and sync: settings between devices
+
+Your linked devices can keep their settings the same. Each device's page has a "Settings" section.
+
+1. Go to ["Settings" > "Sharing and sync"](cache://settings/sharing) and tap a device under "Linked devices".
+2. Under "Settings", choose:
+   - "Match": "Changes on either device go to both."
+   - "Send mine": for example "Desk follows my settings. Its own changes stay on Desk."
+   - "Off": "Each keeps its own."
+
+The device you choose it on is where the settings come from. On the other device the choice says, for example, "Follows Desk's settings". A device linked before this version starts on "Match". A device linked since starts on "Off" until you answer the question after linking.
+
+"What's included" has six groups. Each has its own switch, and each opens a page where you tick single settings:
+- "Appearance": the theme, module icons and dark PDF pages;
+- "Home screen": the bar, Home and its order, and the shortcuts;
+- "Weather and alerts": the sources that are on, what weather watches, your own sources and source lists added from a link;
+- "Notifications": which alerts pop up, and quiet hours;
+- "Map layers": which layers are on;
+- "Ask": the model and web search.
+
+"Never synced" lists what always stays on each device: its name, mobile data downloads, indexing speed, the space kept free, the log level, Obsidian and Logseq connections, and the permissions each device asks for itself.
+
+"API keys" lists each key saved on this device, each with its own switch. All start off. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match", from you only with "Send mine".
+
+A setting changes on the other device at once. Nothing restarts.
+
+- Each setting goes on its own. If both devices change the same setting, the later change wins.
+- With "Send mine", a change made on the other device stays there until you change that setting again.
+- If the other device uses a model this one doesn't have, "Model" says, for example, "Uses Gemma 4 E4B · Q4_K_M, not downloaded here". Tap "Download" to get it. Cache never downloads it on its own.
+- A watched place that hasn't come to this device yet says "waiting for this place" under "What weather watches". It comes with the notebooks.
+- Your Bookshelves are kept the same only with devices set to "Match".
+
 ## Search indexes on linked devices
 
 When you build a search index on one device, your other devices can use it. Nothing to set and nothing to tick.
 
-An index covers a ZIM's pages, PDFs, EPUBs and captions, a library of your own, the captions of your saved videos, and the places and routing data of a region. It reaches any linked device that has the same ZIM, library or region. The device does not need the "Library" or "Maps" box ticked. It only needs sharing set up.
+An index covers a ZIM's pages, PDFs, EPUBs and captions, a library of your own, the captions of your saved videos, and the places and routing data of a region. It reaches any linked device that has the same ZIM, library or region. The device does not need "Library" or "Maps" switched on. It only needs sharing set up.
 
 1. Set up sharing and link the devices. See Sharing and sync: set up and link devices.
 2. Have the same ZIM, library or region on both. Each can have downloaded it by itself.
@@ -358,21 +453,3 @@ Appearance changes how Cache looks. Changes apply straight away.
 4. Under "PDF pages", turn "Dark pages" on or off.
 
 "Dark pages" is for the PDF reader. Off: "Off: pages look as printed, dimmed in a dark theme". On: "On: in a dark theme, pages are light on dark. Pictures look wrong". It only matters in a dark theme.
-
-## Credits and licences
-
-This page says what Cache is and what it is built on.
-
-![Credits and licences](shot:settings-credits)
-
-1. Go to ["Settings" > "Credits and licences"](cache://settings/credits).
-2. Read:
-   - "Version": which Cache you have;
-   - "Licence": the GNU Affero General Public License, version 3 or later;
-   - "Source code": where to get it;
-   - "Credits": the maps, data, libraries and art used;
-   - "Open-source licences": the full text for every package.
-
-If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
-
-The row "What's new in [version]" shows what changed in your version. It shows only when lines were written for that version. Tap it, read, and tap "Got it".

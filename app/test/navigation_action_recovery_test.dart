@@ -90,9 +90,10 @@ void main() {
         a.route!.raw,
       );
       expect(restored.messages.last.text, isEmpty);
-      expect(reopened.transcript(id), [
-        {'role': 'user', 'content': 'Navigate'},
-      ]);
+      // The transcript keeps the question as the model read it: its time line, then the question.
+      expect(reopened.transcript(id), hasLength(1));
+      expect(reopened.transcript(id).single['role'], 'user');
+      expect(reopened.transcript(id).single['content'], matches(RegExp(r'^Local time: \d\d:\d\d\n\nNavigate$')));
       expect(restored.exportMarkdown(id), isNot(contains(a.route!.geometry)));
       expect(restored.exportMarkdown(id), isNot(contains('Hôpital')));
       reopened.close();

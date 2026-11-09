@@ -1,9 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-
 import '../files.dart';
+import '../platform/app_log.dart';
 
 /// The folder the core reads live source definitions from (`live.sources_dir`). The app keeps in it exactly the definitions of the
 /// sources that are switched on (the core lists every definition it finds to the assistant, so a source that is off is not there).
@@ -34,7 +33,7 @@ class LiveFolder {
         if (!f.existsSync() || f.readAsStringSync() != e.value) writeStringAtomicSync(f, e.value);
         kept.add(e.key);
       } on FileSystemException catch (x) {
-        debugPrint('Live source ${e.key}: ${x.message}');
+        logError('Live source', error: x.message, detail: e.key);
       }
     }
     for (final id in managed.difference(desired.keys.toSet())) {
@@ -42,14 +41,14 @@ class LiveFolder {
         final f = File('${dir.path}/$id.json');
         if (f.existsSync()) f.deleteSync();
       } on FileSystemException catch (x) {
-        debugPrint('Live source $id: ${x.message}');
+        logError('Live source', error: x.message, detail: id);
         kept.add(id);
       }
     }
     try {
       writeStringAtomicSync(_manifest, jsonEncode(kept.toList()..sort()));
     } on FileSystemException catch (x) {
-      debugPrint('Live sources manifest: ${x.message}');
+      logError('Live sources manifest', error: x.message);
     }
   }
 }

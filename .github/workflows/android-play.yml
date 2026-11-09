@@ -250,9 +250,12 @@ jobs:
           echo "upload certificate SHA-256: $(cat "$RUNNER_TEMP/upload-cert.sha256")"
       - name: Build the App Bundle
         working-directory: app
+        env:
+          CACHE_LLAMA_GEMMA4_PREFILL_OPT: 'ON'
         run: |
           flutter --version
           flutter pub get
+          flutter test --no-pub
           flutter build appbundle --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.aab"
@@ -264,6 +267,12 @@ jobs:
           for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
             unzip -l "$aab" "base/lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from base/lib/arm64-v8a"; exit 1; }
           done
+          unzip -p "$aab" base/lib/arm64-v8a/libcache_llama.so > "$RUNNER_TEMP/cache-llama-check.so"
+          LC_ALL=C grep -aFq 'cache-gemma4-prefill-31356' "$RUNNER_TEMP/cache-llama-check.so" || { echo "::error::Optimized Gemma engine is missing from the bundle"; exit 1; }
+          rm -f "$RUNNER_TEMP/cache-llama-check.so"
+          unzip -p "$aab" base/lib/arm64-v8a/libcache_search.so > "$RUNNER_TEMP/cache-core-check.so"
+          LC_ALL=C grep -aFq '.cache-search-index.guard' "$RUNNER_TEMP/cache-core-check.so" || { echo "::error::Crash-safe indexing core is missing"; exit 1; }
+          rm -f "$RUNNER_TEMP/cache-core-check.so"
           signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
           if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
             echo "::error::The bundle is not signed with the upload key (signer $signer)"; exit 1

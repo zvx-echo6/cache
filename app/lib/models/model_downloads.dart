@@ -9,14 +9,16 @@ import '../downloads/download_row.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
+import '../platform/memory.dart' show modelMemoryNeed;
 import 'device_memory.dart';
 import 'hf_hub.dart';
+import '../platform.dart' as plat;
 
 /// The phone's total memory in bytes, when it can be read: Android and Linux from /proc/meminfo, iPhone (and Mac) from the
 /// system's hw.memsize.
 Future<int?> totalMemoryBytes() async {
-  if (Platform.isIOS || Platform.isMacOS) return sysctlMemsize();
-  if (!(Platform.isAndroid || Platform.isLinux)) return null;
+  if (plat.isIOS || plat.isMacOS) return sysctlMemsize();
+  if (!(plat.isAndroid || plat.isLinux)) return null;
   try {
     for (final line in await File('/proc/meminfo').readAsLines()) {
       final m = RegExp(r'^MemTotal:\s+(\d+)\s+kB').firstMatch(line);
@@ -29,18 +31,20 @@ Future<int?> totalMemoryBytes() async {
 /// How well a model file of a given size suits a phone with [memory] bytes. The model's file is about what it needs in
 /// memory, plus room for its working memory (context) and the rest of the app and phone.
 enum ModelFit {
-  fits('Fits this device'),
-  tight('May be tight on this device'),
-  tooBig('Too big for this device'),
+  fits('Fits device RAM'),
+  tight('May be tight on RAM'),
+  tooBig('Too large for device RAM'),
   unknown('');
 
   const ModelFit(this.label);
   final String label;
 
-  static ModelFit of(int fileBytes, int? memory) {
+  /// [room]: the memory free now for a model (see [MemoryReading.room], with the model Cache holds counted as free): a model
+  /// that fits the phone but not what is free now is tight.
+  static ModelFit of(int fileBytes, int? memory, {int? room}) {
     if (memory == null || memory <= 0) return ModelFit.unknown;
     final need = fileBytes + (768 << 20);
-    if (need <= memory * 0.55) return ModelFit.fits;
+    if (need <= memory * 0.55) return room != null && modelMemoryNeed(fileBytes) > room ? ModelFit.tight : ModelFit.fits;
     if (need <= memory * 0.75) return ModelFit.tight;
     return ModelFit.tooBig;
   }
@@ -49,6 +53,16 @@ enum ModelFit {
 /// One model download at a time into the models folder: resumable (a ".part" file in models/.partial that continues where it stopped),
 /// checked against Hugging Face's SHA-256, asking the mobile-data switch first. When it finishes the file appears in the
 /// model list. When a chat model is downloaded and the search model is missing, the search model is queued to follow it.
+/// "Downloading Gemma 4 E2B · 40%" while a chat model downloads (the Settings lines when no model is chosen yet); null when none
+/// does.
+String? modelDownloadLine() {
+  final d = ModelDownloads.shared;
+  final f = d?.current;
+  if (d == null || f == null || d.isSearchModel(f)) return null;
+  final pct = d.total > 0 ? ' · ${(100 * d.done / d.total).floor()}%' : '';
+  return 'Downloading ${d.nameOf(f)}$pct';
+}
+
 class ModelDownloads extends ChangeNotifier {
   ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader, this.searchModel})
     : hub = hub ?? HfHub(),
@@ -359,7 +373,7 @@ class ModelDownloads extends ChangeNotifier {
   }
 
   /// The name a row shows for [f] ("Gemma 4 E4B · Q4_K_M" for a recommended model); the file name when no better name is known.
-  String Function(HfFile f) nameOf = (f) => f.fileName;
+  String Function(HfFile f) nameOf = (f) => f.fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
 
   /// Stops the download that runs; what waits after it is dropped too.
   void cancel() {
