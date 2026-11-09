@@ -195,6 +195,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     if let Some(shim) = a.get("valhalla-shim") {
         helper_cfg.shim = PathBuf::from(shim);
     }
+    helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;

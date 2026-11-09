@@ -5,6 +5,7 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
 import 'fs_ops.dart';
+import 'guide_install.dart';
 import 'host_load.dart';
 import 'index_driver.dart';
 import 'pdf_zim_indexer.dart';
@@ -46,6 +47,11 @@ Future<void> main() async {
       ? PdfWork(core: DispatcherPdfCore(dispatcher), read: PdfTextProcess(pdfExe, '${dirs.support.path}/tmp/pdf-text').read, indexesDir: indexes)
       : null;
   final indexer = IndexDriver(dispatcher, log: log, extra: extras, load: HostLoad(), pdf: pdf);
+  // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
+  final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
+  final guide = guidePath != null && guidePath.isNotEmpty
+      ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
+      : null;
   await serveLines(
     stdin,
     (line) async {
@@ -55,7 +61,7 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer),
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
       IndexPauseOp(indexer),

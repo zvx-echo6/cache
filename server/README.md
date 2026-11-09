@@ -207,6 +207,17 @@ PDF text comes from MuPDF, through the hidden `cache pdf-text` command that the 
 which the server sets to itself); the chunks and records are the core's own, so the indexes are the phone's format. Work yields to
 the host's heat (thermal zones) and memory (`/proc/meminfo`). Design: `renders/linux-parity/indexing-design.md`.
 
+Pause and Resume (the Catalog's "Pause all" and "Resume", helper op `index.pause`) stop what runs, keeping what it did, and start
+nothing until Resume; like the phone's they are kept in memory, so a restart resumes. Design: `renders/linux-parity/library-rest-design.md`.
+
+## The guide library
+
+The setup guide the app bundles is installed on the server with no browser open, so guide search works in a browser as on a phone.
+The server gives the helper the package from its web build (`<web>/assets/assets/guide/cache-guide.cache-library`, as
+`CACHE_GUIDE_LIBRARY`); after the core opens, `server/helper/bin/guide_install.dart` unpacks it to `app/docs/libraries/cache-guide`
+(the steps of the phone's `LibrariesState.ensureGuide`) and replaces it when the app carries another `version`. Not done when
+`sources.json` gives the sources (that list is the operator's own).
+
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`
