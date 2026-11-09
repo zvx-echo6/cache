@@ -52,6 +52,13 @@ class AddPdfSlice {
   final Duration lookEvery;
   final DateTime Function() _clock;
 
+  bool _wanted(String key) {
+    final o = only;
+    if (o == null) return true;
+    final j = state.byId(key.substring(key.indexOf('/') + 1));
+    return j != null && o(j);
+  }
+
   Future<AddPdfSliceResult> run() async {
     final end = _clock().add(budget);
     var added = 0, stopped = 0;
@@ -65,7 +72,7 @@ class AddPdfSlice {
       final before = await why();
       final tasks = [
         for (final t in await state.pending())
-          if (only == null || (state.byId(t.key.substring(t.key.indexOf('/') + 1)) case final j? when only!(j))) t,
+          if (_wanted(t.key)) t,
       ];
       if (tasks.isEmpty) return AddPdfSliceResult(added: added, stopped: stopped, more: false, why: 'done');
       if (before != null) return AddPdfSliceResult(added: added, stopped: stopped, more: true, why: before);
