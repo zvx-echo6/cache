@@ -121,6 +121,8 @@ pub struct Helper {
     state: Mutex<State>,
     next_id: AtomicU64,
     stopping: AtomicBool,
+    /// The port of the core's tile server, once asked for (see `tiles`).
+    tile_port: std::sync::Mutex<Option<u16>>,
 }
 
 fn unavailable(why: impl std::fmt::Display) -> String {
@@ -135,6 +137,7 @@ impl Helper {
             state: Mutex::new(State { run: None, failures: 0, restarting: false, reason: String::new() }),
             next_id: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
+            tile_port: std::sync::Mutex::new(None),
         });
         let mut st = h.state.lock().await;
         match h.launch().await {
@@ -148,6 +151,24 @@ impl Helper {
         }
         drop(st);
         h
+    }
+
+    /// The port the core's tile server listens on (127.0.0.1). Kept after the first answer; [fresh] asks the core again (the helper
+    /// may have restarted, which starts a new tile server on another port). The core's `layers server` call starts the server once
+    /// and returns its port; it is made here without an `online` option, so the connection setting is not touched.
+    pub async fn tile_port(self: &Arc<Self>, fresh: bool) -> Result<u16, String> {
+        if !fresh {
+            if let Some(p) = *self.tile_port.lock().unwrap() {
+                return Ok(p);
+            }
+        }
+        let reply = self.call("layers", json!({"op": "server", "arg": null})).await?;
+        if reply["ok"] != json!(true) {
+            return Err(unavailable(reply["error"]["message"].as_str().unwrap_or("the layer engine did not start")));
+        }
+        let port = reply["result"]["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p != 0).ok_or_else(|| unavailable("the layer engine gave no tile port"))?;
+        *self.tile_port.lock().unwrap() = Some(port);
+        Ok(port)
     }
 
     /// Run one op. `Ok` is the helper's whole reply object (`{"id","ok",...}`); `Err` says why the core is unavailable.

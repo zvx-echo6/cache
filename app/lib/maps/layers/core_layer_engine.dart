@@ -5,7 +5,10 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:http/http.dart' as http;
 
+import '../../app_fs.dart';
+import '../../platform.dart' as plat;
 import '../../settings/data_policy.dart';
 import '../geo.dart';
 import 'layer_def.dart';
@@ -251,12 +254,17 @@ class CoreLayerEngine extends LayerEngine {
 
   // ---- addresses ----------------------------------------------------------------------------------------
 
+  // Where the tile server is reached. On a phone it is the core's own server on 127.0.0.1. In a browser that port belongs to the
+  // machine running Cache Server, so tiles come through the server's /api/tiles route (same origin, so the sign-in cookie goes
+  // along); the address is absolute because MapLibre's workers cannot resolve a relative one.
+  String get _tileBase => plat.isWeb ? '${Uri.base.origin}/api/tiles' : 'http://127.0.0.1:$_port';
+
   // After the connection came back the addresses carry its count (the tile server ignores the query), so they are new sources to
   // MapLibre and it asks again for the tiles it had no answer for.
   String get _again => _generation == 0 ? '' : '?g=$_generation';
 
   @override
-  String tilesUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/{z}/{x}/{y}$_again';
+  String tilesUrl(String id) => '$_tileBase/layers/$id/{z}/{x}/{y}$_again';
 
   @override
   String tileJsonUrl(String id) => 'http://127.0.0.1:$_port/layers/$id/tilejson.json$_again';
@@ -286,6 +294,14 @@ class CoreLayerEngine extends LayerEngine {
     final z = zoom.clamp(def.minZoom, def.maxZoom);
     final x = TileMath.tileX(view.centerLon, z);
     final y = TileMath.tileY(view.centerLat, z);
+    if (plat.isWeb) {
+      try {
+        final res = await http.get(Uri.parse('$_tileBase/layers/$layerId/$z/$x/$y')).timeout(const Duration(seconds: 8));
+        return res.statusCode == 200 || res.statusCode == 204;
+      } catch (_) {
+        return false;
+      }
+    }
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
       final req = await client.getUrl(Uri.parse('http://127.0.0.1:$_port/layers/$layerId/$z/$x/$y'));
@@ -380,11 +396,32 @@ class CoreLayerEngine extends LayerEngine {
     return dir is String && dir.isNotEmpty ? File('$dir/unfinished-downloads.json') : null;
   }
 
+  // In a browser the layers folder is on the server, under its support root: the file is reached through AppFs.
+  late final AppFs _fs = createAppFs();
+
+  /// The layers folder relative to the support root (web only); null when the config has none or it is not under that root.
+  Future<String?> _webLayersDir() async {
+    final dir = layersConfig()['dir'];
+    if (dir is! String || dir.isEmpty) return null;
+    final root = await _fs.rootPath(AppRoot.support);
+    final prefix = root.endsWith('/') ? root : '$root/';
+    return dir.startsWith(prefix) ? dir.substring(prefix.length) : null;
+  }
+
   Future<void> _loadSaved() async {
-    final f = _savedFile;
     try {
-      if (f == null || !await f.exists()) return;
-      final j = jsonDecode(await f.readAsString());
+      final String text;
+      if (plat.isWeb) {
+        final rel = await _webLayersDir();
+        final t = rel == null ? null : await _fs.readString(AppRoot.support, '$rel/unfinished-downloads.json');
+        if (t == null) return;
+        text = t;
+      } else {
+        final f = _savedFile;
+        if (f == null || !await f.exists()) return;
+        text = await f.readAsString();
+      }
+      final j = jsonDecode(text);
       if (j is! Map) return;
       for (final e in j.entries) {
         final s = _Saved.fromJson(e.value);
@@ -396,6 +433,17 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   Future<void> _storeSaved() async {
+    if (plat.isWeb) {
+      try {
+        final rel = await _webLayersDir();
+        if (rel == null) return;
+        await _fs.mkdir(AppRoot.support, rel);
+        await _fs.writeStringAtomic(AppRoot.support, '$rel/unfinished-downloads.json', jsonEncode({for (final e in _saved.entries) e.key: e.value.toJson()}));
+      } catch (e) {
+        logError('Unfinished map downloads', error: e);
+      }
+      return;
+    }
     final f = _savedFile;
     if (f == null) return;
     try {

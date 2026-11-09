@@ -5,6 +5,7 @@
 //!   sources.rescan -> {sources: the length of args.sources, or 0}      (anything else -> ok, null)
 //!   zimGet  -> an entry by address: ends in .html: a page that names the address; .png: 5 bytes of image/png; contains "missing":
 //!              not_found; else text/plain
+//!   layers  -> {port: FAKE_TILE_PORT} for op "server" (the core's tile server), else ok, null
 //!   crash   -> exits without replying the first time (the marker file FAKE_MARKER is created), then replies "back"
 //!   open    -> fails with ok:false when FAKE_OPEN_FAILS is set
 //! Every op it receives is appended to the file FAKE_LOG, one `op args` line each. FAKE_NO_READY makes it exit at once.
@@ -62,6 +63,10 @@ fn main() {
                 } else {
                     json!({"id": id, "ok": true, "result": [enc(b"plain"), "text/plain"]})
                 }
+            }
+            "layers" if args["op"] == json!("server") => {
+                let port: u64 = std::env::var("FAKE_TILE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
+                json!({"id": id, "ok": true, "result": {"port": port, "online": false}})
             }
             "boom" => json!({"id": id, "ok": false, "error": {"code": "not_found", "message": "nothing here"}}),
             "crash" => {

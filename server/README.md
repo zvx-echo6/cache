@@ -32,6 +32,22 @@ op `server.features` says what is there:
      "places":  {"available": <the merged places database is there>, "merged_dir": "<path>"},
      "extras":  {<the config sections the core was opened with; "routing" only when routing is available>}}
 
+### Map tiles
+
+The core's layer engine serves map tiles from a tile server inside the helper process, on 127.0.0.1 and a random port, which a browser cannot
+reach. The server forwards to it:
+
+    GET /api/tiles/layers/<id>/<z>/<x>/<y>[.ext]     -> the tile, as the tile server answers it
+    GET /api/tiles/layers/<id>/tilejson.json         -> the layer's TileJSON
+
+The answer is passed through unchanged: 200 with the tile (`Content-Type`, `X-Cache-Status`), 204 where the source has no tile, 503 with
+`Retry-After` for a tile that may come later (the map asks again). It needs the same signed-in session cookie as every `/api/` call; MapLibre's
+requests are same-origin, so they carry it and there is no separate token. The port is found by the helper's `layers` op with `server`
+(the call the browser makes to start the tile server; no `online` option is sent), kept, and asked for again once when a connection fails
+(after a helper restart); 503 `core_unavailable` while the helper is down, 502 `tile_server_unreachable` when the port does not answer.
+Only `layers/...` paths of letters, digits, `.`, `_`, `-` are forwarded (404 otherwise), only GET and HEAD, and the query is dropped.
+The map fonts are not here: they are Flutter assets under `/assets/assets/map/fonts/`.
+
 ### The text embedder
 
 The server embeds text with the same model the phone uses (bge-m3 Q8_0, the pinned `lm-kit/bge-m3-gguf` revision in

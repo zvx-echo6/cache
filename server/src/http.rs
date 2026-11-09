@@ -46,6 +46,9 @@
 //!                                              allow-popups` (no allow-same-origin), so a page in it has no origin and cannot use the
 //!                                              session. The URL's token is the only credential here (the cookie is not read), and the
 //!                                              token opens nothing under /api/. 401 for a missing, wrong or expired token.
+//!   GET  /api/tiles/layers/<id>/<z>/<x>/<y>[.ext] and /api/tiles/layers/<id>/tilejson.json
+//!                                           -> the core's local tile server's answer, unchanged (200 tile, 204 none, 503 + Retry-After for a
+//!                                              tile that may come later); the session cookie is the credential. See `tiles`.
 //!   GET  /settings/keys                     -> the keys settings page (signed in)
 //!   anything else (GET/HEAD)                -> signed in: a file from the web folder. Not signed in: the sign-in page (200) for a page
 //!                                              request ("/", "*.html", a path with no extension), 401 for anything else (assets)
@@ -119,7 +122,7 @@ impl Body for ChannelBody {
 }
 
 impl Reply {
-    fn empty(status: u16) -> Reply {
+    pub(crate) fn empty(status: u16) -> Reply {
         Reply { status, headers: vec![], body: vec![], stream: None }
     }
 
@@ -127,7 +130,7 @@ impl Reply {
         Reply { status, headers: vec![("Content-Type", "application/json".into())], body: body.into_bytes(), stream: None }
     }
 
-    fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
+    pub(crate) fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
         Reply::json(status, json!({"ok": false, "error": {"code": code, "message": message.as_ref()}}).to_string())
     }
 
@@ -425,6 +428,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
     }
     if let Some(r) = library(app, method, path, query, body).await {
         return r;
+    }
+    if let Some(rest) = path.strip_prefix("/api/tiles/") {
+        return crate::tiles::tiles(app.helper.clone(), method, rest).await;
     }
     match (method, path) {
         ("GET", "/api/status") => core_call(app, "status", json!({})).await,
