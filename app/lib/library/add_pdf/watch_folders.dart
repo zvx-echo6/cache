@@ -306,6 +306,14 @@ class WatchFoldersState extends ChangeNotifier implements IndexWorkSource {
     notifyListeners();
   }
 
+  /// Reads the folders from disk again (a background run changed them while Cache was in the background). Only while no check runs.
+  Future<void> reload() async {
+    if (_folders.any((f) => f.checking)) return;
+    _loaded = false;
+    _folders.clear();
+    await load();
+  }
+
   Future<void>? _saving;
   bool _saveAgain = false;
 

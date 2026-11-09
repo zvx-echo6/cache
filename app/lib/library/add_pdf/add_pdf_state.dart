@@ -296,8 +296,13 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.copyIn,
     this.stepBudgetMs = 400,
     this.busyWait = const Duration(seconds: 4),
+    this.mayRun,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
+
+  /// Asked before the jobs are offered as work: false while a background run is adding PDFs (the app asks it to stop and offers
+  /// them again at its next look). Null: always.
+  final Future<bool> Function()? mayRun;
 
   final IngestCalls calls;
 
@@ -503,9 +508,18 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   // ---- the scheduler's work
 
+  /// Reads the jobs from disk again (a background run changed them while Cache was in the background). Only while none runs.
+  Future<void> reload() async {
+    if (_runs.isNotEmpty) return;
+    _loaded = false;
+    _jobs.clear();
+    await load();
+  }
+
   @override
   Future<List<IndexTask>> pending() async {
     await load();
+    if (mayRun != null && !await mayRun!()) return const [];
     return [
       for (final j in _jobs.reversed)
         if (j.status == AddPdfStatus.active && !j.pausedByPerson)

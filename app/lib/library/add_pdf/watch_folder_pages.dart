@@ -4,7 +4,7 @@ part of 'add_pdf_pages.dart';
 // Library, beside Add a folder), the confirm screen, the Watched folders list (and its place beside Add to Library on a wide
 // window), Stop watching, the summary of what a check added, and a folder that can't be reached (Choose again).
 
-/// Whether this phone also checks every 30 minutes while Cache is open (Android, as index work); iOS checks each time Cache opens. Tests set it.
+/// Whether this phone also checks with Cache closed (Android: a few times a day, adding while charging); iOS checks each time Cache opens. Tests set it.
 bool Function() watchChecksInBackground = () => Platform.isAndroid;
 
 /// "2 hours ago", "yesterday", "3 days ago": when a folder was checked.
@@ -237,7 +237,7 @@ class WatchFolderConfirmPage extends StatefulWidget {
   /// The battery now (for the time); the device's own when null.
   final BatteryReading? battery;
 
-  /// Checks while Cache is open too (Android); [watchChecksInBackground] when null.
+  /// Checks with Cache closed too (Android); [watchChecksInBackground] when null.
   final bool? background;
   final bool fromList;
 
@@ -331,9 +331,9 @@ class _WatchFolderConfirmPageState extends State<WatchFolderConfirmPage> {
               ),
               _Fact(
                 label: 'When it checks',
-                value: bg ? "When you open Cache, and while it's open" : 'Each time you open Cache',
+                value: bg ? 'A few times a day, and when you open Cache' : 'Each time you open Cache',
                 valueWeight: FontWeight.w500, valueKey: const ValueKey('watch-when'),
-                note: bg ? "Checks while it's open follow the indexing rules: charging, battery and temperature." : 'Apple does not allow a folder to be watched in the background.',
+                note: bg ? 'New PDFs are added when you open Cache, or while charging.' : 'Apple does not allow a folder to be watched in the background.',
               ),
             ]),
             const SizedBox(height: 14),
@@ -366,7 +366,7 @@ class WatchedFoldersPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final bg = background ?? watchChecksInBackground();
-    final top = bg ? "Checked when you open Cache, and while it's open and charging." : 'Checked each time you open Cache. Apple does not allow background checks.';
+    final top = bg ? 'Checks a few times a day. New PDFs are added when you open Cache, or while charging.' : 'Checked each time you open Cache. Apple does not allow background checks.';
     const removed = 'A PDF removed from a folder stays in Cache.';
     final list = ListenableBuilder(
       listenable: watch,

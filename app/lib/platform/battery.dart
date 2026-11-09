@@ -43,7 +43,7 @@ class BatteryReading {
 /// Reads the battery; null when the device cannot say (no battery, or no way to ask).
 typedef BatteryReader = Future<BatteryReading?> Function();
 
-/// The app's own channel (MainActivity.kt on Android: the sticky ACTION_BATTERY_CHANGED broadcast, no permission; AppDelegate.swift
+/// The app's own channel (on Android the cache_device plugin, in every engine: the sticky ACTION_BATTERY_CHANGED broadcast, no permission; AppDelegate.swift
 /// on iOS: UIDevice battery monitoring). Method "read" answers {"percent": 0..100 or -1, "charging": bool, "thermal": "nominal" |
 /// "light" | "moderate" | "severe" | "critical" | "unknown", "headroom": 0.0.. (Android 11 and later) or absent}. iOS calls
 /// "changed" on the channel when the thermal state changes.

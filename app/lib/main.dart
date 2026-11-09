@@ -36,7 +36,10 @@ import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
 import 'library/add_pdf/add_pdf_calls.dart';
 import 'library/add_pdf/add_pdf_engines.dart';
 import 'library/add_pdf/add_pdf_state.dart';
+import 'library/add_pdf/watch_background.dart';
 import 'library/add_pdf/watch_folders.dart';
+import 'background/background_dispatcher.dart';
+import 'background/background_lock.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -444,22 +447,89 @@ class _CacheAppState extends State<CacheApp> {
     engines: _addPdfEngines,
     libraries: libraries,
     ocrEngine: deviceOcrEngine,
-    bookshelves: () async {
-      final dev = await libraryDeviceIdShared?.call();
-      final dir = _support(kBookshelvesDir);
-      if (dev == null || !validDeviceId(dev) || dir == null) return null;
-      return {
-        'dir': dir.path,
-        'dev': dev,
-        'libraries': [
-          for (final l in libraries.libraries)
-            if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
-        ],
-      };
+    // a background run is adding PDFs: it is asked to stop, and the jobs are offered again at the next look
+    mayRun: () async {
+      final l = _bgLock;
+      return l == null || await l.takeOver(kAddPdfWork, wait: Duration.zero);
     },
+    bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
   );
+
+  /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.
+  Future<Map<String, dynamic>?> _addPdfShelves() async {
+    final dev = await libraryDeviceIdShared?.call();
+    final dir = _support(kBookshelvesDir);
+    if (dev == null || !validDeviceId(dev) || dir == null) return null;
+    return {
+      'dir': dir.path,
+      'dev': dev,
+      'libraries': [
+        for (final l in libraries.libraries)
+          if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
+      ],
+    };
+  }
+
+  /// The one lock with the background runs (background/background_lock.dart), once the support folder is known.
+  BackgroundLock? _bgLock;
+  Timer? _bgOpenTimer;
+  int _bgSeen = 0;
+  int _watchCount = -1;
+
+  /// The app is open: the lock says so (and keeps saying so while it is).
+  void _bgAppOpen() {
+    _bgLock?.appOpened();
+    _bgOpenTimer ??= Timer.periodic(BackgroundLock.refreshEvery, (_) => _bgLock?.appOpened());
+  }
+
+  /// Back at the front: a background run adding PDFs is stopped first; when one ran meanwhile, Add PDF's jobs and the watched
+  /// folders are read again; then index work and the watched folders' check go on.
+  Future<void> _backToFront() async {
+    final l = _bgLock;
+    if (l != null) {
+      _bgAppOpen();
+      await l.takeOver(kAddPdfWork);
+      final g = l.generation;
+      if (g != _bgSeen) {
+        _bgSeen = g;
+        await addPdf.reload();
+        await watchFolders.reload();
+      }
+    }
+    if (!mounted) return;
+    indexing.setOpen(true);
+    // watched folders are checked each time Cache comes back to the front (not again within a minute)
+    unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
+  }
+
+  /// To the back: background runs may go ahead; PDFs a watched folder found that are still to add are added in the background
+  /// while charging (Android).
+  void _toBack() {
+    _bgOpenTimer?.cancel();
+    _bgOpenTimer = null;
+    _bgLock?.appClosed();
+    if (Platform.isAndroid && addPdf.active.any((j) => j.watchId != null)) unawaited(scheduleWatchAdd());
+    unawaited(_writeBackgroundContext());
+  }
+
+  Future<void> _writeBackgroundContext() async {
+    final s = _supportPath;
+    if (s == null || !Platform.isAndroid) return;
+    await writeWatchAddContext(support: s, bookshelves: await _addPdfShelves());
+  }
+
+  /// The watched folders changed: the background count runs while any are watched (Android).
+  void _onWatchFolders() {
+    final n = watchFolders.folders.length;
+    if (_watchCount >= 0 && (n > 0) == (_watchCount > 0)) {
+      _watchCount = n;
+      return;
+    }
+    _watchCount = n;
+    unawaited(scheduleWatchDetect(anyFolders: n > 0));
+  }
 
   /// Watch a folder: new PDFs in a folder the person chose go through Add PDF by themselves. Checked when Cache opens; on Android
   /// also every [kWatchEvery] as index work (the indexing rules: charging, battery, heat). iOS checks only when Cache opens.
@@ -749,13 +819,12 @@ class _CacheAppState extends State<CacheApp> {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
         if (!plat.isWeb) unawaited(connections.syncAll());
-        if (!plat.isWeb) indexing.setOpen(true);
-        // watched folders are checked each time Cache comes back to the front (not again within a minute)
-        if (!plat.isWeb) unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
+        if (!plat.isWeb) unawaited(_backToFront());
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         if (!plat.isWeb) indexing.setOpen(false);
+        if (!plat.isWeb) _toBack();
       },
     );
     if (!plat.isWeb) indexing.setOpen(true);
@@ -808,8 +877,25 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) {
       addPdfShared = addPdf;
       watchFoldersShared = watchFolders;
-      // watched folders: checked when Cache opens, once the libraries can be read (a first PDF may make My books)
-      unawaited(supportRead.then((_) => sources.whenCoreReady()).then((_) => watchFolders.checkAll()).catchError((Object e) {
+      // the lock with the background runs: the app is open; a background run adding PDFs is stopped, and what it changed is
+      // read again. Then the watched folders are checked, once the libraries can be read (a first PDF may make My books).
+      unawaited(supportRead.then((_) async {
+        final s = _supportPath;
+        if (s == null) return;
+        final l = _bgLock = BackgroundLock(Directory(backgroundDir(s)));
+        _bgSeen = l.generation;
+        _bgAppOpen();
+        final ran = l.runs(kAddPdfWork);
+        await l.takeOver(kAddPdfWork);
+        if (ran) {
+          await addPdf.reload();
+          await watchFolders.reload();
+        }
+        watchFolders.addListener(_onWatchFolders);
+        await watchFolders.load();
+        _onWatchFolders();
+        await _writeBackgroundContext();
+      }).then((_) => sources.whenCoreReady()).then((_) => watchFolders.checkAll()).catchError((Object e) {
         logError('Watch a folder: the check at start', error: e);
       }));
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
@@ -1040,6 +1126,8 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
+    _bgOpenTimer?.cancel();
+    watchFolders.removeListener(_onWatchFolders);
     watchFolders.dispose();
     indexThrottle.dispose();
     pdfIndex.dispose();

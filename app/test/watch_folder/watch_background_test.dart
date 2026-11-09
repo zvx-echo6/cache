@@ -1,0 +1,218 @@
+// Watched folders with Cache closed (Android): watch-folder-detect counts new files by name, size and time (it reads none and
+// adds nothing) and queues an add only when there are any; watch-folder-add holds the one lock, follows the indexing rules
+// (charging, battery, heat), adds only what the watched folders found, in slices that stop for the time budget or for Cache
+// coming to the front, and queues the next slice.
+
+import 'dart:io';
+
+import 'package:cache/background/background_lock.dart';
+import 'package:cache/library/add_pdf/add_pdf_slice.dart';
+import 'package:cache/library/add_pdf/add_pdf_state.dart';
+import 'package:cache/library/add_pdf/watch_background.dart';
+import 'package:cache/library/add_pdf/watch_folders.dart';
+import 'package:cache/platform/battery.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../add_pdf/add_pdf_fixtures.dart';
+
+const _lib = AddPdfTarget(title: 'My books', path: '/tmp/my-books');
+const _charging = BatteryReading(percent: 80, charging: true, thermal: Thermal.nominal);
+
+void main() {
+  late Directory tmp;
+  late String support;
+  late Directory manuals;
+  late BackgroundLock lock;
+
+  setUp(() {
+    tmp = Directory.systemTemp.createTempSync('watch-bg');
+    support = '${tmp.path}/support';
+    manuals = Directory('${tmp.path}/Manuals')..createSync(recursive: true);
+    lock = BackgroundLock(Directory(backgroundDir(support)));
+  });
+
+  tearDown(() {
+    try {
+      tmp.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  File put(String rel, String content) {
+    final f = File('${manuals.path}/$rel');
+    f.parent.createSync(recursive: true);
+    f.writeAsStringSync(content);
+    return f;
+  }
+
+  /// Watches Manuals the way Cache does (its first check noting what is there) and lets go of the state, as Cache in the
+  /// background has.
+  Future<void> watched({bool add = false}) async {
+    final pdf = testAddPdfState(Directory('$support/ingest'));
+    final w = WatchFoldersState(addPdf: pdf, dir: () async => Directory('$support/ingest'));
+    final f = await w.watch(root: manuals.path, name: 'Manuals', target: _lib, addExisting: add);
+    await w.check(f);
+    await w.save();
+    await pdf.save();
+    w.dispose();
+    pdf.dispose();
+  }
+
+  group('watch-folder-detect', () {
+    test('counts new and changed PDFs by name, size and time; what was seen is not counted; it queues one add', () async {
+      put('a.pdf', 'one');
+      await watched();
+      var queued = 0;
+      expect(await watchDetectJob(support: support, lock: lock, queueAdd: () async => queued++), '0 new in 1 of 1 folders');
+      expect(queued, 0);
+      put('b.pdf', 'two');
+      put('notes.txt', 'not a pdf');
+      put('a.pdf', 'one, changed');
+      expect(await watchDetectJob(support: support, lock: lock, queueAdd: () async => queued++), '2 new in 1 of 1 folders');
+      expect(queued, 1);
+      expect(watchDetectFile(support).readAsStringSync(), contains('"new":2'));
+      // nothing was read or added: no job, and the folder's record is unchanged
+      final jobs = File('$support/ingest/jobs.json');
+      expect(jobs.existsSync() ? jobs.readAsStringSync() : '', isNot(contains('b.pdf')));
+      expect((await readWatchedFolders(support)).single.files.keys, ['a.pdf']);
+    });
+
+    test('not while Cache is open; a folder that cannot be reached is left out', () async {
+      put('a.pdf', 'one');
+      await watched();
+      lock.appOpened();
+      expect(await watchDetectJob(support: support, lock: lock, queueAdd: () async {}), 'skipped: Cache is open');
+      lock.appClosed();
+      manuals.deleteSync(recursive: true);
+      expect(await watchDetectJob(support: support, lock: lock, queueAdd: () async {}), '0 new in 0 of 1 folders');
+    });
+  });
+
+  group('watch-folder-add', () {
+    late AddPdfState pdf;
+    late WatchFoldersState w;
+    late List<(bool, Duration)> queued;
+
+    Future<void> queue({bool next = false, Duration delay = Duration.zero}) async => queued.add((next, delay));
+
+    setUp(() {
+      queued = [];
+    });
+
+    Future<void> make({FakeIngestCalls? calls}) async {
+      pdf = testAddPdfState(Directory('$support/ingest'), calls: calls);
+      w = WatchFoldersState(addPdf: pdf, dir: () async => Directory('$support/ingest'));
+    }
+
+    tearDown(() {
+      w.dispose();
+      pdf.dispose();
+    });
+
+    test('checks the folders and adds what they found, under the lock, and lets go of it', () async {
+      put('a.pdf', 'one');
+      await watched();
+      put('b.pdf', 'two');
+      await make(calls: FakeIngestCalls({'step': steps([progress('done', result: {'copy': 'c' * 64, 'pieces': 3})])}));
+      final out = await watchAddJob(support: support, lock: lock, battery: () async => _charging, state: pdf, watch: w, queue: queue);
+      expect(out, 'added 1');
+      expect(pdf.jobs.single.sourcePath, 'b.pdf');
+      expect(pdf.jobs.single.status, AddPdfStatus.done);
+      expect(w.folders.single.added, 1);
+      expect(queued, isEmpty);
+      expect(lock.runs(kAddPdfWork), isFalse);
+      expect(lock.generation, 1);
+    });
+
+    test('never while Cache is open or while another run adds (no double work)', () async {
+      await make();
+      lock.appOpened();
+      expect(await watchAddJob(support: support, lock: lock, battery: () async => _charging, state: pdf, watch: w, queue: queue), 'skipped: Cache is open');
+      lock.appClosed();
+      expect(lock.hold(kAddPdfWork), isTrue);
+      expect(await watchAddJob(support: support, lock: lock, battery: () async => _charging, state: pdf, watch: w, queue: queue), 'skipped: another run is adding');
+    });
+
+    test('heat, a low battery or no charger: it does not start, and tries again later', () async {
+      await make();
+      for (final (b, why) in [
+        (const BatteryReading(percent: 80, charging: true, thermal: Thermal.moderate), 'heat'),
+        (const BatteryReading(percent: 15, charging: false), 'unplugged'),
+        (const BatteryReading(percent: 60, charging: false), 'unplugged'),
+      ]) {
+        queued.clear();
+        expect(await watchAddJob(support: support, lock: lock, battery: () async => b, state: pdf, watch: w, queue: queue), 'held: $why');
+        expect(queued.single, (false, kWatchAddRetry));
+      }
+      expect(lock.runs(kAddPdfWork), isFalse);
+    });
+
+    test('a PDF added by hand is left for Cache; only what the folders found is added in the background', () async {
+      put('a.pdf', 'one');
+      await watched(add: true);
+      await make(calls: FakeIngestCalls({'step': steps([progress('done', result: {'copy': 'c' * 64})])}));
+      await pdf.load();
+      final hand = File('${tmp.path}/hand.pdf')..writeAsStringSync('by hand');
+      await pdf.add(pdfPath: hand.path, fileName: 'hand.pdf', bytes: 7, title: 'hand', target: _lib);
+      await watchAddJob(support: support, lock: lock, battery: () async => _charging, state: pdf, watch: w, queue: queue);
+      expect(pdf.jobs.firstWhere((j) => j.fileName == 'hand.pdf').status, AddPdfStatus.active);
+      expect(pdf.jobs.firstWhere((j) => j.fileName == 'a.pdf').status, AddPdfStatus.done);
+    });
+
+    test('the time budget ends a slice mid-PDF: the job is paused, not lost, and the next slice is queued after it', () async {
+      put('a.pdf', 'one');
+      await watched(add: true);
+      // the core keeps reading: the slice stops for its budget
+      await make(calls: FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('reading', pages: 100, pagesDone: 1);
+      }}));
+      await pdf.load();
+      final slice = AddPdfSlice(pdf, budget: const Duration(milliseconds: 150), lookEvery: const Duration(milliseconds: 20), only: (j) => j.watchId != null);
+      final r = await slice.run();
+      expect(r.more, isTrue);
+      expect(r.why, 'time');
+      expect(pdf.jobs.single.status, AddPdfStatus.active);
+      expect(pdf.jobs.single.pausedByPerson, isFalse, reason: 'paused for the slice, not by the person');
+      // and through the job: the next slice is queued after this one
+      final out = await watchAddJob(support: support, lock: lock, battery: () async => _charging, state: pdf, watch: w, budget: const Duration(milliseconds: 150), queue: queue);
+      expect(out, contains('more to do (time)'));
+      expect(queued.single, (true, Duration.zero));
+    });
+
+    test('Cache coming to the front stops the slice at once, and it queues nothing (Cache carries on)', () async {
+      put('a.pdf', 'one');
+      await watched(add: true);
+      await make(calls: FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('reading', pages: 100, pagesDone: 1);
+      }}));
+      final slice = AddPdfSlice(pdf, stopAsked: () => lock.stopAsked(kAddPdfWork), lookEvery: const Duration(milliseconds: 20));
+      expect(lock.hold(kAddPdfWork), isTrue);
+      final running = slice.run();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final took = lock.takeOver(kAddPdfWork, wait: const Duration(seconds: 5), look: const Duration(milliseconds: 20));
+      final r = await running;
+      lock.release(kAddPdfWork);
+      expect(r.why, 'app');
+      expect(await took, isTrue);
+      expect(pdf.jobs.single.status, AddPdfStatus.active);
+    });
+
+    test('heat during a slice pauses it', () async {
+      put('a.pdf', 'one');
+      await watched(add: true);
+      await make(calls: FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('embedding', pages: 1, pagesDone: 1, pieces: 100, piecesDone: 1);
+      }}));
+      var b = _charging;
+      final slice = AddPdfSlice(pdf, held: () async => addPdfHeld(b), lookEvery: const Duration(milliseconds: 20));
+      final running = slice.run();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      b = const BatteryReading(percent: 80, charging: true, thermal: Thermal.severe);
+      final r = await running;
+      expect(r.why, 'heat');
+      expect(r.more, isTrue);
+    });
+  });
+}
