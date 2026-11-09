@@ -192,8 +192,11 @@ class AppState extends ChangeNotifier {
           // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
-          if (r != null && modelMemoryNeed(e.size) > r.room) {
-            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+          final need = r == null
+              ? null
+              : await memoryNeedForFile(e.path, nCtx: settingsFor?.call(e)?.nCtx ?? kContextTokens, fallbackBytes: e.size);
+          if (r != null && need != null && need.total > r.room) {
+            logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
             resting = e;
             notifyListeners();
           } else {
@@ -388,6 +391,12 @@ class AppState extends ChangeNotifier {
       } catch (_) {
         // Without a folder the model loads without the saved prefix.
       }
+    }
+    try {
+      final need = await memoryNeedForFile(path, nCtx: nCtx);
+      if (need != null) logInfo(need.logLine, detail: path.split('/').last);
+    } catch (_) {
+      // The log line is only a diagnostic.
     }
     return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
   }

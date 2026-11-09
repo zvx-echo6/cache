@@ -9,7 +9,7 @@ import '../downloads/download_row.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
-import '../platform/memory.dart' show modelMemoryNeed;
+import '../platform/memory.dart' show modelMemoryNeedBySize;
 import 'device_memory.dart';
 import 'hf_hub.dart';
 import '../platform.dart' as plat;
@@ -44,7 +44,7 @@ enum ModelFit {
   static ModelFit of(int fileBytes, int? memory, {int? room}) {
     if (memory == null || memory <= 0) return ModelFit.unknown;
     final need = fileBytes + (768 << 20);
-    if (need <= memory * 0.55) return room != null && modelMemoryNeed(fileBytes) > room ? ModelFit.tight : ModelFit.fits;
+    if (need <= memory * 0.55) return room != null && modelMemoryNeedBySize(fileBytes) > room ? ModelFit.tight : ModelFit.fits;
     if (need <= memory * 0.75) return ModelFit.tight;
     return ModelFit.tooBig;
   }

@@ -26,6 +26,11 @@
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <cerrno>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -75,6 +80,9 @@ struct Handle {
     std::string prefix_dir;
     std::string model_id;
     std::string prefix_note;
+    // The KV cache types and flash attention setting of the chat context ("q8_0/q8_0/fa=enabled"): part of the prefix identity,
+    // because a saved KV state of one cache type cannot be read into another.
+    std::string kv_desc;
     // The prompt start of the last request shape (system prompt + tools + thinking switch): its key and tokens, and how much
     // of it is stable (the part it shares with the shape before it; all of it once the same shape comes again).
     std::string              probe_key;
@@ -265,7 +273,7 @@ std::string file_identity(const char * path) {
 // ---------------- the saved prompt prefix ----------------
 // The KV state of a prompt start, saved by llama_state_seq_save_file (its magic and version, the tokens, then seq 0's KV state)
 // to a .part file and renamed, so a file under its final name is complete. The name is
-// prefix-<model key>-<tokens hash>.kv: the model key (FNV-1a 64 of the model file's identity, the engine build and n_ctx) makes a
+// prefix-<model key>-<tokens hash>.kv: the model key (FNV-1a 64 of the model file's identity, the engine build, n_ctx and the KV cache types) makes a
 // file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used for as many of
 // its tokens as the prompt shares (the cache after that is dropped), so a file saved with a part that later changed still
 // gives the part before it. At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
@@ -279,7 +287,7 @@ std::string hex64(uint64_t v) {
 }
 
 std::string prefix_model_key(const Handle * h) {
-    const std::string head = h->model_id + "\n" + engine_build() + "\n" + std::to_string(h->n_ctx) + "\n";
+    const std::string head = h->model_id + "\n" + engine_build() + "\n" + std::to_string(h->n_ctx) + "\n" + h->kv_desc + "\n";
     return hex64(fnv1a(1469598103934665603ull, head.data(), head.size()));
 }
 
@@ -344,6 +352,90 @@ void prune_prefix_files(const std::string & dir) {
     std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
     for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
 }
+
+// ---------------- lookup-only tensors stay on flash ----------------
+// The embedding tables a token only looks one row up in (GET_ROWS): per_layer_token_embd (Gemma 4's per-layer table, 56% of the E2B
+// file) and token_embd when the model has a separate output.weight (tied to the output head, token_embd is read in full every token,
+// so it is not lookup-only). Their pages are advised MADV_RANDOM so the kernel does not read ahead around each row and fill memory
+// with pages that are used once. kPleAdvice is the one switch the bench compares (none = no advice).
+enum class PleAdvice { kRandom, kNone };
+constexpr PleAdvice kPleAdvice = PleAdvice::kRandom;
+
+#if defined(__linux__) || defined(__ANDROID__)
+// madvise(MADV_RANDOM) on the lookup-only tensors of the model file, inside its mmap (found from /proc/self/maps by file offset;
+// a tensor that is not inside a mapping of the model file, e.g. weights not file-mapped, is skipped). Logs once.
+void advise_lookup_tensors(const char * model_path) {
+    if (kPleAdvice == PleAdvice::kNone) {
+        cl_logi("PLE advice: none");
+        return;
+    }
+    struct Range { uint64_t off, size; };
+    std::vector<Range> ranges;
+    {
+        gguf_init_params gp;
+        gp.no_alloc = true;
+        gp.ctx      = nullptr;
+        gguf_context * g = gguf_init_from_file(model_path, gp);
+        if (!g) {
+            cl_logi("PLE advice: model header not read, nothing advised");
+            return;
+        }
+        const uint64_t base = gguf_get_data_offset(g);
+        const int64_t  n    = gguf_get_n_tensors(g);
+        bool has_output = false;
+        for (int64_t i = 0; i < n; i++) {
+            if (strcmp(gguf_get_tensor_name(g, i), "output.weight") == 0) has_output = true;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            const char * name = gguf_get_tensor_name(g, i);
+            const bool lookup = strncmp(name, "per_layer_token_embd", 20) == 0 || (has_output && strncmp(name, "token_embd", 10) == 0);
+            if (lookup) ranges.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+        }
+        gguf_free(g);
+    }
+    if (ranges.empty()) {
+        cl_logi("PLE advice: no lookup-only tensors in this model");
+        return;
+    }
+    struct Vma { uint64_t start, end, off; };
+    std::vector<Vma> vmas;
+    std::error_code ec;
+    const std::string real = std::filesystem::weakly_canonical(model_path, ec).string();
+    if (FILE * f = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long st, en, off;
+            int n = 0;
+            if (sscanf(line, "%llx-%llx %*4s %llx %*s %*s %n", &st, &en, &off, &n) < 3 || n <= 0) continue;
+            std::string path = line + n;
+            while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) path.pop_back();
+            if (path == model_path || (!real.empty() && path == real)) vmas.push_back({ st, en, off });
+        }
+        fclose(f);
+    }
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t bytes = 0;
+    int      err   = 0;
+    for (const auto & r : ranges) {
+        for (const auto & v : vmas) {
+            if (r.off < v.off || r.off + r.size > v.off + (v.end - v.start)) continue;
+            const uint64_t addr = v.start + (r.off - v.off);
+            const uint64_t lo   = (addr + ps - 1) & ~(ps - 1);          // rounded in: no neighbouring tensor's page is advised
+            const uint64_t hi   = (addr + r.size) & ~(ps - 1);
+            if (hi <= lo) break;
+            if (madvise((void *) lo, hi - lo, MADV_RANDOM) == 0) bytes += hi - lo; else err = errno;
+            break;
+        }
+    }
+    if (err != 0) {
+        cl_logi("PLE advice: random on %llu MB (errno %d)", (unsigned long long) (bytes >> 20), err);
+    } else {
+        cl_logi("PLE advice: random on %llu MB (ok)", (unsigned long long) (bytes >> 20));
+    }
+}
+#else
+void advise_lookup_tensors(const char *) {}
+#endif
 
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
@@ -549,6 +641,14 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         cp.n_batch         = 512;
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
+        // The KV cache in q8_0 (K and V): about half of f16. A quantized V cache needs flash attention
+        // (llama-context.cpp llama_init_from_model: AUTO becomes ENABLED for a quantized V, DISABLED fails); the CPU flash attention
+        // reads q8_0 K and V for any head size that 32 divides (Gemma 4: 256 and 512), so it is set ENABLED here, not left to the probe.
+        cp.type_k          = GGML_TYPE_Q8_0;
+        cp.type_v          = GGML_TYPE_Q8_0;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        h->kv_desc         = "q8_0/q8_0/fa=enabled";
+        cl_logi("kv: q8_0/q8_0, flash_attn=enabled");
         h->ctx = llama_init_from_model(h->model, cp);
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
@@ -556,6 +656,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
+        advise_lookup_tensors(model_path);
 
         if (!plan.cpus.empty()) {
             // A threadpool whose threads are each pinned to one of the chosen cores.

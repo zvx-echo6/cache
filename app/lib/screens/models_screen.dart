@@ -8,7 +8,7 @@ import 'model_search_screen.dart';
 import '../browse/zim_download.dart' show freeBytesOnDisk;
 import '../downloads/download_row.dart';
 import '../models/search_model.dart' show kSearchModel;
-import '../platform/memory.dart' show modelMemoryNeed;
+import '../platform/memory.dart' show modelMemoryNeedBySize;
 import 'download_confirm.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../layout/adaptive.dart' show ContentWidth;
@@ -58,7 +58,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
     app.memory().then((r) {
       if (r == null || !mounted) return;
       final held = app.active;
-      setState(() => _room = r.room + (held == null ? 0 : modelMemoryNeed(held.size)));
+      setState(() => _room = r.room + (held == null ? 0 : modelMemoryNeedBySize(held.size)));
     });
     if (ModelDownloads.shared != null) _recommended.load();
     // A waiting row names the download it waits for by the name its own row shows.

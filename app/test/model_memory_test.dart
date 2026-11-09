@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/models/model_downloads.dart' show ModelFit;
 import 'package:cache/platform/memory.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,9 +35,13 @@ void main() {
     expect(app.failed, isNull, reason: 'it was not tried: no failure to show');
   });
 
-  test('what a model needs: about two thirds of its file, plus a gigabyte to answer', () {
-    expect(modelMemoryNeed(0), _gb);
-    expect(modelMemoryNeed(3 * _gb) >> 20, closeTo(3 * 1024 * 0.65 + 1024, 1));
+  test('what a model needs by its size (the recommendation path, unchanged): about two thirds of its file, plus a gigabyte', () {
+    expect(modelMemoryNeedBySize(0), _gb);
+    expect(modelMemoryNeedBySize(3 * _gb) >> 20, closeTo(3 * 1024 * 0.65 + 1024, 1));
+    expect(modelMemoryNeedBySize(3427879936), 3301863782, reason: 'a real E2B file: the same number as before the tensor-aware check');
+    // the fit of a model in the lists still uses it: a 1 GiB file needs 0.65 GiB + 1 GiB (about 1.65 GiB) of room
+    expect(ModelFit.of(_gb, 8 * _gb, room: (1.6 * _gb).round()), ModelFit.tight);
+    expect(ModelFit.of(_gb, 8 * _gb, room: (1.7 * _gb).round()), ModelFit.fits);
   });
 
   test('the model is let go when Android says memory runs low in front, or Cache went to the back with little free', () {
