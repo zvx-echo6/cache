@@ -215,15 +215,18 @@ void main() {
         }
         // ignore: avoid_print
         print('search: ${[for (final h in r!.results) h.title]} vector ${r.vectorSources} keyword-only ${r.keywordOnlySources}');
-        expect(r.results.map((h) => h.title), contains('Water purification manual'));
-        try {
-          final k = await searcher.search('purification', k: 5);
+        expect(r.results.any((h) => h.title.startsWith('Water purification manual')), isTrue, reason: 'by meaning');
+        // by keyword, as people search and as Ask's search adds keyword hits: the job extends the library's keyword index
+        final meta = File('$lib/index/meta.json');
+        // ignore: avoid_print
+        print('index meta: ${meta.existsSync() ? meta.readAsStringSync() : 'none'}; files ${[for (final e in Directory('$lib/index').listSync()) e.uri.pathSegments.where((x) => x.isNotEmpty).last]}');
+        for (final q in ['purification', 'boil water purification', 'bleach']) {
+          final k = await searcher.search(q, k: 5);
           // ignore: avoid_print
-          print('keyword search: ${[for (final h in k.results) h.title]}');
-        } on CacheSearchException catch (e) {
-          // ignore: avoid_print
-          print('keyword search: $e');
+          print('keyword search "$q": ${[for (final h in k.results) h.title]} vector ${k.vectorSources} keyword-only ${k.keywordOnlySources}');
         }
+        final k = await searcher.search('boil water purification', k: 5);
+        expect(k.results.any((h) => h.title.startsWith('Water purification manual')), isTrue, reason: 'by keyword');
       } finally {
         await embedder.dispose();
         await searcher.close();
