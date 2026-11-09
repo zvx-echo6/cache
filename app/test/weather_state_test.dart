@@ -96,7 +96,7 @@ class Harness {
     liveDir: browser ? null : () async => liveDir,
     catalogueFiles: browser ? () => _open('live-catalogues') : null,
     liveFiles: browser ? () => _open('live-sources') : null,
-    onPlan: (p) async => plans.add(p),
+    onPlan: browser ? (p) async => plans.add(p) : null,
     builtIns: () async => builtInDefinitions(),
     position: () => here,
     regions: () => regions,

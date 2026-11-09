@@ -555,7 +555,8 @@ class WeatherState extends ChangeNotifier {
         {for (final c in enabledSources) c.id: c.defText},
         formerly: [for (final c in _builtIn) c.id],
       );
-      await _folder!.files.flush();
+      // A browser's writes are queued: the core reads the folder itself, so they are waited for. A phone's are done already.
+      if (liveFiles != null) await _folder!.files.flush();
       final listed = await core.sources();
       _registered = {for (final s in (listed['sources'] as List? ?? const [])) (s as Map)['id'] as String};
       unawaited(publishPlan());
