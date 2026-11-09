@@ -114,6 +114,17 @@ void main() {
         await shoot(tester, size, '8-errors-b', theme, progress);
         w.stopped();
         await shoot(tester, size, '8-library-stopped', theme, panes);
+        // 10. Several PDFs, a folder (with its subfolders), and several queued
+        await shoot(tester, size, '10-several', theme, () => AddPdfConfirmPage(state: w.state, battery: _charging, choice: AddPdfChoice(const [
+              (path: '/tmp/a.pdf', name: 'Water purification manual.pdf', bytes: 43 << 20),
+              (path: '/tmp/b.pdf', name: 'Field radio handbook.pdf', bytes: 212 << 20),
+              (path: '/tmp/c.pdf', name: 'Root cellar plans.pdf', bytes: 14 << 20),
+            ])));
+        await shoot(tester, size, '10-folder', theme, () => AddPdfConfirmPage(state: w.state, battery: _low, choice: AddPdfChoice([
+              for (var i = 1; i <= 12; i++) (path: 'Manuals/Manual $i.pdf', name: 'Manual $i.pdf', bytes: 70 << 20),
+            ], folder: 'Field manuals', folderRoot: '/tmp/field-manuals', skipped: 3)));
+        w.queueSeveral();
+        await shoot(tester, size, '10-queued', theme, progress);
         // 9. The main flow beside the Library (a tablet or a desktop window): the card opens Adding a PDF
         w.runOne();
         if (size == '1440') await shoot(tester, size, '9-tablet', theme, panes, taps: const ['index-overview']);

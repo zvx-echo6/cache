@@ -268,4 +268,68 @@ void main() {
     expect(sampleJob('x').key, 'pdf-add/x');
     expect(AddPdfStatus.values, hasLength(3));
   });
+
+  testWidgets('Several PDFs: the count, the total size and one time; no title to edit; Add queues them all to one library', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    final choice = AddPdfChoice(const [
+      (path: '/tmp/a.pdf', name: 'Water purification manual.pdf', bytes: 30 << 20),
+      (path: '/tmp/b.pdf', name: 'Field radio handbook.pdf', bytes: 40 << 20),
+      (path: '/tmp/c.pdf', name: 'Root cellar plans.pdf', bytes: 14 << 20),
+    ]);
+    await tester.pumpWidget(app(AddPdfConfirmPage(state: w.state, choice: choice, battery: _charging)));
+    await settle(tester);
+    expect(find.text('3 PDFs · 84.0 MB · About 8 min while charging'), findsOneWidget);
+    expect(find.byKey(const ValueKey('add-pdf-title')), findsNothing);
+    expect(find.text('Add 3 PDFs'), findsOneWidget);
+    expect(find.textContaining('They are added one at a time. A book you already have becomes a spare copy.'), findsOneWidget);
+    await tester.tap(find.text('Add 3 PDFs'));
+    await settle(tester);
+    await settle(tester);
+    expect([for (final j in w.state.jobs) j.title]..sort(), ['Field radio handbook', 'Root cellar plans', 'Water purification manual']);
+    expect({for (final j in w.state.jobs) j.libraryTitle}, {'My books'});
+    expect({for (final j in w.state.jobs) j.id}, hasLength(3), reason: 'each its own job');
+  });
+
+  testWidgets('A folder: its name, "This folder and its subfolders", the PDFs in it, and the other files left out', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    final choice = AddPdfChoice(const [
+      (path: 'Water/Water purification manual.pdf', name: 'Water purification manual.pdf', bytes: 30 << 20),
+      (path: 'Radio/Field radio handbook.pdf', name: 'Field radio handbook.pdf', bytes: 40 << 20),
+    ], folder: 'Field manuals', folderRoot: '/tmp/field-manuals', skipped: 2);
+    await tester.pumpWidget(app(AddPdfConfirmPage(state: w.state, choice: choice, battery: _charging)));
+    await settle(tester);
+    expect(find.text('Add a folder'), findsOneWidget);
+    expect(find.text('Field manuals'), findsOneWidget);
+    expect(find.text('This folder and its subfolders'), findsOneWidget);
+    expect(find.text('2 PDFs · 70.0 MB · About 7 min while charging'), findsOneWidget);
+    expect(find.textContaining('2 files that are not a PDF are left out.'), findsOneWidget);
+    await tester.tap(find.text('Add 2 PDFs'));
+    await settle(tester);
+    await settle(tester);
+    final jobs = w.state.jobs;
+    expect(jobs, hasLength(2));
+    expect({for (final j in jobs) j.folderRoot}, {'/tmp/field-manuals'});
+    expect({for (final j in jobs) j.sourcePath}, {'Water/Water purification manual.pdf', 'Radio/Field radio handbook.pdf'});
+  });
+
+  testWidgets('Add to Library has Add a folder under Add a PDF', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    await tester.pumpWidget(app(AddToLibraryScreen(browse: w.browse)));
+    await settle(tester);
+    expect(find.text('Add a folder'), findsOneWidget);
+    expect(find.text('Every PDF in it and its subfolders'), findsOneWidget);
+  });
+
+  testWidgets('Several queued: the one running shows its phases, the others wait their turn', (tester) async {
+    size(tester, const Size(390, 1400));
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    w.queueSeveral();
+    await tester.pumpWidget(app(progress()));
+    await settle(tester);
+    expect(find.text('Reading scanned pages (OCR)'), findsWidgets);
+    expect(find.text('Waiting to add a PDF'), findsNWidgets(2));
+  });
 }
