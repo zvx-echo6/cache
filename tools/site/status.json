@@ -115,7 +115,7 @@
    "id": "st-ask",
    "title": "Ask: speed and accuracy",
    "wide": true,
-   "goals": "Goals: a full answer in 15–30 s on a Pixel 8 · at least 85% of answers mostly correct",
+   "goals": "Goals: the first words within 15–20 s on a Pixel 8, then writing faster than you read · at least 85% of answers mostly correct",
    "table": {
     "head": [
      "Pixel 8, build 47",
@@ -135,6 +135,11 @@
      [
       "Question in a new chat",
       "158 s",
+      "bad"
+     ],
+     [
+      "Time to the first words (clean run)",
+      "about 30–35 s",
       "bad"
      ]
     ]
