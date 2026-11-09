@@ -411,9 +411,9 @@ class WatchFoldersState extends ChangeNotifier implements IndexWorkSource {
   /// Stop watching: the folder is forgotten; what was added from it stays, and PDFs already queued from it are still added.
   Future<void> stop(WatchedFolder f) async {
     _folders.remove(f);
-    await save();
-    logInfo('Watch a folder: stopped watching a folder');
     _changed();
+    logInfo('Watch a folder: stopped watching a folder');
+    await save();
   }
 
   /// Choose again: the same folder picked again, or another. Its library, count and history are kept; what it already added is not

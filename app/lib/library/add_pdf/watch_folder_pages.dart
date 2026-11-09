@@ -319,20 +319,20 @@ class _WatchFolderConfirmPageState extends State<WatchFolderConfirmPage> {
               _Fact(
                 label: 'In it now',
                 value: c.files.isEmpty ? 'No PDFs yet' : '${addPdfCountWords(c)} · ${formatBytes(c.bytes)} · ${time.time}',
-                valueKey: const ValueKey('watch-count'),
+                valueWeight: FontWeight.w500, valueKey: const ValueKey('watch-count'),
                 note: c.files.isEmpty ? null : 'Longer if pages are scans. A book you already have becomes a spare copy.',
               ),
               _Fact(
                 label: 'Library',
                 value: _target.title,
-                valueKey: const ValueKey('watch-library'),
+                valueWeight: FontWeight.w500, valueKey: const ValueKey('watch-library'),
                 note: _target.isNew ? 'New. Your own PDFs go here. It syncs like any library.' : null,
                 trailing: _Ghost(key: const ValueKey('watch-change'), label: 'Change', onPressed: _busy ? null : _change),
               ),
               _Fact(
                 label: 'When it checks',
                 value: bg ? 'When you open Cache, and in the background' : 'Each time you open Cache',
-                valueKey: const ValueKey('watch-when'),
+                valueWeight: FontWeight.w500, valueKey: const ValueKey('watch-when'),
                 note: bg ? 'The background check follows the indexing rules: charging, battery and temperature.' : 'Apple does not allow a folder to be watched in the background.',
               ),
             ]),
@@ -400,7 +400,7 @@ class WatchedFoldersPage extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(8, 14, 12, 8),
               child: Text('Watched folders', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: k.text)),
             ),
-            Expanded(child: list),
+            Expanded(child: Align(alignment: Alignment.topLeft, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 640), child: list))),
           ],
         ),
       );
@@ -508,7 +508,8 @@ class WatchedFolderCard extends StatelessWidget {
                   onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WatchChooseAgainPage(watch: watch, folder: f))),
                 )
               else if (f.checking)
-                Opacity(opacity: 0.5, child: _Ghost(key: ValueKey('watch-checking-${f.id}'), label: 'Checking', onPressed: null))
+                // drawn as the mockup: the outlined button faded, not the theme's grey
+                IgnorePointer(child: Opacity(opacity: 0.5, child: _Ghost(key: ValueKey('watch-checking-${f.id}'), label: 'Checking', onPressed: () {})))
               else
                 _Ghost(key: ValueKey('watch-check-${f.id}'), label: 'Check now', icon: Icons.refresh, onPressed: () => watch.check(f)),
               if (skipped > 0 && !bad) _Ghost(key: ValueKey('watch-try-again-${f.id}'), label: 'Try again', onPressed: () => watch.tryAgain(f)),
@@ -583,8 +584,8 @@ class _WatchChooseAgainPageState extends State<WatchChooseAgainPage> {
             ),
             const SizedBox(height: 10),
             _Stack(rows: [
-              _Fact(label: 'Folder', value: picked?.folder ?? 'Not chosen', valueKey: const ValueKey('watch-again-folder'), trailing: _Ghost(key: const ValueKey('watch-again-choose'), label: 'Choose folder', onPressed: _choose)),
-              _Fact(label: 'Library', value: f.libraryTitle, note: 'Unchanged'),
+              _Fact(label: 'Folder', value: picked?.folder ?? 'Not chosen', valueWeight: FontWeight.w500, valueKey: const ValueKey('watch-again-folder'), trailing: _Ghost(key: const ValueKey('watch-again-choose'), label: 'Choose folder', onPressed: _choose)),
+              _Fact(label: 'Library', value: f.libraryTitle, note: 'Unchanged', valueWeight: FontWeight.w500),
             ]),
             const _Hint('PDFs already added stay. Anything already added from this folder is skipped as a spare copy, not added twice.', padding: EdgeInsets.fromLTRB(6, 10, 6, 10)),
             // drawn faded until a folder is chosen, as the mockup
@@ -638,14 +639,13 @@ Widget _sizeLine(BuildContext context, AddPdfJob job, TextStyle style) {
 /// One summary card for the PDFs one check of a watched folder added: how many and where, then each in the existing result notes
 /// (filed, in Unsorted with Place, Other and Leave, a spare copy), and Open Bookshelves.
 class WatchCheckSummary extends StatelessWidget {
-  const WatchCheckSummary({super.key, required this.state, required this.jobs, this.deps, DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+  const WatchCheckSummary({super.key, required this.state, required this.jobs, this.deps});
 
   final AddPdfState state;
 
   /// The check's PDFs that were added, newest first (as the progress page lists them).
   final List<AddPdfJob> jobs;
   final LibraryDeps? deps;
-  final DateTime Function() _clock;
 
   @override
   Widget build(BuildContext context) {
@@ -653,7 +653,7 @@ class WatchCheckSummary extends StatelessWidget {
     final first = jobs.last;
     final n = jobs.length;
     final d = deps;
-    final ago = _clock().difference(first.added);
+    final ago = DateTime.now().difference(first.added);
     return _Card(
       child: Column(
         key: ValueKey('watch-summary-${first.checkId}'),

@@ -198,7 +198,10 @@ class _Stack extends StatelessWidget {
 
 /// A fact: its small label, the value, an optional line under it, and a button at the end.
 class _Fact extends StatelessWidget {
-  const _Fact({required this.label, required this.value, this.note, this.trailing, this.valueKey});
+  const _Fact({required this.label, required this.value, this.note, this.trailing, this.valueKey, this.valueWeight});
+
+  /// The value's weight (the watch screens' values are medium, as their mockup).
+  final FontWeight? valueWeight;
 
   final String label;
   final String value;
@@ -217,7 +220,7 @@ class _Fact extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(label, style: TextStyle(fontSize: 13, color: k.secondary)),
-              Text(value, key: valueKey, style: TextStyle(fontSize: 16, color: k.text)),
+              Text(value, key: valueKey, style: TextStyle(fontSize: 16, fontWeight: valueWeight, color: k.text)),
               if (note != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(note!, style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary))),
             ],
           ),

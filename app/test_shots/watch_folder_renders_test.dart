@@ -49,6 +49,8 @@ void main() {
   setUpAll(() async {
     await loadShotFonts();
     await _loadLibraryFonts();
+    // the wide pane's line on top: the Android wording (the confirm and list frames draw both phones)
+    watchChecksInBackground = () => true;
   });
 
   late WatchWorld w;

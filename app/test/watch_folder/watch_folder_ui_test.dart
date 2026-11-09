@@ -143,7 +143,10 @@ void main() {
     await tester.pumpWidget(app(WatchFolderConfirmPage(watch: w.watch, state: w.pdf.state, choice: choice, battery: _charging, background: true)));
     await settle(tester);
     await tapKey(tester, 'watch-add');
-    await settle(tester);
+    // the first check reads the folder: real file reads, given real time
+    for (var i = 0; i < 60 && w.pdf.state.jobs.length < 2; i++) {
+      await settle(tester);
+    }
     expect(w.pdf.state.jobs, hasLength(2));
     expect(w.pdf.state.jobs.every((j) => j.watchName == 'Manuals'), isTrue);
   });
@@ -213,7 +216,7 @@ void main() {
     expect(find.text('It may have been moved or renamed, or access was turned off. Checks for it are paused. PDFs already added are not affected.'), findsOneWidget);
     expect(find.text('Check now'), findsOneWidget);
     await tapKey(tester, 'watch-choose-again-manuals');
-    expect(find.text('Choose again'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Choose again'), findsOneWidget);
     expect(find.text('Pick Manuals again'), findsOneWidget);
     expect(find.text('Choose the same folder, or a different one.'), findsOneWidget);
     expect(find.text('Not chosen'), findsOneWidget);
