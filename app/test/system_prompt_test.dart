@@ -22,7 +22,7 @@ void main() {
       expect(p, contains('data expired or was not downloaded'));
       expect(p, contains('small talk or feelings'));
       expect(p, contains('complete, practical answers'));
-      expect(p, contains("don't ask the person where they are"));
+      expect(p, contains('ask where the person is only if a tool says the location is unknown'));
       expect(
         p,
         contains('Read a source only when its snippet is insufficient'),
