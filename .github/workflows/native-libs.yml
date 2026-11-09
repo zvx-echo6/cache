@@ -300,7 +300,7 @@ jobs:
           [[ -z "$(awk '/MARK after-no-engine/ {exit} {print}' "$RUNNER_TEMP/cfg.err")" ]] || { echo "::error::cl_configure without an engine object logged something"; exit 1; }
           [[ -z "$(seg 'MARK after-no-engine' 'MARK after-good-engine')" ]] || { echo "::error::a good engine object logged a rejection"; exit 1; }
           bad="$(seg 'MARK after-good-engine' 'MARK after-bad-engine')"
-          for k in n_threads n_threads_batch cpus flash_attn type_k type_v n_ubatch repack_weights; do
+          for k in n_threads n_threads_batch cpus flash_attn type_k type_v n_ubatch use_mmap repack_weights; do
             grep -q "ignored (bad value): $k\$" <<< "$bad" || { echo "::error::bad engine key $k was not ignored and logged"; exit 1; }
           done
 

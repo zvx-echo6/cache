@@ -218,6 +218,7 @@ struct EngineOpts {
     std::string      type_v          = "f16";
     int              n_ubatch        = 0;      // 0: llama.cpp's default
     int              repack_weights  = -1;     // -1: the process-wide repack_weights option
+    int              use_mmap        = -1;     // -1: load_mode stays as llama_model_default_params sets it (AUTO); 1: MMAP; 0: NONE
 };
 EngineOpts g_engine;
 
@@ -541,6 +542,10 @@ static EngineOpts parse_engine(const common_json & e) {
         if (e.at("repack_weights").is_boolean()) o.repack_weights = e.at("repack_weights").get<bool>() ? 1 : 0;
         else bad("repack_weights");
     }
+    if (e.contains("use_mmap")) {
+        if (e.at("use_mmap").is_boolean()) o.use_mmap = e.at("use_mmap").get<bool>() ? 1 : 0;
+        else bad("use_mmap");
+    }
     return o;
 }
 
@@ -620,6 +625,11 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
+        if (eng.use_mmap >= 0) {
+            mp.load_mode = eng.use_mmap == 1 ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
+            // the label says what happened, e.g. "repacked, load_mode none"
+            h->weights += std::string(", load_mode ") + (eng.use_mmap == 1 ? "mmap" : "none");
+        }
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
@@ -689,9 +699,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             std::string cpu_list;
             for (int c : pin) cpu_list += (cpu_list.empty() ? "" : ",") + std::to_string(c);
             char line[384];
-            snprintf(line, sizeof(line), "engine: threads gen=%d batch=%d cpus=%s flash_attn=%s kv=%s/%s n_batch=%u n_ubatch=%u weights=%s (source: %s)",
+            snprintf(line, sizeof(line), "engine: threads gen=%d batch=%d cpus=%s flash_attn=%s kv=%s/%s n_batch=%u n_ubatch=%u load_mode=%s weights=%s (source: %s)",
                      n_gen, n_batch_threads, cpu_list.empty() ? "none" : cpu_list.c_str(), eng.flash_attn.c_str(), eng.type_k.c_str(),
-                     eng.type_v.c_str(), (unsigned) cp.n_batch, (unsigned) llama_n_ubatch(h->ctx), h->weights.c_str(),
+                     eng.type_v.c_str(), (unsigned) cp.n_batch, (unsigned) llama_n_ubatch(h->ctx),
+                     eng.use_mmap < 0 ? "default:auto" : eng.use_mmap == 1 ? "mmap" : "none", h->weights.c_str(),
                      eng.set ? "intent" : "default");
             h->engine_line = line;
             cl_logi("%s", line);
