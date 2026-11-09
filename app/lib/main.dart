@@ -854,7 +854,7 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
-      _car = CarBridge(nav: nav, maps: maps, drive: carDrive);
+      _car = CarBridge(nav: nav, maps: maps, drive: carDrive, ready: () => sources.whenCoreReady());
       unawaited(_car!.start());
     }
     _openHistory();

@@ -216,6 +216,27 @@ void main() {
       messenger.setMockMethodCallHandler(channel, null);
     });
 
+    test('places wait for the core when the car started the app', () async {
+      final open = Completer<void>();
+      final waiting = CarBridge(nav: nav, maps: maps, drive: drive, channel: const MethodChannel('co.cache/car-wait'), ready: () => open.future);
+      messenger.setMockMethodCallHandler(const MethodChannel('co.cache/car-wait'), (call) async => null);
+      await waiting.start();
+      backend.saved.add(('Home', 42.6, -113.7));
+      Object? answer;
+      final reply = Completer<void>();
+      unawaited(messenger.handlePlatformMessage('co.cache/car-wait', const StandardMethodCodec().encodeMethodCall(const MethodCall('saved')), (data) {
+        answer = const StandardMethodCodec().decodeEnvelope(data!);
+        reply.complete();
+      }));
+      await settle();
+      expect(reply.isCompleted, isFalse, reason: 'no answer before the core is open');
+      open.complete();
+      await reply.future;
+      expect([for (final p in answer as List) (p as Map)['name']], ['Home']);
+      waiting.dispose();
+      messenger.setMockMethodCallHandler(const MethodChannel('co.cache/car-wait'), null);
+    });
+
     test('hello: a car session that is already there connects the bridge', () {
       expect(toCar.first.method, 'hello');
       expect(bridge.connected.value, isTrue);

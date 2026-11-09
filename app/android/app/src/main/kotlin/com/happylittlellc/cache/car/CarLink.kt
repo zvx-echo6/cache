@@ -90,20 +90,31 @@ object CarLink {
         })
     }
 
+    /** Tells each listener; one that fails is logged and the others still hear (the reply to Dart is already sent). */
+    private inline fun each(f: (Listener) -> Unit) {
+        for (l in listeners.toList()) {
+            try {
+                f(l)
+            } catch (e: Exception) {
+                android.util.Log.w("CacheCar", "car listener failed", e)
+            }
+        }
+    }
+
     /** For the tests: what Dart would push. */
     internal fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "hello" -> {
                 dartReady = true
                 result.success(mapOf("connected" to carConnected))
-                for (l in listeners.toList()) l.onDartReady()
+                each { it.onDartReady() }
             }
             "trip" -> {
                 @Suppress("UNCHECKED_CAST")
                 val t = CarTrip.from(call.arguments as? Map<String, Any?> ?: emptyMap())
                 trip = t
                 result.success(null)
-                for (l in listeners.toList()) l.onTrip(t)
+                each { it.onTrip(t) }
             }
             "route" -> {
                 val geo = call.argument<String>("geojson") ?: EMPTY_GEOJSON
@@ -111,16 +122,16 @@ object CarLink {
                 routeGeoJson = geo
                 routeBounds = b
                 result.success(null)
-                for (l in listeners.toList()) l.onRoute(geo, b)
+                each { it.onRoute(geo, b) }
             }
             "styleChanged" -> {
                 result.success(null)
-                for (l in listeners.toList()) l.onStyleChanged()
+                each { it.onStyleChanged() }
             }
             "notice" -> {
                 result.success(null)
                 val text = call.argument<String>("text") ?: ""
-                if (text.isNotBlank()) for (l in listeners.toList()) l.onNotice(text)
+                if (text.isNotBlank()) each { it.onNotice(text) }
             }
             "prompt" -> {
                 audio?.prompt(call.argument<String>("text") ?: "")

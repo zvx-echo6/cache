@@ -169,6 +169,21 @@ class CarSessionTest {
     }
 
     @Test
+    fun aListenerThatFailsDoesNotStopTheOthers() {
+        var heard = 0
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onTrip(trip: CarTrip) = throw IllegalArgumentException("latitude must be between -90 and 90")
+        })
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onTrip(trip: CarTrip) {
+                heard++
+            }
+        })
+        push("trip", trip("browsing"))
+        assertEquals(1, heard)
+    }
+
+    @Test
     fun dartHelloAnswersWhetherACarIsConnected() {
         var answer: Any? = null
         CarLink.handle(MethodCall("hello", null), object : MethodChannel.Result {

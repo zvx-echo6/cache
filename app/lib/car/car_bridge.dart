@@ -30,6 +30,7 @@ class CarBridge {
     required this.drive,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
+    this.ready,
     this.throttle = const Duration(milliseconds: 250),
   })  : _channel = channel ?? const MethodChannel('co.cache/car'),
         _glyphs = glyphs ?? MapAssets.glyphsUrl;
@@ -40,6 +41,21 @@ class CarBridge {
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
+
+  /// Resolves once the search core is open. The car can start Cache with the phone app closed, and asks for saved places at once:
+  /// places, search and directions wait for the core (at most [readyWait]) instead of answering empty.
+  final Future<void> Function()? ready;
+  static const Duration readyWait = Duration(seconds: 30);
+
+  Future<void> _ready() async {
+    final r = ready;
+    if (r == null) return;
+    try {
+      await r().timeout(readyWait);
+    } catch (_) {
+      // Not open in time: answer with what there is.
+    }
+  }
 
   /// True while the car screen is attached (see the class comment).
   final ValueNotifier<bool> connected = ValueNotifier(false);
@@ -164,6 +180,7 @@ class CarBridge {
 
   Future<Object?> _onCall(MethodCall call) async {
     final a = call.arguments is Map ? (call.arguments as Map).cast<String, Object?>() : const <String, Object?>{};
+    if (const {'saved', 'search', 'directions', 'navigateTo', 'start'}.contains(call.method)) await _ready();
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);

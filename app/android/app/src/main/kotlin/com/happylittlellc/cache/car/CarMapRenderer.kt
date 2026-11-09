@@ -328,7 +328,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             if (!force && lastCameraPhase == phase) return
             lastCameraPhase = phase
             if (b != null && b.size == 4) {
-                val bounds = LatLngBounds.Builder().include(LatLng(b[1], b[0])).include(LatLng(b[3], b[2])).build()
+                // The route's bounds as Dart sends them (MapRoute.bounds): south, west, north, east.
+                val bounds = LatLngBounds.Builder().include(LatLng(b[0], b[1])).include(LatLng(b[2], b[3])).build()
                 m.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, pad[0].toInt() + 40, pad[1].toInt() + 40, pad[2].toInt() + 40, pad[3].toInt() + 40))
             } else if (t.destinationLat != null && t.destinationLon != null) {
                 m.moveCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder().target(LatLng(t.destinationLat, t.destinationLon)).zoom(13.0).build()))
