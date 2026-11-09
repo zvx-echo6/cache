@@ -8,7 +8,7 @@ import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
 import '../history/share.dart';
-import '../layout/adaptive.dart' show ReadingWidth, showFittedSheet;
+import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart' show LocationPermissionState;
@@ -83,7 +83,17 @@ class _AskScreenState extends State<AskScreen> {
   void initState() {
     super.initState();
     widget.chat.addListener(_scrollDown);
+    _shownId = widget.chat.activeId;
+    // A chat opens on its latest turn (the answer and any card under it), not at its first question.
+    _jumpToEnd();
   }
+
+  /// The chat the conversation shows, to tell when another one is opened.
+  int? _shownId;
+
+  void _jumpToEnd() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+  });
 
   Future<void> _report(ChatMessage m, String question) async {
     final r = await showReportSheet(context);
@@ -113,6 +123,12 @@ class _AskScreenState extends State<AskScreen> {
   }
 
   void _scrollDown() {
+    if (widget.chat.activeId != _shownId) {
+      // Another chat was opened: show its latest turn.
+      _shownId = widget.chat.activeId;
+      _jumpToEnd();
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
       final pos = _scroll.position;
@@ -257,12 +273,16 @@ class _AskScreenState extends State<AskScreen> {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Scaffold(
+    // A desktop window has room for the chat list beside the conversation, so it stays there instead of opening as a drawer.
+    final docked = !widget.readOnly && isDesktop(context);
+    final page = Scaffold(
       resizeToAvoidBottomInset: false,
-      drawer: widget.readOnly ? null : HistoryDrawer(chat: widget.chat, layout: widget.layout),
+      drawer: widget.readOnly || docked ? null : HistoryDrawer(chat: widget.chat, layout: widget.layout),
       appBar: AppBar(
-        titleSpacing: 0,
-        leading: widget.readOnly
+        titleSpacing: docked ? 16 : 0,
+        leading: docked
+            ? null
+            : widget.readOnly
             ? IconButton(
                 key: const ValueKey('ask-read-back'),
                 tooltip: 'Back',
@@ -410,6 +430,15 @@ class _AskScreenState extends State<AskScreen> {
           ],
         ),
       ),
+    );
+    if (!docked) return page;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        HistoryDrawer(chat: widget.chat, layout: widget.layout, docked: true),
+        VerticalDivider(width: 1, thickness: 1, color: k.secondary.withValues(alpha: 0.2)),
+        Expanded(child: page),
+      ],
     );
   }
 

@@ -82,6 +82,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           # A cancelled or failed run still saves what it built, so the next push starts warm.
           cache-on-failure: true
@@ -113,7 +114,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Packages
         working-directory: app
         run: |
@@ -162,6 +163,7 @@ jobs:
           rustup default "$RUST_VERSION"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           key: embed-parity
           cache-on-failure: true
@@ -189,7 +191,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Phone parity (app)
         working-directory: app
         run: |
@@ -219,6 +221,7 @@ jobs:
           arch: x86_64
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           key: add-pdf-core
           cache-on-failure: true
@@ -246,11 +249,21 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      # PDFium and SQLite for the app's build hooks, as the flutter job takes them
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
       - name: Add PDF on the real core
         working-directory: app
         run: |
-          flutter pub get
           CACHE_ADD_PDF_CORE=1 CACHE_EMBED_LIB="$LLAMA_LIB" CACHE_EMBED_MODEL="$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" \
           LD_LIBRARY_PATH="$CS_DIR:$LLAMA_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             flutter test --no-pub test/add_pdf/add_pdf_core_test.dart --reporter expanded

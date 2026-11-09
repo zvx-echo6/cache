@@ -465,9 +465,23 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     final visible = _controller.visibleRect;
     final x = r.left >= visible.left && r.right <= visible.right ? null : r.center.dx;
     if (_cited.isNotEmpty && identical(s, _cited.first)) {
-      // A cited passage opens near the top of the view, a small gap above it, the strip above that.
+      // A cited passage opens near the top of the view with the whole line before it shown, the view's edge halfway between that
+      // line and the one above it, so no line is cut at the top; at a page's top, a small gap above it.
       _citedTop = r.top;
-      _placeAtTop(r.top, gap: _topGap, x: x, animate: false);
+      final pageRect = _controller.layout.pageLayouts[s.page - 1];
+      final first = _lineRects(PdfPageTextRange(pageText: layer, start: s.start, end: s.end), page, pageRect).firstOrNull;
+      final before = s.start <= 0 || first == null
+          ? const <Rect>[]
+          : _lineRects(PdfPageTextRange(pageText: layer, start: math.max(0, s.start - 600), end: s.start), page, pageRect);
+      // The line just above the passage, and the one above that.
+      final above = [for (final l in before) if (first != null && l.bottom <= first.top + 1) l]..sort((a, b) => b.bottom.compareTo(a.bottom));
+      if (above.isNotEmpty) {
+        final prev = above.first;
+        final over = above.length > 1 ? above[1].bottom : prev.top - (first!.top - prev.bottom);
+        _placeAtTop(prev.top - math.max(0, prev.top - over) / 2, x: x, animate: false);
+      } else {
+        _placeAtTop(r.top, gap: _topGap, x: x, animate: false);
+      }
       return;
     }
     // A find match to the middle of the view.

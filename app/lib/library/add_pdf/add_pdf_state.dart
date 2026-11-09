@@ -6,6 +6,11 @@ import 'package:cache_ocr/cache_ocr.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:saf_util/saf_util.dart';
+
+import '../../notebook/sync/folder.dart' show IoFolder;
+import '../../notebook/sync/folder_access.dart' show openSyncFolder;
+import '../../notebook/sync/saf_stream_shim.dart';
 import '../../platform/app_log.dart';
 import '../../platform/battery.dart';
 import '../../search/index_scheduler.dart';
@@ -49,7 +54,14 @@ class AddPdfJob {
     required this.added,
     this.ownsFile = false,
     this.ocr = 'host',
+    this.folderRoot,
+    this.sourcePath,
   });
+
+  /// From a chosen folder: the folder (an Android tree URI, else a path) and the PDF's path in it. The PDF is copied to
+  /// [pdfPath] when its turn comes, so a folder of PDFs is not copied all at once.
+  final String? folderRoot;
+  final String? sourcePath;
 
   final String id;
 
@@ -160,6 +172,8 @@ class AddPdfJob {
     'added': added.toIso8601String(),
     'owns_file': ownsFile,
     'ocr': ocr,
+    'folder_root': ?folderRoot,
+    'source_path': ?sourcePath,
     'status': status.name,
     'state': state,
     'pages': pages,
@@ -191,6 +205,8 @@ class AddPdfJob {
       added: DateTime.tryParse((j['added'] ?? '') as String) ?? DateTime.now(),
       ownsFile: j['owns_file'] == true,
       ocr: (j['ocr'] ?? 'host') as String,
+      folderRoot: j['folder_root'] as String?,
+      sourcePath: j['source_path'] as String?,
     );
     job
       ..status = AddPdfStatus.values.asNameMap()[j['status']] ?? AddPdfStatus.active
@@ -258,6 +274,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.battery,
     this.onDone,
     this.permit,
+    this.copyIn,
     this.stepBudgetMs = 400,
     this.busyWait = const Duration(seconds: 4),
     DateTime Function()? clock,
@@ -284,11 +301,15 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   /// Awaited before each step and between OCR pages; the app's throttle by default.
   final Future<void> Function(AddPdfJob job)? permit;
+
+  /// Copies a PDF from its chosen folder ([AddPdfJob.folderRoot], [AddPdfJob.sourcePath]) to [AddPdfJob.pdfPath].
+  final Future<void> Function(AddPdfJob job)? copyIn;
   final int stepBudgetMs;
   final Duration busyWait;
   final DateTime Function() _clock;
 
   final List<AddPdfJob> _jobs = [];
+  int _lastId = 0;
   bool _loaded = false;
   int _beat = 0;
   OcrEngine? _ocr;
@@ -393,7 +414,15 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   /// Adds the PDF at [pdfPath] to [target] (My books is made first when it does not exist yet). The job waits its turn in the
   /// index scheduler.
-  Future<AddPdfJob> add({required String pdfPath, required String fileName, required int bytes, required String title, required AddPdfTarget target, bool ownsFile = false}) async {
+  Future<AddPdfJob> add({
+    required String pdfPath,
+    required String fileName,
+    required int bytes,
+    required String title,
+    required AddPdfTarget target,
+    bool ownsFile = false,
+    String? folderRoot,
+  }) async {
     await load();
     var path = target.path;
     var libTitle = target.title;
@@ -404,11 +433,17 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     }
     final d = await dir();
     if (d == null) throw StateError('Cache has no folder to add PDFs in');
-    final id = _clock().microsecondsSinceEpoch.toRadixString(36);
+    final now = _clock().microsecondsSinceEpoch;
+    // several added at once each get their own id
+    final id = (now > _lastId ? now : _lastId + 1).toRadixString(36);
+    _lastId = now > _lastId ? now : _lastId + 1;
     final engine = await _engine();
     final job = AddPdfJob(
       id: id,
-      pdfPath: pdfPath,
+      // a folder's PDF is copied here when its turn comes
+      pdfPath: folderRoot == null ? pdfPath : '${d.path}${Platform.pathSeparator}$id.pdf',
+      folderRoot: folderRoot,
+      sourcePath: folderRoot == null ? null : pdfPath,
       fileName: fileName,
       title: title,
       bytes: bytes,
@@ -614,6 +649,11 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   // ---- the run's side
 
   Future<int> _startCore(AddPdfJob job) async {
+    if (job.folderRoot != null && !File(job.pdfPath).existsSync()) {
+      final tmp = AddPdfJob(id: job.id, pdfPath: '${job.pdfPath}.part', fileName: job.fileName, title: job.title, bytes: job.bytes, libraryPath: job.libraryPath, libraryTitle: job.libraryTitle, jobDir: job.jobDir, added: job.added, folderRoot: job.folderRoot, sourcePath: job.sourcePath);
+      await (copyIn ?? copyFromFolder)(tmp);
+      await File(tmp.pdfPath).rename(job.pdfPath);
+    }
     final r = await calls('start', await _startArgs(job));
     job
       ..coreJob = (r['job'] as num).toInt()
@@ -866,6 +906,22 @@ class AddPdfRun implements IndexRun {
       ..scanInBatch = 0;
     state._changed();
   }
+}
+
+/// Copies a folder's PDF to the job's own file: from an Android folder through the Storage Access Framework (saf_util finds it,
+/// saf_stream copies it), else from the folder's path (an iOS folder's bookmark resolved).
+Future<void> copyFromFolder(AddPdfJob job) async {
+  final root = job.folderRoot!, rel = job.sourcePath!;
+  await File(job.pdfPath).parent.create(recursive: true);
+  if (root.startsWith('content://')) {
+    final f = await SafUtil().child(root, [for (final p in rel.split('/')) if (p.isNotEmpty) p]);
+    if (f == null || f.isDir) throw FileSystemException('The PDF is no longer in the folder', rel);
+    await SafStream().copyToLocalFile(f.uri, job.pdfPath);
+    return;
+  }
+  final folder = await openSyncFolder(root);
+  if (folder is! IoFolder) throw FileSystemException("Can't reach the folder", root);
+  await File('${folder.root}/$rel').copy(job.pdfPath);
 }
 
 /// The time left while it runs: from how fast it has gone so far, once a little is done; before that, the estimate from its size.
