@@ -79,7 +79,7 @@ void main() {
       for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
         await tester.runAsync(() async => w = await WatchWorld.make());
         // 1. Where you start it: the first time; once folders are watched
-        w.watch.debugSet(const []);
+        w.none();
         await shoot(tester, size, '1-add-first', theme, add);
         w.two();
         await shoot(tester, size, '1-add-watched', theme, add);
@@ -91,7 +91,7 @@ void main() {
         await shoot(tester, size, '3-list-android', theme, () => list(android: true));
         w.checking();
         await shoot(tester, size, '3-list-iphone-checking', theme, () => list(android: false));
-        w.watch.debugSet([w.manuals]);
+        w.onlyManuals();
         await shoot(tester, size, '3-stop', theme, () => list(android: true), taps: const ['watch-stop-manuals']);
         w.skipped();
         await shoot(tester, size, '3-skipped', theme, () => list(android: true));

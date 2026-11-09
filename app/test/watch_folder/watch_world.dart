@@ -44,6 +44,12 @@ class WatchWorld {
   /// Frames 1b, 3 and 6: two folders, one library each.
   void two() => watch.debugSet([manuals, fieldGuides]);
 
+  /// Frame 1a: none watched yet.
+  void none() => watch.debugSet(const []);
+
+  /// Frame 3, Stop watching: Manuals alone.
+  void onlyManuals() => watch.debugSet([manuals]);
+
   /// Frame 3, iPhone: Manuals being checked now.
   void checking() => watch.debugSet([
     manuals
