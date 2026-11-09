@@ -4,7 +4,7 @@ import 'dart:ui';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/widgets.dart';
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../maps/layers/starter_defs.dart' show readLiveSourceAssets;
@@ -104,8 +104,8 @@ void cacheBackgroundDispatcher() {
 /// One background run: the same update as Update now, for the sources that are on and the watched places, then the alert check.
 /// It opens its own search core with only the saved places and live data (no library, maps or routing), so it is light.
 Future<void> runBackgroundUpdate() async {
-  final support = await getApplicationSupportDirectory();
-  final files = (plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
+  final support = Directory(await appSupportPath());
+  final files = Directory(await appFilesPath());
   final settings = AppSettings();
   await settings.init();
   if (settings.liveSourcesOn.isEmpty) return;

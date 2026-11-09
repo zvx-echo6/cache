@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
+import '../../app_fs.dart';
 
 /// Map fonts ship with the app (Noto Sans glyphs, SIL Open Font License 1.1) so labels work offline. MapLibre
 /// reads glyphs by file address, so they are copied out of the app's assets once per app version.
@@ -12,7 +12,7 @@ class MapAssets {
 
   /// The `glyphs` address for the style: a folder per font, files per range of characters.
   static Future<String> glyphsUrl({Directory? dirOverride}) async {
-    final base = dirOverride ?? Directory('${(await getApplicationSupportDirectory()).path}/map_fonts');
+    final base = dirOverride ?? Directory('${await appSupportPath()}/map_fonts');
     final marker = File('${base.path}/.version');
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
     final names = [for (final a in manifest.listAssets()) if (a.startsWith(_prefix)) a];

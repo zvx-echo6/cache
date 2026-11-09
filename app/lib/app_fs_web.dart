@@ -10,6 +10,13 @@ AppFs createAppFs({Directory? supportOverride, Directory? docsOverride}) => WebA
 // One transport for every WebAppFs: the same /api/core endpoint (same origin, so the session cookie goes along) that SearchCore uses.
 final CoreTransport _transport = HttpTransport();
 
+// Path lookups for app_fs.dart: the server's roots. There is no temp root on the server.
+final WebAppFs _paths = WebAppFs();
+Future<String> appSupportPath() => _paths.rootPath(AppRoot.support);
+Future<String> appDocumentsPath() => _paths.rootPath(AppRoot.docs);
+Future<String> appFilesPath() => _paths.rootPath(AppRoot.docs);
+Future<String> appTempPath() => throw UnsupportedError('A browser has no temporary folder');
+
 /// The browser side: the files are on Cache for Linux, reached by its fs.* operations through /api/core. Each operation takes
 /// {root: "support"|"docs", path: relative, '/'-separated}. A missing file comes back as not_found, which reads here the way a
 /// missing file reads on a phone (null, false, nothing to delete); bad_path and io_error are thrown as CacheSearchException.
