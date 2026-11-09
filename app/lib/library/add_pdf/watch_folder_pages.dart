@@ -493,7 +493,8 @@ class WatchedFolderCard extends StatelessWidget {
           if (skipped > 0 && !bad)
             Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Row(
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text("$skipped couldn't be added", key: ValueKey('watched-skipped-${f.id}'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: k.emergency)),
                   const SizedBox(width: 4),
