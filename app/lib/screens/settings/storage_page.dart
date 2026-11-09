@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../linux_ui.dart';
 import '../../platform/app_log.dart';
 import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
 import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
+import '../../share/share_fallback.dart' show kDownloadStarted;
 import '../../video/format.dart';
 import '../../weather/catalogue.dart' show isAllowedAddress;
 import '../../weather/weather_state.dart';
@@ -77,7 +79,7 @@ class _StoragePageState extends State<StoragePage> {
                 Text(
                   [
                     u.measured ? '${formatBytes(u.usedBytes)} used by Cache' : 'Measuring…',
-                    free == null ? 'free space unknown' : '${formatBytes(free)} free on this device',
+                    free == null ? 'free space unknown' : '${formatBytes(free)} free on ${linuxUi ? 'the server' : 'this device'}',
                   ].join(' · '),
                   key: const ValueKey('storage-line'),
                   maxLines: 1,
@@ -97,7 +99,8 @@ class _StoragePageState extends State<StoragePage> {
                       ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
                       : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
                 ),
-                SwitchRow(
+                if (!linuxUi)
+                  SwitchRow(
                   title: 'Mobile data downloads',
                   status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
                   value: s.mobileForDownloads,
@@ -105,14 +108,14 @@ class _StoragePageState extends State<StoragePage> {
                 ),
                 SettingsRow(
                   key: const ValueKey('kept-free'),
-                  icon: Icons.phone_android,
-                  title: 'Kept free for the device',
+                  icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
+                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
                   status: const [Part('10% of storage, 5 to 20 GB')],
                   trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
                 ),
               ],
             ),
-            const NoteText('Weather and alerts always update, on any connection.'),
+            if (!linuxUi) const NoteText('Weather and alerts always update, on any connection.'),
             SettingsGroup(
               rows: [
                 for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
@@ -120,7 +123,7 @@ class _StoragePageState extends State<StoragePage> {
             ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
+              status: linuxUi ? 'Log: ${logLevelTitle(appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather))),
             ),
           ],
@@ -230,7 +233,8 @@ class IndexingSpeedPage extends StatelessWidget {
         return SettingsPage(
           title: 'Advanced',
           children: [
-            SettingsGroup(
+            if (!linuxUi)
+              SettingsGroup(
               label: 'Background indexing speed',
               rows: [
                 choice('indexing-gentle', 'Gentle', 'Keeps the device cool and the battery longer', false),
@@ -251,7 +255,7 @@ class IndexingSpeedPage extends StatelessWidget {
                   ),
               ],
             ),
-            const NoteText('The log stays on this device. Nothing leaves it unless you tap Share log.'),
+            NoteText('The log stays on ${linuxUi ? 'the server' : 'this device'}. Nothing leaves it unless you tap Share log.'),
             SettingsGroup(
               rows: [
                 SettingsRow(
@@ -259,14 +263,25 @@ class IndexingSpeedPage extends StatelessWidget {
                   icon: Icons.ios_share,
                   title: 'Share log',
                   status: [Part(log.dir == null ? 'No log yet' : appLogSize())],
-                  onTap: log.dir == null ? null : () => shareAppLog(context),
+                  onTap: log.dir == null
+                      ? null
+                      : linuxUi
+                      ? () => say(context, kDownloadStarted)
+                      : () => shareAppLog(context),
                 ),
                 SettingsRow(
                   key: const ValueKey('log-clear'),
                   icon: Icons.delete_outline,
                   title: 'Clear log',
                   chevron: false,
-                  onTap: log.dir == null ? null : log.clear,
+                  onTap: log.dir == null
+                      ? null
+                      : linuxUi
+                      ? () {
+                          log.clear();
+                          say(context, 'Log cleared');
+                        }
+                      : log.clear,
                 ),
               ],
             ),
