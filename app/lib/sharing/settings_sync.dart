@@ -8,18 +8,7 @@ import '../files.dart';
 import '../platform/app_log.dart';
 import 'sharing_state.dart';
 
-/// The settings log's share: one folder linked devices keep the same, kept only with the devices settings go to or come from
-/// (Match and Send mine), never listed under Sharing and sync; this device's page governs it.
-const String kSettingsShareId = 'settings';
-const String kSettingsShareDir = 'settings-sync';
-
-/// The person's Bookshelves log (packages/cache_shelves): kept only with Match devices, never listed under Sharing and sync.
-const String kBookshelvesShareId = 'bookshelves';
-const String kBookshelvesDir = 'bookshelves';
-
-/// The link kinds each of those folders is kept with (cache_sync's `with`).
-const List<String> kSettingsShareModes = ['match', 'send'];
-const List<String> kBookshelvesShareModes = ['match'];
+export 'share_rules.dart' show kSettingsShareId, kSettingsShareDir, kBookshelvesShareId, kBookshelvesDir, kSettingsShareModes, kBookshelvesShareModes;
 
 /// The chosen Ask model's setting: a model not on this device waits, with Download.
 const String kModelSettingKey = 'ask.model';

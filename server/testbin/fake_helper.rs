@@ -1,6 +1,6 @@
 //! A stand-in for the Dart helper, speaking its line protocol (see server/helper/bin/line_protocol.dart). Used by the proxy
 //! tests. Behavior:
-//!   env     -> {support, docs, shim}: CACHE_APP_SUPPORT, CACHE_APP_DOCS and CACHE_VALHALLA_SHIM as the server set them
+//!   env     -> {support, docs, shim, data}: CACHE_APP_SUPPORT, CACHE_APP_DOCS, CACHE_VALHALLA_SHIM and CACHE_DATA as the server set them
 //!   version -> "fake-1"      status -> [] (or the JSON in FAKE_STATUS)      echo -> the args
 //!   sources.rescan -> {sources: the length of args.sources, or 0}      (anything else -> ok, null)
 //!   zimGet  -> an entry by address: ends in .html: a page that names the address; .png: 5 bytes of image/png; contains "missing":
@@ -43,7 +43,7 @@ fn main() {
             }
             "env" => json!({"id": id, "ok": true, "result": {
                 "support": std::env::var("CACHE_APP_SUPPORT").ok(), "docs": std::env::var("CACHE_APP_DOCS").ok(),
-                "shim": std::env::var("CACHE_VALHALLA_SHIM").ok()}}),
+                "shim": std::env::var("CACHE_VALHALLA_SHIM").ok(), "data": std::env::var("CACHE_DATA").ok()}}),
             "echo" => json!({"id": id, "ok": true, "result": args}),
             "open" if std::env::var_os("FAKE_OPEN_FAILS").is_some() => {
                 json!({"id": id, "ok": false, "error": {"code": "bad_config", "message": "no"}})

@@ -27,6 +27,9 @@ pub struct HelperConfig {
     /// The app's support and documents folders on the server (`<data>/app/support`, `<data>/app/docs`), handed to the helper as
     /// `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`. The helper builds the core's whole config on them and serves `fs.*` from them.
     pub app_dirs: Option<(PathBuf, PathBuf)>,
+    /// The server's data folder, handed to the helper as `CACHE_DATA`: the helper's sharing host keeps the sync engine's identity
+    /// (`<data>/sync`) and shares the Bookshelves log (`<data>/bookshelves`) there. Without it the helper runs no sharing host.
+    pub data_dir: Option<PathBuf>,
     /// The Valhalla shim (`libvalhalla_shim.so`), handed to the helper as `CACHE_VALHALLA_SHIM`: the full path the core's road
     /// router opens (the core checks it with a plain file test, so a bare library name never routes). Default: [default_shim].
     pub shim: PathBuf,
@@ -48,6 +51,7 @@ impl HelperConfig {
             core_lib,
             sources_file,
             app_dirs: None,
+            data_dir: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -238,6 +242,9 @@ impl Helper {
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
+        }
+        if let Some(data) = &self.cfg.data_dir {
+            cmd.env("CACHE_DATA", data);
         }
         let mut child = cmd
             .stdin(Stdio::piped())
