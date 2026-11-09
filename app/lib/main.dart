@@ -729,6 +729,8 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
+    if (plat.isWeb) unawaited(searchModel.refreshServer());
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
     _guidanceAwake;
