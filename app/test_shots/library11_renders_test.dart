@@ -32,16 +32,20 @@ import '../test/library/fake_shelves.dart';
 import '../test/library/library_fixtures.dart' show SampleBook, writeBookLibrary, writeShelves;
 import '../test/nav_fakes.dart';
 import '../test/support/settings_rig.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'library11';
 
-const Map<String, Size> kSizes = {
-  '390': Size(390, 844),
-  '820': Size(820, 1180),
-  '1180': Size(1180, 820),
-  '1440': Size(1440, 900),
-};
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final Map<String, Size> kSizes = kBeta
+    ? kBetaSizes
+    : const {
+        '390': Size(390, 844),
+        '820': Size(820, 1180),
+        '1180': Size(1180, 820),
+        '1440': Size(1440, 900),
+      };
 
 /// The search core's word on the sample library: open and searchable.
 class _Sources extends FakeSources {
@@ -258,13 +262,14 @@ class _Rig {
 
 /// Opens the Library in the app's frame at [size], then taps [path] (keys) in turn, and draws it as [name].
 Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, List<String> path, CacheThemeId theme) async {
-  phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+  final s = kSizes[size]!;
+  phone(tester, size: s, ratio: kBeta ? betaRatio(s) : (size == '390' ? 2 : 1));
   // each picture starts from the defaults: what a picture chose (the Bookshelves look, a hidden list) is kept in files in the
   // support folder, and only the Bookshelves log (bookshelves/) carries over
   for (final f in rig.support.listSync().whereType<File>()) {
     f.deleteSync();
   }
-  await tester.pumpWidget(shotApp(rig.shell(), theme: theme, insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero));
+  await tester.pumpWidget(shotApp(rig.shell(), theme: theme, insets: kBeta ? betaInsets(s) : (size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero)));
   await _settle(tester);
   await tester.tap(find.text('Library').first);
   await _settle(tester);
@@ -334,7 +339,7 @@ void main() {
       final rig = _Rig();
       await rig.make(tester, full: true);
       for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-        for (final e in (size == '390' ? phoneScreens : wideScreens).entries) {
+        for (final e in ((kBeta ? betaOnePane(kSizes[size]!) : size == '390') ? phoneScreens : wideScreens).entries) {
           await _shoot(tester, rig, size, e.key, e.value, theme);
         }
       }
@@ -346,7 +351,7 @@ void main() {
     final rig = _Rig();
     await rig.make(tester, full: false);
     for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-      for (final size in ['390', '1440']) {
+      for (final size in kBeta ? kBetaSizes.keys : const ['390', '1440']) {
         await _shoot(tester, rig, size, 'empty-root', const [], theme);
         await _shoot(tester, rig, size, 'empty-zims', const ['library-zims'], theme);
         await _shoot(tester, rig, size, 'empty-shelves', const ['library-bookshelves'], theme);

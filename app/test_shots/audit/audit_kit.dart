@@ -7,6 +7,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../beta_sizes.dart';
 import '../shot_kit.dart';
 
 /// The five audit sizes (logical points): phone upright and sideways, tablet upright and sideways, a desktop browser window.
@@ -16,6 +17,8 @@ const Map<String, Size> kAuditSizes = {
   '820x1180': Size(820, 1180),
   '1180x820': Size(1180, 820),
   '1440x900': Size(1440, 900),
+  // the beta checklist's tablet (see ../beta_sizes.dart)
+  '1024x1366': Size(1024, 1366),
 };
 
 String auditSizeName = '390x844';
@@ -27,7 +30,7 @@ Size get auditSize => kAuditSizes[auditSizeName]!;
 EdgeInsets get auditInsets => switch (auditSizeName) {
   '390x844' => const EdgeInsets.only(top: 47, bottom: 34),
   '844x390' => const EdgeInsets.only(left: 47, right: 47, bottom: 21),
-  '820x1180' || '1180x820' => const EdgeInsets.only(top: 24, bottom: 20),
+  '820x1180' || '1180x820' || '1024x1366' => const EdgeInsets.only(top: 24, bottom: 20),
   _ => EdgeInsets.zero,
 };
 
@@ -68,12 +71,13 @@ const Set<String> kAuditDarkIds = {
   'connections',
 };
 
-/// Writes the picture [id] at the audit size (dark only for [kAuditDarkIds] or [always]), and logs any layout errors drawn in it.
+/// Writes the picture [id] at the audit size (dark only for [kAuditDarkIds] or [always], every screen with BETA_SIZES), and logs any
+/// layout errors drawn in it.
 Future<void> auditSnap(WidgetTester tester, String id, {bool always = false}) async {
   final dark = auditTheme == CacheThemeId.dark;
   final name = '$auditSizeName-$id-${dark ? 'dark' : 'light'}';
   final e = tester.takeException();
-  if (dark && !always && !kAuditDarkIds.contains(id)) return;
+  if (dark && !always && !kBeta && !kAuditDarkIds.contains(id)) return;
   // ignore: avoid_print
   print('AUDIT-SHOT $name');
   if (e != null) {

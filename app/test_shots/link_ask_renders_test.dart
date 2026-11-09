@@ -16,11 +16,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/settings_rig.dart';
 import '../test/support/sync_fake.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'link_ask';
 
-const Map<String, Size> _sizes = {
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final Map<String, Size> _sizes = kBeta ? kBetaSizes : const {
   '390': Size(390, 844),
   '1440': Size(1440, 900),
 };
@@ -75,9 +77,9 @@ void main() {
         );
 
         final size = e.value;
-        final ratio = size.width < 600 ? 3.0 : 1.0;
+        final ratio = kBeta ? betaRatio(size) : (size.width < 600 ? 3.0 : 1.0);
         phone(tester, size: size, ratio: ratio);
-        await tester.pumpWidget(shotApp(SettingsScreen(deps: r.deps), theme: theme, insets: size.width < 600 ? null : EdgeInsets.zero));
+        await tester.pumpWidget(shotApp(SettingsScreen(deps: r.deps), theme: theme, insets: kBeta ? betaInsets(size) : (size.width < 600 ? null : EdgeInsets.zero)));
         await _settle(tester);
         await _tap(tester, find.byKey(const ValueKey('settings-sharing')));
         await _tap(tester, find.byKey(const ValueKey('enter-code')));

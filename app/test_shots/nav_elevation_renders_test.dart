@@ -33,6 +33,7 @@ import '../test/location_service_test.dart' show FakeSource;
 import '../test/nav_fakes.dart';
 import '../test/navigation_camera_test.dart' show CameraController, NoSurface;
 import '../test/support/test_layer_engine.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'nav_elevation';
@@ -220,11 +221,14 @@ void main() {
     await loadShotFonts();
   });
 
-  const sizes = [
+  final sizes = kBeta
+      // the beta checklist's sizes (see beta_sizes.dart)
+      ? [for (final e in kBetaSizes.entries) (e.key, e.value, betaRatio(e.value), betaInsets(e.value))]
+      : const [
     ('phone-390', Size(390, 844), 3.0, EdgeInsets.only(top: 47, bottom: 34)),
     ('phone-844x390', Size(844, 390), 3.0, EdgeInsets.only(left: 47, right: 47, bottom: 21)),
     ('desktop-1440', Size(1440, 900), 2.0, EdgeInsets.zero),
-  ];
+        ];
   for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
     for (final (name, screen, ratio, insets) in sizes) {
       for (final frame in _Frame.values) {

@@ -19,11 +19,16 @@ import 'package:flutter_test/flutter_test.dart';
 import '../test/support/discover_fakes.dart';
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'discover';
 
-const Map<String, Size> kSizes = {'390': Size(390, 844), '1440': Size(1440, 900)};
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final Map<String, Size> kSizes = kBeta ? kBetaSizes : const {'390': Size(390, 844), '1440': Size(1440, 900)};
+
+double _ratio(String size) => kBeta ? betaRatio(kSizes[size]!) : (size == '390' ? 2 : 1);
+EdgeInsets _insets(String size) => kBeta ? betaInsets(kSizes[size]!) : (size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero);
 
 /// The weather Home's card shows in frame 2.
 class _Weather extends WeatherState {
@@ -96,7 +101,7 @@ Future<void> _settle(WidgetTester tester, [int n = 8]) async {
 
 /// [page] opened over a page behind it (its back arrow shows), in the app's theme, as the phone or window draws it.
 Widget _app(Widget page, CacheThemeId theme, String size) {
-  final insets = size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero;
+  final insets = _insets(size);
   return MaterialApp(
     key: UniqueKey(),
     debugShowCheckedModeBanner: false,
@@ -114,7 +119,7 @@ Widget _app(Widget page, CacheThemeId theme, String size) {
 }
 
 Future<void> _shot(WidgetTester tester, String size, CacheThemeId theme, String name, Widget page, {List<String> taps = const []}) async {
-  phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+  phone(tester, size: kSizes[size]!, ratio: _ratio(size));
   await tester.pumpWidget(_app(page, theme, size));
   await _settle(tester);
   for (final k in taps) {
@@ -151,11 +156,11 @@ void main() {
         // 2: Home after first run, the Discover card in the Set up card's place
         final (_, home) = await _sample();
         layout.setBlockOn(HomeBlock.shortcuts, false);
-        phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+        phone(tester, size: kSizes[size]!, ratio: _ratio(size));
         await tester.pumpWidget(shotApp(
           HomeScreen(layout: layout, weather: weather, discover: home, onOpenDiscover: () {}, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}),
           theme: theme,
-          insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero,
+          insets: _insets(size),
         ));
         await _settle(tester);
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
@@ -165,7 +170,7 @@ void main() {
 
         // 3 (and 9 at 1440): the store
         final (_, store) = await _sample();
-        await _shot(tester, size, theme, size == '1440' ? '3-9-discover' : '3-discover', DiscoverScreen(discover: store, links: DiscoverLinks(allLibraries: (_) {}, allMaps: (_) {})));
+        await _shot(tester, size, theme, (size == '1440' || size == '1440x900') ? '3-9-discover' : '3-discover', DiscoverScreen(discover: store, links: DiscoverLinks(allLibraries: (_) {}, allMaps: (_) {})));
 
         // 4a, 4b: Backcountry's page and Customize
         final (_, listing) = await _sample();

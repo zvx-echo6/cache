@@ -21,11 +21,13 @@ import 'package:flutter_test/flutter_test.dart';
 import '../test/browse/fakes.dart' show FakeSources, testPolicy;
 import '../test/library/fake_shelves.dart';
 import '../test/library/library_fixtures.dart' show SampleBook, testDeps, writeBookLibrary;
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'bookshelves';
 
-const Map<String, Size> kSizes = {'390': Size(390, 844), '1440': Size(1440, 900)};
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final Map<String, Size> kSizes = kBeta ? kBetaSizes : const {'390': Size(390, 844), '1440': Size(1440, 900)};
 
 const List<SampleBook> _field = [
   ('aid', 'Wilderness first aid handbook', '210', null),
@@ -92,12 +94,13 @@ void main() {
   }
 
   Future<void> shoot(WidgetTester tester, String size, String name, List<String> path, CacheThemeId theme, {String? search, double scroll = 0}) async {
-    phone(tester, size: kSizes[size]!, ratio: size == '390' ? 2 : 1);
+    final s = kSizes[size]!;
+    phone(tester, size: s, ratio: kBeta ? betaRatio(s) : (size == '390' ? 2 : 1));
     final d = testDeps(browse: browse, shelves: shelves);
     await tester.pumpWidget(shotApp(
       LibraryPanes(root: (_) => LibraryRootPage(deps: d), prefs: PanePrefs(dirOverride: tmp)),
       theme: theme,
-      insets: size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero,
+      insets: kBeta ? betaInsets(s) : (size == '390' ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero),
     ));
     await _settle(tester);
     for (final k in path) {
@@ -136,7 +139,7 @@ void main() {
         await shoot(tester, size, 'same-book-as-search', picker, theme, search: 'first aid');
         await shoot(tester, size, 'rename', [...book, 'book-rename'], theme);
       }
-      if (size == '390') {
+      if (kSizes[size]!.width < 600) {
         // the spares lower down the page on a phone
         for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
           await shoot(tester, size, 'book-spares-scrolled', book, theme, scroll: 520);
@@ -150,7 +153,7 @@ void main() {
         }
       });
       for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-        if (size == '390') await shoot(tester, size, 'bookshelves-hidden-books', const ['library-bookshelves'], theme, scroll: 1400);
+        if (kSizes[size]!.width < 600) await shoot(tester, size, 'bookshelves-hidden-books', const ['library-bookshelves'], theme, scroll: 1400);
         await shoot(tester, size, 'hidden-books', const ['library-bookshelves', 'shelves-hidden'], theme);
       }
       await tester.pumpWidget(const SizedBox());

@@ -10,12 +10,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/settings_rig.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'own';
 
 const Size _phone = Size(430, 932);
 const Size _tablet = Size(820, 1180);
+
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final List<Size> _sizes = kBeta ? kBetaSizes.values.toList() : const [_phone, _tablet];
+String _sizeName(Size size) => kBeta ? kBetaSizes.entries.firstWhere((e) => e.value == size).key : (size == _phone ? 'phone' : 'tablet');
 
 const _answer = {
   'station': {'id': 'site-12', 'name': 'Bridge gauge', 'latitude': 42.53, 'longitude': -113.79},
@@ -32,17 +37,17 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 Future<void> _show(WidgetTester tester, Widget page, CacheThemeId theme, Size size) async {
-  phone(tester, size: size, ratio: size == _phone ? 3 : 2);
-  await tester.pumpWidget(shotApp(page, theme: theme, insets: size == _phone ? null : const EdgeInsets.only(top: 24, bottom: 20)));
+  phone(tester, size: size, ratio: kBeta ? betaRatio(size) : (size == _phone ? 3 : 2));
+  await tester.pumpWidget(shotApp(page, theme: theme, insets: kBeta ? betaInsets(size) : (size == _phone ? null : const EdgeInsets.only(top: 24, bottom: 20))));
   await _settle(tester);
 }
 
-String _name(String screen, CacheThemeId theme, Size size) => '$screen-${size == _phone ? 'phone' : 'tablet'}-${theme == CacheThemeId.dark ? 'dark' : 'light'}';
+String _name(String screen, CacheThemeId theme, Size size) => '${kBeta ? '${_sizeName(size)}-$screen' : '$screen-${_sizeName(size)}'}-${theme == CacheThemeId.dark ? 'dark' : 'light'}';
 
 void main() {
   setUpAll(loadShotFonts);
 
-  for (final size in [_phone, _tablet]) {
+  for (final size in _sizes) {
     for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
       testWidgets('More sources, the form and Pick what to show: ${_name('own', theme, size)}', (tester) async {
         final r = await SettingsRig.create(tester);

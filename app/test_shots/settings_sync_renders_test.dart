@@ -17,11 +17,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/settings_rig.dart';
 import '../test/support/sync_fake.dart';
+import 'beta_sizes.dart';
 import 'shot_kit.dart';
 
 const _out = 'settings_sync';
 
-const Map<String, Size> _sizes = {
+/// The sizes drawn (the beta checklist's with BETA_SIZES, see beta_sizes.dart).
+final Map<String, Size> _sizes = kBeta ? kBetaSizes : const {
   '390': Size(390, 844),
   '820': Size(820, 1180),
   '1180': Size(1180, 820),
@@ -36,9 +38,9 @@ Future<void> _settle(WidgetTester tester, [int n = 14]) async {
 }
 
 Future<void> _show(WidgetTester tester, Widget page, Size size, CacheThemeId theme) async {
-  final ratio = size.width < 600 ? 3.0 : (size.width >= 1280 ? 1.0 : 2.0);
+  final ratio = kBeta ? betaRatio(size) : (size.width < 600 ? 3.0 : (size.width >= 1280 ? 1.0 : 2.0));
   phone(tester, size: size, ratio: ratio);
-  final insets = size.width < 600 ? null : (size.width >= 1280 ? EdgeInsets.zero : const EdgeInsets.only(top: 24, bottom: 20));
+  final insets = kBeta ? betaInsets(size) : (size.width < 600 ? null : (size.width >= 1280 ? EdgeInsets.zero : const EdgeInsets.only(top: 24, bottom: 20)));
   await tester.pumpWidget(shotApp(page, theme: theme, insets: insets));
   await _settle(tester);
 }
