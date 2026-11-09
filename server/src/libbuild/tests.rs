@@ -1189,17 +1189,19 @@ fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
     assert_eq!((sg.div.as_str(), sg.source.as_str(), sg.classifier_version), ("510", "classifier", Some(1)));
     let b = p.header.book.as_ref().unwrap();
     assert_eq!((b.title.as_str(), b.original_blake3.as_str()), ("The Well Handbook", p.header.source.blake3.as_str()));
-    // this device's log: place and assign for the filed books, unsort for the unsure one
-    let log = svc.live_dir(&lib).join("log").join(format!("{}.jsonl", svc.device));
-    let events = cache_builder::log::parse_log(&std::fs::read_to_string(&log).unwrap()).0;
+    // this device's Bookshelves log: place and assign for the filed books, unsort for the unsure one, keyed by copy
+    let events = shelf_events(&svc);
     assert_eq!(events.len(), 5, "{events:?}");
     assert!(events.iter().all(|e| e.dev == svc.device));
-    // and the local view says the same
+    let copy = b.original_blake3.clone();
+    assert!(events.iter().any(|e| e.kind.copy() == Some(copy.as_str()) && e.loc.as_deref() == Some(format!("{lib}/{doc}").as_str())));
+    assert!(!svc.live_dir(&lib).join("log").exists(), "nothing is written to the library's own log");
+    // and the view says the same
     svc.publish(&lib).unwrap();
-    let view: Value = serde_json::from_slice(&std::fs::read(svc.live_dir(&lib).join(".local/docs.json")).unwrap()).unwrap();
-    assert_eq!(view["format"], json!(2));
-    assert_eq!(view["docs"][doc]["call"]["text"], json!("CDS 510-001"));
-    assert_eq!((view["docs"][doc]["shelf"].clone(), view["docs"][doc]["suggested"]["div"].clone()), (json!("510"), json!("510")));
+    let view = shelves_view(&svc);
+    assert_eq!(view["format"], json!(1));
+    assert_eq!(view["books"][&copy]["call"]["text"], json!("CDS 510-001"));
+    assert_eq!((view["books"][&copy]["shelf"].clone(), view["books"][&copy]["suggested"]["div"].clone()), (json!("510"), json!("510")));
 }
 
 #[test]
@@ -1427,22 +1429,42 @@ fn an_unsure_book_keeps_the_top_three_with_probabilities_and_the_version() {
     assert_eq!(p.header.suggested().map(|s| (s.source, s.classifier_version)), Some(("classifier".to_string(), Some(1))));
 }
 
-/// The events of this device's log as short strings: `place 510 user`, `assign 510 1`, `retire 510 1`, `unsort user`.
-fn log_lines(svc: &BuildService, lib: &str) -> Vec<String> {
-    let log = svc.live_dir(lib).join("log").join(format!("{}.jsonl", svc.device));
-    let events = cache_builder::log::parse_log(&std::fs::read_to_string(&log).unwrap()).0;
+/// The events of this device's Bookshelves log.
+pub(crate) fn shelf_events(svc: &BuildService) -> Vec<cache_shelves::Event> {
+    let log = svc.shelves_dir().join("log").join(format!("{}.jsonl", svc.device));
+    cache_shelves::store::parse_log(&std::fs::read_to_string(&log).unwrap_or_default()).0
+}
+
+/// `<data>/bookshelves/.local/view.json`.
+pub(crate) fn shelves_view(svc: &BuildService) -> Value {
+    serde_json::from_slice(&std::fs::read(svc.shelves_dir().join(".local/view.json")).unwrap()).unwrap()
+}
+
+/// The events of this device's Bookshelves log as short strings: `place 510 user`, `assign 510 1`, `retire 510 1`, `unsort user`,
+/// `same auto text`.
+fn log_lines(svc: &BuildService) -> Vec<String> {
+    let events = shelf_events(svc);
     assert!(events.iter().all(|e| e.dev == svc.device && e.at > 0));
     assert!(events.windows(2).all(|w| w[0].at <= w[1].at), "an event is never earlier than the one before it");
     events
         .iter()
         .map(|e| match &e.kind {
-            cache_builder::log::Kind::Place { div, by, .. } => format!("place {div} {}", by.as_str()),
-            cache_builder::log::Kind::Unsort { by, .. } => format!("unsort {}", by.as_str()),
-            cache_builder::log::Kind::Assign { div, seq, .. } => format!("assign {div} {seq}"),
-            cache_builder::log::Kind::Retire { div, seq, .. } => format!("retire {div} {seq}"),
+            cache_shelves::Kind::Place { div, by, .. } => format!("place {div} {}", by.as_str()),
+            cache_shelves::Kind::Unsort { by, .. } => format!("unsort {}", by.as_str()),
+            cache_shelves::Kind::Assign { div, seq, .. } => format!("assign {div} {seq}"),
+            cache_shelves::Kind::Retire { div, seq, .. } => format!("retire {div} {seq}"),
+            cache_shelves::Kind::Title { title, .. } => format!("title {title}"),
+            cache_shelves::Kind::Same { by, how, .. } => format!("same {} {}", by.as_str(), how.as_str()),
+            cache_shelves::Kind::NotSame { by, .. } => format!("notsame {}", by.as_str()),
             other => format!("{other:?}"),
         })
         .collect()
+}
+
+/// The copy key of a book (its pack's `book.original_blake3`).
+fn copy_of(svc: &BuildService, lib: &str, doc: &str) -> String {
+    let b = svc.book_of(lib, doc).unwrap();
+    svc.pack_copy(lib, doc, b.doc_version).unwrap()
 }
 
 #[test]
@@ -1454,12 +1476,13 @@ fn every_placement_is_written_to_this_devices_log_and_the_view_follows() {
     add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
     drain(&svc);
     let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let copy = copy_of(&svc, &lib, &doc);
     // the build shelved it: the classifier was unsure, so it is unsorted (by auto)
-    assert_eq!(log_lines(&svc, &lib), ["unsort auto"]);
+    assert_eq!(log_lines(&svc), ["unsort auto"]);
     svc.place_book(&lib, &doc, br#"{"division":"510","device":"  tablet 2 "}"#).unwrap();
-    let view_path = svc.live_dir(&lib).join(".local").join("docs.json");
-    let view: Value = serde_json::from_slice(&std::fs::read(&view_path).unwrap()).unwrap();
-    assert_eq!((view["docs"][&doc]["shelf"].clone(), view["docs"][&doc]["call"]["text"].clone()), (json!("510"), json!("CDS 510-001")));
+    let view_path = svc.shelves_dir().join(".local").join("view.json");
+    let view = shelves_view(&svc);
+    assert_eq!((view["books"][&copy]["shelf"].clone(), view["books"][&copy]["call"]["text"].clone()), (json!("510"), json!("CDS 510-001")));
     svc.place_book(&lib, &doc, br#"{"division":"520"}"#).unwrap();
     // refused placements write nothing
     assert!(svc.place_book(&lib, &doc, br#"{"division":"999"}"#).is_err());
@@ -1467,33 +1490,23 @@ fn every_placement_is_written_to_this_devices_log_and_the_view_follows() {
     svc.place_book(&lib, &doc, br#"{"division":"unsorted"}"#).unwrap();
     // a move is place, retire the old number, assign a new one; a number is never used again
     assert_eq!(
-        log_lines(&svc, &lib),
+        log_lines(&svc),
         ["unsort auto", "place 510 user", "assign 510 1", "place 520 user", "retire 510 1", "assign 520 1", "unsort user", "retire 520 1"]
     );
-    let view: Value = serde_json::from_slice(&std::fs::read(&view_path).unwrap()).unwrap();
-    assert_eq!((view["docs"][&doc]["shelf"].clone(), view["docs"][&doc]["call"].clone()), (Value::Null, Value::Null));
+    assert!(shelf_events(&svc).iter().all(|e| e.kind.copy() == Some(copy.as_str())), "every event is keyed by the copy");
+    let view = shelves_view(&svc);
+    assert_eq!((view["books"][&copy]["shelf"].clone(), view["books"][&copy]["call"].clone()), (Value::Null, Value::Null));
     assert_eq!(view["retired"], json!({"510": [1], "520": [1]}));
-    // the user's placements that differ from the guess are the training corrections
-    let log_dir = svc.live_dir(&lib).join("log");
-    let events = cache_builder::log::read_logs(&log_dir).unwrap().events;
-    let pack = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
-    let guess = pack.header.suggested().map(|s| s.div);
-    let want = ["510", "520"].iter().filter(|x| Some(x.to_string()) != guess).count();
-    let corrections = cache_builder::log::corrections(&events, &|_| guess.clone());
-    assert_eq!(corrections.len(), want);
-    // it sits at the library's root beside packs/ and shard/, not in either, so no search payload carries it
-    assert!(!svc.packs_dir(&lib).join("log").exists() && !svc.live_dir(&lib).join("corrections.jsonl").exists());
+    // it is the person's log, not the library's: nothing is in the library folder or its packs, so no search payload carries it
+    assert!(!svc.live_dir(&lib).join("log").exists() && !svc.packs_dir(&lib).join("log").exists() && !svc.live_dir(&lib).join("corrections.jsonl").exists());
     svc.publish(&lib).unwrap();
     assert!(view_path.is_file());
-    assert!(live_docs(&svc, &lib) >= 1, "the core's own library check passes with the log beside the shard");
-    for e in std::fs::read_dir(svc.live_dir(&lib).join("shard")).unwrap().flatten() {
-        assert_ne!(e.file_name().to_string_lossy(), "log");
-    }
-    // it is appended to, never rewritten, and goes with the library
+    assert!(live_docs(&svc, &lib) >= 1, "the core's own library check passes with copies.jsonl beside the shard");
+    // it is appended to, never rewritten, and stays when the library goes (the shelves are the person's)
     svc.place_book(&lib, &doc, br#"{"division":"710"}"#).unwrap();
-    assert_eq!(log_lines(&svc, &lib).len(), 10);
+    assert_eq!(log_lines(&svc).len(), 10);
     svc.delete_library(&lib).unwrap();
-    assert!(!log_dir.exists());
+    assert_eq!(log_lines(&svc).len(), 10);
 }
 
 #[test]
@@ -1504,7 +1517,7 @@ fn the_device_id_is_kept_and_other_devices_logs_decide_which_number_is_free() {
     std::fs::create_dir_all(d.0.join("build")).unwrap();
     std::fs::write(d.0.join("build/device_id"), "server-0ldid\n").unwrap();
     let (svc, _) = rig(&d);
-    assert!(cache_builder::log::valid_device_id(&svc.device));
+    assert!(cache_shelves::events::valid_device_id(&svc.device));
     assert_ne!(svc.device, "server-0ldid");
     // the id is the cache_sync identity kept in <data>/sync
     let (_, sync_id) = cache_sync::identity::load_or_create(&d.0.join(booklog::SYNC_DIR)).unwrap();
@@ -1518,29 +1531,156 @@ fn the_device_id_is_kept_and_other_devices_logs_decide_which_number_is_free() {
     drain(&svc);
     let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
     assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("CDS 510-001"));
-    // another device took 510-001 earlier and its log has synced here: ours shows as the second claim, and the next free is 2
-    let other = svc.live_dir(&lib).join("log").join("phone-1.jsonl");
+    let copy = copy_of(&svc, &lib, &doc);
+    // another device of the person took 510-001 earlier and its Bookshelves log has synced here: ours shows as the second claim,
+    // and the next free is 2
+    let other = svc.shelves_dir().join("log").join("phone-1.jsonl");
     let lines = [
-        cache_builder::log::Event::new(5, "phone-1", cache_builder::log::Kind::Place { doc: "ghost".into(), div: "510".into(), by: cache_builder::log::By::User }),
-        cache_builder::log::Event::new(6, "phone-1", cache_builder::log::Kind::Assign { doc: "ghost".into(), div: "510".into(), seq: 1 }),
+        cache_shelves::Event::new(5, "phone-1", cache_shelves::Kind::Place { copy: "ghost".into(), div: "510".into(), by: cache_shelves::By::User }),
+        cache_shelves::Event::new(6, "phone-1", cache_shelves::Kind::Assign { copy: "ghost".into(), div: "510".into(), seq: 1 }),
     ];
     std::fs::write(&other, lines.iter().map(|e| e.to_line() + "\n").collect::<String>()).unwrap();
     svc.publish(&lib).unwrap();
     assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("CDS 510-001.1"));
-    let view: Value = serde_json::from_slice(&std::fs::read(svc.live_dir(&lib).join(".local/docs.json")).unwrap()).unwrap();
-    assert_eq!(view["docs"][&doc]["call"], json!({"div": "510", "seq": 1, "suffix": 1, "text": "CDS 510-001.1"}));
-    assert!(view["docs"].get("ghost").is_none(), "a book with no pack here is not in the view");
+    let view = shelves_view(&svc);
+    assert_eq!(view["books"][&copy]["call"], json!({"div": "510", "seq": 1, "suffix": 1, "text": "CDS 510-001.1"}));
+    assert!(view["books"].get("ghost").is_none(), "a book with no copy in any library here is not in the view");
     add(&svc, &lib, "r.pdf", &book("radio", 3, Some("Antenna Notes")));
     add(&svc, &lib, "w2.pdf", &pdf_of("well", 50, 3, "Second Well Book"));
     drain(&svc);
     let books = svc.books(&lib).unwrap();
     assert_eq!(by_title(&books, "Second Well Book")["call_number"], json!("CDS 510-002"), "the next free number counts the other device's log");
     // books built before the log existed are shelved at the next publish
-    std::fs::remove_file(svc.live_dir(&lib).join("log").join(format!("{}.jsonl", svc.device))).unwrap();
+    std::fs::remove_file(svc.shelves_dir().join("log").join(format!("{}.jsonl", svc.device))).unwrap();
     svc.publish(&lib).unwrap();
     let books = svc.books(&lib).unwrap();
     assert_eq!(by_title(&books, "The Well Handbook")["division"], json!("510"));
     assert!(books.as_array().unwrap().iter().all(|b| b["unsorted"] == json!(true) || b["call_number"].as_str().is_some_and(|c| c.starts_with("CDS "))), "{books}");
+}
+
+#[test]
+fn the_old_library_log_is_imported_once_and_gives_the_same_shelves_numbers_and_titles() {
+    use cache_builder::log::{By as OldBy, Event as OldEvent, Kind as OldKind};
+    let d = TempDir::new("m5");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "w.pdf", &book("well", 3, Some("The Well Handbook")));
+    add(&svc, &lib, "r.pdf", &book("radio", 3, Some("Antenna Notes")));
+    drain(&svc);
+    svc.publish(&lib).unwrap();
+    let books = svc.books(&lib).unwrap();
+    let well = by_title(&books, "The Well Handbook")["id"].as_str().unwrap().to_string();
+    let radio = by_title(&books, "Antenna Notes")["id"].as_str().unwrap().to_string();
+    let dev = svc.device.clone();
+    let live = svc.live_dir(&lib);
+    svc.shutdown();
+    drop(svc);
+    // the data as an earlier build left it: no Bookshelves folder, and this device's events in the library's own log, by doc
+    std::fs::remove_dir_all(d.0.join(booklog::BOOKSHELVES_DIR)).unwrap();
+    let old = vec![
+        OldEvent::new(10, &dev, OldKind::Place { doc: well.clone(), div: "510".into(), by: OldBy::Auto }),
+        OldEvent::new(10, &dev, OldKind::Assign { doc: well.clone(), div: "510".into(), seq: 3 }),
+        OldEvent::new(11, &dev, OldKind::Place { doc: radio.clone(), div: "510".into(), by: OldBy::User }),
+        OldEvent::new(11, &dev, OldKind::Assign { doc: radio.clone(), div: "510".into(), seq: 1 }),
+        OldEvent::new(12, &dev, OldKind::Place { doc: radio.clone(), div: "710".into(), by: OldBy::User }),
+        OldEvent::new(12, &dev, OldKind::Retire { doc: radio.clone(), div: "510".into(), seq: 1 }),
+        OldEvent::new(12, &dev, OldKind::Assign { doc: radio.clone(), div: "710".into(), seq: 4 }),
+        OldEvent::new(13, &dev, OldKind::Title { doc: well.clone(), title: "Wells".into() }),
+    ];
+    let own = live.join("log").join(format!("{dev}.jsonl"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    let text: String = old.iter().map(|e| e.to_line() + "\n").collect();
+    std::fs::write(&own, &text).unwrap();
+    // another device's library log is that device's to import, not this one's
+    let theirs = OldEvent::new(14, "phone-9", OldKind::Assign { doc: well.clone(), div: "510".into(), seq: 9 });
+    std::fs::write(live.join("log").join("phone-9.jsonl"), theirs.to_line() + "\n").unwrap();
+    let before = cache_builder::log::resolve(&old);
+
+    // the next start imports this device's events once: by copy, with where they were found, at their own time
+    let (svc, _) = rig(&d);
+    let events = shelf_events(&svc);
+    assert_eq!(events.len(), old.len(), "{events:?}");
+    assert_eq!(events.iter().map(|e| e.at).collect::<Vec<_>>(), old.iter().map(|e| e.at).collect::<Vec<_>>());
+    let (wc, rc) = (copy_of(&svc, &lib, &well), copy_of(&svc, &lib, &radio));
+    assert!(events.iter().all(|e| e.kind.copy() == Some(wc.as_str()) || e.kind.copy() == Some(rc.as_str())));
+    assert!(events.iter().all(|e| e.loc.as_deref() == Some(format!("{lib}/{well}").as_str()) || e.loc.as_deref() == Some(format!("{lib}/{radio}").as_str())));
+    assert!(svc.shelves_dir().join(".local/migrated.json").is_file());
+    // the books show the same shelves and numbers as the old log gave them
+    svc.publish(&lib).unwrap();
+    let books = svc.books(&lib).unwrap();
+    for (doc, want) in [(&well, "CDS 510-003"), (&radio, "CDS 710-004")] {
+        let old_call = before.doc(doc).and_then(|x| x.call.as_ref()).map(|c| c.text.clone());
+        assert_eq!(old_call.as_deref(), Some(want));
+        let b = books.as_array().unwrap().iter().find(|b| b["id"] == json!(doc)).unwrap();
+        assert_eq!(b["call_number"], json!(want), "{b}");
+    }
+    let view = shelves_view(&svc);
+    assert_eq!((view["books"][&wc]["shelf"].as_str(), view["books"][&wc]["title"].as_str(), view["books"][&wc]["title_from"].as_str()), (Some("510"), Some("Wells"), Some("log")));
+    assert_eq!((view["books"][&rc]["shelf"].as_str(), view["books"][&rc]["by"].as_str()), (Some("710"), Some("user")));
+    assert_eq!(view["retired"], json!({"510": [1]}));
+    assert_eq!(view["next"], json!({"510": 4, "710": 5}), "the next free numbers count what the old log assigned and retired");
+    // once: a second start writes nothing more, and the library log is never written again
+    let (svc2, _) = rig(&d);
+    assert_eq!(shelf_events(&svc2).len(), old.len());
+    svc2.place_book(&lib, &well, br#"{"division":"520"}"#).unwrap();
+    assert_eq!(shelf_events(&svc2).len(), old.len() + 3);
+    assert_eq!(std::fs::read_to_string(&own).unwrap(), text);
+    assert_eq!(svc2.books(&lib).unwrap().as_array().unwrap().iter().find(|b| b["id"] == json!(well)).unwrap()["call_number"], json!("CDS 520-001"));
+}
+
+#[test]
+fn a_new_build_writes_copies_jsonl_and_a_same_book_event_once() {
+    let d = TempDir::new("m6");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let (l1, l2) = (new_lib(&svc, "One"), new_lib(&svc, "Two"));
+    add(&svc, &l1, "w.pdf", &pdf_of("well", 1, 3, "The Well Handbook"));
+    drain(&svc);
+    let b1 = svc.books(&l1).unwrap()[0].clone();
+    let d1 = b1["id"].as_str().unwrap().to_string();
+    let c1 = copy_of(&svc, &l1, &d1);
+    assert_eq!(b1["call_number"], json!("CDS 510-001"));
+    // the copies file at the library's root holds the book as a read of its packs gives it
+    let copies = |lib: &str| cache_shelves::library::read_copies(&svc.live_dir(lib).join("copies.jsonl")).unwrap().0;
+    let from_packs = |lib: &str| {
+        let p = svc.packs_dir(lib);
+        let r = cache_shelves::library::LibraryRef { library_id: lib.to_string(), dir: p.clone(), packs_dir: Some(p) };
+        cache_shelves::library::load_library(&r, &cache_builder::bookshelves::header_line).unwrap().copies
+    };
+    assert_eq!(copies(&l1), from_packs(&l1));
+    assert_eq!(copies(&l1).iter().map(|c| c.copy.clone()).collect::<Vec<_>>(), vec![c1.clone()]);
+    assert!(copies(&l1)[0].same.is_some(), "with the facts same-book detection reads");
+    // another file of the same book (another title in its metadata, the same text) in another library
+    add(&svc, &l2, "w copy.pdf", &pdf_of("well", 1, 3, "Well Handbook copy"));
+    drain(&svc);
+    let b2 = svc.books(&l2).unwrap()[0].clone();
+    let c2 = copy_of(&svc, &l2, b2["id"].as_str().unwrap());
+    assert_ne!(c1, c2);
+    assert_eq!(copies(&l2), from_packs(&l2));
+    // detection ran once for the new copy and found the book
+    let lines = log_lines(&svc);
+    assert_eq!(lines.iter().filter(|l| l.starts_with("same")).collect::<Vec<_>>(), ["same auto text"], "{lines:?}");
+    let pair = shelf_events(&svc)
+        .into_iter()
+        .find_map(|e| match e.kind {
+            cache_shelves::Kind::Same { copy, with, score, .. } => Some((copy, with, score)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((pair.0.clone().max(pair.1.clone()), pair.0.clone().min(pair.1.clone())), (c1.clone().max(c2.clone()), c1.clone().min(c2.clone())));
+    assert!(pair.2.is_some_and(|s| s > 0.85), "{pair:?}");
+    // so the new copy joins that book, with its shelf and number, and no second number is taken
+    assert_eq!((b2["division"].as_str(), b2["call_number"].as_str()), (Some("510"), Some("CDS 510-001")));
+    assert_eq!(lines.iter().filter(|l| l.starts_with("assign")).count(), 1, "{lines:?}");
+    svc.publish(&l1).unwrap();
+    svc.publish(&l2).unwrap();
+    assert_eq!(log_lines(&svc), lines, "publishing detects nothing again");
+    let view = shelves_view(&svc);
+    let id = c1.clone().min(c2.clone());
+    assert_eq!(view["books"].as_object().unwrap().len(), 1, "{view}");
+    assert_eq!(view["books"][&id]["copies"].as_array().unwrap().len(), 2);
+    assert_eq!(view["books"][&id]["call"]["text"], json!("CDS 510-001"));
 }
 
 #[test]
@@ -1566,6 +1706,7 @@ fn the_same_book_in_a_better_file_replaces_the_old_one_and_a_worse_one_is_not_ke
     let nb = &books[0];
     assert_eq!((nb["id"].as_str(), nb["doc_version"].as_u64(), nb["title"].as_str(), nb["pages"].as_u64()), (Some(doc.as_str()), Some(2), Some("River Guide"), Some(21)));
     assert_eq!(nb["call_number"], call, "the call number stays");
+    assert!(log_lines(&svc).iter().any(|l| l == "same auto text"), "the better file is linked to the copy it replaces");
     assert_eq!(std::fs::read(svc.source_path(&lib, &doc)).unwrap(), better);
     assert!(svc.packs_dir(&lib).join(format!("{doc}@2.cdoc")).is_file() && !svc.packs_dir(&lib).join(format!("{doc}@1.cdoc")).exists());
     let r = svc.removed_view();
@@ -1641,6 +1782,7 @@ fn a_possible_new_edition_waits_for_a_choice_and_keep_both_keeps_both() {
     let files = tree_files(&d.0.join("app/docs/sources").join(&lib));
     assert_eq!(files.iter().filter(|f| f.contains("Field Guide")).count(), 2, "{files:?}");
     assert_eq!(svc.removed_view()["count"], json!(0), "keep both removes nothing");
+    assert!(log_lines(&svc).iter().any(|l| l == "notsame user"), "keep both says they are two books");
 }
 
 #[test]
@@ -1675,6 +1817,7 @@ fn replace_the_older_one_goes_first_in_the_queue_and_the_old_copy_goes_to_remove
     let nb = by_title(&books, "Field Guide");
     assert_eq!((nb["id"].as_str(), nb["doc_version"].as_u64()), (Some(old_doc.as_str()), Some(2)));
     assert_eq!(svc.removed_view()["count"], json!(1));
+    assert!(log_lines(&svc).iter().any(|l| l == "same user user"), "the person's choice links the new file to the old one");
     // a choice for a book that is not waiting
     assert_eq!(svc.decide(&b, br#"{"action":"replace_older"}"#).unwrap_err().status, 409);
 }

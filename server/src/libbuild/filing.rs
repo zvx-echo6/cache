@@ -182,7 +182,7 @@ impl BuildService {
         b2.call_text = match self.shelve_batch(lib, &[(doc.to_string(), division.clone(), by)]) {
             Ok(mut calls) => calls.remove(doc).filter(|t| !t.is_empty()),
             Err(e) => {
-                eprintln!("cache: writing the library log: {e}");
+                eprintln!("cache: writing the Bookshelves log: {e}");
                 None
             }
         };
@@ -252,7 +252,7 @@ impl BuildService {
         let b = self.book_of(lib, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
         // The placement is in this device's log (a `place` by the user, with the retire and assign): that is the training data
         // too, since a `place` whose division differs from `book.suggested` is a correction. The local view follows.
-        self.rebuild_view_quietly(lib);
+        self.rebuild_view_quietly();
         Ok(self.book_json(&cls, &b, false))
     }
 

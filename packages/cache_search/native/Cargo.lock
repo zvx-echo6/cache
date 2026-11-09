@@ -1029,6 +1029,8 @@ dependencies = [
  "cache_builder",
  "cache_classify",
  "cache_embed",
+ "cache_ingest",
+ "cache_shelves",
  "cache_sync",
  "http-body-util",
  "hyper",

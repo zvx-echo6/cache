@@ -5,9 +5,12 @@
 //! - `app/docs/libraries/<library_id>/` is a normal library the core opens (`shard/` and `cache-library.json`, so the helper's scan
 //!   and index jobs treat it like any other) plus `packs/`: one `<doc_id>@<version>.cdoc` per book (see
 //!   server/builder/PACK-FORMAT.md). The packs are the truth; the shard can always be made again from them.
-//!   The library folder also holds `log/<device_id>.jsonl`, this device's append-only log of shelving and title changes (it syncs;
-//!   see [`booklog`] and server/builder/LIBRARY-LOG.md), and `.local/docs.json`, the view made from the packs and every log (it
-//!   never syncs). Where a book is shelved and its call number (`CDS 210-001`) are in the log, not in the pack.
+//!   The library folder also holds `copies.jsonl`, one line of facts per book (made from the packs; what the Bookshelves log reads).
+//!   An old `log/<device_id>.jsonl` from earlier builds is imported once and never written again.
+//! - `bookshelves/` is the person's Bookshelves log: `log/<device_id>.jsonl`, this device's append-only log of shelving, title and
+//!   same-book changes, keyed by copy (it syncs among the person's own devices), and `.local/view.json`, the view resolved from every
+//!   device's log and every library (it never syncs). See [`booklog`] and server/builder/LIBRARY-LOG.md. Where a book is shelved and
+//!   its call number (`CDS 210-001`) are in that log, not in the pack.
 //! - `app/docs/sources/<library_id>/<doc_id>.pdf` is the original PDF of every built book (see [`BuildService::source_path`]).
 //! - `build/queue.json` is the queue, `build/libs/<library_id>.json` the books of each library, `build/drop.json` the drop folder
 //!   settings, `build/pending/` the uploads waiting to be built, `build/work/<library_id>/shard/` the library's own read-write
@@ -43,7 +46,7 @@ use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr,
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
-use cache_builder::log::By;
+use cache_shelves::events::{By, How};
 use cache_builder::pack::{read_pack, write_pack, Pack, Suggested};
 use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
 use cache_builder::{build_pack_with_extractor, BuildOptions, Embedder, Progress, Report};
@@ -493,8 +496,8 @@ pub struct BuildService {
     models: ModelStore,
     last_maintenance: Mutex<Instant>,
     classify_retry: Mutex<Option<Instant>>,
-    /// This device's id: the cache_sync identity in `<data>/sync` (see [`booklog::load_device_id`]); the name of its library log,
-    /// `log/<device>.jsonl`.
+    /// This device's id: the cache_sync identity in `<data>/sync` (see [`booklog::load_device_id`]); the name of its Bookshelves log,
+    /// `bookshelves/log/<device>.jsonl`.
     pub(crate) device: String,
 }
 
@@ -695,6 +698,7 @@ impl BuildService {
             device,
         });
         svc.recover();
+        svc.import_library_logs();
         svc.save_queue();
         svc.classes();
         svc.purge_removed(epoch());
@@ -1168,7 +1172,17 @@ impl BuildService {
             }
         };
         let h = &pack.header;
+        // The copies the new one is linked with in the Bookshelves log, read before the old pack goes: the book it replaces, or the
+        // edition the person chose to keep beside it.
+        let replaced_copy = replacing.and_then(|o| self.pack_copy(&item.library_id, &o.doc_id, o.doc_version));
+        let kept_beside = match (item.force.as_deref(), &item.decision) {
+            (Some("keep_both"), Some(d)) => self.book_of(&item.library_id, &d.other_doc_id).and_then(|o| self.pack_copy(&item.library_id, &o.doc_id, o.doc_version)),
+            _ => None,
+        };
         write_pack(pack, &self.packs_dir(&item.library_id)).map_err(|e| e.to_string())?;
+        if let Err(e) = self.update_copies(&item.library_id, &h.doc_id, Some(h.doc_version)) {
+            eprintln!("cache: writing the copies file: {e}");
+        }
         let cls = self.classes();
         let root = self.sources_root(&item.library_id);
         let mut book = Book {
@@ -1215,17 +1229,55 @@ impl BuildService {
                 let _ = self.to_removed(&c, &nm, &reason, "drop", &item.library_id);
             }
         }
-        // Shelve it in this device's log: place and assign, or unsort when the classifier was unsure. A replacement keeps its number.
-        book.call_text = match replacing {
-            Some(old) => old.call_text.clone(),
-            None => match self.shelve_batch(&item.library_id, &[(book.doc_id.clone(), book.division.clone(), By::Auto)]) {
-                Ok(mut calls) => calls.remove(&book.doc_id).filter(|t| !t.is_empty()),
-                Err(e) => {
-                    eprintln!("cache: writing the library log: {e}");
-                    None
+        // The Bookshelves log. A replacement is the same book as the one it replaces (`same`), so it keeps its shelf and number. A
+        // new copy is looked at once by same-book detection; one that joins a book already on a shelf takes its shelf and number,
+        // any other is shelved: place and assign, or unsort when the classifier was unsure.
+        let call_text = match replacing {
+            Some(old) => {
+                if let Some(c) = &replaced_copy {
+                    let link = if item.force.as_deref() == Some("replace_older") { (By::User, How::User) } else { (By::Auto, How::Text) };
+                    if let Err(e) = self.link_copies(&item.library_id, &book.doc_id, c, Some(link)) {
+                        eprintln!("cache: writing the Bookshelves log: {e}");
+                    }
                 }
-            },
+                // still a new copy: it may also be a copy of a book in another library
+                if let Err(e) = self.detect_new_copy(&item.library_id, &book.doc_id) {
+                    eprintln!("cache: same-book detection: {e}");
+                }
+                old.call_text.clone()
+            }
+            None => {
+                if let Some(c) = &kept_beside {
+                    if let Err(e) = self.link_copies(&item.library_id, &book.doc_id, c, None) {
+                        eprintln!("cache: writing the Bookshelves log: {e}");
+                    }
+                }
+                let joined = self.detect_new_copy(&item.library_id, &book.doc_id).unwrap_or_else(|e| {
+                    eprintln!("cache: same-book detection: {e}");
+                    None
+                });
+                match joined {
+                    Some(j) => {
+                        let shelf = j.shelf.filter(|d| cls.find(d).is_some_and(|(_, x)| x.assigned()));
+                        if shelf.is_some() {
+                            book.unsure = None;
+                        }
+                        book.placed = j.by == Some(By::User);
+                        let call = shelf.as_ref().and(j.call);
+                        book.division = shelf;
+                        call
+                    }
+                    None => match self.shelve_batch(&item.library_id, &[(book.doc_id.clone(), book.division.clone(), By::Auto)]) {
+                        Ok(mut calls) => calls.remove(&book.doc_id).filter(|t| !t.is_empty()),
+                        Err(e) => {
+                            eprintln!("cache: writing the Bookshelves log: {e}");
+                            None
+                        }
+                    },
+                }
+            }
         };
+        book.call_text = call_text;
         let folder = cls.folder_rel(book.division.as_deref());
         let dir = root.join(&folder);
         std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
@@ -1902,8 +1954,11 @@ impl BuildService {
         let mut pack = read_pack(&pack_path).map_err(|e| err(500, "server_error", e.to_string()))?;
         pack.header.set_title(&title);
         write_pack(&pack, &self.packs_dir(id)).map_err(|e| err(500, "server_error", e.to_string()))?;
+        if let Err(e) = self.update_copies(id, doc, Some(book.doc_version)) {
+            eprintln!("cache: writing the copies file: {e}");
+        }
         if let Err(e) = self.log_title(id, doc, &title) {
-            eprintln!("cache: writing the library log: {e}");
+            eprintln!("cache: writing the Bookshelves log: {e}");
         }
         {
             let w = self.open_work(id).map_err(|e| err(500, "server_error", e))?;
@@ -1937,7 +1992,7 @@ impl BuildService {
                 self.save_meta(&m).map_err(|e| err(500, "server_error", format!("could not save the library: {e}")))?;
             }
         }
-        self.rebuild_view_quietly(id);
+        self.rebuild_view_quietly();
         self.poke();
         Ok(json!({"id": doc, "title": title}))
     }
@@ -1966,7 +2021,10 @@ impl BuildService {
             self.save_queue_locked(&st);
         }
         self.apply_pending_deletes(id);
-        self.rebuild_view_quietly(id);
+        if let Err(e) = self.update_copies(id, doc, None) {
+            eprintln!("cache: writing the copies file: {e}");
+        }
+        self.rebuild_view_quietly();
         self.poke();
         Ok(json!({"removed": true, "id": doc}))
     }
