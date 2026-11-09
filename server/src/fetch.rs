@@ -16,7 +16,7 @@ use crate::fetch_scope::{Policy, PublicResolver, Scope};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The hosts the app's catalog screens read from, and nothing else (app/lib, checked 2026-11-01):
 ///   opds.library.kiwix.org  the Kiwix OPDS catalog (browse/opds.dart `kiwixCatalogHost`) and its icons
@@ -220,9 +220,19 @@ pub fn open_with(policy: &Policy, url: &str, max: u64) -> Result<Opened, FetchEr
     let refused = Arc::new(AtomicBool::new(false));
     let agent = if policy.public_only() { agent_with(Some(PublicResolver { refused: refused.clone(), exempt: vec![] })) } else { agent() };
     let mut cur = url.to_string();
+    let started = Instant::now();
     for hop in 0..7 {
         policy.check(&cur, hop == 0)?;
-        let resp = match agent.get(&cur).call() {
+        let mut req = agent.get(&cur);
+        if policy.scope != Scope::Catalog {
+            // one deadline for the whole read, redirects and body included
+            let left = policy.deadline.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                return Err(FetchError::Unreachable("it took too long".into()));
+            }
+            req = req.timeout(left);
+        }
+        let resp = match req.call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) if illustration_fallback(&cur).is_some() => {
                 // The catalog only serves its icons at the size its own feed links (48); another size is a 404.

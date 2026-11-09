@@ -62,11 +62,17 @@ pub struct Policy {
     pub download: bool,
     /// Tests only: addresses on this machine are readable.
     pub allow_private: bool,
+    /// The most one read may take in all (each request, redirects included, and its body), so a slow trickle cannot hold a slot.
+    /// The catalog scope has none: its reads are few and from our own hosts.
+    pub deadline: std::time::Duration,
 }
+
+/// How long one read of a non-catalog scope may take in all.
+pub const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
 
 impl Policy {
     pub fn new(scope: Scope, catalog_hosts: Vec<String>) -> Policy {
-        Policy { scope, catalog_hosts, plain: false, download: false, allow_private: false }
+        Policy { scope, catalog_hosts, plain: false, download: false, allow_private: false, deadline: READ_DEADLINE }
     }
 
     /// Whether the connection must be refused for any address that is not public.
@@ -236,6 +242,9 @@ fn is_public_v6(a: Ipv6Addr) -> bool {
     !(a.is_unspecified()
         || a.is_loopback()
         || a.is_multicast()
+        || (s[..4] == [0, 0, 0, 0] && s[4] == 0xffff && s[5] == 0) // ::ffff:0:0/96 (IPv4-translated, ::ffff:0:a.b.c.d)
+        || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1) // 64:ff9b:1::/48 (local-use NAT64)
+        || (s[0] == 0x2001 && s[1] == 0) // 2001::/32 Teredo
         || (s[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
         || (s[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
         || (s[0] & 0xffc0) == 0xfec0 // fec0::/10 site-local
@@ -306,7 +315,7 @@ mod tests {
     fn only_public_addresses_are_public() {
         for a in [
             "8.8.8.8", "1.1.1.1", "93.184.216.34", "172.32.0.1", "100.63.255.255", "100.128.0.1", "2606:4700:4700::1111", "2a00:1450:4001::200e",
-            "::ffff:8.8.8.8", "64:ff9b::808:808",
+            "::ffff:8.8.8.8", "64:ff9b::808:808", "2001:4860:4860::8888",
         ] {
             assert!(is_public(ip(a)), "{a}");
         }
@@ -314,6 +323,7 @@ mod tests {
             "0.0.0.0", "0.1.2.3", "127.0.0.1", "127.9.9.9", "10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.240", "169.254.169.254",
             "100.64.0.4", "100.127.255.255", "192.0.0.1", "192.0.2.1", "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.9", "224.0.0.1",
             "240.0.0.1", "255.255.255.255", "::", "::1", "fe80::1", "fc00::1", "fd12:3456::1", "fec0::1", "ff02::1", "2001:db8::1",
+            "::ffff:0:8.8.8.8", "::ffff:0:127.0.0.1", "64:ff9b:1::808:808", "64:ff9b:1::1", "2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",
             "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254", "::127.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::1", "2002:c0a8:101::",
         ] {
             assert!(!is_public(ip(a)), "{a}");

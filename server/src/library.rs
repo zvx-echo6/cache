@@ -170,6 +170,8 @@ pub struct LibraryOptions {
     pub fetch_user: Option<bool>,
     /// Tests only: `/api/fetch` scopes other than `catalog` may read addresses on this machine.
     pub fetch_allow_private: bool,
+    /// The most one read of a non-catalog `/api/fetch` scope may take. Default: [`crate::fetch_scope::READ_DEADLINE`].
+    pub fetch_deadline: Option<Duration>,
 }
 
 pub struct Library {
@@ -180,6 +182,7 @@ pub struct Library {
     fetch_hosts: Vec<String>,
     fetch_user: bool,
     fetch_allow_private: bool,
+    fetch_deadline: Duration,
     /// How many reads of the non-catalog scopes may run at once.
     fetch_slots: Arc<tokio::sync::Semaphore>,
     fetch_max: u64,
@@ -367,6 +370,7 @@ impl Library {
             fetch_max: o.fetch_max.unwrap_or(fetch::FETCH_MAX_BYTES),
             fetch_user: o.fetch_user.unwrap_or(true),
             fetch_allow_private: o.fetch_allow_private,
+            fetch_deadline: o.fetch_deadline.unwrap_or(crate::fetch_scope::READ_DEADLINE),
             fetch_slots: Arc::new(tokio::sync::Semaphore::new(FETCH_SLOTS)),
             jobs: Mutex::new(jobs),
             running: Mutex::new(None),
@@ -994,6 +998,7 @@ impl Library {
         let mut policy = Policy::new(scope, self.fetch_hosts.clone());
         policy.plain = fetch::query_param(query, "plain").as_deref() == Some("1");
         policy.allow_private = self.fetch_allow_private;
+        policy.deadline = self.fetch_deadline;
         if scope == Scope::User && !self.fetch_user {
             return Err(api_err(403, "scope_off", "Reading an address you typed is switched off on this server."));
         }

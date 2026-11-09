@@ -156,6 +156,16 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
         "/static/x.bin" => small(&mut s, "200 OK", "Content-Type: application/octet-stream\r\n", b"\x00\x01"),
         "/api/v1/page" => small(&mut s, "200 OK", "Content-Type: text/html\r\n", b"<script>1</script>"),
         "/redir-ok" => small(&mut s, "302 Found", "Location: /cat.xml\r\n", b""),
+        "/trickle" => {
+            // a byte every 50 ms for five seconds: a slow upstream that would hold a slot
+            let _ = s.write_all(head("200 OK", "Content-Type: text/plain\r\n", None).as_bytes());
+            for _ in 0..100 {
+                if s.write_all(b"x").is_err() || s.flush().is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         "/redir-private" => small(&mut s, "302 Found", &format!("Location: http://localhost:{port}/pub.zim\r\n"), b""),
         "/redir-meta" => small(&mut s, "302 Found", "Location: https://169.254.169.254/latest/meta-data\r\n", b""),
         "/redir-evil" => small(&mut s, "302 Found", &format!("Location: http://evil.invalid:{port}/x\r\n"), b""),
@@ -686,6 +696,7 @@ async fn fetch_scopes_read_other_servers_by_path_and_type_and_never_a_private_ad
     let _g = LOCK.lock().await;
     let mut setup = Setup::new();
     setup.options.fetch_allow_private = true; // the test origin is on this machine
+    setup.options.fetch_deadline = Some(Duration::from_secs(1));
     let rig = rig("fetch-scopes", setup).await;
     let get = |scope: &str, url: String| {
         let (app, cookie, scope) = (&rig.app, rig.cookie.clone(), scope.to_string());
@@ -712,6 +723,12 @@ async fn fetch_scopes_read_other_servers_by_path_and_type_and_never_a_private_ad
     assert_eq!(read_all(r.stream.unwrap()).await.0, b"<feed/>");
     let r = get("user", rig.origin.url("/huge-len")).await;
     assert_eq!((r.status, code(&r)), (413, json!("too_large")));
+    // one deadline for a whole read: a trickle is cut off when it passes (here 1 s, not the 90 s of the real server)
+    let r = get("user", rig.origin.url("/trickle")).await;
+    assert_eq!(r.status, 200);
+    let t0 = std::time::Instant::now();
+    let (got, cut) = read_all(r.stream.unwrap()).await;
+    assert!(cut && got.len() < 90 && t0.elapsed() < Duration::from_secs(4), "{} bytes, cut {cut}, {:?}", got.len(), t0.elapsed());
     // models: Hugging Face and the catalog hosts only
     let r = get("models", rig.origin.url("/cat.xml")).await;
     assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
@@ -738,6 +755,12 @@ async fn fetch_scopes_refuse_this_machine_and_the_user_scope_can_be_switched_off
     }
     let r = route(&rig1.app, "GET", &format!("/api/fetch?scope=user&url={}", enc(&rig1.origin.url("/cat.xml"))), Some(&rig1.cookie), b"").await;
     assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    // a number written in hex passes the name check; the connect-time check sees 127.0.0.1 and refuses it, with no connection made
+    for scope in ["user", "video"] {
+        let u = "https://0x7f.0x0.0x0.0x1/api/v1/x";
+        let r = route(&rig1.app, "GET", &format!("/api/fetch?scope={scope}&url={}", enc(u)), Some(&rig1.cookie), b"").await;
+        assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")), "{scope}");
+    }
     stop(&rig1).await;
 
     let mut setup = Setup::new();
