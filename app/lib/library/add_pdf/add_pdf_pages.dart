@@ -5,12 +5,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../platform/app_log.dart' show logError;
+import '../../notebook/sync/folder_access.dart' show openSyncFolder, pickSyncFolder;
 import '../../platform/battery.dart';
 import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../screens/settings/widgets.dart' show GroupLabel, say;
 import '../../search/index_overview.dart';
 import '../../search/index_scheduler.dart';
-import '../../search/index_status.dart' show indexSlowedWords, indexWaitWords;
+import '../../search/index_status.dart' show indexSlowedWords, indexWaitWords, indexWaitingWords;
 import '../../sources/libraries_state.dart';
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
@@ -24,37 +25,80 @@ import 'add_pdf_state.dart';
 /// The Library's pages and states, for Add PDF's result actions (Move, Undo, Place, Open book): set by the Library screen.
 LibraryDeps? addPdfLibraryDeps;
 
-/// A PDF the person chose: its path (the picker's own copy on a phone), its name and size.
+/// A PDF the person chose: its path (the picker's own copy on a phone; inside a chosen folder, its path there), its name and size.
 typedef PickedPdf = ({String path, String name, int bytes});
 
-/// Chooses a PDF with the system's file picker (the app's file_picker, PDFs only); null when nothing was chosen.
-Future<PickedPdf?> pickPdfWithPicker() async {
-  final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: const ['pdf']);
-  final path = f?.path;
-  if (f == null || path == null) return null;
-  return (path: path, name: f.name, bytes: await f.length() ?? await File(path).length());
+/// What the person chose: one PDF or several (the picker), or every PDF in a folder and its subfolders ([folder] its name,
+/// [folderRoot] where it is: an Android folder's tree URI, else a path), with the other files left out ([skipped]).
+class AddPdfChoice {
+  const AddPdfChoice(this.files, {this.folder, this.folderRoot, this.skipped = 0});
+
+  final List<PickedPdf> files;
+  final String? folder;
+  final String? folderRoot;
+  final int skipped;
+
+  int get bytes => files.fold(0, (s, f) => s + f.bytes);
+  bool get one => files.length == 1 && folder == null;
 }
 
-/// What the tests and renders use in place of the system picker.
-Future<PickedPdf?> Function() addPdfPicker = pickPdfWithPicker;
+/// Chooses PDFs with the system's file picker (the app's file_picker, PDFs only, one or several); null when none was chosen.
+Future<AddPdfChoice?> pickPdfWithPicker() async {
+  final picked = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: const ['pdf']);
+  final files = <PickedPdf>[];
+  for (final f in picked) {
+    final path = f.path;
+    if (path == null) continue;
+    files.add((path: path, name: f.name, bytes: await f.length() ?? await File(path).length()));
+  }
+  return files.isEmpty ? null : AddPdfChoice(files);
+}
 
-/// Add a PDF: the file picker, then the confirm screen. The way in from Add to Library (under Your own) and from Bookshelves.
+/// Chooses a folder (Android's folder picker, the iOS document picker for folders, elsewhere the file picker's) and lists every
+/// PDF in it and its subfolders; the other files are counted. Null when none was chosen.
+Future<AddPdfChoice?> pickPdfFolder() async {
+  final picked = await pickSyncFolder();
+  if (picked == null) return null;
+  final folder = await openSyncFolder(picked.path);
+  final files = <PickedPdf>[];
+  var skipped = 0;
+  for (final f in await folder.list('')) {
+    final name = f.path.split('/').last;
+    if (name.startsWith('.')) continue;
+    if (name.toLowerCase().endsWith('.pdf')) {
+      files.add((path: f.path, name: name, bytes: f.size));
+    } else {
+      skipped++;
+    }
+  }
+  return AddPdfChoice(files, folder: picked.display, folderRoot: picked.path, skipped: skipped);
+}
+
+/// What the tests and renders use in place of the system pickers.
+Future<AddPdfChoice?> Function() addPdfPicker = pickPdfWithPicker;
+Future<AddPdfChoice?> Function() addPdfFolderPicker = pickPdfFolder;
+
+/// Add a PDF: the file picker (one or several), then the confirm screen. The way in from Add to Library (under Your own) and
+/// from Bookshelves.
 Future<void> startAddPdf(BuildContext context) => startAddPdfOn(Navigator.of(context));
 
+/// Add a folder: the folder picker, then the confirm screen.
+Future<void> startAddPdfFolder(BuildContext context) => startAddPdfOn(Navigator.of(context), folder: true);
+
 /// [startAddPdf] on [nav] (from a card that goes away meanwhile).
-Future<void> startAddPdfOn(NavigatorState nav) async {
+Future<void> startAddPdfOn(NavigatorState nav, {bool folder = false}) async {
   final state = addPdfShared;
   if (state == null) return;
-  final PickedPdf? picked;
+  final AddPdfChoice? picked;
   try {
-    picked = await addPdfPicker();
+    picked = await (folder ? addPdfFolderPicker : addPdfPicker)();
   } catch (e) {
-    logError('Add PDF: the file picker failed', error: e);
+    logError('Add PDF: the ${folder ? 'folder' : 'file'} picker failed', error: e);
     return;
   }
-  final pdf = picked;
-  if (pdf == null || !nav.mounted) return;
-  await nav.push(MaterialPageRoute<void>(builder: (_) => AddPdfConfirmPage(state: state, pdf: pdf)));
+  final choice = picked;
+  if (choice == null || !nav.mounted) return;
+  await nav.push(MaterialPageRoute<void>(builder: (_) => AddPdfConfirmPage(state: state, choice: choice)));
 }
 
 /// The libraries a PDF may go to: My books (made on first use) and the other libraries the person made.
@@ -66,6 +110,13 @@ List<AddPdfTarget> addPdfTargets(LibrariesState? libs) {
     for (final l in own)
       if (l != def) AddPdfTarget(title: libs!.titleOf(l), path: l.path),
   ];
+}
+
+/// "12 PDFs", "1 PDF".
+String addPdfCountWords(AddPdfChoice c) => c.files.length == 1 ? '1 PDF' : '${c.files.length} PDFs';
+
+extension on String {
+  String? get emptyToNull => isEmpty ? null : this;
 }
 
 String _titleFromName(String name) => name.replaceFirst(RegExp(r'\.pdf$', caseSensitive: false), '');
@@ -82,7 +133,9 @@ String _titleFromName(String name) => name.replaceFirst(RegExp(r'\.pdf$', caseSe
 
 /// A file's tile: the PDF icon on a tinted square.
 class _FileTile extends StatelessWidget {
-  const _FileTile();
+  const _FileTile({this.icon = Icons.description_outlined});
+
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -91,7 +144,7 @@ class _FileTile extends StatelessWidget {
       width: 38,
       height: 38,
       decoration: BoxDecoration(color: Color.alphaBlend(k.secondary.withValues(alpha: 0.12), k.surface), borderRadius: BorderRadius.circular(9)),
-      child: Icon(Icons.description_outlined, size: 21, color: k.accent),
+      child: Icon(icon, size: 21, color: k.accent),
     );
   }
 }
@@ -351,10 +404,15 @@ Widget _bar(BuildContext context, double? value, {bool warn = false}) {
 /// After picking a file: one screen, one decision. The title (filled from the file), its size, the library (Change), the time,
 /// and Add PDF. The file is not copied or changed here; Cancel leaves nothing behind.
 class AddPdfConfirmPage extends StatefulWidget {
-  const AddPdfConfirmPage({super.key, required this.state, required this.pdf, this.battery});
+  AddPdfConfirmPage({super.key, required this.state, PickedPdf? pdf, AddPdfChoice? choice, this.battery})
+      : assert(pdf != null || choice != null),
+        choice = choice ?? AddPdfChoice([pdf!]);
 
   final AddPdfState state;
-  final PickedPdf pdf;
+
+  /// One PDF, several, or a folder's.
+  final AddPdfChoice choice;
+  PickedPdf get pdf => choice.files.first;
 
   /// The battery now (for the time's line); the device's own when null.
   final BatteryReading? battery;
@@ -385,25 +443,43 @@ class _AddPdfConfirmPageState extends State<AddPdfConfirmPage> {
   void dispose() {
     _title.dispose();
     // Cancel (or back) leaves nothing behind: the picker's copy goes
-    if (!_added) {
-      try {
-        final f = File(widget.pdf.path);
-        if (f.existsSync() && f.path.contains('file_picker')) f.deleteSync();
-      } catch (_) {}
+    if (!_added && widget.choice.folderRoot == null) {
+      for (final p in widget.choice.files) {
+        try {
+          final f = File(p.path);
+          if (f.existsSync() && f.path.contains('file_picker')) f.deleteSync();
+        } catch (_) {}
+      }
     }
     super.dispose();
   }
 
   Future<void> _change() async {
-    final t = await showAddPdfLibrarySheet(context, targets: addPdfTargets(widget.state.libraries), current: _target, fileName: widget.pdf.name);
+    final c = widget.choice;
+    final t = await showAddPdfLibrarySheet(context, targets: addPdfTargets(widget.state.libraries), current: _target, fileName: c.one ? widget.pdf.name : addPdfCountWords(c));
     if (t != null && mounted) setState(() => _target = t);
   }
 
   Future<void> _add() async {
     setState(() => _adding = true);
     try {
-      final title = _title.text.trim().isEmpty ? _titleFromName(widget.pdf.name) : _title.text.trim();
-      await widget.state.add(pdfPath: widget.pdf.path, fileName: widget.pdf.name, bytes: widget.pdf.bytes, title: title, target: _target, ownsFile: Platform.isAndroid || Platform.isIOS);
+      final c = widget.choice;
+      var target = _target;
+      for (final p in c.files) {
+        // one title to edit for one PDF; several take their file names
+        final title = c.one && _title.text.trim().isNotEmpty ? _title.text.trim() : _titleFromName(p.name);
+        final job = await widget.state.add(
+          pdfPath: p.path,
+          fileName: p.name,
+          bytes: p.bytes,
+          title: title,
+          target: target,
+          ownsFile: c.folderRoot != null || Platform.isAndroid || Platform.isIOS,
+          folderRoot: c.folderRoot,
+        );
+        // My books is made by the first: the rest go to it
+        target = AddPdfTarget(title: job.libraryTitle, path: job.libraryPath, isDefault: target.isDefault);
+      }
       _added = true;
       if (!mounted) return;
       // the confirm screen gives way to the progress page
@@ -418,25 +494,29 @@ class _AddPdfConfirmPageState extends State<AddPdfConfirmPage> {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final c = widget.choice;
     final pdf = widget.pdf;
-    final time = addPdfTimeWords(pdf.bytes, _battery);
+    final time = addPdfTimeWords(c.bytes, _battery);
     return Scaffold(
-      appBar: AppBar(title: const Text('Add PDF')),
+      appBar: AppBar(title: Text(c.folder != null ? 'Add a folder' : 'Add PDF')),
       body: LayoutBuilder(
-        builder: (context, c) => ListView(
-          padding: EdgeInsets.fromLTRB(c.maxWidth > 600 ? (c.maxWidth - 560) / 2 : 12, 4, c.maxWidth > 600 ? (c.maxWidth - 560) / 2 : 12, 24),
+        builder: (context, cs) => ListView(
+          padding: EdgeInsets.fromLTRB(cs.maxWidth > 600 ? (cs.maxWidth - 560) / 2 : 12, 4, cs.maxWidth > 600 ? (cs.maxWidth - 560) / 2 : 12, 24),
           children: [
             _Card(
               child: Row(
                 children: [
-                  const _FileTile(),
+                  c.folder != null ? const _FileTile(icon: Icons.folder_outlined) : const _FileTile(),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(pdf.name, key: const ValueKey('add-pdf-file'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                        Text('From this phone', style: TextStyle(fontSize: 13, color: k.secondary)),
+                        Text(c.folder ?? (c.one ? pdf.name : addPdfCountWords(c)), key: const ValueKey('add-pdf-file'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                        Text(
+                          c.folder != null ? 'This folder and its subfolders' : 'From this phone',
+                          style: TextStyle(fontSize: 13, color: k.secondary),
+                        ),
                       ],
                     ),
                   ),
@@ -444,23 +524,39 @@ class _AddPdfConfirmPageState extends State<AddPdfConfirmPage> {
               ),
             ),
             const SizedBox(height: 10),
-            TextField(
-              key: const ValueKey('add-pdf-title'),
-              controller: _title,
-              textCapitalization: TextCapitalization.sentences,
-              style: TextStyle(fontSize: 16, color: k.text),
-              decoration: InputDecoration(
-                labelText: 'Title',
-                filled: true,
-                fillColor: k.surface,
-                floatingLabelBehavior: FloatingLabelBehavior.always,
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: k.accent, width: 1.2)),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: k.accent, width: 2)),
+            if (c.one) ...[
+              TextField(
+                key: const ValueKey('add-pdf-title'),
+                controller: _title,
+                textCapitalization: TextCapitalization.sentences,
+                style: TextStyle(fontSize: 16, color: k.text),
+                decoration: InputDecoration(
+                  labelText: 'Title',
+                  filled: true,
+                  fillColor: k.surface,
+                  floatingLabelBehavior: FloatingLabelBehavior.always,
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: k.accent, width: 1.2)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: k.accent, width: 2)),
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
+              const SizedBox(height: 10),
+            ],
+            if (!c.one)
+              _Stack(rows: [
+                _Fact(
+                  label: c.folder != null ? 'In this folder and its subfolders' : 'PDFs',
+                  value: '${addPdfCountWords(c)} · ${formatBytes(c.bytes)} · ${time.time}',
+                  valueKey: const ValueKey('add-pdf-count'),
+                  note: [
+                    if (c.files.isEmpty) 'There are no PDFs in it.' else time.note,
+                    if (c.skipped > 0) '${c.skipped == 1 ? '1 file that is' : '${c.skipped} files that are'} not a PDF ${c.skipped == 1 ? 'is' : 'are'} left out.',
+                    if (c.files.length > 1) 'They are added one at a time. A book you already have becomes a spare copy.',
+                  ].join(' ').emptyToNull,
+                ),
+              ]),
+            if (!c.one) const SizedBox(height: 10),
             _Stack(rows: [
-              _Fact(label: 'Size', value: formatBytes(pdf.bytes), valueKey: const ValueKey('add-pdf-size')),
+              if (c.one) _Fact(label: 'Size', value: formatBytes(pdf.bytes), valueKey: const ValueKey('add-pdf-size')),
               _Fact(
                 label: 'Library',
                 value: _target.title,
@@ -468,10 +564,10 @@ class _AddPdfConfirmPageState extends State<AddPdfConfirmPage> {
                 note: _target.isNew ? 'New. Your own PDFs go here. It syncs like any library.' : null,
                 trailing: _Ghost(key: const ValueKey('add-pdf-change'), label: 'Change', onPressed: _adding ? null : _change),
               ),
-              _Fact(label: 'Time', value: time.time, note: time.note, valueKey: const ValueKey('add-pdf-time')),
+              if (c.one) _Fact(label: 'Time', value: time.time, note: time.note, valueKey: const ValueKey('add-pdf-time')),
             ]),
             const SizedBox(height: 14),
-            _Big(key: const ValueKey('add-pdf-add'), label: 'Add PDF', busy: _adding, onPressed: _adding ? null : _add),
+            _Big(key: const ValueKey('add-pdf-add'), label: c.one ? 'Add PDF' : 'Add ${addPdfCountWords(c)}', busy: _adding, onPressed: _adding || c.files.isEmpty ? null : _add),
             const SizedBox(height: 6),
             Center(child: _Txt(key: const ValueKey('add-pdf-cancel'), label: 'Cancel', onPressed: _adding ? null : () => Navigator.of(context).maybePop())),
           ],
@@ -648,7 +744,11 @@ class AddPdfJobCard extends StatelessWidget {
     if (running && item!.slowed) {
       return _HeldCard(state: state, job: job, words: indexSlowedWords(item.warm), action: ('Pause', Icons.pause, () => state.pause(job)));
     }
-    if (running || item == null || item.state == IndexState.queued) return _PhaseCard(state: state, job: job, full: full);
+    if (running || item == null) return _PhaseCard(state: state, job: job, full: full);
+    // its turn comes (one PDF at a time): the short card
+    if (item.state == IndexState.queued) {
+      return _HeldCard(state: state, job: job, words: indexWaitingWords(kAddPdfKind), action: ('Pause', Icons.pause, () => state.pause(job)));
+    }
     final why = item.why;
     final words = indexWaitWords(why, battery: scheduler?.reading, bytesNeeded: item.bytesNeeded, warm: item.warm) ?? 'Waiting';
     final (String, IconData, VoidCallback) action = switch (why) {
@@ -1095,7 +1195,7 @@ class AddPdfRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    const radius = BorderRadius.vertical(top: Radius.circular(4), bottom: Radius.circular(14));
+    const radius = BorderRadius.all(Radius.circular(4));
     return Material(
       color: k.surface,
       borderRadius: radius,
@@ -1117,6 +1217,48 @@ class AddPdfRow extends StatelessWidget {
                     children: [
                       Text('Add a PDF', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                       Text('A manual or a scanned book', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: k.secondary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Add a folder" in Add to Library, under Add a PDF: every PDF in a folder and its subfolders.
+class AddPdfFolderRow extends StatelessWidget {
+  const AddPdfFolderRow({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    const radius = BorderRadius.vertical(top: Radius.circular(4), bottom: Radius.circular(14));
+    return Material(
+      color: k.surface,
+      borderRadius: radius,
+      child: InkWell(
+        key: const ValueKey('add-pdf-folder'),
+        borderRadius: radius,
+        onTap: () => startAddPdfFolder(context),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 52),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                const _FileTile(icon: Icons.folder_outlined),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Add a folder', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                      Text('Every PDF in it and its subfolders', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                     ],
                   ),
                 ),

@@ -18,4 +18,6 @@ class SafStream {
 
   Future<SafNewFile> writeFileUriBytes(String fileUri, Uint8List data, {bool? append}) async =>
       throw UnsupportedError('web: SafStream.writeFileUriBytes');
+
+  Future<void> copyToLocalFile(String srcUri, String destPath) async => throw UnsupportedError('web: SafStream.copyToLocalFile');
 }
