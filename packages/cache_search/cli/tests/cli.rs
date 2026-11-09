@@ -477,6 +477,36 @@ fn index_library_takes_one_index_folder_option_and_index_seal_needs_its_fields()
 }
 
 #[test]
+fn index_library_into_the_indexes_folder_publishes_a_snapshot() {
+    let tmp = TempDir::new("idxsnap");
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let pts: Vec<_> = (1..=20u64)
+            .map(|i| PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("T{i}"), "content": format!("text {i}")})).0)
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+    }
+    let settings = tmp.path("cache-library.json");
+    std::fs::write(&settings, json!({"format": 1, "library_id": "t", "version": "1", "title": "T"}).to_string()).unwrap();
+    let indexes = tmp.path("indexes");
+    let out = j(cs_ok(&["index-library", "--library", &shard, "--settings", &settings, "--indexes-dir", &indexes]).lines().last().unwrap());
+    assert_eq!(out["state"], "done", "{out}");
+    let snap = out["result"]["snapshot"].as_str().expect("a snapshot id").to_string();
+    // published where the app looks: <indexes>/library/<id@version>/snap/<snapshot>/manifest.json, and nothing left in .build
+    let dir = format!("{indexes}/library/t@1");
+    let m = j(&std::fs::read_to_string(format!("{dir}/snap/{snap}/manifest.json")).unwrap());
+    assert_eq!(m["kind"], "library");
+    assert_eq!(m["source_id"], "t@1");
+    assert!(m["files"].as_array().is_some_and(|f| !f.is_empty()), "{m}");
+    let build = std::path::Path::new(&dir).join(".build");
+    assert!(!build.exists() || std::fs::read_dir(&build).unwrap().next().is_none(), "the build folder is cleared");
+}
+
+#[test]
 fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
     let tmp = TempDir::new("idxfail");
     // an existing folder that is not a library: the job starts, then fails on its own thread
