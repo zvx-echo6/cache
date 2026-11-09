@@ -1578,7 +1578,10 @@ fn the_old_library_log_is_imported_once_and_gives_the_same_shelves_numbers_and_t
     drop(svc);
     // the data as an earlier build left it: no Bookshelves folder, and this device's events in the library's own log, by doc
     std::fs::remove_dir_all(d.0.join(booklog::BOOKSHELVES_DIR)).unwrap();
+    // a book that was shelved as 510-007 and later deleted: its pack is gone, its number must never be given out again
+    let gone = "gone-doc".to_string();
     let old = vec![
+        OldEvent::new(9, &dev, OldKind::Assign { doc: gone.clone(), div: "510".into(), seq: 7 }),
         OldEvent::new(10, &dev, OldKind::Place { doc: well.clone(), div: "510".into(), by: OldBy::Auto }),
         OldEvent::new(10, &dev, OldKind::Assign { doc: well.clone(), div: "510".into(), seq: 3 }),
         OldEvent::new(11, &dev, OldKind::Place { doc: radio.clone(), div: "510".into(), by: OldBy::User }),
@@ -1603,8 +1606,11 @@ fn the_old_library_log_is_imported_once_and_gives_the_same_shelves_numbers_and_t
     assert_eq!(events.len(), old.len(), "{events:?}");
     assert_eq!(events.iter().map(|e| e.at).collect::<Vec<_>>(), old.iter().map(|e| e.at).collect::<Vec<_>>());
     let (wc, rc) = (copy_of(&svc, &lib, &well), copy_of(&svc, &lib, &radio));
-    assert!(events.iter().all(|e| e.kind.copy() == Some(wc.as_str()) || e.kind.copy() == Some(rc.as_str())));
-    assert!(events.iter().all(|e| e.loc.as_deref() == Some(format!("{lib}/{well}").as_str()) || e.loc.as_deref() == Some(format!("{lib}/{radio}").as_str())));
+    let gone_key = cache_shelves::library::copy_key(None, &gone);
+    assert!(events.iter().all(|e| e.kind.copy() == Some(wc.as_str()) || e.kind.copy() == Some(rc.as_str()) || e.kind.copy() == Some(gone_key.as_str())));
+    assert!(events.iter().all(|e| [&well, &radio, &gone].iter().any(|d| e.loc.as_deref() == Some(format!("{lib}/{d}").as_str()))));
+    let reserve = events.iter().find(|e| e.kind.copy() == Some(gone_key.as_str())).unwrap();
+    assert_eq!(reserve.kind, cache_shelves::Kind::Retire { copy: gone_key.clone(), div: "510".into(), seq: 7 }, "the deleted book's assign is kept as a retire");
     assert!(svc.shelves_dir().join(".local/migrated.json").is_file());
     // the books show the same shelves and numbers as the old log gave them
     svc.publish(&lib).unwrap();
@@ -1618,8 +1624,9 @@ fn the_old_library_log_is_imported_once_and_gives_the_same_shelves_numbers_and_t
     let view = shelves_view(&svc);
     assert_eq!((view["books"][&wc]["shelf"].as_str(), view["books"][&wc]["title"].as_str(), view["books"][&wc]["title_from"].as_str()), (Some("510"), Some("Wells"), Some("log")));
     assert_eq!((view["books"][&rc]["shelf"].as_str(), view["books"][&rc]["by"].as_str()), (Some("710"), Some("user")));
-    assert_eq!(view["retired"], json!({"510": [1]}));
-    assert_eq!(view["next"], json!({"510": 4, "710": 5}), "the next free numbers count what the old log assigned and retired");
+    assert_eq!(view["retired"], json!({"510": [1, 7]}));
+    assert_eq!(view["next"], json!({"510": 8, "710": 5}), "the next free numbers count what the old log assigned and retired, deleted books too");
+    assert!(view["books"].get(&gone_key).is_none(), "a deleted book does not appear");
     // once: a second start writes nothing more, and the library log is never written again
     let (svc2, _) = rig(&d);
     assert_eq!(shelf_events(&svc2).len(), old.len());
