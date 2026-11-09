@@ -199,6 +199,14 @@ Under the data folder (`/var/lib/cache-app` when installed):
 | `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
 | `zims/`, `libraries/`, `index/` | the older folders, no longer read |
 
+## Indexing
+
+With no browser open, the helper indexes what the phone indexes (`server/helper/bin/index_driver.dart`): the keyword index of each
+ZIM and library, seals of older indexes, the EPUBs and caption files inside ZIMs (`index_source`), and the PDFs inside ZIMs. The
+PDF text comes from MuPDF, through the hidden `cache pdf-text` command that the helper runs for each PDF (`CACHE_PDF_TEXT_EXE`,
+which the server sets to itself); the chunks and records are the core's own, so the indexes are the phone's format. Work yields to
+the host's heat (thermal zones) and memory (`/proc/meminfo`). Design: `renders/linux-parity/indexing-design.md`.
+
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`

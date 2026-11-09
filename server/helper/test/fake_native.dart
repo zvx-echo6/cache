@@ -2,7 +2,7 @@ import '../../../packages/cache_search/lib/src/native_api.dart';
 
 /// A stand-in for the native library, as in packages/cache_search/test/engine_test.dart (FakeNative): answers from canned
 /// JSON. Only the members these tests reach are written; anything else throws through noSuchMethod.
-class FakeNative implements CsNative, CsLiveNative {
+class FakeNative implements CsNative, CsLiveNative, CsJobNative {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 
@@ -51,6 +51,12 @@ class FakeNative implements CsNative, CsLiveNative {
 
   @override
   String? jobProgress(int job) => progressScript.length > 1 ? progressScript.removeAt(0) : progressScript.single;
+  @override
+  String? jobSet(int job, String json) {
+    calls.add('jobSet:$job:$json');
+    return '{"duty":{},"effective":{},"auto":false,"paused":false}';
+  }
+
   @override
   int jobCancel(int job) => 0;
   @override

@@ -3,6 +3,8 @@ import 'dart:async';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/errors.dart';
 import '../../../packages/cache_search/lib/src/models.dart';
+import 'host_load.dart';
+import 'pdf_zim_indexer.dart';
 
 /// Starts and drives the core's index jobs on the server, one at a time. On the phone SourcesState does this (it is not used in the
 /// browser, because the device owns the sources); the browser only reads the status.
@@ -13,12 +15,22 @@ import '../../../packages/cache_search/lib/src/models.dart';
 ///   turn the keyword index off);
 /// - the jobs are SourcesState._startIndex (`index_zim` with `heap_mb` 200) and LibrariesState._indexInstalled (`index_library`);
 /// - the polling and the "give the core the list again when a job ends" step are SourcesState._pollJobs.
+/// Beyond the keyword indexes, as on the phone (AppIndexCoreCalls and PdfIndexWork, run by its IndexScheduler):
+/// - `index_seal` for an index built before snapshots (cs_status `index.needs_seal`), and `index_source` for the EPUBs and caption
+///   files of a ZIM (`epubindex` and `captionsindex` with `needs_build`), with the same parameters; videos' captions need saved
+///   videos, which the server has none of;
+/// - the PDFs inside a ZIM that has none searchable yet (cs_status `pdfindex` is not ready): [ZimPdfIndexer] reads each PDF with
+///   MuPDF (the pdfrx loop needs Flutter) and makes the same core calls, so the snapshot is the phone's format.
+/// Order: a ZIM or library's keyword index, then seals, then EPUBs and captions, then PDFs; one job at a time.
+/// The phone's throttle has a hook here too, as far as a server has one ([HostLoad]): `index_seal`, `index_source` and the PDF loop
+/// follow the host's heat and memory (jobs through cs_job_set, the PDF loop between PDFs); with [load] null there is no yield.
+///
 /// A ZIM that is stale is indexed again as well. A source is tried once for each [useSources] call (open or rescan), so a source
 /// whose index cannot be built does not start over in a loop; a failure is kept in [failures] until the next rescan.
 ///
 /// The helper is single-threaded and answers one line at a time, so a timer tick never overlaps a request.
 class IndexDriver {
-  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}});
+  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}, this.load, this.pdf}) : _pacer = IndexPacer(load);
 
   final CoreDispatcher dispatcher;
 
@@ -26,6 +38,26 @@ class IndexDriver {
   final Map<String, dynamic> extra;
   final void Function(String message)? log;
   final Duration every;
+
+  /// The host's heat and memory, which index_seal, index_source and the PDF loop yield to; null: no yield.
+  final HostLoad? load;
+
+  /// The PDF reader and the indexes folder, for the PDFs inside ZIMs; null: they are not indexed.
+  final PdfWork? pdf;
+  final IndexPacer _pacer;
+
+  /// The running PDF run, and whether one is starting (it lists the ZIM's PDFs first).
+  ZimPdfIndexer? _pdfRun;
+  bool _pdfBusy = false;
+
+  /// How many PDFs each ZIM has (by path and id), so a ZIM without any is not listed again at every rescan.
+  final Map<String, int> _pdfCounts = {};
+  Map<String, Map<String, dynamic>> _status = const {};
+
+  /// Whether the running job takes cs_job_set (seals and index_source do), and the duty last sent to it.
+  bool _paced = false;
+  HostDuty? _sent;
+  int _paceTicks = 0;
 
   List<Map<String, dynamic>> _sources = const [];
   final Set<String> _tried = {};
@@ -57,12 +89,13 @@ class IndexDriver {
     scheduleMicrotask(tick);
   }
 
-  bool get busy => _job != null;
+  bool get busy => _job != null || _pdfBusy;
 
   /// Whether the timer is running (it stops when nothing is left to start or wait for).
   bool get running => _timer != null;
 
   void stop() {
+    _pdfRun?.cancel();
     _timer?.cancel();
     _timer = null;
   }
@@ -74,13 +107,17 @@ class IndexDriver {
         _advance();
         if (_job != null) return;
       }
+      if (_pdfBusy) return;
+      // The host is too hot or short of memory: nothing new starts now (the timer goes on and looks again).
+      if (load?.duty().paused ?? false) return;
       final next = _next();
       if (next == null) {
+        if (_startPdf()) return;
         // Nothing to start now. Keep ticking while a source is still settling; stop only when all are done or not wanted.
         if (!_waiting) stop();
         return;
       }
-      _start(next.source, next.kind, next.params);
+      _start(next.source, next.kind, next.params, key: next.key);
     } on CacheSearchException catch (e) {
       // Not open yet, or the engine went away: nothing to do until the server opens or rescans again.
       log?.call('indexing paused: ${e.message}');
@@ -105,7 +142,10 @@ class IndexDriver {
       return;
     }
     progress[path] = p.fraction;
-    if (!p.isFinished) return;
+    if (!p.isFinished) {
+      _pace(job);
+      return;
+    }
     try {
       dispatcher.handle('jobFree', {'job': job});
     } catch (_) {}
@@ -122,11 +162,12 @@ class IndexDriver {
     dispatcher.handle('setSources', {'sources': _sources, 'extra': extra});
   }
 
-  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params})? _next() {
+  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _next() {
     final status = <String, Map<String, dynamic>>{
       for (final s in (dispatcher.handle('status', const {}) as List)) (s as Map)['path'] as String: s.cast<String, dynamic>(),
     };
     _waiting = false;
+    _status = status;
     for (final src in _sources) {
       final path = src['path'] as String;
       if (_tried.contains(path) || failures.containsKey(path)) continue;
@@ -144,13 +185,126 @@ class IndexDriver {
           source: src,
           kind: 'index_library',
           params: {'library_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200, 'settings': ?settings},
+          key: null,
         );
       }
       final searchable = s['id'] != null && s['indexed'] == true;
       if (searchable && s['stale'] != true) continue;
-      return (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200});
+      return (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200}, key: null);
+    }
+    return _nextCoreWork(status);
+  }
+
+  /// The core's own index work the phone's AppIndexCoreCalls.needs lists: seals first, then the EPUBs and caption files of ZIMs.
+  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _nextCoreWork(Map<String, Map<String, dynamic>> status) {
+    final root = _indexRoot;
+    if (root.isEmpty) return null;
+    for (final src in _sources) {
+      final s = status[src['path'] as String];
+      if (s == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
+      final index = (s['index'] as Map?)?.cast<String, dynamic>();
+      final id = s['source_id'] as String?;
+      final kind = index?['kind'];
+      final key = 'seal:$kind/$id';
+      if (index != null && index['needs_seal'] == true && id != null && (kind == 'zim' || kind == 'library') && !_tried.contains(key) && !failures.containsKey(key)) {
+        return (source: src, kind: 'index_seal', params: {...root, 'kind': kind, 'source_id': id, 'index_dir': ?index['dir']}, key: key);
+      }
+    }
+    for (final src in _sources) {
+      final s = status[src['path'] as String];
+      if (s == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
+      for (final sub in [s['captionsindex'], s['epubindex']]) {
+        if (sub is! Map || sub['needs_build'] != true || sub['kind'] == null) continue;
+        final id = (sub['source_id'] ?? s['source_id']) as String?;
+        final key = '${sub['kind']}/$id';
+        if (id == null || _tried.contains(key) || failures.containsKey(key)) continue;
+        return (source: src, kind: 'index_source', params: {...root, 'kind': sub['kind'], 'source_id': id}, key: key);
+      }
     }
     return null;
+  }
+
+  /// Starts the PDF run for the next ZIM whose PDFs are not searchable yet (the phone's PdfIndexState.needsIndex); false when
+  /// there is none, or the core has no PDF index calls.
+  bool _startPdf() {
+    final w = pdf;
+    if (w == null || !w.core.available) return false;
+    for (final src in _sources) {
+      if (src['kind'] == 'library') continue;
+      final path = src['path'] as String;
+      final s = _status[path];
+      final id = s?['id'] as String?;
+      if (s == null || id == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
+      final state = (s['pdfindex'] as Map?)?['state'];
+      if (state == 'ready' || state == 'opening') continue;
+      final key = 'zim-pdf/$id';
+      if (_tried.contains(key) || failures.containsKey(key) || _pdfCounts['$path|$id'] == 0) continue;
+      _tried.add(key);
+      _pdfBusy = true;
+      unawaited(_runPdf(w, path, id, key));
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _runPdf(PdfWork w, String path, String id, String key) async {
+    var attach = false;
+    try {
+      progress[key] = null;
+      final list = await w.core.zimPdfs(id);
+      _pdfCounts['$path|$id'] = list.pdfs.length;
+      if (list.pdfs.isEmpty) return;
+      log?.call('indexing the PDFs of $path (${list.pdfs.length})');
+      final run = _pdfRun = ZimPdfIndexer(core: w.core, read: w.read, indexesDir: w.indexesDir, permit: _pacer.permit, log: log);
+      _pacer.cancelled = () => !_pdfBusy || _timer == null;
+      // Progress for the status (index.state) while it runs.
+      final watch = Timer.periodic(const Duration(seconds: 1), (_) => progress[key] = run.fraction);
+      final ZimPdfEnd end;
+      try {
+        end = await run.run(list);
+      } finally {
+        watch.cancel();
+      }
+      switch (end) {
+        case ZimPdfEnd.finished:
+          attach = true;
+          log?.call('PDF index of $path finished (${run.done} PDFs, ${run.skipped} skipped, ${run.reused} reused)');
+        case ZimPdfEnd.paused:
+          // Stopped with the server (or a rescan's stop); the build stays and is picked up at the next open.
+          _tried.remove(key);
+          log?.call('PDF index of $path paused');
+        case ZimPdfEnd.failed:
+          failures[key] = run.error ?? 'Indexing PDFs failed';
+          log?.call('PDF index of $path failed: ${failures[key]}');
+      }
+    } catch (e) {
+      failures[key] = '$e';
+      log?.call('PDF index of $path failed: $e');
+    } finally {
+      _pdfRun = null;
+      _pdfBusy = false;
+      progress.remove(key);
+      if (attach) {
+        // The core attaches the published snapshot when it is given the sources again (the phone's onIndexReady).
+        try {
+          dispatcher.handle('setSources', {'sources': _sources, 'extra': extra});
+        } catch (_) {}
+      }
+      if (_timer != null) kick();
+    }
+  }
+
+  /// Sends the host's duty to the running seal or index_source job when it changes (and every 15 ticks, so a lost set does not
+  /// hold the job for ever), as the phone's CoreIndexRun does.
+  void _pace(int job) {
+    final l = load;
+    if (l == null || !_paced) return;
+    final d = l.duty();
+    if (_sent == d && ++_paceTicks % 15 != 0) return;
+    _sent = d;
+    try {
+      dispatcher.handle('jobSet', {'job': job, 'pace': d.pace()});
+    } catch (_) {}
   }
 
   Map<String, dynamic> get _indexRoot {
@@ -158,11 +312,16 @@ class IndexDriver {
     return root is String && root.isNotEmpty ? {'indexes_dir': root} : const {};
   }
 
-  void _start(Map<String, dynamic> source, String kind, Map<String, dynamic> params) {
-    final path = source['path'] as String;
+  void _start(Map<String, dynamic> source, String kind, Map<String, dynamic> params, {String? key}) {
+    final path = key ?? source['path'] as String;
     _tried.add(path);
+    final paced = kind == 'index_seal' || kind == 'index_source';
+    final duty = paced ? load?.duty() : null;
     try {
-      _job = dispatcher.handle('jobStart', {'kind': kind, 'params': params}) as int;
+      _job = dispatcher.handle('jobStart', {'kind': kind, 'params': {...params, if (duty != null && !duty.paused) 'duty': {'work_ms': duty.workMs, 'idle_ms': duty.idleMs}}}) as int;
+      _paced = paced;
+      _sent = duty;
+      _paceTicks = 0;
       _jobPath = path;
       progress[path] = null;
       log?.call('indexing $path ($kind)');
