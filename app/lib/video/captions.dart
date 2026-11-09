@@ -1,8 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
 
 import '../net/fetch.dart';
+import '../platform.dart' as plat;
+import 'video_media.dart';
 
 /// One caption line with its time, as the player and the transcript show it.
 class Cue {
@@ -68,8 +72,18 @@ class CaptionTrack {
   /// "English", or "Spanish (automatic)" for captions the site's speech recognition made.
   String get name => automatic ? '$label (automatic)' : label;
 
+  /// Test hook: the client a browser reads captions with.
+  static http.Client? webClient;
+
   Future<List<Cue>> load() async {
     // A caption file is small (at most 5 MB): read at once, so the first cue is there when playback starts.
+    // A browser reads the same files through the server (a page may not read a video site, and the saved files are on the server).
+    if (plat.isWeb && (path != null || url != null)) {
+      final address = path != null ? VideoMedia.file(path!) : VideoMedia.remote(url!);
+      final res = await (webClient ?? http.Client()).get(VideoMedia.resolve(address));
+      if (res.statusCode != 200) throw StateError('captions: HTTP ${res.statusCode}');
+      return parseCues(utf8.decode(res.bodyBytes, allowMalformed: true));
+    }
     if (path != null) return parseCues(File(path!).readAsStringSync());
     if (url != null) return parseCues(await fetchText(Uri.parse(url!), httpsOnly: false));
     return const [];

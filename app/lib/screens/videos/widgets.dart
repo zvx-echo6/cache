@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 import '../../video/format.dart';
+import '../../video/video_media.dart';
 
 /// A rounded surface row, the shape every list in the app uses.
 class VideoTile extends StatelessWidget {
@@ -50,13 +52,21 @@ class VideoThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     Widget image;
-    if (path != null && File(path!).existsSync()) {
+    if (plat.isWeb && path != null) {
+      // A browser has no files: the saved picture is on the server, and the site's own picture is read by the server (below).
+      image = Image.network(
+        VideoMedia.resolve(VideoMedia.file(path!)).toString(),
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => url == null ? _blank(k) : Image.network(VideoMedia.resolve(VideoMedia.remote(url!)).toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => _blank(k)),
+      );
+    } else if (!plat.isWeb && path != null && File(path!).existsSync()) {
       image = Image.file(File(path!), fit: BoxFit.cover);
     } else if (url != null) {
+      String net(String u) => plat.isWeb ? VideoMedia.resolve(VideoMedia.remote(u)).toString() : u;
       image = Image.network(
-        url!,
+        net(url!),
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => fallbackUrl == null ? _blank(k) : Image.network(fallbackUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => _blank(k)),
+        errorBuilder: (_, _, _) => fallbackUrl == null ? _blank(k) : Image.network(net(fallbackUrl!), fit: BoxFit.cover, errorBuilder: (_, _, _) => _blank(k)),
       );
     } else {
       image = _blank(k);

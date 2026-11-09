@@ -420,7 +420,7 @@ class _CacheAppState extends State<CacheApp> {
       return core == null ? null : CoreIndexJob(await core.startJob(kind, params));
     },
     indexesDir: () => _support(kIndexesDirName)?.path,
-    videoDir: () => video.dir?.path,
+    videoDir: () => video.dirPath,
     duty: () => indexThrottle.duty,
     // a finished index job: the status is read again, so the Library and the queue say it is built
     onJobDone: () => unawaited(sources.refresh()),
