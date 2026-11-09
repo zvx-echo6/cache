@@ -106,6 +106,23 @@ class AddPdfWorld {
     state.debugSet([r]);
   }
 
+  /// Several PDFs added at once: one runs, the others wait their turn.
+  void queueSeveral() {
+    final r = running;
+    final a = sampleJob('q1', title: 'Field radio handbook', bytes: 40 << 20);
+    final b = sampleJob('q2', title: 'Root cellar plans', bytes: 14 << 20);
+    scheduler
+      ..fixed = {
+        r.key: runningItem(r),
+        a.key: IndexItem(key: a.key, state: IndexState.queued, title: a.title, position: 1),
+        b.key: IndexItem(key: b.key, state: IndexState.queued, title: b.title, position: 2),
+      }
+      ..runningKey = r.key
+      ..done = 0
+      ..total = 3;
+    state.debugSet([r, a, b]);
+  }
+
   AddPdfJob get filed => sampleJob('filed', status: AddPdfStatus.done, state: 'done', result: {
     'copy': 'water',
     'pieces': 254,

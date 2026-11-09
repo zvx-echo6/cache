@@ -7,7 +7,7 @@ import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
-import '../library/add_pdf/add_pdf_pages.dart' show AddPdfRow;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
 import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
 import '../theme.dart';
 import 'browse_state.dart';
@@ -287,7 +287,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           ),
         ),
         // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
-        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow()],
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
         const SizedBox(height: 6),
       ],
       // In a browser, building a library from PDFs and the drop folder.

@@ -203,4 +203,28 @@ void main() {
     expect(aboutMinutes(addPdfEstimate(1 << 20)), 'About 1 min');
     expect(target.isNew, isTrue);
   });
+
+  test('a folder PDF is copied in when its turn comes (not when it is queued); several get their own ids', () async {
+    final calls = FakeIngestCalls({'step': steps([progress('done', result: {'copy': copy, 'pieces': 1, 'same': const [], 'shelf': null})])});
+    final copied = <String>[];
+    final s = AddPdfState(
+      calls: calls,
+      dir: () async => Directory('${tmp.path}/ingest'),
+      engines: () async => {},
+      permit: (_) async {},
+      copyIn: (j) async {
+        copied.add(j.sourcePath!);
+        await File(j.pdfPath).writeAsBytes([1, 2, 3]);
+      },
+    );
+    final a = await s.add(pdfPath: 'Water/a.pdf', fileName: 'a.pdf', bytes: 3, title: 'a', target: at(lib), ownsFile: true, folderRoot: '/folder');
+    final b = await s.add(pdfPath: 'Radio/b.pdf', fileName: 'b.pdf', bytes: 3, title: 'b', target: at(lib), ownsFile: true, folderRoot: '/folder');
+    expect(a.id, isNot(b.id));
+    expect(copied, isEmpty, reason: 'nothing is copied while it waits');
+    expect(a.pdfPath, startsWith('${tmp.path}/ingest'));
+    final run = await (await s.pending()).firstWhere((t) => t.key == a.key).start();
+    expect(await run.finished, isTrue);
+    expect(copied, ['Water/a.pdf']);
+    expect(calls.argsOf('start').single['pdf_path'], a.pdfPath);
+  });
 }
