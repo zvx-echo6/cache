@@ -192,6 +192,7 @@ class ShelfBook {
     this.docId,
     this.originalTitle,
     this.pdfPath,
+    this.onServer = false,
     this.spares = const [],
     this.aka = const [],
     this.reading,
@@ -215,6 +216,10 @@ class ShelfBook {
 
   /// The book's PDF on this device (a file path), or null when it is not here. Open reads it in the PDF reader.
   final String? pdfPath;
+
+  /// In a browser: the book's PDF is kept on the device the browser is signed in to (Cache Server), so there is no file to open here
+  /// and nothing to download. False on a phone and on desktop.
+  final bool onServer;
 
   /// Unique in its source.
   final String id;

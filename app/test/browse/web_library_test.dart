@@ -11,6 +11,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../library/fake_shelf_server.dart';
 import 'fakes.dart';
 import 'web_fakes.dart';
 
@@ -70,6 +71,49 @@ void main() {
     await tester.pumpWidget(screen(BrowseScreen(browse: browse, active: true)));
     await tester.pumpAndSettle();
   }
+
+  group('the Library in a browser has the four rows, over the server\'s shelves', () {
+    Future<void> showStructured(WidgetTester tester) async {
+      wide(tester);
+      await tester.runAsync(() async {
+        await browse.init();
+        await device.refresh();
+      });
+      await tester.pumpWidget(screen(BrowseScreen(browse: browse, active: true, structured: true, shelfServer: FakeShelfServer())));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the four rows, what the device is doing above them, and Add to Library', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await showStructured(tester);
+      for (final key in ['library-zims', 'library-bookshelves', 'library-catalog', 'library-docs']) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+      }
+      expect(find.text('No books yet'), findsOneWidget, reason: 'the server has no books');
+      expect(find.text('wiki.zim'), findsOneWidget, reason: 'the transfer the device runs is a card above the rows');
+      expect(find.byKey(const ValueKey('cancel-j1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('add-to-library')), findsOneWidget);
+    });
+
+    testWidgets('Cache Documentation and Catalog open from the rows', (tester) async {
+      await showStructured(tester);
+      await tester.tap(find.byKey(const ValueKey('library-docs')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('docs-guide')), findsOneWidget);
+      expect(find.byKey(const ValueKey('docs-credits')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('library-catalog')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('catalog-empty')), findsOneWidget);
+    });
+
+    testWidgets('ZIM Collections keeps the storage footer of the device', (tester) async {
+      api.spaceInfo = const DeviceSpaceInfo(free: 50 << 30, total: 500 << 30);
+      await showStructured(tester);
+      await tester.tap(find.byKey(const ValueKey('library-zims')));
+      await tester.pumpAndSettle();
+      expect(find.text('Device storage'), findsOneWidget);
+    });
+  });
 
   group('the Library list in a browser', () {
     testWidgets('nothing yet: the empty words say "this device", and the storage footer is always there', (tester) async {

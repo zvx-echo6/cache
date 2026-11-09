@@ -112,7 +112,7 @@ impl BuildService {
     }
 
     /// Every library folder in `<data>/app/docs/libraries` (names starting with a dot are a swap or a delete in progress).
-    fn library_refs(&self) -> Vec<LibraryRef> {
+    pub(crate) fn library_refs(&self) -> Vec<LibraryRef> {
         let mut out: Vec<LibraryRef> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(self.libs_dir()) {
             for e in rd.flatten() {
@@ -385,7 +385,7 @@ impl BuildService {
 
     /// Sets each book's `call_text` from the Bookshelves log; saves the library when any changed. A book whose copy no library
     /// lists keeps what it has.
-    fn refresh_calls(&self, lib: &str) -> Result<(), String> {
+    pub(crate) fn refresh_calls(&self, lib: &str) -> Result<(), String> {
         let s = self.shelves()?;
         let dir = self.live_dir(lib);
         let mut st = lock(&self.st);

@@ -7,10 +7,12 @@ import '../app_fs.dart';
 
 import '../browse/web/build_api.dart' show BuildBook;
 import '../browse/web/build_compression.dart' show compressionOutcomeWords;
+import '../browse/web/device_files.dart';
 import '../sharing/settings_sync.dart' show kBookshelvesDir;
 import '../sources/libraries_state.dart';
 import 'cds.dart';
 import 'library_device.dart';
+import 'shelf_server.dart';
 import 'shelf_source.dart';
 import 'shelves_calls.dart';
 
@@ -201,6 +203,11 @@ class _ViewBook {
 /// Each read: this device's own old per-library logs are imported (once per library; the core keeps the record), the view is
 /// resolved, every copy seen for the first time is checked against the others once and a match is written as the same book,
 /// and a new book that matches nothing is shelved in its suggested division with the next free number.
+///
+/// In a browser ([server] given) the shelves are Cache Server's: the libraries' catalogues are read from the server's folders through
+/// AppFs ([DeviceFiles]), the facts of the packs and the resolved view come from the server (server/BUILD-API.md "Bookshelves in the
+/// browser"), and every change is sent to it to write into its own file of the log (the server is the one device that writes: it finds
+/// the same books and shelves new ones itself when it builds). Nothing on this path touches dart:io; the phone's path above is unchanged.
 class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer, ShelfCopies, ShelfUnsorter {
   CdsShelfSource(
     this.libraries, {
@@ -210,7 +217,11 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     Future<Directory?> Function()? bookshelvesDir,
     Duration? pollEvery,
     int Function()? clock,
+    ShelfServer? server,
+    DeviceFiles? deviceFiles,
   })  : _calls = calls ?? (libraries == null ? null : CoreShelvesCalls(libraries.sources.whenCoreReady)),
+        _server = server,
+        _files = server == null ? null : (deviceFiles ?? DeviceFiles(createAppFs())),
         // ignore: prefer_initializing_formals
         _deviceId = deviceId,
         // ignore: prefer_initializing_formals
@@ -225,6 +236,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Null: no libraries on this device (the shelves show, empty).
   final LibrariesState? libraries;
   final ShelvesCalls? _calls;
+
+  /// A browser: Cache Server's shelves, and its folders' files. Null on a phone and on desktop.
+  final ShelfServer? _server;
+  final DeviceFiles? _files;
   final Future<String?> Function()? _deviceId;
   final Future<List<String>> Function()? _ownIds;
   final Future<Directory?> Function() _dirOf;
@@ -256,14 +271,17 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   bool _readOnly = false;
   String _signature = '';
   Future<void>? _reading;
+
+  /// A browser: the check of the server's stamp under way (it reads the books again when the stamp changed).
+  Future<void>? _checking;
   bool _again = false;
   Directory? _dir;
   final Set<String> _imported = {};
 
   /// Ends when the books have been read again after the last change (tests).
   Future<void> whenRead() async {
-    while (_reading != null) {
-      await _reading;
+    while (_reading != null || _checking != null) {
+      await (_reading ?? _checking)!;
     }
   }
 
@@ -366,7 +384,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     return ShelfTarget.shelf(a.division ?? a.classNumber);
   }
 
-  bool get _canWrite => !_readOnly && (_deviceId != null || libraryDeviceIdShared != null);
+  bool get _canWrite => !_readOnly && (_server != null || _deviceId != null || libraryDeviceIdShared != null);
 
   @override
   ShelfPlacer? get placer => _canWrite ? this : null;
@@ -430,6 +448,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   void _onLibraries() {
     if (_disposed) return;
+    if (_server != null) {
+      final c = _checking = _checkServer();
+      unawaited(c.catchError((Object _) {}).whenComplete(() {
+        if (identical(_checking, c)) _checking = null;
+      }));
+      return;
+    }
     String sig;
     try {
       sig = _sign();
@@ -439,6 +464,21 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     if (sig == _signature && !_loading) return;
     _signature = sig;
     _read();
+  }
+
+  /// A browser: reads the books again when the libraries or the server's logs and catalogues changed (its stamp).
+  Future<void> _checkServer() async {
+    String sig;
+    try {
+      final libs = libraries?.libraries ?? const <LibraryItem>[];
+      sig = '${[for (final l in libs) '${l.path}:${l.size}'].join('|')}#${await _server!.stamp()}';
+    } catch (_) {
+      sig = '';
+    }
+    // the same stamp: nothing to read, unless the first read has not started (one under way is reading it)
+    if (_disposed || (sig == _signature && (!_loading || _reading != null))) return;
+    _signature = sig;
+    await _read();
   }
 
   /// Reads the books again (after a change), one read at a time.
@@ -526,7 +566,73 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     }
   }
 
+  /// A browser: each library's catalogue, read from the server's folder through AppFs. Packs are not read here; the server gives their
+  /// facts. A library with no catalogue holds no books.
+  Future<List<_LibraryBooks>> _readLibrariesServer() async {
+    final out = <_LibraryBooks>[];
+    final ids = <String>{};
+    final libs = libraries;
+    if (libs == null) return out;
+    for (final l in libs.libraries) {
+      if (libs.isGuide(l)) continue;
+      String? text;
+      try {
+        text = await _files!.readText('${l.path}/$kDocumentsFile');
+      } catch (_) {
+        continue;
+      }
+      if (text == null) continue;
+      final lb = _LibraryBooks(l);
+      for (final line in const LineSplitter().convert(text).skip(1)) {
+        final f = line.split('\t');
+        if (f.isEmpty || f[0].isEmpty) continue;
+        final hash = f.length > 3 && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(f[3]) ? f[3].toLowerCase() : null;
+        lb.docs[f[0]] = (
+          title: f.length > 2 && f[2].isNotEmpty ? f[2] : f[0],
+          version: f.length > 1 ? int.tryParse(f[1]) ?? 1 : 1,
+          pages: f.length > 5 ? int.tryParse(f[5]) : null,
+          hash: hash,
+        );
+      }
+      var id = libs.idOf(l) ?? l.folderName;
+      if (!ids.add(id)) {
+        id = l.folderName;
+        ids.add(id);
+      }
+      lb.id = id;
+      out.add(lb);
+    }
+    return out;
+  }
+
+  /// A browser: the books from the server's view, and the packs' facts it gives. No view (the server did not answer): the books show
+  /// from their catalogues, read-only, in Unsorted.
+  Future<void> _readOnceServer() async {
+    final server = _server!;
+    final libs = await _readLibrariesServer();
+    _libs = libs;
+    try {
+      try {
+        final facts = await server.facts();
+        for (final lb in libs) {
+          for (final e in (facts[lb.id] ?? const <String, Map<String, dynamic>>{}).entries) {
+            if (lb.docs.containsKey(e.key)) lb.facts[e.key] = PackFacts.fromHeader(e.value);
+          }
+        }
+      } catch (_) {
+        // a book without its pack's facts shows what its catalogue has
+      }
+      final v = await server.view();
+      if (_disposed) return;
+      _apply(libs, v.view);
+    } catch (_) {
+      if (_disposed) return;
+      _apply(libs, null);
+    }
+  }
+
   Future<void> _readOnce() async {
+    if (_server != null) return _readOnceServer();
     final libs = _readLibraries();
     _libs = libs;
     final calls = _calls;
@@ -800,7 +906,9 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       author: author ?? facts?.author,
       edition: (edition == null || edition.isEmpty) ? [?facts?.edition, ?facts?.year].join(', ').emptyToNull : edition,
       originalTitle: facts?.sourceTitle != null && facts!.sourceTitle != title ? facts.sourceTitle : null,
-      pdfPath: lb == null || doc == null ? null : localPdfOf(lb.item, doc, d?.hash),
+      // a browser has no file of the book: its PDF is on the server, which the page says
+      pdfPath: _server != null || lb == null || doc == null ? null : localPdfOf(lb.item, doc, d?.hash),
+      onServer: _server != null && lb != null && doc != null,
       spares: spares,
       aka: aka,
       reading: reading,
@@ -855,6 +963,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Appends [events] to this device's file of the Bookshelves log and reads the books again.
   Future<void> _append(List<Map<String, dynamic>> events) async {
     if (events.isEmpty) return;
+    final server = _server;
+    if (server != null) {
+      if (_readOnly) throw StateError('the Bookshelves cannot be written here');
+      final at = _clock();
+      await server.events([for (final e in events) {'at': at, ...e}]);
+      _signature = '';
+      await _read();
+      return;
+    }
     final calls = _calls;
     final dir = _dir ??= await _dirOf();
     if (calls == null || dir == null || _readOnly) throw StateError('the Bookshelves cannot be written here');

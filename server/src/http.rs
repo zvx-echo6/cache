@@ -252,6 +252,11 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.place_book(&id, &doc, &body_owned)).await
         }
+        // the Library in a browser: the person's shelves as this server holds them (server/BUILD-API.md "Bookshelves in the browser")
+        ("GET", ["bookshelves"]) => blocking(move || b.bookshelves_view()).await,
+        ("GET", ["bookshelves", "stamp"]) => blocking(move || Ok(b.bookshelves_stamp())).await,
+        ("GET", ["bookshelves", "facts"]) => blocking(move || b.bookshelves_facts()).await,
+        ("POST", ["bookshelves", "events"]) => blocking(move || b.bookshelves_events(&body_owned)).await,
         ("GET", ["classes"]) => {
             let lib = crate::fetch::query_param(query, "library_id");
             blocking(move || b.classes_view(lib.as_deref())).await
@@ -984,6 +989,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_bookshelves_routes_serve_the_view_and_take_the_events_of_a_book_page() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-shelves");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        assert_eq!(route(&a, "POST", &up, Some(&c), &book("well", 3, Some("Well book"))).await.status, 200);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        // the view: this server's device id, the stamp and one book keyed by its copy
+        let (s, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(s, 200);
+        assert_eq!(v["result"]["device"], json!(a.build.device));
+        let stamp = v["result"]["stamp"].as_str().unwrap().to_string();
+        assert!(!stamp.is_empty());
+        assert_eq!(json_call(&a, "GET", "/api/build/bookshelves/stamp", &c, "").await.1["result"]["stamp"], json!(stamp));
+        let copy = v["result"]["view"]["books"].as_object().unwrap().keys().next().unwrap().to_string();
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        // the facts: the pack's header, without the bulky samebook block
+        let (s, f) = json_call(&a, "GET", "/api/build/bookshelves/facts", &c, "").await;
+        assert_eq!(s, 200);
+        let docs = f["result"]["libraries"].as_object().unwrap().values().find(|d| d.get(&doc).is_some()).expect("the book's pack header");
+        assert_eq!(docs[&doc]["doc_id"], json!(doc));
+        assert!(docs[&doc].get("samebook").is_none());
+        // a placement is the server's own: the number is its next free one, whatever number the page sent
+        let place = json!({"events": [
+            {"ev": "place", "copy": copy, "div": "530", "by": "user", "at": 1},
+            {"ev": "assign", "copy": copy, "div": "530", "seq": 7, "at": 1},
+        ]})
+        .to_string();
+        let (s, v) = json_call(&a, "POST", "/api/build/bookshelves/events", &c, &place).await;
+        assert_eq!((s, v["result"]["moved"].clone()), (200, json!(1)), "{v}");
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        assert_eq!((b["result"][0]["division"].clone(), b["result"][0]["call_number"].clone()), (json!("530"), json!("CDS 530-001")));
+        let (_, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(v["result"]["view"]["books"][&copy]["call"]["text"], json!("CDS 530-001"));
+        assert_ne!(v["result"]["stamp"], json!(stamp), "the stamp follows the log");
+        // hiding is written as it came
+        let (s, v) = json_call(&a, "POST", "/api/build/bookshelves/events", &c, &json!({"events": [{"ev": "remove", "copy": copy}]}).to_string()).await;
+        assert_eq!((s, v["result"]["written"].clone()), (200, json!(1)), "{v}");
+        let (_, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(v["result"]["view"]["books"][&copy]["removed"], json!(true));
+        // refused: not JSON, no events, an event the Library does not write, a division that does not exist
+        for body in [
+            "nope".to_string(),
+            "{}".to_string(),
+            r#"{"events":[]}"#.to_string(),
+            json!({"events": [{"ev": "facts", "copy": copy, "author": "A"}]}).to_string(),
+            json!({"events": [{"ev": "place", "copy": copy, "div": "999", "by": "user"}]}).to_string(),
+        ] {
+            assert_eq!(json_call(&a, "POST", "/api/build/bookshelves/events", &c, &body).await.0, 400, "{body}");
+        }
+    }
+
+    #[tokio::test]
     async fn the_embedder_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-embed");
         let a = file_app(&d);
@@ -1482,6 +1544,10 @@ mod tests {
             ("POST", "/api/build/queue/x/decide"),
             ("POST", "/api/build/libraries/x/books/y/place"),
             ("GET", "/api/build/libraries/x/books/y/suggestions"),
+            ("GET", "/api/build/bookshelves"),
+            ("GET", "/api/build/bookshelves/stamp"),
+            ("GET", "/api/build/bookshelves/facts"),
+            ("POST", "/api/build/bookshelves/events"),
         ] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");

@@ -2080,3 +2080,116 @@ fn upload_compression_is_snapshotted_at_intake_and_explicit_choice_wins() {
     });
     assert_eq!(item(&svc, &override_id).compression, Some(Compression::OFF));
 }
+
+/// The body of a call to `bookshelves_events`.
+fn shelf_body(events: Value) -> Vec<u8> {
+    json!({ "events": events }).to_string().into_bytes()
+}
+
+#[test]
+fn the_browsers_events_shelve_a_built_book_the_servers_way_and_the_rest_go_to_the_log_as_they_came() {
+    let d = TempDir::new("w1");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    add(&svc, &lib, "w.pdf", &book("well", 3, Some("The Well Handbook")));
+    drain(&svc);
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(by_title(&books, "The Well Handbook")["call_number"], json!("CDS 510-001"));
+    let kiln_doc = by_title(&books, "Kiln Craft")["id"].as_str().unwrap().to_string();
+    let kiln = copy_of(&svc, &lib, &kiln_doc);
+    let well = copy_of(&svc, &lib, by_title(&books, "The Well Handbook")["id"].as_str().unwrap());
+    let stamp = svc.shelves_stamp();
+    let before = log_lines(&svc).len();
+    // a page that places a book sends place, and assign with a number of its own: the server shelves it itself, with its next free number
+    let v = svc
+        .bookshelves_events(&shelf_body(json!([
+            {"ev": "place", "copy": kiln, "div": "510", "by": "user", "at": 5},
+            {"ev": "assign", "copy": kiln, "div": "510", "seq": 99, "at": 5},
+        ])))
+        .unwrap();
+    assert_eq!((v["moved"].clone(), v["written"].clone()), (json!(1), json!(0)));
+    let books = svc.books(&lib).unwrap();
+    let k = by_title(&books, "Kiln Craft");
+    assert_eq!((k["call_number"].clone(), k["placed_by_hand"].clone(), k["division"].clone()), (json!("CDS 510-002"), json!(true), json!("510")));
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-002  Kiln Craft.pdf").is_file(), "the filed PDF moved with it");
+    assert_eq!(log_lines(&svc)[before..], ["place 510 user", "assign 510 2"], "one place and one assign, by the server's device");
+    assert_ne!(svc.shelves_stamp(), stamp, "the stamp follows the log");
+    // back to Unsorted: unsort and the retire of its number
+    svc.bookshelves_events(&shelf_body(json!([
+        {"ev": "unsort", "copy": kiln, "by": "user", "at": 6},
+        {"ev": "retire", "copy": kiln, "div": "510", "seq": 2, "at": 6},
+    ])))
+    .unwrap();
+    let books = svc.books(&lib).unwrap();
+    assert_eq!((by_title(&books, "Kiln Craft")["unsorted"].clone(), by_title(&books, "Kiln Craft")["call_number"].clone()), (json!(true), Value::Null));
+    assert!(src_file(&d, &lib, "Unsorted/Kiln Craft.pdf").is_file());
+    // a new title is the book's rename (the pack, the copies file and the filed PDF's name follow), and the log has it
+    let v = svc.bookshelves_events(&shelf_body(json!([{"ev": "title", "copy": kiln, "title": "Kiln Craft, 2nd", "at": 7}]))).unwrap();
+    assert_eq!(v["titled"], json!(1));
+    assert_eq!(by_title(&svc.books(&lib).unwrap(), "Kiln Craft, 2nd")["id"], json!(kiln_doc));
+    assert!(log_lines(&svc).contains(&"title Kiln Craft, 2nd".to_string()));
+    // hide and show again, the two files are two books, and prefer: appended as they came
+    let n = log_lines(&svc).len();
+    let v = svc
+        .bookshelves_events(&shelf_body(json!([
+            {"ev": "remove", "copy": kiln, "at": 8},
+            {"ev": "notsame", "copy": kiln, "with": well, "by": "user", "at": 8},
+            {"ev": "prefer", "copy": well, "at": 8},
+        ])))
+        .unwrap();
+    assert_eq!((v["written"].clone(), v["moved"].clone()), (json!(3), json!(0)));
+    assert_eq!(log_lines(&svc).len(), n + 3);
+    assert_eq!(shelves_view(&svc)["books"][&kiln]["removed"], json!(true));
+    svc.bookshelves_events(&shelf_body(json!([{"ev": "restore", "copy": kiln, "at": 9}]))).unwrap();
+    assert_eq!(shelves_view(&svc)["books"][&kiln]["removed"], json!(false));
+    // refused: nothing is written
+    let n = log_lines(&svc).len();
+    for bad in [
+        json!([{"ev": "place", "copy": kiln, "div": "720", "by": "user"}]),
+        json!([{"ev": "place", "copy": kiln, "div": "999", "by": "user"}]),
+        json!([{"ev": "facts", "copy": kiln, "author": "A"}]),
+        json!([{"ev": "same", "copy": kiln, "with": kiln, "by": "user", "how": "user"}]),
+        json!([{"ev": "remove", "copy": kiln}, {"ev": "nonsense"}]),
+        json!([]),
+    ] {
+        assert_eq!(svc.bookshelves_events(&shelf_body(bad.clone())).unwrap_err().status, 400, "{bad}");
+    }
+    assert_eq!(svc.bookshelves_events(b"nope").unwrap_err().code, "bad_json");
+    assert_eq!(log_lines(&svc).len(), n);
+    // a copy no built library holds (an installed library's) is written as it came, numbers and all
+    let v = svc
+        .bookshelves_events(&shelf_body(json!([
+            {"ev": "place", "copy": "ghost", "div": "510", "by": "user", "at": 10},
+            {"ev": "assign", "copy": "ghost", "div": "510", "seq": 9, "at": 10},
+        ])))
+        .unwrap();
+    assert_eq!((v["written"].clone(), v["moved"].clone()), (json!(2), json!(0)));
+    assert_eq!(log_lines(&svc)[n..], ["place 510 user", "assign 510 9"]);
+}
+
+#[test]
+fn the_facts_and_the_view_for_the_browser_come_from_the_packs_and_the_log() {
+    let d = TempDir::new("w2");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "w.pdf", &book("well", 3, Some("The Well Handbook")));
+    drain(&svc);
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let copy = copy_of(&svc, &lib, &doc);
+    let v = svc.bookshelves_view().unwrap();
+    assert_eq!(v["device"], json!(svc.device));
+    assert_eq!(v["stamp"], json!(svc.shelves_stamp()));
+    assert_eq!(v["view"]["format"], json!(1));
+    assert_eq!(v["view"]["books"][&copy]["call"]["text"], json!("CDS 510-001"));
+    assert_eq!(v["view"]["books"][&copy]["shelf"], json!("510"));
+    // what a phone reads from the pack itself: the header, with no samebook block
+    let f = svc.bookshelves_facts().unwrap();
+    let h = &f["libraries"][&lib][&doc];
+    assert_eq!(h["doc_id"], json!(doc));
+    assert!(h["book"].is_object(), "{h}");
+    assert!(h.get("samebook").is_none());
+    assert_eq!(svc.bookshelves_stamp(), json!({"stamp": svc.shelves_stamp()}));
+}
