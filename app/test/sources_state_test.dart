@@ -271,4 +271,35 @@ void main() {
     expect(seen['indexes_dir'], indexes.path, reason: 'cs_set_sources replaces indexes_dir, so it comes every time');
     expect(s.statuses.single.sourceId, 'u-a.zim');
   });
+
+  group('the browser takes the server features', () {
+    test('every extras section comes through, routing and places included (so nav.available turns on)', () {
+      final extras = SourcesState.webExtrasFrom({
+        'routing': {'available': true, 'shim': '/opt/libvalhalla_shim.so'},
+        'places': {'available': false, 'merged_dir': '/s/regions/places'},
+        'extras': {
+          'layers': {'dir': '/s/layers'},
+          'places': {'merged_dir': '/s/regions/places'},
+          'routing': {'valhalla': {'shim': '/opt/libvalhalla_shim.so'}},
+        },
+      });
+      expect(extras.keys, containsAll(['layers', 'places', 'routing']));
+      expect(extras.containsKey('routing'), isTrue);
+    });
+
+    test('a server without a road router leaves routing out, as a phone without one does', () {
+      final extras = SourcesState.webExtrasFrom({
+        'routing': {'available': false, 'shim': ''},
+        'extras': {'layers': {'dir': '/s/layers'}},
+      });
+      expect(extras.containsKey('routing'), isFalse);
+      expect(extras['layers'], {'dir': '/s/layers'});
+    });
+
+    test('an odd reply gives empty extras', () {
+      expect(SourcesState.webExtrasFrom(null), isEmpty);
+      expect(SourcesState.webExtrasFrom({'routing': {}}), isEmpty);
+      expect(SourcesState.webExtrasFrom('x'), isEmpty);
+    });
+  });
 }
