@@ -267,7 +267,6 @@ class ZimPdfIndexer {
   final void Function(String message)? log;
 
   bool _cancelled = false;
-  PdfFinishJob? _job;
 
   /// PDFs made searchable (this run and earlier ones), skipped (no text, locked, damaged) and all of the ZIM's.
   int done = 0;
@@ -420,7 +419,7 @@ class ZimPdfIndexer {
   }
 
   Future<ZimPdfEnd> _finish(ZimPdfList list) async {
-    final job = _job = await core.finish(indexesDir: indexesDir, zimUuid: list.zimUuid);
+    final job = await core.finish(indexesDir: indexesDir, zimUuid: list.zimUuid);
     var cancelSent = false;
     try {
       while (true) {

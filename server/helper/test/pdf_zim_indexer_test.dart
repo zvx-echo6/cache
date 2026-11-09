@@ -18,7 +18,7 @@ class FakeCore implements PdfIndexCore {
   List<Map<String, dynamic>> added = [];
   Map<String, dynamic>? addedPages;
   String? addedTitle;
-  PdfFinishState finish = PdfFinishState.done;
+  PdfFinishState finishState = PdfFinishState.done;
   void Function()? onAdd;
 
   @override
@@ -65,7 +65,7 @@ class FakeCore implements PdfIndexCore {
   @override
   Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid}) async {
     calls.add('finish:$indexesDir:$zimUuid');
-    return _Job(finish);
+    return _Job(finishState);
   }
 }
 
@@ -182,7 +182,7 @@ void main() {
   });
 
   test('a publish that fails fails the run with its reason; the build stays', () async {
-    core.finish = PdfFinishState.failed;
+    core.finishState = PdfFinishState.failed;
     core.entries['zim:u1/a.pdf'] = Uint8List(4);
     byLength[4] = const PdfTextResult(status: 'ok', size: 4, sha256: 'h', pages: ['hello world']);
     final ix = indexer();
