@@ -85,6 +85,13 @@ class SearchCore {
           ),
       };
 
+  /// Cache Server only: the Catalog's Pause and Resume for the server's index work. `paused` true pauses, false resumes, null only
+  /// reads. `busy` is whether there is index work (running, waiting, or held by the pause).
+  Future<({bool paused, bool busy})> indexPause([bool? paused]) async {
+    final r = (await _call('index.pause', {'paused': ?paused})) as Map;
+    return (paused: r['paused'] == true, busy: r['busy'] == true);
+  }
+
   Future<String> zimMainPage(String zimId) async => (await _call('zimMainPage', {'zimId': zimId})) as String;
 
   Future<List<Suggestion>> suggest(String prefix, {int k = 10, List<String>? sources}) async => [

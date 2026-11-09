@@ -421,8 +421,48 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
       });
 
+  /// In a browser: whether the server's index work is paused by the person (Catalog's Pause all) and whether there is any, as the
+  /// server says (`index.pause`). The same Pause and Resume as the phone's, working on the server's work.
+  bool serverIndexPaused = false;
+  bool serverIndexBusy = false;
+  bool _pauseReading = false;
+
+  Future<void> _readServerPause() async {
+    final core = _core;
+    if (core == null || _pauseReading) return;
+    _pauseReading = true;
+    try {
+      final r = await core.indexPause();
+      if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
+        serverIndexPaused = r.paused;
+        serverIndexBusy = r.busy;
+        notifyListeners();
+      }
+    } on CacheSearchException {
+      // A server older than index.pause: there is nothing to pause.
+    } finally {
+      _pauseReading = false;
+    }
+  }
+
+  /// Pause all (true) or Resume (false) for the server's index work.
+  Future<void> setServerIndexPaused(bool paused) async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      final r = await core.indexPause(paused);
+      serverIndexPaused = r.paused;
+      serverIndexBusy = r.busy;
+    } on CacheSearchException catch (e) {
+      error = _words(e);
+    }
+    _watchServerIndexing();
+    notifyListeners();
+  }
+
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
+    unawaited(_readServerPause());
     if (!_serverWorkLeft) {
       _serverWatch?.cancel();
       _serverWatch = null;
