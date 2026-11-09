@@ -20,6 +20,7 @@
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
+//!   POST /api/library/jobs/<id>/pause|resume -> a waiting or running download stops and keeps its part file (state "paused"); Resume continues it
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
@@ -174,6 +175,12 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
     Some(match (method, path) {
         ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
         ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/pause") => {
+            library_reply(lib.pause_job(&p["/api/library/jobs/".len()..p.len() - "/pause".len()]))
+        }
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/resume") => {
+            library_reply(lib.resume_job(&p["/api/library/jobs/".len()..p.len() - "/resume".len()]))
+        }
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),

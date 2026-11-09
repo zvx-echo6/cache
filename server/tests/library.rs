@@ -137,8 +137,14 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
         "/pub.zim" => small(&mut s, "200 OK", "", &content(0, 100_000)),
         "/pub.zim.sha256" => small(&mut s, "200 OK", "", format!("{}  pub.zim\n", "ff".repeat(32)).as_bytes()),
         "/slow.zim" => {
-            let _ = s.write_all(head("200 OK", "", Some(SLOW)).as_bytes());
-            let mut at = 0;
+            let start = range.as_deref().and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.trim_end_matches('-').parse::<u64>().ok()).unwrap_or(0);
+            if range.is_some() {
+                let extra = format!("Content-Range: bytes {start}-{}/{SLOW}\r\nAccept-Ranges: bytes\r\n", SLOW - 1);
+                let _ = s.write_all(head("206 Partial Content", &extra, Some(SLOW - start)).as_bytes());
+            } else {
+                let _ = s.write_all(head("200 OK", "Accept-Ranges: bytes\r\n", Some(SLOW)).as_bytes());
+            }
+            let mut at = start;
             while at < SLOW {
                 let to = (at + 8192).min(SLOW);
                 if s.write_all(&content(at, to)).is_err() {
@@ -471,6 +477,70 @@ async fn one_download_runs_at_a_time_and_cancel_stops_a_running_or_waiting_job()
     assert_eq!(rig.call("DELETE", &format!("/api/library/jobs/{aid}"), "").await.0, 200);
     assert!(rig.job(aid).await.is_none());
     assert_eq!(rig.call("DELETE", "/api/library/jobs/nope", "").await.0, 404);
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn a_download_can_be_paused_and_resumed_from_its_part_file() {
+    let _g = LOCK.lock().await;
+    let rig = rig("pause", Setup::new()).await;
+    let a = rig.download(json!({"url": rig.origin.url("/slow.zim"), "kind": "zim", "name": "p.zim"})).await;
+    let b = rig.download(json!({"url": rig.origin.url("/pub.zim"), "kind": "zim", "name": "q.zim", "sha256": sha_of(&content(0, 100_000))})).await;
+    let (aid, bid) = (a["id"].as_str().unwrap(), b["id"].as_str().unwrap());
+    for _ in 0..200 {
+        if rig.job(aid).await.is_some_and(|j| j["state"] == json!("running") && j["bytes"].as_u64().unwrap() > 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // pause the running job: it keeps its part file, and the one waiting behind it runs
+    let (s, v) = rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await;
+    assert_eq!((s, v["result"]["state"].clone()), (200, json!("paused")), "{v}");
+    assert_eq!(rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await.1["result"]["state"], json!("paused"), "pausing twice is fine");
+    rig.wait_state(bid, &["done"]).await;
+    let part = part_path(rig.data(), &rig.origin.url("/slow.zim"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kept = std::fs::metadata(&part).expect("the part file is kept").len();
+    assert!(kept > 0 && kept < SLOW, "{kept}");
+    assert_eq!(rig.job(aid).await.unwrap()["state"], json!("paused"));
+    assert!(!rig.zims().join("p.zim").exists());
+    // asking for the same address gives the paused job back, not a second one
+    assert_eq!(rig.download(json!({"url": rig.origin.url("/slow.zim"), "kind": "zim", "name": "p.zim"})).await["id"], a["id"]);
+    // resume: it continues from the part file with a Range request and installs the whole, right file
+    let (s, v) = rig.call("POST", &format!("/api/library/jobs/{aid}/resume"), "").await;
+    assert_eq!((s, v["result"]["state"].clone()), (200, json!("queued")), "{v}");
+    rig.wait_state(aid, &["done"]).await;
+    assert_eq!(std::fs::read(rig.zims().join("p.zim")).unwrap(), content(0, SLOW));
+    assert!(rig.origin.requests("/slow.zim").iter().any(|r| r.as_deref().is_some_and(|r| r.starts_with("bytes="))), "{:?}", rig.origin.requests("/slow.zim"));
+    assert!(!part.exists());
+    // a finished job cannot be paused or resumed; an unknown one is a 404
+    assert_eq!(rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await.1["error"]["code"], json!("not_active"));
+    assert_eq!(rig.call("POST", &format!("/api/library/jobs/{aid}/resume"), "").await.1["error"]["code"], json!("not_paused"));
+    assert_eq!(rig.call("POST", "/api/library/jobs/nope/pause", "").await.0, 404);
+    assert_eq!(rig.call("POST", "/api/library/jobs/nope/resume", "").await.0, 404);
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn cancel_of_a_paused_job_throws_its_part_away() {
+    let _g = LOCK.lock().await;
+    let rig = rig("pause2", Setup::new()).await;
+    let a = rig.download(json!({"url": rig.origin.url("/slow.zim"), "kind": "zim", "name": "r.zim"})).await;
+    let aid = a["id"].as_str().unwrap();
+    for _ in 0..200 {
+        if rig.job(aid).await.is_some_and(|j| j["state"] == json!("running") && j["bytes"].as_u64().unwrap() > 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await;
+    let part = part_path(rig.data(), &rig.origin.url("/slow.zim"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(part.exists());
+    // cancel of a paused job: the part is thrown away
+    let (s, v) = rig.call("DELETE", &format!("/api/library/jobs/{aid}"), "").await;
+    assert_eq!((s, v["result"]["state"].clone()), (200, json!("cancelled")));
+    assert!(!part.exists());
     stop(&rig).await;
 }
 

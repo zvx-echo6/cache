@@ -15,6 +15,9 @@
 //!   runs that procedure itself. The server only brings the file: a downloaded or uploaded package lands in
 //!   `<data>/app/docs/incoming/<name>` (the docs root, where the helper's `fs.*` ops and the core's jobs can reach it), and the
 //!   browser installs it from there and deletes it.
+//! - **Pause and resume** (`POST /api/library/jobs/{id}/pause` and `/resume`): a paused job keeps its part file and its place in the
+//!   list (state `paused`); Resume queues it and it continues where the file ends (a Range request), as the phone's downloads do.
+//!   A canceled job (`DELETE`) throws the part file away. A paused job is still "active": asking for its address again gives it.
 //! - **Uploads** (`POST /api/library/upload`) stream the request body to `<data>/tmp/up-<random>.part` without holding it in memory.
 //! - **Items** (`GET /api/library/items`, `DELETE /api/library/items/{id}`) list and remove what is on the server.
 //! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
@@ -65,6 +68,8 @@ fn api_err(status: u16, code: &'static str, message: impl Into<String>) -> ApiEr
 pub enum State {
     Queued,
     Running,
+    /// Stopped by the person; the part file is kept and Resume continues it.
+    Paused,
     Done,
     Failed,
     Cancelled,
@@ -72,7 +77,7 @@ pub enum State {
 
 impl State {
     fn active(self) -> bool {
-        matches!(self, State::Queued | State::Running)
+        matches!(self, State::Queued | State::Running | State::Paused)
     }
 }
 
@@ -476,6 +481,10 @@ impl Library {
                 if j.state == State::Cancelled && res.is_err() {
                     return;
                 }
+                // Paused (or paused and resumed again before the worker noticed): the job is as the person left it.
+                if matches!(j.state, State::Paused | State::Queued) && res.as_ref().is_err_and(|e| e.code == "cancelled") {
+                    return;
+                }
                 j.finished_at = Some(now_rfc3339());
                 match res {
                     Ok(()) => {
@@ -505,8 +514,12 @@ impl Library {
         let part = part_path(&self.data, &job.url);
         let result = self.download_and_install(job, &part, cancel);
         match &result {
+            // Paused keeps the part file (Resume continues it with a Range request); a canceled job throws it away.
             Err(e) if e.code == "cancelled" => {
-                let _ = std::fs::remove_file(&part);
+                let state = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|j| j.id == job.id).map(|j| j.state);
+                if matches!(state, None | Some(State::Cancelled)) {
+                    let _ = std::fs::remove_file(&part);
+                }
             }
             Err(e) if e.code == "checksum" => {
                 let _ = std::fs::remove_file(&part);
@@ -767,6 +780,52 @@ impl Library {
     pub fn list_jobs(&self) -> Value {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         Value::Array(jobs.iter().map(Job::view).collect())
+    }
+
+    /// `POST /api/library/jobs/{id}/pause`: a waiting or running job stops and keeps what it has downloaded (the part file); it is
+    /// not started again until [Library::resume_job]. Pausing a paused job answers with it; a finished one is 409 `not_active`.
+    pub fn pause_job(&self, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Queued | State::Running => {
+                        j.state = State::Paused;
+                        j.error = None;
+                        Ok(j.view())
+                    }
+                    State::Paused => Ok(j.view()),
+                    _ => Err(api_err(409, "not_active", "That download has already ended.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        if let Some((rid, flag)) = self.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if rid == id {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+        Ok(view)
+    }
+
+    /// `POST /api/library/jobs/{id}/resume`: a paused job goes back in the queue and continues from its part file. A job that is
+    /// not paused is answered as it is; a finished one is 409 `not_paused`.
+    pub fn resume_job(self: &Arc<Self>, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Paused => {
+                        j.state = State::Queued;
+                        Ok(j.view())
+                    }
+                    State::Queued | State::Running => Ok(j.view()),
+                    _ => Err(api_err(409, "not_paused", "That download has already ended. Add it again.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        self.ensure_worker();
+        self.wake.notify_one();
+        Ok(view)
     }
 
     /// `DELETE /api/library/jobs/{id}`: a waiting or running job is canceled (its part file is thrown away); a finished one is
