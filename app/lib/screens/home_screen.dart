@@ -17,7 +17,7 @@ import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'setup_card.dart';
 import 'weather_turn_on.dart';
-import '../layout/adaptive.dart' show showFittedSheet, ContentWidth;
+import '../layout/adaptive.dart' show showFittedSheet, ContentWidth, isShort, kRegularWidth;
 
 /// Home: the blocks the person chose, in the order they chose (Set up Cache while it is not done, the search box, Weather and alerts,
 /// Shortcuts by default), a gear for Settings at the top right, and "Edit Home" at the bottom. The search box searches all of Cache;
@@ -141,6 +141,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Discover's card is in the Set up card's place.
+  final _askKey = GlobalKey(debugLabel: 'home-ask');
+
   bool get _discoverCard => widget.discover?.firstRunDone ?? false;
 
   /// "Hide" on Set up Cache (or Discover, in its place): the block is switched off (Edit Home switches it on again), with Undo.
@@ -177,46 +179,72 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, _) {
           final blocks = layout.visibleBlocks;
           final setupShown = widget.setup != null && blocks.contains(HomeBlock.setup) && !_discoverCard;
-          return LayoutBuilder(builder: (context, cts) => ListView(
-            padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
-            children: [
-              // The banner's slot stays while typing (empty), so the children below keep their places: dropping it shifted the
-              // search box one place up, which made a new text field and closed the keyboard at the first letter typed.
-              if (widget.updates != null) typing ? const SizedBox.shrink() : UpdateBanner(updates: widget.updates!),
-              for (final b in blocks)
-                if (typing && b != HomeBlock.ask)
-                  const SizedBox.shrink()
-                else
-                  switch (b) {
-                    HomeBlock.setup => widget.discover == null
-                        ? (widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup))
-                        : ListenableBuilder(
-                            listenable: widget.discover!,
-                            builder: (context, _) => _discoverCard
-                                ? DiscoverCard(discover: widget.discover!, onOpen: widget.onOpenDiscover ?? () {}, onHide: _hideSetup)
-                                : widget.setup == null
-                                ? const SizedBox.shrink()
-                                : SetupCard(setup: widget.setup!, onHide: _hideSetup),
-                          ),
-                    HomeBlock.ask => Padding(key: const ValueKey('home-ask-block'), padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
-                    HomeBlock.weather => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _WeatherCard(weather: widget.weather, onTap: widget.onOpenWeather, turnOn: setupShown ? null : widget.turnOn, onOpenSettings: widget.onOpenWeatherSettings),
-                    ),
-                    HomeBlock.shortcuts => Padding(padding: const EdgeInsets.only(bottom: 12), child: _shortcuts(context, k)),
-                  },
-              if (typing) _resultList(k),
-              if (!typing)
-                Align(
-                  alignment: Alignment.center,
-                  child: TextButton(
-                    key: const ValueKey('edit-home'),
-                    onPressed: () => _editHome(context),
-                    child: const Text('Edit Home', style: TextStyle(fontSize: 15)),
+          Widget block(HomeBlock b) => switch (b) {
+            HomeBlock.setup => widget.discover == null
+                ? (widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup))
+                : ListenableBuilder(
+                    listenable: widget.discover!,
+                    builder: (context, _) => _discoverCard
+                        ? DiscoverCard(discover: widget.discover!, onOpen: widget.onOpenDiscover ?? () {}, onHide: _hideSetup)
+                        : widget.setup == null
+                        ? const SizedBox.shrink()
+                        : SetupCard(setup: widget.setup!, onHide: _hideSetup),
                   ),
-                ),
-            ],
-          ));
+            // The search box keeps its state (focus, keyboard) when the page goes from two columns to one as typing starts.
+            HomeBlock.ask => KeyedSubtree(
+              key: _askKey,
+              child: Padding(key: const ValueKey('home-ask-block'), padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
+            ),
+            HomeBlock.weather => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _WeatherCard(weather: widget.weather, onTap: widget.onOpenWeather, turnOn: setupShown ? null : widget.turnOn, onOpenSettings: widget.onOpenWeatherSettings),
+            ),
+            HomeBlock.shortcuts => Padding(padding: const EdgeInsets.only(bottom: 12), child: _shortcuts(context, k)),
+          };
+          final editHome = Align(
+            alignment: Alignment.center,
+            child: TextButton(
+              key: const ValueKey('edit-home'),
+              onPressed: () => _editHome(context),
+              child: const Text('Edit Home', style: TextStyle(fontSize: 15)),
+            ),
+          );
+          return LayoutBuilder(builder: (context, cts) {
+            final padding = ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
+            // A short, wide window (a phone held sideways): two columns, so the first screen shows the search box and the weather
+            // on the left and the Set up card and the shortcuts on the right, instead of one column a few rows of which show.
+            if (!typing && isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth) {
+              const right = {HomeBlock.setup, HomeBlock.shortcuts};
+              return ListView(
+                key: const ValueKey('home-two-columns'),
+                padding: padding,
+                children: [
+                  if (widget.updates != null) UpdateBanner(updates: widget.updates!),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
+                      const SizedBox(width: 16),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
+                    ],
+                  ),
+                  editHome,
+                ],
+              );
+            }
+            return ListView(
+              padding: padding,
+              children: [
+                // The banner's slot stays while typing (empty), so the children below keep their places: dropping it shifted the
+                // search box one place up, which made a new text field and closed the keyboard at the first letter typed.
+                if (widget.updates != null) typing ? const SizedBox.shrink() : UpdateBanner(updates: widget.updates!),
+                for (final b in blocks)
+                  if (typing && b != HomeBlock.ask) const SizedBox.shrink() else block(b),
+                if (typing) _resultList(k),
+                if (!typing) editHome,
+              ],
+            );
+          });
         },
       ),
     );
@@ -367,6 +395,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _shortcuts(BuildContext context, CacheTokens k) {
     // A shortcut to the Ask module is not drawn while there is no model (a chat's shortcut stays: it opens read-only).
     final items = [for (final s in layout.shortcuts) if (widget.askOn || s.module != ModuleId.ask) s];
+    final size = MediaQuery.sizeOf(context);
+    final tall = size.width >= kRegularWidth && size.height >= kHomeTallHeight;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -383,18 +413,20 @@ class _HomeScreenState extends State<HomeScreen> {
           GridView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            // Two across on a phone, three on a wider page (the page keeps to the content width).
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            // Two across on a phone, three on a wider page (the page keeps to the content width); a tall window (a tablet held
+            // upright) has larger cards, with larger tiles, so Home is not a strip at the top of the screen.
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 240,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              mainAxisExtent: 96,
+              mainAxisSpacing: tall ? 14 : 10,
+              crossAxisSpacing: tall ? 14 : 10,
+              mainAxisExtent: tall ? 150 : 96,
             ),
             children: [
               for (final s in items)
                 ShortcutCard(
                   key: ValueKey('shortcut-${s.key}'),
                   shortcut: s,
+                  large: tall,
                   onTap: () => widget.onOpenShortcut(s),
                   onLongPress: () => _manage(context, s),
                 ),
@@ -446,11 +478,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+/// The narrowest content that Home splits into two columns on a short window (two of about 300).
+const double kHomeTwoColumnMinWidth = 600;
+
+/// From this window height (a tablet held upright, 1180 or 1366 high) Home's shortcut cards are larger.
+const double kHomeTallHeight = 1000;
+
 /// A shortcut card: the module's painted tile (or an icon for the rest), the name and what it is.
 class ShortcutCard extends StatelessWidget {
-  const ShortcutCard({super.key, required this.shortcut, required this.onTap, required this.onLongPress});
+  const ShortcutCard({super.key, required this.shortcut, required this.onTap, required this.onLongPress, this.large = false});
 
   final Shortcut shortcut;
+
+  /// The larger card of a tall window: a 56 tile and the name in larger type.
+  final bool large;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
@@ -458,12 +499,13 @@ class ShortcutCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final s = shortcut;
+    final double a = large ? 56 : 32;
     final Widget art = switch (s.kind) {
-      ShortcutKind.module => BrandTileImage(s.module!.tile, size: 32),
-      ShortcutKind.chat => const BrandTileImage(BrandTile.chat, size: 32),
-      ShortcutKind.page => const BrandTileImage(BrandTile.library, size: 32),
-      ShortcutKind.place => SizedBox(height: 32, width: 32, child: Icon(Icons.place_outlined, size: 26, color: k.accent)),
-      ShortcutKind.notebook => const BrandTileImage(BrandTile.journal, size: 32),
+      ShortcutKind.module => BrandTileImage(s.module!.tile, size: a),
+      ShortcutKind.chat => BrandTileImage(BrandTile.chat, size: a),
+      ShortcutKind.page => BrandTileImage(BrandTile.library, size: a),
+      ShortcutKind.place => SizedBox(height: a, width: a, child: Icon(Icons.place_outlined, size: a * 0.8, color: k.accent)),
+      ShortcutKind.notebook => BrandTileImage(BrandTile.journal, size: a),
     };
     return Holdable(
         borderRadius: BorderRadius.circular(16),
@@ -471,7 +513,7 @@ class ShortcutCard extends StatelessWidget {
         onHold: onLongPress,
         holdLabel: 'Move or remove',
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: EdgeInsets.all(large ? 16 : 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -480,9 +522,9 @@ class ShortcutCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+                  Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: large ? 18 : 15, fontWeight: FontWeight.w600, color: k.text)),
                   if (s.subtitle.isNotEmpty)
-                    Text(s.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                    Text(s.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: large ? 14 : 12, color: k.secondary)),
                 ],
               ),
             ],
