@@ -265,16 +265,19 @@ jobs:
       - name: Build with the CPU backend as loadable variants
         run: |
           out="$RUNNER_TEMP/dl/out"
+          # no build RPATH: the libraries are found only in $out (LD_LIBRARY_PATH below), all in one folder as in the APK
           cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/dl/build" -DCMAKE_BUILD_TYPE=Release \
-            -DCACHE_LLAMA_TEST_BACKEND_DL=ON -DCACHE_LLAMA_TEST_CLI=ON \
-            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$out" -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$out"
+            -DCACHE_LLAMA_TEST_BACKEND_DL=ON -DCACHE_LLAMA_TEST_CLI=ON -DCMAKE_SKIP_BUILD_RPATH=ON
           cmake --build "$RUNNER_TEMP/dl/build" -j "$(nproc)"
+          mkdir -p "$out"
+          find "$RUNNER_TEMP/dl/build" \( -name '*.so' -o -name '*.so.*' \) -exec cp -P {} "$out/" \;
+          cp "$(find "$RUNNER_TEMP/dl/build" -type f -name cl_test -perm -u+x | head -n 1)" "$out/cl_test"
           ls -l "$out"
           ls "$out"/libggml-cpu-*.so > /dev/null || { echo "::error::no CPU backend variants next to libcache_llama.so"; exit 1; }
       - name: Test (embedder loads with no chat model loaded first)
         run: |
           out="$RUNNER_TEMP/dl/out"
-          "$out/cl_test" --embed bge-model/bge-m3-Q8_0.gguf "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
+          LD_LIBRARY_PATH="$out" "$out/cl_test" --embed bge-model/bge-m3-Q8_0.gguf "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
           # the run must have gone through load_cpu_backend (its log line) and embedded both texts
           grep -q 'native library folder' "$RUNNER_TEMP/dl.log" || { echo "::error::the CPU backend was not loaded by cache_llama"; exit 1; }
           grep -q 'cl_embed_load failed' "$RUNNER_TEMP/dl.log" && { echo "::error::cl_embed_load failed"; exit 1; }
