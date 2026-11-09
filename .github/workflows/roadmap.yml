@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/site/**'
+      - '.github/workflows/roadmap.yml'
 
 permissions:
   contents: read
