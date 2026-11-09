@@ -44,6 +44,14 @@ Future<void> _show(WidgetTester tester, Widget page, Size size, CacheThemeId the
   await _settle(tester);
 }
 
+/// Brings [f] into view: built (scrolled to in the page's list, as a short window has it below the fold), then on screen.
+Future<void> _reach(WidgetTester tester, Finder f) async {
+  if (f.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(f, 200, scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last);
+  }
+  await tester.ensureVisible(f);
+}
+
 const int _mb = 1 << 20;
 const int _gb = 1 << 30;
 
@@ -164,7 +172,7 @@ void main() {
         await snap(tester, _out, '1-main-${e.key}-$t');
 
         // 2: a kind's page (Library)
-        await tester.ensureVisible(find.byKey(const ValueKey('share-library')));
+        await _reach(tester, find.byKey(const ValueKey('share-library')));
         await tester.pump();
         await tester.tap(find.byKey(const ValueKey('share-library')));
         await _settle(tester);
@@ -172,7 +180,7 @@ void main() {
 
         // 3: a linked device's page (Desk)
         await openSharing();
-        await tester.ensureVisible(find.byKey(const ValueKey('peer-peer1')));
+        await _reach(tester, find.byKey(const ValueKey('peer-peer1')));
         await tester.pump();
         await tester.tap(find.byKey(const ValueKey('peer-peer1')));
         await _settle(tester);

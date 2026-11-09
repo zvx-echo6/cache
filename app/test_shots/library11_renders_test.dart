@@ -276,8 +276,11 @@ Future<void> _shoot(WidgetTester tester, _Rig rig, String size, String name, Lis
   for (final k in path) {
     final f = find.byKey(ValueKey(k));
     if (f.evaluate().isEmpty) {
-      await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
+      // the page's own list (on a short window the rail scrolls too, and a sideways list is not the page's)
+      await tester.scrollUntilVisible(f, 300, scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last);
     }
+    await tester.ensureVisible(f.first);
+    await _settle(tester, 2);
     await tester.tap(f.first);
     await _settle(tester);
   }
