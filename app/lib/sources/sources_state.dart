@@ -186,7 +186,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     final SearchCore core;
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
-      final extra = _extra = coreExtras ?? (plat.isWeb ? const <String, dynamic>{} : await _defaultExtras());
+      final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -205,6 +205,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
     return core;
+  }
+
+  /// In a browser the server holds the folders, so the config sections come from it (`server.features`). Only `layers` is taken: the
+  /// map's layer engine needs its folder and a layer download job takes the section along. The rest (`routing`, `places`) stays out, as
+  /// before. Without an answer the sections are empty, as they were.
+  Future<Map<String, dynamic>> _webExtras() async {
+    try {
+      final f = ((await HttpTransport().call('server.features', const {})) as Map).cast<String, dynamic>();
+      final layers = ((f['extras'] as Map?)?['layers']) as Map?;
+      return {if (layers != null) 'layers': layers.cast<String, dynamic>()};
+    } catch (e) {
+      logError('Server features', error: e);
+      return const <String, dynamic>{};
+    }
   }
 
   static CsNative _defaultNative() => FfiCsNative.open();

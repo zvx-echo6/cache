@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import '../../app_fs.dart';
+import '../../platform.dart' as plat;
 
 /// Map fonts ship with the app (Noto Sans glyphs, SIL Open Font License 1.1) so labels work offline. MapLibre
 /// reads glyphs by file address, so they are copied out of the app's assets once per app version.
@@ -12,6 +13,10 @@ class MapAssets {
 
   /// The `glyphs` address for the style: a folder per font, files per range of characters.
   static Future<String> glyphsUrl({Directory? dirOverride}) async {
+    // In a browser the fonts are served with the app: Flutter publishes each asset at assets/<asset key> beside the page, and the
+    // sign-in cookie goes with MapLibre's same-origin requests. The address is absolute because MapLibre's workers cannot resolve
+    // a relative one. Nothing is copied.
+    if (plat.isWeb) return '${Uri.base.resolve('assets/')}assets/map/fonts/{fontstack}/{range}.pbf';
     final base = dirOverride ?? Directory('${await appSupportPath()}/map_fonts');
     final marker = File('${base.path}/.version');
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
