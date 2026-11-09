@@ -892,8 +892,9 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
       Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
-      settingsRead.then((_) => regions.init());
     }
+    // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
+    settingsRead.then((_) => regions.init());
     _layoutRead = layout.init();
     sources.init();
     if (!plat.isWeb) unawaited(pdfIndex.init());
