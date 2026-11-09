@@ -15,6 +15,7 @@ import '../theme.dart';
 import '../update/update_ui.dart' show currentWhatsNew, showWhatsNew;
 import '../version.dart';
 import '../video/format.dart' show formatBytes;
+import 'add_pdf/add_pdf_state.dart' show addPdfShared;
 import 'book_pages.dart';
 import 'catalog_page.dart';
 import 'library_panes.dart';
@@ -68,7 +69,7 @@ class LibraryDeps {
   final Future<List<String>> Function() whatsNew;
 
   /// Everything a Library page listens to.
-  Listenable get changes => Listenable.merge([browse, sources, ?libraries, shelves, files, ?originals, ?regions, ?sharing, ?indexSchedulerShared, ?pdfIndexShared, looks]);
+  Listenable get changes => Listenable.merge([browse, sources, ?libraries, shelves, files, ?originals, ?regions, ?sharing, ?indexSchedulerShared, ?pdfIndexShared, ?addPdfShared, looks]);
 }
 
 // ---- the levels
@@ -107,6 +108,10 @@ List<Crumb> shelfCrumbs(BuildContext context, LibraryDeps d, String? shelfId, {S
   }
   if (last != null) out.add(Crumb(last));
   return out;
+}
+
+extension on String {
+  String? get emptyToNullWords => isEmpty ? null : this;
 }
 
 /// "1 book", "14 books".
@@ -205,7 +210,7 @@ class LibraryRootPage extends StatelessWidget {
                     statusWidget: libraryLines(
                       context,
                       books == 0 ? 'No books yet' : '${booksWord(books)}, shelved by the ${shelves.shortName ?? 'shelves'}',
-                      unsorted == 0 ? null : '$unsorted unsorted',
+                      [if (unsorted > 0) '$unsorted unsorted', if ((addPdfShared?.adding ?? 0) > 0) '${addPdfShared!.adding} being added'].join(' · ').emptyToNullWords,
                     ),
                     selected: nav.isOpen('bookshelves'),
                     onTap: () => nav.open(context, bookshelvesSpec(d)),

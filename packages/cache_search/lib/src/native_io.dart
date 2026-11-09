@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative, CsShelvesNative {
+class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -649,6 +649,30 @@ class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative
       'append' => _shelvesAppend,
       'resolve' => _shelvesResolve,
       'import' => _shelvesImport,
+      _ => null,
+    };
+    return f == null ? null : _take(f(argsJson.toNativeUtf8(allocator: a)));
+  });
+
+  // ---- Add PDF, the ingest job: looked up on first use ----
+
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _ingestStart = _lookupStr1('cs_ingest_start');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _ingestStep = _lookupStr1('cs_ingest_step');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _ingestOcr = _lookupStr1('cs_ingest_ocr');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _ingestCancel = _lookupStr1('cs_ingest_cancel');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _ingestProbe = _lookupStr1('cs_ingest_probe');
+
+  @override
+  bool get hasIngest => _ingestStart != null && _ingestStep != null && _ingestOcr != null && _ingestCancel != null;
+
+  @override
+  String? ingest(String op, String argsJson) => using((a) {
+    final f = switch (op) {
+      'start' => _ingestStart,
+      'step' => _ingestStep,
+      'ocr' => _ingestOcr,
+      'cancel' => _ingestCancel,
+      'probe' => _ingestProbe,
       _ => null,
     };
     return f == null ? null : _take(f(argsJson.toNativeUtf8(allocator: a)));

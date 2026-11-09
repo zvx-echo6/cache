@@ -30,6 +30,11 @@ import 'chat/system_prompt.dart' show isoWithOffset;
 import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
 import 'history/store_open.dart';
+import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
+
+import 'library/add_pdf/add_pdf_calls.dart';
+import 'library/add_pdf/add_pdf_engines.dart';
+import 'library/add_pdf/add_pdf_state.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -426,11 +431,41 @@ class _CacheAppState extends State<CacheApp> {
     speed: settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle,
   );
 
+  /// The models folder (the search model, bge-m3, is there).
+  Future<Directory> _modelsDir() async => Directory('${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models');
+
+  /// Add PDF: one PDF becomes a book in the person's own library, by the core's ingest job, as index work the scheduler runs.
+  late final AddPdfState addPdf = AddPdfState(
+    calls: const CoreIngestCalls(),
+    dir: () async => _support('ingest'),
+    engines: _addPdfEngines,
+    libraries: libraries,
+    ocrEngine: deviceOcrEngine,
+    bookshelves: () async {
+      final dev = await libraryDeviceIdShared?.call();
+      final dir = _support(kBookshelvesDir);
+      if (dev == null || !validDeviceId(dev) || dir == null) return null;
+      return {
+        'dir': dir.path,
+        'dev': dev,
+        'libraries': [
+          for (final l in libraries.libraries)
+            if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
+        ],
+      };
+    },
+    // the book is in: the Library, Catalog and Bookshelves read the libraries again
+    onDone: (_) => libraries.rescan(),
+  );
+
+  Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await getApplicationSupportDirectory()).path), modelsDir: await _modelsDir());
+
   late final IndexScheduler indexing = IndexScheduler(
     throttle: indexThrottle,
     sources: [
       CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
+      if (!plat.isWeb) addPdf,
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
@@ -751,6 +786,15 @@ class _CacheAppState extends State<CacheApp> {
     // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
     final Future<void> supportRead = plat.isWeb ? Future.value() : getApplicationSupportDirectory().then((d) => _supportPath = d.path);
     if (!plat.isWeb) getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    if (!plat.isWeb) {
+      addPdfShared = addPdf;
+      // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
+      unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
+        final s = _supportPath;
+        if (s == null || !mounted) return;
+        await addPdfSelfCheck(addPdf.calls, await _addPdfEngines(), memo: File('$s/ingest/probe.json'));
+      }).catchError((Object e) => logError('Add PDF self-check', error: e)));
+    }
     // Weather starts from what it keeps on the phone (the sources that are on, the last data shown, the saved places) as soon as
     // the settings are read, so Home's card and the Weather screen show it before the core is open; the steps that need the core
     // wait for it inside start.

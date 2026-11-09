@@ -48,6 +48,13 @@ packages:
       relative: true
     source: path
     version: "0.0.1"
+  cache_ocr:
+    dependency: "direct main"
+    description:
+      path: "../packages/cache_ocr"
+      relative: true
+    source: path
+    version: "0.0.1"
   cache_search:
     dependency: "direct main"
     description:

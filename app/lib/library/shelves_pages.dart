@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
+import 'add_pdf/add_pdf_pages.dart' show AddPdfShelvesButton;
+import 'add_pdf/add_pdf_state.dart' show addPdfShared;
 import 'cds.dart';
 import 'library_pages.dart';
 import 'library_panes.dart';
@@ -102,6 +104,8 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 ),
               ],
               const SizedBox(height: 10),
+              // Add PDF: the shortcut where the book ends up
+              if (addPdfShared != null) ...[const AddPdfShelvesButton(), const SizedBox(height: 10)],
               if (working != null) ...[working, const SizedBox(height: 10)],
               if (unsorted.isNotEmpty) ...[
                 SettingsGroup(

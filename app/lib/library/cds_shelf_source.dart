@@ -201,7 +201,7 @@ class _ViewBook {
 /// Each read: this device's own old per-library logs are imported (once per library; the core keeps the record), the view is
 /// resolved, every copy seen for the first time is checked against the others once and a match is written as the same book,
 /// and a new book that matches nothing is shelved in its suggested division with the next free number.
-class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer, ShelfCopies {
+class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer, ShelfCopies, ShelfUnsorter {
   CdsShelfSource(
     this.libraries, {
     ShelvesCalls? calls,
@@ -909,6 +909,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
         if (book(p.before.id) case final now?) (now, p.before.shelf),
     ], by: 'user');
   }
+
+  /// Back to Unsorted (`unsort`, and its number retired); the book stays in its library.
+  @override
+  Future<void> unsort(ShelfBook book) => _write([(book, null)], by: 'user');
 
   @override
   Future<void> readInstead(ShelfBook book, String copy) => _append([{'ev': 'prefer', 'copy': copy}]);

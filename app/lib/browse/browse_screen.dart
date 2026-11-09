@@ -17,6 +17,7 @@ import '../layout/adaptive.dart';
 import '../platform.dart' as plat;
 
 import '../guide/guide_book.dart';
+import '../library/add_pdf/add_pdf_pages.dart' show addPdfLibraryDeps;
 import '../library/cds_shelf_source.dart';
 import '../library/library_pages.dart';
 import '../library/library_panes.dart';
@@ -143,6 +144,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
   @override
   void initState() {
     super.initState();
+    // Add PDF's result actions (Move, Undo, Place, Open book) work on this Library's pages and Bookshelves
+    addPdfLibraryDeps = _deps;
     b.addListener(_onBrowse);
     _maybeCheck();
   }
@@ -156,6 +159,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   @override
   void dispose() {
+    if (identical(addPdfLibraryDeps, _deps)) addPdfLibraryDeps = null;
     b.removeListener(_onBrowse);
     _ownShelves?.dispose();
     super.dispose();
