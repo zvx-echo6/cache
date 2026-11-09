@@ -79,6 +79,9 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
 
     override fun onShown() = load()
 
+    // The phone's saved places changed, or the core opened after the first ask (the car started the app): ask again.
+    override fun onSavedChanged() = load()
+
     private fun load() {
         CarLink.call("saved") { r ->
             if (r == null && !CarLink.dartReady) {
@@ -86,7 +89,7 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
                 return@call
             }
             places = CarPlace.list(r)
-            android.util.Log.i("CacheCar", "saved places for the car: ${places?.size}")
+            android.util.Log.i("CacheCar", "saved places for the car: ${places?.size} (answer ${if (r == null) "none" else "given"})")
             invalidate()
         }
     }

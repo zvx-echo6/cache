@@ -854,7 +854,16 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
-      _car = CarBridge(nav: nav, maps: maps, drive: carDrive, ready: () => sources.whenCoreReady());
+      _car = CarBridge(
+        nav: nav,
+        maps: maps,
+        drive: carDrive,
+        ready: () => sources.whenCoreReady(),
+        // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
+        onConnected: () async {
+          await location.request(explain: () async => false);
+        },
+      );
       unawaited(_car!.start());
     }
     _openHistory();

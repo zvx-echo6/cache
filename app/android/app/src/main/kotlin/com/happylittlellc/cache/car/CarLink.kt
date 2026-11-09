@@ -20,6 +20,7 @@ object CarLink {
         fun onStyleChanged() {}
         fun onNotice(text: String) {}
         fun onDartReady() {}
+        fun onSavedChanged() {}
     }
 
     private var channel: MethodChannel? = null
@@ -130,6 +131,10 @@ object CarLink {
                 routeBounds = b
                 result.success(null)
                 each { it.onRoute(geo, b) }
+            }
+            "savedChanged" -> {
+                result.success(null)
+                each { it.onSavedChanged() }
             }
             "styleChanged" -> {
                 result.success(null)

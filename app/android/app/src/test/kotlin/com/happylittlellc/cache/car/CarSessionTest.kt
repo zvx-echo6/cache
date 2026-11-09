@@ -191,6 +191,10 @@ class CarSessionTest {
         val list = ((templateOf(home) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!
         assertEquals(1, list.items.size)
         assertTrue("saved" in asked)
+        // Dart says the saved places changed (or the core opened after the first ask): the list is asked for again.
+        push("savedChanged", null)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3))
+        assertEquals(2, asked.count { it == "saved" })
         val started = shadowOf(app).nextStartedService
         assertEquals(CarLocationService::class.java.name, started.component!!.className)
         c.moveToState(Lifecycle.State.DESTROYED)
