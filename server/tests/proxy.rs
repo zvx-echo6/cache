@@ -130,7 +130,7 @@ async fn no_sources_file_opens_with_null_sources_and_the_helper_gets_the_app_fol
     assert_eq!(open_args(&rig.log()[0]), json!({"sources": null}));
     assert_eq!(
         rig.core(r#"{"op":"env","args":{}}"#).await,
-        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs", "shim": "/opt/cache/lib/libvalhalla_shim.so"}}))
+        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs", "shim": "/opt/cache/lib/libvalhalla_shim.so", "data": "/var/lib/cache-app"}}))
     );
     rig.app.helper.as_ref().unwrap().shutdown().await;
 }
