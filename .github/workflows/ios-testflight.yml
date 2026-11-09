@@ -131,7 +131,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'core'
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
