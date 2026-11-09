@@ -36,6 +36,7 @@ import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
 import 'library/add_pdf/add_pdf_calls.dart';
 import 'library/add_pdf/add_pdf_engines.dart';
 import 'library/add_pdf/add_pdf_state.dart';
+import 'library/add_pdf/watch_folders.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -460,6 +461,14 @@ class _CacheAppState extends State<CacheApp> {
     onDone: (_) => libraries.rescan(),
   );
 
+  /// Watch a folder: new PDFs in a folder the person chose go through Add PDF by themselves. Checked when Cache opens; on Android
+  /// also every [kWatchEvery] as index work (the indexing rules: charging, battery, heat). iOS checks only when Cache opens.
+  late final WatchFoldersState watchFolders = WatchFoldersState(
+    addPdf: addPdf,
+    dir: () async => _support('ingest'),
+    every: !plat.isWeb && Platform.isAndroid ? kWatchEvery : null,
+  );
+
   Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await appSupportPath())), modelsDir: await _modelsDir());
 
   late final IndexScheduler indexing = IndexScheduler(
@@ -468,6 +477,7 @@ class _CacheAppState extends State<CacheApp> {
       CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
       if (!plat.isWeb) addPdf,
+      if (!plat.isWeb) watchFolders,
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
@@ -740,6 +750,8 @@ class _CacheAppState extends State<CacheApp> {
         unawaited(weather.updateIfDue(kBackgroundEvery));
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) indexing.setOpen(true);
+        // watched folders are checked each time Cache comes back to the front (not again within a minute)
+        if (!plat.isWeb) unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
@@ -795,6 +807,11 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) appTempPath().then((p) => _tempPath = p).catchError((_) => '');
     if (!plat.isWeb) {
       addPdfShared = addPdf;
+      watchFoldersShared = watchFolders;
+      // watched folders: checked when Cache opens, once the libraries can be read (a first PDF may make My books)
+      unawaited(supportRead.then((_) => sources.whenCoreReady()).then((_) => watchFolders.checkAll()).catchError((Object e) {
+        logError('Watch a folder: the check at start', error: e);
+      }));
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
       unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
         final s = _supportPath;
@@ -1023,6 +1040,7 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
+    watchFolders.dispose();
     indexThrottle.dispose();
     pdfIndex.dispose();
     searchModel.dispose();

@@ -79,7 +79,17 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     final done = _doneTotal;
     if (line == null && done == null) return const SizedBox.shrink();
     final held = line != null && s.reason != IndexWait.none && stopped == null;
-    final current = stopped != null ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}' : (line == null ? null : indexCurrentWords(s));
+    var current = stopped != null ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}' : (line == null ? null : indexCurrentWords(s));
+    // a PDF a watched folder found: the folder and how many its check found come first ("Manuals: 2 new PDFs · ...")
+    final run = s.running;
+    if (stopped == null && current != null && run != null && run.startsWith('pdf-add/')) {
+      final j = addPdfShared?.byId(run.substring('pdf-add/'.length));
+      final check = j?.checkId;
+      if (j != null && j.watchName != null && check != null) {
+        final n = addPdfShared!.jobs.where((o) => o.checkId == check).length;
+        current = '${j.watchName}: ${n == 1 ? '1 new PDF' : '$n new PDFs'} · $current';
+      }
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
       child: Material(

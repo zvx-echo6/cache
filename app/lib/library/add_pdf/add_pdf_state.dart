@@ -56,7 +56,18 @@ class AddPdfJob {
     this.ocr = 'host',
     this.folderRoot,
     this.sourcePath,
+    this.watchId,
+    this.watchName,
+    this.checkId,
+    this.watchHash,
   });
+
+  /// Found by a watched folder's check (watch_folders.dart): the folder's id, its name (the progress cards' "From Manuals" tag),
+  /// the check that found it (one summary card for the PDFs one check found) and the file's content hash.
+  final String? watchId;
+  final String? watchName;
+  final String? checkId;
+  final String? watchHash;
 
   /// From a chosen folder: the folder (an Android tree URI, else a path) and the PDF's path in it. The PDF is copied to
   /// [pdfPath] when its turn comes, so a folder of PDFs is not copied all at once.
@@ -174,6 +185,10 @@ class AddPdfJob {
     'ocr': ocr,
     'folder_root': ?folderRoot,
     'source_path': ?sourcePath,
+    'watch_id': ?watchId,
+    'watch_name': ?watchName,
+    'check_id': ?checkId,
+    'watch_hash': ?watchHash,
     'status': status.name,
     'state': state,
     'pages': pages,
@@ -207,6 +222,10 @@ class AddPdfJob {
       ocr: (j['ocr'] ?? 'host') as String,
       folderRoot: j['folder_root'] as String?,
       sourcePath: j['source_path'] as String?,
+      watchId: j['watch_id'] as String?,
+      watchName: j['watch_name'] as String?,
+      checkId: j['check_id'] as String?,
+      watchHash: j['watch_hash'] as String?,
     );
     job
       ..status = AddPdfStatus.values.asNameMap()[j['status']] ?? AddPdfStatus.active
@@ -422,6 +441,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     required AddPdfTarget target,
     bool ownsFile = false,
     String? folderRoot,
+    String? watchId,
+    String? watchName,
+    String? checkId,
+    String? watchHash,
   }) async {
     await load();
     var path = target.path;
@@ -453,6 +476,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       added: _clock(),
       ownsFile: ownsFile,
       ocr: engine == null ? 'off' : 'host',
+      watchId: watchId,
+      watchName: watchName,
+      checkId: checkId,
+      watchHash: watchHash,
     );
     _jobs.insert(0, job);
     await save();

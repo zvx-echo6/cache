@@ -7,7 +7,8 @@ import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
-import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow, WatchFolderRow, WatchedFoldersPage;
+import '../library/add_pdf/watch_folders.dart' show watchFoldersShared;
 import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
 import '../theme.dart';
 import 'browse_state.dart';
@@ -59,6 +60,9 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
   Timer? _debounce;
+
+  /// A wide window shows the Watched folders list in the right column (in the catalogue's place) while this is on.
+  bool _watched = false;
 
   BrowseState get b => widget.browse;
 
@@ -130,10 +134,13 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
     final k = context.t;
     return Scaffold(
       appBar: AppBar(title: const Text('Add to Library')),
-      body: ListenableBuilder(
+      body: LayoutBuilder(
+        builder: (context, cs) => ListenableBuilder(
         listenable: b,
         builder: (context, _) {
-          final own = _own(k);
+          final wide = TwoColumn.fits(context, cs.maxWidth);
+          final watch = watchFoldersShared;
+          final own = _own(k, wide: wide);
           final narrow = Column(
             children: [
               _searchRow(k),
@@ -146,7 +153,9 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           return TwoColumn(
             narrow: narrow,
             left: ListView(key: const ValueKey('add-left'), padding: const EdgeInsets.fromLTRB(12, 4, 0, 24), children: own),
-            right: Column(
+            right: _watched && watch != null
+                ? WatchedFoldersPage(key: const ValueKey('add-watched'), watch: watch, pane: true)
+                : Column(
               children: [
                 Padding(padding: const EdgeInsets.only(right: 12), child: Align(alignment: Alignment.centerLeft, child: _readyLabel)),
                 _searchRow(k),
@@ -158,6 +167,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             ),
           );
         },
+      ),
       ),
     );
   }
@@ -247,9 +257,10 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   );
 
   /// "Your own library" (nothing when the libraries are not set up).
-  List<Widget> _own(CacheTokens k) {
+  List<Widget> _own(CacheTokens k, {bool wide = false}) {
     final libraries = b.libraries;
     final pdf = addPdfShared != null && b.device == null;
+    final watch = pdf ? watchFoldersShared : null;
     return [
       // In a browser the first section is the computer the browser is on.
       if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
@@ -287,7 +298,12 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           ),
         ),
         // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
-        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), AddPdfFolderRow(last: watch == null)],
+        // Watch a folder: new PDFs in a folder are added on their own (on a wide window its list opens in the right column)
+        if (watch != null) ...[
+          const SizedBox(height: 2),
+          WatchFolderRow(watch: watch, selected: wide && _watched, onOpenList: wide ? () => setState(() => _watched = !_watched) : null),
+        ],
         const SizedBox(height: 6),
       ],
       // In a browser, building a library from PDFs and the drop folder.
