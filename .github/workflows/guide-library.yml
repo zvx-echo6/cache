@@ -52,6 +52,7 @@ jobs:
           rustup default "$RUST_VERSION"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
           workspaces: packages/cache_search/native -> target
           key: guide-library
       - name: Guide checks
