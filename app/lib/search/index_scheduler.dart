@@ -210,7 +210,7 @@ class IndexScheduler extends ChangeNotifier {
     final limit = stuckAfterNow;
     if (_quiet < limit) return;
     final at = t.step?.call();
-    logError('Index work ${t.key} is stuck at "${at ?? 'a step it cannot name'}": no progress for ${limit.inMinutes} min of working time (at ${t.progress?.call()}); skipped for now');
+    logError('Index work ${t.key} is stuck at "${at ?? 'a step it cannot name'}": no progress for ${limit.inMinutes} min of working time (at ${t.progress?.call()}); skipped for now', job: t.key);
     _stuck.add(t.key);
     if (at != null) _stuckAt[t.key] = at;
     _watch?.cancel();

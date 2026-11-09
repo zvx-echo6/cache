@@ -9,6 +9,8 @@ import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_index_run.dart';
 import 'pdf_pages.dart';
+import '../../platform/app_log.dart';
+import '../../search/indexes_share.dart' show encodeSourceId;
 
 /// A ZIM as PDF indexing sees it.
 class PdfZimRef {
@@ -456,8 +458,12 @@ class PdfIndexState extends ChangeNotifier {
   }
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
-  /// The step the run on [z] is on now ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when none runs on it.
-  String? stepOf(PdfZimRef z) => _runPath == z.path ? _run?.step : null;
+  String? _preStep;
+  String? _preStepPath;
+
+  /// The step the run on [z] is on now ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB", or before it "Getting the list of
+  /// PDFs in the library"); null when none runs on it.
+  String? stepOf(PdfZimRef z) => _runPath == z.path && _run != null ? _run!.step : (_preStepPath == z.path ? _preStep : null);
 
   /// Steps the run on [z] has taken (a sign of life for the watchdog).
   int stepsOf(PdfZimRef z) => _runPath == z.path ? (_run?.steps ?? 0) : 0;
@@ -638,7 +644,15 @@ class PdfIndexState extends ChangeNotifier {
   }
 
   Future<void> _go(PdfZimRef z) async {
+    // the step before the run: what a run that never gets going was waiting for
+    _preStepPath = z.path;
+    _preStep = 'Getting the list of PDFs in the library';
+    logInfo('PDF work starts: getting the list of PDFs', job: pdfJobKey(z));
+    notifyListeners();
     final list = await listOf(z);
+    logInfo(list == null ? 'PDF work: the library could not be read' : 'PDF work: ${list.pdfs.length} PDFs listed', job: pdfJobKey(z));
+    _preStepPath = null;
+    _preStep = null;
     final paths = _paths(z);
     if (list == null || paths == null) {
       _picking = false;
@@ -666,6 +680,7 @@ class PdfIndexState extends ChangeNotifier {
       },
       attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
+      logJob: pdfJobKey(z),
     );
     _runPath = z.path;
     _picking = false;
@@ -804,6 +819,10 @@ class PdfIndexState extends ChangeNotifier {
     _holds.remove(z.path);
     await _put(z.fileName, {'pause': null});
     if (!_queue.contains(z.path) && z.path != _runPath) _queue.insert(0, z.path);
+    if (z.path != _runPath) {
+      _preStepPath = z.path;
+      _preStep = 'Starting';
+    }
     notifyListeners();
     unawaited(_next(forced: z.path));
   }
@@ -873,3 +892,6 @@ class PdfIndexState extends ChangeNotifier {
     }
   }
 }
+
+/// The index queue's key of [z]'s PDF work (`zim-pdf/<id>`): its log lines go under it, so the queue's Details find them.
+String pdfJobKey(PdfZimRef z) => 'zim-pdf/${encodeSourceId(z.uuid ?? '')}';

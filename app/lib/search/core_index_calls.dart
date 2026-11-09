@@ -208,6 +208,8 @@ class CoreIndexRun implements IndexRun {
   /// not hold the job for ever.
   Map<String, Object?>? _pace;
   int _polls = 0;
+  String? _loggedPhase;
+  int _loggedTenth = -1;
 
   Future<void> _check() async {
     if (_done.isCompleted || _checking) return;
@@ -220,6 +222,13 @@ class CoreIndexRun implements IndexRun {
         }
         pulse[key] = '${p.phase} ${p.done} of ${p.total}';
         steps[key] = coreStepWords(p.phase, p.done, p.total);
+        // the steps in the log (Standard): each new phase, and every tenth of the way through one
+        final tenth = p.total > 0 ? (p.done * 10 ~/ p.total) : 0;
+        if (p.phase != _loggedPhase || tenth != _loggedTenth) {
+          _loggedPhase = p.phase;
+          _loggedTenth = tenth;
+          logInfo(steps[key]!, job: key);
+        }
         // What the person can follow: the look through the library's entries ("scan"), then the items read ("read" counts
         // the caption files or EPUBs).
         if (p.phase == null || p.phase == 'read' || p.phase == 'scan') progress.value = {...progress.value, key: (p.done, p.total)};

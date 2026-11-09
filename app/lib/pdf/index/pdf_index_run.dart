@@ -95,8 +95,13 @@ class PdfIndexRun extends ChangeNotifier {
     this.stage = true,
     this.publish = true,
     this.onTiming,
+    String? logJob,
     DateTime Function()? clock,
-  }) : clock = clock ?? DateTime.now;
+  })  : clock = clock ?? DateTime.now,
+        logJob = logJob ?? 'zim-pdf/${list.zimUuid}';
+
+  /// The key its log lines go under: the index queue's key of this work, so its Details find them.
+  final String logJob;
 
   final PdfIndexCore core;
   /// Where the ZIM's index is built and published (its uuid's folder in the device's indexes folder).
@@ -212,8 +217,8 @@ class PdfIndexRun extends ChangeNotifier {
   void _step(String words) {
     step = words;
     steps++;
-    // each step, timed by the log's clock (Detailed); the queue's Details show the last ones
-    logDetail(words, job: 'zim-pdf/${list.zimUuid}');
+    // each step, timed by the log's clock (Standard: indexing steps); the queue's Details show the last ones
+    logInfo(words, job: logJob);
     notifyListeners();
   }
 
@@ -452,9 +457,9 @@ class PdfIndexRun extends ChangeNotifier {
   Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     // Each PDF's start and end in the log (with what came of it and how long it took), so a device's logs show where work stands.
     final all = Stopwatch()..start();
-    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size >> 10} KB) starts', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size >> 10} KB) starts', detail: pdf.path, job: logJob);
     final one = await _indexOneLogged(pdf, row, bytes: bytes);
-    logInfo('PDF ${handled + 1} of ${list.pdfs.length} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms', detail: pdf.path, job: logJob);
     return one;
   }
 
