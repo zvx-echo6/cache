@@ -126,7 +126,8 @@ void main() {
         'embed_sha256': 'c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb',
         'classifier': classifier.path,
       };
-      const calls = CoreIngestCalls();
+      // pdfrx is up already (pdfiumForTests); a test has no Flutter plugins for pdfrxFlutterInitialize
+      final calls = CoreIngestCalls(init: () async {});
       final probe = await calls('probe', {'engines': engines, 'hash_model': false});
       // ignore: avoid_print
       print('probe: ${jsonEncode(probe)}');

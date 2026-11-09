@@ -779,7 +779,8 @@ class AddPdfRun implements IndexRun {
         final t0 = state._clock();
         Map<String, dynamic> s;
         try {
-          s = await calls('step', {'job': job.coreJob, 'budget_ms': state.stepBudgetMs});
+          // reading and drawing pages use PDFium; making it searchable and saving do not
+          s = await calls('step', {'job': job.coreJob, 'budget_ms': state.stepBudgetMs}, pdfium: job.state == 'reading' || job.state == 'needs_ocr');
         } on CacheSearchException catch (e) {
           if (e.code == 'busy') {
             // another PDF is being saved into this library: this one goes next, and tries again by itself
@@ -833,7 +834,7 @@ class AddPdfRun implements IndexRun {
     final engine = await state._engine();
     if (engine == null) {
       // no engine on this device: the pages are handed back blank (the job counts them as without text)
-      await state.calls('ocr', {
+      await state.calls('ocr', pdfium: false, {
         'job': job.coreJob,
         'engine': 'none',
         'version': '0',
@@ -859,7 +860,7 @@ class AddPdfRun implements IndexRun {
     );
     if (batch.failed.isNotEmpty) logInfo('Add PDF: ${batch.failed.length} scanned pages could not be read', job: job.key);
     if (_stop) throw const _Stopped();
-    await state.calls('ocr', batch.ingestParams);
+    await state.calls('ocr', batch.ingestParams, pdfium: false);
     job
       ..scansDone += batch.pages.length
       ..scanInBatch = 0;

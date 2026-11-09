@@ -19,7 +19,7 @@ class FakeIngestCalls implements IngestCalls {
   List<Map<String, dynamic>> argsOf(String op) => [for (final m in made) if (m.$1 == op) m.$2];
 
   @override
-  Future<Map<String, dynamic>> call(String op, Map<String, dynamic> args) async {
+  Future<Map<String, dynamic>> call(String op, Map<String, dynamic> args, {bool pdfium = true}) async {
     made.add((op, args));
     // a real turn of the event loop, as a call on another isolate takes: timers (a Pause, a test's wait) get their turn
     await Future<void>.delayed(Duration.zero);

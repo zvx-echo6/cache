@@ -86,7 +86,7 @@ void main() {
     expect(find.text('Homestead library'), findsOneWidget);
     await tester.tap(find.text('Field library'));
     await settle(tester);
-    expect(find.descendant(of: find.byKey(const ValueKey('add-pdf-library')), matching: find.text('Field library')), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const ValueKey('add-pdf-library'))).data, 'Field library');
   });
 
   testWidgets('3. Confirm: the title from the file, the size, one time estimate in the indexing rules words', (tester) async {
@@ -100,7 +100,7 @@ void main() {
     expect(find.text('On battery it waits for charging. You can use Cache meanwhile.'), findsOneWidget);
     expect(find.text('Add PDF'), findsWidgets);
     expect(find.text('Cancel'), findsOneWidget);
-    await tester.pumpWidget(app(AddPdfConfirmPage(state: w.state, pdf: (path: '/tmp/none.pdf', name: 'Field radio handbook.pdf', bytes: 212 << 20), battery: _low)));
+    await tester.pumpWidget(app(AddPdfConfirmPage(key: const ValueKey('big'), state: w.state, pdf: (path: '/tmp/none.pdf', name: 'Field radio handbook.pdf', bytes: 212 << 20), battery: _low)));
     await settle(tester);
     expect(find.text('212 MB'), findsOneWidget);
     expect(find.text('About 21 min while charging'), findsOneWidget);
