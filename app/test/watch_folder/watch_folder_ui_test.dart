@@ -98,8 +98,8 @@ void main() {
     expect(find.text('12 PDFs · 840 MB · About 84 min while charging'), findsOneWidget);
     expect(find.text('Longer if pages are scans. A book you already have becomes a spare copy.'), findsOneWidget);
     expect(find.text('My books'), findsOneWidget);
-    expect(find.text('When you open Cache, and in the background'), findsOneWidget);
-    expect(find.text('The background check follows the indexing rules: charging, battery and temperature.'), findsOneWidget);
+    expect(find.text("When you open Cache, and while it's open"), findsOneWidget);
+    expect(find.text("Checks while it's open follow the indexing rules: charging, battery and temperature."), findsOneWidget);
     expect(find.text('Watch and add 12 PDFs'), findsOneWidget);
     expect(find.text('Watch new PDFs only'), findsOneWidget);
     expect(find.text('A PDF you remove from this folder stays in Cache.'), findsOneWidget);
@@ -157,7 +157,7 @@ void main() {
     w.two();
     await tester.pumpWidget(app(WatchedFoldersPage(watch: w.watch, background: true)));
     await settle(tester);
-    expect(find.text('Checked when you open Cache, and in the background while charging.'), findsOneWidget);
+    expect(find.text("Checked when you open Cache, and while it's open and charging."), findsOneWidget);
     expect(find.text('Manuals'), findsOneWidget);
     expect(find.text('Download/Manuals · and subfolders'), findsOneWidget);
     expect(find.text('Checked 2 hours ago'), findsOneWidget);
