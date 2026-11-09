@@ -275,6 +275,22 @@ class SearchEngine {
     return jsonDecode(s ?? (throw CacheSearchException.fromJson(native.lastError(0)))) as Object;
   }
 
+  // ---- Add PDF, the ingest job (cs_ingest_*) ----
+
+  /// True when the loaded core has the ingest calls.
+  static bool hasIngestIn(CsNative native) => native is CsIngestNative && (native as CsIngestNative).hasIngest;
+
+  /// One handle-less ingest call on [native]: `start`, `step`, `ocr`, `cancel` or `probe` with its [args]
+  /// (packages/cache_ingest/INGEST-API.md); the answer as a JSON object. A failure throws [CacheSearchException] with the core's
+  /// code (`busy`, `not_pdf`, `locked`, `damaged`, `no_space` with [CacheSearchException.needed], ...).
+  static Map<String, dynamic> ingestCall(CsNative native, String op, Map<String, dynamic> args) {
+    final n = native is CsIngestNative ? native as CsIngestNative : null;
+    if (n == null || !n.hasIngest) throw const CacheSearchException('unsupported', 'This build of the core cannot add PDFs yet');
+    if (!const {'start', 'step', 'ocr', 'cancel', 'probe'}.contains(op)) throw CacheSearchException('bad_json', 'unknown ingest call $op');
+    final s = n.ingest(op, jsonEncode(args));
+    return (jsonDecode(s ?? (throw CacheSearchException.fromJson(native.lastError(0)))) as Map).cast<String, dynamic>();
+  }
+
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----
 
   /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),

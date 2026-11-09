@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../video/format.dart' show formatBytes;
 import 'cds.dart';
 import 'library_pages.dart';
+import 'add_pdf/add_pdf_pages.dart' show AddPdfBookNote;
 import 'book_edit_pages.dart';
 import 'library_panes.dart';
 import 'same_book_pages.dart';
@@ -464,7 +465,8 @@ class BookPage extends StatelessWidget {
         final crumbs = b.shelf == null ? shelfCrumbs(context, d, null, last: 'Unsorted') : shelfCrumbs(context, d, b.shelf);
         final crumbsWithLast = b.shelf == null ? crumbs : [...crumbs.sublist(0, crumbs.length - 1), Crumb(crumbs.last.label, shelfPath(d, b.shelf!))];
         final color = bookColor(context, d, b);
-        final card = _CatalogueCard(book: b, color: color);
+        // once after Add PDF filed it: "Filed in 530 Water treatment", Move, Undo; then it goes
+        final card = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [AddPdfBookNote(key: ValueKey('add-pdf-book-note-${b.id}'), book: b, deps: d), _CatalogueCard(book: b, color: color)]);
         final facts = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

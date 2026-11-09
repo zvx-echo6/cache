@@ -7,6 +7,8 @@ import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfRow;
+import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'zim_dl.dart';
@@ -247,6 +249,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   /// "Your own library" (nothing when the libraries are not set up).
   List<Widget> _own(CacheTokens k) {
     final libraries = b.libraries;
+    final pdf = addPdfShared != null && b.device == null;
     return [
       // In a browser the first section is the computer the browser is on.
       if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
@@ -254,10 +257,10 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
         const GroupLabel('Your own'),
         Material(
           color: k.surface,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
           child: InkWell(
             key: const ValueKey('add-own-library'),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
             onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 52),
@@ -283,6 +286,8 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             ),
           ),
         ),
+        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow()],
         const SizedBox(height: 6),
       ],
       // In a browser, building a library from PDFs and the drop folder.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:cache_search/cache_search.dart';
 import 'package:crypto/crypto.dart';
@@ -1158,6 +1159,45 @@ class LibrariesState extends ChangeNotifier {
 
   // ---- the blank template
 
+  // ---- libraries the person made (Add PDF)
+
+  /// The libraries the person made on this device or another of theirs (Add PDF's "My books" and any other they made): their
+  /// settings say `"own": true`. Ready-made libraries are never theirs to write to.
+  List<LibraryItem> get ownLibraries => [for (final l in libraries) if (l.settings?['own'] == true) l];
+
+  /// The default personal library, "My books" (`"own_default": true`), when it exists.
+  LibraryItem? get defaultOwnLibrary => ownLibraries.where((l) => l.settings?['own_default'] == true).firstOrNull;
+
+  Future<LibraryItem>? _makingOwn;
+
+  /// The default personal library, made the first time it is needed (no setup step): an empty library from the core's blank
+  /// template (one 1024-dimension Cosine vector, bge-m3), titled [title], with its own id, in the libraries folder like any
+  /// other, so it syncs like any library.
+  Future<LibraryItem> ensureOwnLibrary({String title = 'My books'}) =>
+      defaultOwnLibrary != null ? Future.value(defaultOwnLibrary!) : (_makingOwn ??= _makeOwn(title).whenComplete(() => _makingOwn = null));
+
+  Future<LibraryItem> _makeOwn(String title) async {
+    final core = sources.core ?? await sources.whenCoreReady();
+    if (core == null || dir == null || _dev != null) throw StateError(sources.unavailable ?? 'Search is not ready yet. Try again in a moment.');
+    final tmp = await (tempDirOverride ?? await getTemporaryDirectory()).createTemp('own-library');
+    final stagePath = _child('.add-${DateTime.now().microsecondsSinceEpoch}');
+    var installed = false;
+    try {
+      final settings = ownLibrarySettings(title: title, id: 'my-books-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}', isDefault: true);
+      // its keyword index in its own index/ folder: the Add PDF job extends that one as it adds each book
+      await makeBlankLibrary(core, stagePath, settings, tmp, poll: pollInterval);
+      final folder = _child(await _freeFolderName('my-books'));
+      await _renameRetry(stagePath, folder, once: true);
+      installed = true;
+      await _afterChange();
+      notifyListeners();
+      return libraries.firstWhere((l) => l.path == folder, orElse: () => LibraryItem.at(path: folder, settings: settings));
+    } finally {
+      if (!installed) await _deleteQuietlyPath(stagePath);
+      _deleteQuietly(tmp);
+    }
+  }
+
   /// Makes the blank library template on the device and hands it to the system's save dialog. True when it was saved.
   Future<bool> saveTemplate() async {
     final core = sources.core;
@@ -1278,4 +1318,146 @@ List<String>? _tarNames(List<int> Function(int at) header, int length, int max) 
     at += 512 + (size + 511) ~/ 512 * 512;
   }
   return names.isEmpty ? null : names;
+}
+
+/// Copies the member [name] of the tar file [tarFile] (gzip-compressed when [gzipped]) to [out], reading it as a stream, so a
+/// large member is never held in memory whole. Throws [FileSystemException] when the member is not there.
+Future<void> extractTarMember(File tarFile, String name, File out, {bool gzipped = false}) async {
+  Stream<List<int>> input = tarFile.openRead();
+  if (gzipped) input = input.transform(gzip.decoder);
+  final buf = BytesBuilder(copy: false);
+  IOSink? sink;
+  var left = 0; // bytes of the current member still to come (with its padding: [pad])
+  var pad = 0;
+  var found = false;
+  var ended = false;
+  await for (final chunk in input) {
+    if (ended) break;
+    buf.add(chunk);
+    var bytes = buf.takeBytes();
+    var at = 0;
+    while (true) {
+      if (left > 0 || pad > 0) {
+        final n = left > 0 ? (bytes.length - at < left ? bytes.length - at : left) : 0;
+        if (n > 0) {
+          sink?.add(Uint8List.sublistView(bytes, at, at + n));
+          at += n;
+          left -= n;
+        }
+        if (left == 0 && pad > 0) {
+          final p = bytes.length - at < pad ? bytes.length - at : pad;
+          at += p;
+          pad -= p;
+        }
+        if (left == 0 && pad == 0 && sink != null) {
+          await sink.close();
+          sink = null;
+          ended = true;
+          break;
+        }
+        if (at >= bytes.length) break;
+        continue;
+      }
+      if (bytes.length - at < 512) break;
+      final h = Uint8List.sublistView(bytes, at, at + 512);
+      at += 512;
+      if (h.every((b) => b == 0)) {
+        ended = true;
+        break;
+      }
+      var end = 0;
+      while (end < 100 && h[end] != 0) {
+        end++;
+      }
+      final member = utf8.decode(h.sublist(0, end), allowMalformed: true);
+      final sizeText = String.fromCharCodes(h.sublist(124, 136)).replaceAll(RegExp(r'[^0-7]'), '');
+      final size = sizeText.isEmpty ? 0 : int.parse(sizeText, radix: 8);
+      left = size;
+      pad = (512 - size % 512) % 512;
+      if (member == name) {
+        found = true;
+        sink = out.openWrite();
+        if (size == 0) {
+          await sink.close();
+          sink = null;
+          ended = true;
+          break;
+        }
+      }
+    }
+    if (!ended && at < bytes.length) buf.add(Uint8List.sublistView(bytes, at));
+  }
+  await sink?.close();
+  if (!found) throw FileSystemException('$name is not in the archive', tarFile.path);
+}
+
+/// The settings of a library the person makes on the device (Add PDF's My books): the blank template's (bge-m3, the usual
+/// fields) with its own id and title, and `"own": true` (`"own_default"` for My books) so it is listed as theirs.
+Map<String, dynamic> ownLibrarySettings({required String title, required String id, bool isDefault = false}) => {
+  'format': 1,
+  'library_id': id,
+  'version': '1',
+  'title': title,
+  'fields': {'title': 'title', 'text': 'text', 'page': 'page', 'source_type': 'source', 'link': 'link', 'document': 'doc_id'},
+  'leave_out': <String>[],
+  'embedding': {
+    'vector': '',
+    'model': 'bge-m3-Q8_0.gguf',
+    'sha256': 'c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb',
+    'dims': 1024,
+    'repo': 'lm-kit/bge-m3-gguf',
+    'revision': '9379ce497e8814b200f2dc0d18eb4045426dcb8c',
+    'path': 'bge-m3-Q8_0.gguf',
+    'size': 634553856,
+  },
+  'keyword_index': 'auto',
+  'own': true,
+  if (isDefault) 'own_default': true,
+};
+
+/// Makes an empty library at [folder] (which must not exist) with [settings]: the core's blank template (library_template),
+/// its shard snapshot unpacked (unpack_library), the keyword index when the settings want one (index_library, with [index]'s
+/// parameters for the shard and index folders), and cache-library.json beside it. [tmp] holds the template meanwhile.
+Future<void> makeBlankLibrary(
+  SearchCore core,
+  String folder,
+  Map<String, dynamic> settings,
+  Directory tmp, {
+  Map<String, dynamic> Function(String shard, String index)? index,
+  Duration poll = const Duration(milliseconds: 250),
+}) async {
+  final sep = Platform.pathSeparator;
+  Future<JobProgress> run(String kind, Map<String, dynamic> params) async {
+    final job = await core.startJob(kind, params);
+    try {
+      while (true) {
+        final p = await job.progress();
+        if (p.isFinished) {
+          if (p.state != JobState.done) throw CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'The library could not be made');
+          return p;
+        }
+        await Future<void>.delayed(poll);
+      }
+    } finally {
+      try {
+        await job.free();
+      } catch (_) {}
+    }
+  }
+
+  final template = '${tmp.path}$sep$kLibraryTemplateName';
+  await run('library_template', {'out_path': template});
+  // the template is a gzip'd tar holding the blank shard snapshot, the settings and a README: the snapshot is what unpacks
+  final snapshot = '${tmp.path}${sep}blank-library.snapshot';
+  await extractTarMember(File(template), 'blank-library.snapshot', File(snapshot), gzipped: true);
+  await Directory(folder).create(recursive: true);
+  final shard = '$folder${sep}shard';
+  final p = await run('unpack_library', {'snapshot_path': snapshot, 'dir': shard, 'settings': settings});
+  final detail = p.detail ?? const {};
+  final keyword = (settings['keyword_index'] ?? 'auto') as String;
+  if (keyword == 'on' || (keyword == 'auto' && detail['own_text_index'] != true)) {
+    final indexDir = '$folder${sep}index';
+    await run('index_library', index?.call(shard, indexDir) ?? {'library_path': shard, 'index_dir': indexDir, 'heap_mb': 200, 'settings': settings});
+  }
+  await File('$folder$sep$kLibrarySettingsFile').writeAsString(const JsonEncoder.withIndent('  ').convert(settings), flush: true);
 }

@@ -273,6 +273,11 @@ abstract class ShelfPlacer {
   Future<void> undo(Placement placement);
 }
 
+/// A placer that can put a book back in Unsorted (Add PDF's Undo after a book was filed: the book is kept, never deleted).
+abstract class ShelfUnsorter {
+  Future<void> unsort(ShelfBook book);
+}
+
 /// What a placement did, for its Undo and its message.
 @immutable
 class Placement {

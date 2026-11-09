@@ -206,6 +206,17 @@ abstract class CsShelvesNative {
   String? shelves(String op, String argsJson);
 }
 
+/// Add PDF: the ingest job (cs_ingest_start, cs_ingest_step, cs_ingest_ocr, cs_ingest_cancel, cs_ingest_probe; cache_search.h and
+/// packages/cache_ingest/INGEST-API.md). Handle-less like the Bookshelves; [hasIngest] is false when the loaded core is older than
+/// these calls (looked up when first used).
+abstract class CsIngestNative {
+  bool get hasIngest;
+
+  /// [op] is the function's name after `cs_ingest_`: `start`, `step`, `ocr`, `cancel` or `probe`; [argsJson] its one argument.
+  /// The answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
+  String? ingest(String op, String argsJson);
+}
+
 /// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
 /// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
 abstract class CsCaptionsNative {

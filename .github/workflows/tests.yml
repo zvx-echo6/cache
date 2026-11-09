@@ -6,6 +6,9 @@
 #   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
 #            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it), and cache_ocr's analyze
 #            and tests (a fake engine; the real engines run on an emulator and a simulator in ocr.yml)
+#   add-pdf-core  Add PDF end to end on the real core: the app's AddPdfState drives cs_ingest_* (a Linux libcache_search) with the
+#            real PDFium (the release pdfrx ships), the real bge-m3 embedder (a Linux cache_llama and the pinned model) and the shelf
+#            sorter from the app's assets; OCR is a stand-in (the phone engines run in ocr.yml). app/test/add_pdf/add_pdf_core_test.dart
 #   embed-parity  the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
 #            with the pinned bge-m3 model and a Linux cache_llama (places_pack's parity_tests, then
 #            app/test/query_embedder_parity_test.dart, matched to the golden at cosine 0.999 and to each other exactly)
@@ -194,3 +197,60 @@ jobs:
           CACHE_EMBED_MODELS_DIR="$RUNNER_TEMP/models" CACHE_EMBED_LOCAL_GOLDEN="$RUNNER_TEMP/local-golden.json" \
           LD_LIBRARY_PATH="$LLAMA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             flutter test --no-pub test/query_embedder_parity_test.dart
+
+  add-pdf-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # llama.cpp, for cache_llama
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          key: add-pdf-core
+          cache-on-failure: true
+      - name: The core (libcache_search.so)
+        working-directory: packages/cache_search/native
+        run: |
+          cargo build --locked -p cache_search
+          test -f target/debug/libcache_search.so
+          echo "CS_DIR=$PWD/target/debug" >> "$GITHUB_ENV"
+          echo "ZIM_LIB_DIR=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
+      - name: The embedding model
+        run: |
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $RUNNER_TEMP/models/bge-m3-Q8_0.gguf" | sha256sum -c -
+      - name: cache_llama (Linux, CPU, AVX2)
+        run: |
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/llama" -DCMAKE_BUILD_TYPE=Release -DCACHE_LLAMA_X86_AVX2=ON
+          cmake --build "$RUNNER_TEMP/llama" --target cache_llama -j "$(nproc)"
+          lib=$(find "$RUNNER_TEMP/llama" -name 'libcache_llama.so' | head -n 1)
+          [ -n "$lib" ] || { echo 'libcache_llama.so was not built'; exit 1; }
+          echo "LLAMA_LIB=$lib" >> "$GITHUB_ENV"
+          echo "LLAMA_DIR=$(dirname "$lib")" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Add PDF on the real core
+        working-directory: app
+        run: |
+          flutter pub get
+          CACHE_ADD_PDF_CORE=1 CACHE_EMBED_LIB="$LLAMA_LIB" CACHE_EMBED_MODEL="$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" \
+          LD_LIBRARY_PATH="$CS_DIR:$LLAMA_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test --no-pub test/add_pdf/add_pdf_core_test.dart --reporter expanded

@@ -34,9 +34,13 @@ class IndexTask {
     this.progress,
     this.pulse,
     this.step,
+    this.anyway = false,
   });
 
   final String key;
+
+  /// The person said to run it now (Add PDF's "Resume anyway"): it is not held for the battery or for charging.
+  final bool anyway;
 
   /// The step it is on now, in words ("Reading page 12 of 300 · PDF 3 of 37 · 12 MB"); null when it cannot say.
   final String? Function()? step;
@@ -515,14 +519,14 @@ class IndexScheduler extends ChangeNotifier {
     if (_stuck.contains(t.key)) return IndexWait.stuck;
     // Held by the throttle (too warm, a low battery, the model generating): nothing new starts; what runs is held by its duty.
     final d = throttle?.duty;
-    if (!running && d != null && d.paused) {
+    if (!running && d != null && d.paused && !(t.anyway && d.hold == IndexHold.battery)) {
       return switch (d.hold) {
         IndexHold.heat => IndexWait.heat,
         IndexHold.battery => IndexWait.battery,
         IndexHold.model || IndexHold.none => IndexWait.model,
       };
     }
-    if (b != null) {
+    if (b != null && !t.anyway) {
       if (b.low) return IndexWait.battery;
       // Long work starts only on charge or above half; once running it goes on until the battery is low.
       if (t.long && !running && !b.charging && b.percent <= 50) return IndexWait.charging;
