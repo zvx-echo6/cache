@@ -19,6 +19,19 @@ The program is `target/release/cache`. It also needs the helper and the core lib
 below), whose paths are the `--helper` and `--core-lib` options; by default they are `helper/cache-core-helper` and
 `lib/libcache_search.so` beside the program.
 
+### Road routing and places
+
+The core routes on roads with Valhalla through `lib/libvalhalla_shim.so` (built and tested by `.github/workflows/valhalla.yml`,
+shipped in the tarball). The server hands the helper the shim's full path as `CACHE_VALHALLA_SHIM` (default: next to the core
+library; `--valhalla-shim` overrides it), and the helper opens the core with the phone's own config sections
+(`buildCoreExtras`): `routing.valhalla` (empty `tiles`, the region engine's folder `<data>/app/support/regions/tiles`),
+`places` (`merged_dir` `<data>/app/support/regions/places`) and `regions` (`<data>/app/support/regions`). `/api/core` with
+op `server.features` says what is there:
+
+    {"routing": {"available": <the shim is a file>, "shim": "<path>"},
+     "places":  {"available": <the merged places database is there>, "merged_dir": "<path>"},
+     "extras":  {<the config sections the core was opened with; "routing" only when routing is available>}}
+
 ### The text embedder
 
 The server embeds text with the same model the phone uses (bge-m3 Q8_0, the pinned `lm-kit/bge-m3-gguf` revision in

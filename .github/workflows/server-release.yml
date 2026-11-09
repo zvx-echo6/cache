@@ -3,7 +3,7 @@
 #
 # The tarball is what server/packaging/install.sh unpacks: cache (the program), helper/cache-core-helper (the Dart helper
 # that hosts the core, compiled with `dart compile exe` on each architecture's own runner), lib/libcache_search.so (the core
-# library the helper loads), lib/libzim.so.9 (the libzim the core links), web/ (the real Flutter web build), VERSION and cache.service, with install.sh beside them.
+# library the helper loads), lib/libzim.so.9 (the libzim the core links), lib/libvalhalla_shim.so (the road router, see below), web/ (the real Flutter web build), VERSION and cache.service, with install.sh beside them.
 #
 # The web build bundles canvaskit (--no-web-resources-cdn) and serves its fonts from web/fontfallback, so Cache for Linux works with no internet.
 #
@@ -26,6 +26,11 @@
 # The build jobs run inside an ubuntu:22.04 container (on the same native runners) so the binaries need glibc 2.35 or older and
 # run on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after the build fails the job if any of the
 # binaries needs a newer glibc. (libzim.so.9 also needs GCC 12's libstdc++, GLIBCXX_3.4.30: Ubuntu 22.04+, Debian 12+, bookworm+.)
+#
+# Road routing: lib/libvalhalla_shim.so is Valhalla 3.7.0 and the C shim, built and tested (route, matrix, locate) by the Valhalla
+# workflow (valhalla.yml), which the `routing` job calls; that workflow reuses its last tested output when packages/valhalla is
+# unchanged. The server hands the helper its full path (CACHE_VALHALLA_SHIM; the core needs a real file, not a bare name). The glibc
+# step checks it with the other binaries, and a step after packaging unpacks the tarball and dlopens the shim from it.
 name: Linux build
 
 on:
@@ -39,12 +44,19 @@ on:
       - 'packages/cache_llama/**'
       - '.github/workflows/server-release.yml'
       - '.github/actions/libzim-prebuilt/**'
+      - 'packages/valhalla/**'
+      - '.github/workflows/valhalla.yml'
+      - '.github/actions/valhalla-source/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # libvalhalla_shim.so for both architectures (artifact valhalla-shim-3.7.0-linux-<arch>).
+  routing:
+    uses: ./.github/workflows/valhalla.yml
+
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -68,7 +80,7 @@ jobs:
           if-no-files-found: error
 
   build:
-    needs: web
+    needs: [web, routing]
     strategy:
       fail-fast: false
       matrix:
@@ -261,13 +273,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/helper"
           dart compile exe bin/cache_core_helper.dart -o "$RUNNER_TEMP/helper/cache-core-helper"
       # Fails the job if any binary needs a glibc newer than 2.35 (Ubuntu 22.04, the oldest supported system).
+      - name: Download the road router
+        uses: actions/download-artifact@v4
+        with:
+          name: valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/valhalla-shim
       - name: Check the glibc requirement
         working-directory: .
         run: |
           limit="2.35"
           fail=0
           zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
-          for f in packages/cache_search/native/target/release/cache packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib"; do
+          for f in packages/cache_search/native/target/release/cache packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib" "$RUNNER_TEMP/valhalla-shim/lib/libvalhalla_shim.so"; do
             max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
             echo "$f: max GLIBC_${max:-none}"
             if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
@@ -294,6 +311,9 @@ jobs:
           install -m 755 "$RUNNER_TEMP/helper/cache-core-helper" "$stage/helper/cache-core-helper"
           install -m 644 packages/cache_search/native/target/release/libcache_search.so "$stage/lib/libcache_search.so"
           install -m 644 build-llama/libcache_llama.so "$stage/lib/libcache_llama.so"
+          # The road router (Valhalla and the C shim); the server passes the helper its full path, next to libcache_search.so.
+          install -m 644 "$RUNNER_TEMP/valhalla-shim/lib/libvalhalla_shim.so" "$stage/lib/libvalhalla_shim.so"
+          install -m 644 "$RUNNER_TEMP/valhalla-shim/LICENSE-NOTICE.txt" "$stage/lib/libvalhalla_shim.LICENSE-NOTICE.txt"
           # libzim (Xapian and ICU inside): the core finds it next to itself (RPATH $ORIGIN); the real file under the soname the core needs.
           cp -L "$LIBZIM_DIR"/lib/*/libzim.so.9 "$stage/lib/libzim.so.9"
           chmod 644 "$stage/lib/libzim.so.9"
@@ -311,6 +331,31 @@ jobs:
           tar -tzvf "$RUNNER_TEMP/$name.tar.gz"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "path=$RUNNER_TEMP/$name.tar.gz" >> "$GITHUB_OUTPUT"
+      # The shim as shipped: unpack the tarball into an empty folder and dlopen lib/libvalhalla_shim.so from it (RTLD_NOW, so
+      # every symbol must resolve on this system), then call valhalla_shim_version through dlsym.
+      - name: The packaged shim loads
+        working-directory: .
+        run: |
+          check="$RUNNER_TEMP/shim-load"
+          rm -rf "$check" && mkdir -p "$check/unpacked"
+          tar -C "$check/unpacked" -xzf "${{ steps.pack.outputs.path }}"
+          so="$check/unpacked/lib/libvalhalla_shim.so"
+          test -f "$so" || { echo "::error::lib/libvalhalla_shim.so is not in the tarball"; exit 1; }
+          printf '%s\n' \
+            '#include <dlfcn.h>' \
+            '#include <stdio.h>' \
+            'int main(int argc, char **argv) {' \
+            '  void *h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);' \
+            '  if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }' \
+            '  const char *(*version)(void) = (const char *(*)(void))dlsym(h, "valhalla_shim_version");' \
+            '  if (!version) { fprintf(stderr, "dlsym: %s\n", dlerror()); return 1; }' \
+            '  printf("loaded %s: %s\n", argv[1], version());' \
+            '  return 0;' \
+            '}' > "$check/load.c"
+          gcc -O1 -Wall -o "$check/load" "$check/load.c" -ldl
+          env -u LD_LIBRARY_PATH "$check/load" "$so"
+          env -u LD_LIBRARY_PATH ldd "$so"
+          rm -rf "$check"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.pack.outputs.name }}

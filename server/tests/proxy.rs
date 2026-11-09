@@ -52,6 +52,7 @@ async fn rig(tag: &str, sources: Option<&str>) -> Rig {
     }
     let mut cfg = HelperConfig::new(PathBuf::from(env!("CARGO_BIN_EXE_fake-helper")), PathBuf::from("libfake"), dir.0.join("sources.json"));
     cfg.app_dirs = Some((PathBuf::from("/app/support"), PathBuf::from("/app/docs")));
+    cfg.shim = PathBuf::from("/opt/cache/lib/libvalhalla_shim.so");
     cfg.backoff = vec![Duration::from_millis(50), Duration::from_millis(100)];
     cfg.ready_timeout = Duration::from_secs(10);
     cfg.stop_wait = Duration::from_secs(5);
@@ -128,7 +129,7 @@ async fn no_sources_file_opens_with_null_sources_and_the_helper_gets_the_app_fol
     assert_eq!(open_args(&rig.log()[0]), json!({"sources": null}));
     assert_eq!(
         rig.core(r#"{"op":"env","args":{}}"#).await,
-        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs"}}))
+        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs", "shim": "/opt/cache/lib/libvalhalla_shim.so"}}))
     );
     rig.app.helper.as_ref().unwrap().shutdown().await;
 }

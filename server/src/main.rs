@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const USAGE: &str = "usage:
-  cache serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>] [--embed-lib <lib>]
+  cache serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>] [--embed-lib <lib>] [--valhalla-shim <lib>]
       (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so,
-       --embed-lib (the cache_llama library that embeds text) to <folder>/lib/libcache_llama.so;
+       --embed-lib (the cache_llama library that embeds text) to <folder>/lib/libcache_llama.so,
+       --valhalla-shim (the road router) to libvalhalla_shim.so next to the core library;
        --public-origin, or public_origin in <dir>/config.json, is the address people use, for security keys: it needs a host name)
   cache set-password --data <dir> [--sign-out-all]
       (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out;
@@ -158,7 +159,7 @@ fn keys(argv: &[String]) -> Result<(), String> {
 }
 
 fn serve(argv: &[String]) -> Result<(), String> {
-    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib", "embed-lib", "public-origin"], &["no-tls"])?;
+    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib", "embed-lib", "valhalla-shim", "public-origin"], &["no-tls"])?;
     let data = PathBuf::from(a.req("data")?);
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
@@ -191,6 +192,9 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let embed_lib = a.get("embed-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(embed_lib_name));
     let core_lib = a.get("core-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(lib_name));
     let mut helper_cfg = HelperConfig::new(helper_exe, core_lib, data.join("sources.json"));
+    if let Some(shim) = a.get("valhalla-shim") {
+        helper_cfg.shim = PathBuf::from(shim);
+    }
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;

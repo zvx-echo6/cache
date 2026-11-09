@@ -1,6 +1,7 @@
 # Builds Valhalla 3.7.0 + valhalla_shim for every platform, one job per platform. Today: linux-x86_64 and linux-aarch64 (each on a native runner, no cross-compiling). Each job runs the shim's own
 # test (test/shim_test.c: init, route, matrix, locate over the Idaho tile extract), checks the library needs only glibc <= 2.35, and
 # uploads valhalla-shim-3.7.0-linux-<arch> (lib/libvalhalla_shim.so, include/, LICENSE-NOTICE.txt, BUILD-INFO.txt). No GitHub Release.
+# The Linux build (server-release.yml) calls it (workflow_call) and packages that artifact's library into the release tarball.
 # Built in an ubuntu:22.04 container so the library runs on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+.
 # GCC 13 comes from the ubuntu-toolchain-r/test PPA (Valhalla 3.7.0 uses <format>); libstdc++ and libgcc are linked statically.
 name: Valhalla
@@ -13,6 +14,10 @@ on:
       - '.github/workflows/valhalla.yml'
       - '.github/actions/valhalla-source/**'
   workflow_dispatch:
+  # The Linux build (server-release.yml) calls this workflow for the shim it ships in lib/ of the tarball, so there is one build
+  # of it. A run whose packages/valhalla sources and source action are unchanged reuses the last tested output (the "Built shim"
+  # cache below) and only re-checks and re-uploads it.
+  workflow_call:
 
 permissions:
   contents: read
@@ -69,11 +74,20 @@ jobs:
           cmake --version | sed -n 1p
           ldd --version | sed -n 1p
       - uses: actions/checkout@v4
+      # The tested output of an earlier run with the same shim sources (saved only after its shim test passed, below).
+      - name: Built shim
+        id: built
+        uses: actions/cache/restore@v4
+        with:
+          path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          key: valhalla-shim-linux-v1-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/**', '.github/actions/valhalla-source/**') }}
       - name: Pinned Valhalla source
+        if: steps.built.outputs.cache-hit != 'true'
         uses: ./.github/actions/valhalla-source
         with:
           dir: work/src
       - name: Dependency cache (vcpkg downloads and built packages)
+        if: steps.built.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -82,18 +96,30 @@ jobs:
           key: valhalla-linux-deps-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/vcpkg.json', 'packages/valhalla/triplets/*-linux-rel.cmake', 'packages/valhalla/scripts/build-linux.sh') }}
           restore-keys: valhalla-linux-deps-${{ matrix.arch }}-
       - name: Compiler cache
+        if: steps.built.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: /github/home/ccache
           key: valhalla-linux-ccache-${{ matrix.arch }}-${{ github.run_id }}
           restore-keys: valhalla-linux-ccache-${{ matrix.arch }}-
       - name: Build
+        if: steps.built.outputs.cache-hit != 'true'
         run: |
           ccache --zero-stats
           bash packages/valhalla/scripts/build-linux.sh "$PWD/work" "$PWD/out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}"
           ccache --show-stats
       - name: Shim test (init, route, matrix, locate)
+        if: steps.built.outputs.cache-hit != 'true'
         run: bash packages/valhalla/scripts/test-linux.sh "$PWD/out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}" "$PWD/work/src" "$PWD/testwork"
+      - name: Save the built shim
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          key: ${{ steps.built.outputs.cache-primary-key }}
+      - name: Reused
+        if: steps.built.outputs.cache-hit == 'true'
+        run: cat "out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}/BUILD-INFO.txt"
       - name: Check glibc and symbols
         run: |
           so=out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}/lib/libvalhalla_shim.so

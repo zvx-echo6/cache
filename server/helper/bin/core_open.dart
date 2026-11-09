@@ -12,8 +12,8 @@ import 'line_protocol.dart';
 ///
 /// - The extras (user, live, places, layers, routing, notebook, regions) are the app's own `buildCoreExtras` (app/lib/search/
 ///   core_config.dart), called as SourcesState._defaultExtras calls it on desktop Linux: filesDir is the app's documents folder
-///   ([AppDirs.docs]), supportDir its support folder, layerDefsDir `<support>/layer-defs`, shim `shimPath(null)`, and `<docs>/live-defs`
-///   is created. Skipped here (logged): `installIcuData` and `installStarterLayers`.
+///   ([AppDirs.docs]), supportDir its support folder, layerDefsDir `<support>/layer-defs`, shim the full path the server gives
+///   ([AppDirs.shim], `CACHE_VALHALLA_SHIM`: `<install>/lib/libvalhalla_shim.so`), and `<docs>/live-defs` is created. Skipped here (logged): `installIcuData` and `installStarterLayers`.
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
@@ -43,6 +43,9 @@ class OpenOp implements OpHandler {
     final extra = serverCoreExtras(dirs);
     log?.call('skipped on the server for now: ICU data install, starter map layers');
     log?.call('core extras: ${(extra.keys.toList()..sort()).join(', ')}');
+    final f = serverFeatures(extra);
+    log?.call('road routing: shim ${(f['routing'] as Map)['shim']} ${(f['routing'] as Map)['available'] == true ? 'present' : 'missing (no road routing)'}; '
+        'places: ${(f['places'] as Map)['available'] == true ? 'present' : 'none downloaded'}');
     dispatcher.handle('open', {'sources': sources, 'extra': extra});
     indexer?.useSources(sources);
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
@@ -101,18 +104,77 @@ class IndexStateOp implements OpHandler {
       };
 }
 
-/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS).
+/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), and the full path of the Valhalla shim
+/// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library).
 class AppDirs {
-  AppDirs(this.support, this.docs);
+  AppDirs(this.support, this.docs, {this.shim});
 
   final Directory support;
   final Directory docs;
 
-  /// From the environment; null when either is missing.
+  /// The shim's full path; null when the server gave none (then the bare name, which the core cannot route with).
+  final String? shim;
+
+  /// From the environment; null when either folder is missing.
   static AppDirs? fromEnvironment(Map<String, String> env) {
-    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'];
+    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'], v = env['CACHE_VALHALLA_SHIM'];
     if (s == null || s.isEmpty || d == null || d.isEmpty) return null;
-    return AppDirs(Directory(s), Directory(d));
+    return AppDirs(Directory(s), Directory(d), shim: (v == null || v.isEmpty) ? null : v);
+  }
+}
+
+/// The helper's `server.features`, which a browser may call through `/api/core`: what the server's engine can do, from the files
+/// on disk, so the browser can switch on what the phone switches on from its own opened extras (SourcesState.openedExtra).
+///
+/// ```
+/// {"routing": {"available": bool, "shim": "<path>"},
+///  "places":  {"available": bool, "merged_dir": "<support>/regions/places"},
+///  "extras":  {the cs_open sections the engine was opened with; "routing" only when routing is available}}
+/// ```
+/// - routing is available when the shim (the `routing.valhalla.shim` the engine was given) is a file: the core's own test
+///   (cache_navigate `routing_installed`); the routing tiles are the region engine's folder (`tiles` empty), filled by region
+///   downloads and by the stream cache, as on the phone.
+/// - places is available when the region engine's merged places database is there: `<merged_dir>/CURRENT` names a build whose
+///   `<build>.sqlite` is a file (cache_places `PackSet::merged`).
+class FeaturesOp implements OpHandler {
+  FeaturesOp(this.dirs);
+
+  final AppDirs dirs;
+
+  @override
+  bool handles(String op) => op == 'server.features';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) => serverFeatures(serverCoreExtras(dirs));
+}
+
+/// [FeaturesOp]'s reply for the extras the engine was opened with.
+Map<String, dynamic> serverFeatures(Map<String, dynamic> extra) {
+  final routing = (extra['routing'] as Map?)?.cast<String, dynamic>();
+  final shim = ((routing?['valhalla'] as Map?)?['shim'] as String?) ?? '';
+  final routable = shim.isNotEmpty && File(shim).existsSync();
+  final mergedDir = ((extra['places'] as Map?)?['merged_dir'] as String?) ?? '';
+  return {
+    'routing': {'available': routable, 'shim': shim},
+    'places': {'available': mergedPlacesPresent(mergedDir), 'merged_dir': mergedDir},
+    'extras': {
+      for (final e in extra.entries)
+        if (e.key != 'routing' || routable) e.key: e.value,
+    },
+  };
+}
+
+/// The region engine's merged places database is in [dir]: `CURRENT` names a build and `<build>.sqlite` is a file.
+bool mergedPlacesPresent(String dir) {
+  if (dir.isEmpty) return false;
+  try {
+    final current = File('$dir/CURRENT');
+    if (!current.existsSync()) return false;
+    final build = current.readAsStringSync().trim();
+    if (build.isEmpty || build.contains('/') || build.contains('\\') || build.startsWith('.')) return false;
+    return File('$dir/$build.sqlite').existsSync();
+  } catch (_) {
+    return false;
   }
 }
 
@@ -128,7 +190,8 @@ Map<String, dynamic> serverCoreExtras(AppDirs dirs) {
     filesDir: dirs.docs,
     supportDir: dirs.support,
     layerDefsDir: Directory('${dirs.support.path}/layer-defs'),
-    shim: shimPath(null),
+    shim: dirs.shim ?? shimPath(null),
+    useLinkedRouter: false,
   );
 }
 
