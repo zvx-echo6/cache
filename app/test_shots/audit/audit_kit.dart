@@ -9,11 +9,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../shot_kit.dart';
 
-/// The five audit sizes (logical points): phone upright and sideways, tablet upright and sideways, a desktop browser window.
+/// The audit sizes (logical points): phone upright and sideways, tablet upright (11" and 12.9") and sideways, a desktop browser
+/// window.
 const Map<String, Size> kAuditSizes = {
   '390x844': Size(390, 844),
   '844x390': Size(844, 390),
   '820x1180': Size(820, 1180),
+  '1024x1366': Size(1024, 1366),
   '1180x820': Size(1180, 820),
   '1440x900': Size(1440, 900),
 };
@@ -27,7 +29,7 @@ Size get auditSize => kAuditSizes[auditSizeName]!;
 EdgeInsets get auditInsets => switch (auditSizeName) {
   '390x844' => const EdgeInsets.only(top: 47, bottom: 34),
   '844x390' => const EdgeInsets.only(left: 47, right: 47, bottom: 21),
-  '820x1180' || '1180x820' => const EdgeInsets.only(top: 24, bottom: 20),
+  '820x1180' || '1180x820' || '1024x1366' => const EdgeInsets.only(top: 24, bottom: 20),
   _ => EdgeInsets.zero,
 };
 
@@ -66,6 +68,11 @@ const Set<String> kAuditDarkIds = {
   'directions-panel',
   'guidance',
   'connections',
+  'ask-confirm-card',
+  'chat-list',
+  'region-row',
+  'home-setup-card',
+  'pdf-cited-passage',
 };
 
 /// Writes the picture [id] at the audit size (dark only for [kAuditDarkIds] or [always]), and logs any layout errors drawn in it.

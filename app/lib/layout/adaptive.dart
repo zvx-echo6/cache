@@ -104,9 +104,14 @@ class TwoPane extends StatefulWidget {
     this.id,
     this.listName = 'list',
     this.prefs,
+    this.listAloneUntilChosen = false,
   });
 
   final Widget list;
+
+  /// While nothing is chosen and there is no page to show beside the list, the list takes the whole page instead of sitting
+  /// beside an empty "Choose an item" (Notebooks, Regions); choosing an item brings the detail in beside it.
+  final bool listAloneUntilChosen;
 
   /// The item chosen at first on a regular window (Settings opens on its first page); null shows the placeholder.
   final Object? initialKey;
@@ -135,6 +140,9 @@ class TwoPaneState extends State<TwoPane> {
   late WidgetBuilder? _builder = widget.initial;
   bool _listHidden = false;
   late final PanePrefs _prefs = widget.prefs ?? PanePrefs();
+
+  // The list keeps its state (tab, scroll) when it moves between the page alone and the list pane.
+  final _listKey = GlobalKey(debugLabel: 'pane-list');
 
   @override
   void initState() {
@@ -180,6 +188,7 @@ class TwoPaneState extends State<TwoPane> {
     // Nothing chosen yet: the list stays (there would be nothing to show), and a desktop window may show the starting page.
     final hidden = _listHidden && _builder != null;
     final b = _builder ?? (desktop ? widget.desktopInitial : null);
+    if (b == null && widget.listAloneUntilChosen) return _listScope(hidden: false);
     final Object? navKey = _builder == null ? const _DesktopInitial() : _key;
     final reduce = MediaQuery.disableAnimationsOf(context);
     return Row(
@@ -205,7 +214,7 @@ class TwoPaneState extends State<TwoPane> {
                     explicitChildNodes: true,
                     child: ExcludeSemantics(
                       excluding: hidden,
-                      child: IgnorePointer(ignoring: hidden, child: _PaneScope(state: this, inList: true, selected: _key, hidden: hidden, child: widget.list)),
+                      child: IgnorePointer(ignoring: hidden, child: _listScope(hidden: hidden)),
                     ),
                   ),
                 ),
@@ -250,6 +259,11 @@ class TwoPaneState extends State<TwoPane> {
       ],
     );
   }
+
+  Widget _listScope({required bool hidden}) => KeyedSubtree(
+    key: _listKey,
+    child: _PaneScope(state: this, inList: true, selected: _key, hidden: hidden, child: widget.list),
+  );
 }
 
 /// The key of the detail's Navigator while it shows [TwoPane.desktopInitial].
