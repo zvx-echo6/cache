@@ -46,6 +46,14 @@ jobs:
       - name: Packages
         working-directory: app
         run: flutter pub get
+      # PDFium and SQLite for the app's build hooks, from the Actions cache instead of GitHub releases.
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
       - name: Draw the renders
         working-directory: app
         env:

@@ -36,6 +36,9 @@ on:
       - 'server/tests/data/**'
       - '.github/workflows/native-libs.yml'
       - '.github/actions/libzim-prebuilt/**'
+      - '.github/actions/pinned-downloads/**'
+      - '.github/pinned-downloads.txt'
+      - '.github/scripts/pinned-download.sh'
   workflow_dispatch:
 
 permissions:
@@ -262,8 +265,15 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: ${{ matrix.arch }}
+      - name: openZIM testing suite (pinned, from the Actions cache)
+        id: zimsuite
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: zim-testing-suite-0.10.0.tar.gz
       - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
         working-directory: .
+        env:
+          ZIM_SUITE_TGZ: ${{ steps.zimsuite.outputs.dir }}/zim-testing-suite-0.10.0.tar.gz
         run: |
           line=$(bash packages/cache_search/native/zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
           echo "$line"
