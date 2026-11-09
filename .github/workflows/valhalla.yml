@@ -58,6 +58,9 @@ jobs:
     env:
       CCACHE_DIR: /github/home/ccache
       CCACHE_MAXSIZE: 2G
+      # Use the cmake and ninja installed below (PyPI) instead of letting vcpkg download its own from GitHub releases, which
+      # failed the cold rel-1.1 build three times on 504s. One less outside download for every cold build.
+      VCPKG_FORCE_SYSTEM_BINARIES: 1
     steps:
       - name: Build tools
         env:
