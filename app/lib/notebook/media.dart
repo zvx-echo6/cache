@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app_fs.dart';
+import '../browse/web/local_files.dart' show pickLocalFile, pickLocalFiles;
 import '../platform.dart' as plat;
 import '../pdf/pdf_address.dart' show looksLikePdf;
 import 'save_bytes.dart';
@@ -72,14 +73,16 @@ Future<NbPhoto?> addPhoto(NotebookState nb, {required bool camera}) async {
 
 /// A file from the phone (a scan, a PDF) copied into the Notebook's media folder with its own name.
 Future<NbFile?> addFile(NotebookState nb) async {
-  final picked = await FilePicker.pickFile();
   if (plat.isWeb) {
-    final bytes = picked?.bytes;
-    if (picked == null || bytes == null) return null;
+    // The browser's own chooser (call it straight from the tap); the bytes are written on the server.
+    final picked = await pickLocalFile();
+    if (picked == null) return null;
+    final bytes = await picked.readAll();
     final id = newMediaId();
     await nb.webFs.writeBytesAtomic(AppRoot.support, NotebookState.attachedRel(id), bytes);
     return NbFile(id: id, name: picked.name, bytes: bytes.length);
   }
+  final picked = await FilePicker.pickFile();
   if (picked == null || picked.path == null) return null;
   try {
     final id = newMediaId();
@@ -97,12 +100,12 @@ Future<NbFile?> addFile(NotebookState nb) async {
 /// Lets the person choose a file and runs [use] on it while the picker's copy exists (it is cleared after); null when nothing
 /// was chosen. Any file can be chosen: the core says when it is not one it reads.
 Future<T?> withPickedFile<T>(Future<T> Function(String path, String name) use) async {
-  final picked = await FilePicker.pickFile();
   if (plat.isWeb) {
-    final bytes = picked?.bytes;
-    if (picked == null || bytes == null) return null;
-    return withStagedFiles([(name: picked.name, bytes: bytes)], (paths) => use(paths.first, picked.name));
+    final picked = await pickLocalFile();
+    if (picked == null) return null;
+    return withStagedFiles([(name: picked.name, bytes: await picked.readAll())], (paths) => use(paths.first, picked.name));
   }
+  final picked = await FilePicker.pickFile();
   if (picked == null || picked.path == null) return null;
   try {
     return await use(picked.path!, picked.name);
@@ -115,12 +118,12 @@ Future<T?> withPickedFile<T>(Future<T> Function(String path, String name) use) a
 
 /// Like [withPickedFile] with one or more files (a repeater list can be a KML and a CSV together).
 Future<T?> withPickedFiles<T>(Future<T> Function(List<String> paths) use) async {
-  final picked = await FilePicker.pickFiles();
   if (plat.isWeb) {
-    final files = [for (final f in picked) if (f.bytes != null) (name: f.name, bytes: f.bytes!)];
-    if (files.isEmpty) return null;
-    return withStagedFiles(files, use);
+    final picked = await pickLocalFiles();
+    if (picked.isEmpty) return null;
+    return withStagedFiles([for (final f in picked) (name: f.name, bytes: await f.readAll())], use);
   }
+  final picked = await FilePicker.pickFiles();
   final paths = [for (final f in picked) ?f.path];
   if (paths.isEmpty) return null;
   try {

@@ -11,7 +11,7 @@ Audit items 10 and 11. Phone behavior is unchanged; every change sits behind `pl
 ## Adding
 - Photo: image_picker's `readAsBytes` (image_picker_for_web) -> `encodePhoto` on the main thread (no `Isolate.run` on web) ->
   two `fs.write`s (photo, thumb). Same size, orientation, EXIF stripping as the phone.
-- File: `FilePicker.pickFile()` bytes -> `fs.write` to `notebook/files/<id>`.
+- File: the browser chooser (`pickLocalFile`) bytes -> `fs.write` to `notebook/files/<id>`.
 - Discard of unsaved media: `fs.delete`.
 
 ## Showing and opening
