@@ -489,10 +489,17 @@ class WatchedFolderCard extends StatelessWidget {
                 style: TextStyle(fontSize: 13, height: 1.35, color: k.emergency),
               ),
             ),
+          // a PDF it could not add: counted here, with Try again on the same line (the action row stays as drawn)
           if (skipped > 0 && !bad)
             Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text("$skipped couldn't be added", key: ValueKey('watched-skipped-${f.id}'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: k.emergency)),
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(
+                children: [
+                  Text("$skipped couldn't be added", key: ValueKey('watched-skipped-${f.id}'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: k.emergency)),
+                  const SizedBox(width: 4),
+                  _Txt(key: ValueKey('watch-try-again-${f.id}'), label: 'Try again', onPressed: () => watch.tryAgain(f)),
+                ],
+              ),
             ),
           const SizedBox(height: 10),
           Wrap(
@@ -512,7 +519,6 @@ class WatchedFolderCard extends StatelessWidget {
                 IgnorePointer(child: Opacity(opacity: 0.5, child: _Ghost(key: ValueKey('watch-checking-${f.id}'), label: 'Checking', onPressed: () {})))
               else
                 _Ghost(key: ValueKey('watch-check-${f.id}'), label: 'Check now', icon: Icons.refresh, onPressed: () => watch.check(f)),
-              if (skipped > 0 && !bad) _Ghost(key: ValueKey('watch-try-again-${f.id}'), label: 'Try again', onPressed: () => watch.tryAgain(f)),
               _Txt(key: ValueKey('watch-stop-${f.id}'), label: 'Stop watching', danger: true, onPressed: stop),
             ],
           ),
