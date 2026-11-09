@@ -14,6 +14,7 @@ import 'package:cache/library/add_pdf/add_pdf_calls.dart';
 import 'package:cache/library/add_pdf/add_pdf_engines.dart' show kPdfiumVersion;
 import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/sources/libraries_state.dart';
+import 'package:cache_llama/cache_llama.dart';
 import 'package:cache_ocr/cache_ocr.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -195,22 +196,36 @@ void main() {
       });
       expect(jsonEncode(view), contains(a.result!['copy'] as String));
 
-      // searchable: the library opened in a core finds the first book by its words
+      // searchable: the library opened in a core finds the first book, by meaning (the query embedded by the phone's own
+      // embedder, as the Library search does) and, when the library has a keyword index, by its words
+      // ignore: avoid_print
+      print('library folder: ${[for (final e in Directory(lib).listSync()) e.uri.pathSegments.where((x) => x.isNotEmpty).last]}');
       final searcher = await SearchCore.open([SourceConfig.library(path: '$lib/shard', indexDir: '$lib/index', settings: settings)]);
+      final embedder = CacheEmbedder(modelPath: env['CACHE_EMBED_MODEL']!);
       try {
+        final v = await embedder.embed('how long do I boil water to make it safe');
         SearchResponse? r;
         for (var i = 0; i < 50 && r == null; i++) {
           try {
-            r = await searcher.search('boil water purification', k: 5);
+            r = await searcher.search('boil water purification', k: 5, queryVector: QueryVector(embedder.modelId, v));
           } on CacheSearchException catch (e) {
-            if (e.code != 'busy' && e.code != 'index_missing') rethrow;
+            if (e.code != 'busy') rethrow;
             await Future<void>.delayed(const Duration(milliseconds: 200));
           }
         }
         // ignore: avoid_print
-        print('search: ${[for (final h in r!.results) h.title]}');
+        print('search: ${[for (final h in r!.results) h.title]} vector ${r.vectorSources} keyword-only ${r.keywordOnlySources}');
         expect(r.results.map((h) => h.title), contains('Water purification manual'));
+        try {
+          final k = await searcher.search('purification', k: 5);
+          // ignore: avoid_print
+          print('keyword search: ${[for (final h in k.results) h.title]}');
+        } on CacheSearchException catch (e) {
+          // ignore: avoid_print
+          print('keyword search: $e');
+        }
       } finally {
+        await embedder.dispose();
         await searcher.close();
       }
     } finally {
