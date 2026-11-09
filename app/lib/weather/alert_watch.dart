@@ -308,7 +308,7 @@ class ToldStore {
 
   /// A browser: the file is `alerts_told.json` in the support folder on Cache Server, reached through [AppFs] (so the server's own
   /// timer and every tab share one memory of what was told).
-  ToldStore.appFs(AppFs fs, {String path = 'alerts_told.json'}) : _where = null, _fs = fs, _path = path;
+  ToldStore.appFs(AppFs fs, [this._path = 'alerts_told.json']) : _where = null, _fs = fs;
 
   final Future<File> Function()? _where;
   final AppFs? _fs;

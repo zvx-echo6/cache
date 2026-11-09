@@ -1225,34 +1225,6 @@ void main() {
       expect(AlertFocus.fromPayload('not json'), isNull);
     });
   });
-}
-
-/// The Home card's weather part as one line, the way the card lays it out.
-Future<String> homeWeather(WeatherState w) async {
-  final c = await w.homeCard();
-  if (c.message != null) return c.message!;
-  return [
-    [c.temperature, c.conditions].whereType<String>().join(', '),
-    if (c.high != null && c.low != null) 'High ${c.high}, low ${c.low}',
-    c.place,
-    if (c.expired) 'forecast expired' else ?c.age,
-  ].join(' · ');
-}
-
-/// The Home card's alerts part as one line: the counts, the warnings by name, the place.
-Future<String> homeAlerts(WeatherState w) async {
-  final c = await w.homeCard();
-  if (c.message != null) return c.message!;
-  if (!c.alertsKnown) return 'Nothing downloaded yet';
-  final fires = c.alerts.where((a) => a.fire).length;
-  final warnings = c.alerts.length - fires;
-  if (c.alerts.isEmpty) return 'None active · ${c.place} · checked ${c.checked}';
-  return [
-    if (warnings > 0) warnings == 1 ? '1 warning' : '$warnings warnings',
-    if (fires > 0) fires == 1 ? '1 fire' : '$fires fires',
-    for (final a in c.alerts) if (!a.fire) a.label,
-    c.place,
-  ].join(' · ');
 
   group('in a browser (the files are on Cache Server)', () {
     test('weather starts on the server\'s folders: the catalogue is kept, the core\'s folder holds what is on, and a restart finds both', () async {
@@ -1292,4 +1264,32 @@ Future<String> homeAlerts(WeatherState w) async {
       expect(h.weather.lastOkAt, ran);
     });
   });
+}
+
+/// The Home card's weather part as one line, the way the card lays it out.
+Future<String> homeWeather(WeatherState w) async {
+  final c = await w.homeCard();
+  if (c.message != null) return c.message!;
+  return [
+    [c.temperature, c.conditions].whereType<String>().join(', '),
+    if (c.high != null && c.low != null) 'High ${c.high}, low ${c.low}',
+    c.place,
+    if (c.expired) 'forecast expired' else ?c.age,
+  ].join(' · ');
+}
+
+/// The Home card's alerts part as one line: the counts, the warnings by name, the place.
+Future<String> homeAlerts(WeatherState w) async {
+  final c = await w.homeCard();
+  if (c.message != null) return c.message!;
+  if (!c.alertsKnown) return 'Nothing downloaded yet';
+  final fires = c.alerts.where((a) => a.fire).length;
+  final warnings = c.alerts.length - fires;
+  if (c.alerts.isEmpty) return 'None active · ${c.place} · checked ${c.checked}';
+  return [
+    if (warnings > 0) warnings == 1 ? '1 warning' : '$warnings warnings',
+    if (fires > 0) fires == 1 ? '1 fire' : '$fires fires',
+    for (final a in c.alerts) if (!a.fire) a.label,
+    c.place,
+  ].join(' · ');
 }

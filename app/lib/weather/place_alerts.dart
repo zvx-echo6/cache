@@ -71,7 +71,7 @@ class PlaceAlerts extends ChangeNotifier {
   PlaceAlerts(Future<File> Function() file) : _file = file, _fs = null, _path = '';
 
   /// A browser: the file is in the support folder on Cache Server, reached through [AppFs].
-  PlaceAlerts.appFs(AppFs fs, {String path = kPlaceAlertsFile}) : _file = null, _fs = fs, _path = path;
+  PlaceAlerts.appFs(AppFs fs, [this._path = kPlaceAlertsFile]) : _file = null, _fs = fs;
 
   /// Rules kept in memory only (tests).
   PlaceAlerts.memory() : _file = null, _fs = null, _path = '';
