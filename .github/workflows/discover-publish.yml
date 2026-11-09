@@ -1,0 +1,119 @@
+# Publishes Discover's activity list (docs/discover-catalogue.json) to https://data.cached.info/discover/catalogue.json, the
+# address the app reads (kDiscoverUrl, app/lib/discover/discover_state.dart). Format and rules: docs/discover-recipes.md.
+#
+# It checks the file first (parses, format cache-discover, a version this app reads, identical to the app's copy, and an
+# `updated` date not older than the published one), uploads only when the content changed (compared with the stored object's
+# MD5), then fetches the public address and checks the bytes. It writes ONE key, discover/catalogue.json, and nothing else.
+#
+# Secrets (an R2 key for the data bucket behind data.cached.info, separate from the cached-site key used by roadmap.yml):
+#   DATA_R2_ACCESS_KEY_ID, DATA_R2_SECRET_ACCESS_KEY, DATA_R2_ENDPOINT, DATA_R2_BUCKET
+name: Discover publish
+
+on:
+  push:
+    branches: [rel-1.1, main]
+    paths:
+      - docs/discover-catalogue.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discover-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DATA_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DATA_R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.DATA_R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.DATA_R2_BUCKET }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      PUBLIC_BASE: https://data.cached.info
+      KEY: discover/catalogue.json
+      SRC: docs/discover-catalogue.json
+    steps:
+      - name: Check secrets
+        run: |
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+            if [ -z "${!v}" ]; then echo "::error::$v is missing"; exit 1; fi
+          done
+      - uses: actions/checkout@v4
+      - name: Check the bucket is the one behind data.cached.info
+        # The stored connector catalogue must be the one the public address serves (same ETag), or nothing is uploaded.
+        run: |
+          stored=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key connectors/catalogue.json \
+                     --query ETag --output text | tr -d '"')
+          public=$(curl -fsSI "$PUBLIC_BASE/connectors/catalogue.json" | tr -d '\r' | awk 'tolower($1)=="etag:"{print $2}' | tr -d '"')
+          if [ -z "$stored" ] || [ "$stored" != "$public" ]; then
+            echo "::error::The bucket's connectors/catalogue.json ($stored) is not the one $PUBLIC_BASE serves ($public)."; exit 1
+          fi
+          echo "Bucket matches $PUBLIC_BASE."
+      - name: Validate
+        run: |
+          code=$(curl -s -o published.json -w '%{http_code}' "$PUBLIC_BASE/$KEY") || code=000
+          case "$code" in
+            200) ;;
+            404) rm -f published.json ;;
+            *) echo "::error::Fetching the published file gave HTTP $code"; exit 1 ;;
+          esac
+          python3 -I - "$SRC" app/assets/discover/catalogue.json app/lib/discover/recipe.dart published.json <<'PY'
+          import json, os, re, sys
+          src, app_copy, recipe, published = sys.argv[1:5]
+          def fail(msg):
+              print(f"::error::{msg}"); sys.exit(1)
+          raw = open(src, 'rb').read()
+          try:
+              d = json.loads(raw)
+          except ValueError as e:
+              fail(f"{src} does not parse: {e}")
+          if not isinstance(d, dict) or d.get('format') != 'cache-discover':
+              fail(f"{src}: format is not cache-discover")
+          m = re.search(r'const int kDiscoverVersion = (\d+);', open(recipe).read())
+          if not m:
+              fail(f"kDiscoverVersion not found in {recipe}")
+          supported = int(m.group(1))
+          v = d.get('version')
+          if not isinstance(v, int) or isinstance(v, bool) or v < 1 or v > supported:
+              fail(f"{src}: version {v!r} is not one this app reads (1..{supported})")
+          if open(app_copy, 'rb').read() != raw:
+              fail(f"{src} and {app_copy} differ")
+          upd = d.get('updated')
+          if not isinstance(upd, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', upd):
+              fail(f"{src}: updated {upd!r} is not a YYYY-MM-DD date")
+          if os.path.exists(published):
+              try:
+                  old = json.load(open(published, 'rb')).get('updated', '')
+              except (ValueError, AttributeError):
+                  old = ''
+              if isinstance(old, str) and old and upd < old:
+                  fail(f"{src}: updated {upd} is older than the published {old}")
+              print(f"Published updated: {old or '(none)'}")
+          else:
+              print("Nothing published yet.")
+          print(f"OK: version {v}, updated {upd}, {len(d.get('activities', []))} activities")
+          PY
+      - name: Upload if changed
+        run: |
+          new=$(md5sum "$SRC" | cut -d' ' -f1)
+          old=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY" \
+                  --query ETag --output text 2>/dev/null | tr -d '"' || true)
+          if [ "$new" = "$old" ]; then echo "Unchanged; nothing uploaded."; exit 0; fi
+          aws s3 cp "$SRC" "s3://$R2_BUCKET/$KEY" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json --cache-control 'public, max-age=300' --only-show-errors
+          echo "Uploaded $KEY (${old:-none} -> $new)."
+      - name: Check the public file
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS -o live.json "$PUBLIC_BASE/$KEY" && cmp -s live.json "$SRC"; then
+              echo "$PUBLIC_BASE/$KEY matches $SRC ($(wc -c < live.json) bytes)."; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$PUBLIC_BASE/$KEY does not match $SRC"; exit 1

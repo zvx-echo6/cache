@@ -9,6 +9,9 @@ release.
 - **Published:** `https://data.cached.info/discover/catalogue.json` (`kDiscoverUrl`), on the same host as the region catalogue,
   the connector catalogue and the recommended models. The app fetches it when Discover starts. It keeps the fetched file only
   when the format is one it reads and its `updated` date is the same as or newer than the copy it carries.
+- **Publishing:** `.github/workflows/discover-publish.yml` checks the source and uploads it to that address when
+  `docs/discover-catalogue.json` changes on `rel-1.1` or `main` (or when run by hand). Bump `updated` with every change; the
+  workflow refuses a date older than the published one.
 
 ## Format (`cache-discover`, version 1)
 
