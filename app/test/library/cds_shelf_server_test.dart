@@ -118,7 +118,9 @@ void main() {
     expect(aid.onServer, isTrue, reason: 'the PDF is on the server');
     expect(aid.pdfPath, isNull, reason: 'the browser has no file of it');
     final bees = s.unsorted.single;
-    expect((bees.id, bees.suggestions, bees.onServer), ('bees', ['350'], true), reason: 'a book without facts shows what the view suggests');
+    expect(bees.id, 'bees');
+    expect(bees.suggestions, ['350'], reason: 'a book without facts shows what the view suggests');
+    expect(bees.onServer, isTrue);
     expect(s.hidden.single.id, 'surgery');
     expect(s.nextNumber('210'), 'CDS 210-003');
     expect([for (final g in s.notShelved) (g.library, g.books)], [('Field library', 2)], reason: 'engines and stone are in the catalogue and not in the view');

@@ -475,7 +475,8 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     } catch (_) {
       sig = '';
     }
-    if (_disposed || (sig == _signature && !_loading)) return;
+    // the same stamp: nothing to read, unless the first read has not started (one under way is reading it)
+    if (_disposed || (sig == _signature && (!_loading || _reading != null))) return;
     _signature = sig;
     await _read();
   }
