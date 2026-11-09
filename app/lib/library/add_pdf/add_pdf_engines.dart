@@ -57,8 +57,10 @@ Future<Map<String, dynamic>> addPdfEngines({required Directory support, required
 /// The startup self-check: the core's probe of the engines, logged at Standard in one line, so the first run on a phone says
 /// whether PDFium loaded (and which), whether the embedder and model load, the model's SHA-256, and whether the shelf sorter
 /// loads (and its version). The model's SHA-256 is worked out once per model file (about 600 MB, seconds on a phone) and
-/// remembered in [memo]; at later starts the probe skips hashing.
-Future<Map<String, dynamic>?> addPdfSelfCheck(IngestCalls calls, Map<String, dynamic> engines, {File? memo}) async {
+/// remembered in [memo]; at later starts the probe skips hashing. A probe with no answer within [timeout] is logged as failed,
+/// so the log never stays silent about it.
+Future<Map<String, dynamic>?> addPdfSelfCheck(IngestCalls calls, Map<String, dynamic> engines,
+    {File? memo, Duration timeout = const Duration(minutes: 2)}) async {
   try {
     final model = File((engines['embed_model'] ?? '') as String);
     final stat = model.existsSync() ? model.statSync() : null;
@@ -68,7 +70,8 @@ Future<Map<String, dynamic>?> addPdfSelfCheck(IngestCalls calls, Map<String, dyn
       if (memo != null && memo.existsSync()) kept = (jsonDecode(memo.readAsStringSync()) as Map).cast<String, dynamic>();
     } catch (_) {}
     final hash = stamp != null && kept?['stamp'] != stamp;
-    final r = await calls('probe', {'engines': engines, 'hash_model': hash});
+    logDetail('Add PDF self-check: probing the engines${hash ? ' (hashing the model)' : ''}');
+    final r = await calls('probe', {'engines': engines, 'hash_model': hash}).timeout(timeout);
     final m = (r['model'] as Map?)?.cast<String, dynamic>() ?? const {};
     var sha = m['sha256'] as String?;
     bool? matches = m['matches'] as bool?;

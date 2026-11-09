@@ -1010,6 +1010,15 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
         if (n_ctx <= 0)     n_ctx = 512;
         if (n_threads <= 0) n_threads = 4;
         llama_log_set(quiet_log, nullptr);
+#if defined(CL_BACKEND_DL)
+        // The CPU backend is loaded here too, not only in cl_load: an embedder is often the first model in its process
+        // (the app's query embedder before any chat, Add PDF's own embedder in the core), and with no backend registered
+        // llama_model_load_from_file fails.
+        if (std::string why = load_cpu_backend(); !why.empty()) {
+            set_err(err, err_len, why);
+            return nullptr;
+        }
+#endif
         llama_backend_init();
 
         auto h = std::make_unique<EmbedHandle>();

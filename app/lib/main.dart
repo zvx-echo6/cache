@@ -798,7 +798,11 @@ class _CacheAppState extends State<CacheApp> {
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
       unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
         final s = _supportPath;
-        if (s == null || !mounted) return;
+        if (s == null || !mounted) {
+          logInfo('Add PDF self-check: skipped (${s == null ? 'no support folder' : 'the app closed'})');
+          return;
+        }
+        logDetail('Add PDF self-check: reading the engines');
         await addPdfSelfCheck(addPdf.calls, await _addPdfEngines(), memo: File('$s/ingest/probe.json'));
       }).catchError((Object e) {
         logError('Add PDF self-check', error: e);
