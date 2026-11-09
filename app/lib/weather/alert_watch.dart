@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../app_fs.dart';
 import 'alert_area.dart';
 import 'live_view.dart';
 import 'place_alerts.dart';
@@ -300,21 +301,34 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
 /// What has been told about, kept in a small file so restarts and background runs never repeat a pop-up: the addresses of the
 /// items told about (the file's strings, as before) and what is remembered of each alert ([ToldAlert], the file's objects).
 class ToldStore {
-  ToldStore(File file) : _where = (() async => file);
+  ToldStore(File file) : _where = (() async => file), _fs = null, _path = '';
 
   /// For when the folder is only known later (the app reads its support folder at start).
-  ToldStore.lazy(this._where);
+  ToldStore.lazy(Future<File> Function() where) : _where = where, _fs = null, _path = '';
 
-  final Future<File> Function() _where;
+  /// A browser: the file is `alerts_told.json` in the support folder on Cache Server, reached through [AppFs] (so the server's own
+  /// timer and every tab share one memory of what was told).
+  ToldStore.appFs(AppFs fs, {String path = 'alerts_told.json'}) : _where = null, _fs = fs, _path = path;
+
+  final Future<File> Function()? _where;
+  final AppFs? _fs;
+  final String _path;
 
   /// The most kept; older ones drop off (an alert that old has long ended).
   static const int keep = 500;
 
   Future<List<Object?>> _all() async {
     try {
-      final file = await _where();
-      if (!await file.exists()) return [];
-      final j = jsonDecode(await file.readAsString());
+      final String text;
+      if (_fs != null) {
+        text = await _fs.readString(AppRoot.support, _path) ?? '';
+        if (text.isEmpty) return [];
+      } else {
+        final file = await _where!();
+        if (!await file.exists()) return [];
+        text = await file.readAsString();
+      }
+      final j = jsonDecode(text);
       return j is List ? j : [];
     } catch (_) {
       return [];
@@ -330,7 +344,11 @@ class ToldStore {
   Future<void> add(Iterable<String> addresses, {Iterable<ToldAlert> alerts = const []}) async {
     final list = [...(await _all()), ...addresses, for (final a in alerts) a.toJson()];
     final kept = list.length > keep ? list.sublist(list.length - keep) : list;
-    final file = await _where();
+    if (_fs != null) {
+      await _fs.writeStringAtomic(AppRoot.support, _path, jsonEncode(kept));
+      return;
+    }
+    final file = await _where!();
     await file.parent.create(recursive: true);
     final tmp = File('${file.path}.tmp');
     await tmp.writeAsString(jsonEncode(kept), flush: true);

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/app_fs.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/settings/app_settings.dart';
@@ -15,6 +16,7 @@ import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/weather/places.dart';
+import 'package:cache/weather/weather_files.dart';
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,8 +43,9 @@ class Harness {
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false}) async {
     final h = Harness();
+    h.browser = browser;
     h.notifier = notifier;
     if (clock != null) h.clock = clock;
     h.dir = again?.dir ?? Directory.systemTemp.createTempSync('weather-state');
@@ -66,6 +69,22 @@ class Harness {
 
   AlertNotifier? notifier;
 
+  /// The folders kept the browser's way (on Cache Server through AppFs, here over [dir]) instead of the phone's.
+  bool browser = false;
+  final List<AppFsFiles> browserFiles = [];
+
+  /// What the server's timer was told to fetch, each time it changed.
+  final List<Map<String, dynamic>> plans = [];
+
+  /// Every change to the browser's files has reached the folder.
+  Future<void> flushFiles() => Future.wait([for (final f in browserFiles) f.flush()]);
+
+  Future<AppFsFiles> _open(String base) async {
+    final f = await AppFsFiles.open(createAppFs(supportOverride: dir, docsOverride: dir), AppRoot.support, base);
+    browserFiles.add(f);
+    return f;
+  }
+
   WeatherState build() => WeatherState(
     notifier: notifier,
     told: notifier == null ? null : ToldStore(File('${dir.path}/told.json')),
@@ -73,8 +92,11 @@ class Harness {
     policy: policy,
     core: core,
     secrets: secrets,
-    catalogueDir: () async => Directory('${dir.path}/live-catalogues'),
-    liveDir: () async => liveDir,
+    catalogueDir: browser ? null : () async => Directory('${dir.path}/live-catalogues'),
+    liveDir: browser ? null : () async => liveDir,
+    catalogueFiles: browser ? () => _open('live-catalogues') : null,
+    liveFiles: browser ? () => _open('live-sources') : null,
+    onPlan: (p) async => plans.add(p),
     builtIns: () async => builtInDefinitions(),
     position: () => here,
     regions: () => regions,
@@ -86,7 +108,7 @@ class Harness {
   /// The settled end of a restart: the same folder, settings and keys, a new object.
   Future<Harness> restart() async {
     weather.dispose();
-    return create(again: this, serve: false);
+    return create(again: this, serve: false, browser: browser);
   }
 
   Set<String> get inFolder => liveDir.existsSync() ? ({for (final f in liveDir.listSync().whereType<File>()) f.uri.pathSegments.last}..remove('.managed')) : {};
@@ -1231,4 +1253,43 @@ Future<String> homeAlerts(WeatherState w) async {
     for (final a in c.alerts) if (!a.fire) a.label,
     c.place,
   ].join(' · ');
+
+  group('in a browser (the files are on Cache Server)', () {
+    test('weather starts on the server\'s folders: the catalogue is kept, the core\'s folder holds what is on, and a restart finds both', () async {
+      h = await Harness.create(browser: true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      await h.flushFiles();
+      expect(h.weather.sources.map((c) => c.id), contains('usgs-quakes-near'));
+      expect(h.inFolder, contains('usgs-quakes-near.json'));
+      expect(Directory('${h.dir.path}/live-catalogues').listSync().whereType<Directory>(), hasLength(1));
+      final back = await h.restart();
+      h = back;
+      expect(h.weather.catalogues.single.catalogue.title, 'Cache connectors');
+      expect(h.weather.isOn('usgs-quakes-near'), isTrue);
+    });
+
+    test('what the server\'s timer should fetch is sent when the sources or the places change, and only then', () async {
+      h = await Harness.create(browser: true);
+      h.settings.setWatchHere(true);
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.publishPlan();
+      final plan = h.plans.last;
+      expect([for (final s in plan['sources'] as List) (s as Map)['id']], contains('openmeteo-forecast'));
+      final place = (plan['places'] as List).single as Map;
+      expect(place['id'], kWatchHere);
+      expect((place['request'] as Map)['lat'], 42.54);
+      final before = h.plans.length;
+      await h.weather.publishPlan();
+      expect(h.plans.length, before, reason: 'nothing changed');
+    });
+
+    test('a status the server\'s timer wrote is read again, so the Weather line shows its run', () async {
+      h = await Harness.create(browser: true);
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final ran = h.clock.subtract(const Duration(minutes: 3));
+      File('${h.dir.path}/live-catalogues/status.json').writeAsStringSync(jsonEncode({'ok': ran.millisecondsSinceEpoch, 'run': ran.millisecondsSinceEpoch, 'online': ran.millisecondsSinceEpoch, 'failure': null}));
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'the server fetched 3 minutes ago');
+      expect(h.weather.lastOkAt, ran);
+    });
+  });
 }
