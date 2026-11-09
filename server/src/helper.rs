@@ -236,6 +236,10 @@ impl Helper {
         let sources = read_sources(&self.cfg.sources_file)?;
         let mut cmd = Command::new(&self.cfg.exe);
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
+        // This program, which the helper re-runs as `pdf-text` to read the PDFs inside ZIMs for indexing (MuPDF is here, not in Dart).
+        if let Ok(me) = std::env::current_exe() {
+            cmd.env("CACHE_PDF_TEXT_EXE", me);
+        }
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
         }
