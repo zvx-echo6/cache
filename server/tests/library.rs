@@ -150,6 +150,11 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
         }
         "/icon.png" => small(&mut s, "200 OK", "Content-Type: image/png\r\n", b"\x89PNG-icon"),
         "/cat.xml" => small(&mut s, "200 OK", "Content-Type: application/atom+xml\r\n", b"<feed/>"),
+        "/api/v1/videos/abc/captions" => small(&mut s, "200 OK", "Content-Type: application/json; charset=utf-8\r\n", br#"{"data":[]}"#),
+        "/lazy-static/c.vtt" | "/bucket/c.vtt" => small(&mut s, "200 OK", "Content-Type: text/vtt\r\n", b"WEBVTT\n"),
+        "/static/to-bucket" => small(&mut s, "302 Found", "Location: /bucket/c.vtt\r\n", b""),
+        "/static/x.bin" => small(&mut s, "200 OK", "Content-Type: application/octet-stream\r\n", b"\x00\x01"),
+        "/api/v1/page" => small(&mut s, "200 OK", "Content-Type: text/html\r\n", b"<script>1</script>"),
         "/redir-ok" => small(&mut s, "302 Found", "Location: /cat.xml\r\n", b""),
         "/redir-evil" => small(&mut s, "302 Found", &format!("Location: http://evil.invalid:{port}/x\r\n"), b""),
         "/huge-len" => {
@@ -671,6 +676,75 @@ async fn fetch_reads_allow_listed_hosts_only_and_holds_the_size_cap() {
     let r = get(rig.origin.url("/nothing")).await;
     assert_eq!((r.status, code(&r)), (502, json!("upstream_status")));
     stop(&rig).await;
+}
+
+#[tokio::test]
+async fn fetch_scopes_read_other_servers_by_path_and_type_and_never_a_private_address() {
+    let _g = LOCK.lock().await;
+    let mut setup = Setup::new();
+    setup.options.fetch_allow_private = true; // the test origin is on this machine
+    let rig = rig("fetch-scopes", setup).await;
+    let get = |scope: &str, url: String| {
+        let (app, cookie, scope) = (&rig.app, rig.cookie.clone(), scope.to_string());
+        async move { route(app, "GET", &format!("/api/fetch?scope={scope}&url={}", enc(&url)), Some(&cookie), b"").await }
+    };
+    let code = |r: &cache_server::http::Reply| serde_json::from_slice::<Value>(&r.body).unwrap()["error"]["code"].clone();
+
+    // video: a PeerTube site's API and caption files, and a redirect off those paths (its object storage)
+    for (path, want) in [("/api/v1/videos/abc/captions", r#"{"data":[]}"#), ("/lazy-static/c.vtt", "WEBVTT\n"), ("/static/to-bucket", "WEBVTT\n")] {
+        let r = get("video", rig.origin.url(path)).await;
+        assert_eq!(r.status, 200, "{path}");
+        assert!(r.headers.iter().any(|(k, v)| *k == "X-Content-Type-Options" && v == "nosniff"));
+        assert_eq!(read_all(r.stream.unwrap()).await, (want.as_bytes().to_vec(), false), "{path}");
+    }
+    // not on those paths, or not a kind of thing a video scope hands on
+    let r = get("video", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    for path in ["/static/x.bin", "/api/v1/page"] {
+        let r = get("video", rig.origin.url(path)).await;
+        assert_eq!((r.status, code(&r)), (415, json!("unsupported_type")), "{path}");
+    }
+    // user: any path on a public address (here this machine, by the test switch), still only readable types and a small size
+    let r = get("user", rig.origin.url("/cat.xml")).await;
+    assert_eq!(read_all(r.stream.unwrap()).await.0, b"<feed/>");
+    let r = get("user", rig.origin.url("/huge-len")).await;
+    assert_eq!((r.status, code(&r)), (413, json!("too_large")));
+    // models: Hugging Face and the catalog hosts only
+    let r = get("models", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    // a name for a scope that does not exist
+    let r = get("everything", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (400, json!("invalid")));
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn fetch_scopes_refuse_this_machine_and_the_user_scope_can_be_switched_off() {
+    let _g = LOCK.lock().await;
+    let rig1 = rig("fetch-private", Setup::new()).await;
+    let code = |r: &cache_server::http::Reply| serde_json::from_slice::<Value>(&r.body).unwrap()["error"]["code"].clone();
+    // without the test switch an address on this machine is refused in every scope but catalog, by name and by number
+    for scope in ["video", "user", "models"] {
+        for u in [rig1.origin.url("/api/v1/videos/abc/captions"), format!("http://localhost:{}/api/v1/x", rig1.origin.port), "https://192.168.1.240/api/v1/x".into(), "https://169.254.169.254/latest".into()] {
+            let r = route(&rig1.app, "GET", &format!("/api/fetch?scope={scope}&plain=1&url={}", enc(&u)), Some(&rig1.cookie), b"").await;
+            assert!(r.status == 403 || r.status == 400, "{scope} {u}: {}", r.status);
+            assert_ne!(r.status, 200);
+        }
+    }
+    let r = route(&rig1.app, "GET", &format!("/api/fetch?scope=user&url={}", enc(&rig1.origin.url("/cat.xml"))), Some(&rig1.cookie), b"").await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    stop(&rig1).await;
+
+    let mut setup = Setup::new();
+    setup.options.fetch_allow_private = true;
+    setup.options.fetch_user = Some(false);
+    let rig2 = rig("fetch-user-off", setup).await;
+    let r = route(&rig2.app, "GET", &format!("/api/fetch?scope=user&url={}", enc(&rig2.origin.url("/cat.xml"))), Some(&rig2.cookie), b"").await;
+    assert_eq!((r.status, code(&r)), (403, json!("scope_off")));
+    // the other scopes do not depend on it
+    let r = route(&rig2.app, "GET", &format!("/api/fetch?scope=video&url={}", enc(&rig2.origin.url("/lazy-static/c.vtt"))), Some(&rig2.cookie), b"").await;
+    assert_eq!(r.status, 200);
+    stop(&rig2).await;
 }
 
 #[test]
