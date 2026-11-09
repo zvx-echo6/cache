@@ -491,7 +491,7 @@ fn index_library_into_the_indexes_folder_publishes_a_snapshot() {
         sh.flush().unwrap();
     }
     let settings = tmp.path("cache-library.json");
-    std::fs::write(&settings, json!({"format": 1, "library_id": "t", "version": "1", "title": "T"}).to_string()).unwrap();
+    std::fs::write(&settings, json!({"format": 1, "library_id": "t", "version": "1", "title": "T", "fields": {"title": "title", "text": "content"}}).to_string()).unwrap();
     let indexes = tmp.path("indexes");
     let out = j(cs_ok(&["index-library", "--library", &shard, "--settings", &settings, "--indexes-dir", &indexes]).lines().last().unwrap());
     assert_eq!(out["state"], "done", "{out}");
