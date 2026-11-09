@@ -251,8 +251,12 @@ impl LibraryStore for CoreStore {
 // ---------------------------------------------------------------------------------------------------------
 // The embedder
 
-/// bge-m3 through `cache_embed`, with the settings of the queries. The model is loaded when the first passage is embedded and kept
-/// for the next job; `engines.embed_lib` is the built `libcache_llama` and `engines.embed_model` the GGUF file.
+/// bge-m3 through `cache_embed`, with the settings of the queries. The model is loaded when the first passage is embedded and freed
+/// by `release` (the service calls it when the jobs using it end or have been idle for `opts.embed_idle_ms`); the next embed loads
+/// it again. `engines.embed_lib` is the built `libcache_llama` and `engines.embed_model` the GGUF file.
+///
+/// It is not shared with the app's own query embedder: that one is a separate `cl_embed_load` handle owned by a Dart isolate, which
+/// the core cannot see, and a llama context must not be used from two threads at once.
 struct CoreEmbedder {
     lib: Option<String>,
     model: Option<String>,
@@ -286,6 +290,12 @@ impl cache_ingest::Embedder for CoreEmbedder {
         }
         let (_, e) = g.as_ref().ok_or_else(|| embed_err("the embedder is not loaded".to_string()))?;
         texts.iter().map(|t| e.embed(t).map_err(|er| embed_err(er.to_string()))).collect()
+    }
+
+    fn release(&self) {
+        // waits for an embed in progress (it holds the lock), then frees the model
+        let taken = self.loaded.lock().unwrap_or_else(PoisonError::into_inner).take();
+        drop(taken);
     }
 }
 
@@ -337,7 +347,8 @@ fn text(engines: &Value, k: &str) -> Option<String> {
     engines.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-/// The embedder of the engines named, kept for the next job (loading the model takes seconds and memory).
+/// The embedder of the engines named, one per process for the same engines, so two jobs never hold two copies of the model. It
+/// keeps the model only while jobs use it (see `CoreEmbedder`).
 fn embedder_for(engines: &Value) -> Arc<CoreEmbedder> {
     static KEPT: Mutex<Vec<Arc<CoreEmbedder>>> = Mutex::new(Vec::new());
     let (lib, model, sha256) = (text(engines, "embed_lib"), text(engines, "embed_model"), text(engines, "embed_sha256"));

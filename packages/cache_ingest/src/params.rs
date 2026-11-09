@@ -6,6 +6,9 @@ use cache_shelves::library::LibraryRef;
 use serde_json::Value;
 use std::path::PathBuf;
 
+/// The default of `opts.embed_idle_ms`: one minute.
+pub const DEFAULT_EMBED_IDLE_MS: u64 = 60_000;
+
 #[derive(Debug, Clone)]
 pub struct Opts {
     pub title: Option<String>,
@@ -15,11 +18,13 @@ pub struct Opts {
     pub ocr_dpi: u32,
     pub embed_batch: usize,
     pub embed_threads: usize,
+    /// The job's embedder is released when the job has had no call for this long (milliseconds); the next step loads it again.
+    pub embed_idle_ms: u64,
 }
 
 impl Default for Opts {
     fn default() -> Opts {
-        Opts { title: None, ocr_host: true, ocr_batch: 8, ocr_dpi: 300, embed_batch: 8, embed_threads: 2 }
+        Opts { title: None, ocr_host: true, ocr_batch: 8, ocr_dpi: 300, embed_batch: 8, embed_threads: 2, embed_idle_ms: DEFAULT_EMBED_IDLE_MS }
     }
 }
 
@@ -89,6 +94,7 @@ impl Params {
             opts.ocr_dpi = whole(o, "ocr_dpi", 300, 1200)? as u32;
             opts.embed_batch = whole(o, "embed_batch", 8, 256)? as usize;
             opts.embed_threads = whole(o, "embed_threads", 2, 64)? as usize;
+            opts.embed_idle_ms = whole(o, "embed_idle_ms", DEFAULT_EMBED_IDLE_MS, 86_400_000)?;
         }
         Ok(Params {
             library_dir: PathBuf::from(text(v, "library_dir")?),

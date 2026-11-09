@@ -1020,3 +1020,140 @@ fn a_book_the_sorter_is_not_sure_of_stays_in_unsorted_with_its_guess_kept() {
     // the line of copies.jsonl carries the suggestion too
     assert!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().contains("\"suggested\":{\"div\":\"610\""));
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// The embedding model is held only while a job needs it
+
+fn wait_until(what: &str, f: impl Fn() -> bool) {
+    let t0 = std::time::Instant::now();
+    while !f() {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "timed out waiting until {what}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Steps until the job has embedded at least one batch (the fake model is loaded).
+fn step_until_loaded(rig: &Rig, svc: &Service, job: u64) {
+    for _ in 0..10_000 {
+        let s = step(svc, job, 0);
+        assert_ne!(s["state"], "done");
+        assert_ne!(s["state"], "failed");
+        if rig.emb.is_loaded() {
+            return;
+        }
+    }
+    panic!("the job never embedded");
+}
+
+#[test]
+fn the_embedder_is_released_when_the_job_is_done() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("river", 6));
+    let svc = rig.service();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("d"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    step_until_loaded(&rig, &svc, job);
+    let (s, _) = run(&svc, job, &[]);
+    assert_eq!(s["state"], "done");
+    assert!(!rig.emb.is_loaded(), "the model is freed at done");
+    assert_eq!(rig.emb.loads.load(Ordering::SeqCst), 1, "loaded once for the whole job");
+    assert_eq!(rig.emb.releases.load(Ordering::SeqCst), 1);
+    // the next job loads it again
+    let pdf2 = rig.pdf_file("c.pdf", None, Kind::Ok, &book("lake", 3));
+    let job2 = ok(svc.start(&start_params(&lib, &pdf2, &rig.job_dir("d2"), json!({}))))["job"].as_u64().unwrap();
+    let (s2, _) = run(&svc, job2, &[]);
+    assert_eq!(s2["state"], "done");
+    assert_eq!(rig.emb.loads.load(Ordering::SeqCst), 2);
+    assert!(!rig.emb.is_loaded());
+}
+
+#[test]
+fn the_embedder_is_released_when_the_job_fails() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("tide", 12));
+    *rig.emb.fail_call.lock().unwrap() = Some(2);
+    let svc = rig.service();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("f"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    let (s, _) = run(&svc, job, &[]);
+    assert_eq!(s["state"], "failed");
+    assert_eq!(s["error"]["code"], "embed");
+    assert!(!rig.emb.is_loaded(), "the model is freed at failed, while the failed job is kept");
+    assert_eq!(rig.emb.releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_embedder_is_released_when_the_job_is_cancelled() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("cave", 8));
+    let svc = rig.service();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("c"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    step_until_loaded(&rig, &svc, job);
+    assert_eq!(ok(svc.cancel(&json!({"job": job}).to_string())), json!({"cancelled": true}));
+    assert!(!rig.emb.is_loaded(), "the model is freed at cancel");
+    assert_eq!(rig.emb.releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_job_that_ends_keeps_the_embedder_for_another_live_job() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("cave", 8));
+    let svc = rig.service();
+    let a = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("a"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    let b = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("b"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    step_until_loaded(&rig, &svc, a);
+    ok(svc.cancel(&json!({"job": a}).to_string()));
+    assert!(rig.emb.is_loaded(), "job b still uses it");
+    ok(svc.cancel(&json!({"job": b}).to_string()));
+    assert!(!rig.emb.is_loaded());
+    assert_eq!(rig.emb.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_embedder_is_released_after_the_idle_timeout_and_loaded_again_on_the_next_step() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("dune", 10));
+    let svc = rig.service();
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("i"), json!({"embed_batch": 2, "embed_idle_ms": 50}))))["job"].as_u64().unwrap();
+    step_until_loaded(&rig, &svc, job);
+    // the app stops calling: the model is freed after the timeout, the job is kept
+    wait_until("the idle model is freed", || !rig.emb.is_loaded());
+    assert_eq!(rig.emb.releases.load(Ordering::SeqCst), 1);
+    // the next step loads it again and the job finishes
+    let (s, _) = run(&svc, job, &[]);
+    assert_eq!(s["state"], "done");
+    // (a slow machine may pause past 50 ms between steps and free it once more)
+    assert!(rig.emb.loads.load(Ordering::SeqCst) >= 2);
+    assert!(!rig.emb.is_loaded());
+}
+
+#[test]
+fn the_embedder_is_kept_while_the_job_is_stepped_within_the_timeout() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("dune", 10));
+    let svc = rig.service();
+    // default timeout (60 s): a test run never reaches it
+    let job = ok(svc.start(&start_params(&lib, &pdf, &rig.job_dir("k"), json!({"embed_batch": 2}))))["job"].as_u64().unwrap();
+    step_until_loaded(&rig, &svc, job);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(rig.emb.is_loaded());
+    let (s, _) = run(&svc, job, &[]);
+    assert_eq!(s["state"], "done");
+    assert_eq!(rig.emb.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn embed_idle_ms_must_be_a_whole_number_in_range() {
+    let rig = Rig::new();
+    let lib = rig.lib("mine");
+    let pdf = rig.pdf_file("b.pdf", None, Kind::Ok, &book("dune", 2));
+    let svc = rig.service();
+    for bad in [json!(0), json!(-1), json!("60"), json!(86_400_001u64)] {
+        let e = err(svc.start(&start_params(&lib, &pdf, &rig.job_dir("o"), json!({"embed_idle_ms": bad}))));
+        assert_eq!(e.code, Code::BadJson);
+    }
+}

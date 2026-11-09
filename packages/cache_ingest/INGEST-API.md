@@ -9,8 +9,13 @@ platform has one ingest path.
 
 ## How it runs
 
-- **The app drives it.** There are no core threads and no callbacks across FFI. Each `cs_ingest_step` does a bounded amount of
+- **The app drives it.** There are no callbacks across FFI, and the only core thread is the idle timer below. Each `cs_ingest_step` does a bounded amount of
   work and returns. To pause, stop calling; the job is checkpointed in `job_dir` after every page and every embed batch.
+- **The embedding model is held only while it is needed.** The core loads its own bge-m3 (from `engines.embed_lib` and `engines.embed_model`) at the
+  first embed batch, and frees it when the job reaches `done` or `failed`, when it is cancelled, and when the job has had no call for
+  `opts.embed_idle_ms` (unless another live job on the same engines still uses it). A later step, a resumed job or the next job loads it again. Jobs on the same
+  engines share one copy. It is not shared with the app's own query embedder (a separate handle the app owns), so while a job embeds, two copies are
+  in memory; once the job is done, failed, cancelled or idle, only the app's is.
 - **Resume after a kill:** call `cs_ingest_start` again with the same `job_dir`. If its checkpoint is for the same file (same
   BLAKE3), the job carries on from there; otherwise the old checkpoint is discarded and the job starts fresh.
 - **`job_dir` is the job's own folder.** The job marks it (`.cache-ingest`) and only ever empties or removes a folder that has the mark; a
@@ -42,7 +47,8 @@ platform has one ingest path.
     "ocr_batch": 8,
     "ocr_dpi": 300,
     "embed_batch": 8,
-    "embed_threads": 2
+    "embed_threads": 2,
+    "embed_idle_ms": 60000
   }
 }
 ```
@@ -65,7 +71,8 @@ platform has one ingest path.
   - `ocr_dpi`: 300.
   - `embed_batch`: 8 pieces per embed call.
   - `embed_threads`: 2.
-  `embed_batch` and `embed_threads` let the app keep the work gentle on battery.
+  - `embed_idle_ms`: 60000 (1 to 86400000). The job's embedding model is freed after this long without a call to the job (see How it runs).
+  `embed_batch` and `embed_threads` let the app keep the work gentle on battery, and `embed_idle_ms` on memory.
 - Returns `{"job": 12, "resumed": false, "copy": "<blake3>", "pages": 310}`.
 
 ### `cs_ingest_step(params) -> status`
