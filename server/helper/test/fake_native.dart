@@ -28,6 +28,12 @@ class FakeNative implements CsNative, CsLiveNative {
 
   int setSourcesResult = 0;
 
+  @override
+  int setWeb(int handle, String? provider, String? key, bool online) {
+    calls.add('setWeb:$provider:$key:$online');
+    return 0;
+  }
+
   /// When set, the status the core reports now (a test changes it as the "index" gets built).
   String? Function()? statusFn;
 

@@ -238,6 +238,10 @@ impl Helper {
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
+            // The keystore (`<data>/keystore.json`, owner only) sits outside the folders the browser's `fs.*` ops reach.
+            if let Some(data) = support.parent().and_then(|p| p.parent()) {
+                cmd.env("CACHE_KEYSTORE", data.join("keystore.json"));
+            }
         }
         let mut child = cmd
             .stdin(Stdio::piped())

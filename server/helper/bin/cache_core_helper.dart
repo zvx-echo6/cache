@@ -5,11 +5,13 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
 import 'fs_ops.dart';
+import 'history_ops.dart';
 import 'index_driver.dart';
+import 'keystore.dart';
 import 'line_protocol.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
-/// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
+/// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
 /// the core's config work on them. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
 Future<void> main() async {
@@ -35,6 +37,9 @@ Future<void> main() async {
   }
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
+  // The keystore file is outside both fs.* roots: CACHE_KEYSTORE, else beside them in <support>/../keystore.json.
+  final keystorePath = Platform.environment['CACHE_KEYSTORE'];
+  final keys = KeyStore(File(keystorePath != null && keystorePath.isNotEmpty ? keystorePath : '${dirs.support.parent.path}/keystore.json'), log: log);
   final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
   await serveLines(
     stdin,
@@ -45,12 +50,15 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer),
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, onOpened: () => keys.replay(dispatcher)),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
+      HistoryOps(Directory('${dirs.support.path}/history')),
+      keys,
     ],
+    hook: keys,
   );
   indexer.stop();
   await stdout.flush();
