@@ -186,6 +186,17 @@ class NotebookSync {
   /// Notebook sync: the folders this device wrote a notebook.json in, and for which id (to see a notebook leave the share).
   Map<String, String> _idDirs = {};
 
+  /// Names a notebook had before another device renamed it (name to id): an old file that still says the old name is that
+  /// notebook's, not a new one.
+  Map<String, String> _aliases = {};
+
+  /// Entries whose file is missing from the old folder of a renamed notebook, and how many runs they were waited for (the new
+  /// file may not have arrived yet): never deleted at once.
+  Map<String, int> _moveMiss = {};
+
+  /// Notebooks this run followed to another name (another device renamed them): their files are moved by that device.
+  final Set<String> _followed = {};
+
   /// Each notebook's folder (by notebook name) for this run: the folder's name, with a deterministic suffix when two names make one.
   Map<String, String> _dirs = {};
 
@@ -215,6 +226,8 @@ class NotebookSync {
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
       _idDirs = {for (final e in (j['id_dirs'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
+      _aliases = {for (final e in (j['aliases'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
+      _moveMiss = {for (final e in (j['move_miss'] as Map? ?? const {}).entries) '${e.key}': (e.value as num).toInt()};
     } catch (e) {
       logError('Notebook sync: state unreadable', error: e);
     }
@@ -231,6 +244,8 @@ class NotebookSync {
         'ignored': [..._ignored],
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_idDirs.isNotEmpty) 'id_dirs': _idDirs,
+        if (_aliases.isNotEmpty) 'aliases': _aliases,
+        if (_moveMiss.isNotEmpty) 'move_miss': _moveMiss,
       }),
     );
   }
@@ -379,6 +394,10 @@ class NotebookSync {
       final prev = out[u.doc.id];
       if (prev == null) {
         out[u.doc.id] = u;
+      } else if (kind == SyncKind.share && _topDir(prev.path) != _topDir(u.path) && cache[u.doc.id] != null && [_topDir(prev.path), _topDir(u.path)].contains(_dirOf(cache[u.doc.id]!.$1))) {
+        // The same entry in two folders after a notebook was renamed (the new file came before the old one went): the one in the
+        // notebook's folder is the entry, the other is the old place, not a copy.
+        if (_topDir(u.path) == _dirOf(cache[u.doc.id]!.$1)) out[u.doc.id] = u;
       } else {
         // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
@@ -450,6 +469,8 @@ class NotebookSync {
     }
     return out;
   }
+
+  static String _topDir(String path) => path.contains('/') ? path.substring(0, path.indexOf('/')) : '';
 
   String _dirOf(Notebook n) => _dirs[n.name] ?? folderNameOf(n);
 
@@ -550,6 +571,9 @@ class NotebookSync {
   Future<Notebook> _bookFor(EntryDoc d, Map<String, Notebook> byName) async {
     final have = byName[d.notebook];
     if (have != null) return have;
+    final al = kind == SyncKind.share ? _aliases[d.notebook] : null;
+    final aliased = al == null ? null : notebook.notebook(al);
+    if (aliased != null) return aliased;
     final shared = await _sharedBook(d.notebook);
     // The id the notebook has on the other devices (from its folder's notebook.json).
     var id = _idIn(jsonEncode({'id': shared?['id']}));
@@ -671,6 +695,10 @@ class NotebookSync {
         final j = _jsonMap(text);
         if (j != null && j['id'] != e.value) continue; // the folder's file is another notebook's now
         if (local.contains(e.value)) {
+          // Renamed here: its entry files move to the new folder with it (a device that followed a rename here leaves that to
+          // the one that made it).
+          final book = notebook.notebook(e.value);
+          if (book != null && now.containsValue(e.value) && !_followed.contains(e.value)) await _moveEntries(e.key, book);
           if (text != null) await folder.delete(path);
         } else {
           await folder.writeText(path, '${jsonEncode({'id': e.value, 'deleted': true, 'at': _now().millisecondsSinceEpoch})}\n');
@@ -684,6 +712,29 @@ class NotebookSync {
       final j = _jsonMap(await folder.readText(f.path));
       final at = j?['at'];
       if (j?['deleted'] == true && at is num && _now().millisecondsSinceEpoch - at > kTombstoneDays * 86400000) await folder.delete(f.path);
+    }
+  }
+
+  /// A notebook renamed here: each of its entry files goes to the new folder (written there, then taken out of the old one) and is
+  /// read as the same entry from there. A file changed in the folder since the last sync stays where it is.
+  Future<void> _moveEntries(String oldDir, Notebook book) async {
+    final newDir = _dirOf(book);
+    if (newDir == oldDir) return;
+    for (final e in _items.entries.toList()) {
+      final it = e.value;
+      if (it.imp != null || !it.path.startsWith('$oldDir/') || !it.path.endsWith('.md')) continue;
+      final entry = await notebook.entry(e.key);
+      if (entry == null || entry.notebookId != book.id) continue;
+      final text = await folder.readText(it.path);
+      if (text == null || text != it.base) continue;
+      var np = '$newDir/${it.path.substring(oldDir.length + 1)}';
+      for (var i = 2; await folder.exists(np) || _items.values.any((x) => x.path == np); i++) {
+        np = '$newDir/${_baseName(it.path)} ${i}.md';
+      }
+      final fresh = _render(_docOf(book, entry));
+      await folder.writeText(np, fresh);
+      await folder.delete(it.path);
+      _rec(e.key, np, fresh, entry.rev);
     }
   }
 
@@ -702,6 +753,8 @@ class NotebookSync {
       // A file this device wrote for that id in that folder is the notebook's old place here (renamed on this device): not followed.
       if (_idDirs[dir] == mine.id) continue;
       if (_dirOf(mine) == dir || folderName(name) != dir || notebook.notebooks.any((n) => _dirOf(n) == dir) || notebook.nameTaken(name, exceptId: mine.id)) continue;
+      _aliases[mine.name] = mine.id;
+      _followed.add(mine.id);
       await notebook.saveNotebook(id: mine.id, def: mine.def.copyWith(name: name.trim()));
       _dirs = folderNames(notebook.notebooks);
     }
@@ -735,10 +788,16 @@ class NotebookSync {
   /// The notebook [name] as the other device made it: its folder's notebook.json (notebook sync), else the old map file.
   Future<Map<String, dynamic>?> _sharedBook(String name) async {
     if (kind == SyncKind.share) {
-      try {
-        final j = jsonDecode(await folder.readText('${folderName(name)}/$kNotebookIdFile') ?? 'null');
-        if (j is Map && j['deleted'] != true && _idIn(jsonEncode({'id': j['id']})) != null) return j.cast<String, dynamic>();
-      } catch (_) {}
+      // By the notebook's own file (its folder may carry a suffix): the one whose definition has this name; the folder the name
+      // makes only when no file says it.
+      for (final f in await folder.list('')) {
+        if (!RegExp('^[^/]+/$kNotebookIdFile\$').hasMatch(f.path)) continue;
+        final j = _jsonMap(await folder.readText(f.path));
+        final n = j?['def'] is Map ? (j!['def'] as Map)['name'] : null;
+        if (j != null && j['deleted'] != true && n is String && n.trim().toLowerCase() == name.trim().toLowerCase() && _idIn(jsonEncode({'id': j['id']})) != null) return j;
+      }
+      final j = _jsonMap(await folder.readText('${folderName(name)}/$kNotebookIdFile'));
+      if (j != null && j['deleted'] != true && _idIn(jsonEncode({'id': j['id']})) != null) return j;
     }
     if (_sharedBooks == null) {
       try {
@@ -909,6 +968,7 @@ class NotebookSync {
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
+      if (f != null) _moveMiss.remove(id);
       if (c != null) {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
@@ -929,7 +989,12 @@ class NotebookSync {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
           }
         } else if (missing) {
-          if (kind == SyncKind.share && !cacheChanged) {
+          if (kind == SyncKind.share && !cacheChanged && _topDir(s.path) != _dirOf(c.$1) && (_moveMiss[id] ?? 0) < 3) {
+            // The file is gone from the folder of the notebook's old name: the notebook was renamed and its new file may not have
+            // come yet. Waited for (three runs), never deleted at once.
+            _moveMiss[id] = (_moveMiss[id] ?? 0) + 1;
+          } else if (kind == SyncKind.share && !cacheChanged) {
+            _moveMiss.remove(id);
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;
