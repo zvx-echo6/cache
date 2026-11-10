@@ -58,10 +58,10 @@ void main() {
     final t = FakeTransport();
     final core = await web.VideoCore.open('', transport: t);
     final job = await core.startDownload('a.example', 'u1', choice: '480', token: 'T', title: 'Title', label: '480p');
-    expect(t.calls.last, ('video.jobStart', {'instance': 'a.example', 'video': 'u1', 'choice': '480', 'token': 'T', 'title': 'Title', 'label': '480p'}));
+    expectCall(t.calls.last, 'video.jobStart', {'instance': 'a.example', 'video': 'u1', 'choice': '480', 'token': 'T', 'title': 'Title', 'label': '480p'});
     expect((await job.progress()).fraction, 0.25);
     await job.cancel();
-    expect(t.calls.last, ('video.jobCancel', {'job': 7}));
+    expectCall(t.calls.last, 'video.jobCancel', {'job': 7});
     await job.free();
     await job.free();
     expect(t.calls.where((c) => c.$1 == 'video.jobFree'), hasLength(1));
@@ -72,9 +72,15 @@ void main() {
     final jobs = await core.jobs();
     expect(jobs.map((j) => (j.info.video, j.info.title, j.info.state, j.info.errorCode)), [('u2', 'Two', 'done', null), ('u3', 'Three', 'failed', 'no_space')]);
     await jobs.first.job.cancel();
-    expect(t.calls.last, ('video.jobCancel', {'job': 3}));
+    expectCall(t.calls.last, 'video.jobCancel', {'job': 3});
     await core.close();
     expect(t.closed, isTrue);
     await expectLater(core.instances(), throwsA(isA<CacheSearchException>()));
   });
+}
+
+/// A recorded call is a record holding a map, and a record's `==` compares maps by identity: compare the name and the map's contents.
+void expectCall((String, Map<String, dynamic>) call, String name, Map<String, Object?> args) {
+  expect(call.$1, name);
+  expect(call.$2, args);
 }
