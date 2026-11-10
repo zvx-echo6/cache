@@ -26,6 +26,11 @@
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <cerrno>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -345,6 +350,90 @@ void prune_prefix_files(const std::string & dir) {
     for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
 }
 
+// ---------------- lookup-only tensors stay on flash ----------------
+// The embedding tables a token only looks one row up in (GET_ROWS): per_layer_token_embd (Gemma 4's per-layer table, 56% of the E2B
+// file) and token_embd when the model has a separate output.weight (tied to the output head, token_embd is read in full every token,
+// so it is not lookup-only). Their pages are advised MADV_RANDOM so the kernel does not read ahead around each row and fill memory
+// with pages that are used once. kPleAdvice is the one switch the bench compares (none = no advice).
+enum class PleAdvice { kRandom, kNone };
+constexpr PleAdvice kPleAdvice = PleAdvice::kRandom;
+
+#if defined(__linux__) || defined(__ANDROID__)
+// madvise(MADV_RANDOM) on the lookup-only tensors of the model file, inside its mmap (found from /proc/self/maps by file offset;
+// a tensor that is not inside a mapping of the model file, e.g. weights not file-mapped, is skipped). Logs once.
+void advise_lookup_tensors(const char * model_path) {
+    if (kPleAdvice == PleAdvice::kNone) {
+        cl_logi("PLE advice: none");
+        return;
+    }
+    struct Range { uint64_t off, size; };
+    std::vector<Range> ranges;
+    {
+        gguf_init_params gp;
+        gp.no_alloc = true;
+        gp.ctx      = nullptr;
+        gguf_context * g = gguf_init_from_file(model_path, gp);
+        if (!g) {
+            cl_logi("PLE advice: model header not read, nothing advised");
+            return;
+        }
+        const uint64_t base = gguf_get_data_offset(g);
+        const int64_t  n    = gguf_get_n_tensors(g);
+        bool has_output = false;
+        for (int64_t i = 0; i < n; i++) {
+            if (strcmp(gguf_get_tensor_name(g, i), "output.weight") == 0) has_output = true;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            const char * name = gguf_get_tensor_name(g, i);
+            const bool lookup = strncmp(name, "per_layer_token_embd", 20) == 0 || (has_output && strncmp(name, "token_embd", 10) == 0);
+            if (lookup) ranges.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+        }
+        gguf_free(g);
+    }
+    if (ranges.empty()) {
+        cl_logi("PLE advice: no lookup-only tensors in this model");
+        return;
+    }
+    struct Vma { uint64_t start, end, off; };
+    std::vector<Vma> vmas;
+    std::error_code ec;
+    const std::string real = std::filesystem::weakly_canonical(model_path, ec).string();
+    if (FILE * f = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long st, en, off;
+            int n = 0;
+            if (sscanf(line, "%llx-%llx %*4s %llx %*s %*s %n", &st, &en, &off, &n) < 3 || n <= 0) continue;
+            std::string path = line + n;
+            while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) path.pop_back();
+            if (path == model_path || (!real.empty() && path == real)) vmas.push_back({ st, en, off });
+        }
+        fclose(f);
+    }
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t bytes = 0;
+    int      err   = 0;
+    for (const auto & r : ranges) {
+        for (const auto & v : vmas) {
+            if (r.off < v.off || r.off + r.size > v.off + (v.end - v.start)) continue;
+            const uint64_t addr = v.start + (r.off - v.off);
+            const uint64_t lo   = (addr + ps - 1) & ~(ps - 1);          // rounded in: no neighbouring tensor's page is advised
+            const uint64_t hi   = (addr + r.size) & ~(ps - 1);
+            if (hi <= lo) break;
+            if (madvise((void *) lo, hi - lo, MADV_RANDOM) == 0) bytes += hi - lo; else err = errno;
+            break;
+        }
+    }
+    if (err != 0) {
+        cl_logi("PLE advice: random on %llu MB (errno %d)", (unsigned long long) (bytes >> 20), err);
+    } else {
+        cl_logi("PLE advice: random on %llu MB (ok)", (unsigned long long) (bytes >> 20));
+    }
+}
+#else
+void advise_lookup_tensors(const char *) {}
+#endif
+
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
         fputs(text, stderr);
@@ -556,6 +645,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
+        advise_lookup_tensors(model_path);
 
         if (!plan.cpus.empty()) {
             // A threadpool whose threads are each pinned to one of the chosen cores.
