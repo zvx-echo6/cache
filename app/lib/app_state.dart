@@ -72,7 +72,7 @@ class AppState extends ChangeNotifier {
   /// The bench's launch options (test APK only; off everywhere else), read at each model load.
   final Future<BenchOptions> Function() _bench;
 
-  /// The options of the last model load: [BenchOptions.dropCaches] tells Ask's focus to drop the image and tile caches.
+  /// The bench options of the last model load.
   BenchOptions benchOptions = BenchOptions.off;
 
   /// The device's free memory (a test hook; the system's reading by default).

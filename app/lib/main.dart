@@ -105,7 +105,6 @@ import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
-import 'platform/bench_options.dart' show dropBenchCaches;
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
@@ -764,8 +763,6 @@ class _CacheAppState extends State<CacheApp> {
     for (final name in ['Indexing', 'Notebook sync', 'Settings sync', 'Downloads', 'Region downloads']) {
       askFocus.register(name);
     }
-    // Test APK only: the bench's drop_caches option (AppState.benchOptions is off in every other build).
-    askFocus.dropCaches = () async => app.benchOptions.dropCaches ? dropBenchCaches() : null;
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {

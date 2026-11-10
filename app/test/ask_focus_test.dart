@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/browse/zim_download.dart';
@@ -124,22 +125,6 @@ void main() {
       expect(released, isTrue);
     });
 
-    test('the test-only cache drop runs at the first begin only when it is set, and its words are logged', () async {
-      focus.begin();
-      focus.end();
-      expect(log.where((l) => l.contains('dropped')), isEmpty, reason: 'off by default');
-      var drops = 0;
-      focus.dropCaches = () async {
-        drops++;
-        return 'dropped image cache 1.5 MB and tile cache';
-      };
-      focus.begin();
-      focus.begin();
-      await Future<void>.delayed(Duration.zero);
-      expect(drops, 1);
-      expect(log, contains('Ask focus: dropped image cache 1.5 MB and tile cache'));
-    });
-
     test('a download that has not started waits for the focus to end, then downloads the exact bytes', () async {
       HttpOverrides.global = null; // the test binding answers every request with 400; this one talks to a local server
       final tmp = Directory.systemTemp.createTempSync('askfocus');
@@ -221,22 +206,30 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (c) async => f(c));
     tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
 
-    test('read what the test APK answers', () async {
-      answer((_) => {'testApk': true, 'preread_mbps': 40, 'drop_caches': true});
-      final o = await readBenchOptions(android: true);
-      expect((o.prereadMbps, o.dropCaches), (40, true));
-      expect('$o', 'preread_mbps=40, drop_caches=true');
+    test('the pre-read is on at 60 MB/s unless the bench says otherwise', () async {
+      expect(kDefaultPrereadMbps, 60);
+      expect(BenchOptions.off.prereadMbps, 60);
+      expect(jsonDecode(llamaLoadOptions())['preread_mbps'], 60);
     });
 
-    test('off when the extras are absent, the build is not Android, or the channel does not answer', () async {
-      answer((_) => {'testApk': false, 'preread_mbps': 0, 'drop_caches': false});
-      expect((await readBenchOptions(android: true)).prereadMbps, 0);
-      answer((_) => {'preread_mbps': 40, 'drop_caches': true});
-      expect((await readBenchOptions(android: false)).prereadMbps, 0, reason: 'only Android asks');
+    test('an extra that was given counts, 0 turns the pre-read off', () async {
+      answer((_) => {'testApk': true, 'preread_mbps': 40});
+      expect((await readBenchOptions(android: true)).prereadMbps, 40);
+      answer((_) => {'testApk': true, 'preread_mbps': 0});
+      final o = await readBenchOptions(android: true);
+      expect(o.prereadMbps, 0);
+      expect('$o', 'preread_mbps=0');
+    });
+
+    test('the default when the extra is absent (release build), the build is not Android, or the channel does not answer', () async {
+      answer((_) => {'testApk': false});
+      expect((await readBenchOptions(android: true)).prereadMbps, 60);
+      answer((_) => {'preread_mbps': 0});
+      expect((await readBenchOptions(android: false)).prereadMbps, 60, reason: 'only Android asks');
       answer((_) => throw PlatformException(code: 'x'));
-      expect((await readBenchOptions(android: true)).dropCaches, isFalse);
+      expect((await readBenchOptions(android: true)).prereadMbps, 60);
       answer((_) => 'nonsense');
-      expect((await readBenchOptions(android: true)).prereadMbps, 0);
+      expect((await readBenchOptions(android: true)).prereadMbps, 60);
     });
   });
 }

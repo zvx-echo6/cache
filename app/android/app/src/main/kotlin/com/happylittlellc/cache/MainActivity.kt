@@ -27,15 +27,13 @@ class MainActivity : FlutterActivity() {
     private var keyboardVisible = false
     private val restoreSystemBars = Runnable { applySystemBars() }
 
-    // Test APK only (BuildConfig.TEST_APK): the bench's launch extras, read by Dart through the cache/bench channel. In the release
+    // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
     // build nothing is read and the channel answers zeros.
-    private var benchPrereadMbps = 0
-    private var benchDropCaches = false
+    private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
-        if (i.hasExtra("cache_drop_caches")) benchDropCaches = i.getBooleanExtra("cache_drop_caches", false)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -152,15 +150,17 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        // The bench's options (test APK only; zeros in the release build).
+        // The bench's options (test APK only; nothing in the release build).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "get" -> result.success(mapOf(
-                        "testApk" to BuildConfig.TEST_APK,
-                        "preread_mbps" to if (BuildConfig.TEST_APK) benchPrereadMbps else 0,
-                        "drop_caches" to (BuildConfig.TEST_APK && benchDropCaches),
-                    ))
+                    // Only what was given: no "preread_mbps" key when the extra is absent, and never in the release build.
+                    "get" -> {
+                        val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
+                        val mbps = benchPrereadMbps
+                        if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        result.success(out)
+                    }
                     else -> result.notImplemented()
                 }
             }

@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+- Ask: other apps are much less likely to be closed while Ask loads and answers, and answers start sooner: the model is read in gently after it loads, and background work pauses while Ask answers
+- Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
+
 ## 1.1.0 (build 47, test) - 2026-11-09
 
 This build covers everything new since the public release 1.0.29.

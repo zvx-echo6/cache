@@ -19,10 +19,6 @@ class AskFocus extends ChangeNotifier {
   final void Function(String line) _log;
   final Stopwatch Function() _stopwatch;
 
-  /// Test builds only, set by the app when the bench asks for it: drops the image and tile caches as a focus begins. Returns the
-  /// words to log (what was dropped), or null.
-  Future<String?> Function()? dropCaches;
-
   int _depth = 0;
   Completer<void>? _off;
   Stopwatch? _clock;
@@ -65,17 +61,6 @@ class AskFocus extends ChangeNotifier {
     _clock = _stopwatch()..start();
     _waited.clear();
     _log('Ask focus: on, held: ${workers.isEmpty ? 'none' : workers.join(', ')}');
-    final drop = dropCaches;
-    if (drop != null) {
-      unawaited(() async {
-        try {
-          final what = await drop();
-          if (what != null) _log('Ask focus: $what');
-        } catch (e) {
-          _log('Ask focus: caches not dropped ($e)');
-        }
-      }());
-    }
     notifyListeners();
   }
 
