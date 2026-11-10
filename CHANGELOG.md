@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Library: Add to Library now shows Your own (Your own library, Add a PDF, Add a folder) at the top
+
 ## 1.1.0 (build 48, test) - 2026-11-10
 
 ### Fixed
