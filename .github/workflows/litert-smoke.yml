@@ -6,6 +6,11 @@ name: LiteRT smoke
 
 on:
   workflow_dispatch:
+  # GitHub cannot dispatch a workflow that is not on the default branch yet, so until this branch is merged a push of the smoke
+  # test's own files to it starts the run. Removed again once the results are in.
+  push:
+    branches: [ask/litert-test]
+    paths: [tools/litert-smoke/**, .github/workflows/litert-smoke.yml]
 
 permissions:
   contents: read
