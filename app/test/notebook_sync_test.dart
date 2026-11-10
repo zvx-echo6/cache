@@ -883,7 +883,7 @@ void main() {
       for (final d in [a, b]) {
         expect(d.nb.notebooks.where((n) => n.id == 'hikes-id').map((n) => n.name), ['Trails']);
         expect(ids(d, 'Hikes'), isEmpty);
-        expect(await entryIds(d, 'hikes-id'), {'ea1'});
+        expect(await entryIds(d, 'hikes-id'), {'ea1'});        expect(d.folder.text.keys.where((k) => k.startsWith('Hikes/') && k.endsWith('.md')), isEmpty);
       }
     });
 
