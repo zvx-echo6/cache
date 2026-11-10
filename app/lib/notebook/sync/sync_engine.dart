@@ -101,6 +101,14 @@ class _Item {
       extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true);
 }
 
+/// A notebook as notebook sync last left it: its folder, and its definition then (a change since is a change made here).
+class _BookRec {
+  _BookRec(this.dir, this.snap);
+
+  final String dir;
+  final String snap;
+}
+
 /// A note the person made with the import tag and no Cache id, found by the scan.
 class _Cand {
   _Cand(this.kind, this.path, this.text, this.notebook, {this.private = false});
@@ -196,6 +204,12 @@ class NotebookSync {
   /// Each notebook's folder (by notebook name) for this run: the folder's name, with a deterministic suffix when two names make one.
   Map<String, String> _dirs = {};
 
+  /// Notebook sync: the notebooks that had their id file in the folder at the last sync, by id, with the definition then.
+  Map<String, _BookRec> _books = {};
+
+  /// Notebooks kept although a tombstone came (changed here since, or the delete is not applied): their entries are written back.
+  final Set<String> _keepBooks = {};
+
   List<SyncConflict> get conflicts => List.unmodifiable(_conflicts);
 
   bool get _logseq => kind == SyncKind.logseq || kind == SyncKind.logseqExport;
@@ -221,6 +235,7 @@ class NotebookSync {
       _stopped
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
+      _books = {for (final e in (j['books'] as Map? ?? const {}).entries) '${e.key}': _BookRec('${(e.value as Map)['dir']}', '${(e.value as Map)['snap']}')};
       _idDirs = {for (final e in (j['id_dirs'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _aliases = {for (final e in (j['aliases'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
     } catch (e) {
@@ -240,6 +255,7 @@ class NotebookSync {
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_idDirs.isNotEmpty) 'id_dirs': _idDirs,
         if (_aliases.isNotEmpty) 'aliases': _aliases,
+        if (_books.isNotEmpty) 'books': {for (final e in _books.entries) e.key: {'dir': e.value.dir, 'snap': e.value.snap}},
       }),
     );
   }
@@ -905,6 +921,8 @@ class NotebookSync {
     _sharedBooks = null;
     if (!await folder.reachable()) throw const FileSystemException("Can't reach the folder");
     await notebook.reload();
+    _keepBooks.clear();
+    await _applyRemoteNotebookChanges(r);
     await _settleIds();
     final books = notebook.notebooks;
     final byName = {for (final n in books) n.name: n};
@@ -969,6 +987,8 @@ class NotebookSync {
           continue;
         }
       }
+      // Notebook sync: a file that moved with its notebook's folder (a rename) is followed there.
+      if (kind == SyncKind.share && s != null && f != null && s.imp == null && f.path != s.path) s.path = f.path;
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
@@ -996,7 +1016,9 @@ class NotebookSync {
             // The file is gone from the folder of the notebook's old name: the notebook was renamed, and its new file has not come
             // yet. The entry stays where it is, however long that takes; it is never deleted for a file that is only late. Once the
             // new file comes it is the same entry (see the duplicate rule in the scan).
-          } else if (kind == SyncKind.share && !cacheChanged) {
+          } else if (kind == SyncKind.share && !cacheChanged && _unshared.contains(c.$1.id)) {
+            // The notebook was turned off on the other device: its files going is not a delete.
+          } else if (kind == SyncKind.share && !cacheChanged && !_keepBooks.contains(c.$1.id)) {
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;
@@ -1049,6 +1071,9 @@ class NotebookSync {
           _rec(id, f.path, f.text, saved.rev);
           r.read++;
         }
+      } else if (f != null && !_ownFilesOnly && _tombs.contains(f.path.split('/').first)) {
+        // A file of a notebook deleted on another device that arrived late: not a reason to make the notebook again.
+        continue;
       } else if (f != null && !_ownFilesOnly) {
         // A file or block with an id Cache does not know: read as that entry (notebook sync only; in Obsidian and Logseq a
         // file Cache has no record of is not Cache's).
@@ -1064,7 +1089,7 @@ class NotebookSync {
     }
     // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
     // Obsidian and Logseq notes the person made are left alone).
-    for (final u in _ownFilesOnly ? const <_Unit>[] : newOutside) {
+    for (final u in _ownFilesOnly ? const <_Unit>[] : newOutside.where((u) => !_tombs.contains(u.path.split('/').first))) {
       final id = _newId();
       final saved = await _apply(id, u.doc, byName, text: u.text);
       final book = notebook.notebook(saved.notebookId) ?? byName[u.doc.notebook]!;
@@ -1084,8 +1109,108 @@ class NotebookSync {
     _conflicts = conflicts;
     r.conflicts = conflicts.length;
     if (!_logseq) await _writeBooks(books);
+    await _recordBooks();
     await _save();
     return r;
+  }
+
+  // ---- a whole notebook deleted, or renamed ----
+
+  /// Whether a notebook deleted on another device (a tombstone in its folder) is deleted here too. Always, today. This is the one
+  /// place the "Don't replace my copies from this device" switch will plug in: for a device with it on, this returns false, the
+  /// notebook is kept, and "removed on (device), kept here" is recorded.
+  bool appliesRemoteNotebookDelete(Notebook n) => true;
+
+  String _snap(Notebook n) => jsonEncode({'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, 'sp': n.savedPlaces});
+
+  bool _shared(Notebook n) => includePrivate || !n.private || privateBooks.contains(n.id);
+
+  /// Changed here since the last sync: its definition, or an entry made or changed here.
+  Future<bool> _changedHere(Notebook n, _BookRec rec) async {
+    if (_snap(n) != rec.snap) return true;
+    for (final e in await notebook.entries(n.id)) {
+      if (!_included(n, e)) continue;
+      final s = _items[e.id];
+      if (s == null || s.rev != e.rev) return true;
+    }
+    return false;
+  }
+
+  /// Folders whose id file is a tombstone (a notebook deleted on a device), by folder name.
+  final Set<String> _tombs = {};
+
+  /// Notebooks that left the share on another device (turned off): kept here, as they are.
+  final Set<String> _unshared = {};
+
+  /// Notebook sync: what other devices did to whole notebooks, read from the id files in the folder.
+  /// - A tombstone (`notebook.json` with `"deleted": true`, written by the deleting device) is a delete. The notebook is deleted
+  ///   here too (the normal delete: entries, Places link, map layer) when nothing here changed since the last sync; a notebook
+  ///   changed here wins, is kept, and its folder is written again over the tombstone. The decision goes through
+  ///   [appliesRemoteNotebookDelete].
+  /// - A notebook whose id file is gone with no tombstone and no new folder carrying its id was turned off (unshared) there:
+  ///   this device keeps its copy, entries included (their files being gone is not a delete), and writes nothing for it.
+  /// - The same id in a folder with another name is a rename; [_settleIds] renames the notebook here.
+  /// A private notebook that is not included in sharing was never shared, so none of this touches it.
+  Future<void> _applyRemoteNotebookChanges(SyncReport r) async {
+    _tombs.clear();
+    _unshared.clear();
+    if (kind != SyncKind.share) return;
+    final all = await folder.list('');
+    final idFile = RegExp(r'^([^/]+)/' + RegExp.escape(kNotebookIdFile) + r'$');
+    final realIds = <String>{};
+    final tombs = <(String, String)>[];
+    for (final f in all) {
+      final m = idFile.firstMatch(f.path);
+      if (m == null) continue;
+      final j = _jsonMap(await folder.readText(f.path));
+      final id = j?['id'];
+      if (id is! String) continue;
+      if (j!['deleted'] == true) {
+        _tombs.add(m.group(1)!);
+        tombs.add((m.group(1)!, id));
+      } else {
+        realIds.add(id);
+      }
+    }
+    for (final (dir, id) in tombs) {
+      final n = notebook.notebook(id);
+      if (n == null || !_shared(n)) continue;
+      final rec = _books[id];
+      // Never recorded as synced here: nothing is known about what changed, so it is kept.
+      if (rec == null || await _changedHere(n, rec) || !appliesRemoteNotebookDelete(n)) {
+        _keepBooks.add(id);
+        // its folder is written again, over the tombstone
+        _idDirs.remove(dir);
+        continue;
+      }
+      for (final e in await notebook.entries(id)) {
+        _items.remove(e.id);
+        r.deleted++;
+      }
+      await notebook.deleteNotebook(id);
+      _props.remove(id);
+      _books.remove(id);
+      _idDirs.remove(dir);
+      if (privateBooks.contains(id)) privateBooks.remove(id);
+    }
+    for (final id in [..._books.keys]) {
+      final n = notebook.notebook(id);
+      if (n != null && _shared(n) && !realIds.contains(id) && !_keepBooks.contains(id)) _unshared.add(id);
+    }
+  }
+
+  /// Takes a notebook deleted here out of what is recorded, and records the notebooks that have their id file now (the
+  /// tombstone itself is written by [_settleIds]).
+  Future<void> _recordBooks() async {
+    if (kind != SyncKind.share) return;
+    for (final id in [..._books.keys]) {
+      if (notebook.notebook(id) == null) _books.remove(id);
+    }
+    for (final n in notebook.notebooks) {
+      if (!_shared(n)) continue;
+      final dir = _dirOf(n);
+      if (await folder.exists('$dir/$kNotebookIdFile')) _books[n.id] = _BookRec(dir, _snap(n));
+    }
   }
 
   /// `.cache/notebooks.json`: each notebook's definition, so a device that does not have it yet makes it the same way.

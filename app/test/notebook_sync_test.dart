@@ -117,6 +117,14 @@ class _Link {
   }
 }
 
+/// A notebook sync that does not apply a remote notebook delete (what the per-peer switch will do).
+class _KeepEngine extends NotebookSync {
+  _KeepEngine(_Rig r) : super(notebook: r.nb, kind: SyncKind.share, folder: r.folder, stateFile: r.state, includePrivate: false);
+
+  @override
+  bool appliesRemoteNotebookDelete(Notebook n) => false;
+}
+
 class _Rig {
   _Rig(this.kind, {this.includePrivate = true}) {
     nb = fakeNotebook(store);
@@ -753,7 +761,7 @@ void main() {
       }
     });
 
-    test('a deleted notebook leaves a tombstone, kept for a while; the other device is not told to delete by the id file alone', () async {
+    test('a deleted notebook leaves a tombstone, kept for a while; the peer deletes its unchanged copy', () async {
       final a = await device('hikes-id', entry: 'ea1');
       final b = _Rig(SyncKind.share, includePrivate: false);
       await b.nb.start();
@@ -766,7 +774,7 @@ void main() {
       link.sync();
       await b.engine.run();
       expect(jsonDecode(b.folder.text['Hikes/notebook.json']!)['deleted'], true, reason: 'the peer does not write its own file over the tombstone');
-      expect(ids(b, 'Hikes'), ['hikes-id'], reason: 'the notebook itself is for the delete rule to remove');
+      expect(ids(b, 'Hikes'), isEmpty, reason: 'the tombstone deletes the notebook on the peer, which had not changed it');
       // the tombstone goes after a month
       final later = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, clock: () => DateTime(2026, 12, 5));
       await later.run();
@@ -791,6 +799,116 @@ void main() {
       expect(ids(a, 'Medical'), ['zzz-meds'], reason: 'the notebook stays here');
       link.sync();
       expect(b.folder.text.containsKey('Medical/notebook.json'), isFalse);
+    });
+
+    Future<(_Rig, _Rig, _Link)> linked() async {
+      final a = await device('hikes-id', entry: 'ea1');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link], n: 2);
+      expect(ids(b, 'Hikes'), ['hikes-id']);
+      return (a, b, link);
+    }
+
+    test('delete: a tombstone removes the notebook, with its entries, from the peer; nothing comes back', () async {
+      final (a, b, link) = await linked();
+      await a.nb.deleteNotebook('hikes-id');
+      await rounds([a, b], [link]);
+      expect(ids(b, 'Hikes'), isEmpty);
+      expect(ids(a, 'Hikes'), isEmpty);
+      expect(jsonDecode(a.folder.text['Hikes/notebook.json']!)['deleted'], true);
+      expect(jsonDecode(b.folder.text['Hikes/notebook.json']!)['deleted'], true);
+      expect(b.folder.text.keys.where((k) => k.startsWith('Hikes/') && k.endsWith('.md')), isEmpty);
+    });
+
+    test('delete: a file of the deleted notebook that arrives late does not make it again', () async {
+      final (a, b, link) = await linked();
+      final path = b.folder.text.keys.firstWhere((k) => k.startsWith('Hikes/') && k.endsWith('.md'));
+      final text = b.folder.text[path]!;
+      await a.nb.deleteNotebook('hikes-id');
+      await rounds([a, b], [link]);
+      b.folder.text[path] = text;
+      await b.engine.run();
+      await b.engine.run();
+      expect(ids(b, 'Hikes'), isEmpty);
+    });
+
+    test('delete: a notebook changed on the peer wins over the tombstone; it is kept, the folder written again, and it comes back', () async {
+      final (a, b, link) = await linked();
+      await a.nb.deleteNotebook('hikes-id');
+      await a.engine.run();
+      await b.nb.saveEntry(id: 'eb2', notebookId: 'hikes-id', occurredAt: '2026-11-02T09:00:00-07:00', title: 'B only');
+      link.sync();
+      await b.engine.run();
+      expect(ids(b, 'Hikes'), ['hikes-id']);
+      expect(await entryIds(b, 'hikes-id'), {'ea1', 'eb2'});
+      expect(jsonDecode(b.folder.text['Hikes/notebook.json']!)['deleted'], isNot(true));
+      await rounds([a, b], [link]);
+      expect(await entryIds(a, 'hikes-id'), {'ea1', 'eb2'});
+      expect(await entryIds(b, 'hikes-id'), {'ea1', 'eb2'});
+    });
+
+    test('delete: a private notebook that is not included is never deleted by a tombstone', () async {
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      await b.nb.saveNotebook(id: 'zzz-meds', template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent), private: true);
+      await b.nb.saveEntry(id: 'em1', notebookId: 'zzz-meds', occurredAt: '2026-11-01T09:00:00-07:00', title: 'Private', body: 'x');
+      await NotebookSync(notebook: b.nb, kind: SyncKind.share, folder: b.folder, stateFile: b.state, includePrivate: false, privateBooks: {'zzz-meds'}).run();
+      b.folder.text.removeWhere((k, _) => k.startsWith('Medical/'));
+      b.folder.text['Medical/notebook.json'] = '{"id":"zzz-meds","deleted":true,"at":1794290000000}\n';
+      await b.engine.run();
+      await b.engine.run();
+      expect(ids(b, 'Medical'), ['zzz-meds']);
+      expect(await entryIds(b, 'zzz-meds'), {'em1'});
+    });
+
+    test('unshare: the id file gone with no tombstone keeps the notebook and its entries on the peer', () async {
+      final (a, b, link) = await linked();
+      b.folder.text.removeWhere((k, _) => k.startsWith('Hikes/'));
+      final rep = await b.engine.run();
+      expect(rep.deleted, 0);
+      expect(ids(b, 'Hikes'), ['hikes-id']);
+      expect(await entryIds(b, 'hikes-id'), {'ea1'});
+      await b.engine.run();
+      expect(await entryIds(b, 'hikes-id'), {'ea1'});
+      expect(a.nb.notebooks.any((n) => n.id == 'hikes-id'), isTrue);
+      expect(link.a, a.folder);
+    });
+
+    test('rename: the same id in a new folder moves the notebook on the peer, with no delete and no copy', () async {
+      final (a, b, link) = await linked();
+      await a.nb.saveNotebook(id: 'hikes-id', def: hikes.copyWith(name: 'Trails'));
+      await rounds([a, b], [link]);
+      for (final d in [a, b]) {
+        expect(d.nb.notebooks.where((n) => n.id == 'hikes-id').map((n) => n.name), ['Trails']);
+        expect(ids(d, 'Hikes'), isEmpty);
+        expect(await entryIds(d, 'hikes-id'), {'ea1'});
+        expect(d.folder.text.keys.where((k) => k.startsWith('Hikes/') && k.endsWith('.md')), isEmpty);
+      }
+    });
+
+    test('delete, then the same name made again: a new notebook, not the old one back', () async {
+      final (a, b, link) = await linked();
+      await a.nb.deleteNotebook('hikes-id');
+      await rounds([a, b], [link]);
+      await a.nb.saveNotebook(id: 'bbb-hikes', template: 'notes', def: hikes);
+      await a.nb.saveEntry(id: 'ea9', notebookId: 'bbb-hikes', occurredAt: '2026-11-05T09:00:00-07:00', title: 'Hikes ea9');
+      await rounds([a, b], [link]);
+      for (final d in [a, b]) {
+        expect(ids(d, 'Hikes'), ['bbb-hikes']);
+        expect(await entryIds(d, 'bbb-hikes'), {'ea9'});
+      }
+    });
+
+    test('delete: the decision point can keep a notebook that was deleted elsewhere', () async {
+      final (a, b, link) = await linked();
+      await a.nb.deleteNotebook('hikes-id');
+      await a.engine.run();
+      link.sync();
+      await _KeepEngine(b).run();
+      expect(ids(b, 'Hikes'), ['hikes-id']);
+      expect(await entryIds(b, 'hikes-id'), {'ea1'});
     });
 
     test('a private notebook that is not included keeps its id and writes nothing', () async {
