@@ -195,7 +195,10 @@ void main() {
       expect(b.transfers, isEmpty);
       expect(File(sources.zims.single.path).readAsBytesSync(), bytes);
       // finished: the record is gone, so the next start brings nothing back
-      await Future<void>.delayed(const Duration(milliseconds: 100)); // the record is written without waiting
+      final record = File('${settings.path}/browse.json'); // the record is written without waiting: wait for it to be rewritten without this download
+      for (var i = 0; i < 250 && record.existsSync() && record.readAsStringSync().contains(e.id); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       final again = make(downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
       await again.init();
       expect(again.transfers, isEmpty);
@@ -218,8 +221,11 @@ void main() {
       expect(b.resumableParts, contains(part.path), reason: 'not offered as a leftover');
       expect(b.resumableParts, isNot(contains(gone.path)), reason: 'nothing to carry on: a leftover');
       // now it has a record: the next start brings it back as any other
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(File('${settings.path}/browse.json').readAsStringSync(), contains(e.id));
+      final record = File('${settings.path}/browse.json'); // written without waiting: wait up to 5 s for it
+      for (var i = 0; i < 250 && !(record.existsSync() && record.readAsStringSync().contains(e.id)); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(record.readAsStringSync(), contains(e.id));
     });
 
     test('while the catalogue cannot be reached, a partial file with no record is kept (not a leftover), not adopted', () async {
