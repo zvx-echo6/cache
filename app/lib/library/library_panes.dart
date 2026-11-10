@@ -362,7 +362,7 @@ PreferredSizeWidget libraryAppBar(BuildContext context, {required String title, 
     toolbarHeight: number == null || slim ? kToolbarHeight : 84,
     title: titleWidget ?? (slim
         // On the Linux desktop a list pane with the page open beside it carries just the code; the name is in the breadcrumb there.
-        ? Text(number!, style: TextStyle(fontFamily: kCdsMono, fontSize: 15, fontWeight: FontWeight.w700, color: numberColor ?? k.accent))
+        ? Text(number, style: TextStyle(fontFamily: kCdsMono, fontSize: 15, fontWeight: FontWeight.w700, color: numberColor ?? k.accent))
         : number == null
         ? Text(title, maxLines: 1, overflow: TextOverflow.ellipsis)
         : Column(
