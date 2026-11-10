@@ -42,7 +42,7 @@ abstract class PrivateSharing {
   Future<void> setIncluded(String notebookId, bool on);
 
   /// A notebook got another id (linked devices settling on one): what is kept under the old id moves to the new one.
-  Future<void> notebookReid(String oldId, String newId) async {}
+  Future<void> notebookReid(String oldId, String newId);
 }
 
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
