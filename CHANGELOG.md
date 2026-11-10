@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+- Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
+
 ## 1.1.0 (build 47, test) - 2026-11-09
 
 This build covers everything new since the public release 1.0.29.

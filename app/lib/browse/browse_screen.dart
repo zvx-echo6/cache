@@ -307,6 +307,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
           _say('Choose a picture (PNG, JPEG, WebP or GIF).');
         }
       },
+      getIcon: b.device != null ? null : () async {
+        _say('Getting icon…');
+        final got = await b.getIconFromSource(z);
+        await FileImage(File('${z.path}.icon.png')).evict();
+        await FileImage(File('${z.path}.illustration.png')).evict();
+        if (!mounted) return;
+        setState(() {});
+        _say(got ? 'Icon updated' : 'No icon found at the source');
+      },
       addToHome: addToHome ??
           (layout == null || id == null
               ? null

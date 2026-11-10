@@ -137,7 +137,7 @@ Lists have no tick boxes until you ask for them.
 
 To use an item's menu:
 1. Press and hold the item. You feel a short buzz and it lifts.
-2. Pick an action. For a Library item: "Check for update", "Change icon", "Add to Home" or "Delete".
+2. Pick an action. For a Library item: "Check for update", "Change icon", "Get icon from source", "Add to Home" or "Delete".
 
 To act on several items:
 1. Tap "Select" in the list's header.
@@ -431,13 +431,13 @@ On a tablet the Library's rows stay at the left and each one opens beside them. 
 
 1. Open "Library" and tap "ZIM Collections".
 2. Tap a row to open it in the reader.
-3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
+3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Get icon from source", "Add to Home" and "Delete".
 
 A badge shows only when something needs attention, for example "Update ready". Tap it to update.
 
 Under a row, a line can say how its search is going, for example `Making PDFs searchable · 340 of 5,768`. Tap that line to open it in "Catalog", where "Pause all" and "Resume" are.
 
-"Change icon" picks a picture from your device. "Delete" asks first and shows what it frees.
+"Change icon" picks a picture from your device. "Get icon from source" fetches the picture again from where the ZIM came from (Kiwix), or reads the one inside the ZIM; it says "No icon found at the source" when there is none. "Delete" asks first and shows what it frees.
 
 - If you see "No ZIM Collections yet. Add Wikipedia, medical guides or survival manuals.", tap "Add to Library".
 
