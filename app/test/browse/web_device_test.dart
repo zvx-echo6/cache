@@ -334,6 +334,44 @@ void main() {
       await expectLater(fetchBytesViaDevice(api, url, maxBytes: 3), throwsA(isA<FetchException>()));
     });
 
+    test('a browser read says what kind it is: the scope and plain http reach the device, and the new refusals are the app\'s own', () async {
+      api.fetchBody = Uint8List.fromList(utf8.encode('WEBVTT'));
+      final cue = Uri.parse('http://tube.example/lazy-static/video-captions/x.vtt');
+      await fetchBytesViaDevice(api, cue, scope: FetchScope.video, plain: true);
+      expect((api.fetchedScope, api.fetchedPlain), ('video', true));
+      await fetchBytesViaDevice(api, Uri.parse('https://data.cached.info/x.json'));
+      expect((api.fetchedScope, api.fetchedPlain), (null, false));
+      Future<FetchFailure> fail(String code) async {
+        api.fetchError = DeviceException(code, 'x');
+        try {
+          await fetchBytesViaDevice(api, cue, scope: FetchScope.user);
+        } on FetchException catch (x) {
+          return x.failure;
+        }
+        throw TestFailure('a FetchException was expected');
+      }
+
+      expect(await fail('scope_off'), FetchFailure.notAllowed);
+      expect(await fail('busy'), FetchFailure.unreachable);
+      expect(await fail('unsupported_type'), FetchFailure.unreadable);
+    });
+
+    test('the HTTP side puts the scope and plain in the query', () async {
+      final seen = <Uri>[];
+      final a = HttpDeviceApi(client: MockClient((r) async {
+        seen.add(r.url);
+        return http.Response('x', 200);
+      }));
+      await a.fetch(Uri.parse('https://huggingface.co/api/models?search=a'), scope: FetchScope.models);
+      await a.fetch(Uri.parse('http://tube.example/api/v1/videos'), scope: FetchScope.video, plain: true);
+      await a.fetch(Uri.parse('https://data.cached.info/x'));
+      expect(seen.map((u) => u.queryParameters), [
+        {'url': 'https://huggingface.co/api/models?search=a', 'scope': 'models'},
+        {'url': 'http://tube.example/api/v1/videos', 'scope': 'video', 'plain': '1'},
+        {'url': 'https://data.cached.info/x'},
+      ]);
+    });
+
     test('the Kiwix catalogue in a browser gives its failures in the same words', () async {
       api.fetchBody = Uint8List.fromList(utf8.encode('<feed/>'));
       expect(await fetchCatalogueViaDevice(api, Uri.parse('https://opds.library.kiwix.org/x')), '<feed/>');

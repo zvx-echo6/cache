@@ -1,5 +1,5 @@
 name: libzim prebuilt (Linux)
-description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), unpacked under RUNNER_TEMP/zimbuild, sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh. (The path comes from the shell's RUNNER_TEMP, because in a container job the expression runner.temp is a different path.)
+description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), restored from the GitHub Actions cache or, on a miss, downloaded from download.openzim.org, checked and saved to the cache straight away, so an openzim outage does not fail a run once the file has been fetched. Sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh; the cache key carries the version, so a new pin gets a new key.
 inputs:
   arch:
     description: x86_64 or aarch64
@@ -7,8 +7,18 @@ inputs:
 runs:
   using: composite
   steps:
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/cache-ci-libzim
+        key: libzim-linux-${{ inputs.arch }}-9.8.2-1
     - shell: bash
       run: |
-        line=$(bash "$GITHUB_WORKSPACE/packages/cache_search/native/zimx/fetch-libzim-linux.sh" "$RUNNER_TEMP/zimbuild" "${{ inputs.arch }}" | grep '^LIBZIM_DIR=')
+        line=$(bash "$GITHUB_WORKSPACE/packages/cache_search/native/zimx/fetch-libzim-linux.sh" "$HOME/.cache/cache-ci-libzim" "${{ inputs.arch }}" | grep '^LIBZIM_DIR=')
         echo "$line"
         echo "$line" >> "$GITHUB_ENV"
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/cache-ci-libzim
+        key: libzim-linux-${{ inputs.arch }}-9.8.2-1

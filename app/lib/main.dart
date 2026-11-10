@@ -21,6 +21,7 @@ import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'desktop/desktop_theme.dart';
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
@@ -290,11 +291,12 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
-      notShared: const {'libraries': kLibraryNotShared},
+      notShared: const {'library': kZimNotShared, 'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
       items: () => libraryItems(sources, libraries),
       remoteItem: libraryRemoteItem,
+      alongside: libraryAlongside,
     ),
     DataKind(
       id: 'models',
@@ -809,6 +811,8 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
+    if (plat.isWeb) unawaited(searchModel.refreshServer());
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
     _guidanceAwake;
@@ -995,8 +999,9 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
       Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
-      settingsRead.then((_) => regions.init());
     }
+    // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
+    settingsRead.then((_) => regions.init());
     _layoutRead = layout.init();
     sources.init();
     if (!plat.isWeb) unawaited(pdfIndex.init());
@@ -1179,7 +1184,7 @@ class _CacheAppState extends State<CacheApp> {
                   children: [
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
-                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
                   ],
                 ),
               ),

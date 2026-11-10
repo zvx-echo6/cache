@@ -199,6 +199,16 @@ pub unsafe extern "C" fn cs_zim_main_page(h: *mut Handle, zim_id: *const c_char)
 /// # Safety
 /// `h` NULL or live; `zim_id` NULL or NUL-terminated.
 #[no_mangle]
+pub unsafe extern "C" fn cs_zim_illustration(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let id = arg_str(zim_id, "zim_id")?;
+        out_string(h.zim_illustration(id)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `zim_id` NULL or NUL-terminated.
+#[no_mangle]
 pub unsafe extern "C" fn cs_zim_pdfs(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| {
         let id = arg_str(zim_id, "zim_id")?;
@@ -1256,6 +1266,7 @@ mod tests {
             assert!(cs_status(ptr::null_mut()).is_null());
             assert_eq!(cs_set_sources(ptr::null_mut(), ptr::null()), -1);
             assert!(cs_zim_main_page(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_zim_illustration(ptr::null_mut(), ptr::null()).is_null());
             let (mut m, mut n): (*mut c_char, i64) = (ptr::null_mut(), 0);
             assert!(cs_zim_get(ptr::null_mut(), ptr::null(), &mut m, &mut n).is_null());
             assert_eq!(cs_set_location(ptr::null_mut(), 1.0, 2.0, 3.0, ptr::null()), -1);

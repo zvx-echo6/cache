@@ -32,6 +32,20 @@ op `server.features` says what is there:
      "places":  {"available": <the merged places database is there>, "merged_dir": "<path>"},
      "extras":  {<the config sections the core was opened with; "routing" only when routing is available>}}
 
+### Regions
+
+The browser downloads regions the way the phone does, and the server runs the download, so it goes on with no tab open. The helper
+answers three ops through `/api/core` (`server/helper/bin/regions_ops.dart`): `regions.open` (the engine is open; `unavailable` when the
+core has none), `regions.call {method, args}` and `regions.close` (nothing: the engine is the server's). The methods are the region
+engine's (`status`, `plan`, `add`, `remove`, `stream`, `set_policy`, `check_update`, `update`; docs/REGIONS.md) on the same engine the
+search core opened (one per folder, `<data>/app/support/regions`), plus the off-road packs, which the phone downloads in Dart and the
+helper downloads here (`offroad_packs.dart`): `offroad_fetch {path,url,bytes,sha256}`, `offroad_status {paths}`, `offroad_cancel {path}`
+and `offroad_remove {path}`. A pack is `<build>/<id>/offroad.sqlite` under `regions/offroad`, fetched only from the data host
+(`data.cached.info`, `cache.echo6.co`), resumed from its `.part` file and checked against its SHA-256. When the core opens, the helper
+reads `<support>/regions-app.json` (written by the app), gives the engine the person's Pause (the engine does not keep it) and
+carries on the packs the kept regions still miss. The region and off-road catalogues are fetched through `/api/fetch` and kept in
+`<support>/region-catalogue`.
+
 ### Map tiles
 
 The core's layer engine serves map tiles from a tile server inside the helper process, on 127.0.0.1 and a random port, which a browser cannot

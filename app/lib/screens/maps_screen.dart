@@ -7,7 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../location/coords.dart';
+import '../linux_ui.dart';
 import '../location/location_service.dart';
+import '../location/location_web_ui.dart';
 import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
@@ -819,6 +821,7 @@ class _MapsScreenState extends State<MapsScreen> {
 
   /// The polite ask shown before the system prompt (never on launch, only when the user taps for location).
   Future<bool> _explain() async {
+    if (linuxUi) return showLocationPrePrompt(context);
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -857,6 +860,12 @@ class _MapsScreenState extends State<MapsScreen> {
   }
 
   void _problemSnack() {
+    if (linuxUi) {
+      final m = ScaffoldMessenger.of(context);
+      m.hideCurrentSnackBar();
+      m.showSnackBar(webLocationSnack(location.problem, onHowToAllow: () => showHowToAllow(context), onTryAgain: _locate));
+      return;
+    }
     final text = switch (location.problem) {
       LocationProblem.off => 'Location is off. Switch on "Show my position" in Layers.',
       LocationProblem.permissionDenied => 'Cache was not allowed to read your location.',

@@ -130,6 +130,8 @@ class CoreDispatcher {
         result = [z.bytes, z.mime];
       case 'zimMainPage':
         result = eng().zimMainPage(a['zimId'] as String);
+      case 'zimIllustration':
+        result = eng().zimIllustration(a['zimId'] as String);
       case 'suggest':
         result = [
           for (final s in eng().suggest(a['prefix'] as String, k: a['k'] as int, sources: (a['sources'] as List?)?.cast<String>()))

@@ -135,6 +135,17 @@ async fn no_sources_file_opens_with_null_sources_and_the_helper_gets_the_app_fol
 }
 
 #[tokio::test]
+async fn the_helper_is_started_with_the_public_address_guard_installed() {
+    let _g = LOCK.lock().await;
+    // a value set in the server's own environment is overridden: the server decides, not whatever started it
+    std::env::set_var("CACHE_NET_GUARD", "off");
+    let rig = rig("netguard", None).await;
+    std::env::remove_var("CACHE_NET_GUARD");
+    assert_eq!(rig.core(r#"{"op":"netguard","args":{}}"#).await, (200, json!({"ok": true, "result": "public"})));
+    rig.app.helper.as_ref().unwrap().shutdown().await;
+}
+
+#[tokio::test]
 async fn a_crash_mid_request_gives_503_then_the_helper_comes_back() {
     let _g = LOCK.lock().await;
     let rig = rig("crash", None).await;
