@@ -510,7 +510,11 @@ class _ItemRow extends StatelessWidget {
 /// Settings > Sharing and sync > a linked device: how it is connected and when it was last seen, its free space when it says,
 /// how settings go between the two (Settings), Sync now with it alone, Rename (what this device calls it) and Unlink.
 class SharingDevicePage extends StatefulWidget {
-  const SharingDevicePage({super.key, required this.sharing, required this.peer, this.settingsSync});
+  const SharingDevicePage({super.key, required this.sharing, required this.peer, this.settingsSync, this.noReplacePreview});
+
+  /// Design renders only: null everywhere in the app. When set, the page draws the "Don't replace my copies from this device"
+  /// row (this value is its switch) so the design can be seen before the feature is built; the row does nothing.
+  final bool? noReplacePreview;
 
   final SharingState sharing;
 
@@ -598,6 +602,19 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 // Known once it has answered: an older version never says it keeps links.
                 known: p['link_known'] == true || p['last_seen'] == null,
                 busy: _busy,
+              ),
+            if (widget.noReplacePreview != null)
+              SettingsGroup(
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('device-no-replace'),
+                    title: "Don't replace my copies from this device",
+                    titleLines: 2,
+                    status: [Part('Newer versions from $name never replace yours. Small items arrive beside yours; big files wait until you tap Get it.')],
+                    statusLines: null,
+                    trailing: Switch(value: widget.noReplacePreview!, onChanged: (_) {}),
+                  ),
+                ],
               ),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
