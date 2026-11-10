@@ -8,7 +8,7 @@ description = "Cache's map layer engine: layer definitions, the local tile serve
 [dependencies]
 # Same HTTP stack as cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
-# The public-address guard on the client (installed only by the Linux server's helper; the web read always has it).
+# The public-address guard on the client (installed only by the Linux server's helper; a phone never has it).
 cache_netguard = { path = "../cache_netguard" }
 # Viewed-tile cache (LRU) in a SQLite file; bundled like cache_live's.
 rusqlite = { version = "0.32", features = ["bundled"] }

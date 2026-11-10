@@ -36,7 +36,7 @@ fn a_private_address_is_refused_with_no_guard_setting_and_nothing_connects() {
     // the raw page request: the connect-layer failure
     let f = http_get(&url, &[], soon(), 1 << 16).unwrap_err();
     assert_eq!(f.kind, HttpFail::Connect, "{f:?}");
-    for u in ["http://192.168.1.240/x", "http://169.254.169.254/latest/meta-data/", "http://[::ffff:10.0.0.1]/x", "http://0x7f.1/x", "http://2130706433/x"] {
+    for u in ["http://192.168.1.240/x", "http://169.254.169.254/latest/meta-data/", "http://[::ffff:10.0.0.1]/x", "http://0x7f.1/x", "http://2130706433/x", "http://[::1]/x"] {
         assert_eq!(fetch_page(u, soon(), 1 << 16), Page::Unavailable, "{u}");
         assert_eq!(http_get(u, &[], soon(), 1 << 16).unwrap_err().kind, HttpFail::Connect, "{u}");
     }
