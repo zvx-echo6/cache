@@ -12,8 +12,9 @@
 //!   it sets [`ENV_VAR`] in the Dart helper's environment, which installs the guard for the core crates there.
 //! * The core crates (cache_video, cache_live, cache_layers, cache_regions) build their clients through [`guarded`]. It adds
 //!   the guard only when it is installed ([`install`] or the environment variable), so on a phone, which never sets it, the
-//!   builder is returned untouched and the client is exactly what it was. The model's web read and web search (cache_search)
-//!   use [`always`]: what the model reads is public by definition, on every platform.
+//!   builder is returned untouched and the client is exactly what it was. The model's web read (cache_search) uses [`always`]:
+//!   what the model reads is public by definition, on every platform. The web search provider's own endpoint is owner
+//!   configuration and is not guarded; everything the model reads through it is.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
@@ -260,16 +261,22 @@ mod tests {
         assert!(r.resolve("127.0.0.1:80").is_err());
     }
 
-    /// The test hooks must reach a crate only through its [dev-dependencies], never its [dependencies]: a release build then has no
-    /// way to let loopback through. Reads the manifests of the crates in this workspace that depend on this one.
+    /// The test hooks must reach a crate only through its [dev-dependencies], never its [dependencies] or a [features] entry: a normal
+    /// or release build then has no way to let loopback through. Reads the manifest of every workspace member (the members list in
+    /// the workspace root) and the root itself.
     #[test]
     fn the_test_hooks_feature_is_only_ever_a_dev_dependency() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut manifests: Vec<std::path::PathBuf> = std::fs::read_dir(root.parent().unwrap()).unwrap().flatten().map(|e| e.path().join("Cargo.toml")).collect();
-        manifests.push(root.join("../../../../server/Cargo.toml"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let top = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let list = top.split_once("members = [").and_then(|(_, r)| r.split_once(']')).expect("the workspace members list").0;
+        let members: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
+        assert!(members.contains(&"cache_netguard") && members.contains(&"../../../server") && members.contains(&"../cli"), "{members:?}");
+        let mut manifests = vec![root.join("Cargo.toml")];
+        manifests.extend(members.iter().map(|m| root.join(m).join("Cargo.toml")));
         let mut seen = 0;
-        for m in manifests.iter().filter(|m| m.exists()) {
-            let text = std::fs::read_to_string(m).unwrap();
+        for m in &manifests {
+            let text = std::fs::read_to_string(m).unwrap_or_else(|e| panic!("{}: {e}", m.display()));
+            let own = m.parent().is_some_and(|d| d.ends_with("cache_netguard"));
             let mut section = String::new();
             for line in text.lines() {
                 let t = line.trim();
@@ -279,8 +286,14 @@ mod tests {
                 if t.starts_with('#') || !t.contains("test-hooks") {
                     continue;
                 }
-                seen += 1;
-                assert!(section.ends_with("dev-dependencies]") || section == "[features]", "{}: test-hooks outside [dev-dependencies]: {t}", m.display());
+                if own {
+                    // this crate defines the feature, and nothing else in it may mention it
+                    assert!(section == "[features]" && t.starts_with("test-hooks") && t.ends_with("[]"), "{}: {t}", m.display());
+                } else {
+                    seen += 1;
+                    assert!(section.contains("dev-dependencies"), "{}: test-hooks outside a dev-dependencies table ({section}): {t}", m.display());
+                    assert!(t.contains("cache_netguard") || section.contains("cache_netguard") || t.starts_with("features"), "{}: {t}", m.display());
+                }
             }
         }
         assert!(seen > 0, "the crates whose tests use the hooks name the feature");
