@@ -1116,7 +1116,10 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
         llama_backend_init();
 
         auto h = std::make_unique<EmbedHandle>();
-        h->model = llama_model_load_from_file(model_path, llama_model_default_params());
+        // The weights stay memory-mapped from the file: no repacked anonymous copy of them.
+        llama_model_params mp = llama_model_default_params();
+        mp.use_extra_bufts    = false;
+        h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
             set_err(err, err_len, std::string("cannot load model: ") + model_path);
             return nullptr;
