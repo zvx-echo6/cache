@@ -181,8 +181,10 @@ jobs:
           { echo 'import MapLibre'; cat ios/Runner/AppDelegate.swift; echo; cat "$RUNNER_TEMP/snapshot.swift"; echo 'let routeSnapshotForTheBuild = RouteSnapshot()'; } > "$RUNNER_TEMP/AppDelegate.swift"
           cp "$RUNNER_TEMP/AppDelegate.swift" ios/Runner/AppDelegate.swift
           flutter build ios --config-only --simulator --debug
-          # The app's Podfile settings: iOS 16.3, static frameworks, and the MapLibre pod at the app's pinned version.
-          POD=$(grep -E "^\s*pod 'MapLibre'" "$GITHUB_WORKSPACE/app/ios/Podfile")
+          # The app's Podfile settings: iOS 16.3, static frameworks, and a MapLibre pod (this scratch project builds with CocoaPods, as the
+          # app's own Podfile no longer declares one).
+          # Must equal the maplibre_gl plugin's Swift package version; tools/check_maplibre_pin.py enforces it.
+          POD="pod 'MapLibre', '6.28.0'"
           sed -i '' "s/^# platform :ios.*/platform :ios, '16.3'/" ios/Podfile
           sed -i '' "s/^  use_frameworks!$/  use_frameworks! :linkage => :static/" ios/Podfile
           awk -v pod="$POD" '{print} /flutter_install_all_ios_pods/{print pod}' ios/Podfile > "$RUNNER_TEMP/Podfile" && cp "$RUNNER_TEMP/Podfile" ios/Podfile

@@ -6,6 +6,28 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 47, test) - 2026-11-09
+
+This build covers everything new since the public release 1.0.29.
+
+### New
+- Library: the new Library has ZIM Collections, Bookshelves, the Catalog and the Cache guide (with What's new and Credits)
+- Library: add a PDF, several at once, or a whole folder; scanned pages are read too; each book becomes searchable and is shelved by subject with a call number; if Cache is not sure, the book waits in Unsorted with a best guess to place it
+- Bookshelves: list, drawers and spines views, and Go to a number; a book's page lets you rename it, hide it, and mark spare copies of the same book
+- Search and Ask: find text inside your PDFs and inside the PDFs, EPUBs and video captions in your ZIMs; answers cite the page, chapter or moment
+- Reader: read PDFs and EPUBs inside Cache
+- Discover: ready-made setups (Ready, Backcountry, Homestead) plus libraries and maps, each showing what it adds before you get it
+- Setup: a step-by-step welcome setup, which you can run again from Settings
+- Maps: while navigating, a smaller turn banner, an elevation profile you pull up from the guidance card, and a mini map of the whole route (tap to swap it with the live map)
+- Videos: one Videos list and a new player with captions, quality choice, resume and a transcript on larger screens; saved videos are searchable by what is said in them
+- Sharing and sync: choose what to share item by item, with Sync now at every level, and a page for each linked device where settings can match or follow one device
+- Add your own source: plug in a web service as a weather or data source
+- No model needed: search-only mode when no model is installed
+- Obsidian and Logseq: tag a note `#cachesync` to bring it into Cache
+- Layout: better layouts for phones held sideways, tablets and large iPads
+- Known: Ask can still take a long time to answer on some phones
+- Known: Ask sometimes offers to search instead of searching
+
 ## 1.0.30 (unreleased, test)
 
 ### New
