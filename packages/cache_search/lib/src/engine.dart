@@ -80,8 +80,8 @@ class SearchEngine {
   /// The ZIM's own icon (its `Illustration_48x48@1` metadata, PNG bytes), or null when it has none or the loaded core lacks
   /// cs_zim_illustration.
   Uint8List? zimIllustration(String zimId) {
-    final n = native;
-    if (n is! CsZimIconNative || !n.hasZimIllustration) return null;
+    final n = native is CsZimIconNative ? native as CsZimIconNative : null;
+    if (n == null || !n.hasZimIllustration) return null;
     final s = n.zimIllustration(_h, zimId);
     if (s == null) {
       final e = CacheSearchException.fromJson(native.lastError(_h));
