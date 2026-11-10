@@ -18,7 +18,7 @@ final RegExp _segment = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$');
 /// is continued), checked against the published SHA-256 (a file that does not match is thrown away), then renamed into place, so the
 /// router only ever sees whole packs. The download runs in the helper, so it goes on with no browser open.
 class OffroadPacks {
-  OffroadPacks(this.dir, {this.log, HttpClient Function()? clientFactory, bool Function(Uri)? allowed})
+  OffroadPacks(this.dir, {this.log, HttpClient Function()? clientFactory, bool Function(Uri)? allowed, this.idleTimeout = const Duration(seconds: 60)})
       : _clientFactory = clientFactory ?? _defaultClient,
         _allowed = allowed ?? _defaultAllowed;
 
@@ -27,6 +27,10 @@ class OffroadPacks {
   final void Function(String message)? log;
   final HttpClient Function() _clientFactory;
   final bool Function(Uri) _allowed;
+
+  /// How long a download may go with no bytes arriving before it fails (the part is kept, so a later try continues). Not an overall
+  /// deadline: a large pack that keeps flowing is never cut off.
+  final Duration idleTimeout;
 
   final Map<String, _Run> _runs = {};
 
@@ -83,6 +87,7 @@ class OffroadPacks {
         have = 0;
         res = await _get(client, url, 0);
       }
+      // A redirect is never followed (the address was checked only before the request), so any 3xx fails like a bad status.
       if (res.statusCode != 200 && res.statusCode != 206) {
         await res.drain<void>();
         throw HttpException('HTTP ${res.statusCode}');
@@ -93,7 +98,7 @@ class OffroadPacks {
       if (res.contentLength > 0) run.total = have + res.contentLength;
       final sink = part.openSync(mode: have > 0 ? FileMode.append : FileMode.write);
       try {
-        await for (final chunk in res) {
+        await for (final chunk in res.timeout(idleTimeout)) {
           if (run.cancelled) break;
           sink.writeFromSync(chunk);
           run.done += chunk.length;
@@ -136,8 +141,9 @@ class OffroadPacks {
 
   Future<HttpClientResponse> _get(HttpClient client, Uri url, int from) async {
     final req = await client.getUrl(url);
+    req.followRedirects = false;
     if (from > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-');
-    return req.close();
+    return req.close().timeout(idleTimeout);
   }
 
   /// What each of [paths] is: `{"<path>": {"on_disk", "running", "done", "total", "error"}}`.
