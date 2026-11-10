@@ -349,6 +349,14 @@ void main() {
             shotApp(page, theme: theme, insets: phoneSize ? const EdgeInsets.only(top: 44, bottom: 30) : EdgeInsets.zero, desktop: inShell),
           );
           await _settle(tester);
+          // The Shell shows "What's new" over Home once, a moment after it opens (the sheet's scrim covers the sidebar). Close it, as
+          // the person would, so the pictures show the screens and the sidebar can be tapped.
+          await _settle(tester, 6);
+          final gotIt = find.byKey(const ValueKey('whats-new-ok'));
+          if (gotIt.evaluate().isNotEmpty) {
+            await tester.tap(gotIt);
+            await _settle(tester);
+          }
         }
 
         Future<void> shot(String id) async {
