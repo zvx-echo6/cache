@@ -47,13 +47,16 @@ MarkerColor defaultMarkerColor(Iterable<NbEntry> entries) {
 /// A place's marker: filled in its colour when it is on the map, an outline with a slash when it is hidden (colour never
 /// carries the meaning alone).
 class PlaceMarker extends StatelessWidget {
-  const PlaceMarker({super.key, required this.color, this.hidden = false, this.size = 26});
+  const PlaceMarker({super.key, required this.color, this.hidden = false, this.size = 26, this.icon});
 
   final MarkerColor color;
   final bool hidden;
   final double size;
 
+  /// The place's map icon (its own, else its notebook's); the pin when null.
+  final IconData? icon;
+
   @override
   Widget build(BuildContext context) =>
-      Icon(hidden ? Icons.location_off_outlined : Icons.place, size: size, color: color.color);
+      Icon(hidden ? Icons.location_off_outlined : (icon ?? Icons.place), size: size, color: color.color);
 }
