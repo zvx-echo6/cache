@@ -7,9 +7,10 @@ import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
-import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow, FileTile;
 import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
 import '../sources/libraries_state.dart' show LibrariesState;
+import '../discover/ui/kit.dart' show SectionHead;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'zim_dl.dart';
@@ -408,18 +409,21 @@ class EntryTile extends StatelessWidget {
 /// The YOUR OWN group of Add to Library: the label, Your own library (from a file or a download link), and on a phone Add a PDF and
 /// Add a folder under it. Shown in Add to Library's own list and at the top of Discover when Add to Library opens it.
 class YourOwnGroup extends StatelessWidget {
-  const YourOwnGroup({super.key, required this.libraries, required this.pdf});
+  const YourOwnGroup({super.key, required this.libraries, required this.pdf, this.sectionHeading = false});
 
   final LibrariesState libraries;
 
   /// Add a PDF and Add a folder go under Your own library (a phone; not a browser).
   final bool pdf;
 
+  /// The label is a section heading like Discover's (Collections, Libraries); else the catalogue screen's small label.
+  final bool sectionHeading;
+
   /// The group for the app's own state: null when the libraries are not set up.
   static Widget? forBrowse(BrowseState b) {
     final libraries = b.libraries;
     if (libraries == null) return null;
-    return YourOwnGroup(libraries: libraries, pdf: addPdfShared != null && b.device == null);
+    return YourOwnGroup(libraries: libraries, pdf: addPdfShared != null && b.device == null, sectionHeading: true);
   }
 
   @override
@@ -428,7 +432,7 @@ class YourOwnGroup extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const GroupLabel('Your own'),
+        if (sectionHeading) const SectionHead(title: 'Your own') else const GroupLabel('Your own'),
         Material(
           color: k.surface,
           borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
@@ -442,7 +446,7 @@ class YourOwnGroup extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
-                    Icon(Icons.library_add_outlined, size: 22, color: k.text),
+                    const FileTile(icon: Icons.library_add_outlined),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(

@@ -35,7 +35,7 @@ void main() {
 
   testWidgets('Add to Library opens Discover with YOUR OWN first, above Resources', (tester) async {
     await open(tester, fromAddToLibrary: true);
-    expect(find.text('YOUR OWN'), findsOneWidget);
+    expect(find.text('Your own'), findsOneWidget);
     expect(find.text('Your own library'), findsOneWidget);
     expect(find.text('From a file or a download link'), findsOneWidget);
     expect(find.text('Add a PDF'), findsOneWidget);
@@ -70,7 +70,7 @@ void main() {
 
   testWidgets('Discover opened normally does not show the group', (tester) async {
     await open(tester, fromAddToLibrary: false);
-    expect(find.text('YOUR OWN'), findsNothing);
+    expect(find.text('Your own'), findsNothing);
     expect(find.byKey(const ValueKey('add-own-library')), findsNothing);
     expect(find.byKey(const ValueKey('add-pdf')), findsNothing);
   });
