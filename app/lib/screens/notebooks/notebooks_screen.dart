@@ -148,28 +148,38 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   Widget _shelf(BuildContext context) {
     final k = context.t;
+    final hasMenu = widget.deps.connections != null || widget.deps.pin != null;
+    // The Linux desktop: from 1280 the 300-wide shelf is permanent, so it has no hide button. At 1024 to 1279 the button stays and
+    // Search moves into the overflow menu (or, with no menu, the title is a little smaller) so the title is not cut.
+    final wide = isLinuxWide(context);
+    final narrow = isLinuxDesktop(context) && !wide;
+    final searchInMenu = narrow && hasMenu;
+    void openSearch() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps)));
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notebooks'),
+        titleTextStyle: narrow && !hasMenu ? Theme.of(context).appBarTheme.titleTextStyle?.copyWith(fontSize: 18) : null,
         actions: [
-          ?paneHideButton(context),
+          if (!wide) ?paneHideButton(context),
           IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
-          IconButton(
+          if (!searchInMenu) IconButton(
             key: const ValueKey('notebooks-search'),
             tooltip: 'Search',
             icon: const Icon(Icons.search),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps))),
+            onPressed: openSearch,
           ),
-          if (widget.deps.connections != null || widget.deps.pin != null)
+          if (hasMenu)
             PopupMenuButton<String>(
               key: const ValueKey('notebooks-menu'),
               onSelected: (c) {
+                if (c == 'search') return openSearch();
                 final d = widget.deps;
                 Navigator.of(context).push(MaterialPageRoute<void>(
                   builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
                 ));
               },
               itemBuilder: (_) => [
+                if (searchInMenu) const PopupMenuItem(value: 'search', child: Text('Search')),
                 if (widget.deps.connections != null) const PopupMenuItem(value: 'connections', child: Text('Connections')),
                 if (widget.deps.pin != null) const PopupMenuItem(value: 'pin', child: Text('App PIN')),
               ],
