@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
+import '../../desktop/fact_table.dart';
 import '../../linux_ui.dart';
 import '../../platform/app_log.dart';
 import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
@@ -116,11 +118,24 @@ class _StoragePageState extends State<StoragePage> {
               ],
             ),
             if (!linuxUi) const NoteText('Weather and alerts always update, on any connection.'),
-            SettingsGroup(
-              rows: [
-                for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
-              ],
-            ),
+            // The Linux desktop shows the kinds as a table; every other window keeps the rows.
+            if (isLinuxDesktop(context))
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const GroupLabel('What Cache stores'),
+                  FactTable(
+                    headers: const ['Kind', 'Items', 'Size'],
+                    rows: [for (var i = 0; i < kinds.length; i++) _factRow(kinds[i], colors[i % colors.length])],
+                  ),
+                ],
+              )
+            else
+              SettingsGroup(
+                rows: [
+                  for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
+                ],
+              ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
               status: linuxUi ? 'Log: ${logLevelTitle(appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
@@ -129,6 +144,26 @@ class _StoragePageState extends State<StoragePage> {
           ],
         );
       },
+    );
+  }
+
+  FactRow _factRow(DataKind kind, Color color) {
+    final k = context.t;
+    final n = kind.count?.call();
+    final list = kind.list;
+    return FactRow(
+      key: ValueKey('kind-${kind.id}'),
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(kind.icon, size: 22, color: k.secondary),
+          Positioned(right: -3, bottom: -3, child: Container(width: 9, height: 9, decoration: BoxDecoration(color: color, shape: BoxShape.circle))),
+        ],
+      ),
+      label: kind.label,
+      items: n?.toString(),
+      size: u.measured ? formatBytes(u.bytesOf(kind.id)) : 'Measuring…',
+      onTap: list == null ? null : () => _open(list()),
     );
   }
 
