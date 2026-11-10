@@ -159,7 +159,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     void openSearch() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps)));
     return Scaffold(
       appBar: AppBar(
-        title: Text('Notebooks', style: narrow && !hasMenu ? const TextStyle(fontSize: 18) : null),
+        // At 1024 to 1279 the shelf is 280 wide and holds three buttons, so the title sits at 16 and is 18 pixels (the bar leaves a
+        // title only 88 at the usual 24).
+        titleSpacing: narrow ? 16 : null,
+        title: Text('Notebooks', style: narrow ? const TextStyle(fontSize: 18) : null),
         actions: [
           if (!wide) ?paneHideButton(context),
           IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
