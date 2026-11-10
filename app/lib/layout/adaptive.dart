@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../app_fs.dart';
+import '../desktop/desktop.dart';
 import '../theme.dart';
 
 /// One adaptive system, three width classes, measured on the window (not the device), so iPad Split View and Android multi-window
@@ -205,7 +206,7 @@ class TwoPaneState extends State<TwoPane> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  width: desktop ? kDesktopListWidth : listPaneWidth(width),
+                  width: DesktopMetrics.of(context)?.listWidth ?? (desktop ? kDesktopListWidth : listPaneWidth(width)),
                   // A hidden list is out of reach: no taps, and a screen reader skips it. Shown, it is a semantics container of its
                   // own beside the detail's (below), so the detail page's route barrier, which blocks the semantics of whatever
                   // was painted before it in its container, cannot take the list out of the screen reader's reach.
@@ -380,6 +381,15 @@ class ContentWidth extends StatelessWidget {
     alignment: alignment,
     child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child),
   );
+}
+
+/// Side padding for a Settings page's rows on a page [width] wide: [ContentWidth.padFor] (centred, at most [kContentMaxWidth]),
+/// except in Cache on Linux's desktop window, where the rows sit left-aligned under the title, at most
+/// [DesktopMetrics.formMaxWidth] wide.
+EdgeInsets settingsDetailPad(BuildContext context, double width, {double min = 16}) {
+  final m = DesktopMetrics.of(context);
+  if (m == null) return ContentWidth.padFor(width, min: min);
+  return EdgeInsets.only(left: m.gutter, right: (width - m.gutter - DesktopMetrics.formMaxWidth).clamp(m.gutter, double.infinity).toDouble());
 }
 
 /// A bottom sheet that fits any window: as tall as its content, up to the window's height (less the status bar), and scrolling

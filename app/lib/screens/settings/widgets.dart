@@ -83,7 +83,7 @@ class SettingsPage extends StatelessWidget {
               // A wide pane keeps the rows to the content width, centred (see ContentWidth).
               child: LayoutBuilder(
                 builder: (context, c) => ListView(
-                  padding: ContentWidth.padFor(c.maxWidth, min: 12).copyWith(top: 4, bottom: 24),
+                  padding: settingsDetailPad(context, c.maxWidth, min: 12).copyWith(top: 4, bottom: 24),
                   children: [
                     for (var i = 0; i < children.length; i++) ...[
                       if (i > 0) const SizedBox(height: 14),

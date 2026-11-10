@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../desktop/desktop.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/home_card.dart';
 import '../layout/edit_home_screen.dart';
@@ -165,13 +166,15 @@ class _HomeScreenState extends State<HomeScreen> {
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: const BrandWordmark(height: 30),
+        // On the Linux desktop Settings has its place in the sidebar.
         actions: [
-          IconButton(
-            key: const ValueKey('home-settings'),
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: widget.onOpenSettings,
-          ),
+          if (!isLinuxDesktop(context))
+            IconButton(
+              key: const ValueKey('home-settings'),
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: widget.onOpenSettings,
+            ),
         ],
       ),
       body: ListenableBuilder(
