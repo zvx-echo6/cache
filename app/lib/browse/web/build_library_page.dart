@@ -86,7 +86,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       final choice = await choosePdfCompression(context, c, files);
       if (choice.cancelled || !mounted) return;
       final u = await c.addFiles(files, libraryId: id, compression: choice.choice);
-      if (u != null && mounted) say(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.');
+      if (u != null && mounted) sayUntil(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.', u.done);
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));
     }
@@ -669,7 +669,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       final choice = await choosePdfCompression(context, c, [file]);
       if (choice.cancelled || !mounted) return;
       final u = await c.replaceBook(lib.id, b, file, compression: choice.choice);
-      if (u != null && mounted) say(context, 'Uploading the new copy of ${b.title}. Keep this tab open.');
+      if (u != null && mounted) sayUntil(context, 'Uploading the new copy of ${b.title}. Keep this tab open.', u.done);
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));
     }

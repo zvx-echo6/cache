@@ -476,6 +476,8 @@ void main() {
       expect(find.text('Uploading 1 PDF. Keep this tab open.'), findsOneWidget);
       uploader.finishAll();
       await tester.pumpAndSettle();
+      // the words go when the upload ends, not when the toast's own time is up
+      expect(find.text('Uploading 1 PDF. Keep this tab open.'), findsNothing);
     });
   });
 
