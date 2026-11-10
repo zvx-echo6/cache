@@ -19,6 +19,10 @@ import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
 /// One ZIM file in the sources folder.
+/// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
+/// for itself (the saved `.icon.png` does sync, with its ZIM).
+const List<String> kZimNotShared = ['*.illustration.png'];
+
 class ZimFile {
   ZimFile({required this.path, required this.size});
 
@@ -339,11 +343,40 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   File _originFile(String zimPath) => File('$zimPath.origin.json');
   File _iconFile(String zimPath) => File('$zimPath.icon.png');
 
-  /// The icon saved when the ZIM came from the catalogue, or null.
+  /// The ZIM's own icon, kept as a cache file of its own (not `.icon.png`): that one is the person's choice or the catalogue's and
+  /// travels to the person's other devices, while this one is read from the ZIM itself and each device makes it for itself.
+  File _illustrationFile(String zimPath) => File('$zimPath.illustration.png');
+
+  /// The ZIMs whose own icon was asked for in this run, so a ZIM without one is asked once, not at every redraw.
+  final Set<String> _illustrationAsked = {};
+  bool _closed = false;
+
+  /// The icon to show for [z]: the one saved when the ZIM came from the catalogue (or that the person chose), else the ZIM's own
+  /// (`Illustration_48x48@1`) once it has been read, else null (a letter). The ZIM's own is read lazily and the rows are told
+  /// when it arrives, so this never waits.
   File? iconOf(ZimFile z) {
     if (plat.isWeb) return null;
     final f = _iconFile(z.path);
-    return f.existsSync() ? f : null;
+    if (f.existsSync()) return f;
+    final own = _illustrationFile(z.path);
+    if (own.existsSync()) return own;
+    _readIllustration(z);
+    return null;
+  }
+
+  void _readIllustration(ZimFile z) {
+    final core = _core, id = idOf(z);
+    if (core == null || id == null || !_illustrationAsked.add(z.path)) return;
+    unawaited(() async {
+      try {
+        final png = await core.zimIllustration(id);
+        if (png == null || png.isEmpty) return;
+        await writeBytesAtomic(_illustrationFile(z.path), png);
+        if (!_closed) notifyListeners();
+      } catch (e) {
+        logError('ZIM icon', error: e);
+      }
+    }());
   }
 
   /// What this ZIM is in the catalogue's terms: the record saved at install, else the file name's.
@@ -777,6 +810,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       }
     }
     _failed.remove(dest.path);
+    // A new edition may carry a new picture: the old cached one goes and the ZIM is asked again.
+    _illustrationAsked.remove(dest.path);
+    try {
+      final own = _illustrationFile(dest.path);
+      if (own.existsSync()) own.deleteSync();
+    } catch (_) {}
     await refresh();
     return zims.firstWhere(
       (z) => z.path == dest.path,
@@ -893,7 +932,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       final f = File(z.path);
       if (f.existsSync()) f.deleteSync();
-      for (final side in [_originFile(z.path), _iconFile(z.path)]) {
+      _illustrationAsked.remove(z.path);
+      for (final side in [_originFile(z.path), _iconFile(z.path), _illustrationFile(z.path)]) {
         if (side.existsSync()) side.deleteSync();
       }
       final idx = Directory(_indexDir(z));
@@ -945,6 +985,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   @override
   void dispose() {
+    _closed = true;
     _poll?.cancel();
     _serverWatch?.cancel();
     _core?.close();
