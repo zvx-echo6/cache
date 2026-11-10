@@ -1,4 +1,4 @@
-// A linked device's last seen time: what the row and its page say in each state, and Remove for a device that never answered.
+// A linked device's last seen time: what the row and its page say in each state, and Unlink for a device that never answered.
 
 import 'dart:io';
 
@@ -28,7 +28,7 @@ void main() {
     expect(_words({'last_seen': now - 3 * 3600000, 'via': 'direct', 'live': false, 'error': null}), 'Last seen 3 h ago via direct');
   });
 
-  test('Remove is offered for a device never reached and linked more than 7 days ago', () {
+  test('Unlink is offered for a device never reached and linked more than 7 days ago', () {
     final at = DateTime.fromMillisecondsSinceEpoch(now);
     expect(neverReached({'last_seen': null, 'linked': now - 8 * day}, at), isTrue);
     expect(neverReached({'last_seen': null, 'linked': now - 6 * day}, at), isFalse);
@@ -48,7 +48,7 @@ void main() {
     return (s, sync, dir);
   }
 
-  testWidgets('a device never reached: the row says so, and its page offers Remove', (tester) async {
+  testWidgets('a device never reached: the row says so, and its page offers Unlink', (tester) async {
     final (s, sync, _) = await open(tester, [
       {'id': 'p1', 'name': 'Android device', 'linked': now - 9 * day, 'last_seen': null, 'via': null, 'error': 'not reachable'},
     ]);
@@ -57,24 +57,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Not reachable · Never connected since linking'), findsOneWidget);
     expect(find.text("This device hasn't connected since it was linked."), findsOneWidget);
-    await tester.ensureVisible(find.byKey(const ValueKey('device-remove')));
-    await tester.tap(find.byKey(const ValueKey('device-remove')));
+    expect(find.descendant(of: find.byKey(const ValueKey('device-unlink-never')), matching: find.text('Unlink')), findsOneWidget, reason: 'the button says Unlink');
+    await tester.ensureVisible(find.byKey(const ValueKey('device-unlink-never')));
+    await tester.tap(find.byKey(const ValueKey('device-unlink-never')));
+    await tester.pumpAndSettle();
+    // One question first: Cancel leaves it linked.
+    expect(find.text('Unlink Android device?'), findsOneWidget);
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNWidgets(2), reason: 'in the question and under the Unlink row');
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(sync.argsOf['unlink'], isNull, reason: 'Cancel does nothing');
+    await tester.tap(find.byKey(const ValueKey('device-unlink-never')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pumpAndSettle();
-    expect(sync.argsOf['unlink']!.last, {'peer': 'p1'}, reason: 'the same call Unlink makes');
+    expect(sync.argsOf['unlink']!.last, {'peer': 'p1'}, reason: 'the same call the Unlink row makes');
     expect(sync.peers, isEmpty);
     s.dispose();
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('a device linked a day ago and not reached yet has no Remove line', (tester) async {
+  testWidgets('a device linked a day ago and not reached yet has no Unlink line', (tester) async {
     final (s, _, _) = await open(tester, [
       {'id': 'p1', 'name': 'Desk', 'linked': now - day, 'last_seen': null, 'via': null, 'error': 'not reachable'},
     ]);
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('device-never')), findsNothing);
-    expect(find.byKey(const ValueKey('device-remove')), findsNothing);
+    expect(find.byKey(const ValueKey('device-unlink-never')), findsNothing);
     s.dispose();
     await tester.pumpWidget(const SizedBox());
   });
@@ -87,7 +98,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
     expect(find.text('Connected through a relay · Last seen 5 min ago'), findsOneWidget);
-    expect(find.byKey(const ValueKey('device-remove')), findsNothing);
+    expect(find.byKey(const ValueKey('device-unlink-never')), findsNothing);
     s.dispose();
     await tester.pumpWidget(const SizedBox());
   });

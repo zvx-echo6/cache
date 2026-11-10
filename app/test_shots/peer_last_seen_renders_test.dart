@@ -1,5 +1,5 @@
 // Linked devices (1.1.0): the Sharing list and a device's page when it was never reached, when it was seen 5 minutes ago through a
-// relay, and when it was never reached and linked over 7 days ago (with Remove), at 390 and 1440 points wide in Light, Dark and Tactical.
+// relay, and when it was never reached and linked over 7 days ago (with Unlink), at 390 and 1440 points wide in Light, Dark and Tactical.
 // flutter test test_shots/peer_last_seen_renders_test.dart --update-goldens  (pictures in test_shots/peer-last-seen/)
 
 import 'package:cache/screens/settings_screen.dart';
@@ -76,13 +76,19 @@ void main() {
         await snap(tester, _out, '1-list-${e.key}-${th.key}');
 
         var n = 2;
-        for (final (id, label) in [('never', 'never'), ('seen', 'seen-relay'), ('old', 'never-remove')]) {
+        for (final (id, label) in [('never', 'never'), ('seen', 'seen-relay'), ('old', 'never-unlink')]) {
           await openSharing();
           await tester.ensureVisible(find.byKey(ValueKey('peer-$id')));
           await tester.pump();
           await tester.tap(find.byKey(ValueKey('peer-$id')));
           await _settle(tester);
           await snap(tester, _out, '${n++}-$label-${e.key}-${th.key}');
+          if (id == 'old') {
+            // The one question before it is unlinked.
+            await tester.tap(find.byKey(const ValueKey('device-unlink-never')));
+            await _settle(tester);
+            await snap(tester, _out, '${n++}-unlink-question-${e.key}-${th.key}');
+          }
         }
 
         await _show(tester, const SizedBox(), e.value, th.value);

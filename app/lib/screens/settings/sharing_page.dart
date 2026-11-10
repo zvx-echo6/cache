@@ -321,7 +321,20 @@ List<Part> peerStatus(Map<String, dynamic> p) {
   return [Part(relay ? 'Connected through a relay' : 'Connected directly', Tone.ok), Part(' · $lastSeen')];
 }
 
-/// How long a linked device may go without once answering before Remove is offered by itself.
+/// Asks before a linked device is unlinked. True when the person said Unlink.
+Future<bool> confirmUnlink(BuildContext context, String name) async => await showDialog<bool>(
+  context: context,
+  builder: (ctx) => AlertDialog(
+    title: Text('Unlink $name?'),
+    content: const Text('It can no longer connect to this device. Files already here stay.'),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+      TextButton(key: const ValueKey('confirm-unlink'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Unlink')),
+    ],
+  ),
+) == true;
+
+/// How long a linked device may go without once answering before Unlink is offered by itself.
 const Duration kNeverReachedAfter = Duration(days: 7);
 
 /// A device that has not answered once since it was linked, more than a week ago (the person may well want it gone).
@@ -571,10 +584,14 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
     if (name != null && name.isNotEmpty && name != now) await _run(() => s.renamePeer(widget.peer, name));
   }
 
-  Future<void> _unlink() => _run(() async {
-    await s.unlink(widget.peer);
-    if (mounted) Navigator.of(context).pop();
-  });
+  /// Both Unlink controls (the row and the button for a device never reached) ask once first.
+  Future<void> _unlink(String name) async {
+    if (!await confirmUnlink(context, name)) return;
+    await _run(() async {
+      await s.unlink(widget.peer);
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -605,10 +622,10 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                       Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
-                        key: const ValueKey('device-remove'),
+                        key: const ValueKey('device-unlink-never'),
                         icon: Icon(Icons.link_off, size: 18, color: k.emergency),
-                        label: Text('Remove', style: TextStyle(color: k.emergency)),
-                        onPressed: _busy ? null : _unlink,
+                        label: Text('Unlink', style: TextStyle(color: k.emergency)),
+                        onPressed: _busy ? null : () => _unlink(name),
                       ),
                     ],
                   ],
@@ -652,7 +669,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                   status: const [Part('It can no longer connect to this device. Files already here stay.')],
                   statusLines: null,
                   chevron: false,
-                  onTap: _busy ? null : _unlink,
+                  onTap: _busy ? null : () => _unlink(name),
                 ),
               ],
             ),
