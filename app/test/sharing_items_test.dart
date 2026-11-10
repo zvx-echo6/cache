@@ -299,7 +299,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected directly · 2 min ago'), findsOneWidget);
+    expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));
@@ -318,6 +318,16 @@ void main() {
 
     expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
+    await tester.pumpAndSettle();
+    // One question first; Cancel leaves the device linked.
+    expect(find.text('Unlink Office?'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(r.calls('unlink'), isEmpty, reason: 'Cancel does nothing');
+    await tester.tap(find.byKey(const ValueKey('device-unlink')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pumpAndSettle();
     expect(r.calls('unlink').last, {'peer': 'p1'});

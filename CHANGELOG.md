@@ -7,6 +7,15 @@ release notes).
 ## Unreleased
 
 - Android: Cache now ships for 64-bit ARM phones only (x86 devices and Chromebooks are not supported)
+
+## 1.1.0 (build 48, test) - 2026-11-10
+
+### Fixed
+- Sharing and sync: after Cache updates on an iPhone, syncing works again (it kept looking in the app's old folders); while it rechecks a moved folder, nothing is deleted
+- Storage: free space is shown correctly on iPhone, and downloads and sync keep space in reserve and clean up if storage runs out
+
+### New
+- Sharing and sync: each linked device shows when it was last seen, and Unlink asks once to confirm
 - Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
 
 ## 1.1.0 (build 47, test) - 2026-11-09
