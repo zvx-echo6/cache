@@ -51,6 +51,8 @@ fn last_seen_survives_a_restart_and_a_rename_follows() {
 
     // B restarts: the time is still there before the first round says anything.
     let seen = peer(&b)["last_seen"].as_u64().unwrap();
+    // The round saves it just after it notes it; wait for the file before stopping.
+    wait("the time in the saved file", 30, || std::fs::read_to_string(db.join("sync.json")).map(|t| t.contains("last_seen")).unwrap_or(false));
     b.close();
     let b = engine_on(&db, "Phone", Some(b_port));
     assert!(peer(&b)["last_seen"].as_u64().is_some_and(|t| t >= seen), "last seen survives a restart");
