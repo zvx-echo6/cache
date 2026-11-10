@@ -2,6 +2,7 @@
 // what earlier versions left (kinds ticked before items existed, the Shared folder), private notebooks, Sync now for
 // everything, a kind or an item, and the linked device's page.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -387,5 +388,54 @@ void main() {
     expect(kZimNotShared, ['*.illustration.png'], reason: 'the picture read from the ZIM is made on each device');
     s.dispose();
     await r.dir.delete(recursive: true);
+  });
+
+  testWidgets('a device on another sync version: Version mismatch in its row and page, Check again, and syncing back on a match', (tester) async {
+    final r = await tester.runAsync(_rig);
+    final s = r!.make();
+    await tester.runAsync(s.setUp);
+    expect(r.configs.last['app_version'], '1.1.0', reason: 'the engine is told the app version it shows linked devices');
+    r.sync.peers.addAll([
+      {'id': 'old', 'name': 'Pixel', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 60000, 'via': 'direct', 'error': null,
+        'compat': 'peer_older', 'peer_version': null, 'our_version': '1.1.0'},
+      {'id': 'new', 'name': 'Tablet', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 60000, 'via': 'direct', 'error': null,
+        'compat': 'peer_newer', 'peer_version': '1.2.0', 'our_version': '1.1.0'},
+      {'id': 'ok', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 60000, 'via': 'direct', 'error': null, 'compat': 'ok'},
+    ]);
+    r.sync.checkResult['old'] = 'ok';
+    await tester.runAsync(s.refresh);
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
+    await tester.pump();
+
+    expect(find.textContaining('Version mismatch: Pixel needs to update Cache'), findsOneWidget);
+    expect(find.textContaining('1.0 or earlier · this device 1.1.0'), findsOneWidget);
+    expect(find.textContaining('Version mismatch: update Cache on this device to sync with Tablet'), findsOneWidget);
+    expect(find.textContaining('1.2.0 · this device 1.1.0'), findsOneWidget);
+    expect(find.text('Connected directly · 1 min ago'), findsOneWidget, reason: 'the matching device reads as before');
+
+    await tester.tap(find.byKey(const ValueKey('peer-old')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nothing syncs with Pixel until Pixel is updated'), findsOneWidget);
+    expect(tester.widget<TextButton>(find.byKey(const ValueKey('device-sync'))).onPressed, isNull, reason: 'no Sync now while they differ');
+
+    r.sync.holdCheck = Completer<void>();
+    await tester.tap(find.byKey(const ValueKey('device-check')));
+    await tester.pump();
+    expect(find.text('Checking…'), findsWidgets, reason: 'visible feedback while it asks');
+    expect(r.sync.calls.where((c) => c == 'check_version').length, 1);
+    r.sync.holdCheck!.complete();
+    r.sync.holdCheck = null;
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Version mismatch'), findsNothing, reason: 'matching again: the page is the normal one');
+    expect(tester.widget<TextButton>(find.byKey(const ValueKey('device-sync'))).onPressed, isNotNull);
+    expect(r.sync.argsOf['check_version']!.last, {'peer': 'old'});
+
+    await tester.pumpWidget(const SizedBox());
+    s.dispose();
+    await tester.runAsync(() => r.dir.delete(recursive: true));
   });
 }

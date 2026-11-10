@@ -1,6 +1,6 @@
 //! `cache-sync`: the sync engine of the app, on a desktop, from a terminal.
 //!
-//!   cache-sync --dir <folder> [--name <name>] [--port <n>] [--no-relay] [--no-dht] [--no-mdns] [--no-lookup] run
+//!   cache-sync --dir <folder> [--name <name>] [--port <n>] [--app-version <v>] [--no-relay] [--no-dht] [--no-mdns] [--no-lookup] run
 //!
 //! Runs until stopped. Every two seconds it writes `<folder>/status.json` (what the app's Sharing screen shows). Commands are
 //! files: put `{"method": "...", "args": {...}}` in `<folder>/commands/<name>.json` and the answer appears as
@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, time::Duration};
 
 fn usage() -> ! {
-    eprintln!("usage: cache-sync --dir <folder> [--name <name>] [--port <n>] [--no-relay] [--no-dht] [--no-mdns] [--no-lookup] run");
+    eprintln!("usage: cache-sync --dir <folder> [--name <name>] [--port <n>] [--app-version <v>] [--no-relay] [--no-dht] [--no-mdns] [--no-lookup] run");
     eprintln!("       cache-sync --dir <folder> call <method> [<json args>]");
     std::process::exit(2)
 }
@@ -28,6 +28,7 @@ fn main() {
             "--dir" => dir = args.next(),
             "--name" => cfg["name"] = json!(args.next().unwrap_or_else(|| usage())),
             "--port" => cfg["port"] = json!(args.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or_else(|| usage())),
+            "--app-version" => cfg["app_version"] = json!(args.next().unwrap_or_else(|| usage())),
             "--no-relay" => cfg["relay"] = json!(false),
             "--no-dht" => cfg["dht"] = json!(false),
             "--no-mdns" => cfg["mdns"] = json!(false),

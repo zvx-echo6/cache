@@ -7,6 +7,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../files.dart';
+import '../version.dart';
 import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
@@ -146,6 +147,8 @@ class SharingState extends ChangeNotifier {
         'name': deviceName,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': _reserveBytes((await supportDir()).path),
+        // Shown to linked devices, and compared by the sync gate (a different sync version stops the whole link).
+        'app_version': kAppVersion,
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
         'local_deletes': {for (final a in always) a.id: a.localDeletes},
         'last': {for (final a in always) a.id: a.last},
@@ -558,6 +561,9 @@ class SharingState extends ChangeNotifier {
 
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+
+  /// Asks one linked device for its version now (Check again on a device that differs): its `compat` afterwards ("ok" syncs at once).
+  Future<String> checkVersion(String peer) async => ((await _call('check_version', {'peer': peer}))['compat'] as String?) ?? 'unknown';
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
   /// stops sharing it, and the files stay.

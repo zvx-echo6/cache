@@ -55,6 +55,71 @@ pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
 /// The index exchange between linked devices.
 pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 
+/// The sync protocol version this build speaks, and the oldest it still syncs with. Two linked devices sync only when each one's
+/// `SYNC_PROTO` is at least the other's `SYNC_MIN_PROTO`; otherwise the whole link stops (every kind, both ways) and shows
+/// "Version mismatch" until they match again. A device that sends no version (Cache 1.0.x) counts as 1.
+///
+/// How to bump, by hand, in this one place: a change that an older device could not read or would apply wrongly (the index
+/// format's meaning, how deletes or versions merge, the file transfer) raises `SYNC_PROTO` by one, and raises `SYNC_MIN_PROTO`
+/// to the same number when older devices must be cut off. Raise only `SYNC_PROTO` when older ones still work. An added optional
+/// field that older devices ignore needs no bump.
+pub const SYNC_PROTO: u32 = 2;
+/// The oldest `SYNC_PROTO` this build syncs with (see [`SYNC_PROTO`]).
+pub const SYNC_MIN_PROTO: u32 = 2;
+
+/// Whether a device that speaks `proto` and accepts down to `min` can sync with this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Compat {
+    /// Not heard from since this version started: gated until it answers.
+    #[default]
+    Unknown,
+    Ok,
+    /// The other device is too old for this one.
+    PeerOlder,
+    /// This device is too old for the other one.
+    PeerNewer,
+}
+
+impl Compat {
+    fn of(proto: u32, min: u32) -> Compat {
+        if proto < SYNC_MIN_PROTO {
+            Compat::PeerOlder
+        } else if SYNC_PROTO < min {
+            Compat::PeerNewer
+        } else {
+            Compat::Ok
+        }
+    }
+
+    fn mismatch(self) -> bool {
+        matches!(self, Compat::PeerOlder | Compat::PeerNewer)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Compat::Unknown => "unknown",
+            Compat::Ok => "ok",
+            Compat::PeerOlder => "peer_older",
+            Compat::PeerNewer => "peer_newer",
+        }
+    }
+}
+
+/// What a request on [`SYNC_ALPN`] says: `index/<proto>/<min>` or `secrets/<proto>/<min>`; the bare `index` of 1.0 has no version.
+fn parse_ask(ask: &[u8]) -> (String, Option<(u32, u32)>) {
+    let text = String::from_utf8_lossy(ask);
+    let mut it = text.split('/');
+    let kind = it.next().unwrap_or("").to_string();
+    let ver = match (it.next().and_then(|p| p.parse().ok()), it.next().and_then(|m| m.parse().ok())) {
+        (Some(p), Some(m)) => Some((p, m)),
+        _ => None,
+    };
+    (kind, ver)
+}
+
+/// The error a 1.0 device gets (it shows "Not reachable" and fetches nothing); the text lands in its log.
+const MISMATCH_ERROR: &[u8] = b"version mismatch: update Cache";
+
 /// A transfer with no new data for this long is dropped and retried in the next round (from its verified chunks).
 const STALL: Duration = Duration::from_secs(20);
 /// A file changed less than this long ago is still being written and waits for a later round.
@@ -152,6 +217,12 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// The app's version, shown to linked devices ("1.1.0"); this crate's own version when absent.
+    #[serde(default)]
+    pub app_version: Option<String>,
+    /// Tests only (the `test-hooks` feature): behave as Cache 1.0.x does, sending no version and gating nothing.
+    #[serde(default)]
+    pub legacy_proto: bool,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -333,6 +404,14 @@ struct RemoteIndex {
     /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
+    /// The sender's sync protocol version and the oldest it syncs with ([`SYNC_PROTO`]); 1.0 sends neither (it counts as 1), and
+    /// its app version for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proto: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_proto: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    app_version: Option<String>,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -372,6 +451,11 @@ struct PeerState {
     via: Option<String>,
     error: Option<String>,
     index: Option<RemoteIndex>,
+    /// Whether it can sync with this version, as of its last answer (a mismatch keeps no index, and is not asked again until the
+    /// app opens again, the person checks, or the device itself asks us with a matching version).
+    compat: Compat,
+    proto: Option<u32>,
+    ver: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -406,12 +490,22 @@ impl Run {
 #[derive(Debug)]
 struct Gate {
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    /// The linked devices known to speak a compatible version: only they may fetch files ([`Inner::compatible`]).
+    compatible: Arc<RwLock<HashSet<EndpointId>>>,
+    /// Tests only: gate nothing, as 1.0 does.
+    legacy: bool,
 }
 
 impl EndpointHooks for Gate {
     async fn after_handshake<'a>(&'a self, conn: &'a Connection) -> AfterHandshakeOutcome {
-        if conn.alpn() == PAIR_ALPN || self.allowed.read().map(|a| a.contains(&conn.remote_id())).unwrap_or(false) {
+        let id = conn.remote_id();
+        let linked = self.allowed.read().map(|a| a.contains(&id)).unwrap_or(false);
+        // Files (blobs) go only to a device known to be compatible; the file list and the keys are gated in the request itself.
+        let files_ok = conn.alpn() != iroh_blobs::ALPN || self.legacy || self.compatible.read().map(|a| a.contains(&id)).unwrap_or(false);
+        if conn.alpn() == PAIR_ALPN || (linked && files_ok) {
             AfterHandshakeOutcome::accept()
+        } else if linked {
+            AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(409), reason: MISMATCH_ERROR.to_vec() }
         } else {
             AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(403), reason: b"not linked".to_vec() }
         }
@@ -428,6 +522,13 @@ struct Inner {
     store: FsStore,
     saved: Mutex<Saved>,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    /// The linked devices that last spoke a compatible version (set from their requests and our own checks; in memory only, so
+    /// empty at start: unknown is gated).
+    compatible: Arc<RwLock<HashSet<EndpointId>>>,
+    /// [`Config::app_version`].
+    app_version: String,
+    /// [`Config::legacy_proto`] (tests only).
+    legacy: bool,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
     run: Mutex<Run>,
@@ -1172,6 +1273,112 @@ impl Inner {
             link,
             links: true,
             secrets,
+            proto: (!self.legacy).then_some(SYNC_PROTO),
+            min_proto: (!self.legacy).then_some(SYNC_MIN_PROTO),
+            app_version: (!self.legacy).then(|| self.app_version.clone()),
+        }
+    }
+
+    /// This device's file list with nothing in it, for a device whose version cannot sync with this one but speaks versions
+    /// (so it learns ours and can say so).
+    fn header_only(&self) -> RemoteIndex {
+        RemoteIndex {
+            name: self.saved.lock().unwrap().name.clone(),
+            shares: Vec::new(),
+            free_bytes: None,
+            link: None,
+            links: true,
+            secrets: None,
+            proto: Some(SYNC_PROTO),
+            min_proto: Some(SYNC_MIN_PROTO),
+            app_version: Some(self.app_version.clone()),
+        }
+    }
+
+    /// What `peer`'s request told us of its version: it may fetch files while it is compatible, and a device that was in
+    /// mismatch and now speaks a matching version is asked again at once (it has updated).
+    fn note_peer_compat(&self, peer: &str, compat: Compat) {
+        let Ok(id) = peer.parse::<EndpointId>() else { return };
+        if compat == Compat::Ok {
+            self.compatible.write().unwrap().insert(id);
+            let mut run = self.run.lock().unwrap();
+            if let Some(st) = run.peers.get_mut(peer) {
+                if st.compat.mismatch() {
+                    st.compat = Compat::Unknown;
+                    drop(run);
+                    self.wake.notify_one();
+                }
+            }
+        } else {
+            self.compatible.write().unwrap().remove(&id);
+        }
+    }
+
+    /// Asks `p` for its file list and records the answer: its version, whether it can sync with this one, and (when it can) its
+    /// file list, its copy of the link and its keys. A device that cannot keeps no file list here, so nothing from it is used.
+    async fn refresh_peer(&self, p: &Peer) {
+        let res = self.fetch_index(&p.id).await;
+        let mut asks = None;
+        let mut learned = None;
+        {
+            let mut run = self.run.lock().unwrap();
+            let st = run.peers.entry(p.id.clone()).or_default();
+            match res {
+                Ok((idx, via)) => {
+                    st.last_seen = Some(now_ms());
+                    learned = Some((idx.name.clone(), via.clone()));
+                    st.via = Some(via);
+                    st.error = None;
+                    st.proto = Some(idx.proto.unwrap_or(1));
+                    st.ver = idx.app_version.clone();
+                    st.compat = if self.legacy { Compat::Ok } else { Compat::of(idx.proto.unwrap_or(1), idx.min_proto.unwrap_or(1)) };
+                    if let Ok(id) = p.id.parse::<EndpointId>() {
+                        if st.compat == Compat::Ok {
+                            self.compatible.write().unwrap().insert(id);
+                        } else {
+                            self.compatible.write().unwrap().remove(&id);
+                        }
+                    }
+                    if st.compat == Compat::Ok {
+                        asks = Some((idx.link.clone(), idx.secrets.clone()));
+                        st.index = Some(idx);
+                    } else {
+                        st.index = None;
+                    }
+                }
+                Err(e) => {
+                    st.via = None;
+                    st.error = Some(format!("{e:#}"));
+                }
+            }
+        }
+        if let Some((name, via)) = learned {
+            // Saved with the time and the name the device gave itself, so "last seen" survives a restart and a rename shows.
+            let changed = {
+                let mut sv = self.saved.lock().unwrap();
+                sv.peers.iter_mut().find(|x| x.id == p.id).map(|sp| sp.seen(now_ms(), &via) | sp.adopt_name(&name)).unwrap_or(false)
+            };
+            if changed {
+                let _ = self.save();
+            }
+        }
+        let Some((link, secrets)) = asks else { return };
+        if self.legacy {
+            return;
+        }
+        if let Some(l) = link {
+            self.adopt_link(&p.id, l);
+        }
+        if let Some(d) = secrets {
+            let have = self.received.lock().unwrap().get(&p.id).map(|(x, _)| x.clone());
+            if have.as_deref() != Some(d.as_str()) {
+                match self.fetch_secrets(&p.id).await {
+                    Ok(m) => {
+                        self.received.lock().unwrap().insert(p.id.clone(), (secrets_digest(&m), Some(m)));
+                    }
+                    Err(e) => self.note(format!("Keys from {}: {e:#}", p.name)),
+                }
+            }
         }
     }
 
@@ -1210,7 +1417,7 @@ impl Inner {
             .map_err(|_| anyhow!("not reachable"))?
             .map_err(|e| anyhow!("not reachable: {e}"))?;
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        send.write_all(b"secrets").await.map_err(|e| anyhow!("{e}"))?;
+        send.write_all(&self.ask("secrets")).await.map_err(|e| anyhow!("{e}"))?;
         send.finish().map_err(|e| anyhow!("{e}"))?;
         let bytes = tokio::time::timeout(Duration::from_secs(30), recv.read_to_end(1024 * 1024))
             .await
@@ -1292,52 +1499,13 @@ impl Inner {
             if !self.may_use_network() {
                 break;
             }
-            let res = self.fetch_index(&p.id).await;
-            let mut asks = None;
-            let mut learned = None;
-            {
-                let mut run = self.run.lock().unwrap();
-                let st = run.peers.entry(p.id.clone()).or_default();
-                match res {
-                    Ok((idx, via)) => {
-                        st.last_seen = Some(now_ms());
-                        learned = Some((idx.name.clone(), via.clone()));
-                        st.via = Some(via);
-                        st.error = None;
-                        asks = Some((idx.link.clone(), idx.secrets.clone()));
-                        st.index = Some(idx);
-                    }
-                    Err(e) => {
-                        st.via = None;
-                        st.error = Some(format!("{e:#}"));
-                    }
-                }
+            // A device whose version cannot sync with this one is checked once (when the app opens) and when the person asks
+            // (`check_version`), not every round; the others keep the normal schedule.
+            let skip = self.run.lock().unwrap().peers.get(&p.id).map(|st| st.compat.mismatch()).unwrap_or(false);
+            if skip && !self.legacy {
+                continue;
             }
-            if let Some((name, via)) = learned {
-                // Saved with the time and the name the device gave itself, so "last seen" survives a restart and a rename shows.
-                let changed = {
-                    let mut sv = self.saved.lock().unwrap();
-                    sv.peers.iter_mut().find(|x| x.id == p.id).map(|sp| sp.seen(now_ms(), &via) | sp.adopt_name(&name)).unwrap_or(false)
-                };
-                if changed {
-                    let _ = self.save();
-                }
-            }
-            let Some((link, secrets)) = asks else { continue };
-            if let Some(l) = link {
-                self.adopt_link(&p.id, l);
-            }
-            if let Some(d) = secrets {
-                let have = self.received.lock().unwrap().get(&p.id).map(|(x, _)| x.clone());
-                if have.as_deref() != Some(d.as_str()) {
-                    match self.fetch_secrets(&p.id).await {
-                        Ok(m) => {
-                            self.received.lock().unwrap().insert(p.id.clone(), (secrets_digest(&m), Some(m)));
-                        }
-                        Err(e) => self.note(format!("Keys from {}: {e:#}", p.name)),
-                    }
-                }
-            }
+            self.refresh_peer(p).await;
         }
         let mut paused = None;
         for p in &peers {
@@ -1370,6 +1538,15 @@ impl Inner {
         }
     }
 
+    /// A request on [`SYNC_ALPN`] with this version in it (1.0's has none).
+    fn ask(&self, kind: &str) -> Vec<u8> {
+        if self.legacy {
+            kind.as_bytes().to_vec()
+        } else {
+            format!("{kind}/{SYNC_PROTO}/{SYNC_MIN_PROTO}").into_bytes()
+        }
+    }
+
     async fn fetch_index(&self, peer: &str) -> Result<(RemoteIndex, String)> {
         let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
         let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
@@ -1378,7 +1555,7 @@ impl Inner {
             .map_err(|e| anyhow!("not reachable: {e}"))?;
         let via = conn.paths().iter().find(|p| p.is_selected()).map(|p| if p.is_relay() { "relay" } else { "direct" }).unwrap_or("direct").to_string();
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        send.write_all(b"index").await.map_err(|e| anyhow!("{e}"))?;
+        send.write_all(&self.ask("index")).await.map_err(|e| anyhow!("{e}"))?;
         send.finish().map_err(|e| anyhow!("{e}"))?;
         let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(MAX_INDEX))
             .await
@@ -1732,7 +1909,25 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
-        if ask == b"secrets" {
+        let (kind, ver) = parse_ask(&ask);
+        let legacy = self.0.legacy;
+        let compat = if legacy { Compat::Ok } else { Compat::of(ver.map(|v| v.0).unwrap_or(1), ver.map(|v| v.1).unwrap_or(1)) };
+        if !legacy {
+            self.0.note_peer_compat(&peer, compat);
+        }
+        if compat != Compat::Ok {
+            // A device whose version cannot sync with this one gets none of this device's files, list or keys. One that sends
+            // a version (a newer Cache) is told ours; 1.0, which sends none, gets an error it shows as "Not reachable".
+            if ver.is_some() {
+                send.write_all(&serde_json::to_vec(&self.0.header_only()).unwrap_or_default()).await.map_err(AcceptError::from_err)?;
+                send.finish()?;
+                conn.closed().await;
+            } else {
+                conn.close(VarInt::from_u32(409), MISMATCH_ERROR);
+            }
+            return Ok(());
+        }
+        if kind == "secrets" {
             // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
             let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
             send.write_all(&serde_json::to_vec(&mine).unwrap_or_default()).await.map_err(AcceptError::from_err)?;
@@ -1786,7 +1981,11 @@ impl SyncEngine {
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
 
-        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone()).hooks(Gate { allowed: allowed.clone() });
+        let compatible: Arc<RwLock<HashSet<EndpointId>>> = Arc::default();
+        let legacy = cfg!(feature = "test-hooks") && cfg.legacy_proto;
+        let mut b = Endpoint::builder(presets::Minimal)
+            .secret_key(secret.clone())
+            .hooks(Gate { allowed: allowed.clone(), compatible: compatible.clone(), legacy });
         b = if !cfg.relay {
             b.relay_mode(RelayMode::Disabled)
         } else if !cfg.relay_urls.is_empty() {
@@ -1842,6 +2041,9 @@ impl SyncEngine {
             store: store.clone(),
             saved: Mutex::new(saved),
             allowed,
+            compatible,
+            app_version: cfg.app_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+            legacy,
             pairing: Mutex::new(None),
             run: Mutex::new(Run::default()),
             wanted,
@@ -1946,6 +2148,9 @@ impl SyncEngine {
                     inner.allowed.write().unwrap().remove(&k);
                 }
                 inner.run.lock().unwrap().peers.remove(&id);
+                if let Ok(k) = id.parse::<EndpointId>() {
+                    inner.compatible.write().unwrap().remove(&k);
+                }
                 inner.secrets.lock().unwrap().remove(&id);
                 inner.received.lock().unwrap().remove(&id);
                 inner.save()?;
@@ -2128,6 +2333,18 @@ impl SyncEngine {
                 });
                 Ok(json!({"ok": true}))
             }
+            "check_version" => {
+                // Asks one linked device now for its version, even when it was found to differ (the person's Check again); when
+                // the versions match it is synced at once. Answers what the status says of it.
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let p = inner.saved.lock().unwrap().peers.iter().find(|p| p.id == id).cloned().ok_or_else(|| anyhow!("that device is not linked"))?;
+                self.rt.block_on(inner.refresh_peer(&p));
+                let st = inner.run.lock().unwrap().peers.get(&id).cloned().unwrap_or_default();
+                if st.compat == Compat::Ok {
+                    inner.wake.notify_one();
+                }
+                Ok(json!({"ok": st.error.is_none(), "compat": st.compat.label(), "peer_version": st.ver, "error": st.error}))
+            }
             "sync_now" => {
                 // With no scope, a round of everything now. With one, a round of just that (one device, some shared folders,
                 // some paths in them) on its own, after any round running now: what Sync now on a device, a kind or an item does.
@@ -2300,6 +2517,9 @@ impl SyncEngine {
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
+                    "compat": st.compat.label(),
+                    // A 1.0 device sends no version: null, the app says "1.0 or earlier".
+                    "peer_version": st.ver, "peer_proto": st.proto, "our_version": inner.app_version,
                 })
             })
             .collect();
@@ -2477,5 +2697,30 @@ mod peer_tests {
         let mut p: Peer = serde_json::from_str(old).unwrap();
         assert!(p.adopt_name("Pixel nine"));
         assert_eq!(p.name, "Pixel nine");
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn the_range_decides() {
+        // This build: SYNC_MIN_PROTO..=SYNC_PROTO. No version (1.0) is 1, so it is too old.
+        assert_eq!(Compat::of(SYNC_PROTO, SYNC_MIN_PROTO), Compat::Ok);
+        assert_eq!(Compat::of(1, 1), Compat::PeerOlder);
+        assert_eq!(Compat::of(SYNC_MIN_PROTO - 1, 1), Compat::PeerOlder);
+        // A newer device that still accepts down to this one's version works; one that does not is the newer.
+        assert_eq!(Compat::of(SYNC_PROTO + 1, SYNC_PROTO), Compat::Ok);
+        assert_eq!(Compat::of(SYNC_PROTO + 1, SYNC_PROTO + 1), Compat::PeerNewer);
+    }
+
+    #[test]
+    fn requests_carry_the_version() {
+        assert_eq!(parse_ask(b"index"), ("index".to_string(), None));
+        assert_eq!(parse_ask(b"index/2/2"), ("index".to_string(), Some((2, 2))));
+        assert_eq!(parse_ask(b"secrets/3/1"), ("secrets".to_string(), Some((3, 1))));
+        assert_eq!(parse_ask(b"index/x/2").1, None);
+        assert_eq!(parse_ask(b"secrets").0, "secrets");
     }
 }

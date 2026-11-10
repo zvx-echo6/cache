@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cache/sharing/sharing_state.dart';
 
 /// A sync engine with no network: remembers shares and peers, and answers like the real one.
@@ -13,6 +15,12 @@ class FakeSync implements SyncCoreLike {
   /// The free space and the kept-free reserve `status` answers.
   int freeBytes = 10 << 30;
   int reserveBytes = 1 << 30;
+
+  /// What the next `check_version` finds, by device (its `compat`); a device not listed keeps what it has.
+  final checkResult = <String, String>{};
+
+  /// When set, `check_version` waits for it (a check still going).
+  Completer<void>? holdCheck;
 
   /// This device's key.
   String id = 'me';
@@ -61,6 +69,12 @@ class FakeSync implements SyncCoreLike {
           'link': {'mode': 'off', 'ask': true}, 'link_t': 0,
         });
         return {'ok': true, 'peer': 'peer1', 'name': 'Desk'};
+      case 'check_version':
+        final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+        if (p == null) throw Exception('that device is not linked');
+        if (holdCheck != null) await holdCheck!.future;
+        p['compat'] = checkResult[args['peer']] ?? p['compat'] ?? 'unknown';
+        return {'ok': true, 'compat': p['compat'], 'peer_version': p['peer_version']};
       case 'share_add':
         // Like the engine: the same id again re-points the share (its name stays).
         final have = shares.where((s) => s['id'] == args['id']).firstOrNull;
