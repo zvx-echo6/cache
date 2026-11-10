@@ -66,7 +66,7 @@ xz2 = { version = "0.1.7", features = ["static"] }
 # the same client as cache_live, cache_layers and cache_video. NOT reqwest: its rustls feature verifies with the platform
 # verifier, which on Android needs the JVM handed to it and so fails in a Dart FFI library.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
-# The public-address guard on the client (installed only by the Linux server's helper; the web read always has it).
+# The public-address guard on the client (the model's web read always has it, on every platform; the search provider's own endpoint does not).
 cache_netguard = { path = "../cache_netguard" }
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1" }
