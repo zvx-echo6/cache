@@ -26,6 +26,9 @@ test = false
 cache_embed = { path = "../packages/cache_search/native/cache_embed" }
 # The device identity (the iroh key pair in <data>/sync/identity.key); its id names this server's Bookshelves log. Nothing else of cache_sync is used.
 cache_sync = { path = "../packages/cache_search/native/cache_sync" }
+# The public-address guard: the one address rule and connect-time resolver, shared with the core crates; the server also names the
+# environment variable that installs it in the helper.
+cache_netguard = { path = "../packages/cache_search/native/cache_netguard" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "signal", "process", "io-util", "sync", "fs"] }

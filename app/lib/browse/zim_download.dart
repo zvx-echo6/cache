@@ -4,12 +4,13 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../chat/ask_focus.dart';
 import '../net/fetch.dart' show kUserAgent;
 import 'free_space.dart';
 
-export 'free_space.dart' show freeBytesOnDisk;
+export 'free_space.dart' show allowedBytesOnDisk, freeBytesOnDisk;
 
 /// Why a download stopped, in words for people.
 class DownloadException implements Exception {
@@ -89,11 +90,18 @@ class DownloadResult {
 /// checks free space first, reports progress and can be cancelled.
 class ZimDownloader {
   ZimDownloader({
-    this.freeSpace = freeBytesOnDisk,
+    this.freeSpace = allowedBytesOnDisk,
     HttpClient Function()? clientFactory,
+    @visibleForTesting this.writeChunk = _writeChunk,
   }) : _clientFactory = clientFactory ?? _defaultClient;
 
+  /// The free space a download may use (the pre-check: see [usableBytesOnDisk]).
   final FreeSpace freeSpace;
+
+  /// Writes one chunk of the body; tests give one that fails the way a full disk does.
+  final Future<void> Function(RandomAccessFile file, List<int> chunk) writeChunk;
+
+  static Future<void> _writeChunk(RandomAccessFile file, List<int> chunk) => file.writeFrom(chunk);
   final HttpClient Function() _clientFactory;
 
   static HttpClient _defaultClient() => HttpClient()
@@ -196,9 +204,15 @@ class ZimDownloader {
       );
     } on FileSystemException catch (e) {
       final full = (e.osError?.errorCode ?? 0) == 28;
+      if (full) {
+        // A full disk stops the write; the part written so far goes, so it does not keep the little room that is left.
+        try {
+          part.deleteSync();
+        } catch (_) {}
+      }
       throw DownloadException(
         full
-            ? 'The device is out of space. Free some and try again.'
+            ? 'The device is out of space, so the download stopped and the part already saved was removed. Free some space and try again.'
             : 'Could not write the file: ${e.message}',
         code: full ? 'no_space' : 'failed',
       );
@@ -376,7 +390,7 @@ class ZimDownloader {
         // lasts at most [kAskHoldMax] at a time, one chunk goes by after each, so the connection never sits silent long enough for
         // the server to drop it.
         await askIdle(worker: 'Downloads', maxWait: kAskHoldMax);
-        await raf.writeFrom(chunk);
+        await writeChunk(raf, chunk);
         done += chunk.length;
         final now = DateTime.now();
         if (now.difference(lastReport).inMilliseconds >= 250) {

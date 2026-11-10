@@ -66,6 +66,8 @@ xz2 = { version = "0.1.7", features = ["static"] }
 # the same client as cache_live, cache_layers and cache_video. NOT reqwest: its rustls feature verifies with the platform
 # verifier, which on Android needs the JVM handed to it and so fails in a Dart FFI library.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# The public-address guard on the client (installed only by the Linux server's helper; the web read always has it).
+cache_netguard = { path = "../cache_netguard" }
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1" }
 shard = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
@@ -87,6 +89,8 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+# Loopback hooks for the guard tests; a dev-dependency only, so a release build never has them.
+cache_netguard = { path = "../cache_netguard", features = ["test-hooks"] }
 # Test-only: builds a real partial snapshot locally with Qdrant's own segment snapshot code (same rev, already in
 # the lockfile through edge).
 segment = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }

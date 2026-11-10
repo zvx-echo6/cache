@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../app_fs.dart';
+import '../desktop/desktop.dart';
 import '../theme.dart';
 
 /// One adaptive system, three width classes, measured on the window (not the device), so iPad Split View and Android multi-window
@@ -205,7 +206,7 @@ class TwoPaneState extends State<TwoPane> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  width: desktop ? kDesktopListWidth : listPaneWidth(width),
+                  width: DesktopMetrics.of(context)?.listWidth ?? (desktop ? kDesktopListWidth : listPaneWidth(width)),
                   // A hidden list is out of reach: no taps, and a screen reader skips it. Shown, it is a semantics container of its
                   // own beside the detail's (below), so the detail page's route barrier, which blocks the semantics of whatever
                   // was painted before it in its container, cannot take the list out of the screen reader's reach.
@@ -382,6 +383,15 @@ class ContentWidth extends StatelessWidget {
   );
 }
 
+/// Side padding for a Settings page's rows on a page [width] wide: [ContentWidth.padFor] (centred, at most [kContentMaxWidth]),
+/// except in Cache on Linux's desktop window, where the rows sit left-aligned under the title, at most
+/// [DesktopMetrics.formMaxWidth] wide.
+EdgeInsets settingsDetailPad(BuildContext context, double width, {double min = 16}) {
+  final m = DesktopMetrics.of(context);
+  if (m == null) return ContentWidth.padFor(width, min: min);
+  return EdgeInsets.only(left: m.gutter, right: (width - m.gutter - DesktopMetrics.formMaxWidth).clamp(m.gutter, double.infinity).toDouble());
+}
+
 /// A bottom sheet that fits any window: as tall as its content, up to the window's height (less the status bar), and scrolling
 /// when the content is taller (a phone held sideways), so no choice is ever off the screen. 560 wide at most, as every sheet.
 Future<T?> showFittedSheet<T>({
@@ -493,6 +503,24 @@ bool paneShowsDesktopInitial(BuildContext context) {
   final pane = _PaneScope.of(context);
   return pane != null && pane.inList && pane.state._builder == null && pane.state.widget.desktopInitial != null && isDesktop(context);
 }
+
+/// Set by a pane that holds an index list of its own (the Library's list panes): its rows are drawn flat on the Linux desktop.
+class FlatRows extends InheritedWidget {
+  const FlatRows({super.key, required this.flat, required super.child});
+
+  final bool flat;
+
+  static bool of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<FlatRows>()?.flat ?? false;
+
+  @override
+  bool updateShouldNotify(FlatRows old) => flat != old.flat;
+}
+
+/// The rows here are an index list on the Linux desktop (a [TwoPane]'s list or a [FlatRows] pane): flat 52-pixel rows.
+bool flatListRows(BuildContext context) => isLinuxDesktop(context) && (inPaneList(context) || FlatRows.of(context));
+
+/// This widget is in the list of a [TwoPane] (not its detail).
+bool inPaneList(BuildContext context) => _PaneScope.of(context)?.inList ?? false;
 
 /// Item [key] is the one shown in the detail pane beside this list (its row is marked).
 bool isPaneSelected(BuildContext context, Object key) {

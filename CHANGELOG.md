@@ -9,6 +9,16 @@ release notes).
 - Ask: other apps are much less likely to be closed while Ask loads and answers, and answers start sooner: the model is read in gently after it loads, and background work pauses while Ask answers
 - Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
 
+## 1.1.0 (build 48, test) - 2026-11-10
+
+### Fixed
+- Sharing and sync: after Cache updates on an iPhone, syncing works again (it kept looking in the app's old folders); while it rechecks a moved folder, nothing is deleted
+- Storage: free space is shown correctly on iPhone, and downloads and sync keep space in reserve and clean up if storage runs out
+
+### New
+- Sharing and sync: each linked device shows when it was last seen, and Unlink asks once to confirm
+- Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
+
 ## 1.1.0 (build 47, test) - 2026-11-09
 
 This build covers everything new since the public release 1.0.29.

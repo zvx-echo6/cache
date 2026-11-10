@@ -38,6 +38,7 @@ import 'catalogue_screen.dart' show AddToLibraryScreen;
 import 'browse_state.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/discover_screen.dart';
+import 'free_space.dart' show freeBytesOnDisk;
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
@@ -280,7 +281,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
-  int? get _free => b.device != null ? b.device!.spaceForDialog.usable : b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
+  int? get _free => b.device != null ? b.device!.spaceForDialog.free : freeBytesOnDisk(sources.zimsDir?.path ?? '.');
 
   LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome, bool parts = true}) {
     final id = sources.idOf(z);
@@ -306,6 +307,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
         } else if (mounted) {
           _say('Choose a picture (PNG, JPEG, WebP or GIF).');
         }
+      },
+      getIcon: b.device != null ? null : () async {
+        _say('Getting icon…');
+        final got = await b.getIconFromSource(z);
+        await FileImage(File('${z.path}.icon.png')).evict();
+        await FileImage(File('${z.path}.illustration.png')).evict();
+        if (!mounted) return;
+        setState(() {});
+        _say(got ? 'Icon updated' : 'No icon found at the source');
       },
       addToHome: addToHome ??
           (layout == null || id == null

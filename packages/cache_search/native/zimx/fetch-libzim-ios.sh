@@ -25,7 +25,7 @@ ok() { [ -f "$tgz" ] && [ "$(hash5 "$tgz")" = "$md5" ] && [ "$(hash256 "$tgz")" 
 if ! ok; then
   # Retry interrupted transfers from the official release server. Checksums
   # below remain mandatory before any archive can be used.
-  curl -fsSL --retry 4 --retry-all-errors --retry-delay 5 \
+  curl -fsSL --http1.1 -C - --retry 40 --retry-all-errors --retry-delay 5 \
     --connect-timeout 30 --speed-limit 1024 --speed-time 120 -o "$tgz" "$url"
   ok || { rm -f "$tgz"; echo "checksum mismatch for $name (want md5 $md5, sha256 $sha256)" >&2; exit 1; }
 fi

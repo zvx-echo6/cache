@@ -256,8 +256,14 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   SyncTargetConfig? _shareTarget() {
     final have = _targets.where((t) => t.kind == SyncKind.share).firstOrNull;
-    if (have != null) return have;
     final d = shareFolder?.call();
+    if (have != null) {
+      // The app's folder path changes across iOS installs and updates: the saved one is re-rooted at the current folder.
+      if (d == null || d.path == have.path) return have;
+      final moved = SyncTargetConfig(id: have.id, kind: have.kind, path: d.path, paused: have.paused, display: have.display, importTag: have.importTag);
+      _targets = [for (final t in _targets) t.id == have.id ? moved : t];
+      return moved;
+    }
     if (d == null) return null;
     final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path);
     _targets = [..._targets, t];
