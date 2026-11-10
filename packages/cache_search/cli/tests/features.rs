@@ -408,11 +408,11 @@ fn live_data_through_cs_tool_numbers_and_continues_after_search() {
     assert!(outs[3]["content"].as_str().unwrap().contains("[14] "), "{}", outs[3]["content"]);
     // 5. and live_data after it still has its old numbers
     assert_eq!(outs[4]["content"], outs[1]["content"]);
-    // a repeated call numbers nothing new; the whole id map is the search hit, 12 live items and the 3 later hits
+    // a repeated call numbers nothing new; the whole id map is the search hit, 12 live items and the 5 later hits
     assert_eq!(outs[2]["ids"], json!([]));
     let map = serde_json::from_str::<Value>(&conv.ids().unwrap()).unwrap();
     let ns: Vec<u64> = map["ids"].as_array().unwrap().iter().map(|i| i["n"].as_u64().unwrap()).collect();
-    assert_eq!(ns, (1..=16).collect::<Vec<u64>>());
+    assert_eq!(ns, (1..=18).collect::<Vec<u64>>());
     assert_eq!(map["ids"][1]["address"], "live:weather/home/now");
 
     // a fresh conversation numbers from [1]; the CLI gives the same bytes as serve and the C ABI for it

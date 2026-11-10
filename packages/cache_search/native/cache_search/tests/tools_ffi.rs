@@ -185,7 +185,7 @@ fn the_search_line_is_the_tool_message_of_cs_format() {
     // same results.
     let f = Fx::new("same");
     let raw: Value = serde_json::from_str(
-        &take(unsafe { cs_search(f.h, cstr("sesquipedalian").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) }).unwrap(),
+        &take(unsafe { cs_search(f.h, cstr("sesquipedalian").as_ptr(), cstr(r#"{"k":5}"#).as_ptr()) }).unwrap(),
     )
     .unwrap();
     let want = f.format(&raw["results"].to_string());
