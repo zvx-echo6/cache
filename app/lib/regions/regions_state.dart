@@ -5,11 +5,13 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../app_fs.dart';
 import '../browse/zim_download.dart';
 import '../files.dart';
 import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
+import '../platform.dart' as plat;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
 import '../settings/data_policy.dart';
@@ -601,15 +603,25 @@ class RegionsState extends ChangeNotifier {
 
   Future<File> _appFile() async => File('${(await supportDir()).path}/$kRegionsAppFile');
 
+  /// In a browser the app's folders are on Cache Server, reached through the folder seam (the same file there).
+  late final AppFs _webFs = createAppFs();
+
+  /// The text of regions-app.json; null when it is not there.
+  Future<String?> _readAppFile() async {
+    if (plat.isWeb) return _webFs.readString(AppRoot.support, kRegionsAppFile);
+    final f = await _appFile();
+    return await f.exists() ? f.readAsString() : null;
+  }
+
   /// Reads what the regions hold and starts the core's region engine.
   Future<void> init() async {
     if (_started) return;
     _started = true;
     maps.addListener(_onMaps);
     try {
-      final f = await _appFile();
-      if (await f.exists()) {
-        final j = (jsonDecode(await f.readAsString()) as Map).cast<String, dynamic>();
+      final text = await _readAppFile();
+      if (text != null) {
+        final j = (jsonDecode(text) as Map).cast<String, dynamic>();
         for (final e in ((j['regions'] as Map?) ?? const {}).entries) {
           _kept[e.key as String] = _Kept.fromJson(e.key as String, (e.value as Map).cast<String, dynamic>());
         }
@@ -619,11 +631,11 @@ class RegionsState extends ChangeNotifier {
       }
     } catch (_) {}
     try {
-      _offroadPath = (await offroadDir()).path;
+      if (!plat.isWeb) _offroadPath = (await offroadDir()).path;
     } catch (_) {}
     try {
-      final support = await supportDir();
-      _core = await _opener(regionsConfig(support, routingBaseUrl: baseUrl, placesBaseUrl: placesBaseUrl));
+      // A browser's engine is the server's, which opens it on its own folders: the config is not used there.
+      _core = await _opener(plat.isWeb ? const {} : regionsConfig(await supportDir(), routingBaseUrl: baseUrl, placesBaseUrl: placesBaseUrl));
     } catch (e) {
       routingUnavailable = e is CacheSearchException ? e.message : 'Road routing downloads are not available: $e';
       notifyListeners();
@@ -713,6 +725,7 @@ class RegionsState extends ChangeNotifier {
       return;
     }
     _asked.removeWhere((id) => _statusOf(id) != null);
+    if (plat.isWeb) await _syncServerPacks(c);
     _schedulePoll();
     await _routingCheck();
     _placesCheck();
@@ -768,7 +781,8 @@ class RegionsState extends ChangeNotifier {
     final busy = watching ||
         _routingRegions.any((r) => r['state'] == 'downloading') ||
         _kept.values.any((k) => (k.routing || k.places) && _statusOf(k.id) == null) ||
-        placesUpdate?['downloading'] == true;
+        placesUpdate?['downloading'] == true ||
+        (plat.isWeb && _packRuns.values.any((r) => r.running));
     if (busy && _poll == null) {
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => refresh());
     } else if (!busy) {
@@ -913,7 +927,11 @@ class RegionsState extends ChangeNotifier {
     return byPath.values.toList()..sort((a, b) => a.name.compareTo(b.name));
   }
 
+  /// The packs the server says it has (a browser asks it: the files are not here).
+  final Set<String> _webOnDisk = {};
+
   bool _packOnPhone(String path) {
+    if (plat.isWeb) return _webOnDisk.contains(path);
     final dir = _offroadPath;
     return dir != null && File('$dir/$path').existsSync();
   }
@@ -992,7 +1010,7 @@ class RegionsState extends ChangeNotifier {
     }
     final packs = packsCovering(all, bounds);
     if (packs.isEmpty) return (null, null);
-    _offroadPath ??= (await offroadDir()).path;
+    if (!plat.isWeb) _offroadPath ??= (await offroadDir()).path;
     if (maps.engine.layer(kOffroadElevationLayer) == null) return (null, 'Off-road needs the Elevation map layer, which is not installed.');
     final out = <OffroadPackPlan>[];
     for (final p in packs) {
@@ -1093,6 +1111,7 @@ class RegionsState extends ChangeNotifier {
   /// Downloads one pack into the off-road folder: under a hidden name, checked against its SHA-256 (a file that does not match is
   /// thrown away), then renamed into place, so the router only ever sees whole packs.
   Future<void> _fetchPack(_KeptPack p) async {
+    if (plat.isWeb) return _fetchPackOnServer(p);
     final dir = (await offroadDir()).path;
     _offroadPath = dir;
     final dest = File('$dir/${p.path}');
@@ -1132,6 +1151,64 @@ class RegionsState extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// [_fetchPack] in a browser: Cache Server downloads the pack into its own off-road folder, with no tab needed, and [refresh]
+  /// reads how far it is (the phone's pack downloader and the server's are the same steps).
+  Future<void> _fetchPackOnServer(_KeptPack p) async {
+    final core = _core;
+    if (core == null || held || (_packRuns[p.path]?.running ?? false)) return;
+    final run = _packRuns[p.path] = _PackRun();
+    notifyListeners();
+    try {
+      final r = await core.call('offroad_fetch', {'path': p.path, 'url': p.url, 'bytes': p.bytes, 'sha256': p.sha256});
+      if (r['state'] == 'ready') {
+        _packRuns.remove(p.path);
+        _webOnDisk.add(p.path);
+      } else if (r['state'] == 'held') {
+        _packRuns.remove(p.path);
+      }
+    } catch (e) {
+      run
+        ..running = false
+        ..error = e is CacheSearchException && e.message.isNotEmpty ? e.message : "Off-road data couldn't be downloaded. Try again later.";
+    }
+    notifyListeners();
+    _schedulePoll();
+  }
+
+  /// A browser reads from the server which packs are on its disk and how far the ones downloading are.
+  Future<void> _syncServerPacks(RegionsCoreLike core) async {
+    final paths = {for (final k in _kept.values) for (final p in k.offroad) p.path}.toList();
+    if (paths.isEmpty) {
+      _webOnDisk.clear();
+      return;
+    }
+    final Map<String, dynamic> packs;
+    try {
+      packs = ((await core.call('offroad_status', {'paths': paths}))['packs'] as Map?)?.cast<String, dynamic>() ?? const {};
+    } catch (_) {
+      return;
+    }
+    _webOnDisk.clear();
+    for (final e in packs.entries) {
+      final v = (e.value as Map).cast<String, dynamic>();
+      if (v['on_disk'] == true) {
+        _webOnDisk.add(e.key);
+        _packRuns.remove(e.key);
+      } else if (v['running'] == true) {
+        _packRuns.putIfAbsent(e.key, _PackRun.new)
+          ..running = true
+          ..error = null
+          ..done = (v['done'] as num?)?.toInt() ?? 0;
+      } else if (v['error'] is String) {
+        _packRuns.putIfAbsent(e.key, _PackRun.new)
+          ..running = false
+          ..error = v['error'] as String;
+      } else {
+        _packRuns.remove(e.key);
+      }
+    }
   }
 
   /// The person paused the region downloads (Pause on a region): the core fetches no tiles, the off-road packs and the map areas
@@ -1194,7 +1271,7 @@ class RegionsState extends ChangeNotifier {
   /// The packs kept regions want that are not on the phone and not downloading: started again (on a connection downloads may use).
   Future<void> _resumePacks() async {
     if (held) return;
-    _offroadPath ??= (await offroadDir()).path;
+    if (!plat.isWeb) _offroadPath ??= (await offroadDir()).path;
     for (final k in _kept.values) {
       for (final p in k.offroad) {
         if (!_packOnPhone(p.path) && !(_packRuns[p.path]?.running ?? false)) unawaited(_fetchPack(p));
@@ -1216,6 +1293,14 @@ class RegionsState extends ChangeNotifier {
     for (final p in k?.offroad ?? const <_KeptPack>[]) {
       if (_kept.values.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
       _packRuns.remove(p.path)?.cancel.cancel();
+      if (plat.isWeb) {
+        // the server deletes the pack and its part
+        _webOnDisk.remove(p.path);
+        try {
+          await _core?.call('offroad_remove', {'path': p.path});
+        } catch (_) {}
+        continue;
+      }
       final dir = (await offroadDir()).path;
       for (final f in [File('$dir/${p.path}'), File('${File('$dir/${p.path}').parent.path}/.offroad.sqlite.part')]) {
         try {
@@ -1614,10 +1699,8 @@ class RegionsState extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      final f = await _appFile();
-      await f.parent.create(recursive: true);
       final ready = [for (final r in _routingRegions) if (_routingOf(r)?['state'] == 'ready') r['name'] as String? ?? r['id'] as String];
-      await writeStringAtomic(f, jsonEncode({
+      final text = jsonEncode({
         'regions': {for (final k in _kept.values) k.id: k.toJson()},
         if (held) 'held': true,
         'routing': {
@@ -1625,7 +1708,14 @@ class RegionsState extends ChangeNotifier {
           if (status['tile_dir'] is String && ready.isNotEmpty) 'tile_dir': status['tile_dir'],
           'regions': ready,
         },
-      }));
+      });
+      if (plat.isWeb) {
+        await _webFs.writeStringAtomic(AppRoot.support, kRegionsAppFile, text);
+        return;
+      }
+      final f = await _appFile();
+      await f.parent.create(recursive: true);
+      await writeStringAtomic(f, text);
     } catch (_) {}
   }
 

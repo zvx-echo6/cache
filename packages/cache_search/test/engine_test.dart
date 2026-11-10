@@ -5,7 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A stand-in for the native library: answers from canned JSON and records what it was given.
-class FakeNative implements CsNative, CsLiveNative {
+class FakeNative implements CsNative, CsLiveNative, CsZimIconNative {
   // The tool, location, places and live calls are not used by these tests.
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -18,6 +18,14 @@ class FakeNative implements CsNative, CsLiveNative {
   int jobStartResult = 5;
   int jobCancelResult = 0;
   ZimBytes? zim;
+
+  bool illustrations = true;
+
+  @override
+  bool get hasZimIllustration => illustrations;
+
+  @override
+  String? zimIllustration(int handle, String zimId) => _r('zimIllustration', zimId);
 
   String? _r(String name, [Object? arg]) {
     calls.add(arg == null ? name : '$name:$arg');
@@ -277,6 +285,26 @@ void main() {
       final e = SearchEngine.open(n, [_zim]);
       expect(e.suggest('bu').single.address, 'zim:u1/Burn');
       expect(e.zimMainPage('u1'), 'zim:u1/Main');
+    });
+
+    test("a ZIM's own icon: decoded PNG bytes, null when it has none or the core lacks the call, other errors raised", () {
+      final n = FakeNative()..replies['zimIllustration'] = '{"png_base64":"iVBORw0KGgo="}';
+      final e = SearchEngine.open(n, [_zim]);
+      expect(e.zimIllustration('u1'), Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
+      expect(n.calls, contains('zimIllustration:u1'));
+
+      n
+        ..replies['zimIllustration'] = null
+        ..error = '{"code":"not_found","message":"zim u1 has no illustration"}';
+      expect(e.zimIllustration('u1'), isNull);
+
+      n.error = '{"code":"io","message":"read failed"}';
+      expect(() => e.zimIllustration('u1'), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'io')));
+
+      n.illustrations = false;
+      n.calls.clear();
+      expect(e.zimIllustration('u1'), isNull, reason: 'an older core');
+      expect(n.calls, isNot(contains('zimIllustration:u1')));
     });
 
     test('a closed engine raises, and close is safe twice', () {
