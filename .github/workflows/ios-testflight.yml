@@ -131,7 +131,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'core'
     runs-on: macos-26
-    timeout-minutes: 90
+    # 180: a run on a tag cannot read a branch's caches, so the Rust core builds cold (about 80 minutes).
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
