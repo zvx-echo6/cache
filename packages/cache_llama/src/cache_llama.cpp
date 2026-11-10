@@ -28,7 +28,9 @@
 
 #include <sys/stat.h>
 #if defined(__APPLE__)
+#include <cerrno>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 #if defined(__linux__) || defined(__ANDROID__)
@@ -489,6 +491,13 @@ void advise_lookup_tensors(const char *) {}
 }
 
 #if defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(__APPLE__)
+typedef char mincore_vec_t;
+#else
+typedef unsigned char mincore_vec_t;
+#endif
+// Reads the model's tensor ranges into the page cache, paced to `mbps` MB/s. Steps whose pages are all resident already (found with
+// mincore() on this thread's own read-only mapping, never read through) are skipped and do not count toward the pace.
 void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
     using clock = std::chrono::steady_clock;
     const auto ranges = preread_ranges(path.c_str());
@@ -497,23 +506,62 @@ void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
     cl_logi("preread: start, %llu MB in %zu ranges at %d MB/s", (unsigned long long) (total >> 20), ranges.size(), mbps);
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        cl_logi("preread: stopped at 0 MB after 0 ms (cannot open the file)");
+        cl_logi("preread: stopped at 0 MB read (0 MB resident) after 0 ms (cannot open the file)");
         return;
     }
+    // Own mapping, only for mincore(); if it cannot be made, every step is read as before.
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t fsize = 0;
+    {
+        struct stat st;
+        if (fstat(fd, &st) == 0) fsize = (uint64_t) st.st_size;
+    }
+    void * map = (fsize > 0) ? mmap(nullptr, (size_t) fsize, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+    bool resident_check = map != MAP_FAILED;
+    if (!resident_check) cl_logi("preread: residency check off (mmap failed, errno %d), reading every step", errno);
+    const uint64_t map_end = (fsize + ps - 1) & ~(ps - 1);
+    std::vector<mincore_vec_t> vec;
     std::vector<char> buf(kPrereadStep);
     const auto t0 = clock::now();
     auto since_us = [&]() { return (long long) std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count(); };
-    uint64_t done = 0;
+    uint64_t done = 0;      // bytes passed (read or already resident)
+    uint64_t read_b = 0;    // bytes read: these count toward the pace
+    uint64_t resident_b = 0;
     bool halted = false;
     for (const auto & r : ranges) {
         for (uint64_t pos = 0; pos < r.second && !halted; ) {
             if (stop->load()) { halted = true; break; }
+            const uint64_t off  = r.first + pos;
             const uint64_t want = std::min<uint64_t>(kPrereadStep, r.second - pos);
-            const ssize_t got = pread(fd, buf.data(), (size_t) want, (off_t) (r.first + pos));
+            bool all_resident = false;
+            if (resident_check) {
+                const uint64_t lo = off & ~(ps - 1);
+                const uint64_t hi = std::min<uint64_t>((off + want + ps - 1) & ~(ps - 1), map_end);
+                if (hi > lo) {
+                    vec.assign((size_t) ((hi - lo) / ps), 0);
+                    if (mincore((char *) map + lo, (size_t) (hi - lo), vec.data()) == 0) {
+                        all_resident = true;
+                        for (mincore_vec_t v : vec) {
+                            if (!(v & 1)) { all_resident = false; break; }
+                        }
+                    } else {
+                        cl_logi("preread: residency check off (mincore failed, errno %d), reading every step", errno);
+                        resident_check = false;
+                    }
+                }
+            }
+            if (all_resident) {
+                pos        += want;
+                done       += want;
+                resident_b += want;
+                continue;
+            }
+            const ssize_t got = pread(fd, buf.data(), (size_t) want, (off_t) off);
             if (got <= 0) { halted = true; break; }
-            pos  += (uint64_t) got;
-            done += (uint64_t) got;
-            long long ms = preread_sleep_ms(done, since_us(), mbps);
+            pos    += (uint64_t) got;
+            done   += (uint64_t) got;
+            read_b += (uint64_t) got;
+            long long ms = preread_sleep_ms(read_b, since_us(), mbps);
             while (ms > 0 && !stop->load()) {  // sleep in slices so a free is noticed within one step
                 const long long slice = std::min<long long>(ms, 20);
                 std::this_thread::sleep_for(std::chrono::milliseconds(slice));
@@ -522,12 +570,15 @@ void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
         }
         if (halted) break;
     }
+    if (map != MAP_FAILED) munmap(map, (size_t) fsize);
     close(fd);
     const long long ms = since_us() / 1000;
     if (!halted && done >= total) {
-        cl_logi("preread: done, %llu MB in %lld ms", (unsigned long long) (done >> 20), ms);
+        cl_logi("preread: done, read %llu MB, already resident %llu MB, in %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
     } else {
-        cl_logi("preread: stopped at %llu MB after %lld ms", (unsigned long long) (done >> 20), ms);
+        cl_logi("preread: stopped at %llu MB read (%llu MB resident) after %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
     }
 }
 #else
