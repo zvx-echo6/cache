@@ -7,6 +7,7 @@ import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
+import '../desktop/ask_column.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
@@ -365,7 +366,8 @@ class _AskScreenState extends State<AskScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: Column(
+        child: DesktopReadingColumn(
+          child: Column(
           children: [
             ListenableBuilder(listenable: widget.app, builder: (context, _) => _fixLine(context) ?? const SizedBox.shrink()),
             Expanded(
@@ -428,6 +430,7 @@ class _AskScreenState extends State<AskScreen> {
 
             ReadingWidth(style: _readingStyle, child: _composer(context)),
           ],
+        ),
         ),
       ),
     );
