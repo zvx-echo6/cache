@@ -521,10 +521,9 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
-    // The id the notebook has on the other devices: from its folder; else the old map file's. An id another notebook here
-    // already has is never taken (saving under it would change that notebook).
-    var id = kind == SyncKind.share ? _idIn(await folder.readText('${folderName(d.notebook)}/$kNotebookIdFile')) : null;
-    id ??= shared?['id'] as String?;
+    // The id the notebook has on the other devices (from its folder's notebook.json). An id another notebook here already has
+    // is never taken (saving under it would change that notebook).
+    var id = _idIn(jsonEncode({'id': shared?['id']}));
     if (id != null && notebook.notebook(id) != null) id = null;
     final made = await notebook.saveNotebook(
       id: id,
@@ -598,9 +597,14 @@ class NotebookSync {
             ..add(winner);
         }
       }
-      final text = '${jsonEncode({'id': winner})}\n';
+      // The file also holds the notebook's definition as it was when the id was written, for a device that has not got the
+      // notebook yet. It is written when the folder has no id file or another id; never rewritten after (two devices editing
+      // it at once would conflict).
       final path = '$dir/$kNotebookIdFile';
-      if (await folder.readText(path) != text) await folder.writeText(path, text);
+      if (_idIn(await folder.readText(path)) != winner) {
+        final book = notebook.notebook(winner)!;
+        await folder.writeText(path, '${const JsonEncoder.withIndent(' ').convert(_bookJson(book))}\n');
+      }
       for (final p in files) {
         if (p != path) await folder.delete(p);
       }
@@ -609,7 +613,14 @@ class NotebookSync {
 
   Map<String, dynamic>? _sharedBooks;
 
+  /// The notebook [name] as the other device made it: its folder's notebook.json (notebook sync), else the old map file.
   Future<Map<String, dynamic>?> _sharedBook(String name) async {
+    if (kind == SyncKind.share) {
+      try {
+        final j = jsonDecode(await folder.readText('${folderName(name)}/$kNotebookIdFile') ?? 'null');
+        if (j is Map && _idIn(jsonEncode({'id': j['id']})) != null) return j.cast<String, dynamic>();
+      } catch (_) {}
+    }
     if (_sharedBooks == null) {
       try {
         final t = await folder.readText('.cache/notebooks.json');
@@ -895,12 +906,14 @@ class NotebookSync {
   Future<void> _writeBooks(List<Notebook> books) async {
     final list = [
       for (final n in books)
-        if (includePrivate || !n.private || privateBooks.contains(n.id))
-          {'id': n.id, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)},
+        if (includePrivate || !n.private || privateBooks.contains(n.id)) _bookJson(n),
     ];
     final text = '${const JsonEncoder.withIndent(' ').convert({'format': 'cache-notebooks', 'version': 1, 'notebooks': list})}\n';
     if (await folder.readText('.cache/notebooks.json') != text) await folder.writeText('.cache/notebooks.json', text);
   }
+
+  Map<String, dynamic> _bookJson(Notebook n) =>
+      {'id': n.id, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
 
   String _newId() {
     final rnd = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(12, '0');
