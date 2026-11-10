@@ -8,6 +8,7 @@ import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
 import '../desktop/ask_column.dart';
+import '../desktop/desktop.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
@@ -580,7 +581,7 @@ class _AskScreenState extends State<AskScreen> {
                   minLines: 1,
                   maxLines: 5,
                   textInputAction: TextInputAction.newline,
-                  style: const TextStyle(fontSize: 18),
+                  style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
                   decoration: InputDecoration(
                     hintText: ready ? 'Ask anything' : 'No model',
                   ),
@@ -633,7 +634,7 @@ class _UserBubble extends StatelessWidget {
         ),
         child: Text(
           text,
-          style: TextStyle(fontSize: 18, height: 1.35, color: k.text),
+          style: TextStyle(fontSize: isLinuxDesktop(context) ? 15 : 18, height: 1.35, color: k.text),
         ),
       ),
     );
@@ -727,7 +728,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           if (m.error == kCoreDidNotStart && widget.chat != null)
             TextButton(key: const ValueKey('ask-try-again'), onPressed: widget.chat!.retryLast, child: const Text('Try again')),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
-            _sourcesRow(context, m),
+            // On the Linux desktop the sources chip has 12 pixels of air above it.
+            isLinuxDesktop(context) && m.sources.isNotEmpty ? Padding(padding: const EdgeInsets.only(top: 12), child: _sourcesRow(context, m)) : _sourcesRow(context, m),
           if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)
             Align(
               alignment: Alignment.centerLeft,

@@ -182,7 +182,7 @@ class _VideosScreenState extends State<VideosScreen> {
           child: Text(
             'Nothing on this device yet. Find a video on a site and choose Download.',
             key: const ValueKey('videos-empty'),
-            style: TextStyle(fontSize: 16, color: k.secondary),
+            style: TextStyle(fontSize: isLinuxDesktop(context) ? 15 : 16, color: k.secondary),
           ),
         ),
       for (final g in groups) ...[

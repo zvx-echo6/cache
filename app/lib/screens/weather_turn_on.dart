@@ -107,15 +107,51 @@ Future<void> _update(BuildContext context, WeatherState w) async {
 
 /// The two buttons of the weather's empty states: "Turn on weather" and "Choose a place instead".
 class WeatherTurnOnButtons extends StatelessWidget {
-  const WeatherTurnOnButtons({super.key, required this.turnOn, this.secondary = true});
+  const WeatherTurnOnButtons({super.key, required this.turnOn, this.secondary = true, this.inline = false});
 
   final WeatherTurnOn turnOn;
 
   /// Shows "Choose a place instead" under the main button.
   final bool secondary;
 
+  /// The Linux desktop's empty page: intrinsic-width 36-pixel buttons, left-aligned in a row.
+  final bool inline;
+
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) {
+    if (inline) {
+      final style = ButtonStyle(
+        minimumSize: const WidgetStatePropertyAll(Size(48, 36)),
+        fixedSize: const WidgetStatePropertyAll(Size.fromHeight(36)),
+        textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+      );
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton(
+              key: const ValueKey('weather-turn-on'),
+              style: style,
+              onPressed: () => turnOnWeather(context, turnOn),
+              child: const Text('Turn on weather'),
+            ),
+            if (secondary)
+              OutlinedButton(
+                key: const ValueKey('weather-choose-place'),
+                style: style,
+                onPressed: () => chooseWeatherPlace(context, turnOn),
+                child: const Text('Choose a place instead'),
+              ),
+          ],
+        ),
+      );
+    }
+    return _stacked(context);
+  }
+
+  Widget _stacked(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       FilledButton(

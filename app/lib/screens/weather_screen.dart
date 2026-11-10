@@ -241,18 +241,21 @@ class _WeatherScreenState extends State<WeatherScreen> {
   Widget _empty(BuildContext context, String a, String b, {bool offerTurnOn = true}) {
     final k = context.t;
     // The words and the buttons keep to a narrow column, centred, on a wide window.
+    // (On the Linux desktop the heading and the words are left-aligned and the buttons sit in a row.)
+    final desk = isLinuxDesktop(context);
     final body = Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
       child: ContentWidth(
         maxWidth: 440,
         child: Column(
+        crossAxisAlignment: desk ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
+          Text(a, textAlign: desk ? TextAlign.start : TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
-          Text(b, textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
+          Text(b, textAlign: desk ? TextAlign.start : TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
           if (widget.turnOn case final t? when offerTurnOn) ...[
             const SizedBox(height: 16),
-            WeatherTurnOnButtons(turnOn: t),
+            WeatherTurnOnButtons(turnOn: t, inline: desk),
           ],
           if (widget.onOpenSettings != null) ...[
             const SizedBox(height: 12),
