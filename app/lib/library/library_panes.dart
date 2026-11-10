@@ -192,15 +192,19 @@ class LibraryPanesState extends State<LibraryPanes> {
         final spec = pages[level];
         final parentShows = level == 0 || visible.contains(level - 1);
         // The scope sits above the pane's Navigator, so the page sees where it stands now (its route is built once).
-        page = _LevelScope(
-          state: this,
-          level: level,
-          spec: spec,
-          compact: false,
-          showsParent: parentShows,
-          last: last,
-          canHide: i == visible.length - 2 && n > 1,
-          child: _paneNavigator(spec?.key ?? 'root', Builder(builder: spec?.builder ?? widget.root)),
+        page = FlatRows(
+          // the Linux desktop draws a list pane's rows flat; the rightmost pane is a page
+          flat: !last,
+          child: _LevelScope(
+            state: this,
+            level: level,
+            spec: spec,
+            compact: false,
+            showsParent: parentShows,
+            last: last,
+            canHide: i == visible.length - 2 && n > 1,
+            child: _paneNavigator(spec?.key ?? 'root', Builder(builder: spec?.builder ?? widget.root)),
+          ),
         );
       }
       children.add(

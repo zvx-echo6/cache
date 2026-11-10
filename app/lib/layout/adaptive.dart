@@ -504,6 +504,21 @@ bool paneShowsDesktopInitial(BuildContext context) {
   return pane != null && pane.inList && pane.state._builder == null && pane.state.widget.desktopInitial != null && isDesktop(context);
 }
 
+/// Set by a pane that holds an index list of its own (the Library's list panes): its rows are drawn flat on the Linux desktop.
+class FlatRows extends InheritedWidget {
+  const FlatRows({super.key, required this.flat, required super.child});
+
+  final bool flat;
+
+  static bool of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<FlatRows>()?.flat ?? false;
+
+  @override
+  bool updateShouldNotify(FlatRows old) => flat != old.flat;
+}
+
+/// The rows here are an index list on the Linux desktop (a [TwoPane]'s list or a [FlatRows] pane): flat 52-pixel rows.
+bool flatListRows(BuildContext context) => isLinuxDesktop(context) && (inPaneList(context) || FlatRows.of(context));
+
 /// This widget is in the list of a [TwoPane] (not its detail).
 bool inPaneList(BuildContext context) => _PaneScope.of(context)?.inList ?? false;
 

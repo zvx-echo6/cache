@@ -145,7 +145,7 @@ class SettingsGroup extends StatelessWidget {
       children: [
         if (label != null) GroupLabel(label!),
         for (var i = 0; i < rows.length; i++) ...[
-          if (i > 0) SizedBox(height: isLinuxDesktop(context) && inPaneList(context) ? 0 : 2),
+          if (i > 0) SizedBox(height: flatListRows(context) ? 0 : 2),
           _RowPlace(first: i == 0, last: i == rows.length - 1, child: rows[i]),
         ],
       ],
@@ -220,7 +220,7 @@ class SettingsRow extends StatelessWidget {
     );
     // The index list of a two-pane page on the Linux desktop: flat 52-pixel rows with a hairline, no chevron, and the chosen one
     // marked by a tint and a bar on its left edge.
-    final flat = compact || (isLinuxDesktop(context) && inPaneList(context));
+    final flat = compact || flatListRows(context);
     final showChevron = !flat && (chevron ?? (onTap != null && trailing == null));
     final titleColor = danger ? k.emergency : (dim ? k.secondary : k.text);
     final lead = leading ?? (icon == null ? null : Icon(icon, size: 22, color: k.secondary));
