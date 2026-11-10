@@ -146,6 +146,7 @@ class LiteRtRuntime {
       await _channel.invokeMethod<void>('generate', {
         'id': id,
         'prompt': rendered.prompt,
+        'split': rendered.split,
         'maxTokens': max is int && max > 0 ? max : null,
         'temperature': temp is num ? temp.toDouble() : null,
       });

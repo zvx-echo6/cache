@@ -59,6 +59,9 @@ void main() {
     expect(r.prompt, startsWith('<|turn>system\nBe brief.<turn|>\n<|turn>user\nHi<turn|>\n<|turn>model\n'));
     expect(r.promptTokens, greaterThan(5));
     expect(r.stopOnToolOpen, isFalse);
+    expect(r.split, inInclusiveRange(0, r.prompt.length - 1));
+    // ignore: avoid_print
+    print('split at ${r.split}: tail ${r.prompt.substring(r.split).replaceAll('\n', r'\n')}');
   }, skip: skip);
 
   test('declares the tool in the system turn, and tool_choice none asks to stop at a tool-call opening', () {

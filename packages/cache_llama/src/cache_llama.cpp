@@ -1170,8 +1170,23 @@ int cl_tmpl_render(void * hp, const char * request_json, char * out_json, int le
         const std::string bos = llama_vocab_bos(h->vocab) >= 0 ? common_token_to_piece(h->vocab, llama_vocab_bos(h->vocab), true) : "";
         if (!bos.empty() && text.compare(0, bos.size(), bos) == 0) text.erase(0, bos.size());
         auto tokens = common_tokenize(h->vocab, prompt, /*add_special*/ true, /*parse_special*/ true);
+        // Where the last control token starts in the text (normally the "<|turn>" of the model turn the prompt ends with): an engine
+        // that must stream the tail on its own can prefill the head first, and the tail then starts at a token boundary. The
+        // pieces of the tokens must add up to the text exactly, or there is no split (0).
+        size_t split = 0;
+        {
+            auto toks = common_tokenize(h->vocab, text, /*add_special*/ false, /*parse_special*/ true);
+            std::string joined;
+            bool found = false;
+            for (auto t : toks) {
+                if (llama_vocab_get_attr(h->vocab, t) & LLAMA_TOKEN_ATTR_CONTROL) { split = joined.size(); found = true; }
+                joined += common_token_to_piece(h->vocab, t, true);
+            }
+            if (!found || joined != text || split >= text.size()) split = 0;
+        }
         auto j = common_json::object();
         j["prompt"]            = text;
+        j["split"]             = (int) split;
         j["prompt_tokens"]     = (int) tokens.size();
         j["stop_on_tool_open"] = pr.in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !pr.in.tools.empty();
         return put(j.dump(), out_json, len);

@@ -30,9 +30,10 @@ import java.util.concurrent.Executors
  *
  * Channels: method channel "cache/litert" (load, generate, stop, unload) and event channel "cache/litert/stream".
  *
- * Prefix reuse: up to [MAX_CHECKPOINTS] checkpoints, each (prompt text, a Session that holds exactly that text in its KV cache).
- * A checkpoint is a clone() taken right after prefilling a prompt and before decoding it. A new prompt clones the longest
- * checkpoint whose text is a prefix of it and prefills only the rest.
+ * Prefix reuse: up to [MAX_CHECKPOINTS] checkpoints, each (text, a Session that holds exactly that text in its KV cache).
+ * A checkpoint is a clone() taken right after prefilling the head of a prompt (everything before its last control token) and before
+ * decoding. A new prompt clones the longest checkpoint whose text is a prefix of its head and prefills only the rest of the head;
+ * the tail is prefilled and decoded by the stream call, which needs input.
  */
 object LiteRtBridge {
     private const val TAG = "CacheLiteRt"
@@ -83,10 +84,11 @@ object LiteRtBridge {
                     if (prompt == null) {
                         result.error("bad_args", "no prompt", null)
                     } else {
+                        val split = call.argument<Int>("split") ?: 0
                         val maxTokens = call.argument<Int>("maxTokens")
                         val temperature = call.argument<Double>("temperature")
                         stopRequested = false
-                        worker.execute { generate(id, prompt, maxTokens, temperature) }
+                        worker.execute { generate(id, prompt, split, maxTokens, temperature) }
                         result.success(null)
                     }
                 }
@@ -182,7 +184,7 @@ object LiteRtBridge {
         else -> SamplerConfig(topK = TOP_K, topP = TOP_P, temperature = temperature)
     }
 
-    private fun generate(id: Int, prompt: String, maxTokens: Int?, temperature: Double?) {
+    private fun generate(id: Int, prompt: String, split: Int, maxTokens: Int?, temperature: Double?) {
         val e = engine
         if (e == null) {
             emit(mapOf("id" to id, "error" to "No LiteRT model is loaded"))
@@ -192,18 +194,31 @@ object LiteRtBridge {
         var session: Session? = null
         try {
             val samplerKey = temperature?.toString() ?: "default"
-            // The longest checkpoint (same sampler) whose text starts this prompt.
-            val best = checkpoints.filter { it.sampler == samplerKey && prompt.startsWith(it.text) }.maxByOrNull { it.text.length }
-            val reused = best?.text?.length ?: 0
-            session = best?.session?.clone() ?: e.createSession(SessionConfig(samplerConfig = samplerFor(temperature)))
-            working = session
+            // The stream call prefills its own input and cannot decode with none ("Input is empty"), so the prompt is cut at `split`, a
+            // token boundary where its last control token starts (the tail is normally "<|turn>model\n"). The head is prefilled and
+            // checkpointed; the tail is the stream's input. With no split the whole prompt is streamed on a fresh session.
+            val cut = if (split in 1 until prompt.length) split else 0
+            val head = prompt.substring(0, cut)
+            val tail = prompt.substring(cut)
+            var reused = 0
             val tPrefill = SystemClock.elapsedRealtime()
-            if (stopRequested) throw CancellationException("stopped before prefill")
-            if (prompt.length > reused) {
-                session.runPrefill(listOf(InputData.Text(prompt.substring(reused))))
-                // The checkpoint is taken before decoding, so it holds exactly this prompt.
-                checkpoints.add(Checkpoint(prompt, samplerKey, session.clone()))
-                while (checkpoints.size > MAX_CHECKPOINTS) closeQuietly(checkpoints.removeAt(0).session)
+            if (cut == 0) {
+                session = e.createSession(SessionConfig(samplerConfig = samplerFor(temperature)))
+                working = session
+            } else {
+                // The longest checkpoint (same sampler) whose text starts the head.
+                val best = checkpoints.filter { it.sampler == samplerKey && it.text.length <= cut && head.startsWith(it.text) }
+                    .maxByOrNull { it.text.length }
+                reused = best?.text?.length ?: 0
+                session = best?.session?.clone() ?: e.createSession(SessionConfig(samplerConfig = samplerFor(temperature)))
+                working = session
+                if (stopRequested) throw CancellationException("stopped before prefill")
+                if (head.length > reused) {
+                    session!!.runPrefill(listOf(InputData.Text(head.substring(reused))))
+                    // The checkpoint is taken before decoding, so it holds exactly the head.
+                    checkpoints.add(Checkpoint(head, samplerKey, session!!.clone()))
+                    while (checkpoints.size > MAX_CHECKPOINTS) closeQuietly(checkpoints.removeAt(0).session)
+                }
             }
             val prefillMs = SystemClock.elapsedRealtime() - tPrefill
 
@@ -211,8 +226,8 @@ object LiteRtBridge {
             var firstTokenMs = -1L
             var failure: Throwable? = null
             val finished = CountDownLatch(1)
-            val s = session
-            s.generateContentStream(emptyList(), object : ResponseCallback {
+            val s = session!!
+            s.generateContentStream(listOf(InputData.Text(tail)), object : ResponseCallback {
                 override fun onNext(response: String) {
                     if (firstTokenMs < 0) firstTokenMs = SystemClock.elapsedRealtime() - t0
                     chunks++
@@ -241,7 +256,7 @@ object LiteRtBridge {
             val totalMs = SystemClock.elapsedRealtime() - t0
             Log.i(
                 TAG,
-                "generate promptChars=${prompt.length} reusedChars=$reused prefillMs=$prefillMs firstTokenMs=$firstTokenMs totalMs=$totalMs chunks=$chunks",
+                "generate promptChars=${prompt.length} split=$cut reusedChars=$reused prefillMs=$prefillMs firstTokenMs=$firstTokenMs totalMs=$totalMs chunks=$chunks",
             )
             emit(
                 mapOf(

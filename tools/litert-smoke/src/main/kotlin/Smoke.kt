@@ -2,10 +2,14 @@ import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.InputData
+import com.google.ai.edge.litertlm.ResponseCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.Session
 import com.google.ai.edge.litertlm.SessionConfig
 import java.io.File
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 // Raw text goes in as given: the stock gemma-4-E2B-it.litertlm has no prompt templates, so a Session adds only BOS to the first
 // prefill of a fresh session. Everything runs greedy (temperature 0, top-k 1).
@@ -49,6 +53,38 @@ private fun decode(s: Session): String {
     } finally {
         dog.cancel()
     }
+}
+
+// Streams a decode that prefills [input] first (what the Cache bridge does with the tail of a prompt): the chunks joined, and the
+// time of the first chunk in ms from the call.
+private fun decodeStream(s: Session, input: String, chunkLog: MutableList<String>? = null): Pair<String, Long> {
+    val sb = StringBuilder()
+    var err: Throwable? = null
+    var first = -1L
+    val t0 = System.nanoTime()
+    val done = CountDownLatch(1)
+    var n = 0
+    s.generateContentStream(listOf(InputData.Text(input)), object : ResponseCallback {
+        override fun onNext(response: String) {
+            if (first < 0) first = (System.nanoTime() - t0) / 1_000_000
+            sb.append(response)
+            chunkLog?.add(response)
+            if (++n >= 400) s.cancelProcess()
+        }
+
+        override fun onDone() = done.countDown()
+
+        override fun onError(throwable: Throwable) {
+            if (throwable !is CancellationException) err = throwable
+            done.countDown()
+        }
+    })
+    if (!done.await(DECODE_LIMIT_S, TimeUnit.SECONDS)) {
+        s.cancelProcess()
+        error("stream timed out")
+    }
+    err?.let { throw it }
+    return sb.toString() to first
 }
 
 private fun show(tag: String, text: String) = println("$tag ${esc(text)}")
@@ -141,6 +177,22 @@ fun main(args: Array<String>) {
         }
     }
     sa.close()
+
+    // (f) the split the Cache bridge uses: prefill the head, stream the tail (from its last control token); against runDecode after a
+    // full prefill
+    println("== (f) streamed tail after a prefilled head vs runDecode after a full prefill")
+    for ((name, prompt, reference) in listOf(Triple("prompt (a)", PROMPT_A, outA), Triple("prompt (b)", promptB, outFull))) {
+        attempt("(f) $name") {
+            val cut = prompt.lastIndexOf("<|turn>")
+            val s1 = fresh()
+            prefill(s1, prompt.substring(0, cut))
+            val chunks = ArrayList<String>()
+            val (o, firstMs) = decodeStream(s1, prompt.substring(cut), chunks)
+            s1.close()
+            show("(f) $name split at $cut, streamed:", o)
+            println("(f) $name: ${chunks.size} chunks, first chunk after $firstMs ms, identical to runDecode after a full prefill: ${o == reference}")
+        }
+    }
 
     // (e) clone cost
     println("== (e) clone() time and process RSS")

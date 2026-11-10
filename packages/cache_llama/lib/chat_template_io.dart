@@ -9,11 +9,14 @@ import 'partial_message.dart';
 /// A rendered request: the prompt text (no leading BOS), its token count as the llama path counts it, and whether a tool-call
 /// opening in the output ends the generation (tool_choice "none" with tools).
 class RenderedPrompt {
-  const RenderedPrompt({required this.prompt, required this.promptTokens, required this.stopOnToolOpen});
+  const RenderedPrompt({required this.prompt, required this.promptTokens, required this.stopOnToolOpen, this.split = 0});
 
   final String prompt;
   final int promptTokens;
   final bool stopOnToolOpen;
+
+  /// Where the last control token starts in [prompt] (a token boundary), or 0 for none.
+  final int split;
 }
 
 /// A chat template and tokenizer with no model behind them (cl_tmpl_*): renders a request's prompt and parses generated text into
@@ -74,6 +77,7 @@ class ChatTemplate {
         prompt: j['prompt'] as String,
         promptTokens: j['prompt_tokens'] as int,
         stopOnToolOpen: j['stop_on_tool_open'] as bool,
+        split: (j['split'] as int?) ?? 0,
       );
     } finally {
       malloc.free(req);

@@ -96,7 +96,9 @@ CL_API int cl_free_all(void);
 CL_API void * cl_tmpl_load(const char * gguf_path, const char * template_override, char * err, int err_len);
 
 // Render a request (the JSON of cl_start) and start its parser. Writes JSON {"prompt": the text without a leading BOS,
-// "prompt_tokens": the count as cl_start counts it, "stop_on_tool_open": true for tool_choice "none" with tools}, or {"error"}.
+// "split": the byte offset in prompt where its last control token starts (0 when there is none, or the token pieces do not
+// reproduce the text exactly), "prompt_tokens": the count as cl_start counts it, "stop_on_tool_open": true for tool_choice "none"
+// with tools}, or {"error"}.
 // Returns the length, or -1 if out is too small.
 CL_API int cl_tmpl_render(void * h, const char * request_json, char * out_json, int len);
 
