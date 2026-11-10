@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../desktop/desktop.dart';
+import '../../desktop/hover_row.dart';
 import '../../desktop/notebook_chips.dart';
 import '../../layout/adaptive.dart';
 
@@ -10,6 +11,7 @@ import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
 import '../pin_screen.dart';
+import '../settings/widgets.dart' show Part, SettingsRow;
 import 'connections_screen.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart';
@@ -207,11 +209,15 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           }
           final now = widget.deps.now();
           final again = [for (final n in nb.logs) if (n.entryCount > 0) n].take(3).toList();
+          // The Linux desktop: flat rows across the whole shelf (so the hairline and the chosen row's bar reach its edges); the
+          // "Log again" block and the empty note keep the 16-pixel side margin.
+          final desk = isLinuxDesktop(context);
+          Widget inset(Widget w) => desk ? Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: w) : w;
           return LayoutBuilder(builder: (context, cts) => ListView(
-            padding: ContentWidth.padFor(cts.maxWidth).copyWith(top: 8, bottom: 96),
+            padding: (desk ? EdgeInsets.zero : ContentWidth.padFor(cts.maxWidth)).copyWith(top: 8, bottom: 96),
             children: [
               if (again.isNotEmpty) ...[
-                Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
+                inset(Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary))),
                 const SizedBox(height: 6),
                 // The Linux desktop shows them as one row that scrolls sideways; anywhere else they wrap.
                 LogAgainChips(
@@ -222,6 +228,38 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                 ),
                 const SizedBox(height: 12),
               ],
+              if (desk)
+                for (final n in nb.notebooks)
+                  HoverRow(
+                    key: ValueKey('notebook-${n.id}'),
+                    builder: (context, active) => SettingsRow(
+                      leading: Icon(templateIcon(_templates?.byId(n.template)?.icon ?? ''), color: k.accent),
+                      title: n.name,
+                      status: [Part(_line(n, now))],
+                      statusLines: 2,
+                      selected: isPaneSelected(context, 'notebook-${n.id}'),
+                      onTap: () => _open(n),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (n.map && n.placeCount > 0) Text('on map', style: TextStyle(fontSize: 13, color: k.secondary)),
+                          if (n.isLog)
+                            RevealAction(
+                              shown: active,
+                              child: IconButton(
+                                key: ValueKey('quick-${n.id}'),
+                                tooltip: 'Add entry',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+                                icon: const Icon(Icons.add_circle_outline),
+                                onPressed: () => _quickAdd(n),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  )
+              else
               for (final n in nb.notebooks)
                 Card(
                   key: ValueKey('notebook-${n.id}'),
@@ -243,6 +281,19 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                     onTap: () => _open(n),
                   ),
                 ),
+              if (desk)
+                for (final l in widget.deps.userLayers?.repeaterLists ?? const <UserLayer>[])
+                  SettingsRow(
+                    key: ValueKey('repeaters-${l.id}'),
+                    leading: Icon(Icons.cell_tower, color: k.accent),
+                    title: 'Repeaters: ${l.name}',
+                    status: [Part(l.count == 1 ? '1 repeater' : '${l.count} repeaters')],
+                    statusLines: 2,
+                    selected: isPaneSelected(context, 'repeaters-${l.id}'),
+                    trailing: l.visible ? Text('on map', style: TextStyle(fontSize: 13, color: k.secondary)) : null,
+                    onTap: () => _openRepeaters(l.id),
+                  )
+              else
               for (final l in widget.deps.userLayers?.repeaterLists ?? const <UserLayer>[])
                 Card(
                   key: ValueKey('repeaters-${l.id}'),
@@ -258,10 +309,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                   ),
                 ),
               if (nb.notebooks.isEmpty && (widget.deps.userLayers?.repeaterLists.isEmpty ?? true))
-                Padding(
+                inset(Padding(
                   padding: const EdgeInsets.only(top: 40),
                   child: Text('No notebooks yet. Make one with New notebook.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.secondary)),
-                ),
+                )),
             ],
           ));
         },
