@@ -399,6 +399,10 @@ void main() {
         await show(framed(HomeScreen(layout: rig.layout, updates: updates, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}), home: true));
         await shot('home-update-banner');
 
+        // Home as the app's Shell builds it, with the cards its real state shows (Set up Cache or Discover, Weather and alerts).
+        await show(rig.shell());
+        await shot('home-app-state');
+
         // ---- b. Library: the list, and a book open ----
         await show(rig.shell());
         await openLibrary();

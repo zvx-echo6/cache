@@ -224,9 +224,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
           return LayoutBuilder(builder: (context, cts) {
-            // The desktop dashboard: left-aligned under the bar, at most 1200 wide, on the page gutter.
+            // The desktop dashboard: left-aligned under the bar, at most 1040 wide, on the page gutter.
             final padding = desktop != null
-                ? EdgeInsets.fromLTRB(desktop.gutter, 24, (cts.maxWidth - desktop.gutter - 1200).clamp(desktop.gutter, double.infinity).toDouble(), 24)
+                ? EdgeInsets.fromLTRB(desktop.gutter, 24, (cts.maxWidth - desktop.gutter - 1040).clamp(desktop.gutter, double.infinity).toDouble(), 24)
                 : ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
             // A short, wide window (a phone held sideways): two columns, so the first screen shows the search box and the weather
             // on the left and the Set up card and the shortcuts on the right, instead of one column a few rows of which show.
