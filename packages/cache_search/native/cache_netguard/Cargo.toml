@@ -8,3 +8,8 @@ description = "Cache's public-address guard: the one rule for which addresses an
 [dependencies]
 # Only the Resolver trait and AgentBuilder: the same ureq every core crate builds its client with.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+[features]
+# The loopback hooks the tests of the crates that use this one call (`loopback_here_for_tests` and friends). Only ever named in a
+# [dev-dependencies] entry, never in [dependencies]: a normal or release build has no way to let loopback through.
+test-hooks = []

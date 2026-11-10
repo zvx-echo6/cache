@@ -39,6 +39,8 @@ schemars = { version = "0.8", optional = true }
 schema = ["dep:schemars"]
 
 [dev-dependencies]
+# Loopback hooks for the guard tests; a dev-dependency only, so a release build never has them.
+cache_netguard = { path = "../cache_netguard", features = ["test-hooks"] }
 tiny_http = "0.12"
 cache_user = { path = "../cache_user" }
 # The places pack and its geocoder, for the tests of live_data resolving place names.

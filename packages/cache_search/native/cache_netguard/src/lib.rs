@@ -53,51 +53,64 @@ pub fn always(b: ureq::AgentBuilder) -> ureq::AgentBuilder {
     b.resolver(PublicResolver::new(Arc::new(AtomicBool::new(false)), Vec::new()))
 }
 
-thread_local! {
-    static LOOPBACK_HERE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-static LOOPBACK_ALL: AtomicBool = AtomicBool::new(false);
+// Test hooks: compiled only for this crate's own tests and for a crate's tests that name the `test-hooks` feature in its
+// [dev-dependencies]. A normal or release build has none of this, and `loopback_allowed` is `false` there.
+#[cfg(any(test, feature = "test-hooks"))]
+mod hooks {
+    use std::cell::Cell;
+    use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
-/// Tests only: while the returned value lives, loopback addresses (127/8, ::1) are reachable from this thread, so a test can
-/// stand a local server up and still see everything else (a redirect to a LAN or metadata address) refused.
-#[doc(hidden)]
-pub fn loopback_here_for_tests() -> LoopbackScope {
-    LOOPBACK_HERE.with(|c| c.set(c.get() + 1));
-    LoopbackScope(())
-}
+    thread_local! {
+        static LOOPBACK_HERE: Cell<u32> = const { Cell::new(0) };
+    }
+    static LOOPBACK_ALL: AtomicBool = AtomicBool::new(false);
+    static LOOPBACK_PORTS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
-/// See [`loopback_here_for_tests`].
-#[doc(hidden)]
-pub struct LoopbackScope(());
+    /// Tests only: while the returned value lives, loopback addresses (127/8, ::1) are reachable from this thread, so a test can
+    /// stand a local server up and still see everything else (a redirect to a LAN or metadata address) refused.
+    pub fn loopback_here_for_tests() -> LoopbackScope {
+        LOOPBACK_HERE.with(|c| c.set(c.get() + 1));
+        LoopbackScope(())
+    }
 
-impl Drop for LoopbackScope {
-    fn drop(&mut self) {
-        LOOPBACK_HERE.with(|c| c.set(c.get().saturating_sub(1)));
+    /// See [`loopback_here_for_tests`].
+    pub struct LoopbackScope(());
+
+    impl Drop for LoopbackScope {
+        fn drop(&mut self) {
+            LOOPBACK_HERE.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+
+    /// Tests only: loopback is reachable from every thread of this process from now on (for a client that works on its own thread).
+    pub fn loopback_everywhere_for_tests() {
+        LOOPBACK_ALL.store(true, Ordering::Relaxed);
+    }
+
+    /// Tests only: loopback is reachable on this one port, from every thread, from now on. Every other loopback port stays refused, so a
+    /// test can reach its own origin server and still see a redirect to anything else on this machine refused.
+    pub fn loopback_port_for_tests(port: u16) {
+        if let Ok(mut p) = LOOPBACK_PORTS.lock() {
+            p.push(port);
+        }
+    }
+
+    pub(crate) fn loopback_allowed(a: &SocketAddr) -> bool {
+        a.ip().is_loopback() && (LOOPBACK_ALL.load(Ordering::Relaxed) || LOOPBACK_HERE.with(|c| c.get()) > 0 || LOOPBACK_PORTS.lock().map(|p| p.contains(&a.port())).unwrap_or(false))
     }
 }
 
-/// Tests only: loopback is reachable from every thread of this process from now on (for a client that works on its own thread).
-#[doc(hidden)]
-pub fn loopback_everywhere_for_tests() {
-    LOOPBACK_ALL.store(true, Ordering::Relaxed);
-}
+#[cfg(any(test, feature = "test-hooks"))]
+pub use hooks::{loopback_everywhere_for_tests, loopback_here_for_tests, loopback_port_for_tests, LoopbackScope};
+#[cfg(any(test, feature = "test-hooks"))]
+use hooks::loopback_allowed;
 
-static LOOPBACK_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-
-/// Tests only: loopback is reachable on this one port, from every thread, from now on. Every other loopback port stays refused, so a
-/// test can reach its own origin server and still see a redirect to anything else on this machine refused.
-#[doc(hidden)]
-pub fn loopback_port_for_tests(port: u16) {
-    if let Ok(mut p) = LOOPBACK_PORTS.lock() {
-        p.push(port);
-    }
-}
-
-fn loopback_allowed(a: &SocketAddr) -> bool {
-    a.ip().is_loopback()
-        && (LOOPBACK_ALL.load(Ordering::Relaxed)
-            || LOOPBACK_HERE.with(|c| c.get()) > 0
-            || LOOPBACK_PORTS.lock().map(|p| p.contains(&a.port())).unwrap_or(false))
+/// Without the test hooks loopback is never let through.
+#[cfg(not(any(test, feature = "test-hooks")))]
+fn loopback_allowed(_: &SocketAddr) -> bool {
+    false
 }
 
 /// Looks a name up like the system does and refuses it when any address it gives is not public. It is the connect-time check:
@@ -245,6 +258,32 @@ mod tests {
             }
         }
         assert!(r.resolve("127.0.0.1:80").is_err());
+    }
+
+    /// The test hooks must reach a crate only through its [dev-dependencies], never its [dependencies]: a release build then has no
+    /// way to let loopback through. Reads the manifests of the crates in this workspace that depend on this one.
+    #[test]
+    fn the_test_hooks_feature_is_only_ever_a_dev_dependency() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut manifests: Vec<std::path::PathBuf> = std::fs::read_dir(root.parent().unwrap()).unwrap().flatten().map(|e| e.path().join("Cargo.toml")).collect();
+        manifests.push(root.join("../../../../server/Cargo.toml"));
+        let mut seen = 0;
+        for m in manifests.iter().filter(|m| m.exists()) {
+            let text = std::fs::read_to_string(m).unwrap();
+            let mut section = String::new();
+            for line in text.lines() {
+                let t = line.trim();
+                if t.starts_with('[') {
+                    section = t.to_string();
+                }
+                if t.starts_with('#') || !t.contains("test-hooks") {
+                    continue;
+                }
+                seen += 1;
+                assert!(section.ends_with("dev-dependencies]") || section == "[features]", "{}: test-hooks outside [dev-dependencies]: {t}", m.display());
+            }
+        }
+        assert!(seen > 0, "the crates whose tests use the hooks name the feature");
     }
 
     #[test]

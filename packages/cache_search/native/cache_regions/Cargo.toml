@@ -26,6 +26,8 @@ cache_places = { path = "../cache_places" }
 cache_snapshot = { path = "../cache_snapshot" }
 
 [dev-dependencies]
+# Loopback hooks for the guard tests; a dev-dependency only, so a release build never has them.
+cache_netguard = { path = "../cache_netguard", features = ["test-hooks"] }
 # The tests' routing server.
 tiny_http = "0.12"
 # Two devices: a tile index snapshot travels from one to the other (tests/peer_index.rs).

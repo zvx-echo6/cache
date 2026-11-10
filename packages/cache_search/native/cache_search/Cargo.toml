@@ -89,6 +89,8 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+# Loopback hooks for the guard tests; a dev-dependency only, so a release build never has them.
+cache_netguard = { path = "../cache_netguard", features = ["test-hooks"] }
 # Test-only: builds a real partial snapshot locally with Qdrant's own segment snapshot code (same rev, already in
 # the lockfile through edge).
 segment = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
