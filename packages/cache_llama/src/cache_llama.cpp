@@ -64,6 +64,7 @@ struct Handle {
     int                                  n_prompt    = 0;
     int                                  n_generated = 0;
     bool                                 finished    = true;
+    bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
 
@@ -645,6 +646,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_generated = 0;
         h->n_reused = 0;
         h->stop = false;
+        h->context_cut = false;
         h->stop_tokens.clear();
         h->prefix_note.clear();
 
@@ -703,7 +705,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_prompt = (int) tokens.size();
         if (h->n_prompt == 0 || h->n_prompt >= h->n_ctx) {
             set_err(err, err_len, "prompt does not fit the context (" + std::to_string(h->n_prompt) + " tokens)");
-            return -1;
+            return -3;  // context full: distinct from the other failures (-1)
         }
 
         // The stable prompt start. The prompt start of this request shape is the system prompt and the tool schemas the template
@@ -876,6 +878,7 @@ int cl_next(void * hp, char * buf, int buf_len) {
 
         if (h->n_past + 1 >= h->n_ctx) {
             h->finished = true;  // context full: this is the last token
+            h->context_cut = true;
         } else if (llama_decode(h->ctx, llama_batch_get_one(&tok, 1)) != 0) {
             llama_memory_clear(llama_get_memory(h->ctx), true);  // the cache no longer matches `cached`
             h->cached.clear();
@@ -950,9 +953,11 @@ int cl_finish(void * hp, char * out_json, int len) {
         const common_chat_msg & msg = h->session->finish(common_chat_input(h->generated.substr(h->fed)));
         h->fed = h->generated.size();
         msg_to_json(msg, j);
+        if (h->context_cut) j["stop"] = std::string("context");
     } catch (const std::exception & e) {
         j["content"]     = h->generated;
         j["parse_error"] = std::string(e.what());
+        if (h->context_cut) j["stop"] = std::string("context");
     }
     return put(j.dump(), out_json, len);
 }

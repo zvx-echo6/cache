@@ -32,7 +32,8 @@ class ChatMessage {
       : isUser = m.role == 'user',
         text = m.content,
         phase = TurnPhase.done,
-        error = m.error,
+        error = m.error == kChatFullCode ? null : m.error,
+        chatFull = m.error == kChatFullCode,
         navigationActions = m.navigationActions.isNotEmpty ? m.navigationActions : [
           for (final c in m.citations)
             if (c.address.startsWith('nav:') && c.address.length > 4) NavigationAction(address: c.address),
@@ -51,6 +52,12 @@ class ChatMessage {
   String? activeTool;
   List<NumberedResult> sources = const [];
   String? error;
+
+  /// The next question did not fit the chat's context: shown as a plain message with a New chat button, not as an error.
+  bool chatFull = false;
+
+  /// The answer ended because the chat's context filled up: shown with a note and a New chat button. Not stored.
+  bool cutShort = false;
   List<NavigationAction> navigationActions = const [];
 
   /// The confirm cards this answer asked for, in order.
@@ -62,6 +69,9 @@ class ChatMessage {
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
+
+/// What is kept in a stored message's error column for a reply that found the chat full; read back as [ChatMessage.chatFull].
+const String kChatFullCode = 'chat_full';
 
 /// The answer when the search core could not start: the question is never answered without its tools.
 const String kCoreDidNotStart = "Cache's search couldn't start, so this wasn't answered.";
@@ -621,6 +631,8 @@ class ChatController extends ChangeNotifier {
     reply
       ..phase = update.phase
       ..error = update.error
+      ..chatFull = update.chatFull
+      ..cutShort = update.cutShort
       ..activeTool = update.activeTool;
     final note = update.completedToolText;
     if (note != null) {
@@ -668,7 +680,7 @@ class ChatController extends ChangeNotifier {
             role: 'assistant',
             content: reply.text,
             message: {'role': 'assistant', 'content': reply.text},
-            error: reply.error ?? 'No answer was produced.',
+            error: reply.chatFull ? kChatFullCode : (reply.error ?? 'No answer was produced.'),
             navigationActions: reply.navigationActions,
             stats: stats,
             inTranscript: false,

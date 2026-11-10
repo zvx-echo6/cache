@@ -50,6 +50,8 @@ class TurnUpdate {
     this.completedToolText,
     this.promptTokens = 0,
     this.generatedTokens = 0,
+    this.chatFull = false,
+    this.cutShort = false,
   });
 
   final TurnPhase phase;
@@ -68,6 +70,12 @@ class TurnUpdate {
   final String? completedToolText;
   final int promptTokens;
   final int generatedTokens;
+
+  /// Only with [phase] done: the next request did not fit the context, so there is no answer and the chat is full.
+  final bool chatFull;
+
+  /// Only with [phase] done: the answer ended because the context filled up, so it is cut off.
+  final bool cutShort;
 }
 
 /// Runs one conversation: sends messages and tool schemas, runs the tools the model asks for (at most
@@ -308,9 +316,13 @@ class ToolLoop {
           cited: [for (final n in check.kept) _results[n]!],
           promptTokens: promptTokens,
           generatedTokens: generatedTokens,
+          cutShort: last.cutByContext,
         );
         return;
       }
+    } on ContextFullException catch (e) {
+      logError('Ask: the chat is full (${e.detail})');  // the engine text goes to the log, never to the screen
+      yield const TurnUpdate(phase: TurnPhase.done, chatFull: true);
     } catch (e) {
       yield TurnUpdate(phase: TurnPhase.done, error: e.toString().replaceFirst('Bad state: ', ''));
     }

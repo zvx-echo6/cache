@@ -685,7 +685,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             activeTool: m.activeTool,
             notes: m.toolNotes,
             text: m.text,
-            failed: m.error != null,
+            failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
           ),
           for (final card in m.confirms)
@@ -719,6 +719,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ],
               ),
             ),
+          if (m.cutShort && m.isDone)
+            _newChatNote(context, 'This answer was cut short because the chat is full.', 14, k.secondary, 'ask-cut-short'),
+          if (m.chatFull && m.isDone)
+            _newChatNote(context, 'This chat is full. Start a new chat to keep asking.', 16, k.text, 'ask-chat-full'),
           if (m.error != null)
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
           if (m.error == kCoreDidNotStart && widget.chat != null)
@@ -735,11 +739,34 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 label: Text('Report this answer', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
             ),
-          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
+          if (m.isDone && m.error == null && !m.chatFull && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
             Text(
               'No answer was produced.',
               style: TextStyle(fontSize: 15, color: k.secondary),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// A plain note with a New chat button (the same action as the app bar's), for a full chat.
+  Widget _newChatNote(BuildContext context, String message, double size, Color color, String key) {
+    if (widget.chat == null) return Text(message, style: TextStyle(fontSize: size, color: color));
+    return Padding(
+      key: ValueKey(key),
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: TextStyle(fontSize: size, height: 1.35, color: color)),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('ask-new-chat'),
+            onPressed: widget.chat!.newChat,
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+            icon: const Icon(Icons.add_comment_outlined, size: 20),
+            label: const Text('New chat'),
+          ),
         ],
       ),
     );
