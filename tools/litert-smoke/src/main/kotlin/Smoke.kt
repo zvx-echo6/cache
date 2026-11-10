@@ -2,19 +2,13 @@ import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.InputData
-import com.google.ai.edge.litertlm.ResponseCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.Session
 import com.google.ai.edge.litertlm.SessionConfig
 import java.io.File
-import java.util.concurrent.CancellationException
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 // Raw text goes in as given: the stock gemma-4-E2B-it.litertlm has no prompt templates, so a Session adds only BOS to the first
 // prefill of a fresh session. Everything runs greedy (temperature 0, top-k 1).
-
-private const val MAX_CHUNKS = 160
 
 private fun esc(s: String): String = buildString {
     for (c in s) when {
@@ -37,28 +31,24 @@ private fun fresh(): Session = engine.createSession(SessionConfig(samplerConfig 
 
 private fun prefill(s: Session, text: String) = s.runPrefill(listOf(InputData.Text(text)))
 
-// Decodes what the session has prefilled; the text of the chunks joined. Stops after MAX_CHUNKS chunks.
+// Decodes what the session has prefilled. generateContentStream cannot decode on its own: with no input it fails with
+// "Input is empty" (it prefills its input first), so this uses runDecode, which returns the whole text. A watchdog cancels a decode
+// that runs past DECODE_LIMIT_S seconds.
+private const val DECODE_LIMIT_S = 150L
+
 private fun decode(s: Session): String {
-    val sb = StringBuilder()
-    var n = 0
-    var err: Throwable? = null
-    val done = CountDownLatch(1)
-    s.generateContentStream(emptyList(), object : ResponseCallback {
-        override fun onNext(response: String) {
-            sb.append(response)
-            if (++n >= MAX_CHUNKS) s.cancelProcess()
+    val dog = java.util.Timer(true)
+    dog.schedule(object : java.util.TimerTask() {
+        override fun run() {
+            println("(watchdog) decode ran past $DECODE_LIMIT_S s, cancelling")
+            s.cancelProcess()
         }
-
-        override fun onDone() = done.countDown()
-
-        override fun onError(throwable: Throwable) {
-            if (throwable !is CancellationException) err = throwable
-            done.countDown()
-        }
-    })
-    if (!done.await(20, TimeUnit.MINUTES)) error("decode timed out")
-    err?.let { throw it }
-    return sb.toString()
+    }, DECODE_LIMIT_S * 1000)
+    try {
+        return s.runDecode()
+    } finally {
+        dog.cancel()
+    }
 }
 
 private fun show(tag: String, text: String) = println("$tag ${esc(text)}")

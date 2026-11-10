@@ -46,6 +46,7 @@ jobs:
       - name: Smoke test
         working-directory: tools/litert-smoke
         run: |
+          set -o pipefail
           gradle --no-daemon --console=plain run --args="$RUNNER_TEMP/model/gemma-4-E2B-it.litertlm" 2>&1 | tee "$RUNNER_TEMP/smoke.txt"
           {
             echo '```'
