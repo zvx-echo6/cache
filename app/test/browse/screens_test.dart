@@ -184,8 +184,10 @@ void main() {
       gate.complete(null);
       await Future<void>.delayed(const Duration(milliseconds: 200));
     });
+    // The first snackbar is hidden (it animates out) before the next one comes in, so pump past that.
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('No icon found at the source'), findsWidgets);
   });
 
