@@ -1,10 +1,8 @@
 // Free space: screens show free now, pre-checks use the allowance (free now plus half of the purgeable space on iPhone) less the
-// reserve, the sync engine starts with the same reserve Storage shows, and a full disk stops a download cleanly.
+// reserve, the sync engine starts with the same reserve Storage shows. (A full disk stopping a download is in browse/zim_download_test.dart.)
 
 import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:cache/browse/zim_download.dart';
 import 'package:cache/discover/ui/kit.dart';
 import 'package:cache/settings/space.dart';
 import 'package:cache/settings/storage_usage.dart';
@@ -14,7 +12,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart' show testPolicy;
-import 'browse/zim_download_test.dart' show FakeKiwix, data;
 import 'support/sync_fake.dart';
 
 const _gb = 1 << 30;
@@ -89,55 +86,5 @@ void main() {
     expect(configs.single['reserve_bytes'], isNot(1 << 30), reason: 'not the engine default of 1 GiB');
     sharing.dispose();
     await tester.pumpWidget(const SizedBox());
-  });
-
-  group('a full disk', () {
-    late Directory tmp;
-    setUp(() => tmp = Directory.systemTemp.createTempSync('enospc'));
-    tearDown(() => tmp.deleteSync(recursive: true));
-
-    test('stops the download, deletes the partial file and says so in plain words', () async {
-      final k = FakeKiwix(data(2 << 20));
-      await k.start();
-      addTearDown(k.stop);
-      final part = File('${tmp.path}/f.part');
-      var writes = 0;
-      final d = ZimDownloader(
-        freeSpace: (_) => 1 << 40,
-        writeChunk: (raf, chunk) async {
-          if (++writes > 1) {
-            throw FileSystemException('write failed', part.path, const OSError('No space left on device', 28));
-          }
-          await raf.writeFrom(chunk);
-        },
-      );
-      await expectLater(
-        d.download(url: k.url, part: part, sha256Url: Uri.parse('${k.url}.sha256')),
-        throwsA(
-          isA<DownloadException>()
-              .having((e) => e.code, 'code', 'no_space')
-              .having((e) => e.message, 'message', allOf(contains('out of space'), contains('removed'))),
-        ),
-      );
-      expect(part.existsSync(), isFalse, reason: 'the partial file does not keep the room that is left');
-      expect(writes, greaterThan(1));
-    });
-
-    test('another write error keeps the partial file', () async {
-      final k = FakeKiwix(Uint8List.fromList(data(2 << 20)));
-      await k.start();
-      addTearDown(k.stop);
-      final part = File('${tmp.path}/f.part');
-      var writes = 0;
-      final d = ZimDownloader(
-        freeSpace: (_) => 1 << 40,
-        writeChunk: (raf, chunk) async {
-          if (++writes > 1) throw FileSystemException('write failed', part.path, const OSError('Input/output error', 5));
-          await raf.writeFrom(chunk);
-        },
-      );
-      await expectLater(d.download(url: k.url, part: part), throwsA(isA<DownloadException>().having((e) => e.code, 'code', 'failed')));
-      expect(part.existsSync(), isTrue);
-    });
   });
 }
