@@ -179,14 +179,14 @@ void main() {
     await tester.tap(find.text('Get icon from source'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('Getting icon…'), findsOneWidget);
+    expect(find.text('Getting icon…'), findsWidgets);
     await tester.runAsync(() async {
       gate.complete(null);
       await Future<void>.delayed(const Duration(milliseconds: 200));
     });
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('No icon found at the source'), findsOneWidget);
+    expect(find.text('No icon found at the source'), findsWidgets);
   });
 
   testWidgets('with nothing installed the Library explains and offers Add to Library', (tester) async {

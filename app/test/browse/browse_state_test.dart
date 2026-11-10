@@ -81,7 +81,7 @@ void main() {
     late ZimFile z;
 
     Future<void> install({bool origin = true}) async {
-      final f = File('${sources.zimsDir!.path}/wikivoyage_en_europe_maxi_2026-09.zim')..writeAsBytesSync([0]);
+      final f = File('${sources.zimsDir!.path}/${origin ? 'wikivoyage_en_europe_maxi_2026-09' : 'my-own-file'}.zim')..writeAsBytesSync([0]);
       if (origin) {
         final e = (await catalogWith((u) async => fixture('kiwix_entries_wikivoyage.xml')).entries()).entries.first;
         File('${f.path}.origin.json').writeAsStringSync(jsonEncode(ZimOrigin.fromEntry(e).toJson()));
