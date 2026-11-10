@@ -26,6 +26,8 @@ import '../regions/ui/region_actions.dart';
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
+import '../desktop/desktop.dart';
+import '../desktop/desktop_shell.dart';
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
@@ -816,6 +818,22 @@ class _ShellState extends State<Shell> {
         // A tablet held sideways: the main destinations in a rail at the side, which slides away to give the page the whole
         // width (a menu button at the top left brings it back). Upright, the bottom bar, as on a phone.
         // A short window (a phone held sideways, 390 high) keeps the rail, which scrolls when its destinations do not fit.
+        // Cache on Linux in a window 1024 wide or more: the desktop sidebar, whichever way round the window is.
+        if (isLinuxDesktop(context)) {
+          return ListenableBuilder(
+            listenable: widget.app,
+            builder: (context, _) => DesktopShell(
+              atHome: !_onModules && _module == null,
+              module: _onModules ? null : _module,
+              askOn: _askOn,
+              askDetail: _askOn ? null : askOffDetail(widget.app),
+              onHome: _goHome,
+              onModule: _goModule,
+              onModuleOptions: (c, m) => ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule).moduleOptions(c, m),
+              child: stack,
+            ),
+          );
+        }
         if (hasRailWidth(context) && !isPortrait(context)) {
           final hidden = _railHidden;
           final reduce = MediaQuery.disableAnimationsOf(context);
