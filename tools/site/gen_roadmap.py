@@ -59,8 +59,9 @@ def stable_means(readme):
     text = re.sub(r"\s+", " ", m.group(1)).strip().rstrip(".")
     return [p.strip()[:1].upper() + p.strip()[1:] for p in text.split(";") if p.strip()]
 
-def theme(readme):
-    m = re.search(r"^##\s*1\.1:\s*(.+)$", readme, re.M)
+def theme(readme, release=RELEASE):
+    """A release's title: the readme's "## <release>: <title>" line ("" when there is none)."""
+    m = re.search(r"^##\s*" + re.escape(release) + r":\s*(.+)$", readme, re.M)
     return m.group(1).strip() if m else ""
 
 ICON = {  # 16px inline icons; the state is always written out too, so colour is never the only cue
@@ -107,6 +108,8 @@ stable = stable_means(readme)
 for i in cur: check(i["title"] + "\n" + i["body"], f'item "{i["title"]}"')
 for r, ts in later.items():
     for t in ts: check(t, f"{r} title")
+later_titles = {r: theme(readme, r) for r in LATER}
+for r, t in later_titles.items(): check(t, f"{r} release title")
 check(the_theme + " " + " ".join(stable), "project readme")
 
 def group(name, prio, note):
@@ -119,7 +122,8 @@ legend = "".join(f'<li class="chip {CLS[s]}"><span class="state">{icon(s)}{html.
                  f'<span class="mean">{MEANING[s]}</span></li>' for s in STATES)
 stable_html = "".join(f"<li>{html.escape(s)}.</li>" for s in stable)
 later_html = "".join(
-    f'<div><h3>{r}</h3><ul>' + "".join(f"<li>{html.escape(t)}</li>" for t in ts) + "</ul></div>"
+    f'<div><h3>{r}' + (f': {html.escape(later_titles[r])}' if later_titles.get(r) else "") + '</h3><ul>'
+    + "".join(f"<li>{html.escape(t)}</li>" for t in ts) + "</ul></div>"
     for r, ts in later.items() if ts)
 today = datetime.date.today().isoformat()
 done = sum(1 for i in cur for p in PLATFORMS if i.get(p) == "Done")
