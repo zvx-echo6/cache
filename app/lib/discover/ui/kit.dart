@@ -198,14 +198,19 @@ class SpaceBar extends StatelessWidget {
 /// "11.6 GB selected · 38.2 GB free" over the bar of what it takes of the free space. Too big for the free space: the left in red,
 /// with how much more is needed.
 class SpaceLine extends StatelessWidget {
-  const SpaceLine({super.key, required this.label, required this.bytes, required this.free});
+  const SpaceLine({super.key, required this.label, required this.bytes, required this.free, this.usable});
 
   /// "selected", "Adds", "to download".
   final String Function(String size) label;
   final int bytes;
   final int? free;
 
-  bool get tooBig => free != null && bytes > free!;
+  /// What may be used (the allowance less the reserve); the free space when null.
+  final int? usable;
+
+  int? get _limit => usable ?? free;
+
+  bool get tooBig => _limit != null && bytes > _limit!;
 
   @override
   Widget build(BuildContext context) {
@@ -219,7 +224,7 @@ class SpaceLine extends StatelessWidget {
         Row(
           children: [
             Expanded(child: Text(label(formatBytes(bytes)), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: tooBig ? k.emergency : k.text))),
-            Text(f == null ? 'Free space unknown' : (tooBig ? 'Needs ${formatBytes(bytes - f)} more' : '${formatBytes(f)} free'),
+            Text(f == null ? 'Free space unknown' : (tooBig ? 'Needs ${formatBytes(bytes - _limit!)} more' : '${formatBytes(f)} free'),
                 style: TextStyle(fontSize: 13, color: tooBig ? k.emergency : k.secondary)),
           ],
         ),

@@ -1102,33 +1102,46 @@ impl Inner {
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
+    /// Free bytes now on the volume holding `path` (or its nearest existing parent): the figure shown on screen.
     fn free_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, false)
+    }
+
+    /// What a transfer may count on before the reserve: [`Inner::free_bytes`] everywhere except iPhone, where it also counts half
+    /// of the space iOS can purge. Every space check uses this, so the reserve is the only margin.
+    fn allowed_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, true)
+    }
+
+    fn existing(path: &Path) -> Option<PathBuf> {
         let mut p = path.to_path_buf();
         while !p.exists() {
             if !p.pop() {
                 return None;
             }
         }
-        Self::volume_free(&p)
+        Some(p)
     }
 
-    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix).
+    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix); `allowance` makes no difference here.
     #[cfg(not(target_os = "ios"))]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, _allowance: bool) -> Option<u64> {
         fs4::available_space(p).ok()
     }
 
-    /// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts the space iOS can purge as iPhone Storage in
-    /// Settings does; statvfs leaves it out.
+    /// iPhone: the app's `cache_free_now_bytes_on_disk` (statvfs, same binary) for the figure shown, and its
+    /// `cache_free_bytes_on_disk` (free now plus half of what iOS can purge) for the checks.
     #[cfg(target_os = "ios")]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, allowance: bool) -> Option<u64> {
         use std::os::unix::ffi::OsStrExt;
         extern "C" {
             fn cache_free_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
+            fn cache_free_now_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
         }
         let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
-        // SAFETY: `c` is a valid NUL-terminated path; the helper only reads it.
-        u64::try_from(unsafe { cache_free_bytes_on_disk(c.as_ptr()) }).ok()
+        // SAFETY: `c` is a valid NUL-terminated path; the helpers only read it.
+        let n = unsafe { if allowance { cache_free_bytes_on_disk(c.as_ptr()) } else { cache_free_now_bytes_on_disk(c.as_ptr()) } };
+        u64::try_from(n).ok()
     }
 
     /// One round: rescan every shared folder, then for every linked device fetch its index and apply what is newer there.
@@ -1338,13 +1351,13 @@ impl Inner {
             // The store takes it first; where the shared folder is on another file system (a phone's internal and shared
             // storage) the copy into place needs the room there too.
             for at in [&self.dir, &full] {
-                if let Some(free) = Self::free_bytes(at) {
+                if let Some(free) = Self::allowed_bytes(at) {
                     if free < need.saturating_add(reserve) {
                         bail!(
                             "Paused: {} needs {}, {} is free and {} is kept free",
                             path,
                             human(need),
-                            human(free),
+                            human(Self::free_bytes(at).unwrap_or(free)),
                             human(reserve)
                         );
                     }
@@ -1382,7 +1395,7 @@ impl Inner {
                                 t.done = n;
                             }
                         }
-                        DownloadProgressItem::Error(e) => failed = Some(format!("{e}")),
+                        DownloadProgressItem::Error(e) => failed = Some(if is_no_space(&e) { NO_SPACE.to_string() } else { format!("{e}") }),
                         DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
                         _ => {}
                     },
@@ -1401,6 +1414,9 @@ impl Inner {
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
+                if f == NO_SPACE {
+                    bail!("Paused: no room to keep {path} ({} needed). Free up space and it carries on.", human(need));
+                }
                 bail!("{path}: {f} (will resume)");
             }
         }
@@ -1432,11 +1448,15 @@ impl Inner {
             self.stop.store(true, Ordering::Relaxed);
             bail!("test: cut off writing {path}");
         }
+        let size_of_entry = entry.size;
         if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await {
             // Whatever part got written goes; the content stays in the store and the next round writes it again.
             if std::fs::remove_file(&full).is_err() && full.exists() {
                 // Left for the recovery a start does, before the next scan could take it for an edit.
                 self.recovered.store(false, Ordering::Relaxed);
+            }
+            if is_no_space(&e) {
+                bail!("Paused: no room to write {path} ({} needed). Free up space and it carries on.", human(size_of_entry));
             }
             bail!("could not write {path}: {e}");
         }
@@ -1457,6 +1477,23 @@ impl Inner {
         }
         Ok(())
     }
+}
+
+/// The failure text that stands for a full disk while a transfer is fetched (so it is not shown as a raw error).
+const NO_SPACE: &str = "no space left on the device";
+
+/// True when `e` (or an error it wraps) is the operating system's "disk full" (ENOSPC, 28 on iOS, Android and Linux).
+fn is_no_space(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = cur {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            if io.raw_os_error() == Some(28) {
+                return true;
+            }
+        }
+        cur = err.source();
+    }
+    false
 }
 
 fn chrono_stamp() -> String {
@@ -2225,3 +2262,37 @@ impl SyncEngine {
     }
 }
 
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("could not export")
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn a_full_disk_is_told_from_other_errors() {
+        assert!(is_no_space(&std::io::Error::from_raw_os_error(28)));
+        assert!(is_no_space(&Wrapped(std::io::Error::from_raw_os_error(28))));
+        assert!(!is_no_space(&std::io::Error::from_raw_os_error(13)));
+        assert!(!is_no_space(&std::io::Error::new(std::io::ErrorKind::NotFound, "gone")));
+    }
+
+    #[test]
+    fn checks_use_the_allowance_and_screens_the_free_figure() {
+        // Off iPhone the two are the same statvfs figure; on iPhone the allowance can be larger, never smaller.
+        let d = std::env::temp_dir();
+        let (now, allowed) = (Inner::free_bytes(&d).unwrap(), Inner::allowed_bytes(&d).unwrap());
+        assert!(allowed >= now.saturating_sub(1 << 20));
+    }
+}
