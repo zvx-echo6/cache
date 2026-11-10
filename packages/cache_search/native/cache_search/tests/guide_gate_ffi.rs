@@ -160,7 +160,7 @@ fn a_query_about_the_app_keeps_the_guide_on_top() {
 fn the_result_lines_keep_their_form_and_numbering() {
     let (_t, h) = fixture("lines", "cache-guide");
     let lines = tool_lines(h, 5);
-    assert_eq!(lines.len(), 5);
+    assert_eq!(lines.len(), 3);
     for (i, l) in lines.iter().enumerate() {
         let want = format!("[{}] Mine ", i + 1);
         assert!(l.starts_with(&want), "{l}");

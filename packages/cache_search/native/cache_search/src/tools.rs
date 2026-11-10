@@ -21,7 +21,7 @@ pub type QueryEmbedder = Box<dyn Fn(&str) -> Option<(String, Vec<f32>)> + Send +
 pub const TOOL_ORDER: [&str; 9] = ["search", "read", "navigate", "nearby", "locate", "live_data", "calculate", "act", "web_search"];
 
 /// Results of the built-in search.
-const SEARCH_K: usize = 5;
+const SEARCH_K: usize = 3;
 /// Characters of text the built-in read returns.
 const READ_MAX_CHARS: i32 = 6000;
 
@@ -413,7 +413,7 @@ impl Handle {
         })
     }
 
-    /// Built-in `search`: the top 5 as `{{addr:<address>}} <title> — <snippet>` lines (the same title and snippet
+    /// Built-in `search`: the top 3 as `{{addr:<address>}} <title> — <snippet>` lines (the same title and snippet
     /// rules as `cs_format`; one line each, no ` — ` when the snippet is empty). The query vector is the host's
     /// (`query_vector` sent with the call), else the handle's embedder's; without either the search is keyword-only.
     fn run_search(&mut self, args: &Value, host_vector: Option<Value>) -> std::result::Result<ToolOutput, ToolError> {
