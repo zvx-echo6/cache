@@ -632,36 +632,77 @@ void main() {
       expect(b.folder.text['Trips/notebook.json'], contains('aaa-hikes'), reason: 'never rewritten to a higher id');
     });
 
-    test('names that make one folder get their own folders', () async {
+    test('names that make one folder get their own folders, and another device reads each notebook from its own folder', () async {
       final a = await device('aaa-one', name: 'Trip: 2026', entry: 'ea1');
       await a.nb.saveNotebook(id: 'bbb-two', template: 'notes', def: hikes.copyWith(name: 'Trip 2026'));
       await a.nb.saveEntry(id: 'ea2', notebookId: 'bbb-two', occurredAt: '2026-11-01T09:00:00-07:00', title: 'Second', body: 'x');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
       await a.engine.run();
-      final files = a.folder.text.keys.where((k) => k.endsWith('notebook.json')).toList();
-      expect(files.where((k) => k.startsWith('Trip')).length, 2);
-      expect({for (final k in files.where((k) => k.startsWith('Trip'))) k.split('/').first}.length, 2);
+      final dirs = {for (final k in a.folder.text.keys.where((k) => k.endsWith('notebook.json') && k.startsWith('Trip'))) k.split('/').first};
+      expect(dirs.length, 2, reason: 'no two notebooks share a folder');
+      await rounds([a, b], [link], n: 3);
+      expect(ids(b, 'Trip: 2026'), ['aaa-one']);
+      expect(ids(b, 'Trip 2026'), ['bbb-two']);
+      expect(await entryIds(b, 'aaa-one'), {'ea1'});
+      expect(await entryIds(b, 'bbb-two'), {'ea2'});
     });
 
-    test('a rename carries the id: the other device renames its notebook, nothing is deleted, no second notebook', () async {
+    test('a rename carries the id and the files: the other device ends with one notebook, every entry in the new folder, nothing in the old', () async {
       final a = await device('hikes-id', entry: 'ea1');
+      await a.nb.saveEntry(id: 'ea2', notebookId: 'hikes-id', occurredAt: '2026-11-02T09:00:00-07:00', title: 'Second hike', body: 'y');
       final b = _Rig(SyncKind.share, includePrivate: false);
       await b.nb.start();
       final link = _Link(a.folder, b.folder);
       await rounds([a, b], [link], n: 2);
       expect(ids(b, 'Hikes'), ['hikes-id']);
+      expect(await entryIds(b, 'hikes-id'), {'ea1', 'ea2'});
       await a.nb.saveNotebook(id: 'hikes-id', def: hikes.copyWith(name: 'Trips'));
       await a.engine.run();
       expect(a.folder.text['Trips/notebook.json'], contains('hikes-id'));
-      expect(a.folder.text.containsKey('Hikes/notebook.json'), isFalse);
+      expect(a.folder.text.keys.where((k) => k.startsWith('Hikes/')), isEmpty, reason: 'the files moved, the old folder is empty');
+      expect(a.folder.text.keys.where((k) => k.startsWith('Trips/') && k.endsWith('.md')).length, 2);
       link.sync();
       final rep = await b.engine.run();
       expect(rep.deleted, 0);
       await rounds([a, b], [link], n: 2);
       for (final d in [a, b]) {
         expect(d.nb.notebooks.where((n) => n.name == 'Hikes' || n.name == 'Trips').map((n) => '${n.name}:${n.id}'), ['Trips:hikes-id']);
-        expect(await entryIds(d, 'hikes-id'), {'ea1'});
-        expect(d.folder.text.containsKey('Hikes/notebook.json'), isFalse);
+        expect(await entryIds(d, 'hikes-id'), {'ea1', 'ea2'});
+        expect(d.folder.text.keys.where((k) => k.startsWith('Hikes/')), isEmpty);
+        expect(d.folder.text.keys.where((k) => k.startsWith('Trips/') && k.endsWith('.md')).length, 2);
         expect(jsonDecode(d.folder.text['Trips/notebook.json']!)['deleted'], isNull);
+      }
+      // the next sync is stable: nothing changes on either side
+      final before = [{...a.folder.text}, {...b.folder.text}];
+      await rounds([a, b], [link], n: 2);
+      expect(a.folder.text, before[0]);
+      expect(b.folder.text, before[1]);
+      expect(ids(b, 'Trips'), ['hikes-id']);
+    });
+
+    test('a device that sees the old folder go before the new files come keeps its entries and does not make a second notebook', () async {
+      final a = await device('hikes-id', entry: 'ea1');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link], n: 2);
+      await a.nb.saveNotebook(id: 'hikes-id', def: hikes.copyWith(name: 'Trips'));
+      await a.engine.run();
+      // the old folder's deletes arrive first, the new files later
+      final held = {for (final e in a.folder.text.entries) if (e.key.startsWith('Trips/') && e.key.endsWith('.md')) e.key: e.value};
+      for (final k in held.keys) {
+        a.folder.text.remove(k);
+      }
+      link.sync();
+      await b.engine.run();
+      expect(await entryIds(b, 'hikes-id'), {'ea1'}, reason: 'waited for, not deleted');
+      a.folder.text.addAll(held);
+      await rounds([a, b], [link], n: 2);
+      for (final d in [a, b]) {
+        expect(d.nb.notebooks.where((n) => n.name == 'Hikes' || n.name == 'Trips').map((n) => n.name), ['Trips']);
+        expect(await entryIds(d, 'hikes-id'), {'ea1'});
       }
     });
 
