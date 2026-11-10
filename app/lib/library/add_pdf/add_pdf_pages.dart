@@ -134,7 +134,7 @@ String _titleFromName(String name) => name.replaceFirst(RegExp(r'\.pdf$', caseSe
 /// A file's tile: the PDF icon on a tinted square.
 /// The tiled icon of the rows in Add to Library's Your own group.
 class FileTile extends StatelessWidget {
-  const FileTile({this.icon = Icons.description_outlined});
+  const FileTile({super.key, this.icon = Icons.description_outlined});
 
   final IconData icon;
 
