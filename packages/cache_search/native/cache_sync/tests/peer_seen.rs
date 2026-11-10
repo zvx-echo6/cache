@@ -55,7 +55,8 @@ fn last_seen_survives_a_restart_and_a_rename_follows() {
     wait("the time in the saved file", 30, || std::fs::read_to_string(db.join("sync.json")).map(|t| t.contains("last_seen")).unwrap_or(false));
     b.close();
     let b = engine_on(&db, "Phone", Some(b_port));
-    assert!(peer(&b)["last_seen"].as_u64().is_some_and(|t| t >= seen), "last seen survives a restart");
+    // What is saved is at most a minute behind what was shown (the write is throttled).
+    assert!(peer(&b)["last_seen"].as_u64().is_some_and(|t| t + 60_000 >= seen), "last seen survives a restart");
     assert_eq!(peer(&b)["via"], "direct");
 
     // A is renamed; B takes the new name on its next round.
