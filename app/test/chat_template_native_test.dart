@@ -35,7 +35,7 @@ Map<String, dynamic> _req({bool tools = true, String? toolChoice}) => {
         {'role': 'user', 'content': 'Hi'},
       ],
       if (tools) 'tools': _tools,
-      if (toolChoice != null) 'tool_choice': toolChoice,
+      'tool_choice': ?toolChoice,
       'enable_thinking': false,
     };
 
