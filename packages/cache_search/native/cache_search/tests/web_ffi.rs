@@ -81,6 +81,9 @@ struct Server {
 
 impl Server {
     fn start(handler: impl Fn(&Req) -> Resp + Send + Sync + 'static) -> Server {
+        // the web client is always guarded against private addresses; these tests stand a server up on this machine, so loopback
+        // (and only loopback) is let through for this process. tests/web_guard.rs is the one without it.
+        cache_netguard::loopback_everywhere_for_tests();
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", l.local_addr().unwrap());
         let log: Arc<Mutex<Vec<Req>>> = Arc::default();
@@ -188,6 +191,7 @@ struct Core {
 
 impl Core {
     fn new() -> Core {
+        cache_netguard::loopback_everywhere_for_tests();
         let cfg = cstr(r#"{"sources":[]}"#);
         let h = unsafe { cs_open(cfg.as_ptr()) };
         assert!(!h.is_null());
@@ -722,6 +726,26 @@ fn more_than_five_redirects_is_not_available() {
     });
     let (mut c, _s) = core_with_page(&page, "/r0", "kept snippet");
     assert!(c.content("read", json!({"n": 1})).contains("\nkept snippet\narrived\n"));
+}
+
+#[test]
+fn a_redirect_to_a_private_address_is_not_followed_and_reads_as_not_available() {
+    // No guard variable is set in this process: the web read is guarded on every platform. The target below is this machine, spelled
+    // as an IPv6 address (::ffff:127.0.0.1), which an unguarded client would reach and this one must not.
+    assert!(std::env::var_os("CACHE_NET_GUARD").is_none());
+    let target = Server::start(|_| Resp::html("<p>inside the house</p>"));
+    let target_port = target.base.rsplit(':').next().unwrap().to_string();
+    let local = format!("http://[::ffff:127.0.0.1]:{target_port}/secret");
+    for to in [local.as_str(), "http://169.254.169.254/latest/meta-data/", "http://192.168.1.240/", "http://10.0.0.1/admin", "http://100.64.0.4/", "http://[::1]/"] {
+        let to = to.to_string();
+        let page = Server::start(move |_| Resp::redirect(&to));
+        let (mut c, _s) = core_with_page(&page, "/p", "kept snippet");
+        // the existing failure behaviour, nothing new: the snippet and the usual line
+        assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nkept snippet\n[full page not available]");
+        // fetch_page says the same thing
+        assert_eq!(fetch_page(&page.url("/p"), Instant::now() + Duration::from_secs(5), 64 * 1024), Page::Unavailable);
+    }
+    assert!(target.requests().is_empty(), "the redirect target must never be connected to");
 }
 
 #[test]

@@ -101,6 +101,15 @@ jobs:
               print("Nothing published yet.")
           print(f"OK: version {v}, updated {upd}, {len(d.get('activities', []))} activities")
           PY
+      - name: Check app 1.0.30 does not read this key
+        # Discover is new in 1.1. App 1.0.30 (build 46) has no code that reads this key, so nothing here can break it. If that
+        # ever stops being true, this fails until a 1.0.30 compatibility check is written for the file.
+        run: |
+          git fetch --no-tags --depth=1 origin tag v1.0.30
+          if git grep -n -i -e 'discover/catalogue' -e 'discover-catalogue' v1.0.30 -- app/lib app/assets; then
+            echo "::error::App 1.0.30 reads this key; add a compatibility check before publishing."; exit 1
+          fi
+          echo "App 1.0.30 has no reader for $KEY."
       - name: Upload if changed
         run: |
           new=$(md5sum "$SRC" | cut -d' ' -f1)

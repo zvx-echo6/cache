@@ -85,7 +85,7 @@ class CaptionTrack {
       return parseCues(utf8.decode(res.bodyBytes, allowMalformed: true));
     }
     if (path != null) return parseCues(File(path!).readAsStringSync());
-    if (url != null) return parseCues(await fetchText(Uri.parse(url!), httpsOnly: false));
+    if (url != null) return parseCues(await fetchText(Uri.parse(url!), httpsOnly: false, scope: FetchScope.video));
     return const [];
   }
 }

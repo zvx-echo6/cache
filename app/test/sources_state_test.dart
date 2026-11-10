@@ -103,6 +103,22 @@ class _RecordingNative extends _IndexNative {
 
 CsNative _makeRecordingNative() => _RecordingNative();
 
+/// A core whose ZIMs with "pic" in their name have an illustration (the PNG signature and four more bytes).
+class _IllustrationNative extends _IndexNative implements CsZimIconNative {
+  static const png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+
+  @override
+  bool get hasZimIllustration => true;
+
+  @override
+  String? zimIllustration(int handle, String zimId) => zimId.split('/').last.contains('pic') ? jsonEncode({'png_base64': base64Encode(png)}) : null;
+
+  @override
+  String? lastError(int handle) => jsonEncode({'code': 'not_found', 'message': 'no illustration'});
+}
+
+CsNative _makeIllustrationNative() => _IllustrationNative();
+
 void main() {
   late Directory tmp;
   late Directory zims;
@@ -270,5 +286,69 @@ void main() {
     final seen = jsonDecode(File('${indexes.path}/set_sources.json').readAsStringSync()) as Map;
     expect(seen['indexes_dir'], indexes.path, reason: 'cs_set_sources replaces indexes_dir, so it comes every time');
     expect(s.statuses.single.sourceId, 'u-a.zim');
+  });
+
+  test("a ZIM with no saved icon shows the one inside the ZIM, read once and kept; a ZIM without one keeps its letter", () async {
+    File('${zims.path}/pic.zim').writeAsBytesSync([0]);
+    File('${zims.path}/plain.zim').writeAsBytesSync([0]);
+    File('${zims.path}/saved-pic.zim').writeAsBytesSync([0]);
+    File('${zims.path}/saved-pic.zim.icon.png').writeAsBytesSync([9, 9]);
+    final s = SourcesState(zimsDirOverride: zims, indexesDirOverride: Directory('${tmp.path}/indexes'), nativeFactory: _makeIllustrationNative, coreExtras: const {});
+    addTearDown(s.dispose);
+    await s.init();
+    ZimFile zim(String n) => s.zims.firstWhere((z) => z.fileName == n);
+
+    var told = 0;
+    s.addListener(() => told++);
+    expect(s.iconOf(zim('pic.zim')), isNull, reason: 'the list does not wait for it');
+    for (var i = 0; i < 100 && !File('${zims.path}/pic.zim.illustration.png').existsSync(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(told, greaterThan(0), reason: 'the rows are told when it arrives');
+    final own = s.iconOf(zim('pic.zim'))!;
+    expect(own.path, '${zims.path}/pic.zim.illustration.png');
+    expect(own.readAsBytesSync(), _IllustrationNative.png);
+
+    // The catalogue's (or the person's) icon is kept over the ZIM's own; the ZIM without one has no file and stays a letter.
+    expect(s.iconOf(zim('saved-pic.zim'))!.path, '${zims.path}/saved-pic.zim.icon.png');
+    expect(s.iconOf(zim('plain.zim')), isNull);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(File('${zims.path}/plain.zim.illustration.png').existsSync(), isFalse);
+    expect(File('${zims.path}/saved-pic.zim.illustration.png').existsSync(), isFalse);
+
+    // Deleting the ZIM takes the cached picture with it.
+    await s.remove(zim('pic.zim'));
+    expect(File('${zims.path}/pic.zim.illustration.png').existsSync(), isFalse);
+  });
+
+  group('the browser takes the server features', () {
+    test('every extras section comes through, routing and places included (so nav.available turns on)', () {
+      final extras = SourcesState.webExtrasFrom({
+        'routing': {'available': true, 'shim': '/opt/libvalhalla_shim.so'},
+        'places': {'available': false, 'merged_dir': '/s/regions/places'},
+        'extras': {
+          'layers': {'dir': '/s/layers'},
+          'places': {'merged_dir': '/s/regions/places'},
+          'routing': {'valhalla': {'shim': '/opt/libvalhalla_shim.so'}},
+        },
+      });
+      expect(extras.keys, containsAll(['layers', 'places', 'routing']));
+      expect(extras.containsKey('routing'), isTrue);
+    });
+
+    test('a server without a road router leaves routing out, as a phone without one does', () {
+      final extras = SourcesState.webExtrasFrom({
+        'routing': {'available': false, 'shim': ''},
+        'extras': {'layers': {'dir': '/s/layers'}},
+      });
+      expect(extras.containsKey('routing'), isFalse);
+      expect(extras['layers'], {'dir': '/s/layers'});
+    });
+
+    test('an odd reply gives empty extras', () {
+      expect(SourcesState.webExtrasFrom(null), isEmpty);
+      expect(SourcesState.webExtrasFrom({'routing': {}}), isEmpty);
+      expect(SourcesState.webExtrasFrom('x'), isEmpty);
+    });
   });
 }
