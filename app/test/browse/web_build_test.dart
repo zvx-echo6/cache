@@ -479,6 +479,27 @@ void main() {
       // the words go when the upload ends, not when the toast's own time is up
       expect(find.text('Uploading 1 PDF. Keep this tab open.'), findsNothing);
     });
+
+    testWidgets('Delete is in the library menu, asks first, and the library goes', (tester) async {
+      api.libs = [lib(books: 0, passages: 0), lib(id: 'lib2', title: 'Garden')];
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      await tester.tap(find.byKey(const ValueKey('library-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Delete · frees'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete Hunting and field guides?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(api.calls, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('library-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Delete · frees'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-delete')));
+      await tester.pumpAndSettle();
+      expect(api.calls, ['delete-library lib1']);
+      expect(c.libraries.map((l) => l.id), ['lib2']);
+    });
   });
 
   group('The drop folder', () {
