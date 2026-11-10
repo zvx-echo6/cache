@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cache_ocr/cache_ocr.dart';
 import 'package:cache_search/cache_search.dart';
@@ -20,6 +21,25 @@ import 'add_pdf_calls.dart';
 
 /// The kind of Add PDF's index work, before the "/" of its key.
 const String kAddPdfKind = 'pdf-add';
+
+/// This process, the same in every isolate of it (the app's engine and WorkManager's background engine share a process, and
+/// the core with it): the pid and the process's start time (Linux and Android `/proc/self/stat`), so a new process that got the
+/// same pid has another token. Where there is no /proc, the pid and a random number. Tests set it to act as another process.
+String addPdfProcessToken = _processToken();
+
+String _processToken() {
+  try {
+    final st = File('/proc/self/stat').readAsStringSync();
+    // the fields after the command name, which is in brackets; the start time is field 22
+    final rest = st.substring(st.lastIndexOf(')') + 2).split(' ');
+    return '$pid:${rest[19]}';
+  } catch (_) {
+    return '$pid:${Random.secure().nextInt(1 << 32)}';
+  }
+}
+
+/// The core says a live job already uses the job folder (the job this process started and paused).
+bool _jobDirInUse(Object e) => '$e'.contains('already uses this job_dir');
 
 /// The app's Add PDF state, set at start; null in tests that do not need it and on the web.
 AddPdfState? addPdfShared;
@@ -94,10 +114,14 @@ class AddPdfJob {
 
   AddPdfStatus status = AddPdfStatus.active;
 
-  /// The core's job number in this process (null until started, and after a restart). Kept on disk with the process id: a
-  /// background run in the same process (WorkManager's engine beside the app's) steps the same core job on, since the core
-  /// allows one job per job folder; in another process the number means nothing and the job is started again from its folder.
+  /// The core's job number in this process (null until started, and after a restart). Kept on disk with the process's token
+  /// ([addPdfProcessToken]): a background run in the same process (WorkManager's engine beside the app's) carries on the same core
+  /// job, since the core allows one job per job folder. It is used only when the core confirms a live job holds the job folder;
+  /// otherwise (another process, a stale number) the job is started again from its folder.
   int? coreJob;
+
+  /// [coreJob] came from disk and is not confirmed yet.
+  bool coreFromDisk = false;
 
   /// The core's state: reading, needs_ocr, embedding, writing, done, failed.
   String state = 'reading';
@@ -193,7 +217,7 @@ class AddPdfJob {
     'watch_hash': ?watchHash,
     'status': status.name,
     'core_job': ?coreJob,
-    'core_pid': ?(coreJob == null ? null : pid),
+    'core_proc': ?(coreJob == null ? null : addPdfProcessToken),
     'state': state,
     'pages': pages,
     'pages_done': pagesDone,
@@ -248,7 +272,8 @@ class AddPdfJob {
       ..noteSeen = j['note_seen'] == true
       ..noteDone = j['note_done'] == true
       // the core's job number holds only in the process that started it
-      ..coreJob = j['core_pid'] == pid ? (j['core_job'] as num?)?.toInt() : null;
+      ..coreJob = j['core_proc'] == addPdfProcessToken ? (j['core_job'] as num?)?.toInt() : null;
+    job.coreFromDisk = job.coreJob != null;
     if (j['error'] case final Map e) {
       job
         ..errorCode = e['code'] as String?
@@ -659,11 +684,18 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   Future<void> _cancelCore(AddPdfJob job) async {
     try {
-      var id = job.coreJob;
+      // a number kept on disk is used only once the core confirms its job holds the folder
+      var id = job.coreFromDisk ? null : job.coreJob;
       if (id == null && Directory(job.jobDir).existsSync()) {
         // a job of an earlier run of Cache: the core knows it again from its folder, then removes it
-        id = ((await calls('start', await _startArgs(job)))['job'] as num).toInt();
+        try {
+          id = ((await calls('start', await _startArgs(job)))['job'] as num).toInt();
+        } catch (e) {
+          if (!(job.coreFromDisk && _jobDirInUse(e))) rethrow;
+          id = job.coreJob;
+        }
       }
+      job.coreFromDisk = false;
       if (id != null) await calls('cancel', {'job': id});
     } on CacheSearchException catch (e) {
       if (e.code != 'not_found') logError('Add PDF: the job could not be removed', error: e, job: job.key);
@@ -696,12 +728,26 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   // ---- the run's side
 
   Future<int> _startCore(AddPdfJob job) async {
+    final saved = job.coreFromDisk ? job.coreJob : null;
+    job.coreFromDisk = false;
     if (job.folderRoot != null && !File(job.pdfPath).existsSync()) {
       final tmp = AddPdfJob(id: job.id, pdfPath: '${job.pdfPath}.part', fileName: job.fileName, title: job.title, bytes: job.bytes, libraryPath: job.libraryPath, libraryTitle: job.libraryTitle, jobDir: job.jobDir, added: job.added, folderRoot: job.folderRoot, sourcePath: job.sourcePath);
       await (copyIn ?? copyFromFolder)(tmp);
       await File(tmp.pdfPath).rename(job.pdfPath);
     }
-    final r = await calls('start', await _startArgs(job));
+    final Map<String, dynamic> r;
+    try {
+      r = await calls('start', await _startArgs(job));
+    } catch (e) {
+      // the job this process started and paused (another run of this process, e.g. a background slice) holds the folder: it
+      // carries on under its number
+      if (saved != null && _jobDirInUse(e)) {
+        job.coreJob = saved;
+        logInfo('Add PDF: carried on with the job this process already has', job: job.key);
+        return saved;
+      }
+      rethrow;
+    }
     job
       ..coreJob = (r['job'] as num).toInt()
       ..pages = (r['pages'] as num?)?.toInt() ?? job.pages;
@@ -859,7 +905,8 @@ class AddPdfRun implements IndexRun {
   Future<void> _go() async {
     final calls = state.calls;
     try {
-      if (job.coreJob == null) await state._startCore(job);
+      // a number kept on disk is confirmed by starting from the job folder first (a stale one is never stepped)
+      if (job.coreJob == null || job.coreFromDisk) await state._startCore(job);
       while (!_stop) {
         await state._permitFor(job);
         if (_stop) break;

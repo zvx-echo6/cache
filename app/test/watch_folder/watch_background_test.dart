@@ -11,6 +11,7 @@ import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/add_pdf/watch_background.dart';
 import 'package:cache/library/add_pdf/watch_folders.dart';
 import 'package:cache/platform/battery.dart';
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../add_pdf/add_pdf_fixtures.dart';
@@ -57,12 +58,81 @@ void main() {
     pdf.dispose();
   }
 
-  test("a paused job keeps the core's job number for a later run in the same process, never in another", () {
-    final j = sampleJob('a')..coreJob = 7;
-    final kept = j.toJson();
-    expect(AddPdfJob.fromJson(kept).coreJob, 7);
-    expect(AddPdfJob.fromJson({...kept, 'core_pid': pid + 1}).coreJob, isNull);
-    expect(AddPdfJob.fromJson(sampleJob('b').toJson()).coreJob, isNull);
+  group("the core's job number kept on disk", () {
+    late String token;
+    setUp(() => token = addPdfProcessToken);
+    tearDown(() => addPdfProcessToken = token);
+
+    test('is kept with the process token and read back only in the same process', () {
+      final j = sampleJob('a')..coreJob = 7;
+      final kept = j.toJson();
+      expect(kept['core_proc'], addPdfProcessToken);
+      expect(AddPdfJob.fromJson(kept).coreJob, 7);
+      expect(AddPdfJob.fromJson(kept).coreFromDisk, isTrue);
+      expect(AddPdfJob.fromJson({...kept, 'core_pid': pid}..remove('core_proc')).coreJob, isNull);
+      // a new process that got the same pid has another token
+      addPdfProcessToken = '$pid:another-start';
+      expect(AddPdfJob.fromJson(kept).coreJob, isNull);
+      expect(AddPdfJob.fromJson(sampleJob('b').toJson()).coreJob, isNull);
+    });
+
+    Future<(AddPdfState, AddPdfJob, FakeIngestCalls)> kept(Directory dir, FakeIngestCalls calls) async {
+      final first = testAddPdfState(dir);
+      final f = File('${dir.path}/x.pdf')..writeAsStringSync('pdf');
+      final j = await first.add(pdfPath: f.path, fileName: 'x.pdf', bytes: 3, title: 'x', target: _lib);
+      j.coreJob = 7;
+      Directory(j.jobDir).createSync(recursive: true);
+      await first.save();
+      first.dispose();
+      final again = testAddPdfState(dir, calls: calls);
+      await again.load();
+      return (again, again.byId(j.id)!, calls);
+    }
+
+    test('a stale number (the core has no live job for the folder) is never stepped: the job starts again from its folder', () async {
+      final calls = FakeIngestCalls({
+        'start': (_) => {'job': 9, 'resumed': true, 'pages': 3},
+        'step': steps([progress('done', result: {'copy': 'c' * 64})]),
+      });
+      final (s, j, c) = await kept(Directory('${tmp.path}/stale'), calls);
+      expect(j.coreJob, 7);
+      final run = await (await s.pending()).single.start();
+      expect(await run.finished, isTrue);
+      expect([for (final a in c.argsOf('step')) a['job']], everyElement(9));
+      expect(c.argsOf('start'), hasLength(1));
+      s.dispose();
+    });
+
+    test('a live job of this process holding the folder carries on under its number', () async {
+      final calls = FakeIngestCalls({
+        'start': (_) => throw CacheSearchException('io', 'a job already uses this job_dir'),
+        'step': steps([progress('done', result: {'copy': 'c' * 64})]),
+      });
+      final (s, _, c) = await kept(Directory('${tmp.path}/live'), calls);
+      final run = await (await s.pending()).single.start();
+      expect(await run.finished, isTrue);
+      expect([for (final a in c.argsOf('step')) a['job']], everyElement(7));
+      s.dispose();
+    });
+
+    test('a stale number that the core no longer knows when stepped: started again from the folder', () async {
+      var first = true;
+      final calls = FakeIngestCalls({
+        'start': (_) => first ? throw CacheSearchException('io', 'a job already uses this job_dir') : {'job': 11, 'resumed': true, 'pages': 3},
+        'step': (a) {
+          if (a['job'] == 7) {
+            first = false;
+            throw CacheSearchException('not_found', 'no such job');
+          }
+          return progress('done', result: {'copy': 'c' * 64});
+        },
+      });
+      final (s, _, c) = await kept(Directory('${tmp.path}/gone'), calls);
+      final run = await (await s.pending()).single.start();
+      expect(await run.finished, isTrue);
+      expect([for (final a in c.argsOf('step')) a['job']].last, 11);
+      s.dispose();
+    });
   });
 
   group('watch-folder-detect', () {
