@@ -102,7 +102,6 @@ class _StoragePageState extends State<StoragePage> {
         return SettingsPage(
           title: 'Storage',
           children: [
-            if (desktop) Text('Storage', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: k.text)),
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
