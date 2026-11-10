@@ -12,6 +12,7 @@
 use crate::compress::{compress_pdf, Compression, CompressionOutcome};
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted};
+use crate::ocr::{apply_ocr, ocr_pages, pages_needing_ocr, OcrSettings, OCR_BATCH};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -31,7 +32,8 @@ const ENV_OUT: &str = "CACHE_EXTRACT_OUT";
 const ENV_MEM: &str = "CACHE_EXTRACT_MEM";
 /// Test-only: makes the child misbehave ("segv", "abort", "hang", "exit"). Set by the parent from [`ChildExtractor::fault`] only.
 /// What the child does: unset or `extract` (read the PDF), `compress` (see [`crate::compress`]; `CACHE_EXTRACT_ARG` is the
-/// [`Compression`] as JSON and the result is the outcome and the new PDF).
+/// [`Compression`] as JSON and the result is the outcome and the new PDF), or `ocr` (see [`crate::ocr`]; `CACHE_EXTRACT_ARG` is the
+/// settings and the 0-based pages as JSON, and the result is an extraction holding just those pages, read by OCR).
 const ENV_JOB: &str = "CACHE_EXTRACT_JOB";
 const ENV_ARG: &str = "CACHE_EXTRACT_ARG";
 const ENV_FAULT: &str = "CACHE_EXTRACT_FAULT";
@@ -56,6 +58,8 @@ pub struct ChildExtractor {
     pub timeout: Option<Duration>,
     /// Overrides [`ChildExtractor::memory_for`], in bytes.
     pub memory: Option<u64>,
+    /// Seconds one scanned page may take to OCR (Tesseract on a small computer needs many). Default 60.
+    pub ocr_page_secs: u64,
     /// Test-only fault for the child.
     pub fault: Option<String>,
 }
@@ -64,7 +68,7 @@ impl ChildExtractor {
     /// This program re-run as `extract-pdf`.
     pub fn current_exe(tmp_dir: PathBuf) -> ChildExtractor {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(std::env::args().next().unwrap_or_default()));
-        ChildExtractor { exe, args: vec!["extract-pdf".into()], env: vec![], tmp_dir, timeout: None, memory: None, fault: None }
+        ChildExtractor { exe, args: vec!["extract-pdf".into()], env: vec![], tmp_dir, timeout: None, memory: None, ocr_page_secs: 60, fault: None }
     }
 
     /// Generous: 2 minutes plus 15 seconds per MB, at most an hour. (MuPDF reads a 5 MB PDF in a second or two.)
@@ -95,30 +99,75 @@ impl ChildExtractor {
         }
     }
 
-    /// Run `job` in the child on `pdf`; the bytes it wrote on success.
-    fn run_job(&self, job: &str, arg: &str, pdf: &[u8]) -> Result<JobOutput> {
+    /// [`ChildExtractor::extract`], then the pages with no text layer read by OCR when `ocr` is given: a few pages at a time, each batch in
+    /// its own child with the reading memory limit (plus room for Tesseract) and a time limit of [`ChildExtractor::ocr_page_secs`] a page.
+    /// `on(done, total)` is told before the first batch (with 0) and after each one. OCR never fails the book: a batch that crashes, runs
+    /// out of time or reads nothing leaves its pages as they were (still needing OCR), and three failed batches in a row end the attempt.
+    /// The PDF itself is never changed; the OCR text goes into the returned extraction only ([`Extracted::ocr_pages`]).
+    pub fn extract_with_ocr(&self, pdf: &[u8], ocr: Option<&OcrSettings>, on: &mut dyn FnMut(usize, usize)) -> Result<Extracted> {
+        let mut ext = self.extract(pdf)?;
+        let Some(settings) = ocr else { return Ok(ext) };
+        let todo = pages_needing_ocr(&ext);
+        if todo.is_empty() {
+            return Ok(ext);
+        }
+        on(0, todo.len());
+        let work = self.work_dir()?;
+        std::fs::write(work.0.join("in.pdf"), pdf).map_err(|e| Error::ctx("saving the PDF to read it", e))?;
+        let (mut done, mut failures) = (0usize, 0u32);
+        for batch in todo.chunks(OCR_BATCH) {
+            let _ = std::fs::remove_file(work.0.join("out.bin"));
+            let _ = std::fs::remove_file(work.0.join("out.err"));
+            let timeout = self.timeout.unwrap_or_else(|| Duration::from_secs(30 + self.ocr_page_secs.saturating_mul(batch.len() as u64)));
+            let memory = self.memory_for(pdf.len()).saturating_add(1 << 30).min(9u64 << 30);
+            let read = match self.run_in(&work.0, "ocr", &settings.to_arg(batch), timeout, memory) {
+                Ok(JobOutput::Complete(bytes)) => Extracted::from_wire(&bytes).ok(),
+                _ => None,
+            };
+            match read {
+                Some(r) => {
+                    apply_ocr(&mut ext, r.pages);
+                    failures = 0;
+                }
+                None => failures += 1,
+            }
+            done += batch.len();
+            on(done, todo.len());
+            if failures >= 3 {
+                break;
+            }
+        }
+        Ok(ext)
+    }
+
+    /// A new work folder for one job; it is removed when the value is dropped.
+    fn work_dir(&self) -> Result<Work> {
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let dir = self.tmp_dir.join(format!("extract-{}-{}-{nanos}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&dir).map_err(|e| Error::ctx("making a work folder for reading the PDF", e))?;
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let _cleanup = Cleanup(dir.clone());
+        Ok(Work(dir))
+    }
+
+    /// Run `job` in the child on `pdf`; the bytes it wrote on success.
+    fn run_job(&self, job: &str, arg: &str, pdf: &[u8]) -> Result<JobOutput> {
+        let work = self.work_dir()?;
+        std::fs::write(work.0.join("in.pdf"), pdf).map_err(|e| Error::ctx("saving the PDF to read it", e))?;
+        self.run_in(&work.0, job, arg, self.timeout_for(pdf.len()), self.memory_for(pdf.len()))
+    }
+
+    /// Run `job` in the child on `dir/in.pdf`, with `timeout` and `memory` (bytes); the bytes it wrote to `dir/out.bin` on success.
+    fn run_in(&self, dir: &std::path::Path, job: &str, arg: &str, timeout: Duration, memory: u64) -> Result<JobOutput> {
         let (input, output) = (dir.join("in.pdf"), dir.join("out.bin"));
-        std::fs::write(&input, pdf).map_err(|e| Error::ctx("saving the PDF to read it", e))?;
         let mut cmd = Command::new(&self.exe);
-        cmd.args(&self.args).envs(self.env.iter().map(|(k, v)| (k, v))).env(ENV_IN, &input).env(ENV_OUT, &output).env(ENV_MEM, self.memory_for(pdf.len()).to_string()).env(ENV_JOB, job).env(ENV_ARG, arg);
+        cmd.args(&self.args).envs(self.env.iter().map(|(k, v)| (k, v))).env(ENV_IN, &input).env(ENV_OUT, &output).env(ENV_MEM, memory.to_string()).env(ENV_JOB, job).env(ENV_ARG, arg);
         match &self.fault {
             Some(f) => cmd.env(ENV_FAULT, f),
             None => cmd.env_remove(ENV_FAULT),
         };
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         let mut child = cmd.spawn().map_err(|e| Error::ctx("starting the PDF reader", e))?;
-        let deadline = Instant::now() + self.timeout_for(pdf.len());
+        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(s)) => break s,
@@ -146,6 +195,15 @@ impl ChildExtractor {
             }
         }
         Err(Error::new(CRASH_MSG))
+    }
+}
+
+/// A job's work folder, removed (with the PDF, the result and any OCR scratch file in it) when dropped.
+struct Work(PathBuf);
+
+impl Drop for Work {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -189,6 +247,12 @@ pub fn child_main() -> i32 {
             let c: Compression = std::env::var(ENV_ARG).ok().and_then(|a| serde_json::from_str(&a).ok()).ok_or_else(|| Error::new("compression settings missing"))?;
             let (pdf, outcome) = compress_pdf(&b, &c);
             Ok(encode_compressed(&pdf, &outcome))
+        }
+        "ocr" => {
+            let (settings, pages) = std::env::var(ENV_ARG).ok().and_then(|a| OcrSettings::from_arg(&a)).ok_or_else(|| Error::new("OCR settings missing"))?;
+            let work = output.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+            let read = ocr_pages(&b, &pages, &settings, &work)?;
+            Ok(Extracted { title: None, pages: read, year: None, ppi: None, ocr_pages: Vec::new() }.to_wire())
         }
         _ => extract_pdf(&b).map(|e| e.to_wire()),
     });

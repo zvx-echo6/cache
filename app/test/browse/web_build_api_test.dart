@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/browse/web/build_api.dart';
+import 'package:cache/browse/web/build_text.dart';
 import 'package:cache/browse/web/device_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -162,5 +163,16 @@ void main() {
   test('being signed out is its own word', () async {
     api = HttpBuildApi(client: MockClient((req) async => http.Response('', 401)));
     await expectLater(api.queue(), throwsA(isA<DeviceException>().having((e) => e.code, 'code', 'unauthorized')));
+  });
+
+  test('a book whose scanned pages are being read says so, with how far it is', () {
+    final p = QueueProgress.fromJson({'pages': 12, 'pieces': 0, 'pieces_total': null, 'ocr_pages': 8, 'ocr_done': 3});
+    expect(p.ocrDone, 3);
+    final i = QueueItem(id: 'a', libraryId: 'l', fileName: 'scan.pdf', state: 'reading', progress: p);
+    expect(queueStateWords(i), 'Reading scanned pages (OCR) · 3 of 8');
+    expect(queueFraction(i), 3 / 8);
+    const plain = QueueItem(id: 'b', libraryId: 'l', fileName: 'x.pdf', state: 'reading');
+    expect(queueStateWords(plain), 'Reading the PDF');
+    expect(queueFraction(plain), isNull);
   });
 }
