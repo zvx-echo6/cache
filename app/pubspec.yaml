@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.30+46
+version: 1.1.0+47
 
 environment:
   sdk: ^3.12.2
@@ -40,6 +40,9 @@ dependencies:
     path: ../packages/cache_llama
   cache_search:
     path: ../packages/cache_search
+  # Add PDF: reading scanned pages on the phone (Apple Vision on iPhone and iPad, ML Kit's bundled Latin model on Android).
+  cache_ocr:
+    path: ../packages/cache_ocr
   geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
   maplibre_gl: ^0.27.1
@@ -73,6 +76,10 @@ dependencies:
   # Both BSD-3-Clause; approved 2026-10-30. Pinned (published 2026-09-30 and 2026-10-21).
   saf_util: 3.1.1
   saf_stream: 4.0.3
+  # Cache Server's Library in a browser: the calls to the device (http, already used by cache_search) and the file chooser, drag and
+  # drop and upload (web, the browser bindings). Both were already in the lock file; versions match it.
+  http: ^1.6.0
+  web: ^1.1.1
   # The PDF viewer (PDF entries in ZIM libraries, notebook files): pdfrx (MIT) on PDFium (BSD-3-Clause). Pinned to 2.4.8
   # (published 2026-08-26): the newest release at least two weeks old that runs on the app's Flutter 3.44 (2.5 and later need
   # Flutter 3.47). Approved 2026-11-01.
@@ -128,9 +135,25 @@ flutter:
     - assets/guide/cache-guide.cache-library
     # The recommended models built into the app (a copy of docs/models-recommended.json; a test keeps them equal).
     - assets/models/recommended.json
+    # Add PDF: the shelf sorter (the division classifier the Linux builder files books with; packages/cache_classify), trained on
+    # bge-m3 Q8_0. It is copied out to the app's support folder and named to the core as engines.classifier.
+    - assets/models/cache-classifier-2.bin
     # Notebooks: the notebook templates and the starter logs (a copy of specs/notebook-starters.json; a test keeps them equal).
     - assets/notebook/templates.json
     - assets/notebook/starters.json
+    # Discover's activities and collections built into the app (a copy of docs/discover-catalogue.json; a test keeps them equal).
+    - assets/discover/catalogue.json
+
+  # The Library's own faces (SIL Open Font License 1.1; the licences are beside them and in CREDITS.md): call numbers in Roboto
+  # Mono, the book page's catalogue card in Libre Baskerville (a variable font: its weight is set with the wght axis).
+  fonts:
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/RobotoMono-Bold.ttf
+          weight: 700
+    - family: Libre Baskerville
+      fonts:
+        - asset: assets/fonts/LibreBaskerville-Variable.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -132,9 +132,11 @@ void main() {
     return tester.getSize(find.byKey(const ValueKey('text'))).width;
   }
 
-  testWidgets('ReadingWidth keeps text to about 70 characters on a desktop window and leaves narrower windows alone', (tester) async {
-    expect(await readingBoxWidth(tester, const Size(1279, 800)), 1279);
+  testWidgets('ReadingWidth keeps text to about 70 characters on any window wider than that and leaves narrower windows alone', (tester) async {
+    expect(await readingBoxWidth(tester, const Size(1000, 800)), 1000);
     final w = await readingBoxWidth(tester, const Size(1920, 1080));
+    expect(await readingBoxWidth(tester, const Size(1279, 800)), closeTo(w, 0.5), reason: 'a tablet held sideways too');
+    await readingBoxWidth(tester, const Size(1920, 1080));
     // 70 widths of "0" at 16 px (the test font's characters are about 16 px wide).
     expect(w, inInclusiveRange(70 * 15, 70 * 17));
     final ctx = tester.element(find.byKey(const ValueKey('text')));

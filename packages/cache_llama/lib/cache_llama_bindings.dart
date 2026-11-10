@@ -14,6 +14,8 @@ typedef _IntHC = Int32 Function(Pointer<Void>);
 typedef LlamaHandleIntCall = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
 typedef LlamaHandleVoidCall = void Function(Pointer<Void>);
+typedef _ConfigureC = Int32 Function(Pointer<Utf8>);
+typedef LlamaConfigureCall = int Function(Pointer<Utf8>);
 typedef _EmbedC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, Int32, Int32);
 typedef LlamaEmbedCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, int, int);
 
@@ -30,6 +32,12 @@ class CacheLlamaBindings {
         clGeneratedTokens = lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_generated_tokens'),
         clReusedTokens = lib.providesSymbol('cl_reused_tokens')
             ? lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_reused_tokens')
+            : null,
+        clConfigure = lib.providesSymbol('cl_configure')
+            ? lib.lookupFunction<_ConfigureC, LlamaConfigureCall>('cl_configure')
+            : null,
+        clPrefixNote = lib.providesSymbol('cl_prefix_note')
+            ? lib.lookupFunction<_BufC, LlamaBufferCall>('cl_prefix_note')
             : null,
         clStop = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_stop'),
         clFree = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_free'),
@@ -63,6 +71,12 @@ class CacheLlamaBindings {
   final LlamaHandleIntCall clPromptTokens;
   final LlamaHandleIntCall clGeneratedTokens;
   final LlamaHandleIntCall? clReusedTokens;
+
+  /// Options for the next load (JSON: prefix_dir, repack_weights); null in an older library.
+  final LlamaConfigureCall? clConfigure;
+
+  /// What the last start did with the saved prompt prefix (one log line, or empty); null in an older library.
+  final LlamaBufferCall? clPrefixNote;
   final LlamaHandleVoidCall clStop;
   final LlamaHandleVoidCall clFree;
 

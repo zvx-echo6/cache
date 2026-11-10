@@ -291,6 +291,18 @@ jobs:
           path: ~/.cocoapods
           key: cocoapods-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile') }}
           restore-keys: cocoapods-
+      # PDFium and SQLite for the app's build hooks (macOS for flutter test, iOS for the build), from the Actions cache instead of
+      # GitHub releases. (PDFium for iOS is pdfium_flutter's xcframework, fetched by CocoaPods, not by these.)
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        # A ref from before these steps existed builds without them.
+        if: hashFiles('.github/actions/pinned-downloads/action.yml') != ''
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-mac-arm64.tgz sqlite3-3.5.2-libsqlite3.arm64.macos.dylib sqlite3-3.5.2-libsqlite3.arm64.ios.dylib
+      - name: Seed the build hooks
+        if: steps.native.outcome == 'success'
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app macos-arm64 ios-arm64
       - name: Flutter packages and Pods
         working-directory: app
         env:

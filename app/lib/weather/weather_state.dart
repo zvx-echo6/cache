@@ -21,6 +21,7 @@ import 'live_folder.dart';
 import 'alert_notifier.dart';
 import 'alert_watch.dart';
 import 'live_view.dart';
+import 'own_source.dart';
 import 'place_alerts.dart';
 import 'places.dart';
 import 'words.dart';
@@ -162,8 +163,11 @@ class WeatherState extends ChangeNotifier {
     this.told,
     this.onPlacesChanged,
     FetchBytes? fetch,
+    OwnFetch? ownFetch,
+    this.ownTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
   }) : _fetch = fetch ?? fetchBytes,
+       _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
 
   final AppSettings settings;
@@ -185,6 +189,10 @@ class WeatherState extends ChangeNotifier {
   final Position? Function()? position;
   final List<WatchRegion> Function()? regions;
   final FetchBytes _fetch;
+  final OwnFetch _ownFetch;
+
+  /// How long Try it waits for a source of your own to answer.
+  final Duration ownTimeout;
   final DateTime Function() _now;
 
   /// Shows alert pop-ups; null where there are none (tests, or before the app sets it up).
@@ -233,10 +241,11 @@ class WeatherState extends ChangeNotifier {
   /// The last failure of each source in the last update, by source id.
   Map<String, String> get sourceErrors => Map.unmodifiable(_sourceErrors);
 
-  /// The address of the main catalogue (Advanced can change it).
+  /// The address of the main source list (Settings > Storage > Advanced > Source list address can change it).
   String get catalogueUrl => settings.catalogueUrl ?? kDefaultCatalogueUrl;
 
-  /// The catalogues in use, the main one first, then the ones added from a link.
+  /// The source lists in use: the main one, then links added by earlier versions that are not moved to "Your own" yet (see
+  /// [_moveLinkedLists]).
   List<String> get catalogueUrls => [catalogueUrl, ...settings.extraCatalogues.where((u) => u != catalogueUrl)];
 
   List<LoadedCatalogue> get catalogues {
@@ -252,7 +261,7 @@ class WeatherState extends ChangeNotifier {
   List<Connector> get sources {
     final out = <Connector>[];
     final seen = <String>{};
-    for (final c in catalogues) {
+    for (final c in [...catalogues, ?_own]) {
       for (final k in c.connectors) {
         if (seen.add(k.id)) out.add(k);
       }
@@ -419,8 +428,10 @@ class WeatherState extends ChangeNotifier {
       logError('Built-in live sources', error: e);
     }
     _catalogues = _store!.loadAll();
+    _moveLinkedLists();
     _readStatus();
     _readShown();
+    _readSaved();
     await _readKeys();
     _kind = await policy.probe.current();
     if (_kind != ConnectionKind.none) _lastOnlineAt = _now();
@@ -429,6 +440,9 @@ class WeatherState extends ChangeNotifier {
       _sub = policy.probe.changes.listen(_onConnection);
     } catch (_) {}
     _started = true;
+    // What is kept on the phone (the sources that are on, the last data shown, the saved places) shows from here, before the core
+    // has answered anything: the rest of start waits for the core.
+    notifyListeners();
     await _applyAll();
     notifyListeners();
     if (_catalogueDue) {
@@ -592,12 +606,13 @@ class WeatherState extends ChangeNotifier {
         } on CatalogueException catch (e) {
           _catalogueErrors[url] = e.message;
         } catch (e) {
-          _catalogueErrors[url] = "Couldn't load the catalogue.";
+          _catalogueErrors[url] = "Couldn't load the list of sources.";
         }
       }
     } finally {
       _refreshing = false;
     }
+    _moveLinkedLists();
     await _readKeys();
     await _applyAll();
   }
@@ -617,44 +632,325 @@ class WeatherState extends ChangeNotifier {
     return s.length > 240 ? '${s.substring(0, 240)}…' : s;
   }
 
-  /// Downloads a catalogue from [address] and checks every definition in it, without keeping anything. The person is shown what it
-  /// adds, then [addCatalogue] keeps it. Throws [CatalogueException] with the reason in words.
-  Future<LoadedCatalogue> previewCatalogue(String address) async {
-    if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to add a catalogue.');
-    final url = address.trim();
-    if (catalogueUrls.contains(url)) throw const CatalogueException('That catalogue is already added.');
-    final loaded = await _loader.load(url);
-    if (loaded.definitions.isEmpty) {
-      throw const CatalogueException('None of the sources in this catalogue can be used by this version of Cache.');
-    }
-    if (catalogues.any((c) => c.catalogue.id == loaded.catalogue.id)) {
-      throw CatalogueException('A catalogue called "${loaded.catalogue.title}" is already added.');
-    }
-    return loaded;
+  // ---------------------------------------------------------------- your own sources
+
+  /// What the "Your own" collection is kept under in the store (it is kept like a downloaded list, in the same format, and is never
+  /// downloaded again).
+  static const String ownListUrl = 'cache:own';
+
+  /// The id and title of the collection; its sources' [Origin].
+  static const String ownListId = 'own';
+  static const String ownListTitle = 'Your own';
+
+  LoadedCatalogue? get _own => _catalogues.where((c) => c.url == ownListUrl).firstOrNull;
+
+  /// The sources of your own: made with Add your own source, imported from a source file, or moved from a link an earlier version
+  /// added. They behave like every other source.
+  List<Connector> get ownSources => _own?.connectors ?? const [];
+
+  bool isOwn(Connector c) => c.origin.catalogueId == ownListId;
+
+  /// The sources of your own as a linked device takes them (Settings > Sharing and sync > a device > Settings): each source's
+  /// entry and definition, sorted by id. Their keys are not here (see API keys there).
+  List<Map<String, dynamic>> get ownSourcesJson {
+    final own = _own;
+    if (own == null) return const [];
+    final entries = [...own.catalogue.entries]..sort((a, b) => a.id.compareTo(b.id));
+    return [
+      for (final e in entries)
+        if (own.definitions[e.id] != null) {'entry': catalogueEntryJson(e), 'definition': own.definitions[e.id]},
+    ];
   }
 
-  /// Keeps a catalogue [previewCatalogue] returned.
-  Future<void> addCatalogue(LoadedCatalogue loaded) async {
-    _store!.save(loaded);
-    settings.addCatalogue(loaded.url);
+  /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
+  /// any other, and one that fails is left out. Applied at once.
+  Future<void> replaceOwnSources(Object? list) async {
+    if (_store == null) return;
+    final entries = <CatalogueEntry>[];
+    final defs = <String, String>{};
+    for (final x in (list is List ? list : const [])) {
+      if (x is! Map || x['entry'] is! Map || x['definition'] is! String) continue;
+      try {
+        final e = _ownEntry(CatalogueEntry.fromJson((x['entry'] as Map).cast<String, dynamic>()));
+        Connector.parse(x['definition'] as String);
+        if (defs.containsKey(e.id)) continue;
+        entries.add(e);
+        defs[e.id] = x['definition'] as String;
+      } catch (_) {}
+    }
+    _saveOwn(entries, defs);
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
+  /// The live sources switched on changed from outside this page (a linked device's settings): the core is told at once.
+  Future<void> sourcesChanged() async {
+    await _applyAll();
+    notifyListeners();
+  }
+
+  /// Keeps a key a linked device sent, under [alias], and uses it at once.
+  Future<void> keepKey(String alias, String key) async {
+    await secrets.write(secretName(alias), key);
+    await _readKeys();
+    _keys.add(alias);
+    await _applyAll();
+    notifyListeners();
+  }
+
+  /// Replaces the collection with [entries] and their [defs].
+  void _saveOwn(List<CatalogueEntry> entries, Map<String, String> defs) {
+    final cat = Catalogue(
+      id: ownListId,
+      title: ownListTitle,
+      maintainer: '',
+      homepage: '',
+      baseUrl: Uri.parse('https://localhost/own/'),
+      updated: '',
+      entries: entries,
+    );
+    _store!.save(LoadedCatalogue(url: ownListUrl, catalogue: cat, definitions: {for (final e in entries) e.id: defs[e.id]!}, skipped: const {}, at: _now()));
     _catalogues = _store!.loadAll();
+  }
+
+  /// [e] as an entry of the collection: listed under "Your own" (not featured, not switched on by default), its definition beside it.
+  static CatalogueEntry _ownEntry(CatalogueEntry e) => CatalogueEntry(
+    id: e.id,
+    title: e.title,
+    description: e.description,
+    category: e.category,
+    provider: e.provider,
+    coverage: e.coverage,
+    needsKey: e.needsKey,
+    keyAlias: e.keyAlias,
+    defaultOn: false,
+    featured: false,
+    path: 'defs/${e.id}.json',
+    attribution: e.attribution,
+    license: e.license,
+    docs: e.docs,
+    sha256: null,
+  );
+
+  /// An entry for a definition that came without one (one source file, or the form): its words from the definition.
+  static CatalogueEntry _entryOf(Connector c) => _ownEntry(CatalogueEntry(
+    id: c.id,
+    title: c.title,
+    description: c.description,
+    category: 'other',
+    provider: c.provider,
+    coverage: '',
+    needsKey: c.needsKey,
+    keyAlias: c.keyAlias,
+    defaultOn: false,
+    path: '',
+    attribution: c.attribution,
+    license: '',
+    docs: null,
+    sha256: null,
+  ));
+
+  /// Ids a new source of your own may not take: every source there is but the ones of [except].
+  Set<String> _takenIds({Iterable<String> except = const []}) => {
+    for (final c in sources) c.id,
+    for (final c in _builtIn) c.id,
+    ...liveReplaces.keys,
+  }..removeAll(except);
+
+  /// Links an earlier version added under "Add sources from a link" become part of "Your own": every source the kept copy holds is
+  /// moved (its switch and its key stay, the ids are the same), and the link is dropped. A link not downloaded yet stays until a
+  /// refresh brings its copy. A source the main list also has is the main list's. True when something moved.
+  bool _moveLinkedLists() {
+    final store = _store;
+    if (store == null) return false;
+    final links = [for (final u in settings.extraCatalogues) if (u != catalogueUrl) u];
+    if (links.isEmpty) return false;
+    final own = _own;
+    final entries = [...?own?.catalogue.entries];
+    final defs = {...?own?.definitions};
+    final main = _catalogues.where((c) => c.url == catalogueUrl).firstOrNull;
+    final taken = <String>{
+      for (final e in entries) e.id,
+      for (final e in main?.catalogue.entries ?? const <CatalogueEntry>[]) e.id,
+      for (final c in _builtIn) c.id,
+      ...liveReplaces.keys,
+    };
+    var moved = false;
+    for (final url in links) {
+      final kept = _catalogues.where((c) => c.url == url).firstOrNull;
+      if (kept == null) continue;
+      for (final e in kept.catalogue.entries) {
+        final text = kept.definitions[e.id];
+        if (text == null || !taken.add(e.id)) continue;
+        entries.add(_ownEntry(e));
+        defs[e.id] = text;
+      }
+      store.remove(url);
+      settings.removeCatalogue(url);
+      _catalogueErrors.remove(url);
+      moved = true;
+    }
+    if (!moved) return false;
+    _saveOwn(entries, defs);
+    return true;
+  }
+
+  /// Where Try it asks for: the first watched place, else where the phone is, else the middle of Idaho.
+  Future<({double lat, double lon})> _tryPlace() async {
+    try {
+      final w = await watchedPlaces();
+      if (w.isNotEmpty) return (lat: w.first.lat!, lon: w.first.lon!);
+    } catch (_) {}
+    return _probePlace();
+  }
+
+  /// Try it: fetches the address of [d] once, for the first watched place, with the key typed (or, editing, the one kept), and
+  /// gives the values found. Nothing is kept.
+  Future<OwnTry> tryOwnSource(OwnDraft d) async {
+    final host = ownHost(d.keptAddress);
+    if (await policy.probe.current() == ConnectionKind.none) return OwnTry.failed(host, OwnTryFailure.offline);
+    final at = await _tryPlace();
+    var key = d.key.trim();
+    if (key.isEmpty && d.needsKey && d.id != null) {
+      try {
+        key = await secrets.read(secretName(d.id!)) ?? '';
+      } catch (_) {}
+    }
+    final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
+    if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
+    return tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+  }
+
+  /// Saves the source [d] makes with the values [picks] (a new one, or the one being edited, [OwnDraft.id]): its definition is
+  /// checked by the core as every published definition is, the key goes to secure storage only, and the source is switched on.
+  /// Gives the reason in words when it cannot be saved, else null.
+  Future<String?> saveOwnSource(OwnDraft d, List<OwnPick> picks, {({String lat, String lon})? point}) async {
+    if (_store == null) return 'Weather and alerts is still starting. Try again in a moment.';
+    if (picks.isEmpty) return 'Tick at least one value to show.';
+    final id = d.id ?? ownIdFor(d.name, _takenIds());
+    final text = buildOwnDefinition(id: id, draft: d, picks: picks, point: point);
+    try {
+      await _checkDefinition(text);
+    } on CatalogueException catch (e) {
+      return "Cache can't use this source: ${e.message}";
+    }
+    final key = d.key.trim();
+    try {
+      if (d.needsKey && key.isNotEmpty) await secrets.write(secretName(id), key);
+      if (!d.needsKey) await secrets.delete(secretName(id));
+    } catch (_) {
+      return "The key couldn't be saved on this device.";
+    }
+    final c = Connector.parse(text);
+    final own = _own;
+    final entries = [for (final e in own?.catalogue.entries ?? const <CatalogueEntry>[]) if (e.id != id) e, _entryOf(c)];
+    final defs = {...?own?.definitions, id: text};
+    _saveOwn(entries, defs);
+    settings.setLiveSourcesOn({id}, true);
+    await _readKeys();
+    await _applyAll();
+    return null;
+  }
+
+  /// Removes a source of your own: it is switched off and taken off this device, with its key when no other source uses it.
+  Future<void> removeOwnSource(String id) async {
+    final own = _own;
+    if (own == null || !own.catalogue.entries.any((e) => e.id == id)) return;
+    final alias = sourceById(id)?.keyAlias;
+    settings.setLiveSourcesOn(_same(id), false);
+    _saveOwn([for (final e in own.catalogue.entries) if (e.id != id) e], own.definitions);
+    if (alias != null && sourcesUsingKey(alias).isEmpty) {
+      try {
+        await secrets.delete(secretName(alias));
+      } catch (_) {}
+      _keys.remove(alias);
+    }
+    await _applyAll();
+  }
+
+  /// Reads a source file ([text], or the file at [link]): one source definition, or a list of sources in the published list format
+  /// (its definitions are downloaded from the address it gives). Every source is checked by the core, as the published ones are;
+  /// one that fails, or that is here already, is left out with the reason. Nothing is kept: [addImported] keeps it. Throws
+  /// [CatalogueException] with the reason in words.
+  Future<LoadedCatalogue> previewImport({String? text, String? link}) async {
+    var body = text;
+    final from = link?.trim() ?? 'file';
+    if (body == null) {
+      final u = Uri.tryParse(from);
+      if (u == null || !isAllowedAddress(u)) throw const CatalogueException('Enter an address that starts with https://');
+      if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to read the link.');
+      body = utf8.decode(await _fetch(u), allowMalformed: true);
+    }
+    final Object? j;
+    try {
+      j = jsonDecode(body.replaceFirst('\u{feff}', ''));
+    } on FormatException {
+      throw const CatalogueException("This isn't a source file. Cache reads source files written in JSON.");
+    }
+    if (j is! Map<String, dynamic>) throw const CatalogueException("This isn't a source file.");
+    final LoadedCatalogue read;
+    if (j.containsKey('connectors')) {
+      if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to read the sources in the list.');
+      read = await _loader.loadText(body, from);
+    } else if (j.containsKey('items') || j.containsKey('request')) {
+      final c = Connector.parse(body);
+      try {
+        await _checkDefinition(body);
+      } on CatalogueException catch (e) {
+        throw CatalogueException("Cache can't use this source: ${e.message}");
+      }
+      final e = _entryOf(c);
+      read = LoadedCatalogue(
+        url: from,
+        catalogue: Catalogue(id: ownListId, title: c.title, maintainer: c.provider, homepage: '', baseUrl: Uri.parse('https://localhost/own/'), updated: '', entries: [e]),
+        definitions: {c.id: body},
+        skipped: const {},
+        at: _now(),
+      );
+    } else {
+      throw const CatalogueException("This isn't a source file: it is neither a source nor a list of sources.");
+    }
+    final taken = _takenIds();
+    final defs = <String, String>{};
+    final skipped = {...read.skipped};
+    for (final e in read.catalogue.entries) {
+      final t = read.definitions[e.id];
+      if (t == null) continue;
+      if (!isValidSourceId(e.id)) {
+        skipped[e.id] = 'Its id must be lower-case letters, digits, - and _, at most 64.';
+      } else if (taken.contains(e.id)) {
+        skipped[e.id] = 'You have this source already.';
+      } else {
+        defs[e.id] = t;
+      }
+    }
+    if (defs.isEmpty) {
+      throw CatalogueException(skipped.isEmpty ? 'There is no source in it that Cache can add.' : 'None of its sources can be added. ${skipped.values.first}');
+    }
+    return LoadedCatalogue(url: read.url, catalogue: read.catalogue, definitions: defs, skipped: skipped, at: read.fetchedAt);
+  }
+
+  /// Keeps the sources [previewImport] read, in "Your own". They stay off until switched on.
+  Future<void> addImported(LoadedCatalogue p) async {
+    if (_store == null) return;
+    final own = _own;
+    final entries = [...?own?.catalogue.entries];
+    final defs = {...?own?.definitions};
+    final have = {for (final e in entries) e.id};
+    for (final e in p.catalogue.entries) {
+      final t = p.definitions[e.id];
+      if (t == null || !have.add(e.id)) continue;
+      entries.add(_ownEntry(e));
+      defs[e.id] = t;
+    }
+    _saveOwn(entries, defs);
     await _readKeys();
     await _applyAll();
   }
 
-  /// Removes a catalogue added from a link: its sources go from the lists, and from the core.
-  Future<void> removeCatalogue(String url) async {
-    if (url == catalogueUrl) return;
-    final gone = [for (final c in _catalogues.where((c) => c.url == url)) ...c.connectors.map((k) => k.id)];
-    _store!.remove(url);
-    settings.removeCatalogue(url);
-    _catalogues = _store!.loadAll();
-    settings.setLiveSourcesOn(gone.where((id) => sourceById(id) == null), false);
-    await _readKeys();
-    await _applyAll();
-  }
-
-  /// Sets the main catalogue's address (Advanced); null or empty puts the default back. The old copy is dropped and the new one fetched.
+  /// Sets the main source list's address (Settings > Storage > Advanced); null or empty puts the default back. The old copy is
+  /// dropped and the new one fetched.
   Future<void> setCatalogueUrl(String? address) async {
     final old = catalogueUrl;
     settings.setCatalogueUrl(address);
@@ -674,8 +970,29 @@ class WeatherState extends ChangeNotifier {
       if (p.kind != PlaceKind.saved) (place: p, on: settings.watchedPlaces.contains(p.id)),
   ];
 
-  /// Everything that can be watched: where the phone is, each saved place by name, and the downloaded regions.
+  /// Everything that can be watched: where the phone is, each saved place by name, and the downloaded regions. The saved places are
+  /// the core's; when it cannot answer, the ones it last gave.
   Future<List<WatchPlace>> placeChoices() async {
+    List<SavedPlaceRecord> saved;
+    try {
+      saved = await core.savedPlaces();
+      // A newly saved place is watched (see AppSettings.noteSavedPlaces).
+      settings.noteSavedPlaces([for (final s in saved) 'place:${s.key}']);
+      _keepSaved(saved);
+    } catch (_) {
+      saved = _savedKept ?? const [];
+    }
+    return _choices(saved);
+  }
+
+  /// [placeChoices] at once, without the core: the saved places it last gave (kept in a file). At start the core can be busy for
+  /// seconds; the Weather screen and Home show "Where I am" and the kept places meanwhile.
+  List<WatchPlace> placeChoicesNow() => _choices(_savedKept ?? const []);
+
+  /// [watchedPlaces] at once, without the core (see [placeChoicesNow]).
+  List<WatchPlace> watchedPlacesNow() => _watched(placeChoicesNow());
+
+  List<WatchPlace> _choices(List<SavedPlaceRecord> saved) {
     final p = position?.call();
     final out = <WatchPlace>[
       WatchPlace(
@@ -688,22 +1005,17 @@ class WeatherState extends ChangeNotifier {
         key: p == null ? null : _hereKey(p.lat, p.lon),
       ),
     ];
-    try {
-      final saved = await core.savedPlaces();
-      // A newly saved place is watched (see AppSettings.noteSavedPlaces).
-      settings.noteSavedPlaces([for (final s in saved) 'place:${s.key}']);
-      for (final s in saved) {
-        out.add(WatchPlace(
-          id: 'place:${s.key}',
-          kind: PlaceKind.saved,
-          name: s.name,
-          subtitle: (s.label != null && s.label!.isNotEmpty) ? s.label! : '${s.lat.toStringAsFixed(2)}, ${s.lon.toStringAsFixed(2)}',
-          lat: s.lat,
-          lon: s.lon,
-          key: s.key,
-        ));
-      }
-    } catch (_) {}
+    for (final s in saved) {
+      out.add(WatchPlace(
+        id: 'place:${s.key}',
+        kind: PlaceKind.saved,
+        name: s.name,
+        subtitle: (s.label != null && s.label!.isNotEmpty) ? s.label! : '${s.lat.toStringAsFixed(2)}, ${s.lon.toStringAsFixed(2)}',
+        lat: s.lat,
+        lon: s.lon,
+        key: s.key,
+      ));
+    }
     for (final r in regions?.call() ?? const <WatchRegion>[]) {
       out.add(WatchPlace(
         id: 'region:${r.name}',
@@ -767,10 +1079,44 @@ class WeatherState extends ChangeNotifier {
   }
 
   /// The watched places that can be fetched for now (a place without a position, like "Where I am" before the first fix, waits).
-  Future<List<WatchPlace>> watchedPlaces() async {
-    final all = await placeChoices();
+  Future<List<WatchPlace>> watchedPlaces() async => _watched(await placeChoices());
+
+  List<WatchPlace> _watched(List<WatchPlace> all) {
     final w = settings.watchedPlaces;
     return [for (final p in all) if (w.contains(p.id) && p.located) p];
+  }
+
+  /// The saved places the core last gave, also kept in a file (read at start, before the core opens).
+  List<SavedPlaceRecord>? _savedKept;
+
+  File? get _savedFile {
+    final d = _store?.root;
+    return d == null ? null : File('${d.path}/saved-places.json');
+  }
+
+  static Map<String, dynamic> _savedJson(SavedPlaceRecord s) => {'key': s.key, 'name': s.name, 'lat': s.lat, 'lon': s.lon, 'label': ?s.label};
+
+  void _readSaved() {
+    try {
+      final f = _savedFile;
+      if (f == null || !f.existsSync()) return;
+      final j = jsonDecode(f.readAsStringSync());
+      if (j is! List) return;
+      _savedKept ??= [for (final e in j) if (e is Map) SavedPlaceRecord.fromJson(e.cast<String, dynamic>())];
+    } catch (_) {}
+  }
+
+  void _keepSaved(List<SavedPlaceRecord> saved) {
+    final text = jsonEncode([for (final s in saved) _savedJson(s)]);
+    final before = _savedKept == null ? null : jsonEncode([for (final s in _savedKept!) _savedJson(s)]);
+    _savedKept = saved;
+    if (text == before) return;
+    try {
+      final f = _savedFile;
+      if (f == null) return;
+      f.parent.createSync(recursive: true);
+      writeStringAtomicSync(f, text);
+    } catch (_) {}
   }
 
   /// The watched places by name, one per line ("Where I am", "Home", "Cabin", "+2 more"): a name can hold a comma, as
@@ -813,29 +1159,46 @@ class WeatherState extends ChangeNotifier {
     // The policy the core fetches under must be the one just checked (it is also what the assistant's fetch uses).
     await pushPolicy();
     var fetched = 0, fresh = 0;
-    final failures = <String>[];
-    try {
-      for (final c in srcs) {
-        for (final p in places) {
-          try {
-            final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
-            r['fetched'] == true ? fetched++ : fresh++;
-          } on CacheSearchException catch (e) {
-            logError('Live update failed (${e.code})', error: e.message, detail: c.id);
-            final who = c.provider.isEmpty ? c.title : c.provider;
-            final line = '$who for ${p.name} failed: ${_fetchFailureWords(e)}';
-            failures.add(line);
-            _sourceErrors[c.id] = _fetchFailureWords(e);
-          } catch (e) {
-            logError('Live update failed', error: e, detail: c.id);
-            failures.add('${c.title} for ${p.name} failed');
-            _sourceErrors[c.id] = "Couldn't update.";
-          }
-        }
+    // Every source for every place at once: each download runs on a thread of the core's own (cs_live_fetch_start), so none waits
+    // for another's network and the core's worker stays free for searches and the stored data meanwhile. Failures are listed in
+    // the order of the sources and places, as before.
+    final all = Stopwatch()..start();
+    Future<(bool, String?)> one(Connector c, WatchPlace p) async {
+      final took = Stopwatch()..start();
+      try {
+        final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+        final got = r['fetched'] == true;
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
+        return (got, null);
+      } on CacheSearchException catch (e) {
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
+        logError('Live update failed (${e.code})', error: e.message, detail: c.id);
+        final who = c.provider.isEmpty ? c.title : c.provider;
+        _sourceErrors[c.id] = _fetchFailureWords(e);
+        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
+      } catch (e) {
+        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
+        logError('Live update failed', error: e, detail: c.id);
+        _sourceErrors[c.id] = "Couldn't update.";
+        return (false, '${c.title} for ${p.name} failed');
       }
+    }
+
+    final List<(bool, String?)> outcomes;
+    try {
+      outcomes = await Future.wait([for (final c in srcs) for (final p in places) one(c, p)]);
     } finally {
       _updating = false;
     }
+    final failures = <String>[];
+    for (final (got, failure) in outcomes) {
+      if (failure != null) {
+        failures.add(failure);
+      } else {
+        got ? fetched++ : fresh++;
+      }
+    }
+    logInfo('Live update: ${outcomes.length} fetches at once in ${all.elapsedMilliseconds} ms ($fetched downloaded, $fresh still fresh, ${failures.length} failed)');
     _lastRunAt = _now();
     if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
     // Every source that failed, not only the first.
@@ -936,20 +1299,23 @@ class WeatherState extends ChangeNotifier {
   /// What every switched-on source holds for [p], as stored (expired data is included and flagged). Read from the core, so it
   /// is exactly what the assistant would get.
   Future<List<SourceView>> viewFor(WatchPlace p) async {
-    final out = <SourceView>[];
     var kept = false;
-    for (final c in enabledSources) {
-      try {
-        final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-        _shown['${c.id} ${p.id}'] = g;
-        kept = true;
-        out.add(_viewOf(c, p, g));
-      } on CacheSearchException catch (e) {
-        out.add(SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message)));
-      } catch (_) {
-        out.add(SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]));
-      }
-    }
+    // asked all at once (the core answers them one after another, without a round trip between)
+    final out = await Future.wait([
+      for (final c in enabledSources)
+        () async {
+          try {
+            final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+            _shown['${c.id} ${p.id}'] = g;
+            kept = true;
+            return _viewOf(c, p, g);
+          } on CacheSearchException catch (e) {
+            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
+          } catch (_) {
+            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]);
+          }
+        }(),
+    ]);
     if (kept) _saveShown();
     return out;
   }
@@ -1037,8 +1403,12 @@ class WeatherState extends ChangeNotifier {
   }
 
   /// The place Home talks about: "Where I am" when it is watched and known, else the first watched place.
-  Future<WatchPlace?> homePlace() async {
-    final w = await watchedPlaces();
+  Future<WatchPlace?> homePlace() async => _homeOf(await watchedPlaces());
+
+  /// [homePlace] at once, without the core (see [placeChoicesNow]).
+  WatchPlace? homePlaceNow() => _homeOf(watchedPlacesNow());
+
+  static WatchPlace? _homeOf(List<WatchPlace> w) {
     if (w.isEmpty) return null;
     return w.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => w.first);
   }
@@ -1058,6 +1428,27 @@ class WeatherState extends ChangeNotifier {
   /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
   /// listed are those of the one fire source that reports the most.
   Future<HomeWeather> homeCard() async {
+    final early = _homeEarly();
+    if (early != null) return early;
+    final p = await homePlace();
+    if (p == null) return HomeWeather(message: _noPlaceWords);
+    return _homeFrom(p, await viewFor(p));
+  }
+
+  /// [homeCard] at once, without the core: what was last shown for the place Home talks about, with its age as of now; null while
+  /// nothing is kept for it (Home then waits for [homeCard]). At start the core can be busy for seconds (build 46: 13-20 s
+  /// before the card filled).
+  HomeWeather? homeCardNow() {
+    final early = _homeEarly();
+    if (early != null) return early;
+    final p = homePlaceNow();
+    final kept = p == null ? null : keptViewFor(p);
+    if (p == null || kept == null) return null;
+    return _homeFrom(p, kept);
+  }
+
+  /// What the card says before it is about a place: getting ready, off, or not set up.
+  HomeWeather? _homeEarly() {
     // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
     // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
@@ -1066,9 +1457,12 @@ class WeatherState extends ChangeNotifier {
     // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".
     if (enabledSources.isEmpty && settings.liveDefaultsSeen.isNotEmpty) return const HomeWeather(message: 'Weather is off', off: true);
     if (forecast.isEmpty && counted.isEmpty) return const HomeWeather(message: 'Not set up yet');
-    final p = await homePlace();
-    if (p == null) return HomeWeather(message: _noPlaceWords);
-    final views = await viewFor(p);
+    return null;
+  }
+
+  HomeWeather _homeFrom(WatchPlace p, List<SourceView> views) {
+    final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
+    final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     String? temperature, conditions, high, low, age;
     var forecastExpired = false;
     for (final v in views) {

@@ -16,6 +16,7 @@ import '../sources/libraries_state.dart' show LibraryItem;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
+import '../layout/adaptive.dart' show showFittedSheet;
 
 /// Where one line of "Set up Cache" stands.
 enum SetupPhase { todo, running, done }
@@ -429,7 +430,7 @@ class _SetupRowState extends State<_SetupRow> {
     final guide = onGuide;
     void hold() async {
       HapticFeedback.mediumImpact();
-      final open = await showModalBottomSheet<bool>(
+      final open = await showFittedSheet<bool>(
         context: context,
         showDragHandle: true,
         builder: (ctx) => SafeArea(

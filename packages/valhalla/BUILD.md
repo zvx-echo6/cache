@@ -144,6 +144,24 @@ adb -s 39191FDJH008WZ shell rm -rf /data/local/tmp/valhalla    # clean up afterw
 - OSM-derived tiles carry the ODbL; attribution is the app's job.
 - No LGPL or GPL code is linked.
 
+## Linux (x86_64 and aarch64)
+
+Built by `.github/workflows/valhalla.yml` (jobs `linux-x86_64`, `linux-aarch64`, native runners, `ubuntu:22.04` container) with
+`scripts/build-linux.sh`; `scripts/fetch-source.sh` pins and prepares the Valhalla source for every platform job; `scripts/test-linux.sh`
+runs `test/shim_test.c` (init, route, matrix, locate) over the public Idaho tile extract. Output: `libvalhalla_shim.so` (SONAME
+`libvalhalla_shim.so`, the name the app loads), `include/valhalla_shim.h`, `LICENSE-NOTICE.txt`, `BUILD-INFO.txt`.
+
+Same as the other platforms: Valhalla commit `72f459f` (3.7.0), vcpkg commit `0e39c10` and `vcpkg.json`, this CMake project and its
+switches, static release dependencies, hidden symbols (only `valhalla_shim_*` exported), no Valhalla source patches.
+
+Differences, and why:
+- Triplets `x64-linux-rel` / `arm64-linux-rel` (static, release, `-fPIC`), host triplet = target triplet (as on Windows).
+- `VCPKG_FORCE_SYSTEM_BINARIES=1`: vcpkg downloads no cmake/ninja for aarch64 Linux; cmake and ninja come from PyPI in CI.
+- GCC 13 from the ubuntu-toolchain-r/test PPA: Valhalla 3.7.0 uses `<format>`, which Ubuntu 22.04's GCC 12 lacks.
+- `-static-libstdc++ -static-libgcc` (Android does the same with `c++_static`): the library needs only glibc, max GLIBC 2.35.
+- ccache for Valhalla's own compile in CI (the CMake project forces `ENABLE_CCACHE` off; the launcher is passed instead).
+- tz leapseconds: the same pre-generated file is copied in, as on the other platforms.
+
 ## iPhone device static build (iOS 16.3+, arm64)
 
 Run on a GitHub macOS runner with Xcode, CMake, Ninja and Rust already available:

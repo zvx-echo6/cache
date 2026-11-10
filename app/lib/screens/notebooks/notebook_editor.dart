@@ -5,6 +5,7 @@ import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
+import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// Making a notebook from a template, or editing one (UX 3.4): Name; FIELDS with Add field (each: label, type, unit for a number,
 /// choices for a choice); "Due again" for a log; Private; "Show on map" once entries have places. Create is off until there is a
@@ -102,7 +103,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
 
   Future<void> _pickDue() async {
     const options = ['day', 'week', 'month', '3 months', '6 months', 'year'];
-    final out = await showModalBottomSheet<String>(
+    final out = await showFittedSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: ListView(

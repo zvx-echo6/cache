@@ -1,5 +1,6 @@
 import Flutter
 import Darwin
+import MapLibre
 import os
 import UIKit
 import UniformTypeIdentifiers
@@ -10,6 +11,7 @@ import workmanager_apple
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   let folderAccess = FolderAccess()
+  let routeSnapshot = RouteSnapshot()
 
   override func application(
     _ application: UIApplication,
@@ -111,6 +113,25 @@ import workmanager_apple
       }
       let answer: [String: Any] = ["percent": percent, "charging": charging, "thermal": thermal]
       result(answer)
+    }
+    // The whole-route picture during guidance (RouteSnapshot below, lib/nav/overview/route_overview.dart).
+    let snapshots = FlutterMethodChannel(name: "co.cache/route_snapshot", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let snapshot = routeSnapshot
+    snapshots.setMethodCallHandler { call, result in snapshot.handle(call, result: result) }
+    // Turn-by-turn guidance keeps the screen on (lib/nav/guidance_wakelock.dart): the idle timer is off while it asks, and back on
+    // as soon as it says so or the app goes to the background.
+    let screenAwake = FlutterMethodChannel(name: "co.cache/screen_awake", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    screenAwake.setMethodCallHandler { call, result in
+      guard call.method == "keepScreenOn" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let on = (call.arguments as? [String: Any])?["on"] as? Bool ?? false
+      UIApplication.shared.isIdleTimerDisabled = on
+      result(nil)
+    }
+    NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+      UIApplication.shared.isIdleTimerDisabled = false
     }
     // The thermal state changed: the app reads it again at once (background index work eases off or pauses).
     NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in
@@ -232,5 +253,89 @@ final class FolderAccess: NSObject, UIDocumentPickerDelegate {
     var top = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? scene?.windows.first?.rootViewController
     while let presented = top?.presentedViewController { top = presented }
     return top
+  }
+}
+
+/// The whole-route picture during guidance (lib/nav/overview/route_overview.dart): MapLibre's offscreen map snapshotter renders the
+/// app's map style, with the route written into it, at a fixed camera, once per route, size and theme. It reads the same tile
+/// server on 127.0.0.1 as the live map, which it never touches. The MapLibre framework is the one the maplibre_gl plugin brings in,
+/// at the version the Podfile pins (tools/check_maplibre_pin.py keeps the two the same).
+///
+/// "render" takes {style (JSON), lat, lon, zoom, width, height (points), pixelRatio} and answers {rgba (the pixels, row by row),
+/// width, height (pixels), ms (the render alone)}. A newer request cancels one still running, which answers "cancelled".
+final class RouteSnapshot {
+  private var active: MLNMapSnapshotter?
+  private var activeResult: FlutterResult?
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard call.method == "render" else {
+      result(FlutterMethodNotImplemented)
+      return
+    }
+    guard let a = call.arguments as? [String: Any], let style = a["style"] as? String,
+          let lat = (a["lat"] as? NSNumber)?.doubleValue, let lon = (a["lon"] as? NSNumber)?.doubleValue,
+          let zoom = (a["zoom"] as? NSNumber)?.doubleValue, let width = (a["width"] as? NSNumber)?.doubleValue,
+          let height = (a["height"] as? NSNumber)?.doubleValue, width > 0, height > 0 else {
+      result(FlutterError(code: "bad_args", message: "style, lat, lon, zoom, width and height are needed", details: nil))
+      return
+    }
+    let ratio = (a["pixelRatio"] as? NSNumber)?.doubleValue ?? Double(UIScreen.main.scale)
+    cancel()
+    // The snapshotter reads a style from an address: the JSON goes to a file in the temporary folder.
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("route-overview-style-\(UUID().uuidString).json")
+    do {
+      try style.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      result(FlutterError(code: "snapshot", message: error.localizedDescription, details: nil))
+      return
+    }
+    let camera = MLNMapCamera()
+    camera.centerCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    camera.heading = 0
+    camera.pitch = 0
+    let options = MLNMapSnapshotOptions(styleURL: url, camera: camera, size: CGSize(width: width, height: height))
+    options.zoomLevel = zoom
+    options.scale = CGFloat(ratio)
+    options.showsLogo = false
+    let snapshotter = MLNMapSnapshotter(options: options)
+    active = snapshotter
+    activeResult = result
+    let started = DispatchTime.now().uptimeNanoseconds
+    snapshotter.start { [weak self] snapshot, error in
+      try? FileManager.default.removeItem(at: url)
+      guard let self = self, self.active === snapshotter else { return }
+      self.active = nil
+      self.activeResult = nil
+      let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+      if let error = error {
+        result(FlutterError(code: "snapshot", message: error.localizedDescription, details: nil))
+        return
+      }
+      guard let cg = snapshot?.image.cgImage else {
+        result(FlutterError(code: "snapshot", message: "No picture", details: nil))
+        return
+      }
+      let w = cg.width, h = cg.height
+      var data = Data(count: w * h * 4)
+      let drawn: Bool = data.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return true
+      }
+      guard drawn else {
+        result(FlutterError(code: "snapshot", message: "Could not read the picture", details: nil))
+        return
+      }
+      let answer: [String: Any] = ["rgba": FlutterStandardTypedData(bytes: data), "width": w, "height": h, "ms": ms]
+      result(answer)
+    }
+  }
+
+  private func cancel() {
+    active?.cancel()
+    active = nil
+    activeResult?(FlutterError(code: "cancelled", message: "a newer picture was asked for", details: nil))
+    activeResult = nil
   }
 }

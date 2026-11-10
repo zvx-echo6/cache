@@ -23,6 +23,10 @@ pub enum ErrorCode {
     OtpRequired,
     LimitExceeded,
     Offline,
+    NotPdf,
+    Locked,
+    Embed,
+    NoText,
     Internal,
 }
 
@@ -49,6 +53,10 @@ impl ErrorCode {
             ErrorCode::OtpRequired => "otp_required",
             ErrorCode::LimitExceeded => "limit_exceeded",
             ErrorCode::Offline => "offline",
+            ErrorCode::NotPdf => "not_pdf",
+            ErrorCode::Locked => "locked",
+            ErrorCode::Embed => "embed",
+            ErrorCode::NoText => "no_text",
             ErrorCode::Internal => "internal",
         }
     }
@@ -200,6 +208,10 @@ mod tests {
             (ErrorCode::OtpRequired, "otp_required"),
             (ErrorCode::LimitExceeded, "limit_exceeded"),
             (ErrorCode::Offline, "offline"),
+            (ErrorCode::NotPdf, "not_pdf"),
+            (ErrorCode::Locked, "locked"),
+            (ErrorCode::Embed, "embed"),
+            (ErrorCode::NoText, "no_text"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

@@ -71,6 +71,10 @@ jobs:
           lib=$(find "$RUNNER_TEMP/llama" -name 'libcache_llama.so' | head -n 1)
           [ -n "$lib" ] || { echo 'libcache_llama.so was not built'; exit 1; }
           echo "LLAMA_LIB=$lib" >> "$GITHUB_ENV"
+      # The core's default features link libzim (Xapian ZIM search): cs needs the official prebuilt, found again when cs runs.
+      - uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
       - name: cs and the snapshot writer
         working-directory: packages/cache_search/native
         run: |
@@ -91,6 +95,8 @@ jobs:
       - name: 6. Unpack, index and verify
         run: |
           cs=packages/cache_search/native/target/release/cs
+          LD_LIBRARY_PATH="$(dirname "$(find "$LIBZIM_DIR" -name 'libzim.so.9' | head -n 1)")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH
           lib="$W/check/library/cache-guide-$VERSION"
           "$cs" unpack-library --snapshot "$W/pkg/cache-guide-$VERSION.cache-library.tar" --dir "$lib"
           "$cs" index-library --library "$lib" --index-dir "$W/check/index" --settings "$lib/cache-library.json"

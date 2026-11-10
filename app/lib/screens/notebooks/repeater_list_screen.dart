@@ -74,7 +74,7 @@ class _RepeaterListScreenState extends State<RepeaterListScreen> {
 
   Future<void> _hold(Repeater r) async {
     final d = widget.deps;
-    final choice = await showModalBottomSheet<String>(
+    final choice = await showFittedSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(

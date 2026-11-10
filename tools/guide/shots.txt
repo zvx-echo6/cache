@@ -13,7 +13,7 @@ settings | Settings, the top page, with the quiet line "Getting search ready: 3 
 settings-storage | Settings > Storage: what uses the device's space, with "Clean up", and "Advanced" (Background indexing: Gentle) at the foot
 settings-maps | Settings > Maps: one line per region, the layers and Advanced
 weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
-library | Library: the "Getting search ready · 3 of 12 done" line with its bar at the top, two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
+library | Library: the "Getting search ready · 3 of 12 done" line with its bar at the top, then the four rows: ZIM Collections, Bookshelves, Catalog and Cache Documentation, then "Add to Library"
 library-add | Library > Add: a library from the list, a file or a download link
 guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
 notebooks | Notebooks: the list of notebooks
@@ -23,7 +23,6 @@ places-edit | A saved place open for editing: name, position and its weather and
 map-ring | The map with the ring open on a point: From here, Add stop, Measure
 ask | Ask: a question answered with its sources
 ask-plus-menu | Ask with the + menu open (Use my location, the sources and the rest)
-add-catalogue | Settings > Weather and alerts > More sources > Add sources from a link: the link field with "Check this link"
 ask-confirm-card | Ask with the confirm card "Add to Journal"/log with details, "Not now" and the add button
 ask-model-menu | Ask with the model name tapped: model and memory used, "Switch model...", "Unload: free the memory", "Manage models"
 ask-open-navigation | Ask: an answer with a route and the "Open navigation" button
@@ -63,11 +62,11 @@ regions-select | Regions sheet in Select mode: two regions ticked and the "Downl
 regions-updates-tab | Regions sheet, Updates tab: "Road routing" and "Places" up to date, one map with its date, "Update all" and "Check for updates"
 settings-appearance | Settings > Appearance: the four themes, Module icons Small and Large, and "Dark pages" for PDF pages
 settings-assistant | Settings > Cache model and web search: the model row, "Search service" with "Set up", "Search the web when online", "Use my location" and Conversations
-settings-credits | Settings > Credits and licences: Version, Licence, Source code, Credits, Open-source licences
+settings-credits | Library > Cache Documentation > Credits and licenses: Version, License, Source code, Credits, Open-source licenses
 settings-location-blocked | Settings > Cache model and web search, Location group: "Use my location" row reading "Blocked in the phone's settings" with the "Phone settings" button
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
-settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks ticked under "Shared with linked devices", with their files and size
+settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks switched on under "Shared with linked devices", Models off, each with its line
 settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, one with "Get key", and "More sources (9 more)"
 source-page | A data source's page: "Use this source", "Replace", "Remove the key" and the About this source facts
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note

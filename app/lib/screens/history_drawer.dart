@@ -7,11 +7,15 @@ import '../history/share.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../theme.dart';
+import '../layout/adaptive.dart' show showFittedSheet;
+
+/// The docked chat list's width (a drawer's).
+const double kDockedChatListWidth = 304;
 
 /// The list of past conversations, opened from the Ask top bar: New chat, a search box, then Pinned and
 /// the conversations grouped by date.
 class HistoryDrawer extends StatefulWidget {
-  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown, this.layout, this.width, this.onChosen});
+  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown, this.layout, this.width, this.onChosen, this.docked = false});
 
   final ChatController chat;
 
@@ -20,6 +24,9 @@ class HistoryDrawer extends StatefulWidget {
 
   /// Called after a chat was opened or a new one started from the list, once the list has closed (Settings uses it to bring Ask forward).
   final VoidCallback? onChosen;
+
+  /// Shown as a column beside the conversation (a desktop window) instead of a drawer over it: choosing a chat leaves it there.
+  final bool docked;
 
   /// Where "Add to Home" puts a chat shortcut; the item is hidden when null.
   final LayoutState? layout;
@@ -68,18 +75,18 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
 
   void _open(int id) {
     widget.chat.openConversation(id);
-    Navigator.of(context).pop();
+    if (!widget.docked) Navigator.of(context).pop();
     widget.onChosen?.call();
   }
 
   void _newChat() {
     widget.chat.newChat();
-    Navigator.of(context).pop();
+    if (!widget.docked) Navigator.of(context).pop();
     widget.onChosen?.call();
   }
 
   Future<void> _longPress(Conversation c) async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showFittedSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(
@@ -109,7 +116,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
       case 'delete':
         final messenger = ScaffoldMessenger.of(context);
         widget.chat.deleteConversation(c.id);
-        Navigator.of(context).pop();
+        if (!widget.docked) Navigator.of(context).pop();
         messenger.hideCurrentSnackBar();
         messenger
             .showSnackBar(SnackBar(
@@ -156,10 +163,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
   Widget build(BuildContext context) {
     final k = context.t;
     final searching = _query.text.trim().isNotEmpty;
-    return Drawer(
-      width: widget.width,
-      backgroundColor: k.background,
-      child: SafeArea(
+    final body = SafeArea(
         child: Column(
           children: [
             Padding(
@@ -193,8 +197,11 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
             Expanded(child: searching ? _results(context) : _grouped(context)),
           ],
         ),
-      ),
-    );
+      );
+    if (widget.docked) {
+      return SizedBox(key: const ValueKey('chat-list-docked'), width: widget.width ?? kDockedChatListWidth, child: Material(color: k.background, child: body));
+    }
+    return Drawer(width: widget.width, backgroundColor: k.background, child: body);
   }
 
   Widget _empty(BuildContext context, String text) => Center(

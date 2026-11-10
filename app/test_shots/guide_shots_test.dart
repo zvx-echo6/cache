@@ -92,7 +92,6 @@ import 'package:cache/weather/weather_state.dart';
 import 'package:cache/screens/settings/about_pages.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
 import 'package:cache/screens/settings/assistant_page.dart';
-import 'package:cache/screens/settings/catalogues_page.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/screens/settings/notifications_page.dart';
 import 'package:cache/screens/settings/sharing_page.dart';
@@ -334,7 +333,6 @@ void main() {
     final zims = folder('library', {'wikivoyage_en_idaho.zim': 180 << 20, 'wikipedia_en_medicine.zim': 940 << 20});
     final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
     final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
-    final shared = folder('shared', const {});
     final sync = _CountingSync()..peers.addAll(r.sync.peers);
     final sharing = SharingState(
       policy: r.policy,
@@ -343,7 +341,6 @@ void main() {
         DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'library': zims}),
         DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': models}),
         DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => {'notebooks': notebooks}),
-        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
       ],
       deviceName: 'Android device',
       opener: (_) async => sync,
@@ -359,7 +356,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('settings-weather, source-page, key-sheet, add-catalogue', (tester) async {
+  testWidgets('settings-weather, source-page, key-sheet', (tester) async {
     final r = await _rig(tester);
     await tester.runAsync(() async {
       await r.weather.setRowOn(kCurated.first, true);
@@ -386,9 +383,6 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
-    await show(tester, CataloguesPage(deps: r.deps));
-    await tester.pumpAndSettle();
-    await shot(tester, 'add-catalogue');
     await r.dispose(tester);
   });
 

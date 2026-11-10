@@ -122,7 +122,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                   else if (list == null)
                     const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()))
                   else if (list.isEmpty)
-                    Text('No region here in the catalogue. Search for one in Regions.', key: const ValueKey('regions-empty'), style: TextStyle(fontSize: 14, color: k.secondary))
+                    Text('No region here in the catalog. Search for one in Regions.', key: const ValueKey('regions-empty'), style: TextStyle(fontSize: 14, color: k.secondary))
                   else
                     Flexible(
                       child: ListView(

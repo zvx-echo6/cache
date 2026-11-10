@@ -576,7 +576,7 @@ void main() {
         await tester.runAsync(u.check);
         await _show(tester, home(u), theme: theme);
         await snap(tester, _out, '5a-home-$which-banner-$t');
-        await _show(tester, AboutPage(updates: u, version: () async => '1.0.29', whatsNew: () async => lines), theme: theme);
+        await _show(tester, AboutPage(updates: u, version: () async => '1.0.29'), theme: theme);
         await snap(tester, _out, '5b-about-$which-new-version-and-whats-new-row-$t');
         if (!android) {
           // Dismissed: after a restart (a new check) it stays away; a newer build brings it back.

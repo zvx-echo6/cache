@@ -139,7 +139,7 @@ To get several at once:
 If your area isn't listed, tap ["Draw your own area instead"](cache://maps/draw).
 
 - If a row says `off-road shared with Idaho`, that state's off-road data is downloaded once for all its regions.
-- If a size says "Size unknown", the catalogue has none for it.
+- If a size says "Size unknown", the catalog has none for it.
 - If the list won't load, connect once. It says "Couldn't read the list of regions. It needs a connection the first time."
 - If you're on mobile data, see Downloads, Wi-Fi and mobile data.
 - If a download stops, see A region's own page.
@@ -261,11 +261,11 @@ The Library holds offline copies of Wikipedia, medical guides and survival manua
 ![Add to Library](shot:library-add)
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
-2. Type in "Search the catalogue". You can narrow it with the language chip or a category chip such as "Medicine" or "Preparedness".
+2. Type in "Search the catalog". You can narrow it with the language chip or a category chip such as "Medicine" or "Preparedness".
 3. Under "Ready-made collections · free from Kiwix", tap the download button of the one you want.
 4. In the pop-up, check the size and storage bar, then tap "Download".
 
-When it finishes, Cache checks the file and adds it to your Library. Then it indexes it. The row says "Indexing". You can read straight away. Search inside it works when indexing ends.
+When it finishes, Cache checks the file and adds it to "ZIM Collections". Then it indexes it. The row says "Indexing". You can read straight away. Search inside it works when indexing ends.
 
 If the library holds PDFs or EPUBs, or videos with captions, Cache makes those searchable too, in the background. Nothing to switch on. See Search inside PDFs, EPUBs and captions in chapter 2.
 
@@ -285,7 +285,7 @@ A library is a set of passages Cache searches and cites. You add one from a file
 2. Tap "Your own library".
 3. Choose "From a file on this device" and pick the file. Or choose "From a download link", paste an https:// link and tap "Download".
 4. Watch the card. It shows each step. "Cancel" stops it.
-5. When it's done, the library appears in your Library.
+5. When it's done, the library appears in "Catalog" under "Your own". A library of books puts its books on "Bookshelves".
 
 A .zim file you already have is added the same way.
 

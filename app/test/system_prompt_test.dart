@@ -32,7 +32,7 @@ void main() {
         p,
         matches(
           RegExp(
-            r'Current local date and time: Monday, 2026-10-26 09:05 \(UTC[+-]\d\d:\d\d\)\.',
+            r'Current local date: Monday, 2026-10-26 \(UTC[+-]\d\d:\d\d\)\.',
           ),
         ),
       );
@@ -51,9 +51,33 @@ void main() {
     final prefix = first.substring(0, first.indexOf('Current local date'));
     expect(next.startsWith(prefix), isTrue);
     expect(prefix.length, greaterThan(first.length * .75));
-    expect(next, contains('Tuesday, 2026-10-27 10:06'));
+    expect(next, contains('Tuesday, 2026-10-27 (UTC'));
+    expect(next, isNot(contains('10:06')));
     expect(next, contains("The phone's current location is not known."));
     expect(next, isNot(contains('Monday, 2026-10-26')));
+  });
+
+  test('the same day gives the same bytes at any time of day, so the prompt start is reused all day', () {
+    for (final loc in [true, false]) {
+      for (final voice in [false, true]) {
+        final morning = buildSystemPrompt(now: DateTime(2026, 10, 29, 6, 1), locationKnown: loc, voice: voice);
+        final evening = buildSystemPrompt(now: DateTime(2026, 10, 29, 23, 59), locationKnown: loc, voice: voice);
+        expect(evening, morning);
+      }
+    }
+  });
+
+  test('the time line', () {
+    expect(buildTimeLine(DateTime(2026, 10, 29, 9, 5)), 'Local time: 09:05');
+    expect(buildTimeLine(DateTime(2026, 10, 29, 14, 30)), parityText('time-line-1430.txt'));
+    expect(withTimeLine('Local time: 09:05', 'Q?'), 'Local time: 09:05\n\nQ?');
+  });
+
+  test('frozen with the harness port (harness-askperf prompt_app.py system_date)', () {
+    String atFixtureOffset(String s) => s.replaceAll(RegExp(r'UTC[+-]\d\d:\d\d'), 'UTC-06:00');
+    final now = DateTime(2026, 10, 29, 14, 30);
+    expect(atFixtureOffset(buildSystemPrompt(now: now, locationKnown: true)), parityText('system-date-loc-text.txt'));
+    expect(atFixtureOffset(buildSystemPrompt(now: now, locationKnown: false, voice: true)), parityText('system-date-noloc-voice.txt'));
   });
 
   test(
@@ -71,7 +95,8 @@ void main() {
             voice: voice,
           );
           expect(compact.length, lessThan(baseline.length));
-          expect(compact, contains('2026-10-29 14:30'));
+          expect(compact, contains('2026-10-29 (UTC'));
+          expect(compact, isNot(contains('14:30')));
           expect(compact.contains(kVoiceLine), voice);
         }
       }

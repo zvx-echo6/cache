@@ -209,7 +209,7 @@ void main() {
       await tester.pump();
     }
     expect(h.runs, isEmpty);
-    expect(find.text('Cancelled'), findsOneWidget);
+    expect(find.text('Canceled'), findsOneWidget);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(sent.last['role'], 'system');
     expect(sent.last['content'], '{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}');

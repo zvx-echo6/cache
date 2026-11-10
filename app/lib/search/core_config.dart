@@ -2,6 +2,7 @@
 // helper reads it), and dart:ffi stays behind conditional imports with a web stub (the web build cannot import dart:ffi).
 
 import 'dart:io';
+import '../platform.dart' as plat;
 
 import 'indexes_dir.dart' show kIndexesDirName;
 
@@ -47,7 +48,7 @@ Map<String, dynamic> buildCoreExtras({
     },
     'routing': {
       // The region engine's folder (an empty `tiles`).
-      'valhalla': {'tiles': '', 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
+      'valhalla': {'tiles': '', 'shim': (useLinkedRouter ?? plat.isIOS) ? 'linked' : shim},
       // Off-road: the region packs downloaded with regions (regions_state.dart), with elevation from the map's elevation layer.
       'offroad': {'dir': '${supportDir.path}/regions/offroad'},
     },

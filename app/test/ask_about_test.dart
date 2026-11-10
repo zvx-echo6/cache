@@ -62,7 +62,9 @@ void main() {
     final backend = ScriptedBackend([
       (r) {
         final m = _messages(r);
-        expect(m[1], {'role': 'user', 'content': about.question});
+        expect(m[1]['role'], 'user');
+        expect(m[1]['content'], matches(RegExp(r'^Local time: \d\d:\d\d\n\n')), reason: 'the question starts with its time line');
+        expect(m[1]['content'], endsWith('\n\n${about.question}'));
         expect(about.question,
             'Tell me about this weather service alerts item near Pocatello: Freeze Warning. What does it mean for me, and what should I do?');
         // Byte for byte as recorded: the seeded assistant message and the tool result after it.
@@ -89,7 +91,8 @@ void main() {
       (_) => _call('search', '{"query": "pipes"}'),
       (_) => _call('search', '{"query": "plants"}'),
       (r) {
-        expect(r['tools'], isNull, reason: 'three rounds of its own after the seed, then the request without tools');
+        expect(r['tools'], isNotNull, reason: 'the same tools stay in the request, so the prompt start is reused');
+        expect(r['tool_choice'], 'none', reason: 'three rounds of its own after the seed, then no more tool calls');
         return say('Cover plants and drain pipes [2].');
       },
       (_) => _call('search', '{"query": "pets"}'),

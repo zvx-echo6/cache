@@ -1,9 +1,14 @@
-import 'package:cache/screens/settings/catalogues_page.dart';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:cache/screens/settings/own_source_pages.dart';
+import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/curated.dart';
+import 'package:cache/weather/own_source.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -186,7 +191,8 @@ void main() {
       await tester.enterText(find.byKey(const ValueKey('search-sources')), 'zzz');
       await tester.pump();
       expect(find.text('No source matches your search.'), findsOneWidget);
-      expect(find.text('Add sources from a link'), findsOneWidget);
+      expect(find.byKey(const ValueKey('add-own-source')), findsOneWidget);
+      expect(find.text('Add sources from a link'), findsNothing);
       await r.dispose(tester);
     });
 
@@ -287,91 +293,231 @@ void main() {
     });
   });
 
-  group('Add sources from a link', () {
-    const other = 'https://example.org/c/';
+  group('Your own sources', () {
+    const api = 'https://sensors.example.org/api/creek';
+    const answer = {
+      'station': {'id': 'site-12', 'latitude': 42.53, 'longitude': -113.79},
+      'water': {'level': 1.42, 'trend': 'Rising'},
+      'updated': '12:40',
+    };
 
-    Future<void> enterLink(WidgetTester tester, String link) async {
-      await tester.enterText(find.byKey(const ValueKey('catalogue-link')), link);
-      await tester.tap(find.byKey(const ValueKey('check-link')));
+    Future<void> settle(WidgetTester tester) async {
+      await tester.runAsync(() async {
+        for (var i = 0; i < 10; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
       await tester.pumpAndSettle();
     }
 
-    testWidgets('a link is checked and shown before it is added; adding keeps it; removing takes it off', (tester) async {
+    testWidgets('More sources: Add your own source, the form, Try it, pick what to show, Save source; it is on under Your own', (tester) async {
+      tall(tester);
       final r = await SettingsRig.create(tester);
-      r.web.serve(
-        other,
-        buildCatalogue(id: 'friends', title: 'Friends catalogue', base: other, connectors: [entry('river-x', 'hydrology', 'River X', provider: 'Friends'), entry('bad-one', 'weather', 'Bad one')]),
-      );
-      r.liveCore.invalid.add('bad-one');
-      await r.show(tester, CataloguesPage(deps: r.deps));
+      r.web.files['$api?site=12&lat=42.5400&lon=-113.7900&key=$secret'] = utf8.encode(jsonEncode(answer));
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('Cache connectors'), findsOneWidget, reason: 'the main catalogue');
-      expect(find.textContaining('11 sources'), findsOneWidget);
-      await enterLink(tester, '${other}catalogue.json');
-      expect(find.byKey(const ValueKey('preview-title')), findsOneWidget);
-      expect(find.text('Friends catalogue'), findsOneWidget);
-      expect(find.textContaining('This adds 1 source.'), findsOneWidget);
+      expect(find.text('Your own'.toUpperCase()), findsNothing, reason: 'nothing of your own yet');
+      expect(find.text('Any web service that gives data'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      expect(find.text('Add your own source'), findsWidgets);
+      // nothing typed: says what is missing, asks nothing
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await tester.pumpAndSettle();
+      expect(find.text('Give the source a name.'), findsOneWidget);
+      await tester.enterText(find.byKey(const ValueKey('own-name')), 'Creek level at the bridge');
+      await tester.enterText(find.byKey(const ValueKey('own-address')), '$api?site=12&lat=');
+      await tester.tap(find.byKey(const ValueKey('insert-lat')));
+      await tester.pump();
+      final field = tester.widget<TextField>(find.byKey(const ValueKey('own-address')));
+      field.controller!.text = '${field.controller!.text}&lon=';
+      await tester.tap(find.byKey(const ValueKey('insert-lon')));
+      await tester.pump();
+      expect(field.controller!.text, '$api?site=12&lat={lat}&lon={lon}');
+      // a key that is not in the address
+      await tester.enterText(find.byKey(const ValueKey('own-key')), secret);
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await tester.pumpAndSettle();
+      expect(find.text('Put your key in the web address where the service asks for it.'), findsOneWidget);
+      field.controller!.text = '${field.controller!.text}&key=$secret';
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await settle(tester);
+      expect(find.text('Pick what to show'), findsOneWidget);
+      expect(find.text('It answered. Here is what came back.'), findsOneWidget);
+      expect(find.text('Latitude'), findsOneWidget, reason: 'a value of the answer, named from its key');
+      expect(find.text('1.42'), findsOneWidget);
+      expect(find.byKey(const ValueKey('own-preview')), findsOneWidget);
+      // the first three are ticked; tick the level and the trend only, and rename the level
+      for (final p in ['station.id', 'station.latitude', 'station.longitude']) {
+        final box = find.descendant(of: find.byKey(ValueKey('own-value-$p')), matching: find.byType(Checkbox));
+        if (tester.widget<Checkbox>(box).value == true) await tester.tap(box);
+        await tester.pump();
+      }
+      await tester.scrollUntilVisible(find.byKey(const ValueKey('own-value-water.level')), 200, scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.level')), matching: find.byType(Checkbox)));
+      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.trend')), matching: find.byType(Checkbox)));
+      await tester.pump();
+      await tester.tap(find.text('Level'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('own-rename')), 'Water level');
+      await tester.tap(find.byKey(const ValueKey('own-rename-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('Water level 1.42'), findsOneWidget, reason: 'the preview');
+      await tester.tap(find.byKey(const ValueKey('own-save')));
+      await settle(tester);
+      // back on More sources, under Your own, on
+      expect(find.text('Pick what to show'), findsNothing);
+      expect(find.text('YOUR OWN'), findsOneWidget);
+      expect(find.text('Creek level at the bridge'), findsOneWidget);
+      expect(find.text('Your source · checked every 30 min'), findsOneWidget);
+      expect(switchIn(tester, 'Creek level at the bridge').value, isTrue);
+      final c = r.weather.ownSources.single;
+      expect(c.id, 'own-creek-level-at-the-bridge');
+      expect(r.weather.isOn(c.id), isTrue);
+      expect(c.defText, isNot(contains(secret)), reason: 'the key is never in the definition');
+      expect(c.defText, contains('{api_key}'));
+      expect(await r.secrets.read('live.key.${c.id}'), secret);
+      expect(r.liveCore.checked.last, c.defText, reason: 'the core checked it as it checks every definition');
+      expect(r.liveCore.keys[c.id], secret, reason: 'the core gets the key in memory');
+      expect(File('${r.liveDir.path}/${c.id}.json').readAsStringSync(), isNot(contains(secret)));
+      await r.dispose(tester);
+    });
+
+    testWidgets('Try it says plainly why there are no values (HTTP error, not JSON), and Try again', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, OwnSourceFormPage(deps: r.deps));
+      await tester.enterText(find.byKey(const ValueKey('own-name')), 'Gauge');
+      await tester.enterText(find.byKey(const ValueKey('own-address')), '$api/missing');
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await settle(tester);
+      expect(find.text('sensors.example.org answered with an error (HTTP 404).'), findsOneWidget);
+      r.web.files['$api/missing'] = utf8.encode('<html>hello</html>');
+      await tester.tap(find.byKey(const ValueKey('own-again')));
+      await settle(tester);
+      expect(find.text('sensors.example.org answered, but not with JSON. This version of Cache only reads JSON.'), findsOneWidget);
+      r.web.files['$api/missing'] = utf8.encode('{"v": 3}');
+      await tester.tap(find.byKey(const ValueKey('own-again')));
+      await settle(tester);
+      expect(find.text('It answered. Here is what came back.'), findsOneWidget);
+      expect(r.weather.ownSources, isEmpty, reason: 'nothing is saved before Save source');
+      await r.dispose(tester);
+    });
+
+    testWidgets('a source of your own opens to be edited or removed; removing takes its key too', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await tester.runAsync(() => r.weather.saveOwnSource(
+        const OwnDraft(name: 'Creek', address: '$api?k=$secret', key: secret),
+        const [OwnPick('water.level', 'Water level')],
+      ));
+      final id = r.weather.ownSources.single.id;
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Creek'));
+      await settle(tester);
+      expect(find.byKey(const ValueKey('edit-own')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('edit-own')));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit source'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-address'))).controller!.text, '$api?k={api_key}');
+      expect(find.text('Saved. Type a new one to replace it.'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-own')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-remove-own')));
+      await settle(tester);
+      expect(r.weather.ownSources, isEmpty);
+      expect(r.weather.isOn(id), isFalse);
+      expect(await r.secrets.read('live.key.$id'), isNull);
+      await r.dispose(tester);
+    });
+
+    testWidgets('Or import a source file: a list from a link is checked and shown, then added under Your own, off', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      const other = 'https://example.org/c/';
+      r.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends', base: other, connectors: [entry('river-x', 'hydrology', 'River X', provider: 'Friends'), entry('bad-one', 'weather', 'Bad one')]));
+      r.liveCore.invalid.add('bad-one');
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('own-import')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('import-link')), '${other}catalogue.json');
+      await tester.tap(find.byKey(const ValueKey('import-check')));
+      await settle(tester);
+      expect(find.textContaining('This adds 1 source to Your own.'), findsOneWidget);
       expect(find.text('River X · Friends · US'), findsOneWidget);
       expect(find.text('Left out (1)'), findsOneWidget);
-      expect(find.textContaining('bad-one: items[0].label'), findsOneWidget);
       expect(r.weather.sourceById('river-x'), isNull, reason: 'not kept yet');
-      await tester.tap(find.byKey(const ValueKey('add-catalogue')));
+      await tester.tap(find.byKey(const ValueKey('import-add')));
+      await settle(tester);
+      final x = r.weather.sourceById('river-x')!;
+      expect(r.weather.isOwn(x), isTrue);
+      expect(r.weather.isOn('river-x'), isFalse);
+      expect(r.settings.extraCatalogues, isEmpty, reason: 'a list is read once, not followed');
+      // and one source from a file
+      expect(find.byType(MoreSourcesPage), findsOneWidget, reason: 'adding goes back to More sources');
+      expect(find.text('River X'), findsOneWidget, reason: 'under Your own');
+      Navigator.of(tester.element(find.byType(MoreSourcesPage))).push(MaterialPageRoute<void>(builder: (_) => OwnImportPage(deps: r.deps, pickText: () async => miniDefinition('my-quakes', title: 'My quakes'))));
       await tester.pumpAndSettle();
-      expect(r.weather.sourceById('river-x'), isNotNull);
-      expect(find.text('Friends catalogue'), findsOneWidget, reason: 'now in the list');
-      expect(find.text('Friends catalogue added'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 5));
-      await tester.tap(find.text('Remove'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('confirm-remove-catalogue')));
-      await tester.pumpAndSettle();
-      expect(r.weather.sourceById('river-x'), isNull);
-      expect(r.settings.extraCatalogues, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('import-file')));
+      await settle(tester);
+      expect(find.textContaining('This adds 1 source'), findsOneWidget);
+      expect(find.text('My quakes · Provider'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('import-add')));
+      await settle(tester);
+      expect(r.weather.isOwn(r.weather.sourceById('my-quakes')!), isTrue);
       await r.dispose(tester);
     });
 
-    testWidgets('a link that is not https, not a catalogue, or unreachable says so', (tester) async {
+    testWidgets('a link that is not https, or not a source file, says so', (tester) async {
       final r = await SettingsRig.create(tester);
-      await r.show(tester, CataloguesPage(deps: r.deps));
-      await enterLink(tester, 'http://example.org/c.json');
-      expect(find.byKey(const ValueKey('link-error')), findsOneWidget);
-      expect(find.textContaining('https://'), findsWidgets);
+      await r.show(tester, OwnImportPage(deps: r.deps));
+      await tester.enterText(find.byKey(const ValueKey('import-link')), 'http://example.org/c.json');
+      await tester.tap(find.byKey(const ValueKey('import-check')));
+      await settle(tester);
+      expect(find.text('Enter an address that starts with https://'), findsOneWidget);
       r.web.files['https://example.org/not.json'] = 'hello'.codeUnits;
-      await enterLink(tester, 'https://example.org/not.json');
-      expect(find.textContaining("didn't give a connector catalogue"), findsOneWidget);
-      r.web.offline = true;
-      await enterLink(tester, 'https://example.org/x.json');
-      expect(find.textContaining("Couldn't reach"), findsOneWidget);
+      await tester.enterText(find.byKey(const ValueKey('import-link')), 'https://example.org/not.json');
+      await tester.tap(find.byKey(const ValueKey('import-check')));
+      await settle(tester);
+      expect(find.textContaining("This isn't a source file"), findsOneWidget);
       await r.dispose(tester);
     });
+  });
 
-    testWidgets('on mobile data the check goes ahead (updates use any connection)', (tester) async {
-      final r = await SettingsRig.create(tester);
-      r.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends catalogue', base: other, connectors: [entry('river-x', 'hydrology', 'River X')]));
-      r.probe.change(ConnectionKind.mobile);
-      await r.show(tester, CataloguesPage(deps: r.deps));
-      await enterLink(tester, '${other}catalogue.json');
-      expect(find.byKey(const ValueKey('preview-title')), findsOneWidget);
-      await r.dispose(tester);
-    });
-
-    testWidgets('the main catalogue\'s address is changed in Advanced (here) and can be put back', (tester) async {
+  group('Storage > Advanced > Source list address', () {
+    testWidgets('changes where the source list comes from, and Use the default puts it back', (tester) async {
       final r = await SettingsRig.create(tester);
       const mine = 'https://mine.example.org/c/';
       r.web.serve(mine, buildCatalogue(id: 'mine', title: 'Mine', base: mine, connectors: [entry('my-quakes', 'earthquakes', 'My quakes')]));
-      await r.show(tester, CataloguesPage(deps: r.deps));
+      await r.show(tester, IndexingSpeedPage(settings: r.settings, weather: r.weather));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Address'));
+      expect(find.text('Source list address'), findsOneWidget);
+      expect(find.textContaining('Default · https://data.cached.info/connectors/catalogue.json'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('source-list-address')));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byKey(const ValueKey('catalogue-address')), '${mine}catalogue.json');
-      await tester.tap(find.byKey(const ValueKey('save-address')));
+      await tester.enterText(find.byKey(const ValueKey('source-list-field')), 'http://mine.example.org/c.json');
+      await tester.tap(find.byKey(const ValueKey('source-list-save')));
+      await tester.pumpAndSettle();
+      expect(r.settings.catalogueUrl, isNull, reason: 'not https: refused');
+      await tester.tap(find.byKey(const ValueKey('source-list-address')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('source-list-field')), '${mine}catalogue.json');
+      await tester.tap(find.byKey(const ValueKey('source-list-save')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
       await tester.pumpAndSettle();
       expect(r.settings.catalogueUrl, '${mine}catalogue.json');
       expect(r.weather.sourceById('my-quakes'), isNotNull);
-      expect(find.text('Mine'), findsOneWidget);
-      await tester.tap(find.text('Address'));
+      expect(find.text('${mine}catalogue.json'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('source-list-address')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Use the default'));
+      await tester.tap(find.byKey(const ValueKey('source-list-default')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
       await tester.pumpAndSettle();
       expect(r.settings.catalogueUrl, isNull);
       expect(r.weather.sourceById('usgs-quakes-near'), isNotNull);

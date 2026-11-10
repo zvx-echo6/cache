@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 import 'geo.dart';
 import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
@@ -84,24 +83,27 @@ class MapsState extends ChangeNotifier {
   String? get baseProblem {
     if (!engine.ready) return null;
     if (activeDefinitions.any((d) => d.isBase)) return null;
-    return 'No base map yet. Connect once to get the catalogue.';
+    return 'No base map yet. Connect once to get the catalog.';
   }
 
   /// The small line about layers that cannot draw here and now, or null.
   String? notice;
-  File? _file;
+  AppFs? _fs;
   Map<String, dynamic>? _template;
   Map<String, dynamic>? _protomapsTemplate;
   Timer? _saveTimer;
   int _coverageSeq = 0;
 
+  static const String _name = 'maps.json';
+
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/maps.json');
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
     try {
-      if (_file!.existsSync()) {
-        final j = jsonDecode(_file!.readAsStringSync()) as Map<String, dynamic>;
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text != null) {
+        final j = jsonDecode(text) as Map<String, dynamic>;
         _hadSettings = true;
         _enabled
           ..clear()
@@ -250,6 +252,20 @@ class MapsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The layers switched on, sorted (what a linked device takes, Settings > Sharing and sync).
+  List<String> get layersOn => _enabled.toList()..sort();
+
+  /// Switches on exactly [ids], as a linked device has them. A layer not here yet stays listed and draws once it arrives.
+  void setLayersOn(Iterable<String> ids) {
+    final next = ids.toSet();
+    if (next.length == _enabled.length && next.containsAll(_enabled)) return;
+    _enabled
+      ..clear()
+      ..addAll(next);
+    _save();
+    notifyListeners();
+  }
+
   void setOpacity(String id, double v) {
     _opacity[id] = v.clamp(0.1, 1.0);
     _save();
@@ -282,6 +298,8 @@ class MapsState extends ChangeNotifier {
   String get styleKey => [
         for (final u in uses) '${u.def.id}:${u.opacity.toStringAsFixed(2)}',
         engine.ready ? 'ready' : 'wait',
+        // The connection came back: the style is applied again with new source addresses, so blank tiles are asked for again.
+        'net${engine.sourcesGeneration}',
         for (final l in engine.layers) l.styleSignature,
       ].join(',');
 
@@ -378,9 +396,9 @@ class MapsState extends ChangeNotifier {
 
   Future<void> _write() async {
     try {
-      final f = _file;
-      if (f == null) return;
-      await writeStringAtomic(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      await fs.writeStringAtomic(AppRoot.support, _name, jsonEncode({
         'enabled': _enabled.toList(),
         'opacity': _opacity,
         'definitions': _definitions,

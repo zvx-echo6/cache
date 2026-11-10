@@ -133,6 +133,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   Widget build(BuildContext context) => TwoPane(
     id: 'notebooks',
     listName: 'Notebooks',
+    // A tablet shows the shelf across the page until a notebook is opened beside it (no empty pane).
+    listAloneUntilChosen: true,
     list: Builder(
       builder: (c) {
         _pane = c;
@@ -192,8 +194,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           }
           final now = widget.deps.now();
           final again = [for (final n in nb.logs) if (n.entryCount > 0) n].take(3).toList();
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          return LayoutBuilder(builder: (context, cts) => ListView(
+            padding: ContentWidth.padFor(cts.maxWidth).copyWith(top: 8, bottom: 96),
             children: [
               if (again.isNotEmpty) ...[
                 Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
@@ -249,7 +251,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                   child: Text('No notebooks yet. Make one with New notebook.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.secondary)),
                 ),
             ],
-          );
+          ));
         },
       ),
     );

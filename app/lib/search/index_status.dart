@@ -8,17 +8,20 @@ String indexPartWord(String kind) => switch (kind) {
   'zim-pdf' => 'PDFs',
   'zim-epub' => 'EPUBs',
   'zim-captions' || 'captions' => 'captions',
+  'pdf-add' => 'Add PDF',
   _ => 'the search index',
 };
 
 /// "Making PDFs searchable"; the seal of an older index: "Getting the search index ready".
 String indexDoingWords(String kind) => switch (kind) {
+  'pdf-add' => 'Adding a PDF',
   'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'Making ${indexPartWord(kind)} searchable',
   _ => 'Getting the search index ready',
 };
 
 /// "Waiting to make PDFs searchable"; the seal: "Waiting to get the search index ready".
 String indexWaitingWords(String kind) => switch (kind) {
+  'pdf-add' => 'Waiting to add a PDF',
   'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'Waiting to make ${indexPartWord(kind)} searchable',
   _ => 'Waiting to get the search index ready',
 };
@@ -93,6 +96,8 @@ String? indexCurrentWords(IndexScheduler s) {
   final items = s.items;
   final i = items.where((i) => i.state == IndexState.running).firstOrNull ?? items.where((i) => i.state != IndexState.done).firstOrNull;
   if (i == null) return null;
+  // a PDF being added: its title and the phase it is in ("Water purification manual · Reading scanned pages (OCR)")
+  if (i.kind == 'pdf-add') return '${i.title} · ${i.step ?? indexWaitingWords(i.kind)}';
   final name = i.title.isEmpty ? indexPartWord(i.kind) : '${i.title} · ${indexPartWord(i.kind)}';
   final p = i.progress;
   return p == null || p.$2 <= 0 ? name : '$name ${indexOf(p)}';

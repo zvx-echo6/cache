@@ -1,0 +1,476 @@
+# Builds the native libraries that Cache for Linux (and later every platform) shares, one job per platform and library, each pinned exactly
+# like the other platforms and tested. Today: Linux x86_64 and aarch64 (each on a native runner, no cross-compiling).
+#
+#   cache-llama-linux-<arch>   libcache_llama.so: llama.cpp at the pinned submodule commit (packages/cache_llama/third_party/llama.cpp,
+#                              620d2225c, the one the phone and desktop use) plus cl_embed and the chat engine, built by
+#                              packages/cache_llama/scripts/build-linux.sh (the same script server-release.yml calls). The test runs
+#                              the embed exactness test from server: cache_embed's own example and the server give cosine >= 0.9999
+#                              (bge-m3 Q8_0). Artifact cache-llama-<llama.cpp short sha>-linux-<arch>: lib/libcache_llama.so,
+#                              include/cache_llama.h, BUILD-INFO.txt.
+#   libzim-core-linux-<arch>   the core (libcache_search.so) with the C++ shim zimx over Kiwix's official prebuilt libzim 9.8.2-1
+#                              (Xapian and ICU inside; fetch-libzim-linux.sh holds the sha256), so a ZIM's own Xapian index is searched
+#                              exactly as on the phone. The tests: cache_search's zim tests, including the cfg(zimx) ones and
+#                              tests/zimx_small.rs on a small ZIM with Xapian indexes (the openZIM testing suite's small.zim, pinned
+#                              by sha256). Artifact cache-search-zimx-linux-<arch>: lib/libcache_search.so (RPATH $ORIGIN),
+#                              lib/libzim.so.9, BUILD-INFO.txt.
+#
+# Built in an ubuntu:22.04 container (on the same native runners) so the binaries need glibc 2.35 or older and run on Ubuntu 22.04+,
+# Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after each build fails the job if a binary needs a newer glibc (or, for
+# the C++ ones, a libstdc++ newer than GCC 12's, GLIBCXX_3.4.30), and lists ldd and the NEEDED entries.
+#
+# Placeholders (comments only; the other platforms join when their builds are pinned the same way):
+#   cache-llama-windows-x86_64   cache_llama.dll (CMake, MSVC)         -> cache-llama-<sha>-windows-x86_64
+#   cache-llama-android-arm64    libcache_llama.so + CPU variants      -> cache-llama-<sha>-android-arm64
+#   cache-llama-ios-arm64        libcache_llama.a                      -> cache-llama-<sha>-ios-arm64
+#   libzim-core-windows-x86_64   cache_search.dll + zim-9.dll + ICU    -> cache-search-zimx-windows-x86_64
+#   libzim-core-android-arm64    libcache_search.so + libzim.so        -> cache-search-zimx-android-arm64
+#   libzim-core-ios-arm64        libcache_search.a (+ CoreKiwix)       -> cache-search-zimx-ios-arm64
+name: Native libs
+
+on:
+  push:
+    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
+    paths:
+      - 'packages/cache_llama/**'
+      - 'packages/cache_search/native/**'
+      - 'server/tests/data/**'
+      - '.github/workflows/native-libs.yml'
+      - '.github/actions/libzim-prebuilt/**'
+      - '.github/actions/pinned-downloads/**'
+      - '.github/pinned-downloads.txt'
+      - '.github/scripts/pinned-download.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: 1.99.1
+
+jobs:
+  cache-llama-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            rustflags: ''
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            rustflags: '-C link-arg=-fuse-ld=lld'
+    name: cache-llama-linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    timeout-minutes: 120
+    env:
+      # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own (cache_search builds here now).
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/cache_search/native
+    steps:
+      - name: Git for the checkout
+        working-directory: /
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update -q && apt-get install -y -q git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build tools
+        working-directory: .
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -q
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip file
+          # mupdf-sys (cache_builder, pulled in by the server crate) generates its bindings with bindgen, which needs libclang.
+          apt-get install -y -q libclang-dev clang lld
+          gcc --version | sed -n 1p
+          cmake --version | sed -n 1p
+          ldd --version | sed -n 1p
+      - name: Pinned llama.cpp
+        id: llama
+        working-directory: .
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          rev=$(git rev-parse HEAD:packages/cache_llama/third_party/llama.cpp)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "short=${rev:0:7}" >> "$GITHUB_OUTPUT"
+          echo "llama.cpp $rev"
+          # the pin the phone and desktop use
+          [[ "$rev" == 620d2225cc436ab0b001e3200e590e3b286ef9ab ]] || { echo "::error::llama.cpp is at $rev, not the pinned 620d2225c"; exit 1; }
+          [[ "$(git -C packages/cache_llama/third_party/llama.cpp rev-parse HEAD)" == "$rev" ]] || { echo "::error::the submodule is not checked out at $rev"; exit 1; }
+      - name: Build libcache_llama
+        working-directory: .
+        run: bash packages/cache_llama/scripts/build-linux.sh "$PWD/build-llama"
+      - name: Check glibc and symbols
+        working-directory: .
+        run: |
+          so=build-llama/libcache_llama.so
+          file "$so"
+          ldd "$so"
+          echo "NEEDED:"; readelf -d "$so" | grep NEEDED || true
+          objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tr '\n' ' '; echo
+          max=$(objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "max GLIBC $max"
+          [[ $(printf '%s\n2.35\n' "$max" | sort -V | tail -1) == 2.35 ]] || { echo "::error::needs glibc $max"; exit 1; }
+          nm -D --defined-only "$so" | grep ' T '
+      - name: Rust
+        id: rust
+        working-directory: .
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
+          echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: Cargo registry cache
+        id: cache-1
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-llama-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-llama-${{ matrix.arch }}-
+      - name: Cargo target cache
+        id: cache-2
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-llama-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-llama-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      # cache_search builds with the `xapian` feature by default, which needs the official prebuilt libzim (build.rs reads
+      # LIBZIM_DIR); the exactness test builds the server crate, which pulls cache_search in. Not --no-default-features, so this
+      # job builds what ships.
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: ${{ matrix.arch }}
+      # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
+      - name: Embedding model cache
+        id: cache-3
+        uses: actions/cache/restore@v4
+        with:
+          path: bge-model
+          key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+      - name: Embedding model
+        working-directory: .
+        run: |
+          mkdir -p bge-model
+          f=bge-model/bge-m3-Q8_0.gguf
+          sha=c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+          if [[ ! -f "$f" ]]; then
+            curl -fL --retry 8 --retry-delay 5 --retry-all-errors -C - -o "$f.part" \
+              "https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf"
+            mv "$f.part" "$f"
+          fi
+          echo "$sha  $f" | sha256sum -c -
+          test "$(stat -c %s "$f")" = 634553856
+      - name: Test (embed exactness, cosine against cache_embed's example)
+        env:
+          CACHE_EMBED_LIB: ${{ github.workspace }}/build-llama/libcache_llama.so
+          CACHE_EMBED_MODEL: ${{ github.workspace }}/bge-model/bge-m3-Q8_0.gguf
+          CACHE_EMBED_REF: ${{ runner.temp }}/embed-ref.f32
+        run: |
+          export LD_LIBRARY_PATH="$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")"
+          cargo run --locked -p cache_embed --example embed_texts -- --model "$CACHE_EMBED_MODEL" --lib "$CACHE_EMBED_LIB" \
+            --in ../../../server/tests/data/embed_texts.jsonl --out "$CACHE_EMBED_REF" --meta "$RUNNER_TEMP/embed-ref.meta.json"
+          cat "$RUNNER_TEMP/embed-ref.meta.json"
+          cargo test --locked -p cache_server --test embed_exact -- --ignored --nocapture --test-threads=1 | tee "$RUNNER_TEMP/embed-test.log"
+          grep -E 'cosine' "$RUNNER_TEMP/embed-test.log"
+          {
+            echo "### Embedder (${{ matrix.arch }}, $(nproc) cores)"
+            echo '```'
+            grep -E 'cosine|PERF' "$RUNNER_TEMP/embed-test.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Package
+        working-directory: .
+        run: |
+          out="$PWD/out/cache-llama-${{ steps.llama.outputs.short }}-linux-${{ matrix.arch }}"
+          mkdir -p "$out/lib" "$out/include"
+          install -m 755 build-llama/libcache_llama.so "$out/lib/libcache_llama.so"
+          install -m 644 packages/cache_llama/src/cache_llama.h "$out/include/cache_llama.h"
+          {
+            echo "cache_llama for linux-${{ matrix.arch }}"
+            echo "llama.cpp: ${{ steps.llama.outputs.rev }}"
+            echo "source commit: $GITHUB_SHA"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(uname -srm)"
+            echo "compiler: $(gcc --version | sed -n 1p); $(cmake --version | sed -n 1p)"
+            echo "cmake: -DCMAKE_BUILD_TYPE=Release $([[ '${{ matrix.arch }}' == x86_64 ]] && echo -DCACHE_LLAMA_X86_AVX2=ON) -DCMAKE_SHARED_LINKER_FLAGS='-static-libstdc++ -static-libgcc' (aarch64: baseline Armv8-A)"
+            echo "glibc (container): $(ldd --version | sed -n 1p)"
+            echo "max GLIBC needed: $(objdump -T "$out/lib/libcache_llama.so" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
+            echo "NEEDED: $(readelf -d "$out/lib/libcache_llama.so" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | tr '\n' ' ')"
+            echo "sha256: $(sha256sum "$out/lib/libcache_llama.so" | cut -d' ' -f1)"
+          } > "$out/BUILD-INFO.txt"
+          cat "$out/BUILD-INFO.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cache-llama-${{ steps.llama.outputs.short }}-linux-${{ matrix.arch }}
+          path: out/cache-llama-${{ steps.llama.outputs.short }}-linux-${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-1.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-2.outputs.cache-primary-key != '' && steps.cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-2.outputs.cache-primary-key }}
+      - name: Save cache (Embedding model cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-3.outputs.cache-primary-key != '' && steps.cache-3.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bge-model
+          key: ${{ steps.cache-3.outputs.cache-primary-key }}
+
+  # The phone's CPU backend path (CL_BACKEND_DL: the CPU backend is a set of libggml-cpu-*.so variants that cache_llama loads
+  # itself), built on Linux x86_64 with CACHE_LLAMA_TEST_BACKEND_DL so CI runs it. The test loads the search model with
+  # cl_embed_load and no chat model loaded first, as the app's query embedder and Add PDF's embedder do on a phone.
+  cache-llama-backend-dl:
+    name: cache-llama-backend-dl-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Embedding model cache
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: bge-model
+          key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+      - name: Embedding model
+        run: |
+          mkdir -p bge-model
+          f=bge-model/bge-m3-Q8_0.gguf
+          sha=c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+          if [[ ! -f "$f" ]]; then
+            curl -fL --retry 8 --retry-delay 5 --retry-all-errors -C - -o "$f.part" \
+              "https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf"
+            mv "$f.part" "$f"
+          fi
+          echo "$sha  $f" | sha256sum -c -
+      - name: Build with the CPU backend as loadable variants
+        run: |
+          out="$RUNNER_TEMP/dl/out"
+          # no build RPATH: the libraries are found only in $out (LD_LIBRARY_PATH below), all in one folder as in the APK
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/dl/build" -DCMAKE_BUILD_TYPE=Release \
+            -DCACHE_LLAMA_TEST_BACKEND_DL=ON -DCACHE_LLAMA_TEST_CLI=ON -DCMAKE_SKIP_BUILD_RPATH=ON
+          cmake --build "$RUNNER_TEMP/dl/build" -j "$(nproc)"
+          mkdir -p "$out"
+          find "$RUNNER_TEMP/dl/build" \( -name '*.so' -o -name '*.so.*' \) -exec cp -P {} "$out/" \;
+          # cl_test in a folder of its own: llama_backend_init's fallback searches the executable's folder and the working
+          # folder for backends, which on a phone are /system/bin and /, so neither may hold the variants here either
+          mkdir -p "$RUNNER_TEMP/dl/exe"
+          cp "$(find "$RUNNER_TEMP/dl/build" -type f -name cl_test -perm -u+x | head -n 1)" "$RUNNER_TEMP/dl/exe/cl_test"
+          ls -l "$out"
+          ls "$out"/libggml-cpu-*.so > /dev/null || { echo "::error::no CPU backend variants next to libcache_llama.so"; exit 1; }
+      - name: Test (embedder loads with no chat model loaded first)
+        run: |
+          out="$RUNNER_TEMP/dl/out"
+          model="$PWD/bge-model/bge-m3-Q8_0.gguf"
+          cd "$RUNNER_TEMP/dl/exe"
+          LD_LIBRARY_PATH="$out" ./cl_test --embed "$model" "how do I purify water" "boil water for one minute" 2>&1 | tee "$RUNNER_TEMP/dl.log"
+          # the run must have gone through load_cpu_backend (its log line) and embedded both texts
+          grep -q 'native library folder' "$RUNNER_TEMP/dl.log" || { echo "::error::the CPU backend was not loaded by cache_llama"; exit 1; }
+          grep -q 'cl_embed_load failed' "$RUNNER_TEMP/dl.log" && { echo "::error::cl_embed_load failed"; exit 1; }
+          [[ $(grep -c '^\[[0-9]\]' "$RUNNER_TEMP/dl.log") -eq 2 ]] || { echo "::error::not both texts were embedded"; exit 1; }
+
+  libzim-core-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            rustflags: ''
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            rustflags: '-C link-arg=-fuse-ld=lld'
+    name: libzim-core-linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    timeout-minutes: 150
+    env:
+      # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/cache_search/native
+    steps:
+      - name: Git for the checkout
+        working-directory: /
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update -q && apt-get install -y -q git ca-certificates
+      - uses: actions/checkout@v4
+      - name: Build tools
+        working-directory: .
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -q
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip lld file
+          g++ --version | sed -n 1p
+          ld.lld --version
+          ldd --version | sed -n 1p
+      - name: Rust
+        id: rust
+        working-directory: .
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
+          echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: ${{ matrix.arch }}
+      - name: openZIM testing suite (pinned, from the Actions cache)
+        id: zimsuite
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: zim-testing-suite-0.10.0.tar.gz
+      - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
+        working-directory: .
+        env:
+          ZIM_SUITE_TGZ: ${{ steps.zimsuite.outputs.dir }}/zim-testing-suite-0.10.0.tar.gz
+        run: |
+          line=$(bash packages/cache_search/native/zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
+          echo "$line"
+          echo "$line" >> "$GITHUB_ENV"
+          echo "CS_TEST_REQUIRE_SMALL_ZIM=1" >> "$GITHUB_ENV"
+      - name: Cargo registry cache
+        id: cache-4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-zimx-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-zimx-${{ matrix.arch }}-
+      - name: Cargo target cache
+        id: cache-5
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-zimx-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-zimx-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: Memory
+        run: |
+          free -m
+          nproc
+      # Tests do not need the release profile's fat LTO. The zim tests: the core's unit tests (zimx.rs among them) and the integration tests
+      # that open ZIMs; with libzim linked the cfg(zimx) ones run, among them zimx_ffi.rs (the shim is libzim 9.8.2, C++ exceptions
+      # become errors, a tiny ZIM without Xapian falls back to Tantivy) and zimx_small.rs (a ZIM's own full-text and title indexes).
+      # (The ready.gov tests in zimx_ffi.rs print that CS_TEST_ZIM_DIR is not set and return: that ZIM is 2.4 GB.)
+      - name: Test (zim, zimx)
+        run: |
+          # the unit-test executable of the core has no run path to libzim: the integration tests do (build.rs), this covers both
+          export LD_LIBRARY_PATH="$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")"
+          cargo test --locked -p cache_search --lib --test zimx_ffi --test zimx_small --test zim_ffi --test zim_open_closes \
+            --test zim_budget_ffi --test zim_read_identity --test zim_main_text --test search_ffi --test library_ffi --test conv_suggest_ffi \
+            -- --nocapture 2>&1 | tee "$RUNNER_TEMP/zim-tests.log"
+          grep -E 'fulltext=|^search ' "$RUNNER_TEMP/zim-tests.log" || true
+      # The arm runner gets killed during the fat-LTO link, so aarch64 uses thin LTO; the x86_64 build is unchanged.
+      - name: Build (aarch64)
+        if: matrix.arch == 'aarch64'
+        env:
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+        run: cargo build --locked -p cache_search --release
+      - name: Build (x86_64)
+        if: matrix.arch != 'aarch64'
+        run: cargo build --locked -p cache_search --release
+      - name: Package
+        id: pack
+        working-directory: .
+        run: |
+          name="cache-search-zimx-linux-${{ matrix.arch }}"
+          out="$PWD/out/$name"
+          mkdir -p "$out/lib"
+          install -m 755 packages/cache_search/native/target/release/libcache_search.so "$out/lib/libcache_search.so"
+          # libzim.so.9 is the soname the core needs; copy the real file under that name (the prebuilt has symlinks).
+          cp -L "$LIBZIM_DIR"/lib/*/libzim.so.9 "$out/lib/libzim.so.9"
+          chmod 755 "$out/lib/libzim.so.9"
+          {
+            echo "cache_search (the core) with libzim for linux-${{ matrix.arch }}"
+            echo "source commit: $GITHUB_SHA"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(uname -srm)"
+            echo "rust: $(rustc --version)"
+            echo "compiler: $(g++ --version | sed -n 1p)"
+            echo "libzim: 9.8.2-1 (Kiwix official prebuilt, sha256 in packages/cache_search/native/zimx/fetch-libzim-linux.sh); Xapian and ICU 73 inside"
+            echo "glibc (container): $(ldd --version | sed -n 1p)"
+            for f in libcache_search.so libzim.so.9; do
+              echo "$f: max GLIBC $(objdump -T "$out/lib/$f" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1), max GLIBCXX $(objdump -T "$out/lib/$f" | grep -o 'GLIBCXX_[0-9.]*' | sed 's/GLIBCXX_//' | sort -uV | tail -1)"
+              echo "$f NEEDED: $(readelf -d "$out/lib/$f" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | tr '\n' ' ')"
+              echo "$f sha256: $(sha256sum "$out/lib/$f" | cut -d' ' -f1)"
+            done
+            echo "libcache_search.so RUNPATH: $(readelf -d "$out/lib/libcache_search.so" | grep -E 'RPATH|RUNPATH' | sed 's/.*\[\(.*\)\]/\1/')"
+          } > "$out/BUILD-INFO.txt"
+          cat "$out/BUILD-INFO.txt"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+      - name: Check glibc, NEEDED and that the core loads with its libzim
+        working-directory: .
+        run: |
+          out="${{ steps.pack.outputs.dir }}"
+          fail=0
+          for f in "$out/lib/libcache_search.so" "$out/lib/libzim.so.9"; do
+            file "$f"
+            echo "--- ldd $f"; ldd "$f"
+            echo "--- NEEDED"; readelf -d "$f" | grep -E 'NEEDED|RPATH|RUNPATH|SONAME'
+            max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+            echo "$f: max GLIBC_${max:-none}"
+            if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" 2.35 | sort -V | tail -n 1)" != "2.35" ]]; then echo "::error::$f needs GLIBC_$max, newer than 2.35"; fail=1; fi
+            cxx=$(objdump -T "$f" | grep -o 'GLIBCXX_[0-9][0-9.]*' | sed 's/GLIBCXX_//' | sort -V | tail -n 1 || true)
+            echo "$f: max GLIBCXX_${cxx:-none}"
+            if [[ -n "$cxx" && "$(printf '%s\n%s\n' "$cxx" 3.4.30 | sort -V | tail -n 1)" != "3.4.30" ]]; then echo "::error::$f needs GLIBCXX_$cxx, newer than 3.4.30 (GCC 12)"; fail=1; fi
+          done
+          # the zimx shim and libzim are linked in: the core needs libzim.so.9 and finds it next to itself (RPATH $ORIGIN)
+          readelf -d "$out/lib/libcache_search.so" | grep -q 'NEEDED.*\[libzim.so.9\]' || { echo "::error::libcache_search.so does not need libzim.so.9 (zimx not linked)"; fail=1; }
+          readelf -d "$out/lib/libcache_search.so" | grep -E 'RPATH|RUNPATH' | grep -q '\$ORIGIN' || { echo "::error::libcache_search.so has no \$ORIGIN run path"; fail=1; }
+          if env -u LD_LIBRARY_PATH ldd "$out/lib/libcache_search.so" | grep -q 'not found'; then echo "::error::a library of libcache_search.so is not found"; fail=1; fi
+          env -u LD_LIBRARY_PATH ldd "$out/lib/libcache_search.so" | grep 'libzim' | grep -q "$out/lib/libzim.so.9" || { echo "::error::libzim.so.9 is not resolved next to the core"; fail=1; }
+          # only the cs_* C ABI is exported
+          nm -D --defined-only "$out/lib/libcache_search.so" | grep ' T ' | grep -vc ' T cs_' || true
+          # load it for real (dlopen runs the constructors of the core, the shim and libzim)
+          printf '#include <dlfcn.h>\n#include <stdio.h>\nint main(int c,char**v){void*h=dlopen(v[1],RTLD_NOW);if(!h){fprintf(stderr,"dlopen: %%s\\n",dlerror());return 1;}puts("dlopen ok");return 0;}\n' > "$RUNNER_TEMP/dl.c"
+          gcc "$RUNNER_TEMP/dl.c" -o "$RUNNER_TEMP/dl" -ldl
+          env -u LD_LIBRARY_PATH "$RUNNER_TEMP/dl" "$out/lib/libcache_search.so" || fail=1
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.dir }}
+          if-no-files-found: error
+      - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-4.outputs.cache-primary-key != '' && steps.cache-4.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cache-4.outputs.cache-primary-key }}
+      - name: Save cache (Cargo target cache) (main and rel-1.1 only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-5.outputs.cache-primary-key != '' && steps.cache-5.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: packages/cache_search/native/target
+          key: ${{ steps.cache-5.outputs.cache-primary-key }}

@@ -15,6 +15,11 @@ class DataKind {
     this.count,
     this.list,
     this.inStorage = true,
+    this.shareLabel,
+    this.items,
+    this.itemDepth = const {},
+    this.remoteItem,
+    this.setPrivate,
   });
 
   final String id;
@@ -38,12 +43,62 @@ class DataKind {
   /// The screen that lists the items to remove them (each removal confirms); null when there is none.
   final Widget Function()? list;
 
-  /// False for a kind that is only shared (the Shared folder holds the person's own files and is not one of Cache's kinds).
+  /// False for a kind that Storage does not measure.
   final bool inStorage;
+
+  /// Its name under "Shared with linked devices" when that differs from [label] ("Maps" for Regions).
+  final String? shareLabel;
+  String get sharingLabel => shareLabel ?? label;
+
+  /// The items of this kind on this device, each shared or not on its own (a library or ZIM, a map layer, a model, a notebook, a
+  /// video); null when the kind has none.
+  final List<ShareItem> Function()? items;
+
+  /// How deep an item sits in each shared folder, by share id: 1 (the default) for a file or folder at the top (a ZIM, a
+  /// library), 2 for `store/<layer>.sqlite`, 3 for `downloads/<site>/<video>`. What a linked device holds is listed by it.
+  final Map<String, int> itemDepth;
+
+  /// The item a path listed by a linked device is ([itemDepth] segments of it), or null when it is not one (a file every item
+  /// of the kind needs, which travels with the kind). Null: every listed path is an item, named after its file.
+  final ShareItem? Function(String share, String path, int bytes)? remoteItem;
+
+  /// Switches a private item on or off (a private notebook's "Include in sync and sharing"); its state is [ShareItem.on].
+  final Future<void> Function(ShareItem item, bool on)? setPrivate;
 
   /// Every folder of this kind.
   List<Directory?> get folders => [...shared().values, ...local()];
 
   static Map<String, Directory?> _none() => const {};
   static List<Directory?> _noDirs() => const [];
+}
+
+/// One item of a kind, shared or not on its own: [path] in the shared folder [share], as a sync pattern (it covers everything
+/// under it). The kind's share carries the items switched off as one list; there is never a share per item.
+class ShareItem {
+  const ShareItem({required this.share, required this.path, required this.name, this.bytes, this.private = false, this.on});
+
+  final String share;
+  final String path;
+  final String name;
+
+  /// Its size here, when known (else what a linked device holds of it).
+  final int? bytes;
+
+  /// A private notebook: listed, and off until the person switches it on.
+  final bool private;
+
+  /// For a private item, whether it is switched on (kept where its "Include in sync and sharing" is); null for any other item.
+  final bool? on;
+
+  /// The same item on every device.
+  String get key => '$share/$path';
+
+  /// A path a linked device lists, as an item named after its file ("wikipedia_en_all_maxi_2026-10.zim" -> "wikipedia en all
+  /// maxi 2026-10").
+  static ShareItem plain(String share, String path, int bytes) {
+    final file = path.split('/').last;
+    final dot = file.lastIndexOf('.');
+    final stem = dot > 0 ? file.substring(0, dot) : file;
+    return ShareItem(share: share, path: path, name: stem.replaceAll('_', ' '), bytes: bytes);
+  }
 }

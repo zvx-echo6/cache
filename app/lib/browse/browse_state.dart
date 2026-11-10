@@ -4,15 +4,15 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../app_fs.dart';
 import '../downloads/download_row.dart' show DlMeter;
-import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
+import 'web/device_library.dart';
 import 'zim_download.dart';
 import '../net/fetch.dart';
 import '../platform/app_log.dart';
@@ -62,6 +62,7 @@ class BrowseState extends ChangeNotifier {
     this.settingsDirOverride,
     Future<Uint8List?> Function(Uri url)? iconFetch,
     String? phoneLanguage,
+    this.device,
   }) : catalog = catalog ?? KiwixCatalog(),
        downloader = downloader ?? ZimDownloader(freeSpace: usableBytesOnDisk),
        _iconFetch = iconFetch ?? _fetchIcon,
@@ -71,6 +72,21 @@ class BrowseState extends ChangeNotifier {
     // Downloads waiting for Wi-Fi start by themselves once the connection (or the switch) allows them.
     _net = policy?.probe.changes.listen((_) => _startWaiting());
     policy?.settings.addListener(_startWaiting);
+    device?.addListener(notifyListeners);
+  }
+
+  /// In a browser: the Library on the device, which downloads for this tab (it goes on with the tab closed). Null on a phone.
+  final DeviceLibrary? device;
+
+  /// The transfer the device runs for [e] (waiting, running or failed), shaped as a phone's transfer, or null.
+  ZimTransfer? deviceTransfer(CatalogEntry e) {
+    final j = device?.jobForUrl(e.downloadUrl.toString());
+    if (j == null) return null;
+    return ZimTransfer(e)
+      ..done = j.bytes
+      ..total = j.total > 0 ? j.total : e.size
+      ..phase = j.failed ? TransferPhase.failed : (j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
+      ..error = j.failed ? deviceJobWords(j) : null;
   }
 
   StreamSubscription<ConnectionKind>? _net;
@@ -95,7 +111,7 @@ class BrowseState extends ChangeNotifier {
   final Future<Uint8List?> Function(Uri url) _iconFetch;
   final String? _phoneLanguage;
 
-  File? _file;
+  AppFs? _fs;
 
   /// A `zim:` address a citation asked to open; the Browse tab takes it and clears it.
   String? requestedAddress;
@@ -119,14 +135,17 @@ class BrowseState extends ChangeNotifier {
   /// update finishes (the old file goes) even if the app is closed while the new one is indexed.
   final Map<String, String> _replacements = {};
 
+  static const String _name = 'browse.json';
+
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/browse.json');
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
     var hadLanguage = false;
     try {
-      if (_file!.existsSync()) {
-        final j = (jsonDecode(_file!.readAsStringSync()) as Map)
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text != null) {
+        final j = (jsonDecode(text) as Map)
             .cast<String, dynamic>();
         if (j['language'] is String) {
           language = j['language'] as String;
@@ -151,19 +170,32 @@ class BrowseState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _save() async {
+  /// The last write of browse.json; each write waits for the one before, so they land in the order they were asked for (an
+  /// older state never overwrites a newer one).
+  Future<void> _saving = Future<void>.value();
+
+  /// Ends when every write of browse.json asked for so far is on disk (tests).
+  @visibleForTesting
+  Future<void> get saved => _saving;
+
+  Future<void> _save() {
+    final fs = _fs;
+    if (fs == null) return _saving;
+    final String text;
     try {
-      final f = _file;
-      if (f == null) return;
-      await writeStringAtomic(
-        f,
-        jsonEncode({
-          'language': language,
-          'replacements': _replacements,
-          'downloads': _pending,
-        }),
-      );
-    } catch (_) {}
+      text = jsonEncode({
+        'language': language,
+        'replacements': _replacements,
+        'downloads': _pending,
+      });
+    } catch (_) {
+      return _saving;
+    }
+    return _saving = _saving.then((_) async {
+      try {
+        await fs.writeStringAtomic(AppRoot.support, _name, text);
+      } catch (_) {}
+    });
   }
 
   // ---- the catalogue
@@ -449,7 +481,7 @@ class BrowseState extends ChangeNotifier {
         _remember(e, installed);
         logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
       } on CatalogException catch (e) {
-        logInfo('A partial download is not matched yet (catalogue: ${e.message}); kept', detail: fileName);
+        logInfo('A partial download is not matched yet (catalog: ${e.message}); kept', detail: fileName);
       } catch (e) {
         logError('A partial download is not matched yet; kept', error: e, detail: fileName);
       }
@@ -481,9 +513,8 @@ class BrowseState extends ChangeNotifier {
     });
   }
 
-  void _forget(String id) {
-    if (_pending.remove(id) != null) unawaited(_save());
-  }
+  /// Drops the record of a download; the returned future ends when browse.json says so.
+  Future<void> _forget(String id) => _pending.remove(id) != null ? _save() : _saving;
 
   /// How many downloads of each entry have been started, so a cancel can tell that a new one has taken over the file.
   final Map<String, int> _starts = {};
@@ -497,6 +528,19 @@ class BrowseState extends ChangeNotifier {
     ZimFile? replaces,
     bool allowMobile = false,
   }) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      // The device downloads it and puts it in place, with the tab open or not. An update is finished by [_onSources] once the new
+      // file is ready, as on a phone.
+      if (replaces != null) {
+        _replacements[entry.fileName] = replaces.path;
+        await _save();
+      }
+      await onDevice.downloadZim(entry);
+      updates.remove(replaces?.path);
+      notifyListeners();
+      return;
+    }
     final existing = transfers[entry.id];
     if (existing != null &&
         existing.phase != TransferPhase.failed &&
@@ -565,10 +609,12 @@ class BrowseState extends ChangeNotifier {
       if (transfers[entry.id] == t) transfers.remove(entry.id);
       final secs = DateTime.now().difference(started).inSeconds;
       logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
-      _forget(entry.id);
+      final forgotten = _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
       _onSources();
+      // A finished download returns once its record is gone from browse.json, not while that write is still going.
+      await forgotten;
     } on DownloadException catch (e) {
       if (e.code == 'cancelled') {
         // Only this transfer: a new download of the entry may already be in its place. A paused one stays, to resume.
@@ -617,13 +663,14 @@ class BrowseState extends ChangeNotifier {
     if (t == null) return;
     t.token?.cancel();
     transfers.remove(entry.id);
-    logInfo('Download cancelled: ${entry.title}', job: 'download/${entry.id}');
-    _forget(entry.id);
+    logInfo('Download canceled: ${entry.title}', job: 'download/${entry.id}');
+    final forgotten = _forget(entry.id);
     notifyListeners();
     final started = _starts[entry.id];
     // The download loop notices the cancel and closes the file. The file goes once it has, and only if no new download of
     // this entry was started meanwhile (that one continues the file).
     await t.loop;
+    await forgotten;
     if (_starts[entry.id] != started) return;
     try {
       final part = File('${sources.partialDir.path}/${entry.fileName}.part');
@@ -685,6 +732,7 @@ class BrowseState extends ChangeNotifier {
   @override
   void dispose() {
     _rowTicker?.cancel();
+    device?.removeListener(notifyListeners);
     _net?.cancel();
     policy?.settings.removeListener(_startWaiting);
     sources.removeListener(_onSources);

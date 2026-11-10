@@ -138,6 +138,20 @@ pub struct Config {
     /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
+    /// What this device has switched off in a shared folder, by share id (patterns as for `exclude`): the person's choice of
+    /// items in one share (a library, a map layer, a model). Such a path is neither fetched here nor offered to the others, and
+    /// its deletes stay here, but this device keeps listing it with its history, so switching it on again carries on where it
+    /// left off (and a copy deleted here meanwhile comes back from the devices that kept theirs). `set_off` replaces a share's
+    /// list later.
+    #[serde(default)]
+    pub off: BTreeMap<String, Vec<String>>,
+    /// Shares kept only with some linked devices, by share id: the link kinds ([`Link`]'s `mode`) a device must have for the share
+    /// to be offered to it and taken from it. A link starts `"off"` until the person answers ([`new_link`]); links made before
+    /// that were given `"match"` once ([`migrate_links`]). A link with no mode at all counts as `"match"`. A share not listed goes to every linked device. The person's
+    /// Bookshelves log is `["match"]` (their own devices only), the settings log `["match", "send"]`. `set_share_with` replaces a
+    /// share's list later.
+    #[serde(default)]
+    pub with: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -178,6 +192,30 @@ struct Peer {
     id: String,
     name: String,
     linked: u64,
+    /// What the two devices agreed about this link, as last set on either ([`Link`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link: Option<Link>,
+}
+
+/// What two linked devices keep about their link, the same on both: the app's value (for Cache, how settings go between them:
+/// `{"mode": "match" | "send" | "off", "from": <the device the settings come from>, ...}`) and when it was last set. Each
+/// device sends its copy with its file list; the one set later is taken by the other (`set_link`), so the device the person
+/// chooses it on is where it comes from. The engine itself reads only `mode`, for [`Config::with`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Link {
+    v: Value,
+    t: u64,
+}
+
+/// A link's kind for [`Config::with`]: its `mode`, or `"match"` while it has none (a link only an older version of the other
+/// device knows about; every link here has one, see [`new_link`] and [`migrate_links`]).
+fn link_mode(link: Option<&Link>) -> String {
+    link.and_then(|l| l.v.get("mode")).and_then(|m| m.as_str()).unwrap_or("match").to_string()
+}
+
+/// Names a set of secrets for one device without saying what they are (blake3 of their JSON), so it can tell when they change.
+fn secrets_digest(m: &BTreeMap<String, String>) -> String {
+    blake3::hash(&serde_json::to_vec(m).unwrap_or_default()).to_hex().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +232,28 @@ struct Saved {
     peers: Vec<Peer>,
     #[serde(default)]
     shares: Vec<Share>,
+    /// The links made before new links started Off have been given `"match"` ([`migrate_links`]); done once, never again.
+    #[serde(default)]
+    links_migrated: bool,
+}
+
+/// A link as it is made: Off, waiting for the person's answer (`ask`), until either device sets it. Its time is 0, so any
+/// link set later on either device wins, and both devices start with the same one.
+fn new_link() -> Link {
+    Link { v: json!({"mode": "off", "ask": true}), t: 0 }
+}
+
+/// Once, the first time this version opens: every link made before new links started Off, still with no kind, becomes
+/// `"match"` (what it counted as), so only links made from now on start Off. Returns whether anything changed.
+fn migrate_links(saved: &mut Saved) -> bool {
+    if saved.links_migrated {
+        return false;
+    }
+    for p in saved.peers.iter_mut().filter(|p| p.link.is_none()) {
+        p.link = Some(Link { v: json!({"mode": "match"}), t: 0 });
+    }
+    saved.links_migrated = true;
+    true
 }
 
 /// Local-only facts about a file in a shared folder: the size and modification time it had when it was last hashed.
@@ -220,6 +280,49 @@ struct RemoteShare {
 struct RemoteIndex {
     name: String,
     shares: Vec<RemoteShare>,
+    /// The free space on the device that sent it (older versions do not say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    free_bytes: Option<u64>,
+    /// The sender's copy of its link with the device it sends this to ([`Link`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link: Option<Link>,
+    /// The sender keeps links (older versions do not).
+    #[serde(default)]
+    links: bool,
+    /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secrets: Option<String>,
+}
+
+/// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
+/// one linked device, some shared folders, and within them the paths `paths` covers (patterns as for [`Config::exclude`]).
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    peer: Option<String>,
+    shares: Option<Vec<String>>,
+    paths: Option<Vec<String>>,
+}
+
+impl Scope {
+    fn whole(&self) -> bool {
+        self.peer.is_none() && self.shares.is_none() && self.paths.is_none()
+    }
+
+    fn has_share(&self, id: &str) -> bool {
+        self.shares.as_ref().map(|s| s.iter().any(|x| x == id)).unwrap_or(true)
+    }
+
+    fn has_peer(&self, id: &str) -> bool {
+        self.peer.as_deref().map(|p| p == id).unwrap_or(true)
+    }
+
+    /// `remote` narrowed to the paths of the scope.
+    fn narrow(&self, remote: &Index) -> Index {
+        match &self.paths {
+            None => remote.clone(),
+            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect() },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -274,6 +377,9 @@ impl EndpointHooks for Gate {
     }
 }
 
+/// What one linked device last sent of its secrets: their digest, and the secrets until the app takes them.
+type Received = (String, Option<BTreeMap<String, String>>);
+
 struct Inner {
     dir: PathBuf,
     me: String,
@@ -307,9 +413,19 @@ struct Inner {
     hidden: BTreeMap<String, Vec<String>>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::off`], as `set_off` last left it.
+    off: Mutex<BTreeMap<String, Vec<String>>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
+    /// [`Config::with`], as `set_share_with` last left it.
+    with: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
+    /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
+    secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
+    /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
+    /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
+    received: Mutex<HashMap<String, Received>>,
 }
 
 pub struct SyncEngine {
@@ -523,7 +639,12 @@ impl Inner {
     /// This device fetches `rel` in `share` from the others ([`Config::only`], [`Config::never_fetch`]).
     fn wants(&self, share: &str, rel: &str) -> bool {
         let only = self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true);
-        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
+        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false) && !self.is_off(share, rel)
+    }
+
+    /// `rel` in `share` is switched off on this device ([`Config::off`]): neither fetched nor offered.
+    fn is_off(&self, share: &str, rel: &str) -> bool {
+        self.off.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
     }
 
     /// What this device takes from a peer's list of `share`: not what never syncs, not what it does not fetch, and not a delete
@@ -540,14 +661,22 @@ impl Inner {
         }
     }
 
-    /// What this device offers the others of `share`: not what never syncs, and not its deletes that stay here.
-    fn offered(&self, share: &str, idx: &Index) -> Index {
+    /// What this device offers the others of `share`: not what never syncs, not what is switched off here, and not its deletes
+    /// that stay here.
+    /// A delete waiting to be forgotten because its item was switched on again ([`Inner::refetch`]) is not offered either, so
+    /// the other devices never take it meanwhile. The waiting deletes are read before the index: a rescan stores the index
+    /// without them first and only then stops holding them back, so whichever index is read here, a delete in it that is
+    /// waiting to be forgotten is in `again`.
+    fn offered(&self, share: &str) -> Index {
         let skip = self.skip(share);
+        let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
+        let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
+        let idx = self.load_index(share);
         Index {
             files: idx
                 .files
                 .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
         }
@@ -781,13 +910,27 @@ impl Inner {
         let mut idx = self.load_index(&share.id);
         let mut seen = self.load_seen(&share.id);
         // Deletes made fetchable again since the last round ([`Inner::refetch`]): forgotten, so the merge below fetches them.
-        let again = self.refetch.lock().unwrap().remove(&share.id).unwrap_or_default();
+        let again = self.refetch.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
         let mut refetched = false;
-        for p in again {
-            if idx.files.get(&p).map(|e| e.deleted).unwrap_or(false) {
-                idx.files.remove(&p);
-                seen.remove(&p);
+        for p in &again {
+            if idx.files.get(p).map(|e| e.deleted).unwrap_or(false) {
+                idx.files.remove(p);
+                seen.remove(p);
                 refetched = true;
+            }
+        }
+        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered`]): until the index without
+        // them is on disk, an answer to another device reads the one with them, and must still leave them out.
+        if refetched {
+            self.store_index(&share.id, &idx, &seen)?;
+        }
+        if !again.is_empty() {
+            let mut refetch = self.refetch.lock().unwrap();
+            if let Some(v) = refetch.get_mut(&share.id) {
+                v.retain(|p| !again.contains(p));
+                if v.is_empty() {
+                    refetch.remove(&share.id);
+                }
             }
         }
         if !share.path.is_dir() {
@@ -893,16 +1036,70 @@ impl Inner {
         Ok(changed)
     }
 
-    fn our_index(&self) -> RemoteIndex {
+    /// This device's file list as `peer` gets it: only the shares kept with it ([`Config::with`]), with this device's copy of
+    /// their link and whether there are secrets for it.
+    fn our_index_for(&self, peer: &str) -> RemoteIndex {
         let s = self.saved.lock().unwrap().clone();
+        let link = s.peers.iter().find(|p| p.id == peer).and_then(|p| p.link.clone());
+        let secrets = self.secrets.lock().unwrap().get(peer).filter(|m| !m.is_empty()).map(secrets_digest);
         RemoteIndex {
+            free_bytes: Self::free_bytes(&self.dir),
             name: s.name.clone(),
             shares: s
                 .shares
                 .iter()
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id, &self.load_index(&sh.id)) })
+                .filter(|sh| self.shares_with(&sh.id, peer))
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
                 .collect(),
+            link,
+            links: true,
+            secrets,
         }
+    }
+
+    /// `share` is kept with the linked device `peer` ([`Config::with`]).
+    fn shares_with(&self, share: &str, peer: &str) -> bool {
+        let Some(modes) = self.with.lock().unwrap().get(share).cloned() else { return true };
+        let mode = link_mode(self.saved.lock().unwrap().peers.iter().find(|p| p.id == peer).and_then(|p| p.link.as_ref()));
+        modes.contains(&mode)
+    }
+
+    /// The link as `peer` last set it, when that is later than the copy here (on the same time, the device with the greater key
+    /// wins, so both end up the same).
+    fn adopt_link(&self, peer: &str, theirs: Link) {
+        let changed = {
+            let mut sv = self.saved.lock().unwrap();
+            let Some(p) = sv.peers.iter_mut().find(|p| p.id == peer) else { return };
+            let newer = match &p.link {
+                None => true,
+                Some(l) => theirs.t > l.t || (theirs.t == l.t && theirs.v != l.v && peer > self.me.as_str()),
+            };
+            if newer {
+                p.link = Some(theirs);
+            }
+            newer
+        };
+        if changed {
+            let _ = self.save();
+        }
+    }
+
+    /// Asks `peer` for the secrets it holds for this device.
+    async fn fetch_secrets(&self, peer: &str) -> Result<BTreeMap<String, String>> {
+        let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
+        let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
+            .await
+            .map_err(|_| anyhow!("not reachable"))?
+            .map_err(|e| anyhow!("not reachable: {e}"))?;
+        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
+        send.write_all(b"secrets").await.map_err(|e| anyhow!("{e}"))?;
+        send.finish().map_err(|e| anyhow!("{e}"))?;
+        let bytes = tokio::time::timeout(Duration::from_secs(30), recv.read_to_end(1024 * 1024))
+            .await
+            .map_err(|_| anyhow!("timed out reading the keys"))?
+            .map_err(|e| anyhow!("{e}"))?;
+        conn.close(0u32.into(), b"done");
+        serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
     fn free_bytes(path: &Path) -> Option<u64> {
@@ -936,13 +1133,19 @@ impl Inner {
 
     /// One round: rescan every shared folder, then for every linked device fetch its index and apply what is newer there.
     async fn round(self: &Arc<Self>) {
+        self.round_with(&Scope::default()).await
+    }
+
+    /// A round over what `scope` covers only (Sync now for one device, one kind or one item); the same steps as [`Inner::round`].
+    async fn round_with(self: &Arc<Self>, scope: &Scope) {
         let _one = self.round.lock().await;
-        let shares = self.saved.lock().unwrap().shares.clone();
+        let all = self.saved.lock().unwrap().shares.clone();
         if !self.recovered.swap(true, Ordering::Relaxed) {
-            for sh in &shares {
+            for sh in &all {
                 self.recover(sh).await;
             }
         }
+        let shares: Vec<Share> = all.into_iter().filter(|s| scope.has_share(&s.id)).collect();
         for sh in &shares {
             if let Err(e) = self.rescan(sh).await {
                 self.note(format!("{}: {e}", sh.name));
@@ -952,25 +1155,44 @@ impl Inner {
             self.run.lock().unwrap().paused = Some("Sync is paused: no network it may use".into());
             return;
         }
-        let peers = self.saved.lock().unwrap().peers.clone();
+        let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
                 break;
             }
             let res = self.fetch_index(&p.id).await;
-            let mut run = self.run.lock().unwrap();
-            let st = run.peers.entry(p.id.clone()).or_default();
-            match res {
-                Ok((idx, via)) => {
-                    st.last_seen = Some(now_ms());
-                    st.via = Some(via);
-                    st.error = None;
-                    st.index = Some(idx);
+            let mut asks = None;
+            {
+                let mut run = self.run.lock().unwrap();
+                let st = run.peers.entry(p.id.clone()).or_default();
+                match res {
+                    Ok((idx, via)) => {
+                        st.last_seen = Some(now_ms());
+                        st.via = Some(via);
+                        st.error = None;
+                        asks = Some((idx.link.clone(), idx.secrets.clone()));
+                        st.index = Some(idx);
+                    }
+                    Err(e) => {
+                        st.via = None;
+                        st.error = Some(format!("{e:#}"));
+                    }
                 }
-                Err(e) => {
-                    st.via = None;
-                    st.error = Some(format!("{e:#}"));
+            }
+            let Some((link, secrets)) = asks else { continue };
+            if let Some(l) = link {
+                self.adopt_link(&p.id, l);
+            }
+            if let Some(d) = secrets {
+                let have = self.received.lock().unwrap().get(&p.id).map(|(x, _)| x.clone());
+                if have.as_deref() != Some(d.as_str()) {
+                    match self.fetch_secrets(&p.id).await {
+                        Ok(m) => {
+                            self.received.lock().unwrap().insert(p.id.clone(), (secrets_digest(&m), Some(m)));
+                        }
+                        Err(e) => self.note(format!("Keys from {}: {e:#}", p.name)),
+                    }
                 }
             }
         }
@@ -981,7 +1203,10 @@ impl Inner {
             };
             for rs in &remote.shares {
                 let Some(sh) = shares.iter().find(|s| s.id == rs.id) else { continue };
-                match self.apply(sh, &rs.index, &p.id).await {
+                if !self.shares_with(&sh.id, &p.id) {
+                    continue;
+                }
+                match self.apply(sh, &scope.narrow(&rs.index), &p.id).await {
                     Ok(()) => {}
                     Err(e) => {
                         let msg = format!("{e:#}");
@@ -996,8 +1221,10 @@ impl Inner {
         }
         let mut run = self.run.lock().unwrap();
         run.paused = if self.network.load(Ordering::Relaxed) { paused } else { Some("Sync is paused: no network it may use".into()) };
-        run.rounds += 1;
-        run.last_round = Some(now_ms());
+        if scope.whole() {
+            run.rounds += 1;
+            run.last_round = Some(now_ms());
+        }
     }
 
     async fn fetch_index(&self, peer: &str) -> Result<(RemoteIndex, String)> {
@@ -1018,15 +1245,18 @@ impl Inner {
         Ok((serde_json::from_slice(&bytes).context("the file list from the device is not valid")?, via))
     }
 
-    /// Who has `hash` (by their last index), us excluded.
-    fn providers(&self, hash: &str) -> Vec<EndpointId> {
-        let run = self.run.lock().unwrap();
-        run.peers
-            .iter()
-            .filter(|(_, s)| s.error.is_none())
-            .filter(|(_, s)| s.index.as_ref().map(|i| i.shares.iter().any(|sh| sh.index.files.values().any(|e| !e.deleted && e.hash == hash))).unwrap_or(false))
-            .filter_map(|(id, _)| id.parse().ok())
-            .collect()
+    /// Who has `hash` (by their last index), us excluded, among the devices `share` is kept with.
+    fn providers(&self, share: &str, hash: &str) -> Vec<EndpointId> {
+        let found: Vec<String> = {
+            let run = self.run.lock().unwrap();
+            run.peers
+                .iter()
+                .filter(|(_, s)| s.error.is_none())
+                .filter(|(_, s)| s.index.as_ref().map(|i| i.shares.iter().any(|sh| sh.index.files.values().any(|e| !e.deleted && e.hash == hash))).unwrap_or(false))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        found.into_iter().filter(|id| self.shares_with(share, id)).filter_map(|id| id.parse().ok()).collect()
     }
 
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
@@ -1120,7 +1350,7 @@ impl Inner {
                     }
                 }
             }
-            let providers = self.providers(&entry.hash);
+            let providers = self.providers(&sh.id, &entry.hash);
             if providers.is_empty() {
                 bail!("no linked device has {path} right now");
             }
@@ -1312,7 +1542,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms() });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()) });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -1333,9 +1563,18 @@ impl std::fmt::Debug for SyncProto {
 impl ProtocolHandler for SyncProto {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
         let (mut send, mut recv) = conn.accept_bi().await?;
-        let _ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
+        let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
+        let peer = conn.remote_id().to_string();
+        if ask == b"secrets" {
+            // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
+            let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
+            send.write_all(&serde_json::to_vec(&mine).unwrap_or_default()).await.map_err(AcceptError::from_err)?;
+            send.finish()?;
+            conn.closed().await;
+            return Ok(());
+        }
         let inner = self.0.clone();
-        let body = tokio::task::spawn_blocking(move || serde_json::to_vec(&inner.our_index()).unwrap_or_default())
+        let body = tokio::task::spawn_blocking(move || serde_json::to_vec(&inner.our_index_for(&peer)).unwrap_or_default())
             .await
             .map_err(AcceptError::from_err)?;
         send.write_all(&body).await.map_err(AcceptError::from_err)?;
@@ -1373,6 +1612,9 @@ impl SyncEngine {
         let mut saved: Saved = read_json(&cfg.dir.join("sync.json")).unwrap_or_default();
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
+        }
+        if migrate_links(&mut saved) {
+            write_json(&cfg.dir.join("sync.json"), &saved)?;
         }
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
@@ -1449,7 +1691,11 @@ impl SyncEngine {
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
             hidden: cfg.hidden.clone(),
+            off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
+            with: Mutex::new(cfg.with.clone()),
+            secrets: Mutex::new(HashMap::new()),
+            received: Mutex::new(HashMap::new()),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1533,8 +1779,86 @@ impl SyncEngine {
                     inner.allowed.write().unwrap().remove(&k);
                 }
                 inner.run.lock().unwrap().peers.remove(&id);
+                inner.secrets.lock().unwrap().remove(&id);
+                inner.received.lock().unwrap().remove(&id);
                 inner.save()?;
                 Ok(json!({"ok": true}))
+            }
+            "set_link" => {
+                // What the two devices keep about their link (see Link), set here now: the other device takes it from the next
+                // file list it gets, so both end up the same.
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let v = args.get("link").cloned().filter(|v| v.is_object()).ok_or_else(|| anyhow!("link must be an object"))?;
+                let t = {
+                    let mut sv = inner.saved.lock().unwrap();
+                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
+                    let t = now_ms().max(p.link.as_ref().map(|l| l.t + 1).unwrap_or(0));
+                    p.link = Some(Link { v, t });
+                    t
+                };
+                inner.save()?;
+                inner.wake.notify_one();
+                Ok(json!({"ok": true, "t": t}))
+            }
+            "set_share_with" => {
+                // Which link kinds a share is kept with from now on (null: every linked device). See Config::with.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                match args.get("with") {
+                    None | Some(Value::Null) => {
+                        inner.with.lock().unwrap().remove(&id);
+                    }
+                    Some(Value::Array(a)) => {
+                        let list: Vec<String> = a.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                        inner.with.lock().unwrap().insert(id, list);
+                    }
+                    Some(_) => bail!("with must be a list of link kinds or null"),
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
+            "set_secrets" => {
+                // The secrets for one linked device ({name: value}; empty: none). Kept in memory only, never written by the
+                // engine, and sent only to that device when it asks (it is told they changed with this device's file list).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                if !inner.saved.lock().unwrap().peers.iter().any(|p| p.id == id) {
+                    bail!("that device is not linked");
+                }
+                let mut m = BTreeMap::new();
+                match args.get("secrets") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Object(o)) => {
+                        for (k, v) in o {
+                            let v = v.as_str().ok_or_else(|| anyhow!("each secret must be a string"))?;
+                            m.insert(k.clone(), v.to_string());
+                        }
+                    }
+                    Some(_) => bail!("secrets must be an object"),
+                }
+                let changed = {
+                    let mut sec = inner.secrets.lock().unwrap();
+                    let was = sec.get(&id).cloned().unwrap_or_default();
+                    if m.is_empty() {
+                        sec.remove(&id);
+                    } else {
+                        sec.insert(id, m.clone());
+                    }
+                    was != m
+                };
+                if changed {
+                    inner.wake.notify_one();
+                }
+                Ok(json!({"ok": true}))
+            }
+            "take_secrets" => {
+                // The secrets linked devices sent since the last call, by device, handed over once (the app keeps them in the
+                // phone's secure storage); the engine keeps only their digest.
+                let mut out = serde_json::Map::new();
+                for (peer, (_, m)) in inner.received.lock().unwrap().iter_mut() {
+                    if let Some(m) = m.take() {
+                        out.insert(peer.clone(), json!(m));
+                    }
+                }
+                Ok(json!({"secrets": out}))
             }
             "share_add" => {
                 let path = PathBuf::from(s("path").ok_or_else(|| anyhow!("path is required"))?);
@@ -1652,7 +1976,127 @@ impl SyncEngine {
                 Ok(json!({"ok": true}))
             }
             "sync_now" => {
+                // With no scope, a round of everything now. With one, a round of just that (one device, some shared folders,
+                // some paths in them) on its own, after any round running now: what Sync now on a device, a kind or an item does.
+                let list = |k: &str| -> Result<Option<Vec<String>>> {
+                    match args.get(k) {
+                        None | Some(Value::Null) => Ok(None),
+                        Some(Value::Array(a)) => Ok(Some(a.iter().filter_map(|v| v.as_str().map(String::from)).collect())),
+                        Some(_) => bail!("{k} must be a list"),
+                    }
+                };
+                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")? };
+                if scope.whole() {
+                    inner.wake.notify_one();
+                    return Ok(json!({"ok": true}));
+                }
+                {
+                    let sv = inner.saved.lock().unwrap();
+                    if let Some(p) = &scope.peer {
+                        if !sv.peers.iter().any(|x| x.id == *p) {
+                            bail!("that device is not linked");
+                        }
+                    }
+                    for id in scope.shares.iter().flatten() {
+                        if !sv.shares.iter().any(|x| x.id == *id) {
+                            bail!("{id} is not shared");
+                        }
+                    }
+                }
+                let inner2 = inner.clone();
+                self.rt.spawn(async move { inner2.round_with(&scope).await });
+                Ok(json!({"ok": true}))
+            }
+            "set_off" => {
+                // What this device has switched off in a share from now on (null or []: nothing). Deletes made here under paths
+                // switched on again are forgotten, so the copies the other devices kept come back.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let list: Vec<String> = match args.get("off") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("off must be a list of patterns or null"),
+                };
+                let was = inner.off.lock().unwrap().get(&id).cloned().unwrap_or_default();
+                let back: Vec<String> = inner
+                    .load_index(&id)
+                    .files
+                    .iter()
+                    .filter(|(p, e)| e.deleted && excluded(&was, p) && !excluded(&list, p))
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if !back.is_empty() {
+                    inner.refetch.lock().unwrap().entry(id.clone()).or_default().extend(back.iter().cloned());
+                }
+                {
+                    let mut off = inner.off.lock().unwrap();
+                    if list.is_empty() {
+                        off.remove(&id);
+                    } else {
+                        off.insert(id.clone(), list);
+                    }
+                }
                 inner.wake.notify_one();
+                Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "share_items" => {
+                // A share's items: its paths grouped by their first `depth` segments (a library's folder, a ZIM, a map layer's
+                // file), with what this device holds of each and what each linked device offers, so the person can choose items
+                // a device has not fetched yet.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1).clamp(1, 16) as usize;
+                let key = |p: &str| p.split('/').take(depth).collect::<Vec<_>>().join("/");
+                #[derive(Default)]
+                struct Item {
+                    files: u64,
+                    bytes: u64,
+                    peers: BTreeMap<String, (u64, u64)>,
+                }
+                let saved = inner.saved.lock().unwrap().clone();
+                let mut items: BTreeMap<String, Item> = BTreeMap::new();
+                if saved.shares.iter().any(|x| x.id == id) {
+                    for (p, e) in inner.load_index(&id).files.iter().filter(|(p, e)| !e.deleted && !excluded(inner.skip(&id), p)) {
+                        let it = items.entry(key(p)).or_default();
+                        it.files += 1;
+                        it.bytes += e.size;
+                    }
+                }
+                {
+                    let run = inner.run.lock().unwrap();
+                    for p in &saved.peers {
+                        if !inner.shares_with(&id, &p.id) {
+                            continue;
+                        }
+                        let Some(rs) = run.peers.get(&p.id).and_then(|st| st.index.as_ref()).and_then(|i| i.shares.iter().find(|x| x.id == id)) else {
+                            continue;
+                        };
+                        for (path, e) in inner.without_excluded(&id, &rs.index).files.iter().filter(|(_, e)| !e.deleted) {
+                            let c = items.entry(key(path)).or_default().peers.entry(p.id.clone()).or_default();
+                            c.0 += 1;
+                            c.1 += e.size;
+                        }
+                    }
+                }
+                let peer_name = |id: &str| saved.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+                let out: Vec<Value> = items
+                    .iter()
+                    .map(|(name, it)| {
+                        let peers: Vec<Value> =
+                            it.peers.iter().map(|(pid, (n, b))| json!({"peer": pid, "peer_name": peer_name(pid), "files": n, "bytes": b})).collect();
+                        json!({"name": name, "files": it.files, "bytes": it.bytes, "peers": peers})
+                    })
+                    .collect();
+                Ok(json!({"items": out}))
+            }
+            "set_peer_name" => {
+                // What this device calls a linked device (its own name for itself stays its own).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let name = s("name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).ok_or_else(|| anyhow!("name is required"))?;
+                {
+                    let mut sv = inner.saved.lock().unwrap();
+                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
+                    p.name = name;
+                }
+                inner.save()?;
                 Ok(json!({"ok": true}))
             }
             "set_policy" => {
@@ -1689,7 +2133,7 @@ impl SyncEngine {
                 let st = run.peers.get(&p.id).cloned().unwrap_or_default();
                 if let Some(idx) = &st.index {
                     for sh in &idx.shares {
-                        if !joined.contains(sh.id.as_str()) {
+                        if !joined.contains(sh.id.as_str()) && inner.shares_with(&sh.id, &p.id) {
                             let offered = inner.without_excluded(&sh.id, &sh.index);
                             let live = offered.files.values().filter(|e| !e.deleted);
                             let (n, b) = live.fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.size));
@@ -1697,7 +2141,13 @@ impl SyncEngine {
                         }
                     }
                 }
-                json!({"id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error})
+                let free = st.index.as_ref().and_then(|i| i.free_bytes);
+                json!({
+                    "id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error,
+                    "free_bytes": free,
+                    "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
+                    "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
+                })
             })
             .collect();
         let shares: Vec<Value> = saved
@@ -1709,7 +2159,10 @@ impl SyncEngine {
                 // What linked devices have that this one does not yet.
                 let mut pending = 0u64;
                 let mut pending_bytes = 0u64;
-                for st in run.peers.values() {
+                for (pid, st) in run.peers.iter() {
+                    if !inner.shares_with(&sh.id, pid) {
+                        continue;
+                    }
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
                         for a in index::merge(&idx, &inner.remote_view(&sh.id, &rs.index)) {
                             if let Action::Fetch { entry, .. } = a {
@@ -1725,6 +2178,8 @@ impl SyncEngine {
                     "pending_files": pending, "pending_bytes": pending_bytes,
                     "only": inner.only.lock().unwrap().get(&sh.id).cloned(),
                     "never_fetch": inner.never_fetch.lock().unwrap().get(&sh.id).cloned(),
+                    "off": inner.off.lock().unwrap().get(&sh.id).cloned(),
+                    "with": inner.with.lock().unwrap().get(&sh.id).cloned(),
                 })
             })
             .collect();

@@ -104,7 +104,7 @@ void main() {
     }
 
     await tapSignIn();
-    expect(find.text('Sign-in with GitLab was cancelled.'), findsOneWidget);
+    expect(find.text('Sign-in with GitLab was canceled.'), findsOneWidget);
     await tapSignIn();
     expect(find.text("Example PeerTube couldn't sign you in with GitLab. Try again."), findsOneWidget);
     await tapSignIn();

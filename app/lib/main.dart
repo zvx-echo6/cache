@@ -3,34 +3,54 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
-import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'actions/act_core.dart';
 import 'actions/action_registry.dart';
 import 'actions/app_actions.dart';
 import 'actions/setup_reader.dart';
+import 'app_fs.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
+import 'car/car_bridge.dart';
+import 'car/car_drive.dart';
+import 'browse/web/device_api.dart';
+import 'browse/web/device_fetch.dart';
+import 'browse/web/device_library.dart';
+import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
+import 'browse/web/build_state.dart' show BuildController;
+import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
+import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
+import 'history/store_open.dart';
+import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
+
+import 'library/add_pdf/add_pdf_calls.dart';
+import 'library/add_pdf/add_pdf_engines.dart';
+import 'library/add_pdf/add_pdf_state.dart';
+import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
+import 'library/library_device.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'nav/demo_backend.dart';
+import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'net/fetch.dart' show fetchText;
 import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
@@ -50,6 +70,7 @@ import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
+import 'models/hf_hub.dart' show HfFile;
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
@@ -60,7 +81,10 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/share_items.dart';
+import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
+import 'sharing/synced_settings.dart';
 import 'video/token_store.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -97,6 +121,7 @@ import 'screens/shell.dart';
 import 'screens/videos/library_screen.dart' as videos show LibraryScreen;
 import 'theme.dart';
 import 'keyboard.dart';
+import 'platform.dart' as plat;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -108,7 +133,7 @@ void main() {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
-  if (Platform.isAndroid || Platform.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
   runApp(const CacheApp());
 }
 
@@ -122,16 +147,39 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
-  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries);
+  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
+  // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
+  // with the tab closed) and the uploads from this computer. Null on a phone.
+  late final DeviceLibrary? device = _makeDevice();
+
+  DeviceLibrary? _makeDevice() {
+    if (!plat.isWeb) return null;
+    final api = HttpDeviceApi();
+    deviceFetchApi = api;
+    final fs = createAppFs();
+    final linkedFolders = LinkedFolderController(api: LinkedFolderApi());
+    final d = DeviceLibrary(
+      api: api,
+      fs: fs,
+      uploader: createBrowserUploader(),
+      onItemsChanged: () => sources.refresh(),
+      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs, linkedFolders: linkedFolders),
+    );
+    sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
+    d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));
+    return d;
+  }
   // Libraries (Qdrant collections the core searches): added from a file or a link, in their own folder beside the ZIMs.
   late final LibrariesState libraries = LibrariesState(
     sources: sources,
     policy: policy,
+    device: device,
     // The setup guide ships compressed in the assets; it is copied out to be added like any library file.
     bundledGuide: () async {
+      if (plat.isWeb) return null; // a browser has no temporary folder to copy the guide into
       try {
         final bytes = await rootBundle.load('assets/guide/cache-guide.cache-library');
-        final f = File('${(await getTemporaryDirectory()).path}/cache-guide.cache-library');
+        final f = File('${await appTempPath()}/cache-guide.cache-library');
         await f.writeAsBytes(bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes), flush: true);
         return f;
       } catch (_) {
@@ -159,7 +207,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SearchModel searchModel = SearchModel(
     app: app,
     downloads: modelDownloads,
-    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+    modelsDir: () async => Directory('${await appFilesPath()}/models'),
   );
   late final PdfIndexState pdfIndex = appPdfIndex(sources: sources);
   late final MapsState maps = MapsState(
@@ -174,7 +222,7 @@ class _CacheAppState extends State<CacheApp> {
   late final VideoState video = VideoState(
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
-    indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/$kIndexesDirName'),
+    indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
@@ -201,7 +249,7 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
     secrets: const SecureTokenStore(),
-    catalogueDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/live-catalogues'),
+    catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
     liveDir: () async {
       await sources.whenCoreReady();
       final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
@@ -215,10 +263,10 @@ class _CacheAppState extends State<CacheApp> {
     regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
-    told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
+    told: ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
   )..placeAlerts = placeAlerts;
   /// Each place's own alert rule (Places notebook, the place's gear).
-  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${(await getApplicationSupportDirectory()).path}/$kPlaceAlertsFile'));
+  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -241,6 +289,8 @@ class _CacheAppState extends State<CacheApp> {
       notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
+      items: () => libraryItems(sources, libraries),
+      remoteItem: libraryRemoteItem,
     ),
     DataKind(
       id: 'models',
@@ -249,6 +299,8 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'models': app.modelsDir},
       count: () => app.models.length + (app.searchModel == null ? 0 : 1),
       list: () => ModelsScreen(app: app),
+      items: () => modelItems(app),
+      remoteItem: modelRemoteItem,
     ),
     DataKind(
       id: 'regions',
@@ -263,6 +315,10 @@ class _CacheAppState extends State<CacheApp> {
       notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
+      shareLabel: 'Maps',
+      items: () => mapItems(maps.engine, regions),
+      itemDepth: const {'maps': 2},
+      remoteItem: (share, path, bytes) => mapRemoteItem(maps.engine, share, path, bytes),
     ),
     DataKind(
       id: 'videos',
@@ -272,6 +328,10 @@ class _CacheAppState extends State<CacheApp> {
       // Weather is fetched by each device.
       local: () => [_support('live-catalogues'), weather.liveFolder],
       list: () => videos.LibraryScreen(video: video),
+      shareLabel: 'Videos',
+      items: () => videoItems(video),
+      itemDepth: const {'videos': 3},
+      remoteItem: videoRemoteItem,
     ),
     DataKind(
       id: 'notebooks',
@@ -283,21 +343,18 @@ class _CacheAppState extends State<CacheApp> {
       local: () => [_support('notebook')],
       count: () => notebooks.notebooks.length,
       list: () => NotebooksScreen(deps: notebookDeps),
+      items: () => notebookItems(notebooks),
+      remoteItem: notebookRemoteItem,
+      setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
-    DataKind(
-      id: 'shared',
-      label: 'Shared folder',
-      icon: Icons.folder_shared_outlined,
-      shared: () => {'shared': _beside(sources.zimsDir?.parent, 'Shared')},
-      inStorage: false,
-    ),
+    // The Shared folder of 1.0 is gone: SharingState stops sharing it at start (retiredShares), and its files stay where they are.
   ];
 
   // Sharing and sync: Cache's own folders, by kind.
   late final SharingState sharing = SharingState(
     policy: policy,
-    supportDir: getApplicationSupportDirectory,
-    deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
+    supportDir: () async => Directory(await appSupportPath()),
+    deviceName: plat.isAndroid ? 'Android device' : (plat.isIOS ? 'iPhone' : plat.hostName),
     kinds: dataKinds,
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
     // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
@@ -312,6 +369,42 @@ class _CacheAppState extends State<CacheApp> {
         hidden: kIndexesHidden,
       ),
     ],
+    // Kept only with some linked devices and never listed: the settings log (Match and Send mine, governed by each device's page)
+    // and the person's Bookshelves log (their own devices: Match only).
+    linkShares: [
+      LinkShare(id: kSettingsShareId, name: 'Settings', dir: () => _support(kSettingsShareDir), modes: kSettingsShareModes),
+      LinkShare(id: kBookshelvesShareId, name: 'Bookshelves', dir: () => _support(kBookshelvesDir), modes: kBookshelvesShareModes),
+    ],
+  );
+
+  late final PlaceNameCache _placeNames = PlaceNameCache(weather, settings);
+
+  /// Settings between linked devices, per setting (each linked device's page in Sharing and sync): what goes is
+  /// sharing/synced_settings.dart; the keys ticked for a device go to it alone, held by the sync engine in memory.
+  late final SettingsSync settingsSync = SettingsSync(
+    sharing: sharing,
+    settings: appSyncedSettings(
+      app: app,
+      layout: layout,
+      settings: settings,
+      maps: maps,
+      weather: weather,
+      placeNames: () => _placeNames.names,
+      recommended: () => RecommendedModels.shared.models,
+    ),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
+    dir: () async => _support(kSettingsShareDir),
+    // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
+    downloadModel: (d) => modelDownloads.start(HfFile(
+      repo: d['repo'] as String? ?? '',
+      path: d['path'] as String? ?? '',
+      size: (d['size'] as num?)?.toInt() ?? 0,
+      sha256: d['sha256'] as String?,
+      revision: d['revision'] as String? ?? 'main',
+      url: d['url'] is String ? Uri.tryParse(d['url'] as String) : null,
+    )),
+    placesHere: () async => {for (final p in await weather.placeChoices()) if (p.id.startsWith('place:')) p.id.substring(6)},
   );
 
   /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
@@ -336,20 +429,52 @@ class _CacheAppState extends State<CacheApp> {
   /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
   /// using Cache and the model generating, applied to core jobs (cs_job_set) and to the PDF loop (indexPermit).
   late final IndexThrottle indexThrottle = IndexThrottle(
-    mobile: Platform.isAndroid || Platform.isIOS,
+    mobile: !plat.isWeb && (Platform.isAndroid || Platform.isIOS),
     speed: settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle,
   );
+
+  /// The models folder (the search model, bge-m3, is there).
+  Future<Directory> _modelsDir() async => Directory('${await appFilesPath()}/models');
+
+  /// Add PDF: one PDF becomes a book in the person's own library, by the core's ingest job, as index work the scheduler runs.
+  late final AddPdfState addPdf = AddPdfState(
+    calls: const CoreIngestCalls(),
+    dir: () async => _support('ingest'),
+    engines: _addPdfEngines,
+    libraries: libraries,
+    ocrEngine: deviceOcrEngine,
+    bookshelves: () async {
+      final dev = await libraryDeviceIdShared?.call();
+      final dir = _support(kBookshelvesDir);
+      if (dev == null || !validDeviceId(dev) || dir == null) return null;
+      return {
+        'dir': dir.path,
+        'dev': dev,
+        'libraries': [
+          for (final l in libraries.libraries)
+            if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
+        ],
+      };
+    },
+    // the book is in: the Library, Catalog and Bookshelves read the libraries again
+    onDone: (_) => libraries.rescan(),
+  );
+
+  Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await appSupportPath())), modelsDir: await _modelsDir());
 
   late final IndexScheduler indexing = IndexScheduler(
     throttle: indexThrottle,
     sources: [
       CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
+      if (!plat.isWeb) addPdf,
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
 
-  void _kickIndexing() => unawaited(indexing.kick());
+  void _kickIndexing() {
+    if (!plat.isWeb) unawaited(indexing.kick());
+  }
 
   bool _modelRunning = false;
 
@@ -367,6 +492,7 @@ class _CacheAppState extends State<CacheApp> {
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
   void _syncIndexesOnly() {
+    if (plat.isWeb) return;
     unawaited(sharing.setOnly(
       kIndexesShareId,
       indexesFetchOnly(sources.statuses, savedVideos: [for (final v in video.saved) v.captionsIndex?.sourceId ?? '${v.instance}/${v.uuid}']),
@@ -378,10 +504,10 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
-    supportDir: getApplicationSupportDirectory,
-    catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    supportDir: () async => Directory(await appSupportPath()),
+    catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
-    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     maps: maps,
     // A region downloads from where the phone is, outwards.
     position: () {
@@ -403,6 +529,7 @@ class _CacheAppState extends State<CacheApp> {
     webSearch: webSearch,
     weather: weather,
     sharing: sharing,
+    settingsSync: settingsSync,
     regions: regions,
     indexing: indexing,
     storage: StorageUsage(
@@ -488,7 +615,7 @@ class _CacheAppState extends State<CacheApp> {
   // Notebooks: kept by the core (cs_notebook) in the support folder; their Log notebooks and the Journal publish act actions.
   late final NotebookState notebooks = NotebookState(
     backend: CoreNotebookBackend(sources.whenCoreReady),
-    mediaDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook'),
+    mediaDir: () async => Directory('${await appSupportPath()}/notebook'),
   );
   late final NotebookPublisher notebookActions = NotebookPublisher(registry: actionRegistry, notebook: notebooks);
   late final PlaceChoices notebookPlaces = PlaceChoices(
@@ -513,7 +640,7 @@ class _CacheAppState extends State<CacheApp> {
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
-    dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook-sync'),
+    dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
     storePhoto: (id, bytes) async {
@@ -562,11 +689,18 @@ class _CacheAppState extends State<CacheApp> {
         ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
         : CoreMapBackend(() => sources.core!, embedder: searchModel.embedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
     location: location,
-    speaker: FlutterTtsSpeaker(),
-    positionSource: GeolocatorNavSource(),
+    speaker: CarAwareSpeaker(FlutterTtsSpeaker(), car: () => _car),
+    positionSource: carDrive,
+    simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
   );
+  // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
+  // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
+  CarBridge? _car;
+  // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
+  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
   CacheThemeId _applied = CacheThemeId.dark;
 
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
@@ -597,18 +731,22 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
+    _guidanceAwake;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(
       onResume: () {
+        device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
-        unawaited(connections.syncAll());
-        indexing.setOpen(true);
+        if (!plat.isWeb) unawaited(connections.syncAll());
+        if (!plat.isWeb) indexing.setOpen(true);
       },
-      // Automatic index work runs only while the app is open.
-      onHide: () => indexing.setOpen(false),
+      // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
+      onHide: () {
+        if (!plat.isWeb) indexing.setOpen(false);
+      },
     );
-    indexing.setOpen(true);
+    if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
@@ -645,37 +783,76 @@ class _CacheAppState extends State<CacheApp> {
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
     });
-    app.init();
+    // Bookshelves writes where a person places a book in this device's own library log.
+    if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
+    _appRead = app.init();
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
-    final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
-    getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
+    final Future<void> supportRead = plat.isWeb ? Future.value() : appSupportPath().then((p) => _supportPath = p);
+    if (!plat.isWeb) appTempPath().then((p) => _tempPath = p).catchError((_) => '');
+    if (!plat.isWeb) {
+      addPdfShared = addPdf;
+      // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
+      unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
+        final s = _supportPath;
+        if (s == null || !mounted) {
+          logInfo('Add PDF self-check: skipped (${s == null ? 'no support folder' : 'the app closed'})');
+          return;
+        }
+        logDetail('Add PDF self-check: reading the engines');
+        await addPdfSelfCheck(addPdf.calls, await _addPdfEngines(), memo: File('$s/ingest/probe.json'));
+      }).catchError((Object e) {
+        logError('Add PDF self-check', error: e);
+      }));
+    }
+    // Weather starts from what it keeps on the phone (the sources that are on, the last data shown, the saved places) as soon as
+    // the settings are read, so Home's card and the Weather screen show it before the core is open; the steps that need the core
+    // wait for it inside start.
+    final weatherStart = settingsRead.then((_) => supportRead).then((_) => weather.start());
+    // (its error, if any, is met where it is awaited below)
+    unawaited(weatherStart.then((_) {}, onError: (Object _) {}));
     // Once the core is open: at the first start, or after Try again in Ask started it again.
     settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
-      await webSearch.apply();
-      await LocalAlertNotifier.instance.init();
-      await weather.start();
-      weather.addListener(_onWeather);
-      _onWeather();
-      unawaited(weather.updateIfDue(kBackgroundEvery));
-      await appActions.publishAll();
+      // In a browser a part that cannot start (it needs a phone feature) is logged and the rest still starts; on a phone nothing changes.
+      await _soft('web search', webSearch.apply);
+      await _soft('alert notifier', LocalAlertNotifier.instance.init);
+      await _soft('weather', () async {
+        await weatherStart;
+        weather.addListener(_onWeather);
+        _onWeather();
+        unawaited(weather.updateIfDue(kBackgroundEvery));
+      });
+      await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
-      await notebooks.start();
-      notebookActions.start();
+      await _soft('notebooks', () async {
+        await notebooks.start();
+        notebookActions.start();
+      });
       unawaited(userLayers.reload());
+      // Settings between linked devices, once every setting it watches has been read.
+      if (!plat.isWeb) {
+        await _soft('settings sync', () async {
+          await Future.wait([_appRead, _layoutRead, _mapsRead]);
+          await settingsSync.start();
+        });
+      }
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
       notebooks.onChanged = () {
         before?.call();
-        connections.changed();
+        if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
-      unawaited(connections.syncAll());
-      _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
-        if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
-      });
+      // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
+      if (!plat.isWeb) {
+        unawaited(connections.syncAll());
+        _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
+          if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
+        });
+      }
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
@@ -703,6 +880,8 @@ class _CacheAppState extends State<CacheApp> {
         unawaited(sources.refresh());
         unawaited(indexing.kick());
       }
+      // A linked device's settings changes arrived: applied at once.
+      if (ids.contains(kSettingsShareId) && settingsSync.started) unawaited(settingsSync.pull());
     };
     sources.addListener(_syncIndexesOnly);
     // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
@@ -710,18 +889,49 @@ class _CacheAppState extends State<CacheApp> {
     // Saved videos came or went: their captions' indexes are fetched and built too.
     video.addListener(_syncIndexesOnly);
     video.addListener(_kickIndexing);
-    settingsRead.then((_) => sharing.init());
-    settingsRead.then((_) => regions.init());
-    layout.init();
+    if (!plat.isWeb) {
+      // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
+      Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
+      settingsRead.then((_) => regions.init());
+    }
+    _layoutRead = layout.init();
     sources.init();
-    unawaited(pdfIndex.init());
+    if (!plat.isWeb) unawaited(pdfIndex.init());
+    if (device != null) unawaited(device!.start());
     libraries.init();
     browse.init();
     video.init();
     location.init();
-    maps.init();
+    _mapsRead = maps.init();
+    if (plat.isAndroid) {
+      _car = CarBridge(
+        nav: nav,
+        maps: maps,
+        drive: carDrive,
+        ready: () => sources.whenCoreReady(),
+        // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
+        onConnected: () async {
+          await location.request(explain: () async => false);
+        },
+      );
+      unawaited(_car!.start());
+    }
     _openHistory();
   }
+
+  /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
+  Future<void> _soft(String what, Future<void> Function() step) async {
+    try {
+      await step();
+    } catch (e, stack) {
+      if (!plat.isWeb) rethrow;
+      debugPrint('Start-up step "$what" skipped: $e\n$stack');
+    }
+  }
+
+  Future<void> _appRead = Future.value();
+  Future<void> _layoutRead = Future.value();
+  Future<void> _mapsRead = Future.value();
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
@@ -767,9 +977,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      final dir = await getApplicationSupportDirectory();
-      await dir.create(recursive: true);
-      _store = ConversationStore.open('${dir.path}/conversations.db');
+      _store = await openHistoryStore();
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
@@ -787,6 +995,7 @@ class _CacheAppState extends State<CacheApp> {
       chat.setBackend(
         app.active == null ? null : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
         modelName: app.active == null ? '' : app.displayName(app.active!),
+        queuePosition: app.active == null ? null : app.session.queuePosition,
       );
     }
   }
@@ -803,6 +1012,8 @@ class _CacheAppState extends State<CacheApp> {
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
+    _car?.dispose();
+    _guidanceAwake.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
     sources.removeListener(_kickIndexing);
@@ -816,8 +1027,11 @@ class _CacheAppState extends State<CacheApp> {
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
+    device?.dispose();
     sources.dispose();
     video.dispose();
+    // Settings sync listens to the states below: it lets go of them first.
+    settingsSync.dispose();
     layout.dispose();
     location.dispose();
     regions.dispose();
@@ -888,6 +1102,8 @@ class _CacheAppState extends State<CacheApp> {
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,
+          firstRunWizard: true,
+          discoverFetch: () => fetchText(Uri.parse(kDiscoverUrl)),
         ),
       ),
     );

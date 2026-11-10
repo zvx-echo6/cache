@@ -34,7 +34,8 @@ class _RegionsScreenState extends State<RegionsScreen> {
   @override
   Widget build(BuildContext context) {
     // A tablet shows a region's page beside the list.
-    return TwoPane(id: 'regions', listName: 'Regions', list: Builder(builder: _tabs));
+    // A tablet shows the tabs across the page until a region is opened beside them (no empty pane).
+    return TwoPane(id: 'regions', listName: 'Regions', listAloneUntilChosen: true, list: Builder(builder: _tabs));
   }
 
   Widget _tabs(BuildContext context) {
@@ -45,7 +46,8 @@ class _RegionsScreenState extends State<RegionsScreen> {
         appBar: AppBar(
           title: const Text('Regions'),
           actions: [?paneHideButton(context)],
-          bottom: const TabBar(tabs: [Tab(text: 'Downloads'), Tab(text: 'Local'), Tab(text: 'Updates')]),
+          // Close-set labels, so the three fit a narrow list pane.
+          bottom: const TabBar(labelPadding: EdgeInsets.symmetric(horizontal: 8), tabs: [Tab(text: 'Downloads'), Tab(text: 'Local'), Tab(text: 'Updates')]),
         ),
         body: SafeArea(
           top: false,
@@ -63,15 +65,15 @@ class _RegionsScreenState extends State<RegionsScreen> {
 }
 
 /// The padding and spacing of a Settings page, for a tab's list.
-Widget _list(List<Widget> children) => ListView(
-  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+Widget _list(List<Widget> children) => LayoutBuilder(builder: (context, cts) => ListView(
+  padding: ContentWidth.padFor(cts.maxWidth, min: 12).copyWith(top: 12, bottom: 24),
   children: [
     for (var i = 0; i < children.length; i++) ...[
       if (i > 0) const SizedBox(height: 14),
       children[i],
     ],
   ],
-);
+));
 
 /// The small line under a region's name: what of it is on the phone, or nothing.
 List<Part> localParts(RegionsState regions, LocalRegion? l) => l == null ? const [] : regionStatusParts(regions, l);
@@ -158,8 +160,8 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
     final k = context.t;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        LayoutBuilder(builder: (context, cts) => Padding(
+          padding: ContentWidth.padFor(cts.maxWidth, min: 12).copyWith(top: 12),
           child: TextField(
             key: const ValueKey('region-search'),
             controller: _text,
@@ -183,7 +185,7 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
             ),
           ),
-        ),
+        )),
         Expanded(child: _query.isEmpty ? _countries() : _results()),
       ],
     );

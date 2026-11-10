@@ -3,9 +3,8 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 import 'modules.dart';
 
 /// The blocks Home can show.
@@ -148,7 +147,7 @@ class LayoutState extends ChangeNotifier {
   List<HomeBlock> _order = List.of(defaultBlocks);
   final Set<HomeBlock> _off = {};
   final List<Shortcut> _shortcuts = [];
-  File? _file;
+  AppFs? _fs;
 
   /// The modules in the bar between Home and Modules, in bar order (at most [kMaxPinned]).
   List<ModuleId> get pinned => List.unmodifiable(_pinned);
@@ -164,18 +163,20 @@ class LayoutState extends ChangeNotifier {
   List<Shortcut> get shortcuts => List.unmodifiable(_shortcuts);
 
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/layout.json');
-    _read();
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
+    await _read();
     notifyListeners();
   }
 
-  void _read() {
+  static const String _name = 'layout.json';
+
+  Future<void> _read() async {
     try {
-      final f = _file!;
-      if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = await _fs!.readString(AppRoot.support, _name);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       final pinned = <ModuleId>[];
       for (final n in (j['pinned'] as List? ?? const [])) {
         final m = ModuleId.byName(n as String?);
@@ -210,15 +211,62 @@ class LayoutState extends ChangeNotifier {
   void _save() {
     notifyListeners();
     try {
-      final f = _file;
-      if (f == null) return;
-      writeStringAtomicSync(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      fs.writeStringAtomicSync(AppRoot.support, _name, jsonEncode({
         'pinned': [for (final m in _pinned) m.name],
         'blocks': [for (final b in _order) b.name],
         'off': [for (final b in _off) b.name],
         'shortcuts': [for (final s in _shortcuts) s.toJson()],
       }));
     } catch (_) {}
+  }
+
+  // ---- settings from a linked device ---------------------------------------------------------------------
+
+  /// The bar, Home's blocks and the Shortcuts as JSON, the way a linked device takes them (Settings > Sharing and sync).
+  List<String> get pinnedNames => [for (final m in _pinned) m.name];
+  Map<String, Object?> get blocksJson => {'order': [for (final b in _order) b.name], 'off': [for (final b in _off) b.name]..sort()};
+  List<Map<String, dynamic>> get shortcutsJson => [for (final s in _shortcuts) s.toJson()];
+
+  /// The bar as a linked device has it; modules this version does not know are left out.
+  void applyPinned(Object? names) {
+    final next = <ModuleId>[];
+    for (final n in (names is List ? names : const [])) {
+      final m = ModuleId.byName(n is String ? n : null);
+      if (m != null && !next.contains(m) && next.length < kMaxPinned) next.add(m);
+    }
+    _pinned = next;
+    _save();
+  }
+
+  /// Home's blocks, their order and which are off, as a linked device has them; a block this version has and the other does
+  /// not keeps its default place.
+  void applyBlocks(Object? j) {
+    final m = j is Map ? j : const {};
+    final order = <HomeBlock>[];
+    for (final n in (m['order'] as List? ?? const [])) {
+      final b = HomeBlock.byName(n is String ? n : null);
+      if (b != null && !order.contains(b)) order.add(b);
+    }
+    for (final b in defaultBlocks) {
+      if (!order.contains(b)) b == HomeBlock.setup ? order.insert(0, b) : order.add(b);
+    }
+    _order = order;
+    _off
+      ..clear()
+      ..addAll([for (final n in (m['off'] as List? ?? const [])) ?HomeBlock.byName(n is String ? n : null)]);
+    _save();
+  }
+
+  /// The Shortcuts as a linked device has them.
+  void applyShortcuts(Object? list) {
+    _shortcuts.clear();
+    for (final s in (list is List ? list : const [])) {
+      final sc = Shortcut.fromJson(s);
+      if (sc != null && !_shortcuts.any((x) => x.key == sc.key)) _shortcuts.add(sc);
+    }
+    _save();
   }
 
   // ---- the bottom bar ----------------------------------------------------------------------------------------

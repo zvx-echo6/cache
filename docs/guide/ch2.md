@@ -29,7 +29,7 @@ When a newer Cache is out, "Home" shows a banner.
 
 Swipe the banner away to dismiss it. It stays gone after a restart. It comes back when an even newer build is out.
 
-To see what changed, open ["Settings" > "Credits and licences"](cache://settings/credits) and tap "What's new in [version]". See Credits and licences in chapter 3.
+To see what changed, open "Library" > "Cache Documentation" and tap "What's new in [version]". See Cache Documentation.
 
 ## Search Cache from Home
 
@@ -49,7 +49,7 @@ If nothing matches, "Nothing found" shows under that row. Cache doesn't guess or
 
 With no model on the device, the box says "Search Cache". There is no "Ask Cache:" row. If nothing matches, Cache says "Nothing found on this device." and, small under it, "For an answer in words, choose a model." Tap "Choose a model" to get one.
 
-At the foot of the results, a small grey line can say `Still making [library]'s PDFs searchable (340 of 5,768)`. Tap it for that library's status. Tap the close mark ("Hide") to hide it.
+At the foot of the results, a small gray line can say `Still making [library]'s PDFs searchable (340 of 5,768)`. Tap it for that library's status. Tap the close mark ("Hide") to hide it.
 
 ## Edit Home
 
@@ -87,7 +87,7 @@ A shortcut puts something you use often on "Home". Use "Add to Home" on:
 
 The bar at the bottom starts with "Home" and ends with "Modules". Between them are up to three modules you pin. At first they are "Ask", "Maps" and "Library".
 
-With no model on the device, "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model". While a model downloads, the line reads "Model downloading 40%". Your pin is kept, so "Ask" comes back to the bar when a model arrives.
+With no model on the device, "Ask" leaves the bar. In "Modules" it is grayed, with the line "Needs a model". While a model downloads, the line reads "Model downloading 40%". Your pin is kept, so "Ask" comes back to the bar when a model arrives.
 
 ![The Modules screen](shot:modules)
 
@@ -176,7 +176,7 @@ To turn it off for your questions:
 1. Tap the + button left of the box where you type.
 2. Turn off "Use my location".
 
-- If the device blocks location, the switch is greyed out. It says "Blocked in the device's settings" or "The device's location is switched off".
+- If the device blocks location, the switch is grayed out. It says "Blocked in the device's settings" or "The device's location is switched off".
 
 ## Open a route from Ask
 
@@ -214,7 +214,7 @@ A model is optional. With none on the device, Cache is search only. Everything t
 You are in this mode when you never added a model, when you tap "Not now" on the model row of the "Set up Cache" card, or when you delete your last chat model.
 
 What you see:
-1. "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model".
+1. "Ask" leaves the bar. In "Modules" it is grayed, with the line "Needs a model".
 2. Open "Ask" from "Modules". It says "Ask needs a model on this device." with "Choose a model". Under it, "Saved chats" lists your old chats.
 3. Tap a saved chat to read it. It opens read-only, with the title "Ask" and a back arrow. Where you type it says "Ask is off. Choose a model to carry on." with "Choose a model".
 4. Home search says "Search Cache" and has no "Ask Cache:" row. See Search Cache from Home.
@@ -410,25 +410,125 @@ Layers stream while you're online and keep what you viewed. To keep a whole area
 
 ## Library
 
-"Library" is one list of everything you keep for offline reading.
+"Library" has four rows. Each one says in a line or two what it holds, and a fix shows in color, for example "Update ready for 1" or "9 unsorted".
 
 ![The Library](shot:library)
 
-Each row has an icon, name, description and size. A badge shows only when something needs attention:
-- "Update ready";
-- "Getting ready", while Cache opens a library.
+- "ZIM Collections": the ZIMs from Kiwix, such as Wikipedia and medical guides.
+- "Bookshelves": your books, shelved by the Cache Decimal System.
+- "Catalog": every search index on this device, with "Pause all" and "Resume".
+- "Cache Documentation": this guide, "What's new in [version]" and "Credits and licenses".
 
-After the size, a row can add a few words about making it searchable: `Making PDFs searchable · 340 of 5,768` on the one Cache works on now, "Waiting to make PDFs searchable" on the others, why it waits (for example `Paused · battery low (12%) · plug in to continue`), or "PDFs stopped". Nothing shows when they are ready. See Search inside PDFs, EPUBs and captions.
+At the top, a bar shows while Cache makes search ready in the background. See Search inside PDFs, EPUBs and captions.
 
-The guide that comes with Cache shows "Built in". Your own libraries show "Your own".
+Tap "Add to Library" at the foot to add anything. See Add to your Library in chapter 1.
 
-- Tap a row to open it full screen.
-- Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete". For a library with PDFs or EPUBs, the menu starts with their search status. See Search inside PDFs, EPUBs and captions.
-- Tap "Add to Library" for more. See Add to your Library in chapter 1.
+On a tablet the Library's rows stay at the left and each one opens beside them. On a wide screen, the list you are in and the item you chose sit side by side. A line at the top of each page, for example `Library › Bookshelves › CDS 200`, shows where you are. Tap a part of it to go back there. Tap "Hide list" for more room, and "Show list" to bring the list back.
 
-"Change icon" picks a picture from your device.
+## ZIM Collections
 
-The built-in guide has no "Delete". Anything else asks first and shows what it frees.
+"ZIM Collections" lists your ZIMs. Each row has an icon, name, description and size.
+
+1. Open "Library" and tap "ZIM Collections".
+2. Tap a row to open it in the reader.
+3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
+
+A badge shows only when something needs attention, for example "Update ready". Tap it to update.
+
+Under a row, a line can say how its search is going, for example `Making PDFs searchable · 340 of 5,768`. Tap that line to open it in "Catalog", where "Pause all" and "Resume" are.
+
+"Change icon" picks a picture from your device. "Delete" asks first and shows what it frees.
+
+- If you see "No ZIM Collections yet. Add Wikipedia, medical guides or survival manuals.", tap "Add to Library".
+
+## Bookshelves
+
+"Bookshelves" shows your books on numbered shelves, the Cache Decimal System, CDS for short. There are ten classes, for example "CDS 200 · Medicine and Health", and each has nine divisions, for example "CDS 210 · First aid and emergency care". Every shelf shows, empty ones too.
+
+1. Open "Library" and tap "Bookshelves".
+2. At the top, choose how the shelves look: "List", "Drawers" or "Spines". Cache keeps your choice on this device.
+3. Tap a class to see its divisions, then a division to see its books.
+
+Every book has a call number, for example `CDS 210-002`: its division, then its place in the order books arrived. A number never changes and is never used again. A moved book gets a new number in its new division. If two of your devices give out the same number at the same moment, the later book shows `.1` after it, for example `CDS 210-002.1`.
+
+To jump to a shelf or a book, type its number in "Go to a number, such as 530". It takes a class (500), a division (530) or a call number (530-002).
+
+- If you see "No books yet.", tap "Add to Library".
+- If you see "No shelf has that number. Try one such as 530.", check the number.
+
+While books are being made searchable, a bar says so, for example "Making 3 books searchable". Tap it to open "Catalog".
+
+## Unsorted and Place it
+
+Books Cache was not sure about wait in "Unsorted" at the top of "Bookshelves". It shows only while it holds books.
+
+1. On "Bookshelves", tap "Unsorted", then "Place them".
+2. Each book shows its best guesses, the best one first. Tap one to place the book there.
+3. Or tap "All divisions" and pick any division.
+
+Cache says where the book went and its new call number, for example `Placed in CDS 350 · Beekeeping as CDS 350-004.` Tap "Undo" to take it back.
+
+To place every book at its best guess at once, tap "Place all best guesses". Tap "Undo" to take back the whole lot.
+
+A book that is not searchable yet can be placed too. Your choice is saved and helps Cache learn.
+
+## A book's page
+
+Tap a book on a shelf to open its page. At the top is its catalog card: its call number, title, and author and edition when known. Under it:
+- "Subject": its division, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another division;
+- "PDF": its size, and where it is when Cache knows;
+- "Search": "Searchable here", or how far Cache is;
+- "Stored": how much smaller Cache made it, when it did.
+
+Tap "Delete book" to delete it. See Delete a book.
+
+## Delete a book
+
+"Delete book" has two separate choices.
+
+1. Open the book's page and tap "Delete book".
+2. Choose one:
+   - "Remove from this device": the book leaves this device only. Cache first asks your other devices whether one has it. If none does, nothing is removed;
+   - "Delete from all your devices": the book, its search index and its call number go from every linked device. This cannot be undone.
+
+- If a choice says "Not available on this device yet.", this device can't do it yet.
+
+## Catalog
+
+"Catalog" lists every search index on this device, grouped: "Your books", "ZIM Collections", "Your own" and "Maps and places". It is the one place for pausing and fixing them.
+
+1. Open "Library" and tap "Catalog".
+2. Read each row: its name, its kind (for example PDFS or PAGES), how it stands, and how it syncs.
+3. Use the button on a row when it has one: "Pause", "Resume", "Try again" or "Free space".
+
+"Pause all" stops all the work, and "Resume" goes on. A sync line can say "Not synced: sharing is off" or "Not synced yet". See Sharing and sync: set up and link devices in chapter 3.
+
+Tap one of your own libraries to see what it holds, with its "..." menu.
+
+## Cache Documentation
+
+"Cache Documentation" holds this guide, what changed in your version, and the credits.
+
+1. Open "Library" and tap "Cache Documentation".
+2. Tap "The Cache guide" to read this guide. It is built in and can't be deleted.
+3. Tap "What's new in [version]" to see what changed. It shows only when lines were written for that version.
+4. Tap "Credits and licenses" to see what Cache is built on. See Credits and licenses.
+
+## Credits and licenses
+
+This page says what Cache is and what it is built on.
+
+![Credits and licenses](shot:settings-credits)
+
+1. Go to ["Library" > "Cache Documentation" > "Credits and licenses"](cache://settings/credits).
+2. Read:
+   - "Version": which Cache you have;
+   - "License": the GNU Affero General Public License, version 3 or later;
+   - "Source code": where to get it;
+   - "Credits": the maps, data, libraries and art used;
+   - "Open-source licenses": the full text for every package.
+
+If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
 
 ## The reader
 
@@ -461,7 +561,7 @@ At the top of "Library", a bar shows the progress of all of it, for example `Get
 
 Tap the bar to see the queue: "Running now" with its progress, "Next" in the order they run, and "Done". Each has its own small bar. Tap "Pause all" to stop it all yourself, and "Resume" to go on.
 
-Cache works on one thing at a time. Only that one says `Making PDFs searchable · 340 of 5,768` on its row in "Library". The others say "Waiting to make PDFs searchable" (or EPUBs, or captions) until their turn. Press and hold an item, or tap "..." in the opened item, to see its lines, for example "PDFs: searching ready" or "EPUBs: searching ready".
+Cache works on one thing at a time. Only that one says `Making PDFs searchable · 340 of 5,768`, under its row in "ZIM Collections" and in "Catalog". The others say "Waiting to make PDFs searchable" (or EPUBs, or captions) until their turn. "Catalog" shows each part of each ZIM on its own row.
 
 When Cache waits, the bar, the row and the menu say why and what to do:
 - `Paused · battery low (12%) · plug in to continue`: under 20% and not plugged in. Plug in, and it goes on by itself;
@@ -474,7 +574,7 @@ When Cache waits, the bar, the row and the menu say why and what to do:
 - `Needs 1.2 GB free · Free space`: it needs room. Tap "Free space";
 - "Paused by you · Resume": you paused it. Tap "Resume".
 
-Tap "Resume" on a paused line in the menu to start that one now. Tap "Pause" to stop it yourself.
+In "Catalog", tap "Resume" on a paused row to start it now, or "Pause" to stop it yourself.
 
 If a few PDFs can't be read, a small line says so, for example `12 could not be read`. A scanned PDF is pictures with no text, so search can't read it.
 
@@ -707,7 +807,7 @@ You only need this for videos a site keeps behind a sign-in.
 
 The sheet then says "Signed in as [user name]". Tap "Sign out" to sign out.
 
-- If you see "Sign-in with [name] was cancelled.", you closed the page. Tap it again.
+- If you see "Sign-in with [name] was canceled.", you closed the page. Tap it again.
 - If you see "That sign-in took too long or was already used. Try again.", tap it again.
 - If you see "The video site needs you to sign in again.", sign in again.
 

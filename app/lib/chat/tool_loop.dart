@@ -8,9 +8,11 @@ import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
+import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_call_text.dart';
 import '../platform/app_log.dart';
+import '../platform/ask_diagnostics.dart';
 
 /// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
 const String kSystemPrompt =
@@ -21,7 +23,8 @@ const String kSystemPrompt =
 
 const int kMaxToolRounds = 3;
 
-/// Sent (not kept in the conversation) when the model asked for more tools after the cap and said nothing.
+/// Sent (not kept in the conversation) with every request after the cap: the tool schemas stay in the request (so the
+/// prompt start the engine keeps is not read again), but `tool_choice` "none" stops the model from calling them.
 const Map<String, dynamic> _kAnswerNow = {
   'role': 'user',
   'content': 'Answer now from the tool results above. No more tools are available.',
@@ -75,6 +78,7 @@ class ToolLoop {
     required this.backend,
     required List<Tool> tools,
     this.systemPrompt,
+    this.timeLine,
     this.enableThinking = kEnableThinking,
     this.numbering,
     this.host,
@@ -103,6 +107,10 @@ class ToolLoop {
 
   /// Builds the system prompt for each turn (local time and location change); null: [kSystemPrompt].
   final String Function()? systemPrompt;
+
+  /// Builds the local time line of a new question, put at the start of its user message ([withTimeLine]); null: the question
+  /// goes alone.
+  final String Function()? timeLine;
   final bool enableThinking;
   final Map<String, Tool> _tools;
 
@@ -159,7 +167,11 @@ class ToolLoop {
 
   List<Map<String, dynamic>> get _schemas => host == null ? [for (final t in _tools.values) t.toSchema()] : _hostSchemas;
 
-  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools, {required String prompt, Map<String, dynamic>? extra}) => {
+  /// [noToolCalls]: the tools stay in the request, so the rendered prompt start is the same as in the rounds before, but the
+  /// model may not call them (`tool_choice` "none": no tool-call grammar, and the engine stops at a tool-call opening).
+  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools,
+          {required String prompt, Map<String, dynamic>? extra, bool noToolCalls = false}) =>
+      {
         'messages': [
           {'role': 'system', 'content': prompt},
           ...messages,
@@ -168,6 +180,7 @@ class ToolLoop {
         'enable_thinking': enableThinking,
         'max_tokens': kMaxTokens,
         if (withTools) 'tools': _schemas,
+        if (withTools && noToolCalls) 'tool_choice': 'none',
       };
 
   /// Frees the numbering in the core. The loop is not used afterwards.
@@ -178,10 +191,18 @@ class ToolLoop {
 
   String _clean(String s) => checkCitations(stripToolCalls(s), _results.keys.toSet()).text;
 
-  /// Asks [userText]. With [seed], the turn starts with that tool call (its arguments as JSON text) and its real result, as if the
-  /// model had made it (Ask about this); the seed is not one of the turn's tool rounds.
-  Stream<TurnUpdate> ask(String userText, {({String name, String arguments})? seed}) {
-    _messages.add({'role': 'user', 'content': userText});
+  /// The user message for [userText] as the model reads it: the question's time line ([timeLine]) first, then the question.
+  /// The conversation keeps this message as it is, so later turns render it the same way.
+  Map<String, dynamic> userMessage(String userText) {
+    final line = timeLine?.call();
+    return {'role': 'user', 'content': line == null ? userText : withTimeLine(line, userText)};
+  }
+
+  /// Asks [userText] ([message]: its user message from [userMessage], when the caller stored it already). With [seed], the turn
+  /// starts with that tool call (its arguments as JSON text) and its real result, as if the model had made it (Ask about this);
+  /// the seed is not one of the turn's tool rounds.
+  Stream<TurnUpdate> ask(String userText, {({String name, String arguments})? seed, Map<String, dynamic>? message}) {
+    _messages.add(message ?? userMessage(userText));
     return _turn(seed: seed);
   }
 
@@ -212,28 +233,35 @@ class ToolLoop {
         await _addResult(call);
       }
       while (true) {
-        final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
-        final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
+        // After kMaxToolRounds rounds the same tool schemas are still sent (a request without them renders a different prompt,
+        // which the engine would read again from the tool schemas on), with tool calls switched off and the nudge.
+        final capped = rounds >= kMaxToolRounds || finalAnswer;
+        final request = _request(_messages, _schemas.isNotEmpty, prompt: prompt, extra: capped ? _kAnswerNow : null, noToolCalls: capped);
 
         final roundClock = Stopwatch()..start();
         final requestNumber = ++modelRequests;
         int? firstTextMs;
         logInfo('Ask round $requestNumber starts: messages=${(request['messages'] as List).length}, '
             'system_chars=${prompt.length}, tools_chars=${jsonEncode(request['tools'] ?? const []).length}, '
-            'thinking_requested=$enableThinking');
+            'thinking_requested=$enableThinking, tool_calls_off=${request['tool_choice'] == 'none'}');
         PartialMessage? last;
-        await for (final p in backend.generate(request)) {
-          last = p;
-          if (p.isFinal) break;
-          if (p.hasToolCalls) {
-            yield TurnUpdate(phase: TurnPhase.searching, text: _clean(p.content), activeTool: p.toolCalls.first.name);
-          } else if (p.content.isNotEmpty) {
-            final text = _clean(p.content);
-            if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
-            yield TurnUpdate(phase: TurnPhase.answering, text: text);
-          } else {
-            yield const TurnUpdate(phase: TurnPhase.thinking);
+        final diagnostics = AskDiagnostics.start(requestNumber);
+        try {
+          await for (final p in backend.generate(request)) {
+            last = p;
+            if (p.isFinal) break;
+            if (p.hasToolCalls) {
+              yield TurnUpdate(phase: TurnPhase.searching, text: _clean(p.content), activeTool: p.toolCalls.first.name);
+            } else if (p.content.isNotEmpty) {
+              final text = _clean(p.content);
+              if (text.trim().isNotEmpty) firstTextMs ??= roundClock.elapsedMilliseconds;
+              yield TurnUpdate(phase: TurnPhase.answering, text: text);
+            } else {
+              yield const TurnUpdate(phase: TurnPhase.thinking);
+            }
           }
+        } finally {
+          diagnostics?.stop();
         }
         if (last == null || !last.isFinal) {
           throw StateError('The model stopped without an answer');
@@ -248,12 +276,12 @@ class ToolLoop {
             'content_chars=${last.content.length}, reasoning_chars=${last.reasoning.length}, '
             'tool_calls=${last.toolCalls.length}, parse_error=${last.parseError != null}, '
             'native_ms=${last.totalMs ?? 'unknown'}, round_ms=${roundClock.elapsedMilliseconds}');
+        if (last.prefixNote != null) logInfo(last.prefixNote!);
         promptTokens += last.promptTokens;
         generatedTokens += last.generatedTokens;
 
-        // The cap is enforced here, not only by leaving the schemas out: once kMaxToolRounds rounds have run, a tool
-        // call the model returns anyway is ignored. Its text, if any, is the answer; with none, one more request
-        // goes out without tools to get one.
+        // The cap is enforced here too, not only by tool_choice "none": once kMaxToolRounds rounds have run, a tool call the
+        // model returns anyway is ignored. Its text, if any, is the answer; with none, one more request goes out to get one.
         if (last.hasToolCalls && !_stopped && rounds >= kMaxToolRounds) {
           if (last.content.trim().isEmpty && !finalAnswer) {
             finalAnswer = true;

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../maps/ui/format.dart';
 import '../screens/hold.dart';
 import '../theme.dart';
+import '../layout/adaptive.dart' show showFittedSheet;
 
 /// Where one download stands, in the one pattern every download in the app shows (UX-downloads-29): a title, one status line,
 /// a bar while it is active, and one trailing control for the state.
@@ -205,7 +206,7 @@ Future<void> removeDownload(BuildContext context, DlState s, Future<void> Functi
 Future<void> showDownloadMenu(BuildContext context, DlState s, DlActions a) async {
   final canPause = (s.phase == DlPhase.running || s.phase == DlPhase.starting) && a.pause != null;
   final canResume = (s.phase == DlPhase.paused || s.phase == DlPhase.failed) && a.resume != null;
-  await showModalBottomSheet<void>(
+  await showFittedSheet<void>(
     context: context,
     showDragHandle: true,
     builder: (ctx) => SafeArea(

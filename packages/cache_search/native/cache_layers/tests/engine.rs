@@ -36,6 +36,7 @@ fn tile_bytes(o: TileOut) -> (Vec<u8>, &'static str) {
         TileOut::Tile { bytes, from, .. } => (bytes, from),
         TileOut::Empty => panic!("empty"),
         TileOut::Miss => panic!("miss"),
+        TileOut::Busy => panic!("busy"),
         TileOut::NeedsConnection => panic!("needs connection"),
     }
 }
@@ -560,8 +561,9 @@ fn tile_server_over_http() {
     assert_eq!(get("/layers/nope/1/1/1").0, 404);
     assert_eq!(get("/health").0, 200);
     layers.inner.set_online(false);
+    // offline: a tile that may come back with the connection is a 503 the map asks for again, never a 404 (build 46)
     let (st, _, h) = get("/layers/base/6/11/20");
-    assert_eq!((st, h.as_deref()), (404, Some("miss")));
+    assert_eq!((st, h.as_deref()), (503, Some("miss")));
     let (st, _, h) = get("/layers/sat/6/11/20");
     assert_eq!((st, h.as_deref()), (503, Some("needs-connection")));
     // concurrent requests are served

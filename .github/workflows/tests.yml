@@ -4,14 +4,19 @@
 #   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
 #   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
-#            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it)
+#            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it), and cache_ocr's analyze
+#            and tests (a fake engine; the real engines run on an emulator and a simulator in ocr.yml)
+#   add-pdf-core  Add PDF end to end on the real core: the app's AddPdfState drives cs_ingest_* (a Linux libcache_search) with the
+#            real PDFium (the release pdfrx ships), the real bge-m3 embedder (a Linux cache_llama and the pinned model) and the shelf
+#            sorter from the app's assets; OCR is a stand-in (the phone engines run in ocr.yml). app/test/add_pdf/add_pdf_core_test.dart
 #   embed-parity  the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
 #            with the pinned bge-m3 model and a Linux cache_llama (places_pack's parity_tests, then
 #            app/test/query_embedder_parity_test.dart, matched to the golden at cosine 0.999 and to each other exactly)
 #
-# The core builds on Linux without libzim: build.rs compiles the C++ shim over the official prebuilt libzim only for Windows,
-# Android and iOS, so the `xapian` feature is on (the default) but has no effect here, and the zimx tests (cfg(zimx)) run on
-# Windows only. The Guide check and Identity guard run as their own workflows on every push.
+# The core builds on Linux with libzim, as on the phone: build.rs compiles the C++ shim over Kiwix's official prebuilt libzim
+# (the `xapian` feature, on by default), so the rust job fetches it (.github/actions/libzim-prebuilt, pinned by sha256) and the
+# zimx tests (cfg(zimx)) run here too, tests/zimx_small.rs on a small pinned ZIM (the ready.gov ZIM tests need a 2.4 GB file and
+# skip). The Guide check and Identity guard run as their own workflows on every push.
 #
 # Toolchains are the build machine's: Rust 1.99.1 and Flutter 3.44.8 (as android-play.yml and ios-testflight.yml).
 name: Tests
@@ -57,6 +62,24 @@ jobs:
           rustup default "$RUST_VERSION"
           rustc --version
           cargo clippy --version
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - name: openZIM testing suite (pinned, from the Actions cache)
+        id: zimsuite
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: zim-testing-suite-0.10.0.tar.gz
+      - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
+        env:
+          ZIM_SUITE_TGZ: ${{ steps.zimsuite.outputs.dir }}/zim-testing-suite-0.10.0.tar.gz
+        run: |
+          line=$(bash zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
+          echo "$line" >> "$GITHUB_ENV"
+          echo "CS_TEST_REQUIRE_SMALL_ZIM=1" >> "$GITHUB_ENV"
+          # the core's unit-test executable finds libzim through this (the integration tests have a run path)
+          echo "LD_LIBRARY_PATH=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
@@ -97,6 +120,16 @@ jobs:
         run: |
           flutter --version
           flutter pub get
+      # PDFium and SQLite for the app's build hooks and the PDF tests, from the Actions cache instead of GitHub releases.
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
+      - name: MapLibre versions (the app's own and maplibre_gl's)
+        run: python3 -I tools/check_maplibre_pin.py
       - name: Analyze
         working-directory: app
         run: flutter analyze
@@ -107,6 +140,14 @@ jobs:
         working-directory: packages/cache_search
         run: |
           flutter pub get
+          flutter test --no-pub
+      # The OCR engine layer's Dart side with a fake engine and a mocked channel (the real engines run in ocr.yml).
+      - name: Plugin tests (cache_ocr)
+        working-directory: packages/cache_ocr
+        run: |
+          flutter pub get
+          (cd example && flutter pub get)
+          flutter analyze
           flutter test --no-pub
 
   embed-parity:
@@ -158,3 +199,71 @@ jobs:
           CACHE_EMBED_MODELS_DIR="$RUNNER_TEMP/models" CACHE_EMBED_LOCAL_GOLDEN="$RUNNER_TEMP/local-golden.json" \
           LD_LIBRARY_PATH="$LLAMA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             flutter test --no-pub test/query_embedder_parity_test.dart
+
+  add-pdf-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # llama.cpp, for cache_llama
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+          workspaces: packages/cache_search/native -> target
+          key: add-pdf-core
+          cache-on-failure: true
+      - name: The core (libcache_search.so)
+        working-directory: packages/cache_search/native
+        run: |
+          cargo build --locked -p cache_search
+          test -f target/debug/libcache_search.so
+          echo "CS_DIR=$PWD/target/debug" >> "$GITHUB_ENV"
+          echo "ZIM_LIB_DIR=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
+      - name: The embedding model
+        run: |
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $RUNNER_TEMP/models/bge-m3-Q8_0.gguf" | sha256sum -c -
+      - name: cache_llama (Linux, CPU, AVX2)
+        run: |
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/llama" -DCMAKE_BUILD_TYPE=Release -DCACHE_LLAMA_X86_AVX2=ON
+          cmake --build "$RUNNER_TEMP/llama" --target cache_llama -j "$(nproc)"
+          lib=$(find "$RUNNER_TEMP/llama" -name 'libcache_llama.so' | head -n 1)
+          [ -n "$lib" ] || { echo 'libcache_llama.so was not built'; exit 1; }
+          echo "LLAMA_LIB=$lib" >> "$GITHUB_ENV"
+          echo "LLAMA_DIR=$(dirname "$lib")" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      # PDFium and SQLite for the app's build hooks, as the flutter job takes them
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
+      - name: Add PDF on the real core
+        working-directory: app
+        run: |
+          CACHE_ADD_PDF_CORE=1 CACHE_EMBED_LIB="$LLAMA_LIB" CACHE_EMBED_MODEL="$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" \
+          LD_LIBRARY_PATH="$CS_DIR:$LLAMA_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test --no-pub test/add_pdf/add_pdf_core_test.dart --reporter expanded

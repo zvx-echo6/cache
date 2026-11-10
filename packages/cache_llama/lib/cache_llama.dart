@@ -4,3 +4,4 @@ library;
 export 'llama_session.dart' show LlamaSession;
 export 'partial_message.dart' show PartialMessage, ModelInfo, ToolCall;
 export 'embedder.dart' show CacheEmbedder;
+export 'load_options.dart' show llamaLoadOptions;

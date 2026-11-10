@@ -111,6 +111,17 @@ class SearchEngine {
   Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
   Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
 
+  /// cs_live_fetch_start: [liveFetch] as a job on a thread of its own (its "result" is liveFetch's answer); null when the core
+  /// has no such call (then [liveFetch] is the way).
+  CoreJob? liveFetchJob(Map<String, dynamic> request) {
+    final n = native;
+    if (n is! CsLiveJobNative) return null;
+    final j = (n as CsLiveJobNative).liveFetchStart(_h, jsonEncode(request));
+    if (j == -1) return null;
+    if (j == 0) throw CacheSearchException.fromJson(native.lastError(_h));
+    return CoreJob(native, j);
+  }
+
   CsLiveNative get _liveNative {
     final n = native is CsLiveNative ? native as CsLiveNative : null;
     if (n != null && n.hasLivePolicy) return n;
@@ -244,6 +255,40 @@ class SearchEngine {
     final n = native is CsCaptionsNative ? native as CsCaptionsNative : null;
     if (n == null || !n.hasCaptionsSearch) throw const CacheSearchException('unsupported', 'This build of the core cannot search captions yet');
     return _object(_ok(n.captionsSearch(_h, jsonEncode(request))));
+  }
+
+  // ---- the Bookshelves log (cs_shelves_*) ----
+
+  /// True when the loaded core has the Bookshelves calls.
+  bool get hasShelves => native is CsShelvesNative && (native as CsShelvesNative).hasShelves;
+
+  /// One handle-less Bookshelves call: `detect`, `append`, `resolve` or `import` with its [args] (cache_search.h); the answer as JSON
+  /// (detect's is a list, the others' an object). Needs no open handle.
+  Object shelves(String op, Map<String, dynamic> args) => shelvesCall(native, op, args);
+
+  /// [shelves] on a native layer that may not be open yet (the calls take no handle).
+  static Object shelvesCall(CsNative native, String op, Map<String, dynamic> args) {
+    final n = native is CsShelvesNative ? native as CsShelvesNative : null;
+    if (n == null || !n.hasShelves) throw const CacheSearchException('unsupported', 'This build of the core has no Bookshelves yet');
+    if (!const {'detect', 'append', 'resolve', 'import'}.contains(op)) throw CacheSearchException('bad_json', 'unknown Bookshelves call $op');
+    final s = n.shelves(op, jsonEncode(args));
+    return jsonDecode(s ?? (throw CacheSearchException.fromJson(native.lastError(0)))) as Object;
+  }
+
+  // ---- Add PDF, the ingest job (cs_ingest_*) ----
+
+  /// True when the loaded core has the ingest calls.
+  static bool hasIngestIn(CsNative native) => native is CsIngestNative && (native as CsIngestNative).hasIngest;
+
+  /// One handle-less ingest call on [native]: `start`, `step`, `ocr`, `cancel` or `probe` with its [args]
+  /// (packages/cache_ingest/INGEST-API.md); the answer as a JSON object. A failure throws [CacheSearchException] with the core's
+  /// code (`busy`, `not_pdf`, `locked`, `damaged`, `no_space` with [CacheSearchException.needed], ...).
+  static Map<String, dynamic> ingestCall(CsNative native, String op, Map<String, dynamic> args) {
+    final n = native is CsIngestNative ? native as CsIngestNative : null;
+    if (n == null || !n.hasIngest) throw const CacheSearchException('unsupported', 'This build of the core cannot add PDFs yet');
+    if (!const {'start', 'step', 'ocr', 'cancel', 'probe'}.contains(op)) throw CacheSearchException('bad_json', 'unknown ingest call $op');
+    final s = n.ingest(op, jsonEncode(args));
+    return (jsonDecode(s ?? (throw CacheSearchException.fromJson(native.lastError(0)))) as Map).cast<String, dynamic>();
   }
 
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----

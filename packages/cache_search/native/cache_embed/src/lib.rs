@@ -6,6 +6,8 @@
 //! built `libcache_llama.so` from a path given on the command line and looks up the five symbols it needs. The app calls the same C functions with the same
 //! settings, so a query gets the same vector on the phone and here.
 
+pub mod chat;
+
 use libloading::Library;
 use sha2::{Digest, Sha256};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};

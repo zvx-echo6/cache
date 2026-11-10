@@ -78,7 +78,7 @@ class OffroadPack {
 /// The packs listed in `current.json` (entries that cannot be read are left out).
 List<OffroadPack> parseOffroadCatalogue(String text) {
   final j = jsonDecode(text);
-  if (j is! Map || j['component'] != 'offroad') throw const FormatException('not an off-road catalogue');
+  if (j is! Map || j['component'] != 'offroad') throw const FormatException('not an off-road catalog');
   return [
     for (final r in (j['regions'] as List? ?? const []))
       if (r is Map) ?OffroadPack.fromJson(r.cast<String, dynamic>()),

@@ -12,6 +12,10 @@ option(CACHE_LLAMA_TEST_CLI "Build the cl_test command line test" OFF)
 option(CACHE_LLAMA_GEMMA4_PREFILL_OPT "Test the isolated Gemma 4 prefill optimization" OFF)
 # Desktop/server x86_64 only (not Android): let ggml use AVX2/FMA/F16C. Off = baseline x86-64, runs anywhere, slower.
 option(CACHE_LLAMA_X86_AVX2 "Enable AVX2/FMA/F16C on non-Android x86_64 builds" OFF)
+# Tests only (native-libs.yml): build the CPU backend as loadable variants off Android too, so CI runs the phone's
+# CL_BACKEND_DL path (load_cpu_backend) on Linux. The variant libraries must sit next to libcache_llama.so
+# (CMAKE_LIBRARY_OUTPUT_DIRECTORY), as they do in the APK.
+option(CACHE_LLAMA_TEST_BACKEND_DL "Build the CPU backend as loadable variants on a non-Android host, for tests" OFF)
 
 # --- llama.cpp options: static, no tests/tools/server, no network or download code ---
 set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
@@ -35,7 +39,7 @@ if (ANDROID_ABI STREQUAL "x86_64")
   set(GGML_FMA  ON CACHE BOOL "" FORCE)
   set(GGML_F16C ON CACHE BOOL "" FORCE)
 endif()
-if (ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a")
+if ((ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a") OR CACHE_LLAMA_TEST_BACKEND_DL)
   # Runtime CPU dispatch: the CPU backend is built as one libggml-cpu-*.so per feature level (dotprod,
   # i8mm, sve2 ...) and cache_llama loads the fastest one the phone's CPU supports at startup.
   # This needs shared libraries; the Gradle build packages all of them into the APK.
@@ -147,4 +151,11 @@ if (CACHE_LLAMA_TEST_CLI)
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
   target_link_libraries(cl_cases PRIVATE cache_llama)
+
+  # Prompt reuse timing (saved prefix, tool_choice "none" rounds): C API + the vendored JSON library.
+  add_executable(cl_prefix "${CMAKE_CURRENT_LIST_DIR}/../test/cl_prefix.cpp")
+  target_include_directories(cl_prefix PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
+  target_link_libraries(cl_prefix PRIVATE cache_llama)
 endif()

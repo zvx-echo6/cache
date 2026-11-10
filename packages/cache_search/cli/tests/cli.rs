@@ -461,6 +461,52 @@ fn library_manifest_and_update_library_commands() {
 }
 
 #[test]
+fn index_library_takes_one_index_folder_option_and_index_seal_needs_its_fields() {
+    let tmp = TempDir::new("idxflags");
+    let lib = tmp.path("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    // neither folder option, or both: a usage error before any job starts
+    let o = cs(&["index-library", "--library", &lib]);
+    assert!(!o.ok && o.stderr.contains("--indexes-dir"), "{}", o.stderr);
+    let (a, b) = (tmp.path("a"), tmp.path("b"));
+    let o = cs(&["index-library", "--library", &lib, "--index-dir", &a, "--indexes-dir", &b]);
+    assert!(!o.ok && o.stderr.contains("not both"), "{}", o.stderr);
+    // index-seal without its fields
+    let o = cs(&["index-seal", "--indexes-dir", &a]);
+    assert!(!o.ok, "{}", o.stderr);
+}
+
+#[test]
+fn index_library_into_the_indexes_folder_publishes_a_snapshot() {
+    let tmp = TempDir::new("idxsnap");
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let pts: Vec<_> = (1..=20u64)
+            .map(|i| PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("T{i}"), "content": format!("text {i}")})).0)
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+    }
+    let settings = tmp.path("cache-library.json");
+    std::fs::write(&settings, json!({"format": 1, "library_id": "t", "version": "1", "title": "T", "fields": {"title": "title", "text": "content"}}).to_string()).unwrap();
+    let indexes = tmp.path("indexes");
+    let out = j(cs_ok(&["index-library", "--library", &shard, "--settings", &settings, "--indexes-dir", &indexes]).lines().last().unwrap());
+    assert_eq!(out["state"], "done", "{out}");
+    let snap = out["result"]["snapshot"].as_str().expect("a snapshot id").to_string();
+    // published where the app looks: <indexes>/library/<id@version>/snap/<snapshot>/manifest.json, and nothing left in .build
+    let dir = format!("{indexes}/library/t@1");
+    let m = j(&std::fs::read_to_string(format!("{dir}/snap/{snap}/manifest.json")).unwrap());
+    assert_eq!(m["kind"], "library");
+    assert_eq!(m["source_id"], "t@1");
+    assert!(m["files"].as_array().is_some_and(|f| !f.is_empty()), "{m}");
+    let build = std::path::Path::new(&dir).join(".build");
+    assert!(!build.exists() || std::fs::read_dir(&build).unwrap().next().is_none(), "the build folder is cleared");
+}
+
+#[test]
 fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
     let tmp = TempDir::new("idxfail");
     // an existing folder that is not a library: the job starts, then fails on its own thread
@@ -748,8 +794,12 @@ fn web_search_through_the_cli_needs_the_environment() {
     assert!(!o.stderr.contains(WEB_KEY) && !o.stdout.contains(WEB_KEY));
 }
 
+/// A sources file with no sources, its own for each call: the tests run in parallel threads of one process, and a file shared
+/// between them is truncated by one test's `fs::write` while another test's `cs` reads it (an empty file, a parse error).
 fn empty_config() -> String {
-    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}.json", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}-{n}.json", std::process::id()));
     std::fs::write(&p, r#"{"sources":[]}"#).unwrap();
     p.to_string_lossy().into_owned()
 }
@@ -771,6 +821,7 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     let mut json_args = args.to_vec();
     json_args.push("--json");
     let o = cs_env_patient(&json_args, &env);
+    assert!(o.ok, "cs {json_args:?} failed: {}", o.stderr);
     let v = j(o.stdout.trim());
     assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
     assert!(v["timing_ms"]["search"].is_u64());

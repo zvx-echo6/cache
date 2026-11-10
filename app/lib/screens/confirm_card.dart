@@ -32,7 +32,7 @@ class ConfirmCardView extends StatelessWidget {
       ConfirmState.open => null,
       ConfirmState.running => 'Working…',
       ConfirmState.done => 'Done',
-      ConfirmState.declined => 'Cancelled',
+      ConfirmState.declined => 'Canceled',
       ConfirmState.failed => card.error == null ? 'Could not do it' : 'Could not do it. ${card.error}',
       ConfirmState.dropped => 'Not done',
     };

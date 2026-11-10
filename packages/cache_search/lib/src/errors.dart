@@ -4,7 +4,7 @@ import 'dart:convert';
 /// index_missing, index_stale, busy, unsupported, io, cancelled, no_space, damaged, not_configured, fetch_failed,
 /// quota, bad_response, auth_failed, otp_required, internal).
 class CacheSearchException implements Exception {
-  const CacheSearchException(this.code, this.message);
+  const CacheSearchException(this.code, this.message, {this.needed, this.available});
 
   /// Reads the `{"code","message"}` JSON of cs_last_error (or of a job error). Anything else becomes an
   /// "internal" error that keeps the text.
@@ -13,7 +13,8 @@ class CacheSearchException implements Exception {
     try {
       final j = jsonDecode(json);
       if (j is Map && j['code'] is String) {
-        return CacheSearchException(j['code'] as String, (j['message'] ?? '').toString());
+        return CacheSearchException(j['code'] as String, (j['message'] ?? '').toString(),
+            needed: (j['needed'] as num?)?.toInt(), available: (j['available'] as num?)?.toInt());
       }
     } catch (_) {}
     return CacheSearchException('internal', json);
@@ -21,6 +22,10 @@ class CacheSearchException implements Exception {
 
   final String code;
   final String message;
+
+  /// For `no_space`: the bytes the work needs and those free, when the core says them.
+  final int? needed;
+  final int? available;
 
   @override
   String toString() => message.isEmpty ? code : message;

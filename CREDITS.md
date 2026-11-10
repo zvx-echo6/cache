@@ -2,48 +2,56 @@
 
 Copyright (C) 2026 Happy Little LLC. Cache is licensed AGPL-3.0-or-later.
 
-Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Settings > About and credits > Credits; the full licence text of every Flutter and Dart package is under Open-source licences.
+Cache is free software, licensed AGPL-3.0-or-later. It is built on the work below. The same list is in the app, under Library > Cache Documentation > Credits and licenses > Credits; the full license text of every Flutter and Dart package is under Open-source licenses.
 
-No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licences; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
+No data, library content or language model ships inside Cache. The maps, library files and models you add are yours and keep their own licenses; the entries below are the data services Cache is set up to read from, the libraries it is built from, and its own artwork.
 
 ## Data sources
 
-- OpenStreetMap: street, place, water and land data for the maps, place search and routing. (c) OpenStreetMap contributors, Open Database Licence (ODbL) 1.0. https://www.openstreetmap.org/copyright
+- OpenStreetMap: street, place, water and land data for the maps, place search and routing. (c) OpenStreetMap contributors, Open Database License (ODbL) 1.0. https://www.openstreetmap.org/copyright
 - Map, place and routing packs built from OpenStreetMap are databases under the ODbL 1.0. Attribution: (c) OpenStreetMap contributors.
 - Protomaps: the base map tiles (Protomaps basemap, version 4) and the PMTiles format. The tiles carry OpenStreetMap data (ODbL 1.0). The Protomaps basemaps style code is BSD-3-Clause, Copyright Protomaps LLC. https://protomaps.com
 - OpenFreeMap and OpenMapTiles: the alternative base map and the style the map is drawn from. The style is derived from OpenFreeMap's "Liberty" style (MIT), a fork of OSM Liberty, itself a fork of OSM Bright, derived from Mapbox Open Styles. Style code: BSD-3-Clause. Style design: CC BY 4.0 (OpenMapTiles). Map data: (c) OpenStreetMap contributors, ODbL 1.0. https://openfreemap.org
 - Noto Sans: the map label fonts (glyph ranges as served by OpenFreeMap), SIL Open Font License 1.1. https://openfontlicense.org
-- Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 licence. https://docs.overturemaps.org/attribution/
+- Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 license. https://docs.overturemaps.org/attribution/
 - Mapterhorn: terrain heights, and the hillshade and contour lines made from them. (c) Mapterhorn. Open data from many national sources, see https://mapterhorn.com/attribution
 - ESA WorldCover 2021: land cover. (c) ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0.
 - Open-Meteo: weather forecasts. Weather data by Open-Meteo.com, CC BY 4.0. https://open-meteo.com
 - timezone-boundary-builder: time zone boundaries (through the tzf-dist crate), ODbL 1.0. https://github.com/evansiroky/timezone-boundary-builder
-- Other map layers in the Cache catalogue, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
-- Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own licence (Wikipedia and most others: CC BY-SA), which the file states.
-- PeerTube: videos from the PeerTube sites you connect. Each video keeps the licence its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
+- Other map layers in the Cache catalog, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
+- Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own license (Wikipedia and most others: CC BY-SA), which the file states.
+- PeerTube: videos from the PeerTube sites you connect. Each video keeps the license its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
 
 ## Native libraries and tools
 
 - llama.cpp and ggml (the model runner): MIT, Copyright the ggml authors. https://github.com/ggml-org/llama.cpp
 - libzim 9.8.2 (reads ZIM files): GPL-2.0-or-later, openZIM. Source: https://github.com/openzim/libzim
 - Xapian 1.4 (the full-text index inside libzim): GPL-2.0-or-later. Source: https://xapian.org
-- ICU (inside libzim; Unicode text handling and data): the ICU / Unicode licence, Copyright Unicode, Inc. and others. https://icu.unicode.org
+- ICU (inside libzim; Unicode text handling and data): the ICU / Unicode license, Copyright Unicode, Inc. and others. https://icu.unicode.org
 - zstd and liblzma (inside libzim): zstd is BSD-3-Clause or GPL-2.0 (Meta Platforms); liblzma is public domain.
 - Valhalla 3.7.0 (road routing): MIT, Copyright the Valhalla contributors. https://github.com/valhalla/valhalla
-- Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib licence.
+- Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib license.
 - MapLibre Native (draws the map, through the maplibre_gl package): BSD-2-Clause. https://maplibre.org
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
-- PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType Licence), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library Licence 2), zlib (zlib licence), libtiff (libtiff licence), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode Licence v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
+- OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
+- MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
+- PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType License), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library License 2), zlib (zlib license), libtiff (libtiff license), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode License v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
+- Google ML Kit text recognition (reads scanned PDF pages on Android when a PDF is added, through the cache_ocr package; com.google.mlkit:text-recognition 16.0.1 with its bundled Latin model, nothing downloaded at run time): used under the ML Kit Terms of Service, Copyright Google LLC. https://developers.google.com/ml-kit/terms
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
-- Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licences of the libraries inside the Flutter engine are listed under Open-source licences.
+- Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licenses of the libraries inside the Flutter engine are listed under Open-source licenses.
 
 ## Artwork
 
 - The Cache logo, wordmarks, app icons, launch scene and module tiles are the project's own artwork (see assets/brand in the repository).
 
+## Fonts
+
+- Roboto Mono (Bold; the Library's call and shelf numbers): SIL Open Font License 1.1, Copyright 2015 The Roboto Mono Project Authors. https://github.com/googlefonts/robotomono (the license is at app/assets/fonts/RobotoMono-OFL.txt)
+- Libre Baskerville (the book page's catalog card): SIL Open Font License 1.1, Copyright 2012 The Libre Baskerville Project Authors, with Reserved Font Name Libre Baskerville. https://github.com/impallari/Libre-Baskerville (the license is at app/assets/fonts/LibreBaskerville-OFL.txt)
+
 ## Flutter and Dart packages
 
-Taken from `app/pubspec.lock` (every package the app is built with, direct and indirect). The copyright line is the first one in the package's own licence file; the full text of each licence is in Settings > About and credits > Open-source licences.
+Taken from `app/pubspec.lock` (every package the app is built with, direct and indirect). The copyright line is the first one in the package's own license file; the full text of each license is in Settings > About and credits > Open-source licenses.
 
 - android_file_picker 2.1.1: MIT (Copyright (c) 2018 Miguel Ruivo)
 - archive 4.5.2: MIT (Copyright (c) 2013-2021 Brendan Duncan.)
@@ -212,7 +220,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 
 ## Rust crates
 
-Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built for Android arm64), with the licence each crate declares in `cargo metadata`. The lockfile also covers the command-line tool and the tests, so a few crates listed here are not linked into the app. Where a crate offers a choice (for example MIT OR Apache-2.0), Cache uses it under either. The crates written for Cache itself are cache_layers, cache_live, cache_navigate, cache_offroad, cache_places, cache_search, cache_sync, cache_tool, cache_user, cache_video.
+Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built for Android arm64), with the license each crate declares in `cargo metadata`. The lockfile also covers the command-line tool and the tests, so a few crates listed here are not linked into the app. Where a crate offers a choice (for example MIT OR Apache-2.0), Cache uses it under either. The crates written for Cache itself are cache_layers, cache_live, cache_navigate, cache_offroad, cache_places, cache_search, cache_sync, cache_tool, cache_user, cache_video.
 
 - acto 0.8.2: Apache-2.0 OR MIT (github.com/rkuhn/acto)
 - addr2line 0.25.1: Apache-2.0 OR MIT (github.com/gimli-rs/addr2line)
@@ -237,7 +245,9 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - arc-swap 1.9.3: MIT OR Apache-2.0 (github.com/vorner/arc-swap)
 - arrayvec 0.7.8: MIT OR Apache-2.0 (github.com/bluss/arrayvec)
 - ascii 1.1.0: Apache-2.0 OR MIT (github.com/tomprogrammer/rust-ascii)
+- asn1-rs 0.6.2: MIT OR Apache-2.0 (github.com/rusticata/asn1-rs)
 - asn1-rs 0.7.2: MIT OR Apache-2.0 (github.com/rusticata/asn1-rs)
+- asn1-rs-derive 0.5.1: MIT OR Apache-2.0 (github.com/rusticata/asn1-rs)
 - asn1-rs-derive 0.6.0: MIT OR Apache-2.0 (github.com/rusticata/asn1-rs)
 - asn1-rs-impl 0.2.0: MIT/Apache-2.0 (github.com/rusticata/asn1-rs)
 - async-trait 0.1.92: MIT OR Apache-2.0 (github.com/dtolnay/async-trait)
@@ -254,13 +264,16 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - backtrace 0.3.76: MIT OR Apache-2.0 (github.com/rust-lang/backtrace-rs)
 - bao-tree 0.16.1: MIT OR Apache-2.0 (github.com/n0-computer/bao-tree)
 - base16ct 1.0.0: Apache-2.0 OR MIT (github.com/RustCrypto/formats)
+- base64 0.21.7: MIT OR Apache-2.0 (github.com/marshallpierce/rust-base64)
 - base64 0.22.1: MIT OR Apache-2.0 (github.com/marshallpierce/rust-base64)
 - base64 0.23.1: MIT OR Apache-2.0 (github.com/marshallpierce/rust-base64)
 - base64ct 1.8.3: Apache-2.0 OR MIT (github.com/RustCrypto/formats)
+- base64urlsafedata 0.5.5: MPL-2.0 (github.com/kanidm/webauthn-rs)
 - binary-merge 0.1.2: MIT OR Apache-2.0 (github.com/rklaehn/binary-merge)
 - bincode 1.3.3: MIT (github.com/servo/bincode)
 - bincode 2.0.1: MIT (github.com/bincode-org/bincode)
 - bincode_derive 2.0.1: MIT (github.com/bincode-org/bincode)
+- bindgen 0.72.1: BSD-3-Clause (github.com/rust-lang/rust-bindgen)
 - binout 0.3.2: MIT OR Apache-2.0 (github.com/beling/bsuccinct-rs)
 - bit-vec 0.9.1: Apache-2.0 OR MIT (github.com/contain-rs/bit-vec)
 - bitflags 1.3.2: MIT OR Apache-2.0 (github.com/bitflags/bitflags)
@@ -275,7 +288,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - block-buffer 0.10.4: MIT OR Apache-2.0 (github.com/RustCrypto/utils)
 - block-buffer 0.12.1: MIT OR Apache-2.0 (github.com/RustCrypto/utils)
 - block2 0.6.2: MIT (github.com/madsmtm/objc2)
-- bm25 0.1.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- bm25 0.1.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
 - bon 3.10.3: MIT OR Apache-2.0 (github.com/elastio/bon)
 - bon-macros 3.10.3: MIT OR Apache-2.0 (github.com/elastio/bon)
 - bumpalo 3.20.3: MIT OR Apache-2.0 (github.com/fitzgen/bumpalo)
@@ -291,6 +304,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - cedarwood 0.5.0: BSD-2-Clause (github.com/MnO2/cedarwood)
 - census 0.4.2: MIT (github.com/quickwit-inc/census)
 - cesu8 1.1.0: Apache-2.0/MIT (github.com/emk/cesu8-rs)
+- cexpr 0.6.0: Apache-2.0 OR MIT (github.com/jethrogb/rust-cexpr)
 - cfg-if 1.0.5: MIT OR Apache-2.0 (github.com/rust-lang/cfg-if)
 - cfg_aliases 0.2.2: MIT (github.com/katharostech/cfg_aliases)
 - chacha20 0.10.2: MIT OR Apache-2.0 (github.com/RustCrypto/stream-ciphers)
@@ -299,6 +313,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - chrono-tz 0.10.4: MIT OR Apache-2.0 (github.com/chronotope/chrono-tz)
 - chunked_transfer 1.5.0: MIT OR Apache-2.0 (github.com/frewsxcv/rust-chunked-transfer)
 - cipher 0.4.4: MIT OR Apache-2.0 (github.com/RustCrypto/traits)
+- clang-sys 1.9.1: Apache-2.0 (github.com/KyleMayes/clang-sys)
 - clap 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
 - clap_builder 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
 - clap_derive 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
@@ -355,6 +370,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - defmt-parser 1.1.0: MIT OR Apache-2.0 (github.com/knurling-rs/defmt)
 - der 0.8.3: Apache-2.0 OR MIT (github.com/RustCrypto/formats)
 - der-parser 10.0.0: MIT OR Apache-2.0 (github.com/rusticata/der-parser)
+- der-parser 9.0.0: MIT OR Apache-2.0 (github.com/rusticata/der-parser)
 - deranged 0.5.9: MIT OR Apache-2.0 (github.com/jhpratt/deranged)
 - derive_more 2.1.1: MIT (github.com/JelteF/derive_more)
 - derive_more-impl 2.1.1: MIT (github.com/JelteF/derive_more)
@@ -402,6 +418,8 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - fnv 1.0.7: Apache-2.0 / MIT (github.com/servo/rust-fnv)
 - foldhash 0.1.5: Zlib (github.com/orlp/foldhash)
 - foldhash 0.2.0: Zlib (github.com/orlp/foldhash)
+- foreign-types 0.3.2: MIT OR Apache-2.0 (github.com/sfackler/foreign-types)
+- foreign-types-shared 0.1.1: MIT OR Apache-2.0 (github.com/sfackler/foreign-types)
 - form_urlencoded 1.2.2: MIT OR Apache-2.0 (github.com/servo/rust-url)
 - frostem 1.20260821.8: BSD-3-Clause (github.com/Xuanwo/frostem)
 - fs-err 3.3.2: MIT OR Apache-2.0 (github.com/andrewhickman/fs-err)
@@ -437,11 +455,13 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - getrandom 0.4.3: MIT OR Apache-2.0 (github.com/rust-random/getrandom)
 - ghash 0.5.1: Apache-2.0 OR MIT (github.com/RustCrypto/universal-hashes)
 - gimli 0.32.3: MIT OR Apache-2.0 (github.com/gimli-rs/gimli)
+- glob 0.3.4: MIT OR Apache-2.0 (github.com/rust-lang/glob)
 - gloo-timers 0.3.0: MIT OR Apache-2.0 (github.com/rustwasm/gloo/tree/master/crates/timers)
 - gpu 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - h2 0.4.20: MIT (github.com/hyperium/h2)
 - half 1.8.3: MIT OR Apache-2.0 (github.com/starkat99/half-rs)
 - half 2.7.1: MIT OR Apache-2.0 (github.com/VoidStarKat/half-rs)
+- hash32 0.2.1: MIT OR Apache-2.0 (github.com/japaric/hash32)
 - hash32 0.3.1: MIT OR Apache-2.0 (github.com/japaric/hash32)
 - hashbrown 0.12.3: MIT OR Apache-2.0 (github.com/rust-lang/hashbrown)
 - hashbrown 0.14.5: MIT OR Apache-2.0 (github.com/rust-lang/hashbrown)
@@ -449,6 +469,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - hashbrown 0.16.1: MIT OR Apache-2.0 (github.com/rust-lang/hashbrown)
 - hashbrown 0.17.1: MIT OR Apache-2.0 (github.com/rust-lang/hashbrown)
 - hashlink 0.9.1: MIT OR Apache-2.0 (github.com/kyren/hashlink)
+- heapless 0.7.17: MIT OR Apache-2.0 (github.com/japaric/heapless)
 - heapless 0.8.0: MIT OR Apache-2.0 (github.com/rust-embedded/heapless)
 - heck 0.5.0: MIT OR Apache-2.0 (github.com/withoutboats/heck)
 - hermit-abi 0.5.3: MIT OR Apache-2.0 (github.com/hermit-os/hermit-rs)
@@ -498,8 +519,8 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - integer-encoding 4.1.0: MIT (github.com/dermesser/integer-encoding-rs)
 - inventory 0.3.25: MIT OR Apache-2.0 (github.com/dtolnay/inventory)
 - io-uring 0.7.15: MIT OR Apache-2.0 (github.com/tokio-rs/io-uring)
-- io_bridge 0.0.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
-- io_bridge_object_store 0.0.0: Apache-2.0 (the licence of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- io_bridge 0.0.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
+- io_bridge_object_store 0.0.0: Apache-2.0 (the license of the Qdrant repository it comes from) (github.com/qdrant/qdrant)
 - ipconfig 0.3.4: MIT/Apache-2.0 (github.com/liranringel/ipconfig)
 - ipnet 2.12.2: MIT OR Apache-2.0 (github.com/krisprice/ipnet)
 - irg-kvariants 0.1.1: MIT (github.com/meilisearch/charabia)
@@ -518,6 +539,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - irpc 0.17.0: Apache-2.0/MIT (github.com/n0-computer/irpc)
 - irpc-derive 0.17.0: Apache-2.0/MIT (github.com/n0-computer/irpc)
 - is_terminal_polyfill 1.70.2: MIT OR Apache-2.0 (github.com/polyfill-rs/is_terminal_polyfill)
+- itertools 0.13.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itertools 0.14.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itertools 0.15.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itoa 1.0.18: MIT OR Apache-2.0 (github.com/dtolnay/itoa)
@@ -526,12 +548,15 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - jiff 0.2.38: Unlicense OR MIT (github.com/BurntSushi/jiff)
 - jiff-core 0.1.1: Unlicense OR MIT (github.com/BurntSushi/jiff)
 - jiff-static 0.2.38: Unlicense OR MIT (github.com/BurntSushi/jiff)
+- jni 0.21.1: MIT OR Apache-2.0 (github.com/jni-rs/jni-rs)
 - jni 0.22.4: MIT OR Apache-2.0 (github.com/jni-rs/jni-rs)
 - jni-macros 0.22.4: MIT OR Apache-2.0 (github.com/jni-rs/jni-rs)
+- jni-sys 0.3.1: MIT OR Apache-2.0 (github.com/jni-rs/jni-sys)
 - jni-sys 0.4.1: MIT OR Apache-2.0 (github.com/jni-rs/jni-sys)
 - jni-sys-macros 0.4.1: MIT OR Apache-2.0 (github.com/jni-rs/jni-sys)
 - jobserver 0.1.35: MIT OR Apache-2.0 (github.com/rust-lang/jobserver-rs)
 - jpeg-decoder 0.3.2: MIT OR Apache-2.0 (github.com/image-rs/jpeg-decoder)
+- jpeg-encoder 0.6.1: MIT OR Apache-2.0 (github.com/vstroebel/jpeg-encoder)
 - js-sys 0.3.106: MIT OR Apache-2.0 (github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - lazy_static 1.5.1: MIT OR Apache-2.0 (github.com/rust-lang-nursery/lazy-static.rs)
 - levenshtein_automata 0.2.1: MIT (github.com/tantivy-search/levenshtein-automata)
@@ -566,6 +591,8 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - miniz_oxide 0.8.9: MIT OR Zlib OR Apache-2.0 (github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - miniz_oxide 0.9.1: MIT OR Zlib OR Apache-2.0 (github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - mio 1.2.4: MIT (github.com/tokio-rs/mio)
+- mupdf 0.8.0: AGPL-3.0 (github.com/messense/mupdf-rs)
+- mupdf-sys 0.8.0: AGPL-3.0 (github.com/messense/mupdf-rs)
 - murmur3_32 0.1.0: MIT OR Apache-2.0 (github.com/jsen-/murmur3_32)
 - murmurhash32 0.4.0: MIT (github.com/quickwit-inc/murmurhash32)
 - n0-dns-resolver 0.1.0: MIT OR Apache-2.0 (github.com/n0-computer/iroh)
@@ -597,6 +624,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - nu-ansi-term 0.50.3: MIT (github.com/nushell/nu-ansi-term)
 - num 0.1.43: MIT OR Apache-2.0 (github.com/rust-num/num)
 - num-bigint 0.1.45: MIT OR Apache-2.0 (github.com/rust-num/num-bigint)
+- num-bigint 0.4.8: MIT OR Apache-2.0 (github.com/rust-num/num-bigint)
 - num-cmp 0.1.0: MIT OR Apache-2.0 (github.com/lifthrasiir/num-cmp)
 - num-complex 0.1.44: MIT OR Apache-2.0 (github.com/rust-num/num-complex)
 - num-conv 0.2.2: MIT OR Apache-2.0 (github.com/jhpratt/num-conv)
@@ -620,12 +648,17 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - objc2-system-configuration 0.3.2: Zlib OR Apache-2.0 OR MIT (github.com/madsmtm/objc2)
 - object 0.37.3: Apache-2.0 OR MIT (github.com/gimli-rs/object)
 - object_store 0.14.2: MIT OR Apache-2.0 (github.com/apache/arrow-rs-object-store)
+- oid-registry 0.7.1: MIT OR Apache-2.0 (github.com/rusticata/oid-registry)
 - oid-registry 0.8.1: MIT OR Apache-2.0 (github.com/rusticata/oid-registry)
 - once_cell 1.21.4: MIT OR Apache-2.0 (github.com/matklad/once_cell)
 - once_cell_polyfill 1.70.2: MIT OR Apache-2.0 (github.com/polyfill-rs/once_cell_polyfill)
 - oneshot 0.1.13: MIT OR Apache-2.0 (github.com/faern/oneshot)
 - opaque-debug 0.3.1: MIT OR Apache-2.0 (github.com/RustCrypto/utils)
+- openssl 0.10.81: Apache-2.0 (github.com/rust-openssl/rust-openssl)
+- openssl-macros 0.1.1: MIT OR Apache-2.0
 - openssl-probe 0.2.1: MIT OR Apache-2.0 (github.com/rustls/openssl-probe)
+- openssl-src 300.6.1+3.6.3: MIT OR Apache-2.0 (github.com/alexcrichton/openssl-src-rs)
+- openssl-sys 0.9.117: MIT (github.com/rust-openssl/rust-openssl)
 - ordered-float 2.10.1: MIT (github.com/reem/rust-ordered-float)
 - ordered-float 5.5.0: MIT (github.com/reem/rust-ordered-float)
 - osmpbf 0.3.8: MIT OR Apache-2.0 (github.com/b-r-u/osmpbf)
@@ -635,6 +668,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - parking_lot 0.12.5: MIT OR Apache-2.0 (github.com/Amanieu/parking_lot)
 - parking_lot_core 0.9.12: MIT OR Apache-2.0 (github.com/Amanieu/parking_lot)
 - paste 1.0.15: MIT OR Apache-2.0 (github.com/dtolnay/paste)
+- pastey 0.1.1: MIT OR Apache-2.0 (github.com/as1100k/pastey)
 - pastey 0.2.3: MIT OR Apache-2.0 (github.com/as1100k/pastey)
 - pbr 1.1.1: MIT (github.com/a8m/pb)
 - pem 4.0.0: MIT (github.com/jcreekmore/pem-rs)
@@ -685,7 +719,9 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - qdrant-rust-stemmers 1.2.2: MIT OR BSD-3-Clause (github.com/qdrant/rust-stemmers)
 - quantization 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - quick-error 2.0.1: MIT OR Apache-2.0 (github.com/tailhook/quick-error)
+- quick-xml 0.37.5: MIT (github.com/tafia/quick-xml)
 - quick-xml 0.41.0: MIT (github.com/tafia/quick-xml)
+- quick-xml 0.42.0: MIT (github.com/tafia/quick-xml)
 - quick_cache 0.7.0: MIT (github.com/arthurprs/quick-cache)
 - quinn 0.11.12: MIT OR Apache-2.0 (github.com/quinn-rs/quinn)
 - quinn-proto 0.11.19: MIT OR Apache-2.0 (github.com/quinn-rs/quinn)
@@ -764,6 +800,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - serde_bencode 0.2.4: MIT (github.com/toby/serde-bencode)
 - serde_bytes 0.11.19: MIT OR Apache-2.0 (github.com/serde-rs/bytes)
 - serde_cbor 0.11.2: MIT OR Apache-2.0 (github.com/pyfisch/cbor)
+- serde_cbor_2 0.13.0: MIT OR Apache-2.0 (github.com/kanidm/cbor)
 - serde_core 1.0.229: MIT OR Apache-2.0 (github.com/serde-rs/serde)
 - serde_derive 1.0.229: MIT OR Apache-2.0 (github.com/serde-rs/serde)
 - serde_derive_internals 0.29.1: MIT OR Apache-2.0 (github.com/serde-rs/serde)
@@ -777,6 +814,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - sha2 0.11.1: MIT OR Apache-2.0 (github.com/RustCrypto/hashes)
 - shard 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - sharded-slab 0.1.7: MIT (github.com/hawkw/sharded-slab)
+- shlex 1.3.0: MIT OR Apache-2.0 (github.com/comex/rust-shlex)
 - shlex 2.0.1: MIT OR Apache-2.0 (github.com/comex/rust-shlex)
 - sif-itree 0.4.1: MIT OR Apache-2.0 (codeberg.org/adamreichold/sif-itree)
 - signal-hook-registry 1.4.8: MIT OR Apache-2.0 (github.com/vorner/signal-hook)
@@ -797,6 +835,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - sparse 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - spez 0.1.2: BSD-2-Clause (github.com/m-ou-se/spez)
 - spin 0.10.1: MIT (github.com/mvdnes/spin-rs.git)
+- spin 0.9.9: MIT (github.com/mvdnes/spin-rs)
 - spki 0.8.1: Apache-2.0 OR MIT (github.com/RustCrypto/formats)
 - stable_deref_trait 1.2.1: MIT OR Apache-2.0 (github.com/storyyeller/stable_deref_trait)
 - stopwatch 0.0.7: MIT (github.com/ellisonch/rust-stopwatch)
@@ -807,10 +846,12 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - stumpalo 1.0.0: BSD-3-Clause (codeberg.org/414owen/stumpalo)
 - subtle 2.6.1: BSD-3-Clause (github.com/dalek-cryptography/subtle)
 - swarm-discovery 0.6.5: Apache-2.0 (github.com/rkuhn/swarm-discovery)
+- syn 1.0.109: MIT OR Apache-2.0 (github.com/dtolnay/syn)
 - syn 2.0.119: MIT OR Apache-2.0 (github.com/dtolnay/syn)
 - syn 3.0.9: MIT OR Apache-2.0 (github.com/dtolnay/syn)
 - syn-mid 0.5.4: Apache-2.0 OR MIT (github.com/taiki-e/syn-mid)
 - sync_wrapper 1.0.2: Apache-2.0 (github.com/Actyx/sync_wrapper)
+- synstructure 0.13.2: MIT (github.com/mystor/synstructure)
 - synstructure 0.14.0: MIT (github.com/mystor/synstructure)
 - sysinfo 0.39.6: MIT (github.com/GuillaumeGomez/sysinfo)
 - system-configuration 0.8.0: MIT OR Apache-2.0 (github.com/mullvad/system-configuration-rs)
@@ -902,6 +943,10 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - wasm-streams 0.5.0: MIT OR Apache-2.0 (github.com/MattiasBuelens/wasm-streams)
 - web-sys 0.3.106: MIT OR Apache-2.0 (github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys)
 - web-time 1.1.0: MIT OR Apache-2.0 (github.com/daxpedda/web-time)
+- webauthn-attestation-ca 0.5.5: MPL-2.0 (github.com/kanidm/webauthn-rs)
+- webauthn-rs 0.5.5: MPL-2.0 (github.com/kanidm/webauthn-rs)
+- webauthn-rs-core 0.5.5: MPL-2.0 (github.com/kanidm/webauthn-rs)
+- webauthn-rs-proto 0.5.5: MPL-2.0 (github.com/kanidm/webauthn-rs)
 - webpki-root-certs 1.0.11: CDLA-Permissive-2.0 (github.com/rustls/webpki-roots)
 - webpki-roots 0.26.11: CDLA-Permissive-2.0 (github.com/rustls/webpki-roots)
 - webpki-roots 1.0.11: CDLA-Permissive-2.0 (github.com/rustls/webpki-roots)
@@ -924,18 +969,27 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - windows-registry 0.6.1: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-result 0.4.1: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-strings 0.5.1: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows-sys 0.45.0: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-sys 0.52.0: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-sys 0.59.0: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-sys 0.61.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows-targets 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-targets 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows-threading 0.2.1: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_aarch64_gnullvm 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_aarch64_gnullvm 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_aarch64_msvc 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_aarch64_msvc 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_i686_gnu 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_i686_gnu 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_i686_gnullvm 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_i686_msvc 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_i686_msvc 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_x86_64_gnu 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_x86_64_gnu 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_x86_64_gnullvm 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_x86_64_gnullvm 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
+- windows_x86_64_msvc 0.42.2: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - windows_x86_64_msvc 0.52.6: MIT OR Apache-2.0 (github.com/microsoft/windows-rs)
 - winnow 1.0.4: MIT (github.com/winnow-rs/winnow)
 - wit-bindgen 0.57.1: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT (github.com/bytecodealliance/wit-bindgen)
@@ -944,6 +998,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - ws_stream_wasm 0.7.5: Unlicense (github.com/najamelan/ws_stream_wasm)
 - wyhash 0.5.0: MIT OR Apache-2.0 (github.com/eldruin/wyhash-rs)
 - wyz 0.5.1: MIT (github.com/myrrlyn/wyz)
+- x509-parser 0.16.0: MIT OR Apache-2.0 (github.com/rusticata/x509-parser)
 - x509-parser 0.18.1: MIT OR Apache-2.0 (github.com/rusticata/x509-parser)
 - xml-rs 0.8.29: MIT (github.com/kornelski/xml-rs)
 - xmltree 0.10.3: MIT (github.com/eminence/xmltree-rs)

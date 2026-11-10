@@ -111,11 +111,15 @@ void main() {
     await tester.runAsync(b.init);
     await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
     await tester.pumpAndSettle();
+    // The Library's root: the fix is a plain accent line on ZIM Collections, and Add to Library is here.
+    expect(find.text('Update ready for 1'), findsOneWidget);
+    expect(find.text('Add to Library'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('library-zims')));
+    await tester.pumpAndSettle();
     expect(find.text('Wikivoyage Europe'), findsOneWidget);
     expect(find.textContaining('wikivoyage_en_europe_maxi'), findsNothing);
     expect(find.text('Update ready'), findsOneWidget);
     expect(find.text('Ready'), findsNothing, reason: 'no badge for the ordinary state');
-    expect(find.text('Add to Library'), findsOneWidget);
     expect(find.text('Get more from the Kiwix library'), findsNothing);
     // Tapping the badge offers the update in the download pop-up.
     await tester.tap(find.text('Update ready'));
@@ -131,6 +135,8 @@ void main() {
     final b = make(recorded);
     await tester.runAsync(b.init);
     await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('library-zims')));
     await tester.pumpAndSettle();
     await tester.longPress(find.text('Wikivoyage Europe'));
     await tester.pumpAndSettle();
@@ -158,7 +164,7 @@ void main() {
     await tester.runAsync(b.init);
     await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget);
+    expect(find.text('None yet'), findsOneWidget, reason: 'ZIM Collections, on the Library root');
     await tester.tap(find.byKey(const ValueKey('add-to-library')));
     await tester.pumpAndSettle();
     expect(find.byType(AddToLibraryScreen), findsOneWidget);
@@ -172,7 +178,7 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget, reason: 'the list stays');
+    expect(find.byKey(const ValueKey('library-zims')), findsOneWidget, reason: 'the list stays');
     expect(find.byType(AddToLibraryScreen), findsOneWidget);
     expect(find.text('Choose an item'), findsNothing);
     // One way to one place: with Add to Library beside it, the list has no Add to Library button of its own.

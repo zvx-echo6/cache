@@ -41,7 +41,7 @@ void main() {
     });
 
     test('not a catalogue at all', () {
-      expect(() => Catalogue.parse('<html>'), throwsA(isA<CatalogueException>().having((e) => e.message, 'message', contains('connector catalogue'))));
+      expect(() => Catalogue.parse('<html>'), throwsA(isA<CatalogueException>().having((e) => e.message, 'message', contains("isn't a list of sources"))));
       expect(() => Catalogue.parse('[1]'), throwsA(isA<CatalogueException>()));
     });
 
@@ -55,7 +55,7 @@ void main() {
       for (final p in ['../x.json', '/x.json', 'a/../../x.json', 'a//b.json', 'a\\b.json', 'x.json?y=1']) {
         expect(
           () => Catalogue.parse(cat(connectors: [entry('a', 'weather', 'A', path: p)])),
-          throwsA(isA<CatalogueException>().having((e) => e.message, 'message', contains('leaves the catalogue'))),
+          throwsA(isA<CatalogueException>().having((e) => e.message, 'message', contains('leaves the source list'))),
           reason: p,
         );
       }

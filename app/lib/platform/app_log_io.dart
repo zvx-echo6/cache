@@ -4,11 +4,12 @@ import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../app_fs.dart';
 import '../browse/zim_download.dart' show freeBytesOnDisk;
 import '../maps/ui/format.dart' show formatBytes;
+import '../platform.dart' as plat;
 import '../version.dart';
 import 'app_log.dart';
 import 'memory.dart';
@@ -17,8 +18,9 @@ import 'memory.dart';
 /// open (it crashed or was killed: the "running" mark is still there), and on Android the system's own reasons the last
 /// times the app ended (a crash, a native crash, low memory). Dart errors are written as they happen.
 Future<void> openAppLog() async {
+  if (plat.isWeb) return; // a browser has no log file (the server's folder is not one dart:io can open)
   try {
-    final dir = Directory('${(await getApplicationSupportDirectory()).path}/logs');
+    final dir = Directory('${await appSupportPath()}/logs');
     await appLog.open(dir);
     final running = File('${dir.path}/running');
     if (running.existsSync()) logError('Cache stopped unexpectedly the last time it was open');

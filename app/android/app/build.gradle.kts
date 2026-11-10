@@ -66,6 +66,13 @@ android {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
     }
+
+    // The car screen's JVM tests (src/test, Robolectric): android-car.yml runs them in CI.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -78,6 +85,36 @@ flutter {
     source = "../.."
 }
 
+// Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
+// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. The release on Play stays out of
+// Android Auto until it ships together with CarPlay (owner, 2026-11-08); the test APK and the car tests turn it on.
+val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
+if (androidAuto) {
+    androidComponents {
+        onVariants { variant -> variant.sources.manifests.addStaticManifestFile("src/car/AndroidManifest.xml") }
+    }
+}
+
+// The car screen's Robolectric tests read the merged assets, which the Flutter plugin's copy task writes: let it run first.
+tasks.configureEach {
+    if (name == "packageDebugUnitTestForUnitTest") dependsOn("copyFlutterAssetsDebug")
+}
+
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // The whole-route picture during guidance (RouteSnapshot.kt) uses MapLibre's offscreen map snapshotter. This is the same
+    // artifact, at the same version, that the maplibre_gl plugin already brings in, so no new code ships; tools/check_maplibre_pin.py
+    // (run by the Tests workflow) fails if the two ever differ. The plugin leaves out the Vulkan "android-sdk" for the same reason.
+    implementation("org.maplibre.gl:android-sdk-opengl:13.5.0") {
+        exclude(group = "org.maplibre.gl", module = "android-sdk")
+    }
+    // Android Auto (approved 2026-11-08): the Android for Cars App Library, stable 1.7.0, and its Android Auto part. The car map
+    // (car/CarMapRenderer.kt) draws with the MapLibre artifact above.
+    implementation("androidx.car.app:app:1.7.0")
+    implementation("androidx.car.app:app-projected:1.7.0")
+
+    // Tests only, never in the APK (android-car.yml checks the release classpath): approved 2026-11-08.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.car.app:app-testing:1.7.0")
 }

@@ -12,7 +12,7 @@ import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight});
 
   final NavState nav;
   final MapPlace place;
@@ -21,6 +21,9 @@ class PlaceCard extends StatelessWidget {
 
   /// "Read about it": the place's Wikipedia article in the reader; null leaves the button out.
   final PlaceAbout? about;
+
+  /// The most the card may take (the map's side column); null: 55% of the window, as a bottom card.
+  final double? maxHeight;
 
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
@@ -48,7 +51,7 @@ class PlaceCard extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.55),
+          constraints: BoxConstraints(maxHeight: maxHeight == null ? MediaQuery.sizeOf(context).height * 0.55 : (maxHeight! - 26).clamp(120.0, double.infinity)),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,

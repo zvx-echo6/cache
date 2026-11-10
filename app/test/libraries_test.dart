@@ -16,6 +16,9 @@ import 'package:cache/sharing/sharing_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
+import 'browse/web_fakes.dart';
+import 'package:cache/browse/web/device_api.dart';
+import 'package:cache/browse/web/device_library.dart';
 
 // A "library file" in these tests is JSON standing in for a snapshot: {"fake_library":true,"docs":N,"settings":{...}|null,
 // "guessable":bool,"whole":bool,"fails_to_open":bool}. The fake core below unpacks it into the folder as fake.json and answers
@@ -144,6 +147,9 @@ class _LibNative implements CsNative {
         final shard = p['dir'] as String;
         Directory(shard).createSync(recursive: true);
         File('$shard/fake.json').writeAsStringSync(jsonEncode(fake));
+        for (final entry in ((fake['metadata'] as Map?) ?? const {}).entries) {
+          File('$shard/${entry.key}').writeAsStringSync(entry.value as String);
+        }
         final given = (p['settings'] as Map?)?.cast<String, dynamic>();
         final archive = (fake['settings'] as Map?)?.cast<String, dynamic>();
         result = done(_check(shard, given ?? archive, source: given != null ? 'given' : (archive != null ? 'archive' : null)));
@@ -299,6 +305,38 @@ void main() {
       expect((c['settings'] as Map)['library_id'], 'manuals');
     });
 
+    test('archive catalog, original identities and copies are installed beside settings', () async {
+      await setUpLibs();
+      const catalog = 'doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n';
+      final identities = jsonEncode({'version': 1, 'entries': []});
+      const copies = '{"doc_id":"a","version":1,"copy":"a"}\n';
+      final archive = (jsonDecode(_lib()) as Map).cast<String, dynamic>()
+        ..['metadata'] = {'documents.tsv': catalog, 'source-identities.json': identities, 'copies.jsonl': copies};
+      await libs.addFile(libFile('manuals.cache-library', jsonEncode(archive)),
+          confirmUpdate: never, askSettings: noSettings);
+      final library = libs.libraries.single;
+      expect(libs.phaseOf(library), LibraryPhase.ready);
+      expect(File('${library.path}/documents.tsv').readAsStringSync(), catalog);
+      expect(File('${library.path}/source-identities.json').readAsStringSync(), identities);
+      expect(File('${library.path}/copies.jsonl').readAsStringSync(), copies);
+      for (final name in ['documents.tsv', 'source-identities.json', 'copies.jsonl']) {
+        expect(File('${library.shardPath}/$name').existsSync(), isFalse);
+      }
+      expect(folders(), ['manuals']);
+    });
+
+    test('legacy archives without portable identity metadata still install', () async {
+      await setUpLibs();
+      await libs.addFile(libFile('legacy.cache-library', _lib()),
+          confirmUpdate: never, askSettings: noSettings);
+      final library = libs.libraries.single;
+      expect(libs.phaseOf(library), LibraryPhase.ready);
+      for (final name in ['documents.tsv', 'source-identities.json']) {
+        expect(File('${library.path}/$name').existsSync(), isFalse);
+        expect(File('${library.shardPath}/$name').existsSync(), isFalse);
+      }
+    });
+
     test('with an indexes folder the keyword index is built there, as a snapshot that syncs, not in the library', () async {
       final shared = Directory('${tmp.path}/shared-indexes')..createSync();
       await setUpLibs(indexesDir: shared.path);
@@ -419,6 +457,23 @@ void main() {
       final l = libs.libraries.single;
       expect(libs.statusOf(l)!.opening, isFalse, reason: 'nothing else reads the list again; the row must not stay on Getting ready');
       expect(libs.phaseOf(l), LibraryPhase.ready, reason: 'the index left unfinished is built once the library is open');
+    });
+
+    test('a library just added that the core is still opening is read again until it is open: no restart, no other change', () async {
+      // Pixel testing: a newly added library stayed on "Getting ready" until the app was restarted or another library changed.
+      await setUpLibs();
+      final notified = <LibraryPhase>[];
+      await libs.addFile(
+        libFile('m.cache-library', jsonEncode({...jsonDecode(_lib()) as Map, 'opening_reads': 4})),
+        confirmUpdate: never,
+        askSettings: noSettings,
+      );
+      final l = libs.libraries.single;
+      libs.addListener(() => notified.add(libs.phaseOf(libs.libraries.single)));
+      await libs.whenIdle();
+      expect(libs.statusOf(l)!.opening, isFalse, reason: 'the status is read again until the core has opened it');
+      expect(libs.phaseOf(l), LibraryPhase.ready);
+      expect(notified.last, LibraryPhase.ready, reason: 'the list is told, so the row leaves Getting ready at once');
     });
 
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {
@@ -595,8 +650,12 @@ void main() {
       });
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: BrowseScreen(browse: browse, active: true)));
       await tester.pump();
-      expect(find.textContaining('Built in · 3 entries'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
-      expect(find.textContaining('Your own · 2 entries'), findsOneWidget);
+      // The 1.1 Library: every library is a search index in Catalog, the guide built in, the person's own under Your own.
+      await tester.tap(find.byKey(const ValueKey('library-catalog')));
+      await tester.pumpAndSettle();
+      expect(find.text('Ready · Built in'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
+      expect(find.text('Ready · 2 entries'), findsOneWidget);
+      expect(find.text('YOUR OWN'), findsOneWidget);
       expect(find.text('Getting ready'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       browse.dispose();
@@ -630,6 +689,142 @@ void main() {
       expect(menus, 1);
     });
   });
+
+  // The browser's Library: the app's own install procedure run against the device's files (AppFs) and core, with the same prompts.
+  group('LibrariesState on the device (in a browser)', () {
+    late FakeDeviceApi api;
+    late DeviceLibrary device;
+    late Directory docs;
+    late Directory support;
+
+    Future<void> setUpDevice() async {
+      docs = Directory('${tmp.path}/docs')..createSync(recursive: true);
+      support = Directory('${tmp.path}/support')..createSync(recursive: true);
+      api = FakeDeviceApi();
+      // The "device" lists what is in its libraries folder, forgets a library when asked, and counts the rescans.
+      api.onRemove = (id) => Directory('${docs.path}/libraries/${id.substring('library-'.length)}').deleteSync(recursive: true);
+      device = DeviceLibrary(api: _FolderApi(api, docs), fs: diskFs(support, docs), leaveWarning: (_) {});
+      sources = SourcesState(
+        zimsDirOverride: Directory('${tmp.path}/zims'),
+        indexesDirOverride: Directory('${tmp.path}/indexes'),
+        nativeFactory: _makeNative,
+        coreExtras: const {},
+      );
+      libs = LibrariesState(
+        sources: sources,
+        device: device,
+        appFs: diskFs(support, docs),
+        saveBytes: (name, bytes) async {
+          saved[name] = bytes;
+          return true;
+        },
+        pollInterval: const Duration(milliseconds: 5),
+      );
+      await sources.init();
+      await libs.init();
+    }
+
+    File incoming(String name, String body) => touch('${docs.path}/incoming/$name', body) ;
+    List<String> inLibs() => [for (final d in Directory('${docs.path}/libraries').listSync()) _base(d.path)]..sort();
+    Future<bool> never(String n, String? a, String? b) async => fail('no update was expected');
+    Future<String?> noSettings(String reason) async => fail('no settings file was expected');
+
+    test('an uploaded package is added from the docs root: unpacked, indexed, put in place, the package deleted, the core told', () async {
+      await setUpDevice();
+      incoming('manuals.cache-library', _lib());
+      await libs.addDeviceFile('manuals.cache-library', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task, isNull);
+      final l = libs.libraries.single;
+      expect(l.folderName, 'manuals');
+      expect(l.path, '${docs.path}/libraries/manuals');
+      expect(libs.phaseOf(l), LibraryPhase.ready);
+      expect(libs.docsOf(l), 3);
+      expect(File('${docs.path}/libraries/manuals/cache-library.json').existsSync(), isTrue);
+      expect(inLibs(), ['manuals'], reason: 'no hidden work folder is left');
+      expect(File('${docs.path}/incoming/manuals.cache-library').existsSync(), isFalse);
+      expect(api.rescans, greaterThan(0));
+    });
+
+    test('the same library again asks about the update, swaps it in through the device, and keeps the old one when it will not open', () async {
+      await setUpDevice();
+      incoming('m1.cache-library', _lib(version: '1'));
+      await libs.addDeviceFile('m1.cache-library', confirmUpdate: never, askSettings: noSettings);
+      final asked = <List<String?>>[];
+      incoming('m2.cache-library', _lib(version: '2', docs: 9));
+      await libs.addDeviceFile('m2.cache-library', confirmUpdate: (n, a, b) async {
+        asked.add([n, a, b]);
+        return true;
+      }, askSettings: noSettings);
+      expect(asked, [
+        ['Manuals', '1', '2'],
+      ]);
+      expect(libs.versionOf(libs.libraries.single), '2');
+      expect(libs.docsOf(libs.libraries.single), 9);
+      expect(inLibs(), ['manuals'], reason: 'no old copy left');
+      incoming('bad.cache-library', _lib(version: '3', failsToOpen: true));
+      await libs.addDeviceFile('bad.cache-library', confirmUpdate: (n, a, b) async => true, askSettings: noSettings);
+      expect(libs.task?.error, contains('kept as it was'));
+      expect(libs.versionOf(libs.libraries.single), '2');
+      expect(libs.phaseOf(libs.libraries.single), LibraryPhase.ready);
+      expect(inLibs(), ['manuals']);
+    });
+
+    test('a settings file the core cannot do without is asked for, then read from the device', () async {
+      await setUpDevice();
+      final settings = incoming('s.json', jsonEncode({'format': 1, 'library_id': 'notes', 'title': 'Notes', 'fields': {'text': 'text'}}));
+      incoming('b.snapshot', _lib(withSettings: false, guessable: false));
+      String? reason;
+      await libs.addDeviceFile('b.snapshot', confirmUpdate: never, askSettings: (r) async {
+        reason = r;
+        return settings.path;
+      });
+      expect(reason, contains('cannot guess'));
+      expect(libs.titleOf(libs.libraries.single), 'Notes');
+    });
+
+    test('a file that is not a library, and the blank template, say so; nothing is left on the device', () async {
+      await setUpDevice();
+      incoming('x.txt', 'hello');
+      await libs.addDeviceFile('x.txt', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, "This file isn't a Cache library.");
+      libs.dismissTask();
+      incoming('cache-library-template.tar.gz', 'not json');
+      await libs.addDeviceFile('cache-library-template.tar.gz', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, startsWith('This is an empty library template.'));
+      expect(libs.libraries, isEmpty);
+      expect(inLibs(), isEmpty);
+    });
+
+    test('remove goes through the device, and a download link is a device download that waits as a package', () async {
+      await setUpDevice();
+      incoming('manuals.cache-library', _lib());
+      await libs.addDeviceFile('manuals.cache-library', confirmUpdate: never, askSettings: noSettings);
+      await libs.remove(libs.libraries.single);
+      expect(api.removed, ['library-manuals']);
+      expect(libs.libraries, isEmpty);
+      await libs.addLink('http://example.org/x', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, contains('https://'));
+      libs.dismissTask();
+      await libs.addLink('https://example.org/lib/pack.cache-library', confirmUpdate: never, askSettings: noSettings);
+      expect(api.downloads.single['kind'], 'library');
+      expect(api.downloads.single['url'], 'https://example.org/lib/pack.cache-library');
+    });
+
+    test('work a cut-off add left on the device is cleaned up or put back at start', () async {
+      docs = Directory('${tmp.path}/docs')..createSync(recursive: true);
+      touch('${docs.path}/libraries/.add-5/shard/x', '1');
+      touch('${docs.path}/libraries/.manuals.old/shard/fake.json', _lib());
+      await setUpDevice();
+      expect(inLibs(), ['manuals'], reason: 'the half-made one is gone and the old copy is back');
+    });
+
+    test('the blank template is made on the device and handed to the browser\'s save', () async {
+      await setUpDevice();
+      expect(await libs.saveTemplate(), isTrue);
+      expect(saved.keys, [kLibraryTemplateName]);
+      expect(Directory('${docs.path}/incoming').listSync().where((e) => _base(e.path).startsWith('.template')), isEmpty);
+    });
+  });
 }
 
 /// A ustar archive of [files] (name to bytes), as the template's tar.
@@ -655,6 +850,7 @@ List<int> _tar(Map<String, List<int>> files) {
       ..addAll(List.filled((512 - e.value.length % 512) % 512, 0));
   }
   return out..addAll(List.filled(1024, 0));
+
 }
 
 /// A sync engine whose status lists one shared folder as the test sets it.
@@ -678,5 +874,23 @@ void _copyTree(Directory from, Directory to) {
     } else if (e is File) {
       e.copySync('${to.path}/$name');
     }
+  }
+}
+
+/// The device's answers about its libraries come from its folder; everything else is the fake's.
+class _FolderApi extends FakeDeviceApiView {
+  _FolderApi(super.inner, this.docs);
+
+  final Directory docs;
+
+  @override
+  Future<List<DeviceItem>> items() async {
+    final libs = Directory('${docs.path}/libraries');
+    if (!libs.existsSync()) return const [];
+    return [
+      for (final d in libs.listSync().whereType<Directory>())
+        if (!_base(d.path).startsWith('.') && Directory('${d.path}/shard').existsSync())
+          DeviceItem(id: 'library-${_base(d.path)}', kind: 'library', name: _base(d.path), title: _base(d.path), bytes: 10, path: 'app/docs/libraries/${_base(d.path)}'),
+    ];
   }
 }

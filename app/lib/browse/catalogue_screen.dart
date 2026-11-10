@@ -5,13 +5,19 @@ import 'package:flutter/material.dart';
 import '../layout/adaptive.dart';
 import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
+import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
+import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'opds.dart';
+import 'web/device_flows.dart';
+import 'web/build_list.dart' show buildAddRows;
+import 'web/device_widgets.dart' show FromThisComputer;
 
 String formatBytes(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -165,7 +171,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             controller: _search,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              hintText: 'Search the catalogue',
+              hintText: 'Search the catalog',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _search.text.isEmpty
                   ? null
@@ -243,15 +249,18 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   /// "Your own library" (nothing when the libraries are not set up).
   List<Widget> _own(CacheTokens k) {
     final libraries = b.libraries;
+    final pdf = addPdfShared != null && b.device == null;
     return [
+      // In a browser the first section is the computer the browser is on.
+      if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
       if (libraries != null) ...[
         const GroupLabel('Your own'),
         Material(
           color: k.surface,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
           child: InkWell(
             key: const ValueKey('add-own-library'),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
             onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 52),
@@ -277,8 +286,12 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             ),
           ),
         ),
+        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
         const SizedBox(height: 6),
       ],
+      // In a browser, building a library from PDFs and the drop folder.
+      if (b.device != null) ...buildAddRows(context, b.device!),
     ];
   }
 
@@ -327,7 +340,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              '${b.total} in the catalogue',
+              '${b.total} in the catalog',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: k.secondary),
             ),
@@ -354,7 +367,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          b.catalogError == null ? 'Nothing found. Try another word, language or category.' : "Couldn't reach the catalogue. ${b.catalogError}",
+          b.catalogError == null ? 'Nothing found. Try another word, language or category.' : "Couldn't reach the catalog. ${b.catalogError}",
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 14, color: b.catalogError != null ? k.warning : k.secondary),
         ),
@@ -378,7 +391,7 @@ class EntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final transfer = browse.transfers[entry.id];
+    final transfer = browse.transfers[entry.id] ?? browse.deviceTransfer(entry);
     final installed = browse.installedFor(entry);
     final installedRelease = installed == null ? null : browse.sources.originOf(installed)?.release;
     final newer = installed != null && installedRelease != null && installedRelease.compareTo(entry.release) < 0;
@@ -418,7 +431,10 @@ class EntryTile extends StatelessWidget {
         width: 32,
         height: 32,
         color: k.background,
-        child: url == null ? letter : Image.network(url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
+        // A page may not load pictures from other sites: in a browser the icon comes through this device.
+        child: url == null
+            ? letter
+            : Image.network(plat.isWeb ? '/api/fetch?url=${Uri.encodeComponent(url.toString())}' : url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
       ),
     );
   }

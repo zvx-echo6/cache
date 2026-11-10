@@ -3,13 +3,14 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import '../app_fs.dart';
 
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
 import 'caption_search.dart';
 import 'format.dart';
 import 'token_store.dart';
+import '../platform.dart' as plat;
 import 'video_prefs.dart';
 
 /// What a person is told when a video call fails.
@@ -151,18 +152,23 @@ class VideoState extends ChangeNotifier {
   static CsNative _defaultNative() => FfiCsNative.open();
 
   Future<void> init() async {
+    if (plat.isWeb) {
+      // Videos are saved into a folder on the phone; there is none in a browser.
+      unavailable = 'Videos are not available on this device';
+      notifyListeners();
+      return;
+    }
     final Directory dir;
     if (dirOverride != null) {
       dir = dirOverride!;
     } else {
-      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
-      dir = Directory('${base.path}/videos');
+      dir = Directory('${await appFilesPath()}/videos');
     }
     this.dir = dir;
     await dir.create(recursive: true);
     if (_prefs == null && dirOverride == null) {
       try {
-        _prefs = VideoPrefs(file: File('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}video-prefs.json'));
+        _prefs = VideoPrefs(file: File('${await appSupportPath()}${Platform.pathSeparator}video-prefs.json'));
       } catch (_) {}
     }
     await prefs.load();

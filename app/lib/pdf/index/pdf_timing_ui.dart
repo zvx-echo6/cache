@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import '../../app_fs.dart';
 
 import 'pdf_index_state.dart';
 import 'pdf_timing.dart';
@@ -15,8 +16,7 @@ Future<Directory> pdfTimingDir() async {
       base = await getExternalStorageDirectory();
     } catch (_) {}
   }
-  base ??= await getApplicationSupportDirectory();
-  return Directory('${base.path}${Platform.pathSeparator}pdf-timing');
+  return Directory('${base?.path ?? await appSupportPath()}${Platform.pathSeparator}pdf-timing');
 }
 
 /// The debug timing switch (debug and developer builds only): choose a library, index its first 20 PDFs in a throwaway build,

@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
-import '../layout/adaptive.dart' show kDesktopMinWidth;
+import '../layout/adaptive.dart' show isShort, kDesktopMinWidth;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
@@ -465,9 +465,23 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     final visible = _controller.visibleRect;
     final x = r.left >= visible.left && r.right <= visible.right ? null : r.center.dx;
     if (_cited.isNotEmpty && identical(s, _cited.first)) {
-      // A cited passage opens near the top of the view, a small gap above it, the strip above that.
+      // A cited passage opens near the top of the view with the whole line before it shown, the view's edge halfway between that
+      // line and the one above it, so no line is cut at the top; at a page's top, a small gap above it.
       _citedTop = r.top;
-      _placeAtTop(r.top, gap: _topGap, x: x, animate: false);
+      final pageRect = _controller.layout.pageLayouts[s.page - 1];
+      final first = _lineRects(PdfPageTextRange(pageText: layer, start: s.start, end: s.end), page, pageRect).firstOrNull;
+      final before = s.start <= 0 || first == null
+          ? const <Rect>[]
+          : _lineRects(PdfPageTextRange(pageText: layer, start: math.max(0, s.start - 600), end: s.start), page, pageRect);
+      // The line just above the passage, and the one above that.
+      final above = [for (final l in before) if (first != null && l.bottom <= first.top + 1) l]..sort((a, b) => b.bottom.compareTo(a.bottom));
+      if (above.isNotEmpty) {
+        final prev = above.first;
+        final over = above.length > 1 ? above[1].bottom : prev.top - (first!.top - prev.bottom);
+        _placeAtTop(prev.top - math.max(0, prev.top - over) / 2, x: x, animate: false);
+      } else {
+        _placeAtTop(r.top, gap: _topGap, x: x, animate: false);
+      }
       return;
     }
     // A find match to the middle of the view.
@@ -756,7 +770,8 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
               Expanded(child: _body(k)),
             ],
           ),
-          bottomNavigationBar: open && _barsShown ? _bottomBar(k) : null,
+          // A short window (a phone held sideways) has the page buttons in the top bar instead, so the page keeps the height.
+          bottomNavigationBar: open && _barsShown && !isShort(context) ? _bottomBar(k) : null,
         ),
       ),
     );
@@ -794,6 +809,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
         ],
       ),
       actions: [
+        if (_phase == _Phase.open && isShort(context)) ..._pageButtons(),
         IconButton(
           key: const ValueKey('pdf-find'),
           tooltip: 'Find in this PDF',
@@ -823,17 +839,19 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  Widget _bottomBar(CacheTokens k) {
+  Widget _bottomBar(CacheTokens k) => BottomAppBar(
+    height: 56,
+    padding: EdgeInsets.zero,
+    color: k.surface,
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: _pageButtons()),
+  );
+
+  /// Previous page, Fit page or width, Next page: the bottom bar's buttons (the top bar's on a short window).
+  List<Widget> _pageButtons() {
     final atStart = _page <= 1;
     final atEnd = _page >= _pageCount;
     final toPage = _fit == _Fit.width;
-    return BottomAppBar(
-      height: 56,
-      padding: EdgeInsets.zero,
-      color: k.surface,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
+    return [
           IconButton(
             key: const ValueKey('pdf-prev'),
             tooltip: 'Previous page',
@@ -852,9 +870,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
             icon: const Icon(Icons.keyboard_arrow_down),
             onPressed: atEnd || !_ready ? null : () => _goToPage(_page + 1),
           ),
-        ],
-      ),
-    );
+    ];
   }
 
   Widget? _stripFor(CacheTokens k) {

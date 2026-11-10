@@ -96,7 +96,23 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+      # The Gradle distribution and dependencies, cached by setup-gradle (the wrapper distribution by its version, dependencies
+      # restored from the newest entry, not only an exact match of the build files). Every branch writes, as setup-java's cache did.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ !(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      # PDFium and SQLite for the app's build hooks (Android ABIs, and Linux for flutter test), from the Actions cache instead of
+      # GitHub releases.
+      - name: PDFium and SQLite (pinned, from the Actions cache)
+        id: native
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: >-
+            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz pdfium-chromium-7811-android-arm.tgz
+            pdfium-chromium-7811-android-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
+            sqlite3-3.5.2-libsqlite3.arm.android.so sqlite3-3.5.2-libsqlite3.x64.android.so
+      - name: Seed the build hooks
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64 android-arm android-x64
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -167,6 +183,8 @@ jobs:
         working-directory: app
         env:
           ORG_GRADLE_PROJECT_cacheTestApk: 'true'
+          # Android Auto is off by default (src/car/AndroidManifest.xml); the test APK turns it on for testing with the DHU.
+          ORG_GRADLE_PROJECT_cacheAndroidAuto: 'true'
         run: |
           flutter --version
           flutter pub get
@@ -182,10 +200,16 @@ jobs:
           grep -E "^package:|^application-label:|^native-code:" "$RUNNER_TEMP/badging.txt"
           grep -q "^package: name='com.happylittlellc.cache.test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::Not the .test package"; exit 1; }
           grep -q "^application-label:'Cache test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::The label is not Cache test"; exit 1; }
-          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' || true
-          if "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' | grep -v 'com.happylittlellc.cache.test'; then
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-tree.txt"
+          grep -E 'android:authorities' "$RUNNER_TEMP/manifest-tree.txt" || true
+          # The app's own providers (under <application>) must be under the .test package. A <queries> entry only names another
+          # app's provider to look for (the Car App Library asks for androidx.car.app.connection there) and is not one of ours.
+          awk '/E: /{ind=index($0,"E:"); if (q && ind<=qind) q=0; if ($0 ~ /E: queries/) {q=1; qind=ind}} /android:authorities/ && !q {print}' \
+            "$RUNNER_TEMP/manifest-tree.txt" > "$RUNNER_TEMP/own-authorities.txt"
+          if grep -v 'com.happylittlellc.cache.test' "$RUNNER_TEMP/own-authorities.txt"; then
             echo "::error::A provider authority is not under the .test package"; exit 1
           fi
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -q "CacheCarAppService" || { echo "::error::Android Auto is not in the test APK"; exit 1; }
           for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
             unzip -l "$apk" "lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from lib/arm64-v8a"; exit 1; }
           done

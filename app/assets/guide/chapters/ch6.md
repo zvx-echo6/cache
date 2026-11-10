@@ -162,13 +162,13 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 - `Making PDFs searchable · 340 of 5,768`, "Waiting to make PDFs searchable" or "PDFs: searching ready": see Search indexing messages.
 - "Nothing found. Try another word, language or category.": change the search or chips.
 
-## Kiwix catalogue messages
+## Kiwix catalog messages
 
-When the catalogue in ["Library" > "Add to Library"](cache://library/add) can't load:
+When the catalog in ["Library" > "Add to Library"](cache://library/add) can't load:
 - "Cannot reach the Kiwix library. Check the connection.": connect and tap "Try again".
 - "Cannot make a secure connection to the Kiwix library.": the network may block it, or the device's date is wrong. Try another network.
 - "The Kiwix library took too long to answer.": try later.
-- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalogue." or "The library could not be read: [reason]": try later or on another network.
+- "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalog." or "The library could not be read: [reason]": try later or on another network.
 
 ## ZIM download messages
 
@@ -180,7 +180,7 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 - "The connection failed: [reason]": check the connection.
 - "Could not make a secure connection to the download server.": try another network.
 - "The download server took too long to answer.": try later.
-- "That file is no longer on the download server.": search the catalogue again.
+- "That file is no longer on the download server.": search the catalog again.
 - "The download server answered [code].", "The download server did not say how big the file is.", "The download server redirected too many times.", "The download server sent a redirect with no address." or "The download server continued from the wrong place. Try again.": try later.
 - "Could not write the file: [reason]": check free space.
 - "Could not finish the download: [reason]": tap "Try again".
@@ -231,7 +231,7 @@ States are "Getting ready", "Waiting to index", "Building index" and "Not availa
 ## Map and layer messages
 
 In "Maps":
-- "No base map yet. Connect once to get the catalogue.": connect once.
+- "No base map yet. Connect once to get the catalog.": connect once.
 - "[layer] needs a connection here" or "[layer] needs a connection or a download here": connect, or download the region.
 - "Maps need network access": tap "Allow". If it still fails, tap "Open settings".
 
@@ -273,9 +273,9 @@ On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/r
 - "This country's regions need a connection the first time." or "Search needs a connection the first time.": connect once.
 - "This region could not be read. Connect and try again."
 - `No region called "[name]".`: try another spelling, or browse "Countries".
-- "No region here in the catalogue. Search for one in Regions.": search by name.
+- "No region here in the catalog. Search for one in Regions.": search by name.
 - "Nothing downloaded yet": pick a region under "Downloads".
-- "Size unknown": the catalogue has no size for it.
+- "Size unknown": the catalog has no size for it.
 - "Waiting for Wi-Fi": it will download on Wi-Fi.
 - "On this device": already here.
 
@@ -369,7 +369,7 @@ In the "Choose a place" sheet:
 On a source's page (tap its row in ["Settings" > "Weather and alerts"](cache://settings/weather)):
 - "Data" "Out of date": update when online.
 - "Last update" "Nothing downloaded yet": tap "Update now" on "Weather".
-- "This source is no longer in the catalogue.": its catalogue dropped it.
+- "This source is no longer offered.": the source list dropped it.
 - "Needs your own key": tap "Get key".
 
 In the source list:
@@ -415,21 +415,26 @@ In the key sheet from "Get key" on a source's row (["Settings" > "Weather and al
 - "[source] is on" or "Key replaced": it worked.
 - "Key removed": its sources are off.
 
-## Catalogue messages
+## Your own source messages
 
-In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a link"](cache://settings/weather):
-- "Enter an address that starts with https://": paste the full link.
-- "No connection. Connect to add a catalogue."
-- "Couldn't check that link. Try again."
-- "That address didn't give a connector catalogue.": ask whoever gave you the link.
-- "That catalogue is already added." or `A catalogue called "[name]" is already added.`
-- "None of the sources in this catalogue can be used by this version of Cache."
-- "This catalogue is in a newer format than this version of Cache can read. Update Cache to use it."
-- "This catalogue is in a format Cache does not know."
-- "Couldn't reach [site]. Check your connection.", "Couldn't make a secure connection to [site].", "Couldn't read from [site].", "[site] answered with an error (HTTP [code]).", "The file is larger than expected.": a network or server problem. Try later.
-- "Left out ([n])": some sources couldn't be used. The reason is under each. Tell the publisher.
-- "[name] added", "Removed", "Sources are up to date": it worked.
-- "Couldn't load the catalogue.": the last good copy is kept.
+In ["Settings" > "Weather and alerts" > "More sources" > "Add your own source"](cache://settings/weather):
+- "Give the source a name." or "Enter the web address of the service."
+- "Enter an address that starts with https://": paste the full address.
+- "The address has { } in it that Cache doesn't fill in. Use the Latitude and Longitude buttons for the place."
+- "Put your key in the web address where the service asks for it." or "This address needs your key. Type it under Key."
+- "No connection. Connect to the internet and try again."
+- "[site] answered with an error (HTTP [code]).": check the address, or try later.
+- "[site] answered, but not with JSON. This version of Cache only reads JSON.": this kind of service can't be added yet.
+- "[site] answered, but there are no values in it.", "[site] didn't answer in time.", "Couldn't reach [site]. Check the address and your connection.": check the address and tap "Try again".
+- "Tick at least one value to show."
+- "Cache can't use this source: [reason]": the source was not saved.
+
+When you import a source file:
+- "This isn't a source file." or "This isn't a source file: it is neither a source nor a list of sources.": ask whoever gave it to you.
+- "None of its sources can be added. [reason]"
+- "This source list is in a newer format than this version of Cache can read. Update Cache to use it."
+- "Left out ([n])": some sources couldn't be used, or you have them already. The reason is under each.
+- "Couldn't load the list of sources.": the last good copy is kept.
 
 ## Notification messages
 
@@ -460,7 +465,7 @@ In "Videos":
 ## Video sign-in messages
 
 In the sheet from the account button on a site:
-- "Sign-in with [name] was cancelled.": you closed the site's page. Tap the button again.
+- "Sign-in with [name] was canceled.": you closed the site's page. Tap the button again.
 - "[site] couldn't sign you in with [name]. Try again."
 - "That sign-in took too long or was already used. Try again.": start the sign-in again.
 - "Sign in to [site] to play this video": a private video. Tap "Sign in".
@@ -509,7 +514,7 @@ In ["Settings" > "Storage"](cache://settings/storage):
 - "Nothing to clean up": nothing to remove.
 - "Freed [size]": "Clean up" finished.
 
-In ["Settings" > "Credits and licences"](cache://settings/credits):
+In ["Library" > "Cache Documentation" > "Credits and licenses"](cache://settings/credits):
 - "Couldn't load the credits.": restart Cache.
 
 ## Notebook messages
@@ -551,7 +556,7 @@ These need a connection:
 - downloads;
 - map layers that "Streams when online" or "Needs a connection" outside downloaded areas;
 - web search;
-- the first look at the region list and Kiwix catalogue;
+- the first look at the region list and Kiwix catalog;
 - linking devices over the internet.
 
 ## Mobile data: why a download did not start
