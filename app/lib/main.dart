@@ -744,6 +744,8 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) indexing.setOpen(true);
       },
+      // The search model is held warm while Cache is in front, and let go when it goes to the back; back in front loads it again.
+      onStateChange: searchModel.onLifecycle,
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         if (!plat.isWeb) indexing.setOpen(false);
@@ -776,11 +778,14 @@ class _CacheAppState extends State<CacheApp> {
     });
     // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      if (!releaseModelOn(level, reading)) return;
+      searchModel.onTrim(level);
+      if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    });
+    }, onWarning: searchModel.onMemoryWarning);
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -789,6 +794,11 @@ class _CacheAppState extends State<CacheApp> {
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();
+    // The search model loads in the background once the first frame is up and the start-up work (the chat model at start) is
+    // done; the start never waits for it.
+    if (!plat.isWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_appRead.then((_) => searchModel.warmLoad())));
+    }
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
