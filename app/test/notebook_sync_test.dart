@@ -97,7 +97,11 @@ class _Link {
           win = x ?? y;
         }
         for (final f in [a, b]) {
-          win == null ? f.text.remove(p) : f.text[p] = win;
+          if (win == null) {
+            f.text.remove(p);
+          } else {
+            f.text[p] = win;
+          }
         }
       }
       if (win != null) next[p] = win;
@@ -109,10 +113,10 @@ class _Link {
 class _Rig {
   _Rig(this.kind, {this.includePrivate = true}) {
     nb = fakeNotebook(store);
-    nb.reidJournal = journal;
+    nb.reidJournal = reidFile;
   }
 
-  final File journal = File('${Directory.systemTemp.createTempSync('cache-reid-').path}/reid-journal.json');
+  final File reidFile = File('${Directory.systemTemp.createTempSync('cache-reid-').path}/reid-journal.json');
 
   final SyncKind kind;
   final bool includePrivate;
@@ -522,7 +526,7 @@ void main() {
       await rounds([a, b], [link], n: 2);
       expect(ids(b, 'Hikes'), ['aaa-hikes']);
       expect(await entryIds(b, 'aaa-hikes'), {'ea1'});
-      expect(b.journal.existsSync(), isFalse);
+      expect(b.reidFile.existsSync(), isFalse);
     });
 
     test('only a conflict copy of the id file, no notebook.json: the lowest id still wins', () async {
@@ -565,7 +569,7 @@ void main() {
       expect(moves, ['bbb-hikes>aaa-hikes']);
       expect(shared.ids, {'aaa-hikes'});
       expect(priv, {'aaa-hikes'});
-      expect(a.journal.existsSync(), isFalse);
+      expect(a.reidFile.existsSync(), isFalse);
       // another round changes nothing
       final idFile = a.folder.text['Hikes/notebook.json'];
       await rounds([a, b], [link], n: 1);
@@ -754,16 +758,16 @@ void main() {
         final d = await build(kill == 2 ? {} : {kill + 1});
         if (kill == 2) d.rig.store.failNext = 'io';
         await expectLater(d.rig.nb.reidNotebook('bbb-hikes', 'aaa-hikes'), throwsA(anything));
-        expect(d.rig.journal.existsSync(), isTrue, reason: 'the journal stays until every step saved');
-        final j = jsonDecode(d.rig.journal.readAsStringSync()) as Map;
+        expect(d.rig.reidFile.existsSync(), isTrue, reason: 'the journal stays until every step saved');
+        final j = jsonDecode(d.rig.reidFile.readAsStringSync()) as Map;
         expect((j['old'], j['new']), ('bbb-hikes', 'aaa-hikes'));
         // the next start: a new NotebookState on the same core and journal replays it before anything syncs
-        final again = fakeNotebook(d.rig.store)..reidJournal = d.rig.journal;
+        final again = fakeNotebook(d.rig.store)..reidJournal = d.rig.reidFile;
         again.privateSharing = d.shared;
         again.reidSteps.addAll(d.rig.nb.reidSteps);
         await again.start();
         await again.replayReid();
-        expect(d.rig.journal.existsSync(), isFalse);
+        expect(d.rig.reidFile.existsSync(), isFalse);
         expect(again.notebooks.where((n) => n.name == 'Hikes').map((n) => n.id), ['aaa-hikes']);
         expect((await again.entries('aaa-hikes')).map((e) => e.id), ['e1']);
         expect(d.shared.ids, {'aaa-hikes'});
@@ -826,7 +830,7 @@ void main() {
     });
   });
 
-  group('the app PIN', () {  group('the app PIN', () {
+  group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);
       final store = MemoryTokenStore();
