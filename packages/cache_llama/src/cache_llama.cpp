@@ -624,6 +624,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
+        // llama.cpp's own on-demand reading of the tensors the architecture marks (Gemma 4's per-layer table): no read of the whole
+        // file up front, the rows a batch needs are prefetched. Needs mmap.
+        mp.lazy_mode = LLAMA_LAZY_MODE_ON;
+        cl_logi("engine: lazy=on");
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
