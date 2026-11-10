@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
-"""The app declares MapLibre's native SDK itself for the whole-route picture (RouteSnapshot.kt, AppDelegate.swift): the same artifact
-the maplibre_gl plugin brings in. This fails when the app's version and the plugin's differ, so the two never drift apart.
+"""MapLibre's native SDK must come from one place on each platform, so the app never ships it twice.
+
+Android: the app declares MapLibre's SDK itself for the whole-route picture (RouteSnapshot.kt), the same artifact the maplibre_gl
+plugin brings in. This fails when the app's version and the plugin's differ.
+
+iOS: the app does not pin MapLibre. The maplibre_gl plugin brings it in through its Swift package (Flutter's Swift Package Manager
+integration), and RouteSnapshot (AppDelegate.swift) imports it from there. So there is no app version to compare. The real risk is
+someone re-adding `pod 'MapLibre'` to app/ios/Podfile, which embeds a second MapLibre.framework and breaks the archive ("Multiple
+commands produce ... Runner.app/Frameworks/MapLibre.framework"). This fails if the Podfile declares a MapLibre pod at all, and prints
+the plugin's MapLibre version for information.
 
 Run from the repository root after `flutter pub get` in app/ (it reads app/.dart_tool/package_config.json to find the plugin):
     python3 -I tools/check_maplibre_pin.py
@@ -36,22 +44,24 @@ def one(pattern: str, text: str, where: str) -> str:
 def main() -> None:
     plugin = plugin_dir()
     android_pattern = r"org\.maplibre\.gl:android-sdk-opengl:([0-9][0-9A-Za-z.\-]*)"
-    pod_pattern = r"""['"]MapLibre['"]\s*,\s*['"]([^'"]+)['"]"""
+    pod_line = re.compile(r"""^\s*pod\s+['"]MapLibre['"]""", re.MULTILINE)
+    spm_pattern = r'exact:\s*"([^"]+)"'
     plugin_android = one(android_pattern, (plugin / "android" / "build.gradle").read_text(), "the plugin's android/build.gradle")
     app_android = one(android_pattern, (APP / "android" / "app" / "build.gradle.kts").read_text(), "app/android/app/build.gradle.kts")
-    plugin_ios = one(pod_pattern, (plugin / "ios" / "maplibre_gl.podspec").read_text(), "the plugin's ios/maplibre_gl.podspec")
-    app_ios = one(pod_pattern, (APP / "ios" / "Podfile").read_text(), "app/ios/Podfile")
+    plugin_ios = one(spm_pattern, (plugin / "ios" / "maplibre_gl" / "Package.swift").read_text(), "the plugin's ios/maplibre_gl/Package.swift")
+    podfile_pod = pod_line.search((APP / "ios" / "Podfile").read_text())
     print(f"maplibre_gl at {plugin}")
     print(f"Android: plugin {plugin_android}, app {app_android}")
-    print(f"iOS: plugin {plugin_ios}, app {app_ios}")
+    print(f"iOS: plugin brings MapLibre {plugin_ios} through its Swift package; the app declares no MapLibre pod: {not podfile_pod}")
     bad = []
     if plugin_android != app_android:
         bad.append(f"app/android/app/build.gradle.kts declares android-sdk-opengl {app_android}; maplibre_gl uses {plugin_android}")
-    if plugin_ios != app_ios:
-        bad.append(f"app/ios/Podfile pins MapLibre {app_ios}; maplibre_gl uses {plugin_ios}")
+    if podfile_pod:
+        bad.append("app/ios/Podfile declares a MapLibre pod; maplibre_gl already brings MapLibre in through its Swift package, "
+                   "and a pod embeds a second MapLibre.framework (the archive fails with 'Multiple commands produce')")
     if bad:
         sys.exit("\n".join(bad))
-    print("MapLibre versions match")
+    print("MapLibre is declared once on each platform")
 
 
 if __name__ == "__main__":
