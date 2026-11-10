@@ -152,11 +152,6 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
-    /// Facts about this device the app wants every linked device to know (a JSON object, for Cache `{"notebook_format": 2}`): sent
-    /// with the file list, and shown for each linked device in the status as `caps` (absent for a device whose version sends none).
-    /// The engine reads none of it. `set_caps` replaces it later.
-    #[serde(default)]
-    pub caps: Option<Value>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -297,9 +292,6 @@ struct RemoteIndex {
     /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
-    /// What the sender's app says about it ([`Config::caps`]); older versions send none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    caps: Option<Value>,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -428,8 +420,6 @@ struct Inner {
     refetch: Mutex<HashMap<String, Vec<String>>>,
     /// [`Config::with`], as `set_share_with` last left it.
     with: Mutex<BTreeMap<String, Vec<String>>>,
-    /// [`Config::caps`], as `set_caps` last left it.
-    caps: Mutex<Option<Value>>,
     /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
     /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
@@ -1064,7 +1054,6 @@ impl Inner {
             link,
             links: true,
             secrets,
-            caps: self.caps.lock().unwrap().clone(),
         }
     }
 
@@ -1705,7 +1694,6 @@ impl SyncEngine {
             off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
-            caps: Mutex::new(cfg.caps.clone()),
             secrets: Mutex::new(HashMap::new()),
             received: Mutex::new(HashMap::new()),
         });
@@ -1824,16 +1812,6 @@ impl SyncEngine {
                         inner.with.lock().unwrap().insert(id, list);
                     }
                     Some(_) => bail!("with must be a list of link kinds or null"),
-                }
-                inner.wake.notify_one();
-                Ok(json!({"ok": true}))
-            }
-            "set_caps" => {
-                // What this device says about itself to the linked devices from now on (a JSON object or null). See Config::caps.
-                match args.get("caps") {
-                    None | Some(Value::Null) => *inner.caps.lock().unwrap() = None,
-                    Some(v @ Value::Object(_)) => *inner.caps.lock().unwrap() = Some(v.clone()),
-                    Some(_) => bail!("caps must be an object or null"),
                 }
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
@@ -2169,7 +2147,6 @@ impl SyncEngine {
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
-                    "caps": st.index.as_ref().and_then(|i| i.caps.clone()),
                 })
             })
             .collect();

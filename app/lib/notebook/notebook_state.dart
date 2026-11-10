@@ -177,52 +177,93 @@ class NotebookState extends ChangeNotifier {
   Stream<({String oldId, String newId})> get reids => _reids.stream;
 
   /// Gives a notebook another id. Linked devices that each made the same notebook settle on one id this way, so it runs on every
-  /// upgrade and whenever a device with a lower id joins; it is a journaled, resumable path. First `reid-journal.json` is
-  /// written (old, new, step names). Then, each step able to run again: the core (the notebook, its entries, the Places link and
-  /// the map layer), private sharing, the registered [reidSteps], and [also] (steps only this call knows). The journal goes only
-  /// after every step saved; a kill or a failure in between leaves it, and [replayReid] finishes the job at the next start.
+  /// upgrade and whenever a device with a lower id joins; it is a journaled, resumable path. The journal (`reid-journal.json`) is a
+  /// queue: this change is added to it (old, new, step names) and the queue is worked through in order. Each change runs its steps,
+  /// each able to run again: the core (the notebook, its entries, the Places link and the map layer), private sharing, the
+  /// registered [reidSteps], and [also] (steps only this call knows). A change leaves the queue only after every step saved, and
+  /// the file goes when the queue is empty. A failure, here or at start, keeps the queue, sets [replayError] (notebook sync waits
+  /// and says so) and is thrown; [replayReid] finishes the queue, so a change that failed and the next one both complete.
   Future<Notebook> reidNotebook(String id, String newId, {Map<String, ReidStep> also = const {}}) async {
     if (id == newId) return notebook(id)!;
-    await _writeJournal(id, newId, ['core', 'private sharing', ...reidSteps.keys, ...also.keys]);
-    return _reidRun(id, newId, also);
+    final q = await _readQueue();
+    final item = {'old': id, 'new': newId, 'steps': ['core', 'private sharing', ...reidSteps.keys, ...also.keys]};
+    q.add(item);
+    await _writeQueue(q);
+    _alsoFor[newId] = also;
+    await _drain();
+    return notebook(newId)!;
   }
 
-  /// Set when a replay failed: the journal is kept, notebook sync waits (a state is shown) and the replay is tried again at the
-  /// next sync. Null when there is nothing to finish.
+  /// Set when a notebook id change could not be finished (at start or while the app runs): the queue is kept, notebook sync waits
+  /// (a state is shown) and the change is tried again at the next sync. Null when nothing waits.
   Object? replayError;
 
-  /// Finishes a re-id that a kill or a failure left half done. Called at start, after what keeps ids is wired (private sharing, the
-  /// registered steps) and before any notebook sync. A journal that cannot be read, or a step that fails, is never dropped: the
-  /// error is kept in [replayError] and thrown.
+  final Map<String, Map<String, ReidStep>> _alsoFor = {};
+  List<Map<String, dynamic>> _memQueue = [];
+
+  /// Finishes the notebook id changes a kill or a failure left half done. Called at start, after what keeps ids is wired (private
+  /// sharing, the registered steps) and before any notebook sync. A journal that cannot be read is never dropped: the error is kept
+  /// in [replayError] and thrown.
   Future<void> replayReid() async {
     final f = reidJournal;
-    if (f == null || !await f.exists()) {
+    if (f != null && !await f.exists() && _memQueue.isEmpty) {
       replayError = null;
       return;
     }
+    await _drain();
+  }
+
+  Future<List<Map<String, dynamic>>> _readQueue() async {
+    final f = reidJournal;
+    if (f == null) return [..._memQueue];
+    if (!await f.exists()) return [];
+    final Object? j;
     try {
-      final Object? j;
-      try {
-        j = jsonDecode(await f.readAsString());
-      } on FormatException catch (e) {
-        throw StateError('the re-id journal could not be read: ${e.message}');
+      j = jsonDecode(await f.readAsString());
+    } on FormatException catch (e) {
+      throw StateError('the re-id journal could not be read: ${e.message}');
+    }
+    // The queue; or the single change an earlier build wrote.
+    final list = j is Map && j['items'] is List ? j['items'] as List : (j is Map && j['old'] is String ? [j] : null);
+    if (list == null) throw StateError('the re-id journal is not one');
+    return [
+      for (final x in list)
+        if (x is Map && x['old'] is String && x['new'] is String) x.cast<String, dynamic>() else throw StateError('the re-id journal is not one'),
+    ];
+  }
+
+  Future<void> _writeQueue(List<Map<String, dynamic>> q) async {
+    final f = reidJournal;
+    if (f == null) {
+      _memQueue = [...q];
+      return;
+    }
+    if (q.isEmpty) {
+      if (await f.exists()) await f.delete();
+      return;
+    }
+    await f.parent.create(recursive: true);
+    await writeStringAtomic(f, jsonEncode({'items': q}));
+  }
+
+  /// Runs the queue in order. Any failure keeps what is left, records [replayError] and is thrown.
+  Future<void> _drain() async {
+    try {
+      var q = await _readQueue();
+      while (q.isNotEmpty) {
+        final item = q.first;
+        await _reidRun(item['old'] as String, item['new'] as String, _alsoFor[item['new']] ?? const {});
+        q = await _readQueue();
+        if (q.isNotEmpty && q.first['old'] == item['old'] && q.first['new'] == item['new']) q.removeAt(0);
+        await _writeQueue(q);
+        _alsoFor.remove(item['new']);
       }
-      final o = j is Map ? j['old'] : null, n = j is Map ? j['new'] : null;
-      if (o is! String || n is! String) throw StateError('the re-id journal is not one');
-      await _reidRun(o, n, const {});
       replayError = null;
     } catch (e) {
       replayError = e;
-      logError('A notebook id change could not be finished; the journal is kept', error: e);
+      logError('A notebook id change could not be finished; it is kept to be finished', error: e);
       rethrow;
     }
-  }
-
-  Future<void> _writeJournal(String o, String n, List<String> steps) async {
-    final f = reidJournal;
-    if (f == null) return;
-    await f.parent.create(recursive: true);
-    await writeStringAtomic(f, jsonEncode({'old': o, 'new': n, 'steps': steps}));
   }
 
   Future<Notebook> _reidRun(String id, String newId, Map<String, ReidStep> also) async {
@@ -232,8 +273,6 @@ class NotebookState extends ChangeNotifier {
     for (final s in [...reidSteps.values, ...also.values]) {
       await s(id, newId);
     }
-    final f = reidJournal;
-    if (f != null && await f.exists()) await f.delete();
     return n;
   }
 

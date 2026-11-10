@@ -65,18 +65,17 @@ class MemFolder implements SyncFolder {
 }
 
 class _Rig {
-  _Rig(this.kind, {this.includePrivate = true}) {
+  _Rig(this.kind) {
     nb = fakeNotebook(store);
   }
 
   final SyncKind kind;
-  final bool includePrivate;
   final FakeNotebookBackend store = FakeNotebookBackend();
   late final NotebookState nb;
   final MemFolder folder = MemFolder();
   final File state = File('${Directory.systemTemp.createTempSync('cache-nbsync-').path}/state.json');
 
-  NotebookSync get engine => NotebookSync(notebook: nb, kind: kind, folder: folder, stateFile: state, includePrivate: includePrivate, clock: () => DateTime(2026, 10, 29, 17, 2));
+  NotebookSync get engine => NotebookSync(notebook: nb, kind: kind, folder: folder, stateFile: state, clock: () => DateTime(2026, 10, 29, 17, 2));
 
   Future<Notebook> journal() async {
     await nb.start();
@@ -387,40 +386,6 @@ void main() {
       final rep = await r.engine.run();
       expect(rep.read, 0);
       expect((await r.nb.entry(a.id))!.body, 'six jugs');
-    });
-  });
-
-  group('notebook sync between devices', () {
-    test('private notebooks stay home unless included; a second device makes the notebook and its entries', () async {
-      final one = _Rig(SyncKind.share, includePrivate: false);
-      await one.journal();
-      final log = await one.nb.saveNotebook(
-          template: 'log',
-          def: const NotebookDef(name: 'Generator test', fields: [LogField(label: 'Run time', type: FieldType.number, unit: 'min')], quickAdd: true, sort: NotebookSort.recent));
-      await one.nb.saveEntry(notebookId: log.id, occurredAt: '2026-10-25T16:12:00-06:00', values: {'f1': 20}, body: 'Oil fine.');
-      final meds = await one.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent), private: true);
-      await one.nb.saveEntry(notebookId: meds.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Private', body: 'x');
-      await one.engine.run();
-      expect(one.folder.text.keys.where((k) => k.endsWith('.md')).length, 1);
-      final books = jsonDecode(one.folder.text['.cache/notebooks.json']!) as Map;
-      final names = [for (final n in books['notebooks'] as List) (n as Map)['def']['name']];
-      expect(names, containsAll(['Journal', 'Generator test']));
-      expect(names, isNot(contains('Medical')));
-      // the other device, with this folder
-      final two = _Rig(SyncKind.share, includePrivate: false);
-      await two.nb.start();
-      two.folder.text.addAll(one.folder.text);
-      final rep = await two.engine.run();
-      expect(rep.read, 1);
-      final made = two.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
-      expect(made.id, log.id);
-      final e = (await two.nb.entries(made.id)).single;
-      expect(e.values, {'f1': 20});
-      expect(e.body, 'Oil fine.');
-      // a private notebook with "Include in sync and sharing" goes too
-      final again = NotebookSync(notebook: one.nb, kind: SyncKind.share, folder: one.folder, stateFile: one.state, includePrivate: false, privateBooks: {meds.id});
-      await again.run();
-      expect(one.folder.text.keys.where((k) => k.endsWith('.md')).length, 2);
     });
   });
 

@@ -646,8 +646,9 @@ class _CacheAppState extends State<CacheApp> {
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
     // Linked devices say their notebook format with the data they already send; format 1 folders stay until all have said 2.
-    peerCaps: () => sharing.running ? {for (final p in sharing.peers) '${p['id']}': (p['caps'] as Map?)?.cast<String, dynamic>()} : null,
-    setCaps: sharing.setCaps,
+    // The conversion of the share to the id layout removes the old folders, so it waits for the link-level gate (an older device gets
+    // nothing, in either direction: the removals must not reach it as deletes).
+    gateActive: () => sharing.linkGateActive,
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -849,6 +850,8 @@ class _CacheAppState extends State<CacheApp> {
           } catch (_) {}
         }
         await notebooks.start();
+        // The first start of a version with format 2 of the notebooks share: the notebooks here now are the ones from before.
+        if (!plat.isWeb) await connections.captureUpgrade();
         notebookActions.start();
       });
       unawaited(userLayers.reload());

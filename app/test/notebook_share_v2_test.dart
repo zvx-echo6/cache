@@ -1,56 +1,46 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/sync/share_format.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/share_rig.dart';
 
-/// Format 2 of the notebooks share: each notebook in `<id>/`, the one-time convergence of ids, and format 1 kept beside it for
-/// devices that only know that (builds up to 1.0.30). Every test syncs through the simulated share (ShareLink), as cache_sync does.
-typedef Run = Future<void> Function();
-
-void exchange(List<Dev> all, {Set<String> old = const {}}) {
-  for (final d in all) {
-    d.peers = {for (final o in all) if (o != d) o.label: o.advertised, for (final o in old) o: null};
-  }
-}
-
-/// [n] rounds: every device syncs (seeing what the others last said about themselves), then the share carries; then one more sync.
-Future<void> rounds(List<Dev> devs, List<ShareLink> links, {int n = 3, List<Run> others = const [], Set<String> old = const {}}) async {
+/// The notebooks share in the id layout (format 2): one folder `<id>/` per notebook; the conversion on update (journaled, resumable:
+/// exact-name convergence to the lowest id, then the old folders go); a device that has not updated (the REAL engine of v1.0.30,
+/// from the tag) gated off the link and then updating; tombstones; the private filter; the re-id queue. Every test syncs through the
+/// simulated share (ShareLink), as cache_sync does; the link-level gate is a stub (`ShareLink.open`, `Dev.gateOn`).
+Future<void> rounds(List<Dev> devs, List<ShareLink> links, {int n = 3}) async {
   for (var i = 0; i < n; i++) {
     for (final d in devs) {
-      exchange([...devs], old: old);
       await d.sync();
-    }
-    for (final o in others) {
-      await o();
     }
     for (final l in links) {
       l.sync();
     }
   }
   for (final d in devs) {
-    exchange([...devs], old: old);
     await d.sync();
   }
 }
 
-Set<String> mdFiles(MemFolder f) => {for (final k in f.text.keys) if (k.endsWith('.md')) k};
+Set<String> oldFiles(MemFolder f) => {for (final k in f.text.keys) if (k.endsWith('.md')) k};
 Set<String> noteFiles(MemFolder f, String dir) => {for (final k in f.text.keys) if (k.startsWith('$dir/') && k.endsWith(kNoteExt)) k};
 
-Future<Dev> started(String label, {DateTime Function()? clock}) async {
-  final d = Dev(label, clock: clock);
+Future<Dev> started(String label, {bool old = false, bool autoUpgrade = true}) async {
+  final d = Dev(label, old: old, autoUpgrade: autoUpgrade);
   await d.boot();
   return d;
 }
 
 void main() {
-  group('two devices that both upgrade', () {
-    test('ids converge on the lowest by exact name, nothing is lost, and format 1 goes once both have said format 2', () async {
-      final a = await started('a');
-      final b = await started('b');
+  group('the conversion on update', () {
+    test('both devices update: ids converge on the lowest by exact name, nothing is lost, and the old folders are gone', () async {
+      final a = await started('a', old: true);
+      final b = await started('b', old: true);
       await a.make('Hikes', id: 'a-1');
       await a.add('a-1', 'ea1', 'Alpha');
       await b.make('Hikes', id: 'b-2');
@@ -58,39 +48,263 @@ void main() {
       await b.make('Trips', id: 'b-3');
       await b.add('b-3', 'eb2', 'Gamma');
       final link = ShareLink(a.folder, b.folder);
-      // before the upgrade: the format 1 sync, as every build to 1.0.30 does it
-      for (var i = 0; i < 2; i++) {
-        await a.oldSync();
-        await b.oldSync();
-        link.sync();
-      }
-      await a.oldSync();
-      await b.oldSync();
+      await rounds([a, b], [link], n: 3);
       expect(await a.entryIds('a-1'), {'ea1', 'eb1'});
-      expect(await b.entryIds('b-2'), {'ea1', 'eb1'});
+      expect(oldFiles(a.folder).length, 3);
       final aTrips = a.ids('Trips').single;
-      // the upgrade
+      await a.updateCache();
+      await b.updateCache();
       await rounds([a, b], [link], n: 4);
       for (final d in [a, b]) {
         expect(d.ids('Hikes'), ['a-1'], reason: '${d.label}: the lowest id for the name');
         expect(await d.entryIds('a-1'), {'ea1', 'eb1'}, reason: '${d.label}: entries intact');
-        expect(d.ids('Trips').single, ([aTrips, 'b-3']..sort()).first, reason: '${d.label}: one Trips with the lower id');
+        expect(d.ids('Trips').single, ([aTrips, 'b-3']..sort()).first, reason: d.label);
         expect(await d.entryIds(d.ids('Trips').single), {'eb2'});
         expect(d.nb.notebooks.length, 2, reason: 'no notebook was made twice');
+        expect(oldFiles(d.folder), isEmpty, reason: '${d.label}: no old folder left');
+        expect(d.folder.bytes.keys.where((k) => k.startsWith('photos/')), isEmpty);
+        expect(d.conn.conversionState, 'done', reason: d.label);
+        expect(d.folder.text.values.where((t) => t.contains('"deleted"')), isEmpty, reason: 'no tombstone from the removal');
       }
       expect(jsonDecode(a.folder.text['a-1/notebook.json']!)['name'], 'Hikes');
-      expect(jsonDecode(a.folder.text['b-2/notebook.json']!)['alias_of'], 'a-1', reason: 'the folder of the higher id is an alias, its entries stay');
-      // both said format 2 and then that they stopped format 1: the format 1 folders are gone, with no tombstone
-      for (final d in [a, b]) {
-        expect(d.conn.legacyState, 'cleaned', reason: d.label);
-        expect(mdFiles(d.folder), isEmpty, reason: '${d.label}: no format 1 folder left');
-        expect(d.folder.text.values.where((t) => t.contains('"deleted"')), isEmpty);
-      }
-      // what is there now is stable
       final before = [{...a.folder.text}, {...b.folder.text}];
       await rounds([a, b], [link], n: 2);
       expect(a.folder.text, before[0]);
       expect(b.folder.text, before[1]);
+    });
+
+    test('nothing is converted before the link gate is active, and notebook sync waits until the upgrade is written down', () async {
+      final a = await started('a', old: true, autoUpgrade: false);
+      await a.make('Hikes', id: 'a-1');
+      await a.add('a-1', 'ea1', 'Alpha');
+      await a.sync();
+      expect(oldFiles(a.folder).length, 1);
+      a.gateOn = false;
+      await a.updateCache();
+      a.autoUpgrade = false;
+      final before = {...a.folder.text};
+      await a.sync();
+      expect(a.folder.text, before, reason: 'the upgrade is not written down yet: nothing syncs');
+      expect(a.conn.status('share'), 'Paused.');
+      await a.upgrade();
+      await a.sync();
+      expect(noteFiles(a.folder, 'a-1').length, 1, reason: 'the id layout is written');
+      expect(oldFiles(a.folder).length, 1, reason: 'but the old folder stays while the gate is not active');
+      expect(a.conn.conversionState, 'converting');
+      a.gateOn = true;
+      await a.sync();
+      expect(oldFiles(a.folder), isEmpty);
+      expect(a.conn.conversionState, 'done');
+      expect(await a.entryIds('a-1'), {'ea1'});
+    });
+
+    test('a kill while the old folders are being removed: the next start finishes it, and nothing is lost', () async {
+      final a = await started('a', old: true);
+      await a.make('Hikes', id: 'a-1');
+      await a.add('a-1', 'ea1', 'Alpha');
+      await a.add('a-1', 'ea2', 'Beta');
+      await a.make('Trips', id: 'a-2');
+      await a.add('a-2', 'ea3', 'Gamma');
+      await a.sync();
+      expect(oldFiles(a.folder).length, 3);
+      await a.updateCache();
+      a.folder.failAfterDeletes = 1;
+      await a.sync();
+      expect(a.conn.conversionState, 'removing');
+      expect(oldFiles(a.folder).length, 2, reason: 'one was removed, then the kill');
+      expect(noteFiles(a.folder, 'a-1').length + noteFiles(a.folder, 'a-2').length, 3);
+      a.folder.failAfterDeletes = null;
+      a.restart();
+      await a.boot();
+      await a.sync();
+      expect(oldFiles(a.folder), isEmpty);
+      expect(a.conn.conversionState, 'done');
+      expect(await a.entryIds('a-1'), {'ea1', 'ea2'});
+      expect(await a.entryIds('a-2'), {'ea3'});
+    });
+
+    test('a note in an old folder that Cache has not read is placed in the id layout and read, not removed; a kill in between makes no copy', () async {
+      final a = await started('a', old: true);
+      await a.make('Hikes', id: 'a-1');
+      await a.add('a-1', 'ea1', 'Alpha');
+      await a.sync();
+      // a note that came from an older device and was not read before the update
+      a.folder.text['Hikes/2026-11-02 Late.md'] = '---\ncache_id: ex9\nnotebook: Hikes\ntitle: Late\ndate: 2026-11-02\ntime: 2026-11-02T09:00:00\n---\nCame late.\n';
+      await a.updateCache();
+      a.folder.failAfterDeletes = 0;
+      await a.sync();
+      expect(a.folder.text.keys.where((k) => k.startsWith('a-1/') && k.contains('Late')).length, 1);
+      a.folder.failAfterDeletes = null;
+      a.restart();
+      await a.boot();
+      await a.sync();
+      await a.sync();
+      expect(await a.entryIds('a-1'), {'ea1', 'ex9'}, reason: 'read once');
+      expect((await a.nb.entry('ex9'))!.body, 'Came late.');
+      expect(a.folder.text.keys.where((k) => k.startsWith('a-1/') && k.contains('Late')).length, 1, reason: 'one file, not two');
+      expect(oldFiles(a.folder), isEmpty);
+      expect(a.conn.conversionState, 'done');
+    });
+  });
+
+  group('a device that has not updated (the real v1.0.30 engine)', () {
+    test('gated off the link it receives nothing and loses nothing; when it updates the link resumes and they converge', () async {
+      final n = await started('new', old: true);
+      final d = await started('old', old: true);
+      await n.make('Hikes', id: 'n-1');
+      await n.add('n-1', 'en1', 'Alpha');
+      await d.make('Hikes', id: 'd-9');
+      await d.add('d-9', 'ed1', 'Beta');
+      final link = ShareLink(n.folder, d.folder);
+      await rounds([n, d], [link], n: 3);
+      expect(await d.entryIds('d-9'), {'en1', 'ed1'});
+      // the gate: a device on the old protocol gets nothing, in either direction
+      link.open = () => n.old == d.old;
+      await n.updateCache();
+      final heldByD = {...d.folder.text};
+      await rounds([n, d], [link], n: 3);
+      expect(oldFiles(n.folder), isEmpty, reason: 'the new device converted');
+      expect(noteFiles(n.folder, 'n-1').length, 2);
+      expect(d.folder.text, heldByD, reason: 'the old device was sent nothing (no delete, no new folder)');
+      expect(await d.entryIds('d-9'), {'en1', 'ed1'}, reason: 'and lost nothing');
+      expect(d.nb.notebooks.length, 1);
+      // the old device edits while gated: nothing reaches the new one
+      await d.nb.saveEntry(id: 'ed2', notebookId: 'd-9', occurredAt: '2026-11-02T09:00:00-07:00', title: 'While gated', body: 'x');
+      await rounds([n, d], [link], n: 2);
+      expect(await n.entryIds('n-1'), {'en1', 'ed1'});
+      // it updates: converts, and the link resumes
+      await d.updateCache();
+      await rounds([n, d], [link], n: 4);
+      for (final x in [n, d]) {
+        expect(x.ids('Hikes'), ['d-9'], reason: '${x.label}: the lowest id');
+        expect(await x.entryIds('d-9'), {'en1', 'ed1', 'ed2'}, reason: x.label);
+        expect(oldFiles(x.folder), isEmpty);
+        expect(x.nb.notebooks.length, 1);
+      }
+    });
+
+    test('a chain A-B, B-C, C-D with D not updated: D is left alone, then updates and the four converge', () async {
+      final a = await started('a', old: true);
+      final b = await started('b', old: true);
+      final c = await started('c', old: true);
+      final d = await started('d', old: true);
+      await a.make('Hikes', id: 'h-a');
+      await a.add('h-a', 'ea1', 'Alpha');
+      await b.make('Hikes', id: 'h-b');
+      await b.add('h-b', 'eb1', 'Beta');
+      await c.make('Hikes', id: 'h-c');
+      await c.add('h-c', 'ec1', 'Gamma');
+      await d.make('Hikes', id: 'h-d');
+      await d.add('h-d', 'ed1', 'Delta');
+      final ab = ShareLink(a.folder, b.folder);
+      final bc = ShareLink(b.folder, c.folder);
+      final cd = ShareLink(c.folder, d.folder);
+      cd.open = () => c.old == d.old;
+      await rounds([a, b, c, d], [ab, bc, cd], n: 6);
+      for (final x in [a, b, c, d]) {
+        expect(await x.entryIds(x.ids('Hikes').single), {'ea1', 'eb1', 'ec1', 'ed1'}, reason: '${x.label} before the update');
+      }
+      await a.updateCache();
+      await b.updateCache();
+      await c.updateCache();
+      final heldByD = {...d.folder.text};
+      await rounds([a, b, c, d], [ab, bc, cd], n: 6);
+      expect(d.folder.text, heldByD, reason: 'the old device on the end of the chain got nothing');
+      expect(await d.entryIds('h-d'), {'ea1', 'eb1', 'ec1', 'ed1'});
+      for (final x in [a, b, c]) {
+        expect(x.ids('Hikes'), ['h-a'], reason: x.label);
+        expect(await x.entryIds('h-a'), {'ea1', 'eb1', 'ec1', 'ed1'}, reason: x.label);
+        expect(oldFiles(x.folder), isEmpty);
+      }
+      await d.updateCache();
+      await rounds([a, b, c, d], [ab, bc, cd], n: 6);
+      for (final x in [a, b, c, d]) {
+        expect(x.ids('Hikes'), ['h-a'], reason: '${x.label}: one id on all four');
+        expect(await x.entryIds('h-a'), {'ea1', 'eb1', 'ec1', 'ed1'}, reason: x.label);
+        expect(x.nb.notebooks.length, 1);
+        expect(oldFiles(x.folder), isEmpty);
+      }
+    });
+  });
+
+  group('after the update', () {
+    test('two new notebooks made with one name stay two, with the sharing turned on after the update', () async {
+      final a = await started('a', autoUpgrade: false);
+      final b = await started('b', autoUpgrade: false);
+      await a.upgrade();
+      await b.upgrade();
+      a.on = false;
+      b.on = false;
+      await a.make('Shopping', id: 's-1');
+      await a.add('s-1', 'ea1', 'Milk');
+      await b.make('Shopping', id: 's-2');
+      await b.add('s-2', 'eb1', 'Bread');
+      a.on = true;
+      b.on = true;
+      final link = ShareLink(a.folder, b.folder);
+      await rounds([a, b], [link], n: 4);
+      for (final d in [a, b]) {
+        expect({for (final n in d.nb.notebooks) n.id}, {'s-1', 's-2'}, reason: '${d.label}: two notebooks, by id');
+        expect(await d.entryIds('s-1'), {'ea1'}, reason: d.label);
+        expect(await d.entryIds('s-2'), {'eb1'}, reason: d.label);
+      }
+      expect(a.nb.notebook('s-1')!.name, 'Shopping');
+      expect(a.nb.notebook('s-2')!.name, startsWith('Shopping ('));
+      expect(jsonDecode(a.folder.text['s-2/notebook.json']!)['name'], 'Shopping');
+      final before = [{...a.folder.text}, {...b.folder.text}];
+      await rounds([a, b], [link], n: 2);
+      expect(a.folder.text, before[0]);
+      expect(b.folder.text, before[1]);
+    });
+
+    test('the list of notebooks from before the update is not lost with a damaged file: restored from its copy, else empty', () async {
+      final a = await started('a', autoUpgrade: false);
+      await a.make('Hikes', id: 'a-1');
+      await a.upgrade();
+      final f = File('${a.stateDir.path}/upgrade-eligible.json');
+      expect(jsonDecode(f.readAsStringSync())['ids'], ['a-1']);
+      // a damaged file: the copy is used
+      f.writeAsStringSync('{broken');
+      a.restart();
+      await a.boot();
+      await a.upgrade();
+      expect(jsonDecode(f.readAsStringSync())['ids'], ['a-1'], reason: 'restored, and not written down again from the notebooks now');
+      // both damaged: nothing is eligible, and that is not undone by the next start
+      await a.make('Trips', id: 'a-2');
+      f.writeAsStringSync('{broken');
+      File('${f.path}.bak').writeAsStringSync('{broken');
+      a.restart();
+      await a.boot();
+      await a.upgrade();
+      expect(jsonDecode(f.readAsStringSync())['ids'], isEmpty);
+      expect(File('${f.path}.damaged').existsSync(), isTrue);
+      a.restart();
+      await a.boot();
+      await a.upgrade();
+      expect(jsonDecode(f.readAsStringSync())['ids'], isEmpty, reason: 'not captured again from the notebooks (a and a-2 stay apart from others by id)');
+    });
+
+    test('a rename made on both devices at once converges on one name; the folder never moves', () async {
+      final a = await started('a');
+      final b = await started('b');
+      await a.make('Hikes', id: 'a-1');
+      await a.add('a-1', 'ea1', 'Alpha');
+      final link = ShareLink(a.folder, b.folder);
+      await rounds([a, b], [link]);
+      expect(b.ids('Hikes'), ['a-1']);
+      final files = noteFiles(a.folder, 'a-1');
+      await a.nb.saveNotebook(id: 'a-1', def: a.nb.notebook('a-1')!.def.copyWith(name: 'Peaks'));
+      await b.nb.saveNotebook(id: 'a-1', def: b.nb.notebook('a-1')!.def.copyWith(name: 'Ridges'));
+      await rounds([a, b], [link], n: 4);
+      final names = {for (final d in [a, b]) d.nb.notebook('a-1')!.name};
+      expect(names.length, 1, reason: 'one name on both devices: $names');
+      expect({'Peaks', 'Ridges'}, contains(names.single));
+      for (final d in [a, b]) {
+        expect(d.nb.notebooks.length, 1);
+        expect(await d.entryIds('a-1'), {'ea1'});
+        expect(d.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
+        expect(noteFiles(d.folder, 'a-1'), files);
+      }
     });
 
     test('Trip: 2026 and Trip 2026 stay two notebooks, here and on the other device', () async {
@@ -102,7 +316,6 @@ void main() {
       await a.add('a-2', 'ea2', 'Space');
       final link = ShareLink(a.folder, b.folder);
       await rounds([a, b], [link]);
-      expect({for (final k in a.folder.text.keys.where((k) => k.endsWith('notebook.json'))) k.split('/').first}, {'a-1', 'a-2'});
       for (final d in [a, b]) {
         expect(d.ids('Trip: 2026'), ['a-1'], reason: d.label);
         expect(d.ids('Trip 2026'), ['a-2'], reason: d.label);
@@ -111,190 +324,143 @@ void main() {
       }
     });
 
-    test('renames made on both devices at once converge on one name', () async {
+    test('a record that comes after its notes loses nothing: the notes are read once it is there; a note before its photo is read again', () async {
       final a = await started('a');
       final b = await started('b');
       await a.make('Hikes', id: 'a-1');
       await a.add('a-1', 'ea1', 'Alpha');
+      await a.nb.saveEntry(id: 'ea2', notebookId: 'a-1', occurredAt: '2026-11-02T09:00:00-07:00', title: 'With a photo', body: 'p', photos: [const NbPhoto(id: 'p1')]);
+      final pf = await a.nb.photoFile('p1');
+      await pf.parent.create(recursive: true);
+      await pf.writeAsBytes(Uint8List.fromList([1, 2, 3]));
       final link = ShareLink(a.folder, b.folder);
-      await rounds([a, b], [link]);
-      expect(b.ids('Hikes'), ['a-1']);
-      await a.nb.saveNotebook(id: 'a-1', def: a.nb.notebook('a-1')!.def.copyWith(name: 'Peaks'));
-      await b.nb.saveNotebook(id: 'a-1', def: b.nb.notebook('a-1')!.def.copyWith(name: 'Ridges'));
+      // the record and the photo are late
+      link.block = (p) => p.endsWith('notebook.json') || p.contains('/photos/');
+      await rounds([a, b], [link], n: 3);
+      expect(b.nb.notebooks, isEmpty, reason: 'no notebook from notes alone');
+      link.block = (p) => p.contains('/photos/');
+      await rounds([a, b], [link], n: 3);
+      expect(await b.entryIds('a-1'), {'ea1', 'ea2'});
+      expect((await b.nb.entry('ea2'))!.photos, isEmpty, reason: 'the note is here, its photo is not yet');
+      link.block = null;
+      await rounds([a, b], [link], n: 3);
+      expect(await b.entryIds('a-1'), {'ea1', 'ea2'}, reason: 'no copy');
+      expect((await b.nb.entry('ea2'))!.photos.map((p) => p.id), ['p1'], reason: 'read again when the photo came');
+    });
+  });
+
+  group('private notebooks', () {
+    test('one that is not included writes nothing, is never matched by name, and is never filled by a note of another device', () async {
+      final a = await started('a');
+      final b = await started('b');
+      final meds = await a.make('Meds', id: 'm-1', private: true);
+      await a.add(meds.id, 'em1', 'Private', body: 'mine');
+      await b.make('Meds', id: 'm-2');
+      await b.add('m-2', 'em2', 'Other');
+      final link = ShareLink(a.folder, b.folder);
       await rounds([a, b], [link], n: 4);
-      final names = {for (final d in [a, b]) d.nb.notebook('a-1')!.name};
-      expect(names.length, 1, reason: 'one name on both devices: $names');
-      expect({'Peaks', 'Ridges'}, contains(names.single));
-      for (final d in [a, b]) {
-        expect(d.nb.notebooks.length, 1);
-        expect(await d.entryIds('a-1'), {'ea1'});
-        expect(d.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
-      }
-      expect(jsonDecode(a.folder.text['a-1/notebook.json']!)['name'], names.single);
-      // a rename moves nothing: the entry is where it was
-      expect(noteFiles(a.folder, 'a-1').length, 1);
+      expect(a.ids('Meds'), ['m-1']);
+      expect(await a.entryIds('m-1'), {'em1'});
+      expect(a.folder.text.keys.where((k) => k.startsWith('m-1/')), isEmpty);
+      expect(b.ids('Meds'), ['m-2']);
+      expect(await b.entryIds('m-2'), {'em2'});
     });
 
-    test('a rename edits the record only: the folder and the entries stay, nothing is deleted on the other device', () async {
+    test('a note that carries the id of an entry of a private notebook is never applied, moved or given another flag', () async {
+      final a = await started('a');
+      await a.make('Hikes', id: 'a-1');
+      await a.add('a-1', 'ea1', 'Alpha');
+      final meds = await a.make('Meds', id: 'm-1', private: true);
+      await a.add(meds.id, 'em1', 'Private', body: 'mine');
+      await a.sync();
+      a.folder.text['a-1/forged.cnote'] = '---\ncache_id: em1\ntitle: Private\ndate: 2026-11-01\ntime: 2026-11-01T09:00:00\n---\nchanged from outside\n';
+      await a.sync();
+      await a.sync();
+      final e = (await a.nb.entry('em1'))!;
+      expect((e.notebookId, e.body, e.private), ('m-1', 'mine', true));
+      expect(await a.entryIds('a-1'), {'ea1'});
+      // included, it is part of the share like any notebook
+      await a.conn.setIncluded('m-1', true);
+      await a.sync();
+      expect(a.folder.text.keys.where((k) => k.startsWith('m-1/')), isNotEmpty);
+    });
+  });
+
+  group('deleting a notebook (the tombstone, through the connections that main.dart wires)', () {
+    Future<(Dev, Dev, ShareLink)> pair() async {
       final a = await started('a');
       final b = await started('b');
       await a.make('Hikes', id: 'a-1');
+      await a.make('Other', id: 'a-2');
       await a.add('a-1', 'ea1', 'Alpha');
       final link = ShareLink(a.folder, b.folder);
       await rounds([a, b], [link]);
-      final files = noteFiles(a.folder, 'a-1');
-      await a.nb.saveNotebook(id: 'a-1', def: a.nb.notebook('a-1')!.def.copyWith(name: 'Trips'));
-      await rounds([a, b], [link]);
-      expect(b.nb.notebook('a-1')!.name, 'Trips');
       expect(await b.entryIds('a-1'), {'ea1'});
-      expect(noteFiles(a.folder, 'a-1'), files);
-      expect(noteFiles(b.folder, 'a-1'), files);
-    });
-  });
+      return (a, b, link);
+    }
 
-  group('one device upgraded, one not', () {
-    test('no deletes either side; the old device gets the new one\'s edits through format 1; format 1 stays', () async {
-      final n = await started('new');
-      final o = await started('old');
-      await n.make('Hikes', id: 'n-1');
-      await n.add('n-1', 'en1', 'Alpha', body: 'first');
-      await o.make('Hikes', id: 'o-9');
-      await o.add('o-9', 'eo1', 'Beta');
-      final link = ShareLink(n.folder, o.folder);
-      // before the upgrade both are old
-      for (var i = 0; i < 2; i++) {
-        await n.oldSync();
-        await o.oldSync();
-        link.sync();
-      }
-      await n.oldSync();
-      await o.oldSync();
-      expect(await o.entryIds('o-9'), {'en1', 'eo1'});
-      // the new device upgrades (the other says nothing about itself: it is an older version)
-      Future<void> go(int count) => rounds([n], [link], n: count, others: [() => o.oldSync()], old: {'old'});
-      await go(3);
-      expect(n.conn.legacyState, 'on', reason: 'a device that has not said format 2');
-      expect(n.advertised, {'notebook_format': 2, 'notebook_legacy': true});
-      expect(await n.entryIds('n-1'), {'en1', 'eo1'});
-      expect(await o.entryIds('o-9'), {'en1', 'eo1'});
-      expect(n.nb.notebooks.length, 1);
-      expect(o.nb.notebooks.length, 1, reason: 'the old device made no second notebook from the format 2 folders');
-      expect(noteFiles(n.folder, 'n-1').length, 2, reason: 'format 2 has both entries');
-      expect(mdFiles(n.folder).length, 2, reason: 'format 1 is kept current: both entries are in the name folder');
-      // an edit on the new device reaches the old one through the name folder
-      await n.nb.saveEntry(id: 'en1', notebookId: 'n-1', occurredAt: '2026-11-01T09:00:00-07:00', title: 'Alpha', body: 'edited on the new device');
-      await go(3);
-      expect((await o.nb.entry('en1'))!.body, 'edited on the new device');
-      // a new entry on the old device reaches the new one
-      await o.nb.saveEntry(id: 'eo2', notebookId: 'o-9', occurredAt: '2026-11-02T09:00:00-07:00', title: 'Delta', body: 'from the old device');
-      await go(3);
-      expect((await n.nb.entry('eo2'))!.body, 'from the old device');
-      expect(noteFiles(n.folder, 'n-1').length, 3);
-      // a delete on the old device is a delete; a delete on the new one too
-      await o.nb.deleteEntry('eo1');
-      await go(3);
-      expect(await n.entryIds('n-1'), {'en1', 'eo2'});
-      expect(noteFiles(n.folder, 'n-1').length, 2);
-      await n.nb.deleteEntry('en1');
-      await go(3);
-      expect(await o.entryIds('o-9'), {'eo2'});
-      // nothing else was lost, and format 1 is still kept
-      expect(await n.entryIds('n-1'), {'eo2'});
-      expect(n.conn.legacyState, 'on');
-      expect(mdFiles(n.folder).length, 1);
-    });
-
-    test('a device that links after the format 1 folders were removed brings them back, without deleting anything', () async {
-      final a = await started('a');
-      final b = await started('b');
-      await a.make('Hikes', id: 'a-1');
-      await a.add('a-1', 'ea1', 'Alpha');
-      await b.make('Hikes', id: 'a-1');
-      final ab = ShareLink(a.folder, b.folder);
-      await rounds([a, b], [ab], n: 4);
-      expect(a.conn.legacyState, 'cleaned');
-      expect(mdFiles(a.folder), isEmpty);
-      // an old device links to a
-      final o = await started('old');
-      final ao = ShareLink(a.folder, o.folder);
-      for (var i = 0; i < 3; i++) {
-        exchange([a, b]);
-        a.peers = {'b': b.advertised, 'old': null};
-        await a.sync();
-        await o.oldSync();
-        ao.sync();
-        ab.sync();
-      }
-      expect(a.conn.legacyState, 'on');
-      expect(await a.entryIds('a-1'), {'ea1'}, reason: 'nothing was deleted by the folders coming back');
-      expect(mdFiles(a.folder).length, 1);
-      expect(await o.entryIds(o.ids('Hikes').single), {'ea1'});
-    });
-  });
-
-  group('after both devices are on format 2', () {
-    test('two notebooks made with one name stay two, here and on the other device, each with its own entries', () async {
-      final a = await started('a');
-      final b = await started('b');
-      final link = ShareLink(a.folder, b.folder);
-      // both devices are on format 2 and have synced once
+    test('the deleting device leaves a tombstone and takes the notebook\'s files out; the other device deletes it too', () async {
+      final (a, b, link) = await pair();
+      await a.nb.deleteNotebook('a-1');
+      await rounds([a, b], [link]);
+      final t = jsonDecode(a.folder.text['a-1/notebook.json']!) as Map;
+      expect((t['format'], t['id'], t['deleted']), (2, 'a-1', true));
+      expect(a.folder.text.keys.where((k) => k.startsWith('a-1/') && k != 'a-1/notebook.json'), isEmpty, reason: 'no .cnote left');
+      expect(b.folder.text.keys.where((k) => k.startsWith('a-1/') && k != 'a-1/notebook.json'), isEmpty);
+      expect(b.ids('Hikes'), isEmpty, reason: 'deleted on the other device through the normal delete');
+      expect(await b.nb.entry('ea1'), isNull);
+      expect(b.ids('Other'), ['a-2']);
+      // the tombstone is not undone by the next sync, and goes after 30 days
       await rounds([a, b], [link], n: 2);
-      await a.make('Shopping', id: 's-1');
-      await a.add('s-1', 'ea1', 'Milk');
-      await b.make('Shopping', id: 's-2');
-      await b.add('s-2', 'eb1', 'Bread');
+      expect(b.ids('Hikes'), isEmpty);
+      expect(a.ids('Hikes'), isEmpty);
+    });
+
+    test('a notebook changed here since the last sync is kept, and its folder is written again over the tombstone', () async {
+      final (a, b, link) = await pair();
+      await b.nb.saveEntry(id: 'eb1', notebookId: 'a-1', occurredAt: '2026-11-02T09:00:00-07:00', title: 'Made here', body: 'new');
+      await a.nb.deleteNotebook('a-1');
+      await a.sync();
+      link.sync();
+      await b.sync();
+      expect(b.ids('Hikes'), ['a-1'], reason: 'changed here: kept');
+      expect(await b.entryIds('a-1'), {'ea1', 'eb1'});
       await rounds([a, b], [link], n: 4);
       for (final d in [a, b]) {
-        expect({for (final n in d.nb.notebooks) n.id}, {'s-1', 's-2'}, reason: '${d.label}: two notebooks, by id');
-        expect(await d.entryIds('s-1'), {'ea1'}, reason: d.label);
-        expect(await d.entryIds('s-2'), {'eb1'}, reason: d.label);
+        expect(d.ids('Hikes'), ['a-1'], reason: '${d.label}: it is back where the delete was');
+        expect(await d.entryIds('a-1'), {'ea1', 'eb1'}, reason: d.label);
       }
-      expect(a.nb.notebook('s-1')!.name, 'Shopping');
-      expect(b.nb.notebook('s-2')!.name, 'Shopping');
-      expect(a.nb.notebook('s-2')!.name, startsWith('Shopping ('), reason: 'the other one is kept apart by its id');
-      expect(jsonDecode(a.folder.text['s-2/notebook.json']!)['name'], 'Shopping', reason: 'the record keeps its name');
-      // stable
-      final before = [{...a.folder.text}, {...b.folder.text}];
-      await rounds([a, b], [link], n: 2);
-      expect(a.folder.text, before[0]);
-      expect(b.folder.text, before[1]);
-      expect(a.nb.notebooks.length, 2);
-      expect(b.nb.notebooks.length, 2);
+      expect(jsonDecode(a.folder.text['a-1/notebook.json']!)['deleted'], isNull);
     });
-  });
 
-  group('a notebook an old device makes', () {
-    test('two upgraded devices that get it from the old one end with one notebook id and no duplicates', () async {
-      final o = await started('old');
-      final n1 = await started('n1');
-      final n2 = await started('n2');
-      await o.make('Camps', id: 'o-5');
-      await o.add('o-5', 'eo1', 'Ridge camp');
-      final on1 = ShareLink(o.folder, n1.folder);
-      final n12 = ShareLink(n1.folder, n2.folder);
-      Future<void> go(int n) async {
-        for (var i = 0; i < n; i++) {
-          exchange([n1, n2], old: {'old'});
-          n1.peers = {'n2': n2.advertised, 'old': null};
-          await n1.sync();
-          n2.peers = {'n1': n1.advertised};
-          await n2.sync();
-          await o.oldSync();
-          on1.sync();
-          n12.sync();
-        }
-      }
+    test('a private notebook that is not included is untouched by a tombstone of the same id', () async {
+      final (a, b, link) = await pair();
+      await b.conn.setIncluded('a-1', false);
+      await b.nb.saveNotebook(id: 'a-1', def: b.nb.notebook('a-1')!.def, private: true);
+      await a.nb.deleteNotebook('a-1');
+      await rounds([a, b], [link], n: 3);
+      expect(b.ids('Hikes'), ['a-1']);
+      expect(await b.entryIds('a-1'), {'ea1'});
+    });
 
-      await go(5);
-      expect(n1.ids('Camps').length, 1);
-      expect(n2.ids('Camps').length, 1);
-      expect(n1.ids('Camps'), n2.ids('Camps'), reason: 'the same id on both upgraded devices');
-      expect(await n1.entryIds(n1.ids('Camps').single), {'eo1'});
-      expect(await n2.entryIds(n2.ids('Camps').single), {'eo1'});
-      expect(o.nb.notebooks.length, 1, reason: 'the old device made no second notebook');
-      expect(await o.entryIds('o-5'), {'eo1'});
-      expect(n1.nb.notebooks.length, 1);
-      expect(n2.nb.notebooks.length, 1);
+    test('the tombstone goes after 30 days, and a notebook consumed by then does not come back', () async {
+      var now = DateTime(2026, 11, 10, 9);
+      final a = Dev('a', clock: () => now);
+      final b = Dev('b', clock: () => now);
+      await a.boot();
+      await b.boot();
+      await a.make('Hikes', id: 'a-1');
+      await a.make('Other', id: 'a-2');
+      final link = ShareLink(a.folder, b.folder);
+      await rounds([a, b], [link]);
+      await a.nb.deleteNotebook('a-1');
+      await rounds([a, b], [link]);
+      expect(b.ids('Hikes'), isEmpty);
+      now = now.add(const Duration(days: 31));
+      await rounds([a, b], [link]);
+      expect(a.folder.text.containsKey('a-1/notebook.json'), isFalse);
+      expect(a.ids('Hikes'), isEmpty);
+      expect(b.ids('Hikes'), isEmpty);
     });
   });
 
@@ -310,138 +476,44 @@ void main() {
       expect(a.conn.sharingNote, kUpdateNeededNote);
       expect(a.conn.status('share'), kUpdateNeededNote);
       expect(a.folder.text, before, reason: 'nothing was written or removed');
-      expect(await a.entryIds('a-1'), {'ea1'});
-      // once it is not there, notebooks sync again
       a.folder.text.remove('zzz/notebook.json');
       await a.sync();
       expect(a.conn.formatBlocked, isFalse);
       expect(a.conn.sharingNote, isNull);
-      expect(a.folder.text.containsKey('a-1/notebook.json'), isTrue);
     });
   });
 
-  group('private notebooks and a lone device', () {
-    test('a private notebook that is not included writes nothing, is never matched by name and is never touched', () async {
-      final a = await started('a');
-      final b = await started('b');
-      final meds = await a.make('Meds', id: 'm-1', private: true);
-      await a.add(meds.id, 'em1', 'Private');
-      await b.make('Meds', id: 'm-2');
-      await b.add('m-2', 'em2', 'Other');
-      final link = ShareLink(a.folder, b.folder);
-      await rounds([a, b], [link], n: 4);
-      expect(a.ids('Meds'), ['m-1']);
-      expect(await a.entryIds('m-1'), {'em1'});
-      expect(a.folder.text.keys.where((k) => k.startsWith('m-1/')), isEmpty);
-      expect(b.ids('Meds'), ['m-2']);
-      expect(await b.entryIds('m-2'), {'em2'});
-      // included, it joins the share like any other
-      a.on = false;
-      await a.conn.setIncluded('m-1', true);
-      a.on = true;
-      await rounds([a, b], [link], n: 4);
-      expect(a.ids('Meds'), ['m-1'], reason: 'the lower id');
-      expect(b.ids('Meds'), ['m-1']);
-      expect(await b.entryIds('m-1'), {'em1', 'em2'});
-    });
-
-    test('a single device with no peer: format 1 folders become the layout and nothing else changes, then it is stable', () async {
-      final a = await started('a');
-      await a.make('Hikes', id: 'a-1');
-      await a.add('a-1', 'ea1', 'Alpha');
-      await a.make('Trips', id: 'a-2');
-      await a.add('a-2', 'ea2', 'Beta');
-      await a.oldSync();
-      expect(mdFiles(a.folder).length, 2);
-      a.peers = {};
-      await a.sync();
-      expect(a.conn.legacyState, 'cleaned');
-      expect(mdFiles(a.folder), isEmpty);
-      expect(noteFiles(a.folder, 'a-1').length, 1);
-      expect(noteFiles(a.folder, 'a-2').length, 1);
-      expect(await a.entryIds('a-1'), {'ea1'});
-      expect(await a.entryIds('a-2'), {'ea2'});
-      expect(a.nb.notebooks.length, 2);
-      final before = {...a.folder.text};
-      await a.sync();
-      await a.sync();
-      expect(a.folder.text, before);
-    });
-
-    test('while it is not known who is linked (sharing not running), format 1 stays', () async {
-      final a = await started('a');
-      await a.make('Hikes', id: 'a-1');
-      await a.add('a-1', 'ea1', 'Alpha');
-      await a.oldSync();
-      a.peers = null;
-      await a.sync();
-      await a.sync();
-      expect(a.conn.legacyState, 'on');
-      expect(mdFiles(a.folder).length, 1);
-    });
-  });
-
-  group('deleting a notebook', () {
-    test('leaves a tombstone, the other device is told through the hook and keeps its entries, and the tombstone goes after 30 days', () async {
-      var now = DateTime(2026, 11, 10, 9);
-      final a = await started('a', clock: () => now);
-      final b = await started('b', clock: () => now);
-      await a.make('Hikes', id: 'a-1');
-      await a.make('Other', id: 'a-2');
-      await a.add('a-1', 'ea1', 'Alpha');
-      final link = ShareLink(a.folder, b.folder);
-      await rounds([a, b], [link]);
-      expect(await b.entryIds('a-1'), {'ea1'});
-      await a.nb.deleteNotebook('a-1');
-      await rounds([a, b], [link]);
-      final t = jsonDecode(a.folder.text['a-1/notebook.json']!) as Map;
-      expect((t['format'], t['id'], t['deleted'], t['at']), (2, 'a-1', true, now.millisecondsSinceEpoch));
-      expect(b.tombstones, isNotEmpty);
-      expect(b.tombstones.first, 'a-1@${now.millisecondsSinceEpoch}');
-      expect(b.ids('Hikes'), ['a-1'], reason: 'what a tombstone does here is for the hook, not for a missing file');
-      expect(await b.entryIds('a-1'), {'ea1'});
-      // whoever consumes the tombstone (the delete rule) removes the notebook here; the tombstone itself goes after 30 days
-      await b.nb.deleteNotebook('a-1');
-      now = now.add(const Duration(days: 31));
-      await rounds([a, b], [link]);
-      expect(a.folder.text.containsKey('a-1/notebook.json'), isFalse);
-      expect(b.folder.text.containsKey('a-1/notebook.json'), isFalse);
-      expect(a.ids('Hikes'), isEmpty);
-      expect(b.ids('Hikes'), isEmpty);
-    });
-  });
-
-  group('a notebook id change in the migration is journaled and resumable', () {
-    // a-1 and b-2 are the same notebook ("Hikes", private and included on both); b has to take a-1.
-    Future<(Dev, Dev, ShareLink)> pair() async {
+  group('notebook id changes are queued and journaled', () {
+    // Hikes and Trips are the same notebooks on both devices (higher ids on b): b has to take a's ids.
+    Future<(Dev, Dev, ShareLink)> pair({bool private = false}) async {
       final a = await started('a');
       final b = await started('b');
       a.on = false;
       b.on = false;
-      await a.make('Hikes', id: 'a-1', private: true);
-      await a.conn.setIncluded('a-1', true);
+      await a.make('Hikes', id: 'a-1', private: private);
+      await a.make('Trips', id: 'a-3');
+      await b.make('Hikes', id: 'b-2', private: private);
+      await b.make('Trips', id: 'b-4');
+      if (private) {
+        await a.conn.setIncluded('a-1', true);
+        await b.conn.setIncluded('b-2', true);
+      }
       await a.add('a-1', 'ea1', 'Alpha');
-      await b.make('Hikes', id: 'b-2', private: true);
-      await b.conn.setIncluded('b-2', true);
       await b.add('b-2', 'eb1', 'Beta');
-      final link = ShareLink(a.folder, b.folder);
-      // b's field names, as its share state keeps them
-      File('${b.stateDir.path}/share2.json').writeAsStringSync(jsonEncode({'props': {'b-2': {'f1': 'distance'}}}));
-      File('${b.stateDir.path}/share.json').writeAsStringSync(jsonEncode({'props': {'b-2': {'f1': 'distance'}}}));
+      await b.add('b-4', 'eb2', 'Gamma');
       a.on = true;
       b.on = true;
-      // a's record first, so that b sees it in its first pass
-      exchange([a, b]);
+      File('${b.stateDir.path}/share2.json').writeAsStringSync(jsonEncode({'props': {'b-2': {'f1': 'distance'}}}));
+      final link = ShareLink(a.folder, b.folder);
       await a.sync();
       link.sync();
       return (a, b, link);
     }
 
     for (final kill in ['core', 'private sharing', 'field names']) {
-      test('killed in the $kill step: the next start replays the journal before any sync, and everything is intact', () async {
-        final (a, b, link) = await pair();
+      test('killed in the $kill step: the next start replays the queue before any sync, and everything is intact', () async {
+        final (a, b, link) = await pair(private: true);
         var failed = false;
-        // the kill: the step that fails once, at the point of the test
         switch (kill) {
           case 'core':
             b.store.failOpNext = 'notebook_reid';
@@ -457,74 +529,81 @@ void main() {
               await real(o, n);
             };
         }
-        exchange([a, b]);
         await b.sync();
         expect(b.reidFile.existsSync(), isTrue, reason: 'the journal stays until every step saved');
-        expect(jsonDecode(b.reidFile.readAsStringSync()), containsPair('new', 'a-1'));
-        // a start again on the same files, wired and replayed as main.dart does it, before any notebook sync
+        expect(b.nb.replayError, isNotNull);
+        expect(b.conn.sharingNote, contains('paused'));
         b.restart();
         await b.boot();
         expect(b.reidFile.existsSync(), isFalse);
         expect(b.ids('Hikes'), ['a-1']);
         expect(b.conn.included('a-1'), isTrue, reason: 'the private notebook is still included in the share');
         expect(b.conn.included('b-2'), isFalse);
-        for (final f in ['share.json', 'share2.json']) {
-          final props = (jsonDecode(File('${b.stateDir.path}/$f').readAsStringSync()) as Map)['props'] as Map;
-          expect(props.keys, ['a-1'], reason: f);
-          expect(props['a-1'], {'f1': 'distance'});
-        }
+        final props = (jsonDecode(File('${b.stateDir.path}/share2.json').readAsStringSync()) as Map)['props'] as Map;
+        expect(props['a-1'], {'f1': 'distance'});
+        expect(props.containsKey('b-2'), isFalse);
         await rounds([a, b], [link], n: 4);
         for (final d in [a, b]) {
           expect(d.ids('Hikes'), ['a-1'], reason: d.label);
           expect(await d.entryIds('a-1'), {'ea1', 'eb1'}, reason: d.label);
         }
-        expect(noteFiles(a.folder, 'a-1').length + noteFiles(a.folder, 'b-2').length, 2, reason: 'one file per entry, wherever it is');
       });
     }
 
-    test('a replay that keeps failing does not stop the start: it is logged, the journal stays, sync waits and says so, and it is tried again', () async {
-      final (a, b, _) = await pair();
-      var broken = true;
-      b.nb.reidSteps['probe'] = (o, n) async {
-        if (broken) throw StateError('still failing');
-      };
-      exchange([a, b]);
+    test('a failure in the middle of a sync pauses notebook sync; the next sync finishes it and the next change, both complete', () async {
+      final (a, b, link) = await pair();
+      b.store.failOpNext = 'notebook_reid';
       await b.sync();
+      expect(b.nb.replayError, isNotNull, reason: 'a change that failed mid-session pauses notebook sync, visibly');
+      expect(b.conn.status('share'), 'Paused.');
+      expect(b.conn.sharingNote, isNotNull);
       expect(b.reidFile.existsSync(), isTrue);
-      b.restart();
-      b.nb.reidSteps['probe'] = (o, n) async {
-        if (broken) throw StateError('still failing');
-      };
-      await b.boot();
-      expect(b.nb.replayError, isNotNull);
-      expect(b.nb.notebooks.isNotEmpty, isTrue, reason: 'the start went on');
-      expect(b.conn.sharingNote, contains('paused'));
-      final before = {...b.folder.text};
-      await b.sync();
-      expect(b.folder.text, before, reason: 'notebook sync waits');
-      expect(b.reidFile.existsSync(), isTrue);
-      broken = false;
+      // the next sync replays what failed and goes on to the next change
       await b.sync();
       expect(b.nb.replayError, isNull);
-      expect(b.reidFile.existsSync(), isFalse);
       expect(b.conn.sharingNote, isNull);
-      expect(b.ids('Hikes'), ['a-1']);
+      expect(b.reidFile.existsSync(), isFalse);
+      await rounds([a, b], [link], n: 4);
+      for (final d in [a, b]) {
+        expect(d.ids('Hikes'), ['a-1'], reason: d.label);
+        expect(d.ids('Trips'), ['a-3'], reason: d.label);
+        expect(await d.entryIds('a-1'), {'ea1', 'eb1'});
+        expect(await d.entryIds('a-3'), {'eb2'});
+      }
     });
 
-    test('a corrupt connection file never loses the journal: the replay waits for it', () async {
+    test('changes queued behind one that failed are all finished by one replay, in order', () async {
+      final r = await started('r');
+      await r.make('One', id: 'o-1');
+      await r.make('Two', id: 't-1');
+      r.store.failOpNext = 'notebook_reid';
+      await expectLater(r.nb.reidNotebook('o-1', 'o-0'), throwsA(anything));
+      expect(r.nb.replayError, isNotNull);
+      r.store.failOpNext = 'notebook_reid';
+      await expectLater(r.nb.reidNotebook('t-1', 't-0'), throwsA(anything), reason: 'the queue does not skip ahead');
+      expect(jsonDecode(r.reidFile.readAsStringSync())['items'], hasLength(2));
+      r.nb.reidSteps.clear();
+      await r.nb.replayReid();
+      expect(r.nb.replayError, isNull);
+      expect(r.reidFile.existsSync(), isFalse);
+      expect({for (final n in r.nb.notebooks) n.id}, {'o-0', 't-0'});
+    });
+
+    test('a journal that cannot be read is kept, and notebook sync waits', () async {
       final (a, b, _) = await pair();
-      b.nb.reidSteps['probe'] = (o, n) async => throw StateError('killed');
-      exchange([a, b]);
+      b.store.failOpNext = 'notebook_reid';
       await b.sync();
-      expect(b.reidFile.existsSync(), isTrue);
-      File('${b.stateDir.path}/targets.json').writeAsStringSync('{not json');
+      final good = b.reidFile.readAsStringSync();
+      b.reidFile.writeAsStringSync('{broken');
       b.restart();
       await b.boot();
-      expect(b.reidFile.existsSync(), isTrue, reason: 'the journal was not dropped');
       expect(b.nb.replayError, isNotNull);
-      expect(b.conn.sharingNote, contains('settings could not be read'));
+      expect(b.reidFile.readAsStringSync(), '{broken', reason: 'not dropped');
+      expect(b.conn.sharingNote, contains('paused'));
+      b.reidFile.writeAsStringSync(good);
       await b.sync();
-      expect(b.reidFile.existsSync(), isTrue);
+      expect(b.nb.replayError, isNull);
+      expect(a.nb.notebooks.length, 2);
     });
   });
 }

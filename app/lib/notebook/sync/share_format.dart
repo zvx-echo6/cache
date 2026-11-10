@@ -180,16 +180,3 @@ bool _isLegacyPath(String path) {
   if (top == 'photos') return path.endsWith('.jpg');
   return path.endsWith('.md');
 }
-
-/// The lowest id of a live record by exact notebook name (what a version 1 folder's notebook is called), for a device that makes
-/// a notebook from a version 1 folder while another already gave it an id.
-Future<Map<String, String>> idsByName(SyncFolder folder) async {
-  final out = <String, String>{};
-  for (final d in (await readShareDirs(folder)).values) {
-    final r = d.merged;
-    if (r == null || r.kind != RecordKind.live || r.id != d.dir) continue;
-    final have = out[r.name];
-    if (have == null || r.id.compareTo(have) < 0) out[r.name] = r.id;
-  }
-  return out;
-}

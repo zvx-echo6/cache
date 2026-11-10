@@ -6,7 +6,7 @@ release notes).
 
 ## Unreleased
 
-- Notebooks: notebook sync keeps each notebook in its own folder under one id, so a notebook has the same id on every linked device, and a rename on one device is a rename on the others; older devices keep working beside it until every linked device is updated
+- Notebooks: notebook sync keeps each notebook in its own folder under one id, so a notebook has the same id on every linked device and a rename on one device is a rename on the others; on update the share is converted once (the old folders go), and a device that has not updated Cache does not sync notebooks until it does
 - Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
 
 ## 1.1.0 (build 47, test) - 2026-11-09

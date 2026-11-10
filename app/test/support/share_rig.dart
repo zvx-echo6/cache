@@ -5,8 +5,8 @@ import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart';
-import 'package:cache/notebook/sync/sync_engine.dart';
 
+import '../fixtures/v1030/sync_engine_v1030.dart' as v1030;
 import 'notebook_fake.dart';
 
 /// A folder in memory.
@@ -14,6 +14,9 @@ class MemFolder implements SyncFolder {
   final Map<String, String> text = {};
   final Map<String, Uint8List> bytes = {};
   bool up = true;
+
+  /// A kill during removals: after this many deletes the next one throws (null: never).
+  int? failAfterDeletes;
 
   @override
   String get display => 'Share';
@@ -41,6 +44,10 @@ class MemFolder implements SyncFolder {
 
   @override
   Future<void> delete(String path) async {
+    if (failAfterDeletes != null) {
+      if (failAfterDeletes! <= 0) throw StateError('killed');
+      failAfterDeletes = failAfterDeletes! - 1;
+    }
     text.remove(path);
     bytes.remove(path);
   }
@@ -63,9 +70,13 @@ class ShareLink {
   /// Paths the share does not carry yet (a slow transfer): left as they are on both sides.
   bool Function(String path)? block;
 
+  /// The link-level gate: while it is false the link carries nothing, in either direction (a device on an older sync protocol).
+  bool Function()? open;
+
   bool _hidden(String p) => p.split('/').any((s) => s.startsWith('.'));
 
   void sync() {
+    if (!(open?.call() ?? true)) return;
     final next = <String, String>{};
     final paths = {...a.text.keys, ...b.text.keys, ...last.keys}.where((p) => !_hidden(p));
     for (final p in paths.toList()..sort()) {
@@ -110,34 +121,53 @@ class ShareLink {
   }
 }
 
-/// A device that has format 2: its notebooks, its folder of the share, and the connections that run notebook sync.
+/// A device: its notebooks, its folder of the share, and either the sync of Cache v1.0.30 (the real engine, from the tag: it has not
+/// updated) or the connections that run notebook sync now. [updateCache] is the update: the same notebooks and folder, the app
+/// started again as the new version.
 class Dev {
-  Dev(this.label, {this.clock}) {
+  Dev(this.label, {this.old = false, this.autoUpgrade = true, this.clock}) {
     _wire();
   }
 
+  final String label;
   final DateTime Function()? clock;
 
-  /// A new start of the app on the same notebooks, share folder and files (a kill and a start): new state objects, nothing in memory.
+  /// Still on v1.0.30.
+  bool old;
+
+  /// The notebooks that exist at the first sync stand for the ones from before the update (a test that wants the update to come
+  /// before any notebook is made calls [upgrade] itself and sets this to false).
+  bool autoUpgrade;
+
   void restart() => _wire();
 
+  /// The update: the app starts again, as the new version, on the same notebooks, share folder and files.
+  Future<void> updateCache() async {
+    old = false;
+    _wire();
+    await boot();
+  }
+
   void _wire() {
-    nb = fakeNotebook(store);
+    // Each device keeps its photos in a folder of its own.
+    nb = NotebookState(backend: store, mediaDir: () async => Directory('${stateDir.path}/media'));
     nb.reidJournal = reidFile;
     conn = NotebookConnections(
-      clock: clock,
       notebook: nb,
+      clock: clock,
       dir: () async => stateDir,
       shareFolder: () => Directory('${stateDir.path}/share'),
       shareOn: () => on,
       folderFor: (_) => folder,
-      peerCaps: () => peers,
-      setCaps: (c) async => advertised = c,
-      onTombstone: (id, at) async => tombstones.add('$id@$at'),
+      gateActive: () => gateOn,
+      storePhoto: (id, bytes) async {
+        final f = await nb.photoFile(id);
+        await f.parent.create(recursive: true);
+        await f.writeAsBytes(bytes);
+      },
     );
   }
 
-  final String label;
   final FakeNotebookBackend store = FakeNotebookBackend(journal: false);
   late NotebookState nb;
   late NotebookConnections conn;
@@ -145,19 +175,15 @@ class Dev {
   final Directory stateDir = Directory.systemTemp.createTempSync('cache-dev-');
   late final File reidFile = File('${stateDir.path}/reid-journal.json');
 
-  /// What this device sees of the linked devices' caps (null: it knows of none yet; a device with no caps: an older version).
-  Map<String, Map<String, dynamic>?>? peers;
-
   /// Whether notebook sync of the share runs (a test switches it off while it sets things up, so no sync starts by itself).
   bool on = true;
 
-  /// What this device last told the others about itself.
-  Map<String, dynamic>? advertised;
+  /// The link-level version gate (a stub: all peers gated or compatible as the test needs).
+  bool gateOn = true;
+  bool _upgraded = false;
 
-  final List<String> tombstones = [];
-
-  /// Starts the way main.dart does: what keeps notebook ids is wired first, then the journal is replayed (a failure does not stop
-  /// the start), then the notebooks are read.
+  /// Starts the way main.dart does: what keeps notebook ids is wired first, then the journal is replayed (a failure does not stop the
+  /// start), then the notebooks are read.
   Future<void> boot() async {
     nb.privateSharing = conn;
     nb.reidSteps['field names'] = conn.moveFieldMaps;
@@ -165,6 +191,12 @@ class Dev {
       await nb.replayReid();
     } catch (_) {}
     await nb.start();
+  }
+
+  /// The first start of this version: the notebooks here now are the ones from before.
+  Future<void> upgrade() async {
+    await conn.captureUpgrade();
+    _upgraded = true;
   }
 
   Future<Notebook> make(String name, {String? id, bool private = false}) =>
@@ -177,7 +209,14 @@ class Dev {
 
   Future<Set<String>> entryIds(String notebookId) async => {for (final e in await nb.entries(notebookId)) e.id};
 
+  /// One sync: the engine of v1.0.30 for a device that has not updated; the connections for one that has.
   Future<void> sync() async {
+    if (old) {
+      final e = v1030.NotebookSync(notebook: nb, kind: v1030.SyncKind.share, folder: folder, stateFile: File('${stateDir.path}/share.json'), includePrivate: false);
+      await e.run();
+      return;
+    }
+    if (autoUpgrade && !_upgraded) await upgrade();
     while (conn.syncing) {
       await Future<void>.delayed(Duration.zero);
     }
@@ -185,11 +224,5 @@ class Dev {
     while (conn.syncing) {
       await Future<void>.delayed(Duration.zero);
     }
-  }
-
-  /// Format 1 only, as every build up to 1.0.30 syncs the notebooks share.
-  Future<void> oldSync({bool includePrivate = false}) async {
-    final e = NotebookSync(notebook: nb, kind: SyncKind.share, folder: folder, stateFile: File('${stateDir.path}/share.json'), includePrivate: includePrivate, skipFormat2Dirs: false);
-    await e.run();
   }
 }
