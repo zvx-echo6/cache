@@ -213,8 +213,11 @@ class SharingState extends ChangeNotifier {
   /// Sets what this device and [peer] keep about their link; [peer] takes it with the next sync.
   /// Whether the link-level version gate is active in the engine: a linked device on an older sync protocol gets nothing of any kind,
   /// in either direction. Notebook sync converts its share (and removes the old folders) only once it is. The gate itself is in
-  /// cache_sync (design/link-version-gate); until it lands this is true when the engine is running.
-  bool get linkGateActive => _core != null;
+  /// cache_sync (design/link-version-gate).
+  ///
+  /// TODO(link-version-gate): fail-SAFE placeholder. It returns false until the real gate exists, so the conversion never removes the
+  /// old name folders (that would reach a 1.0.x peer as deletes). Replace with the gate's own "active" answer.
+  bool get linkGateActive => false;
 
   /// What Sharing says under a kind besides its summary when something stops it (notebook sync: "Update Cache on this device ..."),
   /// set by the app.

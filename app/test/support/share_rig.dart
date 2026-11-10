@@ -159,7 +159,7 @@ class Dev {
       shareFolder: () => Directory('${stateDir.path}/share'),
       shareOn: () => on,
       folderFor: (_) => folder,
-      gateActive: () => gateOn,
+      gateActive: gateUnset ? null : () => gateOn,
       storePhoto: (id, bytes) async {
         final f = await nb.photoFile(id);
         await f.parent.create(recursive: true);
@@ -180,6 +180,9 @@ class Dev {
 
   /// The link-level version gate (a stub: all peers gated or compatible as the test needs).
   bool gateOn = true;
+
+  /// Leave the gate seam unset (null), as an app with no gate wired has it.
+  bool gateUnset = false;
   bool _upgraded = false;
 
   /// Starts the way main.dart does: what keeps notebook ids is wired first, then the journal is replayed (a failure does not stop the

@@ -98,6 +98,25 @@ void main() {
       expect(await a.entryIds('a-1'), {'ea1'});
     });
 
+    test('with the gate unset (null) or inactive nothing is removed, however many syncs', () async {
+      for (final unset in [true, false]) {
+        final a = await started('a', old: true);
+        await a.make('Hikes', id: 'a-1');
+        await a.add('a-1', 'ea1', 'Alpha');
+        await a.sync();
+        a.gateUnset = unset;
+        a.gateOn = false;
+        await a.updateCache();
+        await a.sync();
+        await a.sync();
+        await a.sync();
+        expect(oldFiles(a.folder).length, 1, reason: unset ? 'gate unset' : 'gate inactive');
+        expect(noteFiles(a.folder, 'a-1').length, 1, reason: 'the id layout is written all the same');
+        expect(a.conn.conversionState, 'converting');
+        expect(await a.entryIds('a-1'), {'ea1'});
+      }
+    });
+
     test('a kill while the old folders are being removed: the next start finishes it, and nothing is lost', () async {
       final a = await started('a', old: true);
       await a.make('Hikes', id: 'a-1');
