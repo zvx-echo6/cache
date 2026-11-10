@@ -299,7 +299,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected directly · 2 min ago'), findsOneWidget);
+    expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));

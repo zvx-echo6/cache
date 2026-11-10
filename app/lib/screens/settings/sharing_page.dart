@@ -237,6 +237,7 @@ class _SharingPageState extends State<SharingPage> {
                     icon: Icons.devices_other,
                     title: p['name'] as String? ?? '',
                     status: peerStatus(p),
+                    statusLines: 2,
                     onTap: () => _peer(p),
                   ),
                 SettingsRow(key: const ValueKey('show-code'), icon: Icons.qr_code_2, title: 'Show my link code', onTap: _busy ? null : _showCode),
@@ -306,15 +307,29 @@ class _SharingPageState extends State<SharingPage> {
   }
 }
 
-/// "Connected directly · 2 min ago", "Not reachable · last seen 3 h ago".
+/// "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
+/// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
+/// via a relay"), not as a connection.
 List<Part> peerStatus(Map<String, dynamic> p) {
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
-  if (err == null && seen != null) {
-    return [Part(p['via'] == 'relay' ? 'Connected through a relay' : 'Connected directly', Tone.ok), Part(' · ${_ago(seen)}')];
-  }
-  if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · last seen ${_ago(seen)}')];
-  return const [Part('Checking…')];
+  final relay = p['via'] == 'relay';
+  final lastSeen = seen == null ? 'Never connected since linking' : 'Last seen ${_ago(seen)}';
+  if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · $lastSeen')];
+  if (seen == null) return const [Part('Checking…')];
+  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : 'direct'}')];
+  return [Part(relay ? 'Connected through a relay' : 'Connected directly', Tone.ok), Part(' · $lastSeen')];
+}
+
+/// How long a linked device may go without once answering before Remove is offered by itself.
+const Duration kNeverReachedAfter = Duration(days: 7);
+
+/// A device that has not answered once since it was linked, more than a week ago (the person may well want it gone).
+bool neverReached(Map<String, dynamic> p, [DateTime? now]) {
+  if (p['last_seen'] != null) return false;
+  final linked = p['linked'] as int?;
+  if (linked == null) return false;
+  return (now ?? DateTime.now()).difference(DateTime.fromMillisecondsSinceEpoch(linked)) > kNeverReachedAfter;
 }
 
 /// A kind's line: "4 of 6 shared · 11.3 GB", "Not shared".
@@ -585,6 +600,17 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                   children: [
                     statusText(context, peerStatus(p), size: 14, maxLines: null),
                     if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
+                    if (neverReached(p)) ...[
+                      const SizedBox(height: 10),
+                      Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        key: const ValueKey('device-remove'),
+                        icon: Icon(Icons.link_off, size: 18, color: k.emergency),
+                        label: Text('Remove', style: TextStyle(color: k.emergency)),
+                        onPressed: _busy ? null : _unlink,
+                      ),
+                    ],
                   ],
                 ),
               ),
