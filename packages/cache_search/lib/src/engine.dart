@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'errors.dart';
 import 'map_models.dart';
@@ -75,6 +76,20 @@ class SearchEngine {
 
   /// The address of a ZIM's main page.
   String zimMainPage(String zimId) => _object(_ok(native.zimMainPage(_h, zimId)))['address'] as String;
+
+  /// The ZIM's own icon (its `Illustration_48x48@1` metadata, PNG bytes), or null when it has none or the loaded core lacks
+  /// cs_zim_illustration.
+  Uint8List? zimIllustration(String zimId) {
+    final n = native;
+    if (n is! CsZimIconNative || !n.hasZimIllustration) return null;
+    final s = n.zimIllustration(_h, zimId);
+    if (s == null) {
+      final e = CacheSearchException.fromJson(native.lastError(_h));
+      if (e.code == 'not_found') return null;
+      throw e;
+    }
+    return base64Decode(_object(s)['png_base64'] as String);
+  }
 
   List<Suggestion> suggest(String prefix, {int k = 10, List<String>? sources}) => [
         for (final s in (_object(_ok(native.suggest(_h, prefix, jsonEncode({'k': k, 'sources': sources}))))['suggestions'] as List? ?? const []))

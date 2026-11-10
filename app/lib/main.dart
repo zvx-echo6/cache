@@ -286,11 +286,12 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
-      notShared: const {'libraries': kLibraryNotShared},
+      notShared: const {'library': kZimNotShared, 'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
       items: () => libraryItems(sources, libraries),
       remoteItem: libraryRemoteItem,
+      alongside: libraryAlongside,
     ),
     DataKind(
       id: 'models',
