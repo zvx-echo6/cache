@@ -61,7 +61,7 @@ final Map<String, StepTemplate> kStepTemplates = {
       presentBare: 'Searching your library…', pastBare: 'Searched your library', value: (s) => _arg(s, 'query')),
   'read': StepTemplate('Reading {}…', 'Read {}', presentBare: 'Reading a source…', pastBare: 'Read a source', value: _title),
   'calculate': const StepTemplate('Calculating…', 'Calculated', presentBare: 'Calculating…', pastBare: 'Calculated'),
-  'nearby': StepTemplate('Finding {} near you…', 'Found {} near you',
+  'nearby': StepTemplate('Searching nearby for: {}…', 'Searched nearby for: {}',
       presentBare: 'Looking for places near you…',
       pastBare: 'Looked for places near you',
       value: (s) => _arg(s, 'category')?.replaceAll('_', ' ') ?? _arg(s, 'query')),
