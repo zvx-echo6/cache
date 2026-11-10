@@ -21,6 +21,7 @@ import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'desktop/desktop_theme.dart';
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
@@ -1073,7 +1074,7 @@ class _CacheAppState extends State<CacheApp> {
                   children: [
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
-                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
                   ],
                 ),
               ),
