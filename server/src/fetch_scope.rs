@@ -18,10 +18,13 @@
 //! `renders/linux-parity/fetch-design.md`).
 
 use crate::fetch::{is_loopback, parse_url, FetchError, Parsed};
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::Ipv4Addr;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+
+// The address rule and the connect-time resolver are one implementation, shared with the core crates (packages/cache_search/native/cache_netguard).
+pub use cache_netguard::{is_public, PublicResolver};
+use cache_netguard::is_public_v4;
 
 /// The most a non-catalog scope may answer: listings, captions and icons, not files.
 pub const SMALL_MAX_BYTES: u64 = 8 << 20;
@@ -196,87 +199,6 @@ pub fn public_name(host: &str) -> bool {
     !["local", "localhost", "internal", "lan", "home", "localdomain", "intranet", "corp", "arpa"].contains(&last)
 }
 
-/// Whether an address is on the public internet. Everything that is private, loopback, link-local (cloud metadata is 169.254.169.254),
-/// shared (100.64/10 is Tailscale and carrier NAT), unspecified, multicast, documentation or reserved is not.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(a) => is_public_v4(a),
-        IpAddr::V6(a) => is_public_v6(a),
-    }
-}
-
-fn is_public_v4(a: Ipv4Addr) -> bool {
-    let o = a.octets();
-    !(a.is_unspecified()
-        || a.is_loopback()
-        || a.is_private()
-        || a.is_link_local()
-        || a.is_broadcast()
-        || a.is_multicast()
-        || o[0] == 0
-        || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
-        || (o[0] == 192 && o[1] == 0 && o[2] == 2) // 192.0.2.0/24
-        || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15
-        || (o[0] == 198 && o[1] == 51 && o[2] == 100) // 198.51.100.0/24
-        || (o[0] == 203 && o[1] == 0 && o[2] == 113) // 203.0.113.0/24
-        || o[0] >= 240) // 240.0.0.0/4
-}
-
-fn is_public_v6(a: Ipv6Addr) -> bool {
-    let s = a.segments();
-    // An IPv4 address carried inside one: ::ffff:a.b.c.d, ::a.b.c.d, 64:ff9b::a.b.c.d and 2002:aabb:ccdd:: (6to4).
-    let inner = |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
-    if s[..5] == [0, 0, 0, 0, 0] && s[5] == 0xffff {
-        return is_public_v4(inner(s[6], s[7]));
-    }
-    if s[..6] == [0, 0, 0, 0, 0, 0] && !a.is_unspecified() && !a.is_loopback() {
-        return is_public_v4(inner(s[6], s[7]));
-    }
-    if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-        return is_public_v4(inner(s[6], s[7]));
-    }
-    if s[0] == 0x2002 {
-        return is_public_v4(inner(s[1], s[2]));
-    }
-    !(a.is_unspecified()
-        || a.is_loopback()
-        || a.is_multicast()
-        || (s[..4] == [0, 0, 0, 0] && s[4] == 0xffff && s[5] == 0) // ::ffff:0:0/96 (IPv4-translated, ::ffff:0:a.b.c.d)
-        || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1) // 64:ff9b:1::/48 (local-use NAT64)
-        || (s[0] == 0x2001 && s[1] == 0) // 2001::/32 Teredo
-        || (s[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
-        || (s[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
-        || (s[0] & 0xffc0) == 0xfec0 // fec0::/10 site-local
-        || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-        || (s[0] == 0x100 && s[1..4] == [0, 0, 0])) // 100::/64 discard
-}
-
-/// Looks a name up like the system does and refuses it when any address it gives is not public. It is the connect-time check:
-/// the connection can only go to an address that was checked.
-#[derive(Debug)]
-pub struct PublicResolver {
-    /// Set when an address was refused, so the caller can say "not allowed" and not "unreachable".
-    pub refused: Arc<AtomicBool>,
-    /// Host names that are looked up without the check: the catalog hosts, which the server has always read.
-    pub exempt: Vec<String>,
-}
-
-impl ureq::Resolver for PublicResolver {
-    fn resolve(&self, netloc: &str) -> io::Result<Vec<SocketAddr>> {
-        let addrs: Vec<SocketAddr> = netloc.to_socket_addrs()?.collect();
-        let host = netloc.rsplit_once(':').map_or(netloc, |(h, _)| h).to_ascii_lowercase();
-        if self.exempt.iter().any(|h| h.eq_ignore_ascii_case(&host)) && !addrs.is_empty() {
-            return Ok(addrs);
-        }
-        if addrs.is_empty() || addrs.iter().any(|a| !is_public(a.ip())) {
-            self.refused.store(true, Ordering::Relaxed);
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "that address is not on the public internet"));
-        }
-        Ok(addrs)
-    }
-}
-
 /// The client for a read of an address a tab supplied (a download, its checksum, its icon): it connects only to public addresses,
 /// on every hop, except for the `exempt` catalog hosts. The flag is set when it refused one. `allow_private` is for tests.
 pub fn guarded_agent(exempt: &[String], allow_private: bool) -> (ureq::Agent, Arc<AtomicBool>) {
@@ -284,7 +206,7 @@ pub fn guarded_agent(exempt: &[String], allow_private: bool) -> (ureq::Agent, Ar
     if allow_private {
         return (crate::fetch::agent(), refused);
     }
-    (crate::fetch::agent_with(Some(PublicResolver { refused: refused.clone(), exempt: exempt.to_vec() })), refused)
+    (crate::fetch::agent_with(Some(PublicResolver::new(refused.clone(), exempt.to_vec()))), refused)
 }
 
 /// The early answer for an address a tab supplied: false for one that cannot be public (an address in any spelling, `localhost`,
@@ -302,32 +224,10 @@ pub fn address_ok(p: &Parsed, exempt: &[String], allow_private: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     fn pol(scope: Scope) -> Policy {
         Policy::new(scope, crate::fetch::FETCH_HOSTS.iter().map(|h| h.to_string()).collect())
-    }
-
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-
-    #[test]
-    fn only_public_addresses_are_public() {
-        for a in [
-            "8.8.8.8", "1.1.1.1", "93.184.216.34", "172.32.0.1", "100.63.255.255", "100.128.0.1", "2606:4700:4700::1111", "2a00:1450:4001::200e",
-            "::ffff:8.8.8.8", "64:ff9b::808:808", "2001:4860:4860::8888",
-        ] {
-            assert!(is_public(ip(a)), "{a}");
-        }
-        for a in [
-            "0.0.0.0", "0.1.2.3", "127.0.0.1", "127.9.9.9", "10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.240", "169.254.169.254",
-            "100.64.0.4", "100.127.255.255", "192.0.0.1", "192.0.2.1", "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.9", "224.0.0.1",
-            "240.0.0.1", "255.255.255.255", "::", "::1", "fe80::1", "fc00::1", "fd12:3456::1", "fec0::1", "ff02::1", "2001:db8::1",
-            "::ffff:0:8.8.8.8", "::ffff:0:127.0.0.1", "64:ff9b:1::808:808", "64:ff9b:1::1", "2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",
-            "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254", "::127.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::1", "2002:c0a8:101::",
-        ] {
-            assert!(!is_public(ip(a)), "{a}");
-        }
     }
 
     #[test]
@@ -489,7 +389,7 @@ mod tests {
     fn the_resolver_refuses_a_name_that_resolves_to_this_machine() {
         use ureq::Resolver;
         let refused = Arc::new(AtomicBool::new(false));
-        let r = PublicResolver { refused: refused.clone(), exempt: vec![] };
+        let r = PublicResolver::new(refused.clone(), vec![]);
         assert!(r.resolve("localhost:80").is_err());
         assert!(refused.load(Ordering::Relaxed));
         // an address in any spelling the system accepts
@@ -497,7 +397,7 @@ mod tests {
             assert!(r.resolve(n).is_err(), "{n}");
         }
         // the catalog hosts are the one exception: a name on the exempt list is not checked
-        assert!(PublicResolver { refused: Arc::new(AtomicBool::new(false)), exempt: vec!["localhost".into()] }.resolve("localhost:80").is_ok());
-        assert!(PublicResolver { refused: Arc::new(AtomicBool::new(false)), exempt: vec![] }.resolve("8.8.8.8:443").is_ok());
+        assert!(PublicResolver::new(Arc::new(AtomicBool::new(false)), vec!["localhost".into()]).resolve("localhost:80").is_ok());
+        assert!(PublicResolver::new(Arc::new(AtomicBool::new(false)), vec![]).resolve("8.8.8.8:443").is_ok());
     }
 }

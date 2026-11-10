@@ -307,6 +307,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
           _say('Choose a picture (PNG, JPEG, WebP or GIF).');
         }
       },
+      getIcon: b.device != null ? null : () async {
+        _say('Getting icon…');
+        final got = await b.getIconFromSource(z);
+        await FileImage(File('${z.path}.icon.png')).evict();
+        await FileImage(File('${z.path}.illustration.png')).evict();
+        if (!mounted) return;
+        setState(() {});
+        _say(got ? 'Icon updated' : 'No icon found at the source');
+      },
       addToHome: addToHome ??
           (layout == null || id == null
               ? null
@@ -557,7 +566,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                   child: Text(
-                    b.device?.activityHint ?? 'Icons come from each source\'s website; change one from the hold menu.',
+                    b.device?.activityHint ?? 'Icons come from each source; change one from the hold menu.',
                     style: TextStyle(fontSize: 12, color: k.secondary),
                   ),
                 ),
@@ -634,7 +643,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
               ] else
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
-                  child: Text("Each opens in the reader. Icons come from each source's website; change one from the hold menu.", style: TextStyle(fontSize: 13, color: k.secondary)),
+                  child: Text("Each opens in the reader. Icons come from each source; change one from the hold menu.", style: TextStyle(fontSize: 13, color: k.secondary)),
                 ),
               for (final t in transfers) _transferRow(k, t),
               for (final z in sources.zims) _zimRow(k, z, from: context),
@@ -679,6 +688,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     return LibraryRow(
       key: ValueKey('zim-${z.fileName}'),
       icon: sources.iconOf(z),
+      tintIcon: true,
       title: sources.titleOf(z),
       detail: [
         if (o != null && o.summary.isNotEmpty) o.summary,
@@ -778,7 +788,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 /// One row of the Library: the icon (the source's own, or a letter), the name on one line, the description and size on one line,
 /// and a badge for an exception. The size always stays visible; a long name ends in an ellipsis.
 class LibraryRow extends StatelessWidget {
-  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false, this.below});
+  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false, this.below, this.tintIcon = false});
 
   final String title;
   final String detail;
@@ -786,6 +796,10 @@ class LibraryRow extends StatelessWidget {
   /// A line under the detail with its own tap (ZIM Collections' search line).
   final Widget? below;
   final File? icon;
+
+  /// Draws the picture in the theme's single hue (Tactical) when the theme has one: a ZIM's icon, which is full colour art from
+  /// elsewhere. The letter stays in the theme's colours either way.
+  final bool tintIcon;
   final Widget? badge;
   final VoidCallback? onTap;
   final VoidCallback? onHold;
@@ -804,7 +818,7 @@ class LibraryRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                LetterIcon(title: title, file: icon),
+                LetterIcon(title: title, file: icon, tint: tintIcon),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -836,11 +850,14 @@ class LibraryRow extends StatelessWidget {
 
 /// A small square icon: the picture when there is one, else the first letter of the name.
 class LetterIcon extends StatelessWidget {
-  const LetterIcon({super.key, required this.title, this.file, this.size = 32});
+  const LetterIcon({super.key, required this.title, this.file, this.size = 32, this.tint = false});
 
   final String title;
   final File? file;
   final double size;
+
+  /// The picture goes through the theme's [CacheTokens.brandFilter] (null in the full-colour themes: no change).
+  final bool tint;
 
   @override
   Widget build(BuildContext context) {
@@ -853,7 +870,13 @@ class LetterIcon extends StatelessWidget {
         width: size,
         height: size,
         color: k.background,
-        child: file == null ? fallback : Image.file(file!, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback),
+        child: file == null
+            ? fallback
+            : () {
+                final picture = Image.file(file!, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback);
+                final f = tint ? k.brandFilter : null;
+                return f == null ? picture : ColorFiltered(colorFilter: f, child: picture);
+              }(),
       ),
     );
   }

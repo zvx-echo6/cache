@@ -135,7 +135,8 @@ pub fn mark_network_up() {
 fn agent() -> &'static ureq::Agent {
     static A: OnceLock<ureq::Agent> = OnceLock::new();
     A.get_or_init(|| {
-        ureq::AgentBuilder::new()
+        // the public-address guard when the Linux server's helper installed it (a no-op on a phone)
+        cache_netguard::guarded(ureq::AgentBuilder::new())
             .timeout_connect(Duration::from_secs(8))
             .timeout(Duration::from_secs(60))
             .user_agent(&user_agent())

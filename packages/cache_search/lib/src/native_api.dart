@@ -217,6 +217,15 @@ abstract class CsIngestNative {
   String? ingest(String op, String argsJson);
 }
 
+/// A ZIM's own icon (cs_zim_illustration; cache_search.h). Kept apart from [CsNative] like the PDF indexes; [hasZimIllustration] is
+/// false when the loaded core is older than the call (looked up when first used).
+abstract class CsZimIconNative {
+  bool get hasZimIllustration;
+
+  /// cs_zim_illustration: {"png_base64"}, or null on error (ask [CsNative.lastError]; `not_found` when the ZIM has no icon).
+  String? zimIllustration(int handle, String zimId);
+}
+
 /// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
 /// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
 abstract class CsCaptionsNative {

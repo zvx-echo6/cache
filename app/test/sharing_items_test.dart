@@ -9,6 +9,7 @@ import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/sharing/share_items.dart';
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:cache/sources/sources_state.dart' show kZimNotShared;
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -326,5 +327,55 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     s.dispose();
     await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
+
+  test("a ZIM's saved icon goes with it: off and synced with the item, never an item of its own", () async {
+    final r = await _rig();
+    r.sync.items['library'] = [
+      {'name': 'wikimed.zim', 'files': 1, 'bytes': 10, 'peers': []},
+      {'name': 'wikimed.zim.icon.png', 'files': 1, 'bytes': 2, 'peers': []},
+      // a ZIM only a linked device holds, switched off here: its icon is left off too
+      {'name': 'canning.zim', 'files': 0, 'bytes': 0, 'peers': [{'peer': 'p1', 'peer_name': 'Desk', 'files': 1, 'bytes': 9}]},
+      {'name': 'canning.zim.icon.png', 'files': 0, 'bytes': 0, 'peers': [{'peer': 'p1', 'peer_name': 'Desk', 'files': 1, 'bytes': 2}]},
+    ];
+    final lib = DataKind(
+      id: 'library',
+      label: 'Library',
+      icon: Icons.menu_book_outlined,
+      shared: () => {'library': Directory('${r.dir.path}/zims')},
+      items: () => const [ShareItem(share: 'library', path: 'wikimed.zim', name: 'Medical encyclopedia', bytes: 10)],
+      remoteItem: libraryRemoteItem,
+      alongside: libraryAlongside,
+    );
+    final s = SharingState(
+      policy: testPolicy(wifi: true),
+      supportDir: () async => r.dir,
+      kinds: [lib],
+      opener: (c) async => r.sync,
+    );
+    await s.setUp();
+    await s.setShared(lib, true);
+    final items = s.itemsOf(lib);
+    expect([for (final i in items) i.item.path], ['wikimed.zim', 'canning.zim'], reason: 'the picture is not an item');
+
+    await s.setItem(lib, items[0].item, false);
+    await s.setItem(lib, items[1].item, false);
+    expect(r.calls('set_off').last, {
+      'id': 'library',
+      'off': ['canning.zim', 'canning.zim.icon.png', 'wikimed.zim', 'wikimed.zim.icon.png'],
+    });
+    await s.setItem(lib, items[0].item, true);
+    expect(r.calls('set_off').last, {'id': 'library', 'off': ['canning.zim', 'canning.zim.icon.png']});
+
+    await s.syncItem(items[0].item);
+    expect(r.calls('sync_now').last, {
+      'share': 'library',
+      'paths': ['wikimed.zim', 'wikimed.zim.icon.png'],
+    });
+    expect(libraryAlongside('libraries', 'field-manuals'), isEmpty);
+    expect(libraryAlongside('library', 'x.txt'), isEmpty);
+    expect(kZimNotShared, ['*.illustration.png'], reason: 'the picture read from the ZIM is made on each device');
+    s.dispose();
+    await r.dir.delete(recursive: true);
   });
 }

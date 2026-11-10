@@ -410,7 +410,7 @@ class SharingState extends ChangeNotifier {
   List<String> _offOf(DataKind k, String id) {
     final out = <String>{
       for (final key in _off[k.id] ?? const <String>{})
-        if (key.startsWith('$id/')) key.substring(id.length + 1),
+        if (key.startsWith('$id/')) ...[key.substring(id.length + 1), ...?k.alongside?.call(id, key.substring(id.length + 1))],
       for (final it in k.items?.call() ?? const <ShareItem>[])
         if (it.share == id && it.private && it.on != true) it.path,
     };
@@ -517,7 +517,10 @@ class SharingState extends ChangeNotifier {
   }
 
   /// Sync now for one item: its paths in its shared folder only.
-  Future<void> syncItem(ShareItem it) => _call('sync_now', {'share': it.share, 'paths': [it.path]});
+  Future<void> syncItem(ShareItem it) => _call('sync_now', {
+    'share': it.share,
+    'paths': [it.path, for (final k in kinds) ...?k.alongside?.call(it.share, it.path)],
+  });
 
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
