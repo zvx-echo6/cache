@@ -68,7 +68,7 @@ class FfiRegionsEngine implements RegionsEngine {
 /// Methods: the engine's own (`status`, `plan`, `add`, `remove`, `stream`, `set_policy`, `check_update`, `update`) and the server's
 /// off-road pack downloads (the phone downloads those itself, into the same folder; [OffroadPacks]):
 ///   offroad_fetch {path, url, bytes, sha256}  -> {"state": "running"|"ready"|"held"}
-///   offroad_status {paths: [..]}              -> {"packs": {"<path>": {on_disk, running, done, total, error}}}
+///   offroad_status {paths: [..]}              -> `{"packs": {"<path>": {on_disk, running, done, total, error}}}`
 ///   offroad_cancel {path}                     offroad_remove {path}
 /// The downloads are the server's, so they go on with no browser open. [afterOpen] (called when the search core has opened) gives
 /// the engine the person's Pause from `<support>/regions-app.json` (the engine does not keep it) and carries on the packs the

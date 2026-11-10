@@ -43,6 +43,8 @@ void main() {
         res.statusCode = HttpStatus.found;
         res.headers.set(HttpHeaders.locationHeader, 'http://127.0.0.1:${server.port}/target');
       } else if (stalling) {
+        // Unbuffered: with the default output buffer the 1000 bytes sit on the server and never reach the client before the stall.
+        res.bufferOutput = false;
         res.contentLength = body.length;
         res.add(body.sublist(0, 1000));
         await res.flush();
