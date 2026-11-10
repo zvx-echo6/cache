@@ -250,6 +250,8 @@ Future<void> _shoot(WidgetTester tester, _Rig rig, String size, CacheThemeId the
     if (f.evaluate().isEmpty) {
       await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
     }
+    await tester.ensureVisible(f.first);
+    await tester.pump();
     await tester.tap(f.first);
     await _settle(tester);
   }
