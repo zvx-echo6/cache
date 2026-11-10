@@ -408,6 +408,8 @@ fn a_notebook_takes_another_id_with_its_entries() {
     assert_eq!(err(&nb, "notebook_reid", json!({"id": id, "new_id": "bad id"})).code, "bad_json");
     let n = call(&nb, "notebook_reid", json!({"id": id, "new_id": "shared-id-1"}));
     assert_eq!((n["id"].clone(), n["entries"].clone()), (json!("shared-id-1"), json!(1)));
+    // run again after it went through (a replay): the same answer
+    assert_eq!(call(&nb, "notebook_reid", json!({"id": id, "new_id": "shared-id-1"}))["id"], "shared-id-1");
     assert_eq!(call(&nb, "entry", json!({"id": eid}))["notebook_id"], "shared-id-1");
     assert_eq!(call(&nb, "entries", json!({"notebook_id": "shared-id-1"}))["entries"].as_array().unwrap().len(), 1);
     assert_eq!(err(&nb, "notebook", json!({"id": id})).code, "not_found");

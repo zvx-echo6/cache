@@ -182,6 +182,11 @@ class FakeNotebookBackend implements NotebookBackend {
   }
 
   Map<String, dynamic> _reid(String id, String newId) {
+    // Run again after it went through (a journal replay): the notebook under its new id.
+    if (id != newId && !notebooks.any((x) => x['id'] == id)) {
+      final done = notebooks.where((x) => x['id'] == newId).firstOrNull;
+      if (done != null) return done;
+    }
     final n = _nb(id);
     if (id != newId) {
       if (notebooks.any((x) => x['id'] == newId)) throw CacheSearchException('bad_json', 'a notebook with id "$newId" already exists');

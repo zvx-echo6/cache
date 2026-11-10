@@ -42,6 +42,8 @@ class EntryEditor extends StatefulWidget {
 
 class _EntryEditorState extends State<EntryEditor> {
   late String? _id = widget.entry?.id;
+  late String _bookId = widget.book.id;
+  StreamSubscription<({String oldId, String newId})>? _reidSub;
   late bool _draft = widget.entry?.draft ?? true;
   late DateTime _when = widget.entry?.when ?? widget.now();
   late String? _occurredAt = widget.entry?.occurredAt;
@@ -65,6 +67,10 @@ class _EntryEditorState extends State<EntryEditor> {
   @override
   void initState() {
     super.initState();
+    // The notebook got another id while this is open: what is typed saves under the new one.
+    _reidSub = widget.notebook.reids.listen((r) {
+      if (r.oldId == _bookId) _bookId = r.newId;
+    });
     if (_isNew && widget.book.map && widget.at == null) {
       _placePending = true;
       widget.places.herePlace().then((p) {
@@ -82,6 +88,7 @@ class _EntryEditorState extends State<EntryEditor> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _reidSub?.cancel();
     _title.dispose();
     _text.dispose();
     super.dispose();
@@ -106,7 +113,7 @@ class _EntryEditorState extends State<EntryEditor> {
         final body = _text.text.trim();
         final saved = await widget.notebook.saveEntry(
           id: _id,
-          notebookId: widget.book.id,
+          notebookId: _bookId,
           occurredAt: _occurredAt ?? isoLocal(_when),
           title: _title.text.trim().isEmpty ? null : _title.text.trim(),
           body: body.isEmpty ? null : body,

@@ -564,6 +564,10 @@ pub fn notebook_reid(c: &mut Connection, args: &Value) -> Result<Value> {
     }
     let tx = c.transaction()?;
     if load_notebook(&tx, id)?.is_none() {
+        // A replay of a re-id that already went through: the notebook is under its new id.
+        if let Some(done) = load_notebook(&tx, new_id)? {
+            return notebook_json(&tx, &done);
+        }
         return Err(Error::not_found(format!("no notebook with id {id:?}")));
     }
     if id != new_id {

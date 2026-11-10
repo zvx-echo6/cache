@@ -179,6 +179,15 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     unawaited(syncAll());
   }
 
+  /// A notebook got another id: the field names every connected folder keeps for it (Obsidian, Logseq and notebook sync state)
+  /// move to the new id. One step of the re-id journal: it can run again.
+  Future<void> moveFieldMaps(String oldId, String newId) async {
+    await init();
+    for (final t in _targets) {
+      await NotebookSync.moveProps(File('${(await dir()).path}/${t.id}.json'), oldId, newId);
+    }
+  }
+
   @override
   Future<void> notebookReid(String oldId, String newId) async {
     await init();

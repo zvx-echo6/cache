@@ -125,6 +125,8 @@ class NotebookScreen extends StatefulWidget {
 
 class _NotebookScreenState extends State<NotebookScreen> {
   NotebookState get nb => widget.deps.notebook;
+  late String _id = widget.notebookId;
+  StreamSubscription<({String oldId, String newId})>? _reidSub;
   List<NbEntry>? _entries;
   int _readAt = -1;
   ({double lat, double lon})? _here;
@@ -133,6 +135,13 @@ class _NotebookScreenState extends State<NotebookScreen> {
   void initState() {
     super.initState();
     nb.addListener(_onChange);
+    // The notebook got another id (linked devices settling on one): this screen follows it.
+    _reidSub = nb.reids.listen((r) {
+      if (r.oldId == _id) {
+        _id = r.newId;
+        _read();
+      }
+    });
     widget.deps.connections?.addListener(_onLinks);
     _read();
     widget.deps.places.here().then((h) {
@@ -143,6 +152,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   @override
   void dispose() {
     nb.removeListener(_onChange);
+    _reidSub?.cancel();
     widget.deps.connections?.removeListener(_onLinks);
     super.dispose();
   }
@@ -159,7 +169,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   Future<void> _read() async {
     _readAt = nb.revision;
     try {
-      final list = await nb.entries(widget.notebookId);
+      final list = await nb.entries(_id);
       if (mounted) setState(() => _entries = list);
     } catch (_) {
       if (mounted) setState(() => _entries = const []);
@@ -208,7 +218,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final book = nb.notebook(widget.notebookId);
+    final book = nb.notebook(_id);
     if (book == null) return Scaffold(appBar: AppBar(), body: const Center(child: Text('This notebook is gone')));
     if (book.isPlaces) return PlacesNotebookScreen(deps: widget.deps, notebookId: book.id);
     final k = context.t;

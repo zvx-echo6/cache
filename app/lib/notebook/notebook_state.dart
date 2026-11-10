@@ -1,10 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show CacheSearchException, SearchCore;
 import 'package:flutter/foundation.dart';
 
+import '../files.dart';
 import 'notebook_model.dart';
 import '../platform/app_log.dart';
+
+/// One step of moving what is kept under a notebook's old id to its new id (see [NotebookState.reidNotebook]); it can run again.
+typedef ReidStep = Future<void> Function(String oldId, String newId);
 
 /// The core's Notebook calls (cs_notebook): one op with its arguments, the answer as JSON. Tests use an in-memory one.
 abstract class NotebookBackend {
@@ -61,8 +67,6 @@ class NotebookState extends ChangeNotifier {
   /// Private notebooks included in sync and sharing; null where there is no sync.
   PrivateSharing? privateSharing;
 
-  /// After a notebook got another id ([reidNotebook]): whatever else keeps notebook ids (the Home shortcuts) follows.
-  void Function(String oldId, String newId)? onNotebookReid;
 
   List<Notebook> _notebooks = const [];
   bool _loading = true;
@@ -158,13 +162,64 @@ class NotebookState extends ChangeNotifier {
             'template_ref': ?templateRef,
           })));
 
-  /// Gives a notebook another id: its entries, the Places link and its map layer follow in the core, and what the app keeps
-  /// under the old id (private sharing, shortcuts) is moved to the new one. Linked devices that each made the same notebook
-  /// settle on one id this way (see NotebookSync).
-  Future<Notebook> reidNotebook(String id, String newId) async {
+  // ---- a notebook's id changes ----
+
+  /// Where the re-id journal is kept (app support); null where there is no sync (tests set it).
+  File? reidJournal;
+
+  /// What else keeps notebook ids, in the order it is moved to the new id after the core has it: each step saves what it holds
+  /// and can be run again. Registered by the app (shortcuts, the sync connections' field names).
+  final Map<String, ReidStep> reidSteps = {};
+
+  final StreamController<({String oldId, String newId})> _reids = StreamController.broadcast();
+
+  /// A notebook has another id now (open screens and editors follow).
+  Stream<({String oldId, String newId})> get reids => _reids.stream;
+
+  /// Gives a notebook another id. Linked devices that each made the same notebook settle on one id this way, so it runs on every
+  /// upgrade and whenever a device with a lower id joins; it is a journaled, resumable path. First `reid-journal.json` is
+  /// written (old, new, step names). Then, each step able to run again: the core (the notebook, its entries, the Places link and
+  /// the map layer), private sharing, the registered [reidSteps], and [also] (steps only this call knows). The journal goes only
+  /// after every step saved; a kill or a failure in between leaves it, and [replayReid] finishes the job at the next start.
+  Future<Notebook> reidNotebook(String id, String newId, {Map<String, ReidStep> also = const {}}) async {
+    if (id == newId) return notebook(id)!;
+    await _writeJournal(id, newId, ['core', 'private sharing', ...reidSteps.keys, ...also.keys]);
+    return _reidRun(id, newId, also);
+  }
+
+  /// Finishes a re-id that a kill or a failure left half done. Called at start, before any notebook sync.
+  Future<void> replayReid() async {
+    final f = reidJournal;
+    if (f == null || !await f.exists()) return;
+    try {
+      final j = jsonDecode(await f.readAsString());
+      final o = j is Map ? j['old'] : null, n = j is Map ? j['new'] : null;
+      if (o is! String || n is! String) {
+        await f.delete();
+        return;
+      }
+      await _reidRun(o, n, const {});
+    } on FormatException {
+      await f.delete();
+    }
+  }
+
+  Future<void> _writeJournal(String o, String n, List<String> steps) async {
+    final f = reidJournal;
+    if (f == null) return;
+    await f.parent.create(recursive: true);
+    await writeStringAtomic(f, jsonEncode({'old': o, 'new': n, 'steps': steps}));
+  }
+
+  Future<Notebook> _reidRun(String id, String newId, Map<String, ReidStep> also) async {
     final n = await _change(() async => Notebook.fromJson(await backend.call('notebook_reid', {'id': id, 'new_id': newId})));
+    _reids.add((oldId: id, newId: newId));
     await privateSharing?.notebookReid(id, newId);
-    onNotebookReid?.call(id, newId);
+    for (final s in [...reidSteps.values, ...also.values]) {
+      await s(id, newId);
+    }
+    final f = reidJournal;
+    if (f != null && await f.exists()) await f.delete();
     return n;
   }
 

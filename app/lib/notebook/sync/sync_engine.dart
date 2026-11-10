@@ -22,6 +22,9 @@ enum SyncKind { obsidian, logseq, logseqExport, share }
 /// The file in each notebook's folder (notebook sync) that carries the notebook's id, so it is the same on every linked device.
 const String kNotebookIdFile = 'notebook.json';
 
+/// How long the tombstone of a deleted notebook stays in the share.
+const int kTombstoneDays = 30;
+
 /// What needs a person's decision.
 enum ConflictKind { bothChanged, removedOutside, unreadable }
 
@@ -180,6 +183,12 @@ class NotebookSync {
   /// Entries the person stopped syncing with this folder: kept in Cache, never written here again.
   final Set<String> _stopped = {};
 
+  /// Notebook sync: the folders this device wrote a notebook.json in, and for which id (to see a notebook leave the share).
+  Map<String, String> _idDirs = {};
+
+  /// Each notebook's folder (by notebook name) for this run: the folder's name, with a deterministic suffix when two names make one.
+  Map<String, String> _dirs = {};
+
   List<SyncConflict> get conflicts => List.unmodifiable(_conflicts);
 
   bool get _logseq => kind == SyncKind.logseq || kind == SyncKind.logseqExport;
@@ -205,6 +214,7 @@ class NotebookSync {
       _stopped
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
+      _idDirs = {for (final e in (j['id_dirs'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
     } catch (e) {
       logError('Notebook sync: state unreadable', error: e);
     }
@@ -220,6 +230,7 @@ class NotebookSync {
         'conflicts': [for (final c in _conflicts) c.toJson()],
         'ignored': [..._ignored],
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
+        if (_idDirs.isNotEmpty) 'id_dirs': _idDirs,
       }),
     );
   }
@@ -423,8 +434,27 @@ class NotebookSync {
 
   static String folderNameOf(Notebook n) => folderName(n.name);
 
+  /// Each notebook's folder: its name's folder, and for the notebooks whose names make the same folder ("Trip: 2026", "Trip 2026"),
+  /// the one with the lowest id keeps it and the others get their id's first characters added, so no two share a folder.
+  static Map<String, String> folderNames(Iterable<Notebook> books) {
+    final by = <String, List<Notebook>>{};
+    for (final n in books) {
+      by.putIfAbsent(folderNameOf(n), () => []).add(n);
+    }
+    final out = <String, String>{};
+    for (final e in by.entries) {
+      final l = e.value..sort((a, b) => a.id.compareTo(b.id));
+      for (var i = 0; i < l.length; i++) {
+        out[l[i].name] = i == 0 ? e.key : '${e.key} ${l[i].id.substring(0, l[i].id.length < 8 ? l[i].id.length : 8)}';
+      }
+    }
+    return out;
+  }
+
+  String _dirOf(Notebook n) => _dirs[n.name] ?? folderNameOf(n);
+
   Future<String> _newPath(EntryDoc d, Notebook n) async {
-    final dir = folderNameOf(n);
+    final dir = _dirOf(n);
     final base = noteFileName(d);
     var name = '$dir/$base.md';
     var i = 2;
@@ -521,10 +551,18 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
-    // The id the notebook has on the other devices (from its folder's notebook.json). An id another notebook here already has
-    // is never taken (saving under it would change that notebook).
+    // The id the notebook has on the other devices (from its folder's notebook.json).
     var id = _idIn(jsonEncode({'id': shared?['id']}));
-    if (id != null && notebook.notebook(id) != null) id = null;
+    final held = id == null ? null : notebook.notebook(id);
+    if (held != null && held.name != d.notebook && kind == SyncKind.share) {
+      // Another device renamed the notebook: the folder carries the same id, so the notebook here is renamed, not made again.
+      final renamed = await notebook.saveNotebook(id: held.id, def: held.def.copyWith(name: d.notebook));
+      byName.remove(held.name);
+      byName[renamed.name] = renamed;
+      return renamed;
+    }
+    // An id another notebook here already has is never taken (saving under it would change that notebook).
+    if (held != null) id = null;
     final made = await notebook.saveNotebook(
       id: id,
       template: (shared?['template'] as String?) ?? 'notes',
@@ -557,24 +595,34 @@ class NotebookSync {
     if (text == null) return null;
     try {
       final j = jsonDecode(text);
-      final id = j is Map ? j['id'] : null;
+      final id = j is Map && j['deleted'] != true ? j['id'] : null;
       return id is String && RegExp(r'^[A-Za-z0-9-]{1,64}$').hasMatch(id) ? id : null;
     } catch (_) {
       return null;
     }
   }
 
-  /// Linked devices that each made the same notebook (same folder) must end with one id for it. Every notebook's folder carries
-  /// a small `notebook.json` with its id (a file of its own, so there is no shared map for two devices to change at once). The
-  /// lowest id found, in the folder's file and in the conflict copies that sync keeps when two devices wrote it at once, and
-  /// this device's own, wins on every device; a device with another id takes the winner's (its entries, private-sharing choice,
-  /// shortcuts and Places link follow) and writes it. Notebooks left out of the sync (private ones not included) are not touched.
+  /// Linked devices that each made the same notebook must end with one id for it. Every notebook's folder carries a small
+  /// `notebook.json` with its id (a file of its own, so there is no shared map for two devices to change at once). The lowest id
+  /// found, in the folder's file and in the conflict copies that sync keeps when two devices wrote it at once, and this device's
+  /// own, wins on every device; a device with another id takes the winner's through the re-id journal (its entries, private-sharing
+  /// choice, shortcuts, Places link, map layer and field names follow) and writes it. An id another notebook here holds cannot be
+  /// taken: the device keeps its own, and the file is never rewritten to a higher id than it has, so it cannot flip-flop. Notebooks
+  /// left out of the sync (private ones not included) are not touched.
+  ///
+  /// A notebook that leaves the share loses its file: renamed or turned off, the old `<folder>/notebook.json` is removed (peers keep
+  /// their copy; a rename shows as the same id in the new folder, and peers rename theirs); deleted, it is replaced by a tombstone
+  /// `{"id", "deleted": true, "at": <ms>}` kept for [kTombstoneDays] days, for peers to act on.
   Future<void> _settleIds() async {
     if (kind != SyncKind.share) return;
     final copy = RegExp(r'^notebook \(conflict, .*\)\.json$');
+    final now = <String, String>{};
+    _dirs = folderNames(notebook.notebooks);
+    await _followRenames();
     for (final n in [...notebook.notebooks]) {
       if (!(includePrivate || !n.private || privateBooks.contains(n.id))) continue;
-      final dir = folderNameOf(n);
+      final dir = _dirOf(n);
+      final path = '$dir/$kNotebookIdFile';
       final files = [
         for (final f in await folder.list(dir))
           if (f.path.startsWith('$dir/') && (f.path.substring(dir.length + 1) == kNotebookIdFile || copy.hasMatch(f.path.substring(dir.length + 1)))) f.path,
@@ -582,15 +630,16 @@ class NotebookSync {
       var winner = n.id;
       for (final p in files) {
         final id = _idIn(await folder.readText(p));
-        if (id != null && id.compareTo(winner) < 0) winner = id;
+        // an id another notebook here holds is not this one's to take
+        if (id != null && id.compareTo(winner) < 0 && notebook.notebook(id) == null) winner = id;
       }
-      // Another notebook here already has that id (not this folder's): leave this one as it is.
-      if (winner != n.id && notebook.notebook(winner) != null) winner = n.id;
+      var book = n;
       if (winner != n.id) {
         final old = n.id;
-        await notebook.reidNotebook(old, winner);
-        final props = _props.remove(old);
-        if (props != null) _props.putIfAbsent(winner, () => props);
+        // The field names are saved first, so the journal's step moves what is on disk; then they are read again.
+        await _save();
+        book = await notebook.reidNotebook(old, winner, also: {'share field names': (o, w) => moveProps(stateFile, o, w)});
+        await _load();
         if (privateBooks.contains(old)) {
           privateBooks
             ..remove(old)
@@ -598,17 +647,85 @@ class NotebookSync {
         }
       }
       // The file also holds the notebook's definition as it was when the id was written, for a device that has not got the
-      // notebook yet. It is written when the folder has no id file or another id; never rewritten after (two devices editing
-      // it at once would conflict).
-      final path = '$dir/$kNotebookIdFile';
-      if (_idIn(await folder.readText(path)) != winner) {
-        final book = notebook.notebook(winner)!;
+      // notebook yet. It is written when the folder has no id file or one with a higher id; never rewritten after (two devices
+      // editing it at once would conflict).
+      final have = _idIn(await folder.readText(path));
+      // A file that is gone where this device wrote it was taken away on purpose (the notebook was renamed, turned off or deleted
+      // there): it is not written back.
+      final taken = have == null && _idDirs[dir] == book.id && !files.any((p) => p != path);
+      if (!taken && (have == null || have.compareTo(book.id) > 0)) {
         await folder.writeText(path, '${const JsonEncoder.withIndent(' ').convert(_bookJson(book))}\n');
       }
       for (final p in files) {
         if (p != path) await folder.delete(p);
       }
+      now[dir] = book.id;
     }
+    // Notebooks that left the share since the last run. Not when the list could not be read (everything would look deleted).
+    if (notebook.error == null && notebook.notebooks.isNotEmpty) {
+      final local = {for (final n in notebook.notebooks) n.id};
+      for (final e in _idDirs.entries) {
+        if (now.containsKey(e.key)) continue;
+        final path = '${e.key}/$kNotebookIdFile';
+        final text = await folder.readText(path);
+        final j = _jsonMap(text);
+        if (j != null && j['id'] != e.value) continue; // the folder's file is another notebook's now
+        if (local.contains(e.value)) {
+          if (text != null) await folder.delete(path);
+        } else {
+          await folder.writeText(path, '${jsonEncode({'id': e.value, 'deleted': true, 'at': _now().millisecondsSinceEpoch})}\n');
+        }
+      }
+      _idDirs = now;
+    }
+    // Old tombstones go.
+    for (final f in await folder.list('')) {
+      if (!RegExp('^[^/]+/$kNotebookIdFile\$').hasMatch(f.path)) continue;
+      final j = _jsonMap(await folder.readText(f.path));
+      final at = j?['at'];
+      if (j?['deleted'] == true && at is num && _now().millisecondsSinceEpoch - at > kTombstoneDays * 86400000) await folder.delete(f.path);
+    }
+  }
+
+  /// Another device renamed a notebook: its new folder has a `notebook.json` with the id of a notebook here, in a folder no notebook
+  /// here has. The notebook here is renamed to the file's name (the same notebook, not a second one).
+  Future<void> _followRenames() async {
+    for (final f in await folder.list('')) {
+      final m = RegExp('^([^/]+)/$kNotebookIdFile\$').firstMatch(f.path);
+      if (m == null) continue;
+      final dir = m.group(1)!;
+      final j = _jsonMap(await folder.readText(f.path));
+      final id = _idIn(j == null ? null : jsonEncode({'id': j['id']}));
+      final name = j?['def'] is Map ? (j!['def'] as Map)['name'] : null;
+      final mine = id == null ? null : notebook.notebook(id);
+      if (mine == null || name is! String || name.trim().isEmpty) continue;
+      if (_dirOf(mine) == dir || folderName(name) != dir || notebook.notebooks.any((n) => _dirOf(n) == dir) || notebook.nameTaken(name, exceptId: mine.id)) continue;
+      await notebook.saveNotebook(id: mine.id, def: mine.def.copyWith(name: name.trim()));
+      _dirs = folderNames(notebook.notebooks);
+    }
+  }
+
+  static Map<String, dynamic>? _jsonMap(String? text) {
+    if (text == null) return null;
+    try {
+      final j = jsonDecode(text);
+      return j is Map ? j.cast<String, dynamic>() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A notebook's field names (kept in a sync state file, by notebook id) move to its new id; saved at once, and running it
+  /// again changes nothing. A step of the re-id journal.
+  static Future<void> moveProps(File f, String oldId, String newId) async {
+    if (!await f.exists()) return;
+    final j = jsonDecode(await f.readAsString());
+    final props = j is Map ? j['props'] : null;
+    if (j is! Map || props is! Map || !props.containsKey(oldId)) return;
+    final m = {...props};
+    final moved = m.remove(oldId);
+    m.putIfAbsent(newId, () => moved);
+    await writeStringAtomic(f, jsonEncode({...j, 'props': m}));
   }
 
   Map<String, dynamic>? _sharedBooks;
@@ -618,7 +735,7 @@ class NotebookSync {
     if (kind == SyncKind.share) {
       try {
         final j = jsonDecode(await folder.readText('${folderName(name)}/$kNotebookIdFile') ?? 'null');
-        if (j is Map && _idIn(jsonEncode({'id': j['id']})) != null) return j.cast<String, dynamic>();
+        if (j is Map && j['deleted'] != true && _idIn(jsonEncode({'id': j['id']})) != null) return j.cast<String, dynamic>();
       } catch (_) {}
     }
     if (_sharedBooks == null) {

@@ -546,7 +546,11 @@ impl MapStore {
     /// A Places notebook got another id: its layer (and the lines and areas kept with it) now belongs to the new one.
     pub fn rename_notebook_layer(&self, old: &str, new: &str) -> Result<()> {
         let c = self.db()?;
-        c.execute("UPDATE map_lists SET notebook_id=?2 WHERE notebook_id=?1", [old, new])?;
+        // Only when the new id has no layer yet, so running it again changes nothing.
+        c.execute(
+            "UPDATE map_lists SET notebook_id=?2 WHERE notebook_id=?1 AND NOT EXISTS (SELECT 1 FROM map_lists WHERE notebook_id=?2)",
+            [old, new],
+        )?;
         Ok(())
     }
 

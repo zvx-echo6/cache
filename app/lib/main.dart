@@ -830,6 +830,14 @@ class _CacheAppState extends State<CacheApp> {
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
       await _soft('notebooks', () async {
+        // A notebook id change a kill left half done is finished before anything syncs (see NotebookState.reidNotebook).
+        if (!plat.isWeb) {
+          notebooks.reidJournal = File('${await appSupportPath()}/reid-journal.json');
+          notebooks.reidSteps['shortcuts'] = (o, n) async => layout.renameNotebook(o, n);
+          notebooks.reidSteps['field names'] = connections.moveFieldMaps;
+          await _layoutRead;
+          await notebooks.replayReid();
+        }
         await notebooks.start();
         notebookActions.start();
       });
@@ -848,7 +856,6 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
-      notebooks.onNotebookReid = layout.renameNotebook;
       // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
       if (!plat.isWeb) {
         unawaited(connections.syncAll());

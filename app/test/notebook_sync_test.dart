@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cache/layout/layout_state.dart';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/sync/folder.dart';
@@ -64,10 +65,54 @@ class MemFolder implements SyncFolder {
   Future<bool> exists(String path) async => text.containsKey(path) || bytes.containsKey(path);
 }
 
+/// The share between two devices, as cache_sync keeps it: every file but the hidden ones, a change on one side goes to the other
+/// (deletes too), and when both changed a file the side with the lesser content keeps its file as a conflict copy and takes the
+/// other's (the copy then goes across as a file of its own).
+class _Link {
+  _Link(this.a, this.b);
+
+  final MemFolder a;
+  final MemFolder b;
+  Map<String, String> last = {};
+
+  void sync() {
+    final next = <String, String>{};
+    final paths = {...a.text.keys, ...b.text.keys, ...last.keys}.where((p) => !p.split('/').any((s) => s.startsWith('.')));
+    for (final p in paths.toList()..sort()) {
+      final l = last[p], x = a.text[p], y = b.text[p];
+      var win = x;
+      if (x != y) {
+        final xc = x != l, yc = y != l;
+        if (xc && !yc) {
+          win = x;
+        } else if (yc && !xc) {
+          win = y;
+        } else if (x != null && y != null) {
+          win = x.compareTo(y) >= 0 ? x : y;
+          final loser = identical(win, x) ? b : a;
+          final lost = identical(win, x) ? y : x;
+          final dot = p.lastIndexOf('.');
+          loser.text['${p.substring(0, dot)} (conflict, ${identical(win, x) ? 'Field tablet' : 'Home phone'}, 2026-11-10 0900)${p.substring(dot)}'] = lost;
+        } else {
+          win = x ?? y;
+        }
+        for (final f in [a, b]) {
+          win == null ? f.text.remove(p) : f.text[p] = win;
+        }
+      }
+      if (win != null) next[p] = win;
+    }
+    last = next;
+  }
+}
+
 class _Rig {
   _Rig(this.kind, {this.includePrivate = true}) {
     nb = fakeNotebook(store);
+    nb.reidJournal = journal;
   }
+
+  final File journal = File('${Directory.systemTemp.createTempSync('cache-reid-').path}/reid-journal.json');
 
   final SyncKind kind;
   final bool includePrivate;
@@ -427,123 +472,233 @@ void main() {
   group('notebook ids between linked devices', () {
     const hikes = NotebookDef(name: 'Hikes', fields: [], sort: NotebookSort.recent);
 
-    // What cache_sync carries: every file but the hidden ones (so never `.cache/notebooks.json`).
-    void carry(MemFolder from, MemFolder to) {
-      for (final e in from.text.entries) {
-        if (e.key.split('/').any((s) => s.startsWith('.'))) continue;
-        if (RegExp(r'notebook( \(conflict.*\))?\.json$').hasMatch(e.key)) continue;
-        to.text[e.key] = e.value;
-      }
-    }
-
-    Future<_Rig> device(String id, {String entry = ''}) async {
+    Future<_Rig> device(String id, {String entry = '', String name = 'Hikes', Set<String>? priv}) async {
       final r = _Rig(SyncKind.share, includePrivate: false);
       await r.nb.start();
-      final n = await r.nb.saveNotebook(id: id, template: 'notes', def: hikes);
-      if (entry.isNotEmpty) await r.nb.saveEntry(id: entry, notebookId: n.id, occurredAt: '2026-11-01T09:00:00-07:00', title: 'Hike $entry', body: 'Body $entry');
+      final n = await r.nb.saveNotebook(id: id, template: 'notes', def: hikes.copyWith(name: name));
+      if (entry.isNotEmpty) await r.nb.saveEntry(id: entry, notebookId: n.id, occurredAt: '2026-11-01T09:00:00-07:00', title: '$name $entry', body: 'Body $entry');
       return r;
     }
 
-    // Both devices wrote their own notebook.json: sync keeps the peer's newer one in place and the local one as a conflict copy.
-    void crossWrite(MemFolder a, MemFolder b) {
-      const f = 'Hikes/notebook.json';
-      final fa = a.text[f]!, fb = b.text[f]!;
-      a.text[f] = fb;
-      a.text['Hikes/notebook (conflict, B, 2026-11-10 0900).json'] = fa;
-      b.text[f] = fa;
-      b.text['Hikes/notebook (conflict, A, 2026-11-10 0900).json'] = fb;
+    // The sync of linked devices, in turns: both devices run, the share carries, both run again.
+    Future<void> rounds(List<_Rig> devices, List<_Link> links, {int n = 3}) async {
+      for (var i = 0; i < n; i++) {
+        for (final d in devices) {
+          await d.engine.run();
+        }
+        for (final l in links) {
+          l.sync();
+        }
+      }
+      for (final d in devices) {
+        await d.engine.run();
+      }
     }
 
-    test('a notebook made on one device arrives on the other with the same id', () async {
+    List<String> ids(_Rig d, String name) => [for (final n in d.nb.notebooks) if (n.name == name) n.id];
+    Future<Set<String>> entryIds(_Rig d, String nbId) async => {for (final e in await d.nb.entries(nbId)) e.id};
+
+    test('a notebook made on one device arrives on the other with the same id and its definition', () async {
       final a = await device('hikes-from-a', entry: 'ea1');
-      await a.engine.run();
-      expect(a.folder.text['Hikes/notebook.json'], contains('hikes-from-a'));
       final b = _Rig(SyncKind.share, includePrivate: false);
       await b.nb.start();
-      carry(a.folder, b.folder);
-      b.folder.text['Hikes/notebook.json'] = a.folder.text['Hikes/notebook.json']!;
-      await b.engine.run();
-      final made = b.nb.notebooks.firstWhere((n) => n.name == 'Hikes');
-      expect(made.id, 'hikes-from-a');
-      expect((await b.nb.entries(made.id)).map((e) => e.id), ['ea1']);
+      await rounds([a, b], [_Link(a.folder, b.folder)], n: 2);
+      expect(ids(b, 'Hikes'), ['hikes-from-a']);
+      expect(await entryIds(b, 'hikes-from-a'), {'ea1'});
+      expect(b.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
     });
 
     test('the notebook arrives before its id file: the device settles on the id once it comes', () async {
       final a = await device('aaa-hikes', entry: 'ea1');
       await a.engine.run();
+      final idText = a.folder.text.remove('Hikes/notebook.json')!;
       final b = _Rig(SyncKind.share, includePrivate: false);
       await b.nb.start();
-      carry(a.folder, b.folder);
+      final link = _Link(a.folder, b.folder);
+      link.sync();
       await b.engine.run();
-      final first = b.nb.notebooks.firstWhere((n) => n.name == 'Hikes').id;
-      expect(first, isNot('aaa-hikes'));
-      // B's own id is not lower than A's, so A's file wins when it arrives
-      b.folder.text['Hikes/notebook.json'] = a.folder.text['Hikes/notebook.json']!;
-      await b.engine.run();
-      expect(b.nb.notebooks.where((n) => n.name == 'Hikes').map((n) => n.id), ['aaa-hikes']);
-      expect((await b.nb.entries('aaa-hikes')).map((e) => e.id), ['ea1']);
+      expect(ids(b, 'Hikes').single, isNot('aaa-hikes'));
+      a.folder.text['Hikes/notebook.json'] = idText;
+      await rounds([a, b], [link], n: 2);
+      expect(ids(b, 'Hikes'), ['aaa-hikes']);
+      expect(await entryIds(b, 'aaa-hikes'), {'ea1'});
+      expect(b.journal.existsSync(), isFalse);
     });
 
-    test('two devices with different ids for one folder converge on the lowest, with their entries and references', () async {
+    test('only a conflict copy of the id file, no notebook.json: the lowest id still wins', () async {
+      final a = await device('bbb-hikes', entry: 'ea1');
+      await a.engine.run();
+      a.folder.text.remove('Hikes/notebook.json');
+      a.folder.text['Hikes/notebook (conflict, Field tablet, 2026-11-10 0900).json'] = '{"id":"aaa-hikes"}\n';
+      await a.engine.run();
+      expect(ids(a, 'Hikes'), ['aaa-hikes']);
+      expect(a.folder.text['Hikes/notebook.json'], contains('aaa-hikes'));
+      expect(a.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
+      expect(await entryIds(a, 'aaa-hikes'), {'ea1'});
+    });
+
+    test('two devices with different ids for one folder converge on the lowest, with entries and references', () async {
       final a = await device('bbb-hikes', entry: 'ea1');
       final b = await device('aaa-hikes', entry: 'eb1');
-      final aShared = _Included()..ids.add('bbb-hikes');
-      a.nb.privateSharing = aShared;
-      String? moved;
-      a.nb.onNotebookReid = (o, n) => moved = '$o>$n';
-      final aPrivate = {'bbb-hikes'};
-      final aEngine = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, privateBooks: aPrivate);
-      await aEngine.run();
+      final shared = _Included()..ids.add('bbb-hikes');
+      a.nb.privateSharing = shared;
+      final moves = <String>[];
+      a.nb.reids.listen((r) => moves.add('${r.oldId}>${r.newId}'));
+      final priv = {'bbb-hikes'};
+      final eng = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, privateBooks: priv);
+      final link = _Link(a.folder, b.folder);
+      await eng.run();
       await b.engine.run();
-      carry(a.folder, b.folder);
-      carry(b.folder, a.folder);
-      crossWrite(a.folder, b.folder);
-      await aEngine.run();
+      link.sync();
+      await eng.run();
       await b.engine.run();
+      link.sync();
+      await eng.run();
+      await b.engine.run();
+      link.sync();
+      await eng.run();
       for (final d in [a, b]) {
-        expect(d.nb.notebooks.where((n) => n.name == 'Hikes').map((n) => n.id), ['aaa-hikes']);
+        expect(ids(d, 'Hikes'), ['aaa-hikes']);
+        expect(await entryIds(d, 'aaa-hikes'), {'ea1', 'eb1'});
         expect(d.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
-        expect(d.folder.text['Hikes/notebook.json'], contains('aaa-hikes'));
       }
-      // A's entry and the references to its old id moved with it
-      expect((await a.nb.entries('aaa-hikes')).map((e) => e.id).toSet(), {'ea1', 'eb1'});
-      expect(moved, 'bbb-hikes>aaa-hikes');
-      expect(aShared.ids, {'aaa-hikes'});
-      expect(aPrivate, {'aaa-hikes'});
-      // the rest of the entries cross and nothing doubles
-      carry(a.folder, b.folder);
-      await b.engine.run();
-      expect((await b.nb.entries('aaa-hikes')).map((e) => e.id).toSet(), {'ea1', 'eb1'});
-      expect(b.nb.notebooks.where((n) => n.name == 'Hikes').length, 1);
+      expect(moves, ['bbb-hikes>aaa-hikes']);
+      expect(shared.ids, {'aaa-hikes'});
+      expect(priv, {'aaa-hikes'});
+      expect(a.journal.existsSync(), isFalse);
       // another round changes nothing
       final idFile = a.folder.text['Hikes/notebook.json'];
-      await aEngine.run();
+      await rounds([a, b], [link], n: 1);
       expect(a.folder.text['Hikes/notebook.json'], idFile);
-      expect(a.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
-      expect(a.nb.notebooks.where((n) => n.name == 'Hikes').map((n) => n.id), ['aaa-hikes']);
+      expect(ids(a, 'Hikes'), ['aaa-hikes']);
+    });
+
+    test('a late joiner with a lower id: every device moves to it', () async {
+      final a = await device('mmm-hikes', entry: 'ea1');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final ab = _Link(a.folder, b.folder);
+      await rounds([a, b], [ab], n: 2);
+      expect(ids(b, 'Hikes'), ['mmm-hikes']);
+      final c = await device('aaa-hikes', entry: 'ec1');
+      final ac = _Link(a.folder, c.folder);
+      await rounds([a, c], [ac], n: 3);
+      await rounds([a, b], [ab], n: 3);
+      for (final d in [a, b, c]) {
+        expect(ids(d, 'Hikes'), ['aaa-hikes']);
+      }
+      await rounds([a, b, c], [ab, ac], n: 2);
+      for (final d in [a, b, c]) {
+        expect(await entryIds(d, 'aaa-hikes'), {'ea1', 'ec1'});
+      }
     });
 
     test('concurrent edits on both devices keep one notebook', () async {
       final a = await device('aaa-hikes', entry: 'ea1');
       final b = await device('aaa-hikes', entry: 'eb1');
-      await a.engine.run();
-      await b.engine.run();
-      carry(a.folder, b.folder);
-      carry(b.folder, a.folder);
-      await a.engine.run();
-      await b.engine.run();
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link]);
       await a.nb.saveEntry(id: 'ea2', notebookId: 'aaa-hikes', occurredAt: '2026-11-02T09:00:00-07:00', title: 'A again');
       await b.nb.saveEntry(id: 'eb2', notebookId: 'aaa-hikes', occurredAt: '2026-11-02T10:00:00-07:00', title: 'B again');
-      await a.engine.run();
-      await b.engine.run();
-      carry(a.folder, b.folder);
-      carry(b.folder, a.folder);
-      await a.engine.run();
-      await b.engine.run();
+      await rounds([a, b], [link]);
       for (final d in [a, b]) {
-        expect(d.nb.notebooks.where((n) => n.name == 'Hikes').length, 1);
-        expect((await d.nb.entries('aaa-hikes')).map((e) => e.id).toSet(), {'ea1', 'eb1', 'ea2', 'eb2'});
+        expect(ids(d, 'Hikes'), ['aaa-hikes']);
+        expect(await entryIds(d, 'aaa-hikes'), {'ea1', 'eb1', 'ea2', 'eb2'});
       }
+    });
+
+    test('a winner held by another notebook here: the device keeps its id and the file is not rewritten back and forth', () async {
+      final a = await device('aaa-hikes', entry: 'ea1');
+      final b = await device('aaa-hikes', entry: 'eb1');
+      // b's Trips folder carries an id that b's own Hikes holds: it cannot be taken
+      await b.nb.saveNotebook(id: 'ttt-trips', template: 'notes', def: hikes.copyWith(name: 'Trips'));
+      b.folder.text['Trips/notebook.json'] = '{"id":"aaa-hikes"}\n';
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link], n: 3);
+      final seen = <String>[];
+      for (var i = 0; i < 3; i++) {
+        await a.engine.run();
+        await b.engine.run();
+        link.sync();
+        seen.add('${b.folder.text['Trips/notebook.json']}|${a.folder.text['Trips/notebook.json']}|${b.folder.text['Hikes/notebook.json']}');
+      }
+      expect(seen.toSet().length, 1, reason: 'the id files stop changing');
+      expect(ids(b, 'Trips'), ['ttt-trips']);
+      expect(ids(b, 'Hikes'), ['aaa-hikes']);
+      expect(b.folder.text['Trips/notebook.json'], contains('aaa-hikes'), reason: 'never rewritten to a higher id');
+    });
+
+    test('names that make one folder get their own folders', () async {
+      final a = await device('aaa-one', name: 'Trip: 2026', entry: 'ea1');
+      await a.nb.saveNotebook(id: 'bbb-two', template: 'notes', def: hikes.copyWith(name: 'Trip 2026'));
+      await a.nb.saveEntry(id: 'ea2', notebookId: 'bbb-two', occurredAt: '2026-11-01T09:00:00-07:00', title: 'Second', body: 'x');
+      await a.engine.run();
+      final files = a.folder.text.keys.where((k) => k.endsWith('notebook.json')).toList();
+      expect(files.where((k) => k.startsWith('Trip')).length, 2);
+      expect({for (final k in files.where((k) => k.startsWith('Trip'))) k.split('/').first}.length, 2);
+    });
+
+    test('a rename carries the id: the other device renames its notebook, nothing is deleted, no second notebook', () async {
+      final a = await device('hikes-id', entry: 'ea1');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link], n: 2);
+      expect(ids(b, 'Hikes'), ['hikes-id']);
+      await a.nb.saveNotebook(id: 'hikes-id', def: hikes.copyWith(name: 'Trips'));
+      await a.engine.run();
+      expect(a.folder.text['Trips/notebook.json'], contains('hikes-id'));
+      expect(a.folder.text.containsKey('Hikes/notebook.json'), isFalse);
+      link.sync();
+      final rep = await b.engine.run();
+      expect(rep.deleted, 0);
+      await rounds([a, b], [link], n: 2);
+      for (final d in [a, b]) {
+        expect(d.nb.notebooks.where((n) => n.name == 'Hikes' || n.name == 'Trips').map((n) => '${n.name}:${n.id}'), ['Trips:hikes-id']);
+        expect(await entryIds(d, 'hikes-id'), {'ea1'});
+        expect(d.folder.text.containsKey('Hikes/notebook.json'), isFalse);
+        expect(jsonDecode(d.folder.text['Trips/notebook.json']!)['deleted'], isNull);
+      }
+    });
+
+    test('a deleted notebook leaves a tombstone, kept for a while; the other device is not told to delete by the id file alone', () async {
+      final a = await device('hikes-id', entry: 'ea1');
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
+      await rounds([a, b], [link], n: 2);
+      await a.nb.deleteNotebook('hikes-id');
+      await a.engine.run();
+      final t = jsonDecode(a.folder.text['Hikes/notebook.json']!) as Map;
+      expect((t['id'], t['deleted'], t['at']), ('hikes-id', true, DateTime(2026, 10, 29, 17, 2).millisecondsSinceEpoch));
+      link.sync();
+      await b.engine.run();
+      expect(jsonDecode(b.folder.text['Hikes/notebook.json']!)['deleted'], true, reason: 'the peer does not write its own file over the tombstone');
+      expect(ids(b, 'Hikes'), ['hikes-id'], reason: 'the notebook itself is for the delete rule to remove');
+      // the tombstone goes after a month
+      final later = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, clock: () => DateTime(2026, 12, 5));
+      await later.run();
+      expect(a.folder.text.containsKey('Hikes/notebook.json'), isFalse);
+    });
+
+    test('turning a notebook off removes its id file without a tombstone; the other device keeps its copy', () async {
+      final a = _Rig(SyncKind.share, includePrivate: false);
+      await a.nb.start();
+      await a.nb.saveNotebook(id: 'zzz-meds', template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent), private: true);
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await b.nb.start();
+      final link = _Link(a.folder, b.folder);
+      final on = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, privateBooks: {'zzz-meds'});
+      await on.run();
+      link.sync();
+      await b.engine.run();
+      expect(ids(b, 'Medical'), isEmpty, reason: 'a notebook with no entries is not made by the id file');
+      expect(a.folder.text['Medical/notebook.json'], contains('zzz-meds'));
+      await a.engine.run();
+      expect(a.folder.text.containsKey('Medical/notebook.json'), isFalse);
+      expect(ids(a, 'Medical'), ['zzz-meds'], reason: 'the notebook stays here');
+      link.sync();
+      expect(b.folder.text.containsKey('Medical/notebook.json'), isFalse);
     });
 
     test('a private notebook that is not included keeps its id and writes nothing', () async {
@@ -551,21 +706,127 @@ void main() {
       await a.nb.start();
       final meds = await a.nb.saveNotebook(id: 'zzz-meds', template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent), private: true);
       await a.nb.saveEntry(id: 'em1', notebookId: meds.id, occurredAt: '2026-11-01T09:00:00-07:00', title: 'Private', body: 'x');
-      // a file from another device claiming a lower id for that folder is not read
       a.folder.text['Medical/notebook.json'] = '{"id":"aaa-meds"}\n';
       await a.engine.run();
-      expect(a.nb.notebooks.firstWhere((n) => n.name == 'Medical').id, 'zzz-meds');
+      expect(ids(a, 'Medical'), ['zzz-meds']);
       expect(a.folder.text['Medical/notebook.json'], contains('aaa-meds'));
       expect(a.folder.text.keys.where((k) => k.endsWith('.md') && k.startsWith('Medical/')), isEmpty);
-      // included, it settles like any other
       final again = NotebookSync(notebook: a.nb, kind: SyncKind.share, folder: a.folder, stateFile: a.state, includePrivate: false, privateBooks: {'zzz-meds'});
       await again.run();
-      expect(a.nb.notebooks.firstWhere((n) => n.name == 'Medical').id, 'aaa-meds');
-      expect((await a.nb.entries('aaa-meds')).map((e) => e.id), ['em1']);
+      expect(ids(a, 'Medical'), ['aaa-meds']);
+      expect(await entryIds(a, 'aaa-meds'), {'em1'});
     });
   });
 
-  group('the app PIN', () {
+  group('a notebook id change is a journaled, resumable job', () {
+    const hikes = NotebookDef(name: 'Hikes', fields: [LogField(label: 'Distance', type: FieldType.number, unit: 'mi')], sort: NotebookSort.recent);
+
+    // A device with a Hikes notebook (id 'bbb-hikes'), a field-name state file for the share and for an Obsidian folder, a
+    // shortcut and a private-sharing choice, all under the old id; and a share that carries 'aaa-hikes' for it.
+    Future<({_Rig rig, _Included shared, List<String> shortcuts, File obsidian, int Function() calls})> build(Set<int> failAt) async {
+      final r = _Rig(SyncKind.share, includePrivate: false);
+      await r.nb.start();
+      await r.nb.saveNotebook(id: 'bbb-hikes', template: 'log', def: hikes);
+      await r.nb.saveEntry(id: 'e1', notebookId: 'bbb-hikes', occurredAt: '2026-11-01T09:00:00-07:00', values: {'f1': 4});
+      final shared = _Included()..ids.add('bbb-hikes');
+      r.nb.privateSharing = shared;
+      final shortcuts = <String>['bbb-hikes'];
+      final obsidian = File('${r.state.parent.path}/obsidian.json')..writeAsStringSync(jsonEncode({'props': {'bbb-hikes': {'f1': 'distance'}}}));
+      r.state.writeAsStringSync(jsonEncode({'props': {'bbb-hikes': {'f1': 'distance'}}}));
+      var n = 0;
+      Future<void> step(String name, Future<void> Function(String, String) f) async {
+        r.nb.reidSteps[name] = (o, w) async {
+          if (failAt.contains(++n)) throw StateError('killed in $name');
+          await f(o, w);
+        };
+      }
+
+      await step('shortcuts', (o, w) async => shortcuts.replaceRange(0, shortcuts.length, [for (final x in shortcuts) x == o ? w : x]));
+      await step('field names', (o, w) async {
+        await NotebookSync.moveProps(r.state, o, w);
+        await NotebookSync.moveProps(obsidian, o, w);
+      });
+      return (rig: r, shared: shared, shortcuts: shortcuts, obsidian: obsidian, calls: () => n);
+    }
+
+    for (final kill in [0, 1, 2]) {
+      test('killed at step ${kill + 1} (${['shortcuts', 'field names', 'before any step'][kill]}), the replay finishes it with everything intact', () async {
+        final d = await build(kill == 2 ? {} : {kill + 1});
+        if (kill == 2) d.rig.store.failNext = 'io';
+        await expectLater(d.rig.nb.reidNotebook('bbb-hikes', 'aaa-hikes'), throwsA(anything));
+        expect(d.rig.journal.existsSync(), isTrue, reason: 'the journal stays until every step saved');
+        final j = jsonDecode(d.rig.journal.readAsStringSync()) as Map;
+        expect((j['old'], j['new']), ('bbb-hikes', 'aaa-hikes'));
+        // the next start: a new NotebookState on the same core and journal replays it before anything syncs
+        final again = fakeNotebook(d.rig.store)..reidJournal = d.rig.journal;
+        again.privateSharing = d.shared;
+        again.reidSteps.addAll(d.rig.nb.reidSteps);
+        await again.start();
+        await again.replayReid();
+        expect(d.rig.journal.existsSync(), isFalse);
+        expect(again.notebooks.where((n) => n.name == 'Hikes').map((n) => n.id), ['aaa-hikes']);
+        expect((await again.entries('aaa-hikes')).map((e) => e.id), ['e1']);
+        expect(d.shared.ids, {'aaa-hikes'});
+        expect(d.shortcuts, ['aaa-hikes']);
+        for (final f in [d.rig.state, d.obsidian]) {
+          final props = (jsonDecode(f.readAsStringSync()) as Map)['props'] as Map;
+          expect(props.keys, ['aaa-hikes'], reason: f.path);
+          expect(props['aaa-hikes'], {'f1': 'distance'});
+        }
+        // a second replay does nothing
+        await again.replayReid();
+        expect(again.notebooks.where((n) => n.name == 'Hikes').length, 1);
+      });
+    }
+
+    test('a field with a renamed label still reads and writes under the same property name after a re-id', () async {
+      final d = await build({});
+      await d.rig.nb.reidNotebook('bbb-hikes', 'aaa-hikes');
+      // the label is renamed after the re-id; the property name the file already uses stays
+      final book = d.rig.nb.notebook('aaa-hikes')!;
+      final f = book.def.fields.first;
+      await d.rig.nb.saveNotebook(id: 'aaa-hikes', def: book.def.copyWith(fields: [LogField(fid: f.fid, label: 'Miles walked', type: f.type, unit: f.unit)]));
+      final eng = NotebookSync(notebook: d.rig.nb, kind: SyncKind.share, folder: d.rig.folder, stateFile: d.rig.state, includePrivate: false);
+      await eng.run();
+      final file = d.rig.folder.text.entries.firstWhere((e) => e.key.endsWith('.md')).value;
+      expect(file, contains('distance: 4'), reason: 'written under the name the state file kept, not "miles_walked"');
+      expect(file, isNot(contains('miles_walked')));
+    });
+
+    test('Obsidian and Logseq connections keep their field names across a re-id', () async {
+      final d = await build({});
+      final logseq = File('${d.rig.state.parent.path}/logseq.json')..writeAsStringSync(jsonEncode({'props': {'bbb-hikes': {'f1': 'distance'}, 'other': {'f9': 'x'}}}));
+      d.rig.nb.reidSteps['logseq'] = (o, w) => NotebookSync.moveProps(logseq, o, w);
+      await d.rig.nb.reidNotebook('bbb-hikes', 'aaa-hikes');
+      final props = (jsonDecode(logseq.readAsStringSync()) as Map)['props'] as Map;
+      expect(props['aaa-hikes'], {'f1': 'distance'});
+      expect(props['other'], {'f9': 'x'});
+      expect(props.containsKey('bbb-hikes'), isFalse);
+    });
+
+    test('Home shortcuts follow a notebook to its new id', () async {
+      final dir = Directory.systemTemp.createTempSync('cache-layout-');
+      final layout = LayoutState(settingsDirOverride: dir);
+      await layout.init();
+      layout.addShortcut(Shortcut.notebook(id: 'bbb-hikes', name: 'Hikes'));
+      layout.addShortcut(Shortcut.notebook(id: 'ccc-other', name: 'Other'));
+      layout.renameNotebook('bbb-hikes', 'aaa-hikes');
+      expect([for (final s in layout.shortcuts) s.notebookId], ['aaa-hikes', 'ccc-other']);
+      final again = LayoutState(settingsDirOverride: dir);
+      await again.init();
+      expect([for (final s in again.shortcuts) s.notebookId], ['aaa-hikes', 'ccc-other'], reason: 'saved');
+    });
+
+    test('the saved-places notebook keeps its link when its id changes', () async {
+      final r = _Rig(SyncKind.share);
+      await r.nb.start();
+      final sp = await r.nb.ensureSavedPlaces();
+      await r.nb.reidNotebook(sp.id, 'aaa-places');
+      expect(r.nb.savedPlaces?.id, 'aaa-places');
+    });
+  });
+
+  group('the app PIN', () {  group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);
       final store = MemoryTokenStore();
