@@ -10,6 +10,9 @@ someone re-adding `pod 'MapLibre'` to app/ios/Podfile, which embeds a second Map
 commands produce ... Runner.app/Frameworks/MapLibre.framework"). This fails if the Podfile declares a MapLibre pod at all, and prints
 the plugin's MapLibre version for information.
 
+The iOS job in .github/workflows/map-bench.yml builds a scratch project with CocoaPods and so carries its own literal
+`POD="pod 'MapLibre', 'X'"`. This also fails if that X differs from the plugin's version.
+
 Run from the repository root after `flutter pub get` in app/ (it reads app/.dart_tool/package_config.json to find the plugin):
     python3 -I tools/check_maplibre_pin.py
 """
@@ -49,6 +52,8 @@ def main() -> None:
     plugin_android = one(android_pattern, (plugin / "android" / "build.gradle").read_text(), "the plugin's android/build.gradle")
     app_android = one(android_pattern, (APP / "android" / "app" / "build.gradle.kts").read_text(), "app/android/app/build.gradle.kts")
     plugin_ios = one(spm_pattern, (plugin / "ios" / "maplibre_gl" / "Package.swift").read_text(), "the plugin's ios/maplibre_gl/Package.swift")
+    bench_text = (ROOT / ".github" / "workflows" / "map-bench.yml").read_text()
+    bench_ios = one(r'POD="pod \'MapLibre\',\s*\'([^\']+)\'"', bench_text, ".github/workflows/map-bench.yml")
     podfile_pod = pod_line.search((APP / "ios" / "Podfile").read_text())
     print(f"maplibre_gl at {plugin}")
     print(f"Android: plugin {plugin_android}, app {app_android}")
@@ -59,6 +64,8 @@ def main() -> None:
     if podfile_pod:
         bad.append("app/ios/Podfile declares a MapLibre pod; maplibre_gl already brings MapLibre in through its Swift package, "
                    "and a pod embeds a second MapLibre.framework (the archive fails with 'Multiple commands produce')")
+    if bench_ios != plugin_ios:
+        bad.append(f".github/workflows/map-bench.yml builds the iOS snapshotter against MapLibre {bench_ios}; maplibre_gl uses {plugin_ios}")
     if bad:
         sys.exit("\n".join(bad))
     print("MapLibre is declared once on each platform")
