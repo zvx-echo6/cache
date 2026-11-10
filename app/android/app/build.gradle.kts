@@ -42,6 +42,9 @@ android {
             // Not shipped: on the Pixel 8 (Tensor G3) the SVE2 variants read prompts at about half the
             // speed of armv8.6_1, and ggml would prefer them. Keep every armv8.x variant.
             excludes += "**/libggml-cpu-android_armv9*.so"
+            // arm64-v8a only. abiFilters does not drop the prebuilt libraries inside plugin AARs (libdartjni, libmaplibre,
+            // libmlkit_google_ocr_pipeline), which would leave x86_64 and armeabi-v7a folders holding only those, so exclude them outright.
+            excludes += listOf("**/x86_64/**", "**/x86/**", "**/armeabi-v7a/**", "**/armeabi/**")
         }
     }
 
