@@ -34,7 +34,7 @@ import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../video/format.dart';
-import 'catalogue_screen.dart' show AddToLibraryScreen;
+import 'catalogue_screen.dart' show AddToLibraryScreen, YourOwnGroup;
 import 'browse_state.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/discover_screen.dart';
@@ -449,7 +449,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   /// name Add to Library; the catalogue's own page where the app has no Discover (tests).
   Widget _addPage() {
     final d = DiscoverState.shared;
-    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources);
+    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources, yourOwn: YourOwnGroup.forBrowse(b));
   }
 
   /// The 1.1 Library's Add to Library: in the detail on a desktop window, else a page of its own.

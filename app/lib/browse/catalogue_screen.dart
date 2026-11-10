@@ -9,6 +9,7 @@ import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
 import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
 import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
+import '../sources/libraries_state.dart' show LibrariesState;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'zim_dl.dart';
@@ -253,43 +254,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
     return [
       // In a browser the first section is the computer the browser is on.
       if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
-      if (libraries != null) ...[
-        const GroupLabel('Your own'),
-        Material(
-          color: k.surface,
-          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
-          child: InkWell(
-            key: const ValueKey('add-own-library'),
-            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 52),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.library_add_outlined, size: 22, color: k.text),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Your own library', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                          Text('From a file or a download link', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: k.secondary),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
-        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
-        const SizedBox(height: 6),
-      ],
+      if (libraries != null) YourOwnGroup(libraries: libraries, pdf: pdf),
       // In a browser, building a library from PDFs and the drop folder.
       if (b.device != null) ...buildAddRows(context, b.device!),
     ];
@@ -436,6 +401,69 @@ class EntryTile extends StatelessWidget {
             ? letter
             : Image.network(plat.isWeb ? '/api/fetch?url=${Uri.encodeComponent(url.toString())}' : url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
       ),
+    );
+  }
+}
+
+/// The YOUR OWN group of Add to Library: the label, Your own library (from a file or a download link), and on a phone Add a PDF and
+/// Add a folder under it. Shown in Add to Library's own list and at the top of Discover when Add to Library opens it.
+class YourOwnGroup extends StatelessWidget {
+  const YourOwnGroup({super.key, required this.libraries, required this.pdf});
+
+  final LibrariesState libraries;
+
+  /// Add a PDF and Add a folder go under Your own library (a phone; not a browser).
+  final bool pdf;
+
+  /// The group for the app's own state: null when the libraries are not set up.
+  static Widget? forBrowse(BrowseState b) {
+    final libraries = b.libraries;
+    if (libraries == null) return null;
+    return YourOwnGroup(libraries: libraries, pdf: addPdfShared != null && b.device == null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('Your own'),
+        Material(
+          color: k.surface,
+          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
+          child: InkWell(
+            key: const ValueKey('add-own-library'),
+            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 52),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_add_outlined, size: 22, color: k.text),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Your own library', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                          Text('From a file or a download link', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: k.secondary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
+        const SizedBox(height: 6),
+      ],
     );
   }
 }
