@@ -504,6 +504,9 @@ bool paneShowsDesktopInitial(BuildContext context) {
   return pane != null && pane.inList && pane.state._builder == null && pane.state.widget.desktopInitial != null && isDesktop(context);
 }
 
+/// This widget is in the list of a [TwoPane] (not its detail).
+bool inPaneList(BuildContext context) => _PaneScope.of(context)?.inList ?? false;
+
 /// Item [key] is the one shown in the detail pane beside this list (its row is marked).
 bool isPaneSelected(BuildContext context, Object key) {
   final pane = _PaneScope.of(context);

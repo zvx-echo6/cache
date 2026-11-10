@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
 import '../../layout/adaptive.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -121,7 +122,8 @@ class GroupLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+    // On the desktop the label's edge is the card's edge.
+    padding: isLinuxDesktop(context) ? const EdgeInsets.fromLTRB(0, 12, 0, 8) : const EdgeInsets.fromLTRB(6, 6, 6, 6),
     child: Text(
       text.toUpperCase(),
       style: TextStyle(fontSize: 12, letterSpacing: 0.7, color: context.t.secondary, fontWeight: FontWeight.w500),
@@ -143,7 +145,7 @@ class SettingsGroup extends StatelessWidget {
       children: [
         if (label != null) GroupLabel(label!),
         for (var i = 0; i < rows.length; i++) ...[
-          if (i > 0) const SizedBox(height: 2),
+          if (i > 0) SizedBox(height: isLinuxDesktop(context) && inPaneList(context) ? 0 : 2),
           _RowPlace(first: i == 0, last: i == rows.length - 1, child: rows[i]),
         ],
       ],
@@ -171,7 +173,12 @@ class SettingsRow extends StatelessWidget {
     this.holdLabel = 'Options',
     this.selected = false,
     this.titleLines = 1,
+    this.compact = false,
   });
+
+  /// The Linux desktop's flat 44-pixel row, for a group drawn as one table-like card (Storage); the index lists get the flat 52-pixel
+  /// row by themselves.
+  final bool compact;
 
   /// Lines the name may take (a book's title in a narrow list: 2).
   final int titleLines;
@@ -211,7 +218,10 @@ class SettingsRow extends StatelessWidget {
       top: Radius.circular(first ? 16 : 4),
       bottom: Radius.circular(last ? 16 : 4),
     );
-    final showChevron = chevron ?? (onTap != null && trailing == null);
+    // The index list of a two-pane page on the Linux desktop: flat 52-pixel rows with a hairline, no chevron, and the chosen one
+    // marked by a tint and a bar on its left edge.
+    final flat = compact || (isLinuxDesktop(context) && inPaneList(context));
+    final showChevron = !flat && (chevron ?? (onTap != null && trailing == null));
     final titleColor = danger ? k.emergency : (dim ? k.secondary : k.text);
     final lead = leading ?? (icon == null ? null : Icon(icon, size: 22, color: k.secondary));
     final hold = onHold;
@@ -219,9 +229,14 @@ class SettingsRow extends StatelessWidget {
       container: true,
       customSemanticsActions: hold == null ? null : {CustomSemanticsAction(label: holdLabel): hold},
       selected: selected,
-      child: Material(
-        color: selected ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : k.surface,
-        borderRadius: radius,
+      child: _flatFrame(
+        flat,
+        k,
+        Material(
+        color: flat
+            ? (selected ? k.primary.withValues(alpha: 0.28) : Colors.transparent)
+            : (selected ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : k.surface),
+        borderRadius: flat ? BorderRadius.zero : radius,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
@@ -232,9 +247,9 @@ class SettingsRow extends StatelessWidget {
                   hold();
                 },
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 52),
+            constraints: BoxConstraints(minHeight: compact ? 44 : 52),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              padding: EdgeInsets.symmetric(horizontal: flat ? 16 : 14, vertical: 9),
               child: Row(
                 children: [
                   if (lead != null) ...[lead, const SizedBox(width: 14)],
@@ -261,7 +276,22 @@ class SettingsRow extends StatelessWidget {
             ),
           ),
         ),
+        ),
       ),
+    );
+  }
+
+  /// The flat row's hairline under it and, for the chosen row, the bar on its left edge; [row] alone otherwise.
+  Widget _flatFrame(bool flat, CacheTokens k, Widget row) {
+    if (!flat) return row;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: selected ? k.accent : Colors.transparent, width: 3),
+          bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2)),
+        ),
+      ),
+      child: row,
     );
   }
 }
@@ -322,6 +352,32 @@ class AdvancedRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    if (isLinuxDesktop(context)) {
+      // A 44-pixel row between hairlines, in the table's language, not an outlined bar.
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: k.secondary.withValues(alpha: 0.2)), bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2))),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 44,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Text('Advanced', style: TextStyle(fontSize: 15, color: k.text)),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(status, textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.secondary))),
+                  const SizedBox(width: 6),
+                  Icon(Icons.chevron_right, color: k.secondary.withValues(alpha: 0.8)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Material(
       color: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: k.secondary.withValues(alpha: 0.5), width: 1.5)),

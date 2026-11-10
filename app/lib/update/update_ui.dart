@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../app_fs.dart';
+import '../desktop/desktop.dart';
 import '../theme.dart';
 import '../version.dart';
 import 'app_update.dart';
@@ -126,14 +127,14 @@ class UpdateBanner extends StatelessWidget {
     builder: (context, _) {
       if (!updates.bannerShown) return const SizedBox.shrink();
       final k = context.t;
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Dismissible(
-          key: const ValueKey('update-banner'),
-          onDismissed: (_) => updates.dismiss(),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
-            decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: k.accent.withValues(alpha: 0.6), width: 1.5)),
+      // The Linux desktop: a 48-pixel strip with a 3-pixel stripe in the warning colour, the message and the action the same weight.
+      final desktop = isLinuxDesktop(context);
+      final body = Container(
+            height: desktop ? 48 : null,
+            padding: desktop ? const EdgeInsets.fromLTRB(14, 0, 6, 0) : const EdgeInsets.fromLTRB(14, 6, 6, 6),
+            decoration: desktop
+                ? BoxDecoration(color: k.surface, border: Border(left: BorderSide(color: k.warning, width: 3)))
+                : BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: k.accent.withValues(alpha: 0.6), width: 1.5)),
             child: Row(
               children: [
                 Icon(Icons.system_update_outlined, size: 22, color: k.accent),
@@ -145,13 +146,19 @@ class UpdateBanner extends StatelessWidget {
                 TextButton(
                   key: const ValueKey('update-open'),
                   onPressed: updates.linux ? () => showHowToUpdate(context, updates) : updates.open,
-                  child: Text(updates.openLabel),
+                  child: Text(updates.openLabel, style: desktop ? const TextStyle(fontSize: 14, fontWeight: FontWeight.w600) : null),
                 ),
                 if (updates.linux)
                   IconButton(key: const ValueKey('update-dismiss'), tooltip: 'Dismiss', icon: Icon(Icons.close, size: 20, color: k.secondary), onPressed: updates.dismiss),
               ],
             ),
-          ),
+          );
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Dismissible(
+          key: const ValueKey('update-banner'),
+          onDismissed: (_) => updates.dismiss(),
+          child: desktop ? ClipRRect(borderRadius: BorderRadius.circular(8), child: body) : body,
         ),
       );
     },

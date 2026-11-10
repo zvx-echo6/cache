@@ -70,9 +70,39 @@ class _StoragePageState extends State<StoragePage> {
         final colors = _colors(k);
         final free = u.freeBytes;
         final clean = u.cleanupBytes;
+        final desktop = isLinuxDesktop(context);
+        // The Clean up and Kept free rows: on the desktop one card of flat 44-pixel rows, in the table's own row language.
+        final rows = <Widget>[
+                SettingsRow(
+                  key: const ValueKey('clean-up'),
+                  compact: desktop,
+                  icon: Icons.cleaning_services_outlined,
+                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
+                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
+                  trailing: _cleaning
+                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
+                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
+                ),
+                if (!linuxUi)
+                  SwitchRow(
+                  title: 'Mobile data downloads',
+                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
+                  value: s.mobileForDownloads,
+                  onChanged: s.setMobileForDownloads,
+                ),
+                SettingsRow(
+                  key: const ValueKey('kept-free'),
+                  compact: desktop,
+                  icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
+                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
+                  status: const [Part('10% of storage, 5 to 20 GB')],
+                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
+                ),
+              ];
         return SettingsPage(
           title: 'Storage',
           children: [
+            if (desktop) Text('Storage', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: k.text)),
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -90,33 +120,15 @@ class _StoragePageState extends State<StoragePage> {
                 ),
               ],
             ),
-            SettingsGroup(
-              rows: [
-                SettingsRow(
-                  key: const ValueKey('clean-up'),
-                  icon: Icons.cleaning_services_outlined,
-                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
-                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
-                  trailing: _cleaning
-                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
-                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
-                ),
-                if (!linuxUi)
-                  SwitchRow(
-                  title: 'Mobile data downloads',
-                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
-                  value: s.mobileForDownloads,
-                  onChanged: s.setMobileForDownloads,
-                ),
-                SettingsRow(
-                  key: const ValueKey('kept-free'),
-                  icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
-                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
-                  status: const [Part('10% of storage, 5 to 20 GB')],
-                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
-                ),
-              ],
-            ),
+            if (desktop)
+              Material(
+                color: k.surface,
+                borderRadius: BorderRadius.circular(14),
+                clipBehavior: Clip.antiAlias,
+                child: Column(children: [for (var i = 0; i < rows.length; i++) ...[if (i > 0) Divider(height: 1, color: k.secondary.withValues(alpha: 0.2)), rows[i]]]),
+              )
+            else
+              SettingsGroup(rows: rows),
             if (!linuxUi) const NoteText('Weather and alerts always update, on any connection.'),
             // The Linux desktop shows the kinds as a table; every other window keeps the rows.
             if (isLinuxDesktop(context))

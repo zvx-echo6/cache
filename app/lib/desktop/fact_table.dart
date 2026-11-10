@@ -98,7 +98,7 @@ extension on Widget {
     alignment: Alignment.centerRight,
     children: [
       this,
-      if (on) Padding(padding: const EdgeInsets.only(right: 10), child: Icon(Icons.chevron_right, size: 20, color: color)),
+      if (on) Positioned(right: 10, top: 0, bottom: 0, child: Center(child: Icon(Icons.chevron_right, size: 20, color: color))),
     ],
   );
 }

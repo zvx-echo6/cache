@@ -6,7 +6,7 @@ import 'desktop.dart';
 /// [base] with the desktop's density: a lower page bar with a hairline, 16-pixel dialogs, smaller body text, 36-pixel buttons,
 /// a hover tint and, for a snackbar, a place at the bottom left of a region [regionWidth] wide. Only colours from [CacheTokens]; text
 /// styles are [base]'s own, resized, so the font stays whatever the app uses.
-ThemeData desktopTheme(ThemeData base, {required double regionWidth}) {
+ThemeData desktopTheme(ThemeData base, {required double regionWidth, double gutter = 24}) {
   final k = base.extension<CacheTokens>();
   if (k == null) return base;
   TextStyle? size(TextStyle? s, double px, {double? height}) => s?.copyWith(fontSize: px, height: height);
@@ -39,7 +39,7 @@ ThemeData desktopTheme(ThemeData base, {required double regionWidth}) {
     ),
     appBarTheme: base.appBarTheme.copyWith(
       toolbarHeight: DesktopMetrics.barHeight,
-      titleSpacing: 24,
+      titleSpacing: gutter,
       titleTextStyle: size(base.appBarTheme.titleTextStyle, 20),
       shape: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2))),
     ),
@@ -80,7 +80,7 @@ class DesktopThemeScope extends StatelessWidget {
     final base = Theme.of(context);
     final on = isLinuxDesktop(context);
     return Theme(
-      data: on ? desktopTheme(base, regionWidth: regionWidth ?? MediaQuery.sizeOf(context).width) : base,
+      data: on ? desktopTheme(base, regionWidth: regionWidth ?? MediaQuery.sizeOf(context).width, gutter: isLinuxWide(context) ? 32 : 24) : base,
       child: child,
     );
   }
