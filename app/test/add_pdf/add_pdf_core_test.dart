@@ -285,6 +285,8 @@ void main() {
             engines: () async => engines,
             ocrEngine: () async => FakeOcrEngine(engine: 'fake-ocr', version: '1', pages: {1: _radio}),
             bookshelves: shelf,
+            // the least work per step, so each phase lasts several steps and the stop lands inside it
+            stepBudgetMs: 1,
             permit: (job) async {
               if (!hit && job.state == phase) {
                 hit = true;
@@ -292,7 +294,7 @@ void main() {
               }
             },
           );
-          final bytes = scanned ? scannedPdf() : textPdf('Water purification manual', [_water, _water.reversed.toList(), _water]);
+          final bytes = scanned ? scannedPdf() : textPdf('Water purification manual', [for (var i = 0; i < 12; i++) i.isEven ? _water : _water.reversed.toList()]);
           final f = File('${tmp.path}/$phase/picked.pdf')..writeAsBytesSync(bytes);
           final title = scanned ? 'Field radio handbook' : 'Water purification manual';
           final job = await first.add(pdfPath: f.path, fileName: 'picked.pdf', bytes: bytes.length, title: title, target: AddPdfTarget(title: 'My books', path: lib, isDefault: true));
