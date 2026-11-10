@@ -188,8 +188,9 @@ impl BuildService {
         self.write_catalogue(lib)
     }
 
-    /// The library's catalogue, made from its packs the way the one-shot builder makes it: `documents.tsv` (what a browser or a
-    /// phone lists a library's books from; without it the library shows no books).
+    /// The library's catalogue and local view, made from its packs the way the one-shot builder makes them: `documents.tsv` (what a
+    /// browser or a phone lists a library's books from; without it the library shows no books) and `.local/docs.json`, format 2
+    /// (the book facts, compression and OCR among them).
     fn write_catalogue(&self, lib: &str) -> Result<(), String> {
         let (live, packs) = (self.live_dir(lib), self.packs_dir(lib));
         let headers = if packs.is_dir() { cache_builder::view::live_headers(&packs).map_err(|e| e.to_string())? } else { Default::default() };
@@ -199,6 +200,9 @@ impl BuildService {
             tsv.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}\n", h.doc_id, h.doc_version, title, h.source.blake3, h.pieces, h.page_count));
         }
         write_bytes_atomic(&live.join(cache_builder::library::DOCUMENTS_FILE), tsv.as_bytes()).map_err(|e| format!("writing documents.tsv: {e}"))?;
+        if !headers.is_empty() {
+            cache_builder::view::rebuild_view(&live, &packs).map_err(|e| format!("writing .local/docs.json: {e}"))?;
+        }
         Ok(())
     }
 

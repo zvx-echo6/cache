@@ -503,6 +503,11 @@ fn a_built_library_has_documents_tsv() {
     let live = svc.live_dir(&lib);
     let tsv = std::fs::read_to_string(live.join("documents.tsv")).unwrap();
     assert_eq!(tsv.lines().count(), 2, "{tsv}");
+    // and the local view, format 2, which carries each book's compression and OCR
+    let view: serde_json::Value = serde_json::from_slice(&std::fs::read(live.join(".local/docs.json")).unwrap()).unwrap();
+    assert_eq!(view["format"], 2);
+    assert_eq!(view["docs"].as_object().unwrap().len(), 1);
+    assert!(view["docs"].as_object().unwrap().values().all(|v| v.get("compression").is_some() && v.get("ocr").is_some()));
 }
 
 #[test]
