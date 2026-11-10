@@ -729,7 +729,7 @@ class NotebookSync {
       if (text == null || text != it.base) continue;
       var np = '$newDir/${it.path.substring(oldDir.length + 1)}';
       for (var i = 2; await folder.exists(np) || _items.values.any((x) => x.path == np); i++) {
-        np = '$newDir/${_baseName(it.path)} ${i}.md';
+        np = '$newDir/${_baseName(it.path)} $i.md';
       }
       final fresh = _render(_docOf(book, entry));
       await folder.writeText(np, fresh);
