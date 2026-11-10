@@ -3,8 +3,9 @@
 // 390x844 (the phone layout, unchanged). Screens: Home with the update banner, the Library (list, and a book open in the detail
 // pane), Settings > Storage, and the share dialog over Ask. The Library's sample books and the Library rig are copied from
 // library11_renders_test.dart, Ask's chat from desktop_renders_test.dart.
-// The one stand-in: Shell wires the update check only on iOS and Android, so Home (with its banner) and Ask are drawn by their own
-// screens inside DesktopShell, the frame the Shell builds on a Linux desktop window, instead of through Shell.
+// The first set draws Home (with its banner) and Ask by their own screens inside DesktopShell, the frame the Shell builds on a Linux
+// desktop window. Round 3 (at the end) draws Ask, Notebooks, Weather and Videos the same way, at 1440x900 and 1024x768, light and dark
+// (Ask also in parchment and tactical at 1440), and Home through the Shell itself, whose update check now runs on Linux too.
 // flutter test test_shots/linux_desktop_mockups_test.dart --update-goldens  (pictures in test_shots/linux_desktop_mockups/)
 
 import 'dart:async';
@@ -15,15 +16,24 @@ import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/chat/tool.dart';
 import 'package:cache/chat/tool_loop.dart';
 import 'package:cache/desktop/desktop_shell.dart';
+import 'package:cache/desktop/linux_updates.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
 import 'package:cache/library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'package:cache/linux_ui.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
+import 'package:cache/notebook/notebook_model.dart';
+import 'package:cache/notebook/places.dart';
+import 'package:cache/notebook/templates.dart';
 import 'package:cache/platform/battery.dart';
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/screens/home_screen.dart';
+import 'package:cache/screens/notebooks/notebook_screen.dart';
+import 'package:cache/screens/notebooks/notebooks_screen.dart';
+import 'package:cache/screens/videos/videos_screen.dart';
+import 'package:cache/screens/weather_screen.dart';
+import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/screens/shell.dart';
 import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/search/index_throttle.dart' show IndexDuty;
@@ -43,12 +53,16 @@ import '../test/browse/fakes.dart' show FakeSources, catalogWith, fixture, testP
 import '../test/library/fake_shelves.dart';
 import '../test/library/library_fixtures.dart' show SampleBook, writeBookLibrary, writeShelves;
 import '../test/nav_fakes.dart';
+import '../test/support/notebook_fake.dart';
 import '../test/support/settings_rig.dart';
 import 'shot_kit.dart';
 
 const _out = 'linux_desktop_mockups';
 
 const Map<String, Size> _sizes = {'1440x900': Size(1440, 900), '1024x1366': Size(1024, 1366), '390x844': Size(390, 844)};
+
+/// Round 3's windows: a wide desktop (the sidebar) and the narrowest one (the rail).
+const Map<String, Size> _sizes3 = {'1440x900': Size(1440, 900), '1024x768': Size(1024, 768)};
 
 class _Newer implements AppUpdateSource {
   @override
@@ -456,6 +470,181 @@ void main() {
 
       await tester.pumpWidget(const SizedBox());
       updates.dispose();
+      await rig.dispose(tester);
+    });
+  }
+
+  _round3();
+}
+
+// ---- Round 3: Ask, Notebooks, Weather, Videos, and Home through the Shell -------------------------------------------------------
+
+const String _longAnswer = 'Boil it for one minute at sea level and for three minutes above 6,500 feet [1]. If you cannot boil it, a filter rated '
+    'for protozoa and bacteria takes out most of what makes you sick, and a chemical tablet handles what the filter misses. Clear cloudy '
+    'water through a clean cloth first, because silt shields germs from the treatment [2].\n\nThree habits matter more than the method:\n\n'
+    '- Collect from moving water, upstream of camps and trails.\n- Keep the clean container away from the dirty one.\n- Let the water '
+    'cool, covered, before you drink it.';
+
+void _round3() {
+  for (final entry in _sizes3.entries) {
+    testWidgets('Linux desktop round 3 at ${entry.key}', (tester) async {
+      final size = entry.value;
+      final rig = _Rig();
+      await rig.make(tester, full: false);
+      final r = rig.r;
+      // The update check reads this stand-in, so no request leaves the machine.
+      debugLinuxUpdateSource = _Newer();
+      addTearDown(() => debugLinuxUpdateSource = null);
+
+      // Ask: three past chats, and a conversation with a long answer.
+      for (final t in ['Treating burns', 'Water purification', 'A route through the Sawtooths']) {
+        r.store.create(title: t);
+      }
+      r.chat.messages
+        ..add(ChatMessage.user('How do I make water from a stream safe to drink?'))
+        ..add(ChatMessage.assistant()
+          ..phase = TurnPhase.done
+          ..text = _longAnswer
+          ..sources = const [
+            NumberedResult(1, SourceResult(title: 'Water purification', snippet: 'Boiling kills germs: bring the water to a rolling boil for one minute.', address: 'zim:6ba7b810-9dad-11d1-80b4-00c04fd430c8/A/Water_purification')),
+            NumberedResult(2, SourceResult(title: 'Boiling at altitude', snippet: 'Water boils at a lower temperature as you climb.', address: 'zim:6ba7b810-9dad-11d1-80b4-00c04fd430c8/A/Boiling_point')),
+          ]);
+
+      // Notebooks: the Journal and three starter logs, each with an entry, so "Log again" has chips.
+      final templates = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
+      final nb = fakeNotebook(FakeNotebookBackend());
+      final logs = <Notebook>[];
+      await tester.runAsync(() async {
+        await nb.start();
+        for (final st in templates.starters.take(3)) {
+          final log = await nb.saveNotebook(template: st.template, def: st.def, templateRef: st.ref, map: false);
+          await nb.saveEntry(notebookId: log.id, occurredAt: '2026-10-25T16:12:00-06:00');
+          logs.add(log);
+        }
+      });
+      final deps = NotebookDeps(notebook: nb, places: PlaceChoices.none, now: () => DateTime(2026, 10, 29, 17, 2));
+
+      Future<void> show(Widget page, CacheThemeId theme) async {
+        phone(tester, size: size, ratio: 1);
+        for (final f in rig.support.listSync().whereType<File>()) {
+          f.deleteSync();
+        }
+        await tester.pumpWidget(shotApp(page, theme: theme, insets: EdgeInsets.zero, desktop: true));
+        await _settle(tester, 12);
+        final gotIt = find.byKey(const ValueKey('whats-new-ok'));
+        if (gotIt.evaluate().isNotEmpty) {
+          await tester.tap(gotIt);
+          await _settle(tester);
+        }
+      }
+
+      Widget framed(Widget page, ModuleId module) =>
+          DesktopShell(module: module, onHome: () {}, onModule: (_) {}, onModuleOptions: (c, m) {}, child: page);
+
+      Future<void> shot(String id, CacheThemeId theme) async {
+        final e = tester.takeException();
+        final name = '${entry.key}-$id-${theme.name}';
+        // ignore: avoid_print
+        print('MOCKUP-SHOT $name');
+        if (e != null) {
+          // ignore: avoid_print
+          print('MOCKUP-EXC $name: ${e.toString().split('\n').where((l) => l.trim().isNotEmpty).take(2).join(' | ')}');
+        }
+        await snap(tester, _out, name);
+      }
+
+      // Weather, populated: forecast, weather alerts and wildfires on, each with what the core would have stored.
+      Future<void> weatherData() async {
+        await tester.runAsync(() async {
+          for (final row in WeatherTurnOn.rows) {
+            await r.weather.setRowOn(row, true);
+          }
+        });
+        final fetched = r.clock.subtract(const Duration(minutes: 50)).toIso8601String();
+        r.liveCore.stored['openmeteo-forecast'] = {
+          'fetched_at': fetched,
+          'age': '50 minutes old',
+          'expired': false,
+          'items': [
+            {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '43 °F', 'Conditions': 'overcast'}},
+            {'address': 'live:openmeteo-forecast/x/d1', 'label': 'Tue Nov 10', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '31 °F', 'Conditions': 'light rain', 'Rain': '0.12 in'}},
+            {'address': 'live:openmeteo-forecast/x/d2', 'label': 'Wed Nov 11', 'fields': {'Daytime high': '49 °F', 'Low (early morning)': '28 °F', 'Conditions': 'snow showers', 'Snow': '0.8 in'}},
+            {'address': 'live:openmeteo-forecast/x/d3', 'label': 'Thu Nov 12', 'fields': {'Daytime high': '44 °F', 'Low (early morning)': '24 °F', 'Conditions': 'clear sky'}},
+          ],
+        };
+        r.liveCore.stored['nws-alerts-point'] = {
+          'fetched_at': fetched,
+          'age': '50 minutes old',
+          'expired': false,
+          'items': [
+            {'address': 'live:nws-alerts-point/x/a1', 'label': 'Wind Advisory', 'fields': {'Severity': 'Minor', 'Until': 'Tue 9 PM'}},
+          ],
+        };
+        r.liveCore.stored['wfigs-incidents-near'] = {
+          'fetched_at': fetched,
+          'age': '50 minutes old',
+          'expired': false,
+          'items': [
+            {'address': 'live:wfigs-incidents-near/x/f1', 'label': 'East Fork fire', 'fields': {'From the place': '78 mi N', 'Size': '266 acres', 'Contained': '60%'}},
+          ],
+        };
+        await tester.runAsync(() async {
+          final here = (await r.weather.watchedPlaces()).first;
+          await r.weather.viewFor(here);
+        });
+      }
+
+      final turnOn = WeatherTurnOn(weather: r.weather, location: r.location);
+
+      for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+        // Ask
+        await show(framed(AskScreen(app: r.app, chat: r.chat, location: r.location, layout: rig.layout, onOpenSource: (_) {}, onOpenNavigation: (_) {}), ModuleId.ask), theme);
+        await shot('ask', theme);
+
+        // Notebooks: the shelf with "Log again" and the pane waiting, then a log open in the pane.
+        await show(framed(NotebooksScreen(deps: deps, templates: templates), ModuleId.notebooks), theme);
+        await _settle(tester);
+        await shot('notebooks', theme);
+        final first = find.byKey(ValueKey('notebook-${logs.first.id}'));
+        if (first.evaluate().isNotEmpty) {
+          await tester.tap(first);
+          await _settle(tester, 12);
+        }
+        await shot('notebooks-open', theme);
+
+        // Videos
+        await show(framed(VideosScreen(video: r.video), ModuleId.videos), theme);
+        await shot('videos', theme);
+
+        // Weather: empty (nothing on), then populated.
+        await show(framed(WeatherScreen(weather: r.weather, turnOn: turnOn, onOpenSettings: () {}), ModuleId.weather), theme);
+        await shot('weather-empty', theme);
+        await weatherData();
+        await show(framed(WeatherScreen(weather: r.weather, turnOn: turnOn, onOpenSettings: () {}, onAsk: (_) {}), ModuleId.weather), theme);
+        await _settle(tester, 12);
+        await shot('weather', theme);
+        // back to nothing on for the next theme
+        await tester.runAsync(() async {
+          for (final row in WeatherTurnOn.rows) {
+            await r.weather.setRowOn(row, false);
+          }
+        });
+
+        // Home through the Shell: its update check runs on Linux now, so the banner shows.
+        await show(rig.shell(), theme);
+        await shot('home-shell-banner', theme);
+      }
+
+      // The other two themes, once, at 1440.
+      if (size.width >= 1440) {
+        for (final theme in [CacheThemeId.parchment, CacheThemeId.tactical]) {
+          await show(framed(AskScreen(app: r.app, chat: r.chat, location: r.location, layout: rig.layout, onOpenSource: (_) {}, onOpenNavigation: (_) {}), ModuleId.ask), theme);
+          await shot('ask', theme);
+        }
+      }
+
+      await tester.pumpWidget(const SizedBox());
+      nb.dispose();
       await rig.dispose(tester);
     });
   }

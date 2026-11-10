@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import 'desktop.dart';
+import 'focus_ring.dart';
 
 /// [base] with the desktop's density: a lower page bar with a hairline, 16-pixel dialogs, smaller body text, 36-pixel buttons,
 /// a hover tint and, for a snackbar, a place at the bottom left of a region [regionWidth] wide. Only colours from [CacheTokens]; text
@@ -44,7 +45,8 @@ ThemeData desktopTheme(ThemeData base, {required double regionWidth, double gutt
       shape: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2))),
     ),
     dialogTheme: dialog.copyWith(
-      constraints: const BoxConstraints(maxWidth: 480),
+      // By content: 400 wide for a yes or no, wider (to 560) for what has more to say or a text area.
+      constraints: const BoxConstraints(minWidth: 400, maxWidth: 560),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       titleTextStyle: size(dialog.titleTextStyle, 18),
       contentTextStyle: size(dialog.contentTextStyle, 15, height: 1.5),
@@ -70,10 +72,13 @@ ThemeData desktopTheme(ThemeData base, {required double regionWidth, double gutt
 /// unchanged. The tree has the same shape either way, so resizing across the line keeps the pages' state. [regionWidth] is the
 /// width a snackbar is placed in (the window's when null).
 class DesktopThemeScope extends StatelessWidget {
-  const DesktopThemeScope({super.key, required this.child, this.regionWidth});
+  const DesktopThemeScope({super.key, required this.child, this.regionWidth, this.focusRing = true});
 
   final Widget child;
   final double? regionWidth;
+
+  /// Draws the keyboard focus ring over the page (once, at the top; a scope nested inside it leaves it to that one).
+  final bool focusRing;
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +86,7 @@ class DesktopThemeScope extends StatelessWidget {
     final on = isLinuxDesktop(context);
     return Theme(
       data: on ? desktopTheme(base, regionWidth: regionWidth ?? MediaQuery.sizeOf(context).width, gutter: isLinuxWide(context) ? 32 : 24) : base,
-      child: child,
+      child: FocusRingScope(enabled: on && focusRing, child: child),
     );
   }
 }
