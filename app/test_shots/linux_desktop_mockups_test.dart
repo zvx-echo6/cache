@@ -368,9 +368,23 @@ void main() {
             ? DesktopShell(atHome: home, module: module, onHome: () {}, onModule: (_) {}, onModuleOptions: (c, m) {}, child: page)
             : page;
 
-        Future<void> openLibrary() async {
-          await tester.tap(inShell ? find.byKey(const ValueKey('desktop-nav-library')) : find.text('Library').first);
+        // Opens a module from the sidebar (1280 and up: icon and name) or the rail (1024 to 1279: icon and a small name); the item has
+        // the same key in both. Then checks the module's screen is the one on show, so a picture never silently draws Home.
+        Future<void> goTo(String module, String screenKey) async {
+          final item = find.byKey(ValueKey('desktop-nav-$module'));
+          await tester.ensureVisible(item);
+          await tester.tap(item);
           await _settle(tester);
+          expect(find.byKey(ValueKey(screenKey)), findsWidgets, reason: '${entry.key}: $module did not open');
+        }
+
+        Future<void> openLibrary() async {
+          if (inShell) {
+            await goTo('library', 'library-bookshelves');
+          } else {
+            await tester.tap(find.text('Library').first);
+            await _settle(tester);
+          }
         }
 
         // ---- a. Home with the update banner ----
@@ -397,7 +411,7 @@ void main() {
         // ---- c. Settings > Storage ----
         await show(rig.shell());
         if (inShell) {
-          await tester.tap(find.byKey(const ValueKey('desktop-nav-settings')));
+          await goTo('settings', 'settings-storage');
         } else {
           await tester.tap(find.text('Modules').first);
           await _settle(tester);
