@@ -754,7 +754,10 @@ mod tests {
             targets.push(format!("http://[::127.0.0.1]:{p6}/"));
         }
         for t in &targets {
-            assert_eq!(stream_reply(t.clone(), None, false).await.status, 502, "direct: {t}");
+            // An IPv6 literal is not an address the proxy takes at all (`parse_url` refuses `[`): 400 before any lookup. The rest get
+            // as far as the guard: 502 at connect time.
+            let want = if t.contains('[') { 400 } else { 502 };
+            assert_eq!(stream_reply(t.clone(), None, false).await.status, want, "direct: {t}");
         }
         untouched(&l4, "direct 127.0.0.1");
         if let Some((l6, _)) = &w6 {
