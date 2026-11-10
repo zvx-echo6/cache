@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LiteRT-LM on the GPU (litert/LiteRtBridge.kt): the GPU delegate loads these two system libraries. Merged into the app's manifest
+     only when the build has -PcacheLiteRt=true (build.gradle.kts), which only the test APK workflow sets. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <uses-native-library android:name="libvndksupport.so" android:required="false"/>
+        <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+    </application>
+</manifest>

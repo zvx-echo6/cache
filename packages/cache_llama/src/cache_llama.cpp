@@ -90,6 +90,64 @@ struct Handle {
 
 void cl_logi(const char * fmt, ...);
 
+// A request as cl_start and cl_tmpl_render read it: the parsed JSON, the chat template inputs, and the tool-call opening
+// tokens that end the generation (tool_choice "none" with tools).
+struct ParsedRequest {
+    common_json                 req;
+    common_chat_templates_inputs in;
+    std::vector<llama_token>    stop_tokens;
+};
+
+void parse_request(const llama_vocab * vocab, const char * request_json, ParsedRequest & out) {
+    out.req = common_json::parse(request_json);
+    const auto & req = out.req;
+    common_chat_templates_inputs & in = out.in;
+    in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
+    in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    // Optional top-level "enable_thinking": true|false. Passed to the template as the
+    // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
+    if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
+        in.enable_thinking = req.at("enable_thinking").get<bool>();
+    }
+    if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
+        in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
+    }
+    // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
+    // tool-call grammar off; the tool-call opening tokens then end the generation (below).
+    if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
+        in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
+    }
+    if (in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !in.tools.empty()) {
+        for (const char * open : { "<|tool_call>", "<tool_call>" }) {
+            auto t = common_tokenize(vocab, open, /*add_special*/ false, /*parse_special*/ true);
+            if (t.size() == 1 && (llama_vocab_get_attr(vocab, t[0]) & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED))) {
+                out.stop_tokens.push_back(t[0]);
+            }
+        }
+    }
+}
+
+// A chat template and tokenizer without a model (cl_tmpl_*): the prompt of a request is rendered and the generated text parsed
+// here, while another engine (LiteRT-LM) decodes. Only the vocabulary is loaded from the GGUF.
+struct TmplHandle {
+    llama_model *                        model = nullptr;
+    const llama_vocab *                  vocab = nullptr;
+    common_chat_templates_ptr            tmpls;
+    std::unique_ptr<common_chat_session> session;
+    std::string                          generated;  // everything given to cl_tmpl_feed so far
+};
+
+// Gemma 4 tool calls end with this; an engine that stops at it does not return its text.
+const char * const kToolCallOpen  = "<|tool_call>";
+const char * const kToolCallClose = "<tool_call|>";
+
+// If the text has a tool-call opening with no closing after it, returns the closing to append, else "".
+std::string missing_tool_call_close(const std::string & text) {
+    const size_t open = text.rfind(kToolCallOpen);
+    if (open == std::string::npos) return std::string();
+    return text.find(kToolCallClose, open) == std::string::npos ? std::string(kToolCallClose) : std::string();
+}
+
 // The model's own recommended sampling, embedded in the GGUF as general.sampling.* (the same keys and
 // effect as llama.cpp's common_init_from_params, whose helper is private). Keys the GGUF lacks keep llama.cpp's
 // defaults. Logs the effective settings once.
@@ -742,31 +800,11 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->stop_tokens.clear();
         h->prefix_note.clear();
 
-        auto req = common_json::parse(request_json);
-        common_chat_templates_inputs in;
-        in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
-        in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        // Optional top-level "enable_thinking": true|false. Passed to the template as the
-        // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
-        if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
-            in.enable_thinking = req.at("enable_thinking").get<bool>();
-        }
-        if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
-            in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
-        }
-        // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
-        // tool-call grammar off; the tool-call opening tokens then end the generation (below).
-        if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
-            in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
-        }
-        if (in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !in.tools.empty()) {
-            for (const char * open : { "<|tool_call>", "<tool_call>" }) {
-                auto t = common_tokenize(h->vocab, open, /*add_special*/ false, /*parse_special*/ true);
-                if (t.size() == 1 && (llama_vocab_get_attr(h->vocab, t[0]) & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED))) {
-                    h->stop_tokens.push_back(t[0]);
-                }
-            }
-        }
+        ParsedRequest pr;
+        parse_request(h->vocab, request_json, pr);
+        const common_json & req = pr.req;
+        common_chat_templates_inputs & in = pr.in;
+        h->stop_tokens = pr.stop_tokens;
 
         // The session wraps common_chat_templates_apply and keeps the parser for cl_finish.
         h->session = std::make_unique<common_chat_session>(h->tmpls.get(), h->vocab, in);
@@ -1082,6 +1120,120 @@ int cl_free_all(void) {
     }
     for (Handle * h : all) free_handle(h);
     return (int) all.size();
+}
+
+// ---------------- template and parser without a model ----------------
+
+void * cl_tmpl_load(const char * gguf_path, const char * template_override, char * err, int err_len) {
+    try {
+        llama_log_set(quiet_log, nullptr);
+#if defined(CL_BACKEND_DL)
+        if (std::string why = load_cpu_backend(); !why.empty()) {
+            set_err(err, err_len, why);
+            return nullptr;
+        }
+#endif
+        llama_backend_init();
+        auto h = std::make_unique<TmplHandle>();
+        llama_model_params mp = llama_model_default_params();
+        mp.vocab_only = true;
+        h->model = llama_model_load_from_file(gguf_path, mp);
+        if (!h->model) {
+            set_err(err, err_len, std::string("cannot load the vocabulary of: ") + (gguf_path ? gguf_path : ""));
+            return nullptr;
+        }
+        h->vocab = llama_model_get_vocab(h->model);
+        h->tmpls = common_chat_templates_init(h->model, template_override ? template_override : "");
+        if (!h->tmpls) {
+            set_err(err, err_len, "no usable chat template");
+            llama_model_free(h->model);
+            return nullptr;
+        }
+        return h.release();
+    } catch (const std::exception & e) {
+        set_err(err, err_len, e.what());
+        return nullptr;
+    }
+}
+
+int cl_tmpl_render(void * hp, const char * request_json, char * out_json, int len) {
+    auto * h = (TmplHandle *) hp;
+    try {
+        h->session.reset();
+        h->generated.clear();
+        ParsedRequest pr;
+        parse_request(h->vocab, request_json, pr);
+        h->session = std::make_unique<common_chat_session>(h->tmpls.get(), h->vocab, pr.in);
+        const std::string prompt = h->session->prompt().str();
+        // The rendered text may start with the BOS text; the engine adds its own.
+        std::string text = prompt;
+        const std::string bos = llama_vocab_bos(h->vocab) >= 0 ? common_token_to_piece(h->vocab, llama_vocab_bos(h->vocab), true) : "";
+        if (!bos.empty() && text.compare(0, bos.size(), bos) == 0) text.erase(0, bos.size());
+        auto tokens = common_tokenize(h->vocab, prompt, /*add_special*/ true, /*parse_special*/ true);
+        auto j = common_json::object();
+        j["prompt"]            = text;
+        j["prompt_tokens"]     = (int) tokens.size();
+        j["stop_on_tool_open"] = pr.in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !pr.in.tools.empty();
+        return put(j.dump(), out_json, len);
+    } catch (const std::exception & e) {
+        auto j = common_json::object();
+        j["error"] = std::string(e.what());
+        return put(j.dump(), out_json, len);
+    }
+}
+
+int cl_tmpl_feed(void * hp, const char * chunk, char * out_json, int len) {
+    auto * h = (TmplHandle *) hp;
+    auto j = common_json::object();
+    j["role"] = std::string("assistant");
+    try {
+        if (!h->session) return -1;
+        const std::string c = chunk ? chunk : "";
+        h->generated += c;
+        msg_to_json(h->session->feed(common_chat_input(c)), j);
+    } catch (const std::exception & e) {
+        j["content"]     = std::string();
+        j["parse_error"] = std::string(e.what());
+    }
+    return put(j.dump(), out_json, len);
+}
+
+int cl_tmpl_finish(void * hp, const char * rest, char * out_json, int len) {
+    auto * h = (TmplHandle *) hp;
+    auto j = common_json::object();
+    j["role"] = std::string("assistant");
+    try {
+        if (!h->session) return -1;
+        std::string r = rest ? rest : "";
+        h->generated += r;
+        // A stop token ends the output without its text: a tool call stopped at its closing token lacks it.
+        const std::string close = missing_tool_call_close(h->generated);
+        r += close;
+        h->generated += close;
+        msg_to_json(h->session->finish(common_chat_input(r)), j);
+    } catch (const std::exception & e) {
+        j["content"]     = h->generated;
+        j["parse_error"] = std::string(e.what());
+    }
+    return put(j.dump(), out_json, len);
+}
+
+int cl_tmpl_count(void * hp, const char * text) {
+    auto * h = (TmplHandle *) hp;
+    try {
+        return (int) common_tokenize(h->vocab, text ? text : "", /*add_special*/ false, /*parse_special*/ true).size();
+    } catch (const std::exception &) {
+        return -1;
+    }
+}
+
+void cl_tmpl_free(void * hp) {
+    auto * h = (TmplHandle *) hp;
+    if (!h) return;
+    h->session.reset();
+    h->tmpls.reset();
+    if (h->model) llama_model_free(h->model);
+    delete h;
 }
 
 // ---------------- embeddings ----------------

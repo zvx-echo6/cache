@@ -11,6 +11,11 @@ name: Android test APK
 
 on:
   workflow_dispatch:
+    inputs:
+      litert:
+        description: 'Add the LiteRT-LM chat engine (.litertlm models, Ask bench against llama.cpp). Off: the build is as without this input.'
+        type: boolean
+        default: false
 
 concurrency:
   group: android-test-apk-${{ github.ref }}
@@ -188,7 +193,14 @@ jobs:
         run: |
           flutter --version
           flutter pub get
-          flutter build apk --release
+          # The LiteRT-LM engine (a Gradle property and a Dart define) only when the litert input asks for it; otherwise the
+          # command is the one this workflow always ran.
+          extra=()
+          if [ "${{ inputs.litert }}" = "true" ]; then
+            export ORG_GRADLE_PROJECT_cacheLiteRt=true
+            extra+=(--dart-define=CACHE_LITERT=true)
+          fi
+          flutter build apk --release "${extra[@]}"
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
       - name: Verify the APK
@@ -222,6 +234,9 @@ jobs:
             echo "::error::The APK is not signed with the upload key (signer $signer)"; exit 1
           fi
           echo "signed with the upload key"
+          if [ "${{ inputs.litert }}" = "true" ]; then
+            unzip -l "$apk" | grep -i litert || { echo "::error::LiteRT-LM is not in the APK"; exit 1; }
+          fi
       - name: Remove signing material
         if: always()
         run: rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/upload-cert.sha256" "$RUNNER_TEMP/apksigner.txt" app/android/key.properties

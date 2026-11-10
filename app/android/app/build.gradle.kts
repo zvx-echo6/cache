@@ -6,6 +6,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// The LiteRT-LM engine for the Cache test APK only (android-test-apk.yml sets cacheLiteRt=true when its litert input asks for it): its
+// library, its source set (src/litert) and its manifest entries are in the build only then. Every other build, the Play release
+// included, has none of it.
+val liteRt = (project.findProperty("cacheLiteRt") as String?) == "true"
+if (liteRt && (project.findProperty("cacheTestApk") as String?) != "true") {
+    throw GradleException("cacheLiteRt=true needs cacheTestApk=true: LiteRT-LM is in the test APK only")
+}
+
 android {
     namespace = "com.happylittlellc.cache"
     compileSdk = flutter.compileSdkVersion
@@ -64,6 +72,7 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
+            if (liteRt) proguardFiles("proguard-litert.pro")
         }
     }
 
@@ -95,6 +104,15 @@ if (androidAuto) {
     }
 }
 
+if (liteRt) {
+    androidComponents {
+        onVariants { variant ->
+            variant.sources.manifests.addStaticManifestFile("src/litert/AndroidManifest.xml")
+            (variant.sources.kotlin ?: variant.sources.java)?.addStaticSourceDirectory("src/litert/kotlin")
+        }
+    }
+}
+
 // The car screen's Robolectric tests read the merged assets, which the Flutter plugin's copy task writes: let it run first.
 tasks.configureEach {
     if (name == "packageDebugUnitTestForUnitTest") dependsOn("copyFlutterAssetsDebug")
@@ -112,6 +130,11 @@ dependencies {
     // (car/CarMapRenderer.kt) draws with the MapLibre artifact above.
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.car.app:app-projected:1.7.0")
+
+    // The test APK's LiteRT-LM engine (src/litert): the JNI layer only, Google Maven, needs Kotlin 2.3 or later.
+    if (liteRt) {
+        implementation("com.google.ai.edge.litertlm:litertlm-android:0.19.1")
+    }
 
     // Tests only, never in the APK (android-car.yml checks the release classpath): approved 2026-11-08.
     testImplementation("junit:junit:4.13.2")

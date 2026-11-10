@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
+import 'litert/litert_flag.dart';
+import 'litert/litert_runtime.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
@@ -25,7 +27,7 @@ class ModelEntry {
   final int size;
 
   String get fileName => path.split(RegExp(r'[\\/]')).last;
-  String get name => fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
+  String get name => fileName.replaceFirst(RegExp(r'\.(gguf|litertlm)$', caseSensitive: false), '');
 
   /// Identifies this exact file for the "not supported" memory.
   String get key => '$fileName|$size';
@@ -74,6 +76,12 @@ class AppState extends ChangeNotifier {
   final Directory? modelsDirOverride;
 
   final LlamaSession session = LlamaSession();
+
+  /// The LiteRT-LM chat path of the test APK (CACHE_LITERT only; never used otherwise).
+  late final LiteRtRuntime liteRt = LiteRtRuntime();
+
+  /// True when [e] is a .litertlm model, which the LiteRT engine runs (only in a CACHE_LITERT build).
+  static bool isLiteRtModel(ModelEntry e) => kLiteRt && e.path.toLowerCase().endsWith('.litertlm');
 
   CacheThemeId theme = CacheThemeId.dark;
 
@@ -282,7 +290,7 @@ class AppState extends ChangeNotifier {
     }
     try {
       for (final f in modelsDir!.listSync().whereType<File>()) {
-        if (f.path.toLowerCase().endsWith('.gguf')) {
+        if (f.path.toLowerCase().endsWith('.gguf') || (kLiteRt && f.path.toLowerCase().endsWith('.litertlm'))) {
           final e = ModelEntry(path: f.path, size: f.lengthSync());
           // The search model is not a chat model: it is never listed or loaded as one.
           if (isSearchModelFile(e.fileName)) {
@@ -389,6 +397,18 @@ class AppState extends ChangeNotifier {
         // Without a folder the model loads without the saved prefix.
       }
     }
+    if (kLiteRt) {
+      if (path.toLowerCase().endsWith('.litertlm')) {
+        // One engine at a time: the llama model goes first. The template layer takes its vocabulary from a Gemma 4 GGUF chat model.
+        await session.unload();
+        final ggufs = models.where((m) => m.path.toLowerCase().endsWith('.gguf')).toList();
+        final vocab = ggufs.where((m) => m.fileName.toLowerCase().contains('gemma')).firstOrNull ?? ggufs.firstOrNull;
+        if (vocab != null) logInfo('LiteRT prompt vocabulary: ${vocab.fileName}');
+        final cache = await appTempPath();
+        return liteRt.load(path, nCtx: nCtx, vocabGguf: vocab?.path, cacheDir: cache);
+      }
+      await liteRt.unload();
+    }
     return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
   }
 
@@ -428,6 +448,7 @@ class AppState extends ChangeNotifier {
     modelGeneration++;
     notifyListeners();
     await session.unload();
+    if (kLiteRt) await liteRt.unload();
     logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
   }
@@ -443,6 +464,7 @@ class AppState extends ChangeNotifier {
     modelGeneration++;
     notifyListeners();
     await session.unload();
+    if (kLiteRt) await liteRt.unload();
   }
 
   /// Loads the [resting] model again (Ask opened, or its question was sent).

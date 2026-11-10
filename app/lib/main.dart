@@ -39,6 +39,7 @@ import 'library/add_pdf/add_pdf_state.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
+import 'litert/litert_runtime.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
@@ -1007,7 +1008,11 @@ class _CacheAppState extends State<CacheApp> {
     if (_backendGeneration != app.modelGeneration) {
       _backendGeneration = app.modelGeneration;
       chat.setBackend(
-        app.active == null ? null : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
+        app.active == null
+            ? null
+            : AppState.isLiteRtModel(app.active!)
+                ? LiteRtBackend(app.liteRt, extras: () => app.activeSettings.requestExtras)
+                : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
         modelName: app.active == null ? '' : app.displayName(app.active!),
         queuePosition: app.active == null ? null : app.session.queuePosition,
       );

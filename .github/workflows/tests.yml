@@ -9,7 +9,7 @@
 #   add-pdf-core  Add PDF end to end on the real core: the app's AddPdfState drives cs_ingest_* (a Linux libcache_search) with the
 #            real PDFium (the release pdfrx ships), the real bge-m3 embedder (a Linux cache_llama and the pinned model) and the shelf
 #            sorter from the app's assets; OCR is a stand-in (the phone engines run in ocr.yml). app/test/add_pdf/add_pdf_core_test.dart
-#   embed-parity  the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
+#   embed-parity  (also the template layer of the LiteRT-LM path, test/chat_template_native_test.dart) the builder's and the phone's embeddings against packages/cache_llama/test/fixtures/bge-m3-golden.json
 #            with the pinned bge-m3 model and a Linux cache_llama (places_pack's parity_tests, then
 #            app/test/query_embedder_parity_test.dart, matched to the golden at cosine 0.999 and to each other exactly)
 #
@@ -199,6 +199,13 @@ jobs:
           CACHE_EMBED_MODELS_DIR="$RUNNER_TEMP/models" CACHE_EMBED_LOCAL_GOLDEN="$RUNNER_TEMP/local-golden.json" \
           LD_LIBRARY_PATH="$LLAMA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             flutter test --no-pub test/query_embedder_parity_test.dart
+      # The template layer for the LiteRT-LM path (cl_tmpl_*): a vocabulary-only load of the pinned model with a Gemma 4 template
+      # given as text; renders a request and parses generated text, including a tool call cut at its closing token.
+      - name: Chat template layer (app)
+        working-directory: app
+        run: |
+          CACHE_EMBED_MODELS_DIR="$RUNNER_TEMP/models" LD_LIBRARY_PATH="$LLAMA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test --no-pub test/chat_template_native_test.dart --reporter expanded
 
   add-pdf-core:
     runs-on: ubuntu-latest

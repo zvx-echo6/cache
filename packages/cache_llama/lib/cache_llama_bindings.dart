@@ -18,6 +18,12 @@ typedef _ConfigureC = Int32 Function(Pointer<Utf8>);
 typedef LlamaConfigureCall = int Function(Pointer<Utf8>);
 typedef _EmbedC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, Int32, Int32);
 typedef LlamaEmbedCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, int, int);
+typedef _TmplLoadC = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32);
+typedef TmplLoadCall = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef _TmplTextC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Int32);
+typedef TmplTextCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef _TmplCountC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef TmplCountCall = int Function(Pointer<Void>, Pointer<Utf8>);
 
 /// Thin typed wrapper over the native library. Every method is a direct call.
 class CacheLlamaBindings {
@@ -45,7 +51,13 @@ class CacheLlamaBindings {
         clEmbedLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_embed_load'),
         clEmbedInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_embed_info'),
         clEmbed = lib.lookupFunction<_EmbedC, LlamaEmbedCall>('cl_embed'),
-        clEmbedFree = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_embed_free');
+        clEmbedFree = lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_embed_free'),
+        clTmplLoad = lib.providesSymbol('cl_tmpl_load') ? lib.lookupFunction<_TmplLoadC, TmplLoadCall>('cl_tmpl_load') : null,
+        clTmplRender = lib.providesSymbol('cl_tmpl_render') ? lib.lookupFunction<_TmplTextC, TmplTextCall>('cl_tmpl_render') : null,
+        clTmplFeed = lib.providesSymbol('cl_tmpl_feed') ? lib.lookupFunction<_TmplTextC, TmplTextCall>('cl_tmpl_feed') : null,
+        clTmplFinish = lib.providesSymbol('cl_tmpl_finish') ? lib.lookupFunction<_TmplTextC, TmplTextCall>('cl_tmpl_finish') : null,
+        clTmplCount = lib.providesSymbol('cl_tmpl_count') ? lib.lookupFunction<_TmplCountC, TmplCountCall>('cl_tmpl_count') : null,
+        clTmplFree = lib.providesSymbol('cl_tmpl_free') ? lib.lookupFunction<_VoidHC, LlamaHandleVoidCall>('cl_tmpl_free') : null;
 
   /// Opens the native library of the current platform.
   factory CacheLlamaBindings.open() {
@@ -86,4 +98,12 @@ class CacheLlamaBindings {
   final LlamaBufferCall clEmbedInfo;
   final LlamaEmbedCall clEmbed;
   final LlamaHandleVoidCall clEmbedFree;
+
+  /// The template and parser without a chat model (cl_tmpl_*, for an engine that decodes elsewhere); null in an older library.
+  final TmplLoadCall? clTmplLoad;
+  final TmplTextCall? clTmplRender;
+  final TmplTextCall? clTmplFeed;
+  final TmplTextCall? clTmplFinish;
+  final TmplCountCall? clTmplCount;
+  final LlamaHandleVoidCall? clTmplFree;
 }

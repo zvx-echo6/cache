@@ -30,6 +30,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         super.onCreate(savedInstanceState)
+        liteRt("onIntent", arrayOf(Context::class.java, Intent::class.java), this, intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -48,6 +49,20 @@ class MainActivity : FlutterActivity() {
     override fun provideFlutterEngine(context: Context): FlutterEngine = SharedEngine.obtain(context)
 
     override fun shouldDestroyEngineWithHost(): Boolean = SharedEngine.releaseFromActivity()
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        liteRt("onIntent", arrayOf(Context::class.java, Intent::class.java), this, intent)
+    }
+
+    // The LiteRT-LM test engine (src/litert, merged only with -PcacheLiteRt=true, which only the test APK workflow sets): found by
+    // name so this source set compiles without it. In any other build the class is absent and this does nothing.
+    private fun liteRt(method: String, types: Array<Class<*>>, vararg args: Any?) {
+        try {
+            Class.forName("com.happylittlellc.cache.litert.LiteRtBridge").getMethod(method, *types).invoke(null, *args)
+        } catch (_: ClassNotFoundException) {
+        }
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -135,6 +150,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        liteRt("register", arrayOf(Context::class.java, io.flutter.plugin.common.BinaryMessenger::class.java), this, flutterEngine.dartExecutor.binaryMessenger)
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")

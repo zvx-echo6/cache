@@ -1,0 +1,49 @@
+# A JVM smoke test of the LiteRT-LM Session API the Cache test APK uses (app/android/app/src/litert/.../LiteRtBridge.kt), run on
+# the CPU of a CI runner before any phone time: raw prefill, a tool declared in the system turn, prefix reuse through clone(), the
+# KV state after a decode, and the cost of clone(). tools/litert-smoke is the program. Run by hand; it uploads nothing.
+# The model is Google's stock gemma-4-E2B-it.litertlm (public, no token), kept in the Actions cache.
+name: LiteRT smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '8.14.3'
+      - name: Model (Actions cache)
+        id: model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/model
+          key: litert-gemma-4-E2B-it-stock-v1
+      - name: Download the model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/model"
+          curl -fL --retry 5 --retry-delay 10 -o "$RUNNER_TEMP/model/gemma-4-E2B-it.litertlm" "$MODEL_URL"
+          ls -l "$RUNNER_TEMP/model"
+      - name: Smoke test
+        working-directory: tools/litert-smoke
+        run: |
+          gradle --no-daemon --console=plain run --args="$RUNNER_TEMP/model/gemma-4-E2B-it.litertlm" 2>&1 | tee "$RUNNER_TEMP/smoke.txt"
+          {
+            echo '```'
+            grep -E '^(\(|==|engine|model|done)' "$RUNNER_TEMP/smoke.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -86,6 +86,32 @@ CL_API void cl_free(void * h);
 // Not while another handle of the process is generating. cl_free of a handle freed here does nothing.
 CL_API int cl_free_all(void);
 
+// ---- Template and parser without a chat model (separate handle type) ----
+// For an engine that decodes elsewhere (LiteRT-LM): the prompt is rendered with a chat template and the generated text is parsed
+// into an assistant message, with no llama context and no weights. Only the vocabulary of a GGUF is loaded (any model of the same
+// token set). One request at a time per handle.
+
+// Load the vocabulary of gguf_path and the chat template (template_override, or the GGUF's own when null or empty).
+// Returns a handle, or NULL with the reason in err.
+CL_API void * cl_tmpl_load(const char * gguf_path, const char * template_override, char * err, int err_len);
+
+// Render a request (the JSON of cl_start) and start its parser. Writes JSON {"prompt": the text without a leading BOS,
+// "prompt_tokens": the count as cl_start counts it, "stop_on_tool_open": true for tool_choice "none" with tools}, or {"error"}.
+// Returns the length, or -1 if out is too small.
+CL_API int cl_tmpl_render(void * h, const char * request_json, char * out_json, int len);
+
+// Feed generated text to the parser; writes the partial message like cl_partial. Returns the length, or -1.
+CL_API int cl_tmpl_feed(void * h, const char * chunk, char * out_json, int len);
+
+// Finish the parse like cl_finish. A tool-call opening with no closing token after it gets the closing appended first
+// (an engine that stops at the closing token does not return its text).
+CL_API int cl_tmpl_finish(void * h, const char * rest, char * out_json, int len);
+
+// Token count of text (special tokens parsed, no BOS), or -1.
+CL_API int cl_tmpl_count(void * h, const char * text);
+
+CL_API void cl_tmpl_free(void * h);
+
 // ---- Embeddings (separate handle type: an app may hold a chat handle and an embedding handle at once) ----
 // Not thread-safe per handle: one cl_embed at a time on a given embedding handle.
 // Prefixes some models expect (e.g. "query: " / "passage: ", or an instruction line) are the caller's job:
