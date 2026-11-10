@@ -4,7 +4,11 @@
 // switches on with debugLinuxUi (plat.isWeb is a compile-time define). Not part of the test suite.
 import 'dart:io';
 
+import 'package:cache/desktop/desktop.dart';
+import 'package:cache/desktop/desktop_shell.dart';
+import 'package:cache/layout/adaptive.dart';
 import 'package:cache/layout/layout_state.dart';
+import 'package:cache/layout/modules.dart';
 import 'package:cache/linux_ui.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
@@ -27,15 +31,35 @@ import 'shot_kit.dart';
 
 const _folder = 'linux-ux';
 
-const Map<String, Size> _sizes = {'390x844': Size(390, 844), '844x390': Size(844, 390), '1024x1366': Size(1024, 1366), '1440x900': Size(1440, 900)};
+const Map<String, Size> _sizes = {'390x844': Size(390, 844), '1024x1366': Size(1024, 1366), '1440x900': Size(1440, 900)};
 
-EdgeInsets _insets(Size s) => s.width < 600
-    ? const EdgeInsets.only(top: 47, bottom: 34)
-    : s.height < 480
-    ? const EdgeInsets.only(left: 47, right: 47, bottom: 21)
-    : s.width < 1280
-    ? const EdgeInsets.only(top: 24, bottom: 20)
-    : EdgeInsets.zero;
+// A phone has a status bar and a home bar; a Linux desktop window has neither.
+EdgeInsets _insets(Size s) => s.width < 600 ? const EdgeInsets.only(top: 47, bottom: 34) : EdgeInsets.zero;
+
+/// The page's own scrolling list (the shell has others: the sidebar, the Settings list).
+Finder _pageScroll(Type page) => find.descendant(of: find.byType(page), matching: find.byType(Scrollable)).first;
+
+/// Settings' list, as the desktop shows it beside a page (the names and status lines of the real list).
+Widget _settingsList() {
+  const rows = [
+    ('Cache model and web search', 'Gemma 4 E2B \u00b7 web search off'),
+    ('Maps', 'Idaho Falls, Twin Falls \u00b7 miles'),
+    ('Weather and alerts', '4 sources \u00b7 2 places'),
+    ('Notifications', 'Serious alerts \u00b7 quiet 10 PM-6 AM'),
+    ('Storage', '41.0 GB free'),
+    ('Sharing and sync', 'Off'),
+    ('Appearance', 'Light'),
+  ];
+  return Scaffold(
+    appBar: AppBar(title: const Text('Settings')),
+    body: ListView(
+      children: [
+        for (final r in rows)
+          ListTile(minTileHeight: 52, title: Text(r.$1), subtitle: Text(r.$2)),
+      ],
+    ),
+  );
+}
 
 class _Newer implements AppUpdateSource {
   @override
@@ -88,8 +112,22 @@ void main() {
         addTearDown(tester.view.reset);
       }
 
-      Future<void> draw(WidgetTester tester, Widget page, {GlobalKey<ScaffoldMessengerState>? messenger}) async {
-        await tester.pumpWidget(shotApp(page, messenger: messenger, theme: theme, insets: _insets(size)));
+      Future<void> draw(WidgetTester tester, Widget page, {GlobalKey<ScaffoldMessengerState>? messenger, ModuleId module = ModuleId.settings, bool home = false}) async {
+        // A desktop window draws the screen inside the desktop shell (sidebar, page bar, pane); the phone draws it alone, as before.
+        final inShell = size.width >= kLinuxDesktopMin;
+        final Widget shown = !inShell
+            ? page
+            : DesktopShell(
+                atHome: home,
+                module: home ? null : module,
+                onHome: () {},
+                onModule: (_) {},
+                onModuleOptions: (c, m) {},
+                child: module == ModuleId.settings && !home
+                    ? TwoPane(key: UniqueKey(), list: _settingsList(), initialKey: 'page', initial: (_) => page)
+                    : page,
+              );
+        await tester.pumpWidget(shotApp(shown, messenger: messenger, theme: theme, insets: _insets(size), desktop: inShell));
         for (var i = 0; i < 4; i++) {
           await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
           await tester.pump(const Duration(milliseconds: 60));
@@ -148,13 +186,13 @@ void main() {
         await draw(tester, IndexingSpeedPage(settings: settings, log: log));
         await snapAs(tester, '1b-advanced-log');
 
-        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-share')), 100);
+        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-share')), 100, scrollable: _pageScroll(IndexingSpeedPage));
         await tester.tap(find.byKey(const ValueKey('log-share')));
         await settle(tester);
         await snapAs(tester, '1c-share-log-snackbar');
 
         await draw(tester, IndexingSpeedPage(settings: settings, log: log));
-        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-clear')), 100);
+        await tester.scrollUntilVisible(find.byKey(const ValueKey('log-clear')), 100, scrollable: _pageScroll(IndexingSpeedPage));
         await tester.runAsync(() async {
           await tester.tap(find.byKey(const ValueKey('log-clear')));
           await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -211,7 +249,7 @@ void main() {
           ),
         );
         final messenger = GlobalKey<ScaffoldMessengerState>();
-        await draw(tester, chat(), messenger: messenger);
+        await draw(tester, chat(), messenger: messenger, module: ModuleId.ask);
         await tester.tap(find.byKey(const ValueKey('open-share')));
         await settle(tester);
         await snapAs(tester, '2a-share-dialog');
@@ -219,14 +257,14 @@ void main() {
         await settle(tester);
         await snapAs(tester, '2b-download-started');
 
-        await draw(tester, chat(), messenger: messenger);
+        await draw(tester, chat(), messenger: messenger, module: ModuleId.ask);
         await tester.tap(find.byKey(const ValueKey('open-share')));
         await settle(tester);
         await tester.tap(find.byKey(const ValueKey('share-copy')));
         await settle(tester);
         await snapAs(tester, '2c-copied');
 
-        await draw(tester, chat(), messenger: messenger);
+        await draw(tester, chat(), messenger: messenger, module: ModuleId.ask);
         await tester.tap(find.byKey(const ValueKey('open-share-blocked')));
         await settle(tester);
         await snapAs(tester, '2d-copy-blocked');
@@ -243,7 +281,7 @@ void main() {
         await tester.runAsync(layout.init);
         final updates = AppUpdates(source: _Newer(), openUrl: (_) async {}, android: false, linux: true);
         await tester.runAsync(updates.check);
-        await draw(tester, HomeScreen(layout: layout, updates: updates, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}));
+        await draw(tester, HomeScreen(layout: layout, updates: updates, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}), home: true);
         await settle(tester);
         await snapAs(tester, '3a-banner-home');
         await tester.tap(find.byKey(const ValueKey('update-open')));
@@ -267,11 +305,11 @@ void main() {
         );
 
         // the question before the browser's own prompt: the map and Ask, then weather
-        await draw(tester, opener((c) => showLocationPrePrompt(c)));
+        await draw(tester, opener((c) => showLocationPrePrompt(c)), module: ModuleId.maps);
         await tester.tap(find.byKey(const ValueKey('open')));
         await settle(tester);
         await snapAs(tester, '4a-location-question');
-        await draw(tester, opener((c) => showLocationPrePrompt(c, weather: true)));
+        await draw(tester, opener((c) => showLocationPrePrompt(c, weather: true)), module: ModuleId.maps);
         await tester.tap(find.byKey(const ValueKey('open')));
         await settle(tester);
         await snapAs(tester, '4b-location-question-weather');
@@ -315,7 +353,7 @@ void main() {
         // the one-line answers on the map and in weather
         final messenger = GlobalKey<ScaffoldMessengerState>();
         Future<void> snack(SnackBar bar, String id) async {
-          await draw(tester, behind(const SizedBox.expand()), messenger: messenger);
+          await draw(tester, behind(const SizedBox.expand()), messenger: messenger, module: ModuleId.maps);
           messenger.currentState!.showSnackBar(bar);
           await settle(tester);
           await snapAs(tester, id);
