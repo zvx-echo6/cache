@@ -140,7 +140,7 @@ enum NotebookSort { date, recent, distance }
 
 /// A notebook's definition (made from a template, which is data): its name, fields, how often it is due and its shape.
 class NotebookDef {
-  const NotebookDef({required this.name, required this.fields, this.dueEvery, this.sort = NotebookSort.date, this.quickAdd = false, this.meta = const {}});
+  const NotebookDef({required this.name, required this.fields, this.dueEvery, this.sort = NotebookSort.date, this.quickAdd = false, this.meta = const {}, this.icon});
 
   final String name;
   final List<LogField> fields;
@@ -156,6 +156,9 @@ class NotebookDef {
   /// The template's id, version, author and group, when the log came from one.
   final Map<String, dynamic> meta;
 
+  /// The notebook's map icon (an id of map_icons.dart); null uses the default for its template.
+  final String? icon;
+
   List<LogField> get visible => [for (final f in fields) if (!f.hidden) f];
 
   LogField? field(String fid) {
@@ -165,18 +168,20 @@ class NotebookDef {
     return null;
   }
 
-  NotebookDef copyWith({String? name, List<LogField>? fields, String? dueEvery, bool clearDue = false, NotebookSort? sort, bool? quickAdd}) => NotebookDef(
+  NotebookDef copyWith({String? name, List<LogField>? fields, String? dueEvery, bool clearDue = false, NotebookSort? sort, bool? quickAdd, String? icon, bool clearIcon = false}) => NotebookDef(
         name: name ?? this.name,
         fields: fields ?? this.fields,
         dueEvery: clearDue ? null : (dueEvery ?? this.dueEvery),
         sort: sort ?? this.sort,
         quickAdd: quickAdd ?? this.quickAdd,
         meta: meta,
+        icon: clearIcon ? null : (icon ?? this.icon),
       );
 
   Map<String, dynamic> toJson() => {
         ...meta,
         'name': name,
+        'icon': ?icon,
         'due_every': dueEvery,
         'shape': {'sort': sort.name, if (quickAdd) 'quick_add': true},
         'fields': [for (final f in fields) f.toJson()],
@@ -193,6 +198,7 @@ class NotebookDef {
       quickAdd: sh['quick_add'] == true,
       fields: [for (final f in (j['fields'] as List? ?? const [])) ?LogField.fromJson(f)],
       meta: {for (final k in const ['id', 'version', 'author', 'group']) if (j[k] != null) k: j[k]},
+      icon: j['icon'] is String ? j['icon'] as String : null,
     );
   }
 }
@@ -255,6 +261,9 @@ class NbEntry {
 
   /// The marker colour's name, when one was chosen.
   String? get color => props['color'] is String ? props['color'] as String : null;
+
+  /// This place's own map icon (an id of map_icons.dart), when one was chosen; else its notebook's icon shows.
+  String? get icon => props['icon'] is String ? props['icon'] as String : null;
 
   /// Drawn on the map (true unless switched off).
   bool get onMap => props['on_map'] != false;
