@@ -94,7 +94,9 @@ class AddPdfJob {
 
   AddPdfStatus status = AddPdfStatus.active;
 
-  /// The core's job number in this run of the app (null until started, and after a restart).
+  /// The core's job number in this process (null until started, and after a restart). Kept on disk with the process id: a
+  /// background run in the same process (WorkManager's engine beside the app's) steps the same core job on, since the core
+  /// allows one job per job folder; in another process the number means nothing and the job is started again from its folder.
   int? coreJob;
 
   /// The core's state: reading, needs_ocr, embedding, writing, done, failed.
@@ -190,6 +192,8 @@ class AddPdfJob {
     'check_id': ?checkId,
     'watch_hash': ?watchHash,
     'status': status.name,
+    'core_job': ?coreJob,
+    'core_pid': ?(coreJob == null ? null : pid),
     'state': state,
     'pages': pages,
     'pages_done': pagesDone,
@@ -242,7 +246,9 @@ class AddPdfJob {
       ..worked = Duration(milliseconds: (j['worked_ms'] as num?)?.toInt() ?? 0)
       ..result = (j['result'] as Map?)?.cast<String, dynamic>()
       ..noteSeen = j['note_seen'] == true
-      ..noteDone = j['note_done'] == true;
+      ..noteDone = j['note_done'] == true
+      // the core's job number holds only in the process that started it
+      ..coreJob = j['core_pid'] == pid ? (j['core_job'] as num?)?.toInt() : null;
     if (j['error'] case final Map e) {
       job
         ..errorCode = e['code'] as String?

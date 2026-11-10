@@ -57,6 +57,14 @@ void main() {
     pdf.dispose();
   }
 
+  test("a paused job keeps the core's job number for a later run in the same process, never in another", () {
+    final j = sampleJob('a')..coreJob = 7;
+    final kept = j.toJson();
+    expect(AddPdfJob.fromJson(kept).coreJob, 7);
+    expect(AddPdfJob.fromJson({...kept, 'core_pid': pid + 1}).coreJob, isNull);
+    expect(AddPdfJob.fromJson(sampleJob('b').toJson()).coreJob, isNull);
+  });
+
   group('watch-folder-detect', () {
     test('counts new and changed PDFs by name, size and time; what was seen is not counted; it queues one add', () async {
       put('a.pdf', 'one');
