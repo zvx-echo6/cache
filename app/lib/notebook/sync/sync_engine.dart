@@ -190,10 +190,6 @@ class NotebookSync {
   /// notebook's, not a new one.
   Map<String, String> _aliases = {};
 
-  /// Entries whose file is missing from the old folder of a renamed notebook, and how many runs they were waited for (the new
-  /// file may not have arrived yet): never deleted at once.
-  Map<String, int> _moveMiss = {};
-
   /// Notebooks this run followed to another name (another device renamed them): their files are moved by that device.
   final Set<String> _followed = {};
 
@@ -227,7 +223,6 @@ class NotebookSync {
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
       _idDirs = {for (final e in (j['id_dirs'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _aliases = {for (final e in (j['aliases'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
-      _moveMiss = {for (final e in (j['move_miss'] as Map? ?? const {}).entries) '${e.key}': (e.value as num).toInt()};
     } catch (e) {
       logError('Notebook sync: state unreadable', error: e);
     }
@@ -245,7 +240,6 @@ class NotebookSync {
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_idDirs.isNotEmpty) 'id_dirs': _idDirs,
         if (_aliases.isNotEmpty) 'aliases': _aliases,
-        if (_moveMiss.isNotEmpty) 'move_miss': _moveMiss,
       }),
     );
   }
@@ -454,7 +448,8 @@ class NotebookSync {
   static String folderNameOf(Notebook n) => folderName(n.name);
 
   /// Each notebook's folder: its name's folder, and for the notebooks whose names make the same folder ("Trip: 2026", "Trip 2026"),
-  /// the one with the lowest id keeps it and the others get their id's first characters added, so no two share a folder.
+  /// the name that sorts first keeps it and the others get a short stable hash of their full name added. Only the names decide
+  /// it, so every device makes the same folders before and after they agree on ids.
   static Map<String, String> folderNames(Iterable<Notebook> books) {
     final by = <String, List<Notebook>>{};
     for (final n in books) {
@@ -462,12 +457,21 @@ class NotebookSync {
     }
     final out = <String, String>{};
     for (final e in by.entries) {
-      final l = e.value..sort((a, b) => a.id.compareTo(b.id));
+      final l = e.value..sort((a, b) => a.name.compareTo(b.name));
       for (var i = 0; i < l.length; i++) {
-        out[l[i].name] = i == 0 ? e.key : '${e.key} ${l[i].id.substring(0, l[i].id.length < 8 ? l[i].id.length : 8)}';
+        out[l[i].name] = i == 0 ? e.key : '${e.key} ${_nameHash(l[i].name)}';
       }
     }
     return out;
+  }
+
+  /// FNV-1a of the name, 8 hex digits.
+  static String _nameHash(String name) {
+    var h = 0x811c9dc5;
+    for (final c in name.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0xffffffff;
+    }
+    return h.toRadixString(16).padLeft(8, '0');
   }
 
   static String _topDir(String path) => path.contains('/') ? path.substring(0, path.indexOf('/')) : '';
@@ -968,7 +972,6 @@ class NotebookSync {
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
-      if (f != null) _moveMiss.remove(id);
       if (c != null) {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
@@ -989,12 +992,11 @@ class NotebookSync {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
           }
         } else if (missing) {
-          if (kind == SyncKind.share && !cacheChanged && _topDir(s.path) != _dirOf(c.$1) && (_moveMiss[id] ?? 0) < 3) {
-            // The file is gone from the folder of the notebook's old name: the notebook was renamed and its new file may not have
-            // come yet. Waited for (three runs), never deleted at once.
-            _moveMiss[id] = (_moveMiss[id] ?? 0) + 1;
+          if (kind == SyncKind.share && !cacheChanged && _topDir(s.path) != _dirOf(c.$1)) {
+            // The file is gone from the folder of the notebook's old name: the notebook was renamed, and its new file has not come
+            // yet. The entry stays where it is, however long that takes; it is never deleted for a file that is only late. Once the
+            // new file comes it is the same entry (see the duplicate rule in the scan).
           } else if (kind == SyncKind.share && !cacheChanged) {
-            _moveMiss.remove(id);
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;

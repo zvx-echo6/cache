@@ -75,11 +75,18 @@ class _Link {
   final MemFolder b;
   Map<String, String> last = {};
 
+  /// Paths the share does not carry yet (a slow transfer): left as they are on both sides.
+  bool Function(String path)? block;
+
   void sync() {
     final next = <String, String>{};
     final paths = {...a.text.keys, ...b.text.keys, ...last.keys}.where((p) => !p.split('/').any((s) => s.startsWith('.')));
     for (final p in paths.toList()..sort()) {
       final l = last[p], x = a.text[p], y = b.text[p];
+      if (block?.call(p) ?? false) {
+        if (l != null) next[p] = l;
+        continue;
+      }
       var win = x;
       if (x != y) {
         final xc = x != l, yc = y != l;
@@ -682,27 +689,67 @@ void main() {
       expect(ids(b, 'Trips'), ['hikes-id']);
     });
 
-    test('a device that sees the old folder go before the new files come keeps its entries and does not make a second notebook', () async {
+    test('a rename whose new files come many runs late loses no entry on the other device', () async {
       final a = await device('hikes-id', entry: 'ea1');
+      await a.nb.saveEntry(id: 'ea2', notebookId: 'hikes-id', occurredAt: '2026-11-02T09:00:00-07:00', title: 'Second hike', body: 'y');
       final b = _Rig(SyncKind.share, includePrivate: false);
       await b.nb.start();
       final link = _Link(a.folder, b.folder);
       await rounds([a, b], [link], n: 2);
       await a.nb.saveNotebook(id: 'hikes-id', def: hikes.copyWith(name: 'Trips'));
       await a.engine.run();
-      // the old folder's deletes arrive first, the new files later
-      final held = {for (final e in a.folder.text.entries) if (e.key.startsWith('Trips/') && e.key.endsWith('.md')) e.key: e.value};
-      for (final k in held.keys) {
-        a.folder.text.remove(k);
+      // the old folder's deletes and the new id file come; the new entry files do not
+      link.block = (p) => p.startsWith('Trips/') && p.endsWith('.md');
+      for (var i = 0; i < 7; i++) {
+        link.sync();
+        await b.engine.run();
+        await a.engine.run();
+        expect(await entryIds(b, 'hikes-id'), {'ea1', 'ea2'}, reason: 'run ${i + 1}: kept, not deleted');
+        expect(ids(b, 'Trips'), ['hikes-id']);
       }
-      link.sync();
-      await b.engine.run();
-      expect(await entryIds(b, 'hikes-id'), {'ea1'}, reason: 'waited for, not deleted');
-      a.folder.text.addAll(held);
+      expect(a.folder.text.keys.where((k) => k.startsWith('Hikes/')), isEmpty);
+      // the files arrive at last: the same entries, one notebook, the old folder empty, stable
+      link.block = null;
       await rounds([a, b], [link], n: 2);
       for (final d in [a, b]) {
         expect(d.nb.notebooks.where((n) => n.name == 'Hikes' || n.name == 'Trips').map((n) => n.name), ['Trips']);
-        expect(await entryIds(d, 'hikes-id'), {'ea1'});
+        expect(await entryIds(d, 'hikes-id'), {'ea1', 'ea2'});
+        expect(d.folder.text.keys.where((k) => k.startsWith('Hikes/')), isEmpty);
+        expect(d.folder.text.keys.where((k) => k.startsWith('Trips/') && k.endsWith('.md')).length, 2);
+      }
+      final before = [{...a.folder.text}, {...b.folder.text}];
+      await rounds([a, b], [link], n: 2);
+      expect(a.folder.text, before[0]);
+      expect(b.folder.text, before[1]);
+      // and a delete after that is still a delete
+      await a.nb.deleteEntry('ea2');
+      await rounds([a, b], [link], n: 3);
+      expect(await entryIds(b, 'hikes-id'), {'ea1'});
+    });
+
+    test('devices that made the same colliding names with other ids agree on the folders, and converge without a duplicate or a delete', () async {
+      Future<_Rig> make(String one, String two, String e1, String e2) async {
+        final r = await device(one, name: 'Trip: 2026', entry: e1);
+        await r.nb.saveNotebook(id: two, template: 'notes', def: hikes.copyWith(name: 'Trip 2026'));
+        await r.nb.saveEntry(id: e2, notebookId: two, occurredAt: '2026-11-01T09:00:00-07:00', title: 'Other $e2', body: 'x');
+        return r;
+      }
+
+      final a = await make('aaa-one', 'bbb-two', 'ea1', 'ea2');
+      final c = await make('ccc-one', 'ddd-two', 'ec1', 'ec2');
+      Set<String> dirs(_Rig r) => {for (final k in r.folder.text.keys.where((k) => k.endsWith('notebook.json') && k.startsWith('Trip'))) k.split('/').first};
+      await a.engine.run();
+      await c.engine.run();
+      expect(dirs(a), dirs(c), reason: 'the folders come from the names alone');
+      expect(dirs(a).length, 2);
+      final link = _Link(a.folder, c.folder);
+      await rounds([a, c], [link], n: 4);
+      for (final d in [a, c]) {
+        expect(d.nb.notebooks.where((n) => n.name.startsWith('Trip')).length, 2);
+        expect(ids(d, 'Trip: 2026'), ['aaa-one']);
+        expect(ids(d, 'Trip 2026'), ['bbb-two']);
+        expect(await entryIds(d, 'aaa-one'), {'ea1', 'ec1'});
+        expect(await entryIds(d, 'bbb-two'), {'ea2', 'ec2'});
       }
     });
 
@@ -794,10 +841,11 @@ void main() {
       return (rig: r, shared: shared, shortcuts: shortcuts, obsidian: obsidian, calls: () => n);
     }
 
-    for (final kill in [0, 1, 2]) {
-      test('killed at step ${kill + 1} (${['shortcuts', 'field names', 'before any step'][kill]}), the replay finishes it with everything intact', () async {
-        final d = await build(kill == 2 ? {} : {kill + 1});
+    for (final kill in [0, 1, 2, 3]) {
+      test('killed at step ${kill + 1} (${['shortcuts', 'field names', 'before any step', 'private sharing'][kill]}), a fresh start replays the journal and finishes it with everything intact', () async {
+        final d = await build(kill >= 2 ? {} : {kill + 1});
         if (kill == 2) d.rig.store.failNext = 'io';
+        if (kill == 3) d.rig.nb.privateSharing = _Flaky(d.shared);
         await expectLater(d.rig.nb.reidNotebook('bbb-hikes', 'aaa-hikes'), throwsA(anything));
         expect(d.rig.reidFile.existsSync(), isTrue, reason: 'the journal stays until every step saved');
         final j = jsonDecode(d.rig.reidFile.readAsStringSync()) as Map;
@@ -993,6 +1041,29 @@ void main() {
       expect(pin.locked, isFalse);
     });
   });
+}
+
+/// Private sharing that fails once when told of a notebook id change (the app killed there).
+class _Flaky implements PrivateSharing {
+  _Flaky(this.inner);
+
+  final _Included inner;
+  bool failed = false;
+
+  @override
+  bool included(String notebookId) => inner.included(notebookId);
+
+  @override
+  Future<void> setIncluded(String notebookId, bool on) => inner.setIncluded(notebookId, on);
+
+  @override
+  Future<void> notebookReid(String oldId, String newId) async {
+    if (!failed) {
+      failed = true;
+      throw StateError('killed in private sharing');
+    }
+    await inner.notebookReid(oldId, newId);
+  }
 }
 
 class _Included implements PrivateSharing {
