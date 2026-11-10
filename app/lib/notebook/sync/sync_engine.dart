@@ -152,6 +152,8 @@ class NotebookSync {
     this.idLayout = false,
     this.onTombstone,
     this.idForName,
+    this.eligible,
+    this.onLegacyMade,
     this.skipFormat2Dirs = true,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
@@ -167,6 +169,17 @@ class NotebookSync {
   /// Format 1: leave the `<id>/` folders alone (builds before format 2 do not know them; tests turn this off to stand for them,
   /// which find nothing of them to read because format 2's entry files are not `.md`).
   final bool skipFormat2Dirs;
+
+  /// Format 2: the notebooks that existed before this device's migration (local at the upgrade, or made from a format 1 folder):
+  /// the only ones whose exact name settles which notebook they are. After that ids are the only identity, so two notebooks made
+  /// with one name on format 2 stay two. Shared with, and saved by, the connections.
+  final Set<String>? eligible;
+
+  /// Format 1: a notebook was made here from a format 1 folder (it is eligible, see [eligible]).
+  final void Function(String id)? onLegacyMade;
+
+  /// Format 2: the name each notebook folder of the share has (after a run), for listing a notebook that is only on a linked device.
+  Map<String, String> dirNames = {};
 
   /// Format 1: the id format 2 gave the notebook of this exact name, for a notebook made here from a format 1 folder.
   final Future<String?> Function(String name)? idForName;
@@ -573,6 +586,7 @@ class NotebookSync {
     }
     final made = await _makeBook(id: newId, name: d.notebook, shared: shared);
     byName[made.name] = made;
+    if (kind == SyncKind.share && !idLayout) onLegacyMade?.call(made.id);
     return made;
   }
 
@@ -718,8 +732,21 @@ class NotebookSync {
 
   bool _inShare(Notebook n) => includePrivate || !n.private || privateBooks.contains(n.id);
 
+  bool _eligible(String id) => eligible?.contains(id) ?? false;
+
+  /// A name that no notebook here has: [name], else with the first characters of [id] added.
+  String _freeName(String name, String id) {
+    if (!notebook.nameTaken(name)) return name;
+    final short = id.length < 6 ? id : id.substring(0, 6);
+    var n = '$name ($short)';
+    for (var i = 2; notebook.nameTaken(n); i++) {
+      n = '$name ($short $i)';
+    }
+    return n;
+  }
+
   Map<String, dynamic> _recBody(Notebook n) =>
-      {'name': n.name, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
+      {'name': n.name, if (_eligible(n.id)) 'legacy': true, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
 
   /// A notebook's id changes (another device's id for it is lower): the journal in [NotebookState.reidNotebook], with the field
   /// names of this share's state moved too. What this device kept for the old id goes to the new one.
@@ -727,6 +754,7 @@ class NotebookSync {
     final from = n.id;
     final sn = _snap.remove(from);
     if (sn != null) _snap[to] = sn;
+    eligible?.add(to);
     await _save();
     await notebook.reidNotebook(from, to, also: {'share field names': (o, w) => moveProps(stateFile, o, w)});
     await _load();
@@ -769,11 +797,12 @@ class NotebookSync {
     // One id per exact notebook name: the lowest wins everywhere. A notebook here that has a higher one takes it, and its folder
     // (when there is one) becomes an alias of the lower; the entries in it stay where they are.
     final ids = <String, Set<String>>{};
+    // Only notebooks from before the migration are matched by name (see [eligible]); the others are told apart by id alone.
     for (final r in recs.values) {
-      if (r.kind == RecordKind.live) ids.putIfAbsent(r.name, () => {}).add(r.id);
+      if (r.kind == RecordKind.live && r.body['legacy'] == true) ids.putIfAbsent(r.name, () => {}).add(r.id);
     }
     for (final n in notebook.notebooks) {
-      if (_inShare(n)) ids.putIfAbsent(n.name, () => {}).add(n.id);
+      if (_inShare(n) && _eligible(n.id)) ids.putIfAbsent(n.name, () => {}).add(n.id);
     }
     for (final e in ids.entries) {
       if (e.value.length < 2) continue;
@@ -848,11 +877,14 @@ class NotebookSync {
     _recByName = {for (final r in recs.values) if (r.kind == RecordKind.live) r.name: r.body};
     for (final r in recs.values.where((r) => r.kind == RecordKind.live).toList()) {
       if (notebook.notebook(r.id) != null) continue;
-      if ((ids[r.name] ?? const <String>{}).any((x) => x.compareTo(r.id) < 0)) continue;
-      if (notebook.nameTaken(r.name)) continue;
-      await _makeBook(id: r.id, name: r.name, shared: r.body);
-      _snap[r.id] = (name: r.name, at: r.at);
+      if (r.body['legacy'] == true && (ids[r.name] ?? const <String>{}).any((x) => x.compareTo(r.id) < 0)) continue;
+      // A name a notebook here already has (made on its own, not the same notebook): this one is another notebook, kept under its
+      // name with a few characters of its id added here, and the record keeps the name it has.
+      final name = _freeName(r.name, r.id);
+      await _makeBook(id: r.id, name: name, shared: r.body);
+      _snap[r.id] = (name: name, at: r.at);
     }
+    dirNames = {for (final e in recs.entries) if (e.value.kind == RecordKind.live) e.key: e.value.name};
     // Which notebook each folder's entries belong to (only notebooks here and in the share).
     _dirNb = {};
     for (final e in recs.entries) {

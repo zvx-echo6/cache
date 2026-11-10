@@ -232,6 +232,37 @@ void main() {
     });
   });
 
+  group('after both devices are on format 2', () {
+    test('two notebooks made with one name stay two, here and on the other device, each with its own entries', () async {
+      final a = await started('a');
+      final b = await started('b');
+      final link = ShareLink(a.folder, b.folder);
+      // both devices are on format 2 and have synced once
+      await rounds([a, b], [link], n: 2);
+      await a.make('Shopping', id: 's-1');
+      await a.add('s-1', 'ea1', 'Milk');
+      await b.make('Shopping', id: 's-2');
+      await b.add('s-2', 'eb1', 'Bread');
+      await rounds([a, b], [link], n: 4);
+      for (final d in [a, b]) {
+        expect({for (final n in d.nb.notebooks) n.id}, {'s-1', 's-2'}, reason: '${d.label}: two notebooks, by id');
+        expect(await d.entryIds('s-1'), {'ea1'}, reason: d.label);
+        expect(await d.entryIds('s-2'), {'eb1'}, reason: d.label);
+      }
+      expect(a.nb.notebook('s-1')!.name, 'Shopping');
+      expect(b.nb.notebook('s-2')!.name, 'Shopping');
+      expect(a.nb.notebook('s-2')!.name, startsWith('Shopping ('), reason: 'the other one is kept apart by its id');
+      expect(jsonDecode(a.folder.text['s-2/notebook.json']!)['name'], 'Shopping', reason: 'the record keeps its name');
+      // stable
+      final before = [{...a.folder.text}, {...b.folder.text}];
+      await rounds([a, b], [link], n: 2);
+      expect(a.folder.text, before[0]);
+      expect(b.folder.text, before[1]);
+      expect(a.nb.notebooks.length, 2);
+      expect(b.nb.notebooks.length, 2);
+    });
+  });
+
   group('a notebook an old device makes', () {
     test('two upgraded devices that get it from the old one end with one notebook id and no duplicates', () async {
       final o = await started('old');

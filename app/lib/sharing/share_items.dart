@@ -100,9 +100,15 @@ List<String> notebookAlongside(NotebookState notebooks, String share, String pat
   return n == null ? const [] : [NotebookSync.folderNameOf(n)];
 }
 
-/// A notebook on a linked device only; the photos folder every notebook of format 1 used travels with the kind.
-ShareItem? notebookRemoteItem(String share, String path, int bytes) =>
-    path == 'photos' || path == 'Conflicts' ? null : ShareItem(share: share, path: path, name: path, bytes: bytes);
+/// A notebook on a linked device only, by the name its folder's record gives ([nameOf], from notebook sync). The photos folder
+/// every notebook of format 1 used travels with the kind; a format 1 folder (named after a notebook, no record) is not listed: its
+/// notebook is the `<id>/` folder's.
+ShareItem? notebookRemoteItem(String share, String path, int bytes, {String? Function(String dir)? nameOf}) {
+  if (path == 'photos' || path == 'Conflicts') return null;
+  final name = nameOf?.call(path);
+  if (nameOf != null && name == null) return null;
+  return ShareItem(share: share, path: path, name: name ?? path, bytes: bytes);
+}
 
 /// Switches a private notebook on or off: its "Include in sync and sharing".
 Future<void> setNotebookShared(NotebookState notebooks, ShareItem it, bool on) async {

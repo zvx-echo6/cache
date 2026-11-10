@@ -115,6 +115,15 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   /// Format 1 and 2 together: `legacy` is `on` (format 1 folders kept current beside the format 2 ones), `off` (this device stopped
   /// writing and reading them) or `cleaned` (removed from the share); and what each linked device last said.
   String _legacy = 'on';
+
+  /// The notebooks that existed before this device's migration to format 2 (local then, or made from a format 1 folder): the only
+  /// ones matched by exact name with other devices' notebooks. Saved with the format state.
+  final Set<String> _eligible = {};
+  bool _migrated = false;
+
+  /// The name of the notebook folder `<id>/` in the share, as its record says (after a sync); null for a folder that is not one.
+  Map<String, String> _dirNames = {};
+  String? dirName(String dir) => _dirNames[dir];
   final Map<String, ({bool legacyOff})> _peerFormat = {};
   Map<String, dynamic>? _advertised;
   bool _formatRead = false;
@@ -338,6 +347,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       folder: folder,
       stateFile: File('${(await dir()).path}/${t.id}${v2 ? '2' : ''}.json'),
       idLayout: v2,
+      eligible: v2 ? _eligible : null,
+      onLegacyMade: t.kind == SyncKind.share && legacy ? _eligible.add : null,
       clock: clock,
       onTombstone: v2 ? onTombstone : null,
       idForName: t.kind == SyncKind.share && legacy ? (name) async => (await idsByName(folder))[name] : null,
@@ -421,6 +432,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       final j = jsonDecode(await f.readAsString());
       if (j is! Map) return;
       _legacy = const {'on', 'off', 'cleaned'}.contains(j['legacy']) ? j['legacy'] as String : 'on';
+      _migrated = j['migrated'] == true;
+      _eligible.addAll([for (final x in (j['eligible'] as List? ?? const [])) '$x']);
       for (final e in (j['peers'] as Map? ?? const {}).entries) {
         _peerFormat['${e.key}'] = (legacyOff: (e.value as Map)['legacy_off'] == true);
       }
@@ -433,7 +446,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   Future<void> _saveFormat() async {
     final f = await _formatFile();
     await f.parent.create(recursive: true);
-    await writeStringAtomic(f, jsonEncode({'legacy': _legacy, 'peers': {for (final e in _peerFormat.entries) e.key: {'legacy_off': e.value.legacyOff}}}));
+    await writeStringAtomic(f, jsonEncode({'legacy': _legacy, 'migrated': _migrated, 'eligible': [..._eligible]..sort(), 'peers': {for (final e in _peerFormat.entries) e.key: {'legacy_off': e.value.legacyOff}}}));
   }
 
   /// One sync of the notebooks share. While any linked device has not said it keeps format 2, the format 1 folders (one per
@@ -455,6 +468,12 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       }
     }
     await _readFormat();
+    // The first time: the notebooks here now are the ones from before the migration, the only ones matched by name.
+    if (!_migrated && !notebook.loading && notebook.error == null) {
+      _eligible.addAll(notebook.notebooks.map((n) => n.id));
+      _migrated = true;
+      await _saveFormat();
+    }
     NotebookSync? v2;
     NotebookSync? v1;
     try {
@@ -468,7 +487,9 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       v2 = await _engine(t);
       final r = await v2.run();
       _merged[t.id] = r.merged;
+      _dirNames = v2.dirNames;
       await _formatStep(folder, t);
+      await _saveFormat();
       _conflicts[t.id] = [...v2.conflicts, ...?v1?.conflicts];
       final n = _conflicts[t.id]!.length;
       _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';

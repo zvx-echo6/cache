@@ -345,7 +345,7 @@ class _CacheAppState extends State<CacheApp> {
       count: () => notebooks.notebooks.length,
       list: () => NotebooksScreen(deps: notebookDeps),
       items: () => notebookItems(notebooks),
-      remoteItem: notebookRemoteItem,
+      remoteItem: (share, path, bytes) => notebookRemoteItem(share, path, bytes, nameOf: connections.dirName),
       alongside: (share, path) => notebookAlongside(notebooks, share, path),
       setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
