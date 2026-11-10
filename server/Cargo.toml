@@ -65,3 +65,7 @@ libc = "0.2"
 # (On Windows it comes from vcpkg instead: see server/README.md.)
 [target.'cfg(not(windows))'.dependencies]
 openssl = { version = "0.10.81", features = ["vendored"] }
+
+[dev-dependencies]
+# The loopback test hooks (compiled out of every normal and release build): a test's own origin server is let through the guard, one port at a time.
+cache_netguard = { path = "../packages/cache_search/native/cache_netguard", features = ["test-hooks"] }

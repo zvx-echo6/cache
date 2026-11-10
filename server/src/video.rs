@@ -23,7 +23,6 @@ use crate::http::Reply;
 use hyper::body::Bytes;
 use serde_json::json;
 use std::io::{Read, Seek, SeekFrom};
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,7 +55,7 @@ pub async fn serve(helper: Option<Arc<Helper>>, method: &str, path: &str, query:
     }
     if rest == "stream" {
         let Some(url) = crate::fetch::query_param(query, "u") else { return Reply::error(400, "bad_request", "u (an address) is required") };
-        return stream_reply(url, range.map(str::to_string), head, false).await;
+        return stream_reply(url, range.map(str::to_string), head).await;
     }
     Reply::error(404, "not_found", format!("no such endpoint: GET {path}"))
 }
@@ -356,51 +355,6 @@ fn entry_type(mime: &str, name: &str) -> String {
 
 // ---- the stream proxy
 
-/// Whether [ip] is an address on the public internet: not this machine, not a private, link-local, shared (CGNAT), documentation,
-/// multicast or unspecified address, and an IPv4-mapped IPv6 address is judged by the IPv4 inside.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v) => {
-            let o = v.octets();
-            !(v.is_loopback()
-                || v.is_private()
-                || v.is_link_local()
-                || v.is_unspecified()
-                || v.is_broadcast()
-                || v.is_multicast()
-                || v.is_documentation()
-                || (o[0] == 100 && (o[1] & 0xc0) == 64)
-                || o[0] == 0
-                || o[0] >= 240
-                || (o[0] == 198 && (o[1] & 0xfe) == 18))
-        }
-        IpAddr::V6(v) => {
-            if let Some(m) = v.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(m));
-            }
-            let s = v.segments();
-            !(v.is_loopback() || v.is_unspecified() || v.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || (s[0] == 0x2001 && s[1] == 0x0db8))
-        }
-    }
-}
-
-/// The client's name lookup, installed on the one agent every request and every redirect hop of `stream` uses: only addresses [is_public] says are public get through (all of them or none), so what is connected to is
-/// what was checked, whatever redirect or DNS answer led there. (When ask-linux-fetch's `fetch_scope` (`guarded_agent`, `address_ok`)
-/// is merged, `open_upstream` takes its agent and this type and [is_public] go.)
-struct PublicOnly {
-    allow_private: bool,
-}
-
-impl ureq::Resolver for PublicOnly {
-    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
-        let all: Vec<SocketAddr> = netloc.to_socket_addrs()?.collect();
-        if all.is_empty() || (!self.allow_private && all.iter().any(|a| !is_public(a.ip()))) {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not a public address"));
-        }
-        Ok(all)
-    }
-}
-
 struct Upstream {
     status: u16,
     headers: Vec<(&'static str, String)>,
@@ -409,10 +363,10 @@ struct Upstream {
     reader: Box<dyn Read + Send + Sync>,
 }
 
-fn open_upstream(url: &str, range: Option<&str>, allow_private: bool) -> Result<Upstream, u16> {
+fn open_upstream(url: &str, range: Option<&str>) -> Result<Upstream, u16> {
     crate::fetch::parse_url(url).ok_or(400u16)?;
-    let agent = ureq::AgentBuilder::new()
-        .resolver(PublicOnly { allow_private })
+    // The shared public-address guard, checked at connect time on the request and on every redirect hop.
+    let agent = cache_netguard::always(ureq::AgentBuilder::new())
         .redirects(4)
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(30))
@@ -548,9 +502,9 @@ pub fn rewrite_playlist(base: &str, text: &str) -> String {
     out
 }
 
-async fn stream_reply(url: String, range: Option<String>, head: bool, allow_private: bool) -> Reply {
+async fn stream_reply(url: String, range: Option<String>, head: bool) -> Reply {
     let opened = tokio::task::spawn_blocking(move || {
-        let u = open_upstream(&url, range.as_deref(), allow_private)?;
+        let u = open_upstream(&url, range.as_deref())?;
         Ok::<_, u16>((u, url))
     })
     .await;
@@ -683,11 +637,11 @@ mod tests {
 
     #[test]
     fn addresses_that_are_not_public_are_refused() {
-        for ip in ["127.0.0.1", "10.1.2.3", "192.168.1.240", "172.16.0.1", "169.254.1.1", "100.64.0.14", "0.0.0.0", "224.0.0.1", "198.18.0.1", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:192.168.1.1", "::"] {
-            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        for ip in ["127.0.0.1", "10.1.2.3", "192.168.1.240", "172.16.0.1", "169.254.1.1", "100.64.0.14", "0.0.0.0", "224.0.0.1", "198.18.0.1", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:192.168.1.1", "::", "::127.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::1", "fec0::1"] {
+            assert!(!cache_netguard::is_public(ip.parse().unwrap()), "{ip}");
         }
         for ip in ["5.189.158.149", "8.8.8.8", "2606:4700:4700::1111", "::ffff:8.8.8.8"] {
-            assert!(is_public(ip.parse().unwrap()), "{ip}");
+            assert!(cache_netguard::is_public(ip.parse().unwrap()), "{ip}");
         }
     }
 
@@ -746,7 +700,8 @@ mod tests {
         let mut resp = b"HTTP/1.1 206 Partial Content\r\nContent-Type: text/html\r\nContent-Range: bytes 0-9/100\r\nContent-Length: 10\r\nConnection: close\r\n\r\n".to_vec();
         resp.extend_from_slice(body);
         let (url, t) = serve_once(resp);
-        let r = stream_reply(url, Some("bytes=0-9".into()), false, true).await;
+        allow_origin(&url);
+        let r = stream_reply(url, Some("bytes=0-9".into()), false).await;
         assert_eq!(r.status, 206);
         assert_eq!(header(&r, "Content-Type"), Some("video/mp4"), "by the address's name, never the page type");
         assert_eq!(header(&r, "Content-Range"), Some("bytes 0-9/100"));
@@ -758,17 +713,100 @@ mod tests {
     #[tokio::test]
     async fn the_proxy_will_not_reach_this_machine_or_odd_addresses() {
         // 127.0.0.1 is not public: refused before any connection (502 from the resolver)
-        assert_eq!(stream_reply("http://127.0.0.1:9/v.mp4".into(), None, false, false).await.status, 502);
-        assert_eq!(stream_reply("http://localhost:9/v.mp4".into(), None, false, false).await.status, 502);
+        assert_eq!(stream_reply("http://127.0.0.1:9/v.mp4".into(), None, false).await.status, 502);
+        assert_eq!(stream_reply("http://localhost:9/v.mp4".into(), None, false).await.status, 502);
         for bad in ["file:///etc/passwd", "ftp://a.example/x", "https://user@a.example/", "not a url", "https://a.example\\@b/"] {
-            assert_eq!(stream_reply(bad.into(), None, false, false).await.status, 400, "{bad}");
+            assert_eq!(stream_reply(bad.into(), None, false).await.status, 400, "{bad}");
         }
+    }
+
+    /// Lets this test's own loopback origin server (and only that port) through the address guard.
+    fn allow_origin(url: &str) {
+        let port: u16 = url.rsplit_once(':').unwrap().1.split('/').next().unwrap().parse().unwrap();
+        cache_netguard::loopback_port_for_tests(port);
+    }
+
+    /// A listener on `host` (a loopback address) that must never be connected to; `None` where the host cannot be bound here.
+    fn watch(host: &str) -> Option<(std::net::TcpListener, u16)> {
+        let l = std::net::TcpListener::bind(format!("{host}:0")).ok()?;
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        Some((l, port))
+    }
+
+    fn untouched(l: &std::net::TcpListener, what: &str) {
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(matches!(l.accept(), Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock), "{what}: a connection was made");
+    }
+
+    #[tokio::test]
+    async fn the_proxy_refuses_ipv6_forms_of_private_addresses_and_makes_no_connection() {
+        let (l4, p4) = watch("127.0.0.1").unwrap();
+        let w6 = watch("[::127.0.0.1]");
+        let mut targets = vec![
+            "http://[::127.0.0.1]/".to_string(),
+            "http://[64:ff9b::7f00:1]/".to_string(),
+            "http://[2002:7f00:1::1]/".to_string(),
+            "http://192.168.1.240/".to_string(),
+            format!("http://127.0.0.1:{p4}/"),
+        ];
+        if let Some((_, p6)) = &w6 {
+            targets.push(format!("http://[::127.0.0.1]:{p6}/"));
+        }
+        for t in &targets {
+            assert_eq!(stream_reply(t.clone(), None, false).await.status, 502, "direct: {t}");
+        }
+        untouched(&l4, "direct 127.0.0.1");
+        if let Some((l6, _)) = &w6 {
+            untouched(l6, "direct ::127.0.0.1");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_proxy_refuses_a_redirect_to_a_private_address_and_makes_no_connection() {
+        let (l4, p4) = watch("127.0.0.1").unwrap();
+        let w6 = watch("[::127.0.0.1]");
+        let mut targets = vec![
+            "http://[::127.0.0.1]/".to_string(),
+            "http://[64:ff9b::7f00:1]/".to_string(),
+            "http://[2002:7f00:1::1]/".to_string(),
+            "http://192.168.1.240/".to_string(),
+            format!("http://127.0.0.1:{p4}/"),
+        ];
+        if let Some((_, p6)) = &w6 {
+            targets.push(format!("http://[::127.0.0.1]:{p6}/"));
+        }
+        for t in &targets {
+            let (url, origin) = serve_once(format!("HTTP/1.1 302 Found\r\nLocation: {t}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes());
+            allow_origin(&url);
+            assert_eq!(stream_reply(url, None, false).await.status, 502, "redirect to {t}");
+            origin.join().unwrap();
+        }
+        untouched(&l4, "redirect to 127.0.0.1");
+        if let Some((l6, _)) = &w6 {
+            untouched(l6, "redirect to ::127.0.0.1");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_proxy_follows_a_redirect_between_allowed_origins() {
+        // control: the guard refuses addresses, not redirects; a hop to another allowed loopback origin still works
+        let (target, t2) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_vec());
+        allow_origin(&target);
+        let (url, t1) = serve_once(format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes());
+        allow_origin(&url);
+        let r = stream_reply(url, None, false).await;
+        assert_eq!(r.status, 200);
+        assert_eq!(collect(r).await, b"abc");
+        t1.join().unwrap();
+        t2.join().unwrap();
     }
 
     #[tokio::test]
     async fn an_upstream_error_status_is_passed_on_without_a_body() {
         let (url, t) = serve_once(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec());
-        assert_eq!(stream_reply(url, None, false, true).await.status, 403);
+        allow_origin(&url);
+        assert_eq!(stream_reply(url, None, false).await.status, 403);
         t.join().unwrap();
     }
 
