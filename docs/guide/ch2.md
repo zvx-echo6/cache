@@ -157,7 +157,7 @@ Delete always asks first. The pop-up shows what it frees and says "You can downl
 1. Open "Ask" from the bar. You can also type in the Home search box and tap "Ask Cache:".
 2. If "Ask" says "Ask needs a model on this device.", tap "Choose a model" first. If the title says "No model", tap it and choose a model.
 3. Type in "Ask anything" and tap "Send".
-4. Follow the progress: "Preparing answer…", "Looking this up…" and "Reading from source…". The work stays visible as the answer appears; "Answer delivered" marks completion. Tap "Stop" to stop it.
+4. Follow the progress. While Cache works, one line says what it is doing, such as searching your library, reading a source or calculating, and each finished step stays above it with a check. When the answer starts to appear, the steps fold into one line such as "3 steps"; tap it to show or hide them. "Answer delivered" marks completion. Tap "Stop" to stop it.
 
 Cache looks in your Library, libraries, downloaded places and maps, and weather data. If you set it up, it also searches the web when you're online.
 

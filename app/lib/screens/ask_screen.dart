@@ -683,6 +683,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           AnswerProgress(
             phase: m.phase,
             activeTool: m.activeTool,
+            activeStep: m.activeStep,
+            steps: m.steps,
             notes: m.toolNotes,
             text: m.text,
             failed: m.error != null || m.cutShort,

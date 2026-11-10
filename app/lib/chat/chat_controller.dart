@@ -12,6 +12,7 @@ import '../search/numbering_state.dart';
 import 'ask_about.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
+import 'progress_steps.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
@@ -50,6 +51,11 @@ class ChatMessage {
   /// Ephemeral work shown continuously above the final answer, not model history.
   List<String> toolNotes = const [];
   String? activeTool;
+
+  /// The tool call running now, and the ones that finished in this answer (the trail above the progress line). Kept with the
+  /// message while the app runs, like [toolNotes]; not stored and never sent to the model.
+  ToolStep? activeStep;
+  List<ToolStep> steps = const [];
   List<NumberedResult> sources = const [];
   String? error;
 
@@ -627,13 +633,23 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// An `act` step with the title of the action it runs, from the installed definitions.
+  ToolStep? _withActionTitle(ToolStep? step) {
+    if (step == null || step.tool != 'act') return step;
+    final id = step.arguments['action'];
+    return id is String ? step.withTitle(actions?.definition(id)?.title) : step;
+  }
+
   void _applyUpdate(ChatMessage reply, TurnUpdate update) {
     reply
       ..phase = update.phase
       ..error = update.error
       ..chatFull = update.chatFull
       ..cutShort = update.cutShort
-      ..activeTool = update.activeTool;
+      ..activeTool = update.activeTool
+      ..activeStep = _withActionTitle(update.step);
+    final finished = update.finishedStep;
+    if (finished != null) reply.steps = [...reply.steps, _withActionTitle(finished)!];
     final note = update.completedToolText;
     if (note != null) {
       if (note.isNotEmpty) reply.toolNotes = [...reply.toolNotes, note];
