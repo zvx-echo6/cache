@@ -412,6 +412,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Whether [l] is a library of books (its rows go to Bookshelves).
   bool holdsBooks(LibraryItem l) => _libs.any((x) => x.item.path == l.path);
 
+  /// How many books [l] holds, shelved or not: its catalogue's documents (what the not-shelved line counts too). A book with copies in
+  /// two libraries counts in each.
+  int booksIn(LibraryItem l) => _libs.where((x) => x.item.path == l.path).firstOrNull?.docs.length ?? 0;
+
   static void _signFiles(StringBuffer b, Directory dir) {
     if (!dir.existsSync()) return;
     final files = [for (final e in dir.listSync()) if (e is File) e]..sort((a, c) => a.path.compareTo(c.path));

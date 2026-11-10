@@ -152,6 +152,10 @@ class _BrowseScreenState extends State<BrowseScreen> {
       final CdsShelfSource c => c.holdsBooks(l),
       _ => false,
     },
+    booksIn: (l) => switch (_shelves) {
+      final CdsShelfSource c => c.booksIn(l),
+      _ => 0,
+    },
     rootTop: (ctx) => [
       if (libs?.task case final t?) _taskRow(ctx.t, t),
       // a browser: what the device is doing for this tab (uploads, downloads, a library being built)
