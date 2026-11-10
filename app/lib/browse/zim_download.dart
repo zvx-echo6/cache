@@ -5,6 +5,7 @@ import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 
+import '../chat/ask_focus.dart';
 import '../net/fetch.dart' show kUserAgent;
 import 'free_space.dart';
 
@@ -111,6 +112,8 @@ class ZimDownloader {
     void Function()? onVerifying,
     CancelToken? cancel,
   }) async {
+    // While Ask answers, a download that has not started waits (see chat/ask_focus.dart); one running is held in _fetchBody.
+    await askIdle(worker: 'Downloads');
     final client = _clientFactory();
     cancel?._onCancel(() => client.close(force: true));
     try {
@@ -147,6 +150,7 @@ class ZimDownloader {
 
       // 5. Verify.
       if (expected != null) {
+        await askIdle(worker: 'Downloads'); // the check reads the whole file: not while Ask answers
         onVerifying?.call();
         final got = await _hashFile(part.path, expected.kind);
         _checkCancel(cancel);
@@ -368,6 +372,10 @@ class ZimDownloader {
     try {
       await for (final chunk in res) {
         _checkCancel(cancel);
+        // While Ask answers the stream is held (an await in an await-for body pauses the subscription: nothing is lost). The hold
+        // lasts at most [kAskHoldMax] at a time, one chunk goes by after each, so the connection never sits silent long enough for
+        // the server to drop it.
+        await askIdle(worker: 'Downloads', maxWait: kAskHoldMax);
         await raf.writeFrom(chunk);
         done += chunk.length;
         final now = DateTime.now();

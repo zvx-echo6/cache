@@ -89,7 +89,8 @@ class LlamaSession {
   /// Loads the model (replacing a model loaded before). Throws a [StateError] with the reason on failure.
   /// On Android the CPU weights stay file-backed in the mmap; [repackWeights] repacks them instead, for measurement only (see
   /// cl_configure). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs; null: not saved.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir}) async {
+  /// [prereadMbps]: the gentle pre-read rate in MB/s after the load (0: off).
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = 0}) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
@@ -100,7 +101,7 @@ class LlamaSession {
       'id': id,
       'path': path,
       'nCtx': nCtx,
-      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights),
+      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights, prereadMbps: prereadMbps),
     });
     final r = await c.future;
     if (r['error'] != null) throw StateError(r['error'] as String);

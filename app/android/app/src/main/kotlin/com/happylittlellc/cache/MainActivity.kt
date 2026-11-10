@@ -27,9 +27,26 @@ class MainActivity : FlutterActivity() {
     private var keyboardVisible = false
     private val restoreSystemBars = Runnable { applySystemBars() }
 
+    // Test APK only (BuildConfig.TEST_APK): the bench's launch extras, read by Dart through the cache/bench channel. In the release
+    // build nothing is read and the channel answers zeros.
+    private var benchPrereadMbps = 0
+    private var benchDropCaches = false
+
+    private fun readBenchExtras(i: Intent?) {
+        if (!BuildConfig.TEST_APK || i == null) return
+        if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+        if (i.hasExtra("cache_drop_caches")) benchDropCaches = i.getBooleanExtra("cache_drop_caches", false)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        readBenchExtras(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         super.onCreate(savedInstanceState)
+        readBenchExtras(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -135,6 +152,18 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        // The bench's options (test APK only; zeros in the release build).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "get" -> result.success(mapOf(
+                        "testApk" to BuildConfig.TEST_APK,
+                        "preread_mbps" to if (BuildConfig.TEST_APK) benchPrereadMbps else 0,
+                        "drop_caches" to (BuildConfig.TEST_APK && benchDropCaches),
+                    ))
+                    else -> result.notImplemented()
+                }
+            }
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")

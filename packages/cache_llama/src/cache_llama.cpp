@@ -22,12 +22,18 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #if defined(__linux__) || defined(__ANDROID__)
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -71,6 +77,10 @@ struct Handle {
     bool                                 finished    = true;
     std::atomic<bool>                    stop{false};
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
+
+    // Gentle pre-read of the model file into the page cache (cl_configure preread_mbps): one thread, stopped and joined in free_handle.
+    std::thread       preread;
+    std::atomic<bool> preread_stop{false};
 
     // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
     std::string weights        = "default";
@@ -208,6 +218,7 @@ void cl_logi(const char * fmt, ...) {
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
+int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
@@ -434,6 +445,97 @@ void advise_lookup_tensors(const char * model_path) {
 void advise_lookup_tensors(const char *) {}
 #endif
 
+// ---------------- gentle pre-read ----------------
+// The first prompt of a chat faults in about 1.5 GB of the mmapped model within seconds, which pushes free pages under Android's
+// low-memory watermark and kills cached apps. Reading the file ahead at a low, steady rate spreads that out. It uses its own file
+// descriptor and never touches the mapping or the model. per_layer_token_embd is left alone: llama.cpp reads those rows lazily.
+[[maybe_unused]] constexpr uint64_t kPrereadStep = 1u << 20;  // 1 MiB
+
+// Milliseconds to sleep so that `bytes` read after `elapsed_us` microseconds never exceeds `mbps` MB/s (1 MB = 1 MiB). 0 if on pace.
+[[maybe_unused]] long long preread_sleep_ms(uint64_t bytes, long long elapsed_us, int mbps) {
+    if (mbps <= 0) return 0;
+    const long long due_us = (long long) ((double) bytes * 1e6 / ((double) mbps * 1048576.0));
+    const long long wait   = due_us - elapsed_us;
+    return wait > 0 ? (wait + 999) / 1000 : 0;
+}
+
+// File ranges to read: every tensor except per_layer_token_embd*, sorted by offset, adjacent or overlapping ranges merged.
+[[maybe_unused]] std::vector<std::pair<uint64_t, uint64_t>> preread_ranges(const char * model_path) {
+    std::vector<std::pair<uint64_t, uint64_t>> r;  // (offset, size)
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = nullptr;
+    gguf_context * g = gguf_init_from_file(model_path, gp);
+    if (!g) return r;
+    const uint64_t base = gguf_get_data_offset(g);
+    const int64_t  n    = gguf_get_n_tensors(g);
+    for (int64_t i = 0; i < n; i++) {
+        if (strncmp(gguf_get_tensor_name(g, i), "per_layer_token_embd", 20) == 0) continue;
+        r.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+    }
+    gguf_free(g);
+    std::sort(r.begin(), r.end());
+    std::vector<std::pair<uint64_t, uint64_t>> m;
+    for (const auto & x : r) {
+        if (x.second == 0) continue;
+        if (!m.empty() && x.first <= m.back().first + m.back().second) {
+            const uint64_t end = std::max(m.back().first + m.back().second, x.first + x.second);
+            m.back().second = end - m.back().first;
+        } else {
+            m.push_back(x);
+        }
+    }
+    return m;
+}
+
+#if defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
+    using clock = std::chrono::steady_clock;
+    const auto ranges = preread_ranges(path.c_str());
+    uint64_t total = 0;
+    for (const auto & r : ranges) total += r.second;
+    cl_logi("preread: start, %llu MB in %zu ranges at %d MB/s", (unsigned long long) (total >> 20), ranges.size(), mbps);
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        cl_logi("preread: stopped at 0 MB after 0 ms (cannot open the file)");
+        return;
+    }
+    std::vector<char> buf(kPrereadStep);
+    const auto t0 = clock::now();
+    auto since_us = [&]() { return (long long) std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count(); };
+    uint64_t done = 0;
+    bool halted = false;
+    for (const auto & r : ranges) {
+        for (uint64_t pos = 0; pos < r.second && !halted; ) {
+            if (stop->load()) { halted = true; break; }
+            const uint64_t want = std::min<uint64_t>(kPrereadStep, r.second - pos);
+            const ssize_t got = pread(fd, buf.data(), (size_t) want, (off_t) (r.first + pos));
+            if (got <= 0) { halted = true; break; }
+            pos  += (uint64_t) got;
+            done += (uint64_t) got;
+            long long ms = preread_sleep_ms(done, since_us(), mbps);
+            while (ms > 0 && !stop->load()) {  // sleep in slices so a free is noticed within one step
+                const long long slice = std::min<long long>(ms, 20);
+                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+                ms -= slice;
+            }
+        }
+        if (halted) break;
+    }
+    close(fd);
+    const long long ms = since_us() / 1000;
+    if (!halted && done >= total) {
+        cl_logi("preread: done, %llu MB in %lld ms", (unsigned long long) (done >> 20), ms);
+    } else {
+        cl_logi("preread: stopped at %llu MB after %lld ms", (unsigned long long) (done >> 20), ms);
+    }
+}
+#else
+void preread_run(std::string, int, std::atomic<bool> *) {
+    cl_logi("preread: off");  // no pread() on this platform
+}
+#endif
+
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
         fputs(text, stderr);
@@ -556,6 +658,9 @@ static std::mutex          g_live_mu;
 static std::set<Handle *>  g_live;
 
 static void free_handle(Handle * h) {
+    // Stop the pre-read first: it must be gone before the model is.
+    h->preread_stop.store(true);
+    if (h->preread.joinable()) h->preread.join();
     h->smpl.reset();
     h->session.reset();
     h->tmpls.reset();
@@ -573,6 +678,7 @@ int cl_configure(const char * options_json) {
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
+        if (j.contains("preread_mbps") && j.at("preread_mbps").is_number()) g_preread_mbps = std::max(0, j.at("preread_mbps").get<int>());
         return 0;
     } catch (const std::exception &) {
         return -1;
@@ -599,9 +705,11 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
+        int  preread_mbps  = 0;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
+            preread_mbps  = g_preread_mbps;
             h->prefix_dir = g_prefix_dir;
         }
         (void) repack_opt_in;
@@ -685,6 +793,15 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
             g_live.insert(out);
+        }
+        if (preread_mbps > 0) {
+            try {
+                out->preread = std::thread(preread_run, std::string(model_path), preread_mbps, &out->preread_stop);
+            } catch (const std::exception &) {
+                cl_logi("preread: off (thread not started)");
+            }
+        } else {
+            cl_logi("preread: off");
         }
         return out;
     } catch (const std::exception & e) {

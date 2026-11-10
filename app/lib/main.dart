@@ -24,6 +24,7 @@ import 'browse/web/build_api.dart' show HttpBuildApi;
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
+import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -104,6 +105,7 @@ import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
+import 'platform/bench_options.dart' show dropBenchCaches;
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'search/index_scheduler.dart';
@@ -505,6 +507,7 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
+    focus: askFocus,
     supportDir: () async => Directory(await appSupportPath()),
     catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
@@ -555,7 +558,10 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final LayoutState layout = LayoutState();
+  /// Held while Ask generates an answer: background work (sync, downloads, indexing) starts nothing new meanwhile (chat/ask_focus.dart).
+  late final AskFocus askFocus = AskFocus();
   late final ChatController chat = ChatController(
+    focus: askFocus,
     // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
     tools: const [],
     // Try again (or the next question) after the core could not start starts it again.
@@ -753,6 +759,13 @@ class _CacheAppState extends State<CacheApp> {
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    askFocusShared = askFocus;
+    // The workers that hold off while Ask answers (named in the log). Indexing follows the throttle (chat.busy, _onChatForIndexing).
+    for (final name in ['Indexing', 'Notebook sync', 'Settings sync', 'Downloads', 'Region downloads']) {
+      askFocus.register(name);
+    }
+    // Test APK only: the bench's drop_caches option (AppState.benchOptions is off in every other build).
+    askFocus.dropCaches = () async => app.benchOptions.dropCaches ? dropBenchCaches() : null;
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
@@ -1038,6 +1051,8 @@ class _CacheAppState extends State<CacheApp> {
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
     indexThrottle.dispose();
+    if (identical(askFocusShared, askFocus)) askFocusShared = null;
+    askFocus.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
