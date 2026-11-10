@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
 import '../../downloads/download_row.dart';
 import '../../theme.dart';
 import '../../video/caption_search.dart';
@@ -124,11 +125,14 @@ class _VideosScreenState extends State<VideosScreen> {
           if (video.unavailable != null) return Notice(video.unavailable!);
           final width = MediaQuery.sizeOf(context).width;
           final twoAcross = width >= kVideoTwoAcrossWidth;
-          return Center(
+          // The Linux desktop lines the list up with the page bar's title, on the page gutter, instead of centring it.
+          final desktop = DesktopMetrics.of(context);
+          return Align(
+            alignment: desktop == null ? Alignment.center : Alignment.topLeft,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: twoAcross ? kVideoListMaxWidth * 2 : kVideoListMaxWidth),
               child: ListView(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + MediaQuery.paddingOf(context).bottom),
+                padding: EdgeInsets.fromLTRB(desktop?.gutter ?? 16, 8, desktop?.gutter ?? 16, 24 + MediaQuery.paddingOf(context).bottom),
                 children: _searched.isNotEmpty ? [_searchField(context), ..._results(context)] : _list(context, twoAcross),
               ),
             ),
