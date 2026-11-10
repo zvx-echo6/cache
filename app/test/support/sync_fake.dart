@@ -62,7 +62,13 @@ class FakeSync implements SyncCoreLike {
         });
         return {'ok': true, 'peer': 'peer1', 'name': 'Desk'};
       case 'share_add':
-        shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
+        // Like the engine: the same id again re-points the share (its name stays).
+        final have = shares.where((s) => s['id'] == args['id']).firstOrNull;
+        if (have != null) {
+          have['path'] = args['path'];
+        } else {
+          shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
+        }
         return {'ok': true, 'id': args['id']};
       case 'share_remove':
         shares.removeWhere((s) => s['id'] == args['id']);

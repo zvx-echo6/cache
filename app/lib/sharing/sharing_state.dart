@@ -162,6 +162,7 @@ class SharingState extends ChangeNotifier {
       await _applyPolicy();
       await refresh();
       await _retire();
+      await _repointAll();
       await _addAlways();
       await _addLinkShares();
       await refreshItems();
@@ -181,6 +182,29 @@ class SharingState extends ChangeNotifier {
       _starting = false;
       notifyListeners();
     }
+  }
+
+  /// Every folder this device shares whose engine path is no longer where the app keeps it (the app's container path changes
+  /// across iOS installs and updates): the same id is added again with the current path, which the engine re-points (it keeps
+  /// the name, and its first scan after the move records no deletes). Run on every start.
+  Future<void> _repointAll() async {
+    final folders = <String, Directory?>{
+      for (final a in always) a.id: a.dir(),
+      for (final l in linkShares) l.id: l.dir(),
+      for (final k in shareKinds) ...k.shared(),
+    };
+    for (final e in folders.entries) {
+      final d = e.value;
+      final sh = shareOf(e.key);
+      if (d == null || sh == null || sh['path'] == d.path) continue;
+      try {
+        await d.create(recursive: true);
+        await _call('share_add', {'id': e.key, 'name': sh['name'], 'path': d.path});
+      } catch (e2) {
+        logError('Could not point a shared folder at its new place', error: e2, detail: '${sh['name']}');
+      }
+    }
+    await refresh();
   }
 
   /// What each always-shared folder may fetch, as last set (see [setOnly]).

@@ -498,11 +498,24 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
+///
+/// `complete` is cleared when anything could not be read (a folder that cannot be listed, a file whose details cannot be
+/// read): what is missing from `out` then may only be unreadable, so a scan must not take it as gone.
+fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>, complete: &mut bool) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        *complete = false;
+        return;
+    };
+    for e in rd {
+        let Ok(e) = e else {
+            *complete = false;
+            continue;
+        };
         let p = e.path();
-        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        let Ok(m) = std::fs::symlink_metadata(&p) else {
+            *complete = false;
+            continue;
+        };
         if m.file_type().is_symlink() {
             continue;
         }
@@ -511,7 +524,7 @@ fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut V
             continue;
         }
         if m.is_dir() {
-            walk(root, &p, skip, hidden, out);
+            walk(root, &p, skip, hidden, out, complete);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -605,6 +618,50 @@ impl Inner {
 
     fn seen_path(&self, share: &str) -> PathBuf {
         self.dir.join("index").join(format!("{share}.seen.json"))
+    }
+
+    /// Set (holding the new path) while a share re-pointed to a new folder has not yet had its first, reconciling scan.
+    fn moved_path(&self, share: &str) -> PathBuf {
+        self.dir.join("index").join(format!("{share}.moved"))
+    }
+
+    fn moved_marker(&self, share: &str) -> Option<PathBuf> {
+        std::fs::read_to_string(self.moved_path(share)).ok().map(PathBuf::from)
+    }
+
+    /// Adds a share, or re-points one this device already has (same id) at `path`: the folder's absolute path changes when the
+    /// app's container moves (an iOS update). The name stays; the share is marked so its first scan never records deletes.
+    /// The same folder under another id is refused. Returns whether the share was already there.
+    fn upsert_share(&self, id: &str, name: String, path: PathBuf) -> Result<bool> {
+        let existed;
+        let moved;
+        let share_name;
+        {
+            let mut sv = self.saved.lock().unwrap();
+            if sv.shares.iter().any(|x| x.id != id && x.path == path) {
+                bail!("that folder is already shared");
+            }
+            if let Some(x) = sv.shares.iter_mut().find(|x| x.id == id) {
+                existed = true;
+                moved = x.path != path;
+                x.path = path.clone();
+                share_name = x.name.clone();
+            } else {
+                existed = false;
+                moved = false;
+                share_name = name.clone();
+                sv.shares.push(Share { id: id.to_string(), name, path: path.clone() });
+            }
+        }
+        if moved {
+            std::fs::create_dir_all(self.dir.join("index"))?;
+            std::fs::write(self.moved_path(id), path.to_string_lossy().as_bytes())?;
+            self.save()?;
+            self.note(format!("{share_name}: folder moved after an update; checking files"));
+        } else if !existed {
+            self.save()?;
+        }
+        Ok(existed)
     }
 
     fn save(&self) -> Result<()> {
@@ -939,12 +996,17 @@ impl Inner {
         let root = share.path.clone();
         let skip = self.skip(&share.id).to_vec();
         let hidden = self.hidden_ok(&share.id).to_vec();
-        let files = tokio::task::spawn_blocking(move || {
+        let (files, complete) = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &skip, &hidden, &mut v);
-            v
+            let mut complete = true;
+            walk(&root, &root, &skip, &hidden, &mut v, &mut complete);
+            (v, complete)
         })
         .await?;
+        // The first scan after the folder was re-pointed ([`Inner::repoint_share`]) only reconciles: what the index lists and the
+        // folder lacks is forgotten (the other devices bring it back if they have it), never recorded as a delete. A scan that
+        // could not read everything records no deletes either.
+        let moved = self.moved_marker(&share.id).as_deref() == Some(share.path.as_path());
         #[cfg(feature = "test-hooks")]
         {
             // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
@@ -1012,9 +1074,20 @@ impl Inner {
             seen.insert(rel, key);
         }
         // A file still waiting to be written (cut off, to come again) has not gone.
-        let gone: Vec<String> =
-            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect();
+        let gone: Vec<String> = if complete {
+            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect()
+        } else {
+            Vec::new()
+        };
         for p in gone {
+            if moved {
+                stale.push(idx.files[&p].hash.clone());
+                idx.files.remove(&p);
+                seen.remove(&p);
+                let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+                changed = true;
+                continue;
+            }
             let old = idx.files[&p].clone();
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
@@ -1023,6 +1096,10 @@ impl Inner {
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        // Reconciled: normal delete detection resumes (unless the scan was cut short, then the next scan reconciles too).
+        if moved && complete && self.moved_marker(&share.id).as_deref() == Some(share.path.as_path()) {
+            let _ = std::fs::remove_file(self.moved_path(&share.id));
+        }
         if writes.len() != writes_before {
             self.store_writes(&share.id, &writes)?;
         }
@@ -1904,14 +1981,7 @@ impl SyncEngine {
                 }
                 let name = s("name").unwrap_or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Shared".into()));
                 let id = s("id").unwrap_or_else(|| token()[..13].to_lowercase());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id || x.path == path) {
-                        bail!("that folder is already shared");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "id": id}))
             }
@@ -1926,14 +1996,7 @@ impl SyncEngine {
                         run.peers.values().filter_map(|p| p.index.as_ref()).flat_map(|i| i.shares.iter()).find(|x| x.id == id).map(|x| x.name.clone())
                     })
                     .unwrap_or_else(|| "Shared".into());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id) {
-                        bail!("already joined");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
