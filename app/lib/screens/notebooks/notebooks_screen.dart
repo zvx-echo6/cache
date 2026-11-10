@@ -159,8 +159,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     void openSearch() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps)));
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Notebooks'),
-        titleTextStyle: narrow && !hasMenu ? Theme.of(context).appBarTheme.titleTextStyle?.copyWith(fontSize: 18) : null,
+        title: Text('Notebooks', style: narrow && !hasMenu ? const TextStyle(fontSize: 18) : null),
         actions: [
           if (!wide) ?paneHideButton(context),
           IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
@@ -220,12 +219,12 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                 inset(Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary))),
                 const SizedBox(height: 6),
                 // The Linux desktop shows them as one row that scrolls sideways; anywhere else they wrap.
-                LogAgainChips(
+                inset(LogAgainChips(
                   chips: [
                     for (final n in again)
                       ActionChip(key: ValueKey('again-${n.id}'), avatar: const Icon(Icons.add, size: 18), label: Text(n.name), onPressed: () => _quickAdd(n)),
                   ],
-                ),
+                )),
                 const SizedBox(height: 12),
               ],
               if (desk)

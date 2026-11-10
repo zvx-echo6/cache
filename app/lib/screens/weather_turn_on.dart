@@ -120,11 +120,12 @@ class WeatherTurnOnButtons extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (inline) {
-      final style = ButtonStyle(
+      ButtonStyle style(ButtonStyle? themed) => ButtonStyle(
         minimumSize: const WidgetStatePropertyAll(Size(48, 36)),
         fixedSize: const WidgetStatePropertyAll(Size.fromHeight(36)),
-        textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        textStyle: WidgetStatePropertyAll((themed?.textStyle?.resolve(const {}) ?? const TextStyle()).copyWith(fontSize: 14, fontWeight: FontWeight.w600)),
       );
+      final theme = Theme.of(context);
       return Align(
         alignment: Alignment.centerLeft,
         child: Wrap(
@@ -133,14 +134,14 @@ class WeatherTurnOnButtons extends StatelessWidget {
           children: [
             FilledButton(
               key: const ValueKey('weather-turn-on'),
-              style: style,
+              style: style(theme.filledButtonTheme.style),
               onPressed: () => turnOnWeather(context, turnOn),
               child: const Text('Turn on weather'),
             ),
             if (secondary)
               OutlinedButton(
                 key: const ValueKey('weather-choose-place'),
-                style: style,
+                style: style(theme.outlinedButtonTheme.style),
                 onPressed: () => chooseWeatherPlace(context, turnOn),
                 child: const Text('Choose a place instead'),
               ),
