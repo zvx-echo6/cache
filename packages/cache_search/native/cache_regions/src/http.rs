@@ -30,7 +30,8 @@ impl std::fmt::Display for Fail {
 }
 
 pub fn agent(user_agent: &str) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(60)).user_agent(user_agent).max_idle_connections_per_host(8).build()
+    // the public-address guard when the Linux server's helper installed it (a no-op on a phone)
+    cache_netguard::guarded(ureq::AgentBuilder::new()).timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(60)).user_agent(user_agent).max_idle_connections_per_host(8).build()
 }
 
 /// An https address, or http to this machine (the tests' server). Anything else is never fetched.
