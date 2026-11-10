@@ -326,6 +326,26 @@ class LayoutState extends ChangeNotifier {
     return true;
   }
 
+  /// A notebook got another id: its shortcut points to the new one.
+  void renameNotebook(String oldId, String newId) {
+    var changed = false;
+    for (var i = 0; i < _shortcuts.length; i++) {
+      final s = _shortcuts[i];
+      if (s.notebookId != oldId) continue;
+      final moved = Shortcut(kind: s.kind, title: s.title, subtitle: s.subtitle, data: {...s.data, 'id': newId});
+      if (_shortcuts.any((x) => x.key == moved.key)) {
+        _shortcuts.removeAt(i--);
+      } else {
+        _shortcuts[i] = moved;
+      }
+      changed = true;
+    }
+    if (changed) {
+      _save();
+      notifyListeners();
+    }
+  }
+
   void removeShortcut(Shortcut s) {
     final n = _shortcuts.length;
     _shortcuts.removeWhere((x) => x.key == s.key);

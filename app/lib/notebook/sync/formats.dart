@@ -170,14 +170,14 @@ Object? propValue(List<String> lines) {
 /// its own way: no `notebook` (the id decides), `title` only when it is not the file's name ([titleDefault]), `date` and `time`
 /// only when they are not the time Cache gave it on import ([whenDefault]), and none of the names in [skip] (the note's own
 /// properties that were there before Cache, kept as they are in [EntryDoc.extra]).
-String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = const {}, String? titleDefault, String? whenDefault}) {
+String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = const {}, String? titleDefault, String? whenDefault, bool withNotebook = true}) {
   final b = StringBuffer('---\n');
   void p(String k, Object? v) {
     if (!skip.contains(k)) b.writeln('$k: ${_yaml(v)}');
   }
 
   p('cache_id', d.id);
-  if (!imported) p('notebook', d.notebook);
+  if (!imported && withNotebook) p('notebook', d.notebook);
   if (d.title != null && d.title!.trim().isNotEmpty && !(imported && d.title!.trim() == titleDefault)) p('title', d.title);
   // Obsidian's Date and Date & time types: written as they are, unquoted.
   if (!imported || d.when != whenDefault) {

@@ -86,20 +86,27 @@ List<ShareItem> notebookItems(NotebookState notebooks) => [
   for (final n in notebooks.notebooks)
     ShareItem(
       share: 'notebooks',
-      path: NotebookSync.folderNameOf(n),
+      path: n.id,
       name: n.name,
       private: n.private,
       on: n.private ? (notebooks.privateSharing?.included(n.id) ?? false) : null,
     ),
 ];
 
-/// A notebook on a linked device only; the photos folder every notebook uses travels with the kind.
+/// The format 1 folder of a notebook (named after it) goes with the notebook's `<id>/` folder: switched off and synced with it.
+List<String> notebookAlongside(NotebookState notebooks, String share, String path) {
+  if (share != 'notebooks') return const [];
+  final n = notebooks.notebooks.where((n) => n.id == path).firstOrNull;
+  return n == null ? const [] : [NotebookSync.folderNameOf(n)];
+}
+
+/// A notebook on a linked device only; the photos folder every notebook of format 1 used travels with the kind.
 ShareItem? notebookRemoteItem(String share, String path, int bytes) =>
-    path == 'photos' ? null : ShareItem(share: share, path: path, name: path, bytes: bytes);
+    path == 'photos' || path == 'Conflicts' ? null : ShareItem(share: share, path: path, name: path, bytes: bytes);
 
 /// Switches a private notebook on or off: its "Include in sync and sharing".
 Future<void> setNotebookShared(NotebookState notebooks, ShareItem it, bool on) async {
-  final n = notebooks.notebooks.where((n) => NotebookSync.folderNameOf(n) == it.path).firstOrNull;
+  final n = notebooks.notebooks.where((n) => n.id == it.path).firstOrNull;
   if (n == null) return;
   await notebooks.privateSharing?.setIncluded(n.id, on);
 }

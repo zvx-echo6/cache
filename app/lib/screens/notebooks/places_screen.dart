@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../layout/adaptive.dart';
@@ -89,6 +91,8 @@ class PlacesNotebookScreen extends StatefulWidget {
 class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   NotebookState get nb => widget.deps.notebook;
   PlaceNotebookDeps? get pd => widget.deps.placesDeps;
+  late String _id = widget.notebookId;
+  StreamSubscription<({String oldId, String newId})>? _reidSub;
   List<NbEntry>? _entries;
   int _readAt = -1;
   ({double lat, double lon})? _here;
@@ -97,6 +101,13 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   void initState() {
     super.initState();
     nb.addListener(_onChange);
+    // The notebook got another id (linked devices settling on one): this screen follows it.
+    _reidSub = nb.reids.listen((r) {
+      if (r.oldId == _id) {
+        _id = r.newId;
+        _read();
+      }
+    });
     pd?.alerts.addListener(_onChange);
     pd?.alerts.load();
     _read();
@@ -106,8 +117,18 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   }
 
   @override
+  void didUpdateWidget(PlacesNotebookScreen old) {
+    super.didUpdateWidget(old);
+    if (old.notebookId != widget.notebookId) {
+      _id = widget.notebookId;
+      _read();
+    }
+  }
+
+  @override
   void dispose() {
     nb.removeListener(_onChange);
+    _reidSub?.cancel();
     pd?.alerts.removeListener(_onChange);
     super.dispose();
   }
@@ -120,7 +141,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   Future<void> _read() async {
     _readAt = nb.revision;
     try {
-      final list = await nb.entries(widget.notebookId);
+      final list = await nb.entries(_id);
       if (mounted) setState(() => _entries = [for (final e in list) if (!e.draft) e]);
     } catch (_) {
       if (mounted) setState(() => _entries = const []);
@@ -183,7 +204,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final book = nb.notebook(widget.notebookId);
+    final book = nb.notebook(_id);
     if (book == null) return Scaffold(appBar: AppBar(), body: const Center(child: Text('This notebook is gone')));
     final k = context.t;
     final h = _here;
@@ -573,6 +594,8 @@ class _PlaceFormState extends State<PlaceForm> {
   late NbPlace? _pin = widget.entry?.place ?? widget.at;
   late MarkerColor _color = widget.entry?.color != null ? markerColor(widget.entry!.color) : defaultMarkerColor(widget.others);
   late bool _onMap = widget.entry?.onMap ?? true;
+  late String _bookId = widget.book.id;
+  StreamSubscription<({String oldId, String newId})>? _reidSub;
   late bool _weather = _id == null ? true : pd?.watched(_id!) ?? false;
   late PlaceAlertRule _rule = _id == null ? PlaceAlertRule.same : pd?.alerts.ruleFor(_id!) ?? PlaceAlertRule.same;
   late List<NbPhoto> _photos = [...?widget.entry?.photos];
@@ -589,6 +612,10 @@ class _PlaceFormState extends State<PlaceForm> {
   @override
   void initState() {
     super.initState();
+    // The notebook got another id while this is open: the place saves under the new one.
+    _reidSub = nb.reids.listen((r) {
+      if (r.oldId == _bookId) _bookId = r.newId;
+    });
     if (_pin == null) {
       widget.deps.places.herePlace().then((p) {
         if (mounted && _pin == null && p != null) setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
@@ -598,6 +625,7 @@ class _PlaceFormState extends State<PlaceForm> {
 
   @override
   void dispose() {
+    _reidSub?.cancel();
     _name.dispose();
     _notes.dispose();
     _search.dispose();
@@ -648,7 +676,7 @@ class _PlaceFormState extends State<PlaceForm> {
       final e = widget.entry;
       final saved = await nb.saveEntry(
         id: e?.id,
-        notebookId: widget.book.id,
+        notebookId: _bookId,
         occurredAt: e?.occurredAt ?? isoLocal(widget.deps.now()),
         title: name,
         body: _notes.text.trim().isEmpty ? null : _notes.text.trim(),

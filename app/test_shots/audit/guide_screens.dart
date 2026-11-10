@@ -1885,6 +1885,11 @@ class _Included implements PrivateSharing {
   final Set<String> ids = {};
 
   @override
+  Future<void> notebookReid(String oldId, String newId) async {
+    if (ids.remove(oldId)) ids.add(newId);
+  }
+
+  @override
   bool included(String notebookId) => ids.contains(notebookId);
 
   @override

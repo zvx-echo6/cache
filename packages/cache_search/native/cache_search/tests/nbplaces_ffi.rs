@@ -308,6 +308,39 @@ fn a_file_imported_into_a_notebook_is_its_places_and_layer() {
 }
 
 #[test]
+fn a_places_notebook_with_shapes_keeps_its_layer_through_a_reid_and_a_half_done_one() {
+    let h = H::open("reid");
+    let r = h.nb_ok("import", json!({"path": fixture("rally-points.geojson"), "now": NOW}));
+    let old = r["notebook"]["id"].as_str().unwrap().to_string();
+    let shapes = |h: &H| {
+        let l = h.ok(unsafe { cs_userlayers_list(h.h) });
+        let y = l["layers"].as_array().unwrap().iter().find(|y| y["name"] == "Rally Points").cloned();
+        y.map(|y| (y["notebook_id"].clone(), y["points"].clone(), y["lines"].clone(), y["areas"].clone()))
+    };
+    assert_eq!(shapes(&h), Some((json!(old), json!(2), json!(1), json!(1))));
+    // the layer moves with the notebook, lines and areas included; running it again changes nothing
+    let n = h.nb_ok("notebook_reid", json!({"id": old, "new_id": "shared-rally"}));
+    assert_eq!((n["id"].clone(), n["entries"].clone()), (json!("shared-rally"), json!(2)));
+    assert_eq!(shapes(&h), Some((json!("shared-rally"), json!(2), json!(1), json!(1))));
+    assert_eq!(h.nb_ok("notebook_reid", json!({"id": old, "new_id": "shared-rally"}))["id"], "shared-rally");
+    assert_eq!(shapes(&h), Some((json!("shared-rally"), json!(2), json!(1), json!(1))));
+    h.nb_ok("entry_save", json!({"notebook_id": "shared-rally", "occurred_at": NOW, "title": "Added", "place": {"lat": 42.6, "lon": -113.7}}));
+    assert_eq!(shapes(&h), Some((json!("shared-rally"), json!(3), json!(1), json!(1))));
+    // a refused re-id puts the layer back
+    let other = h.nb_ok("notebook_save", json!({"template": "notes", "def": {"name": "Other", "due_every": null, "fields": []}}))["id"].as_str().unwrap().to_string();
+    assert!(h.nb("notebook_reid", json!({"id": "shared-rally", "new_id": other})).is_err());
+    assert_eq!(shapes(&h).unwrap().0, json!("shared-rally"));
+    // while the app's re-id journal is there, a notebook change does not touch the layers (a half done re-id must not lose them)
+    let journal = h.t.0.join("reid-journal.json");
+    std::fs::write(&journal, r#"{"old":"a","new":"shared-rally"}"#).unwrap();
+    h.nb_ok("notebook_delete", json!({"id": "shared-rally"}));
+    assert_eq!(shapes(&h).unwrap().0, json!("shared-rally"));
+    std::fs::remove_file(&journal).unwrap();
+    h.nb_ok("entry_save", json!({"notebook_id": other, "occurred_at": NOW, "title": "x"}));
+    assert_eq!(shapes(&h), None);
+}
+
+#[test]
 fn repeater_rows_keep_their_recorded_key_order() {
     let g = golden();
     let h = H::open("repeaters");

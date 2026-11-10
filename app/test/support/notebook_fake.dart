@@ -22,9 +22,16 @@ class FakeNotebookBackend implements NotebookBackend {
   /// Makes the next call fail with this code.
   String? failNext;
 
+  /// Makes the next call of this op fail (code `io`): a kill at a known step.
+  String? failOpNext;
+
   @override
   Future<Map<String, dynamic>> call(String op, [Map<String, dynamic> args = const {}]) async {
     calls.add(op);
+    if (failOpNext == op) {
+      failOpNext = null;
+      throw CacheSearchException('io', 'failed');
+    }
     if (failNext != null) {
       final c = failNext!;
       failNext = null;
@@ -38,6 +45,7 @@ class FakeNotebookBackend implements NotebookBackend {
         'notebooks' => {'notebooks': [for (final n in _ordered()) _nbJson(n)]},
         'notebook' => _nbJson(_nb(a['id'] as String)),
         'notebook_save' => _nbJson(_save(a)),
+        'notebook_reid' => _nbJson(_reid(a['id'] as String, a['new_id'] as String)),
         'notebook_delete' => _deleteNb(a['id'] as String),
         'entries' => {'entries': [for (final e in _entriesOf(_nb(a['notebook_id'] as String)['id'] as String)) _entryJson(e)]},
         'entry' => _entryJson(_entry(a['id'] as String)),
@@ -178,6 +186,23 @@ class FakeNotebookBackend implements NotebookBackend {
       ..['updated'] = now
       ..['rev'] = (old['rev'] as int) + 1;
     return old;
+  }
+
+  Map<String, dynamic> _reid(String id, String newId) {
+    // Run again after it went through (a journal replay): the notebook under its new id.
+    if (id != newId && !notebooks.any((x) => x['id'] == id)) {
+      final done = notebooks.where((x) => x['id'] == newId).firstOrNull;
+      if (done != null) return done;
+    }
+    final n = _nb(id);
+    if (id != newId) {
+      if (notebooks.any((x) => x['id'] == newId)) throw CacheSearchException('bad_json', 'a notebook with id "$newId" already exists');
+      n['id'] = newId;
+      for (final e in entries.where((e) => e['notebook_id'] == id)) {
+        e['notebook_id'] = newId;
+      }
+    }
+    return n;
   }
 
   Map<String, dynamic> _deleteNb(String id) {

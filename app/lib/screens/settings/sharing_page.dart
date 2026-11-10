@@ -265,6 +265,8 @@ class _SharingPageState extends State<SharingPage> {
                   ),
               ],
             ),
+            for (final k in s.shareKinds)
+              if (s.kindWarning?.call(k.id) case final w?) NoteText(w, key: ValueKey('share-warning-${k.id}')),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -319,6 +321,8 @@ List<Part> peerStatus(Map<String, dynamic> p) {
 
 /// A kind's line: "4 of 6 shared · 11.3 GB", "Not shared".
 List<Part> kindSummary(SharingState s, DataKind k) {
+  // Something stops this kind (notebook sync on a newer format): the line says so, the note under the list says what to do.
+  if (s.kindWarning?.call(k.id) != null) return const [Part('Not syncing', Tone.warn)];
   if (!s.kindOn(k)) {
     final offers = s.offersOfKind(k);
     if (offers.isEmpty) return const [Part('Not shared', Tone.quiet)];

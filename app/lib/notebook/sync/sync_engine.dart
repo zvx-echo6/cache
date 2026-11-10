@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../files.dart';
+import 'share_format.dart';
 import '../notebook_model.dart';
 import '../notebook_state.dart';
 import 'folder.dart';
@@ -148,8 +149,27 @@ class NotebookSync {
     this.privateBooks = const {},
     this.logseqConfig,
     this.importTag = kDefaultImportTag,
+    this.idLayout = false,
+    this.onTombstone,
+    this.idForName,
+    this.skipFormat2Dirs = true,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
+
+  /// Notebook sync only: keep the notebooks in `<id>/` folders (format 2, see share_format.dart) instead of one folder per notebook
+  /// name (format 1, what builds up to 1.0.30 read and write). The format 1 engine leaves the `<id>/` folders alone.
+  final bool idLayout;
+
+  /// Format 2: a notebook another device deleted (its folder has a tombstone). The one place that decides what a delete does here;
+  /// entries of such a notebook are left as they are until it says otherwise.
+  final Future<void> Function(String notebookId, int at)? onTombstone;
+
+  /// Format 1: leave the `<id>/` folders alone (builds before format 2 do not know them; tests turn this off to stand for them,
+  /// which find nothing of them to read because format 2's entry files are not `.md`).
+  final bool skipFormat2Dirs;
+
+  /// Format 1: the id format 2 gave the notebook of this exact name, for a notebook made here from a format 1 folder.
+  final Future<String?> Function(String name)? idForName;
 
   /// The tag that imports a note (Obsidian and two-way Logseq).
   final String importTag;
@@ -177,6 +197,22 @@ class NotebookSync {
   /// Entries the person stopped syncing with this folder: kept in Cache, never written here again.
   final Set<String> _stopped = {};
 
+  /// Format 2: what each notebook's record said when it was last synced here (its name and when it got it), by notebook id.
+  Map<String, ({String name, int at})> _snap = {};
+
+  /// Format 2: the notebook each folder of the share holds entries of (an alias points to the notebook it was merged into), the
+  /// folders that are tombstones, and the notebooks they stand for.
+  Map<String, String> _dirNb = {};
+  final Set<String> _tombDirs = {};
+  final Set<String> _tombBooks = {};
+
+  /// Format 1: the folders of the share that are format 2's, which it leaves alone.
+  Set<String> _v2Dirs = {};
+
+  /// Notebook sync: the names of the notebooks that are not in the share (private, not included): an entry that arrives for one is
+  /// never read into it.
+  Set<String> _outNames = {};
+
   List<SyncConflict> get conflicts => List.unmodifiable(_conflicts);
 
   bool get _logseq => kind == SyncKind.logseq || kind == SyncKind.logseqExport;
@@ -202,6 +238,9 @@ class NotebookSync {
       _stopped
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
+      _snap = {
+        for (final e in (j['snap'] as Map? ?? const {}).entries) '${e.key}': (name: '${(e.value as Map)['name']}', at: ((e.value as Map)['at'] as num?)?.toInt() ?? 0),
+      };
     } catch (e) {
       logError('Notebook sync: state unreadable', error: e);
     }
@@ -217,6 +256,7 @@ class NotebookSync {
         'conflicts': [for (final c in _conflicts) c.toJson()],
         'ignored': [..._ignored],
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
+        if (_snap.isNotEmpty) 'snap': {for (final e in _snap.entries) e.key: {'name': e.value.name, 'at': e.value.at}},
       }),
     );
   }
@@ -256,7 +296,7 @@ class NotebookSync {
     );
   }
 
-  String _render(EntryDoc d) => _logseq ? renderLogseq(d) : renderObsidian(d);
+  String _render(EntryDoc d) => _logseq ? renderLogseq(d) : renderObsidian(d, withNotebook: !idLayout);
 
   static String _baseName(String path) {
     final n = path.split('/').last;
@@ -311,6 +351,7 @@ class NotebookSync {
     String nbOf(String id) => cache[id]?.$1.name ?? '';
     String whenOf(String id) => cache[id] == null ? _nowWall : wallTime(cache[id]!.$2.occurredAt);
     final importing = _ownFilesOnly && candidates != null;
+    if (idLayout) return _scanIds(out, newOutside, unreadable, cache);
     if (_logseq) {
       for (final dir in [_journals, 'pages']) {
         for (final f in await folder.list(dir)) {
@@ -376,6 +417,7 @@ class NotebookSync {
 
     for (final f in await folder.list('')) {
       if (!f.path.endsWith('.md') || f.path.startsWith('Conflicts/') || f.path.startsWith('.cache/')) continue;
+      if (kind == SyncKind.share && skipFormat2Dirs && _v2Dirs.contains(_topDir(f.path))) continue;
       final text = await folder.readText(f.path);
       if (text == null) continue;
       final folderName = f.path.contains('/') ? f.path.substring(0, f.path.indexOf('/')) : '';
@@ -409,6 +451,7 @@ class NotebookSync {
       final owner = byName[probe.notebook] ?? book;
       final doc = parseObsidian(text, fallbackId: '', fallbackNotebook: owner?.name ?? '', fieldProps: owner == null ? const {} : _propTypes(owner))!;
       final u = _Unit(f.path, text, doc);
+      if (kind == SyncKind.share && _outNames.contains(doc.notebook)) continue;
       if (doc.id.isEmpty) {
         if (owner != null) newOutside.add(u);
         continue;
@@ -421,20 +464,24 @@ class NotebookSync {
   static String folderNameOf(Notebook n) => folderName(n.name);
 
   Future<String> _newPath(EntryDoc d, Notebook n) async {
-    final dir = folderNameOf(n);
+    final dir = idLayout ? n.id : folderNameOf(n);
+    final ext = idLayout ? kNoteExt : '.md';
     final base = noteFileName(d);
-    var name = '$dir/$base.md';
+    var name = '$dir/$base$ext';
     var i = 2;
     while (await folder.exists(name) || _items.values.any((x) => x.path == name)) {
-      name = '$dir/$base ${i++}.md';
+      name = '$dir/$base ${i++}$ext';
     }
     return name;
   }
 
-  Future<void> _copyPhotosOut(EntryDoc d) async {
+  /// Where a notebook's photos are in the share: format 2 keeps them in the notebook's folder.
+  String _photoDir(Notebook n) => idLayout ? '${n.id}/photos' : _attachments;
+
+  Future<void> _copyPhotosOut(EntryDoc d, Notebook n) async {
     final ids = [...d.photos, for (final v in d.fields.values) if (v is List) ...v.whereType<String>()];
     for (final id in ids) {
-      final path = '$_attachments/cache-$id.jpg';
+      final path = '${_photoDir(n)}/cache-$id.jpg';
       if (await folder.exists(path)) continue;
       final f = await notebook.photoFile(id);
       if (await f.exists()) await folder.writeBytes(path, await f.readAsBytes());
@@ -457,7 +504,7 @@ class NotebookSync {
       await folder.writeText(it!.path, text);
       return it.path;
     }
-    await _copyPhotosOut(d);
+    await _copyPhotosOut(d, n);
     if (!_logseq) {
       final path = _items[id]?.path ?? await _newPath(d, n);
       await folder.writeText(path, text);
@@ -518,13 +565,25 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
+    // A format 1 folder's notebook that format 2 already gave an id (and no notebook here holds it): that id.
+    var newId = shared?['id'] as String?;
+    if (kind == SyncKind.share && !idLayout && idForName != null) {
+      final other = await idForName!(d.notebook);
+      if (other != null && notebook.notebook(other) == null) newId = other;
+    }
+    final made = await _makeBook(id: newId, name: d.notebook, shared: shared);
+    byName[made.name] = made;
+    return made;
+  }
+
+  /// A notebook made here the way another device made it: [shared] is its definition there (template, def, private, props).
+  Future<Notebook> _makeBook({String? id, required String name, Map<String, dynamic>? shared}) async {
     final made = await notebook.saveNotebook(
-      id: shared?['id'] as String?,
+      id: id,
       template: (shared?['template'] as String?) ?? 'notes',
-      def: shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)) : NotebookDef(name: d.notebook, fields: const [], sort: NotebookSort.recent),
+      def: shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)).copyWith(name: name) : NotebookDef(name: name, fields: const [], sort: NotebookSort.recent),
       private: shared?['private'] == true,
     );
-    byName[made.name] = made;
     // The other device's property names, by label, so both write the same ones.
     final sharedProps = shared?['props'];
     final sharedFields = shared?['def'] is Map ? (shared!['def'] as Map)['fields'] as List? ?? const [] : const [];
@@ -545,7 +604,11 @@ class NotebookSync {
 
   Map<String, dynamic>? _sharedBooks;
 
+  /// Format 2: the definition each live notebook folder gives, by exact notebook name (for this run).
+  Map<String, Map<String, dynamic>> _recByName = {};
+
   Future<Map<String, dynamic>?> _sharedBook(String name) async {
+    if (idLayout) return _recByName[name];
     if (_sharedBooks == null) {
       try {
         final t = await folder.readText('.cache/notebooks.json');
@@ -601,7 +664,13 @@ class NotebookSync {
     for (final pid in photoIds) {
       final f = await notebook.photoFile(pid);
       if (await f.exists()) continue;
-      final bytes = await folder.readBytes('$_attachments/cache-$pid.jpg');
+      var bytes = await folder.readBytes('${_photoDir(book)}/cache-$pid.jpg');
+      if (bytes == null && idLayout) {
+        // Photos written into the folder of an id merged into this notebook's.
+        for (final e in _dirNb.entries) {
+          if (e.value == book.id && e.key != book.id && bytes == null) bytes = await folder.readBytes('${e.key}/photos/cache-$pid.jpg');
+        }
+      }
       if (bytes != null) await storePhotoBytes(pid, bytes);
     }
     final had = {for (final p in existing?.photos ?? const <NbPhoto>[]) p.id: p};
@@ -639,6 +708,228 @@ class NotebookSync {
   /// Writes a photo that came from the folder under its own id (the app stores it as a Notebook photo).
   Future<void> Function(String id, Uint8List bytes) storePhotoBytes = (id, bytes) async {};
 
+  // ---- format 2: the notebooks' records ----
+
+  static String _topDir(String path) => path.contains('/') ? path.substring(0, path.indexOf('/')) : '';
+
+  EntryDoc _inBook(EntryDoc d, String name) => d.notebook == name
+      ? d
+      : EntryDoc(id: d.id, notebook: name, when: d.when, title: d.title, body: d.body, place: d.place, photos: d.photos, fields: d.fields, private: d.private, extra: d.extra);
+
+  bool _inShare(Notebook n) => includePrivate || !n.private || privateBooks.contains(n.id);
+
+  Map<String, dynamic> _recBody(Notebook n) =>
+      {'name': n.name, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
+
+  /// A notebook's id changes (another device's id for it is lower): the journal in [NotebookState.reidNotebook], with the field
+  /// names of this share's state moved too. What this device kept for the old id goes to the new one.
+  Future<void> _reid(Notebook n, String to) async {
+    final from = n.id;
+    final sn = _snap.remove(from);
+    if (sn != null) _snap[to] = sn;
+    await _save();
+    await notebook.reidNotebook(from, to, also: {'share field names': (o, w) => moveProps(stateFile, o, w)});
+    await _load();
+    if (privateBooks.contains(from)) {
+      privateBooks
+        ..remove(from)
+        ..add(to);
+    }
+  }
+
+  /// Reads the share's notebook records and brings them and the notebooks here to one state: copies of a record that sync kept
+  /// merged; one id per exact notebook name (the lowest, through the re-id journal); a rename that is newer on one side taken by the
+  /// other, as any field is; notebooks made here for records that have none here; records written for notebooks that have none; a
+  /// tombstone for a notebook deleted here; the folder of each notebook worked out for the entries.
+  Future<void> _syncRecords() async {
+    final dirs = await readShareDirs(folder);
+    final now = _now().millisecondsSinceEpoch;
+    final recs = <String, NbRecord>{};
+    for (final d in dirs.values) {
+      final m = d.merged;
+      if (m == null || m.id != d.dir) continue;
+      if (d.copyPaths.isNotEmpty || d.mainText != m.text) {
+        await folder.writeText('${d.dir}/$kRecordFile', m.text);
+        for (final p in d.copyPaths) {
+          await folder.delete(p);
+        }
+      }
+      recs[d.dir] = m;
+    }
+    // A record another device merged into a lower id: the notebook here with that id takes the lower one.
+    for (final n in [...notebook.notebooks]) {
+      final r = recs[n.id];
+      if (r == null || r.kind != RecordKind.alias || !_inShare(n)) continue;
+      var to = r.aliasOf!;
+      for (var i = 0; i < 5 && recs[to]?.kind == RecordKind.alias; i++) {
+        to = recs[to]!.aliasOf!;
+      }
+      if (to != n.id && notebook.notebook(to) == null) await _reid(n, to);
+    }
+    // One id per exact notebook name: the lowest wins everywhere. A notebook here that has a higher one takes it, and its folder
+    // (when there is one) becomes an alias of the lower; the entries in it stay where they are.
+    final ids = <String, Set<String>>{};
+    for (final r in recs.values) {
+      if (r.kind == RecordKind.live) ids.putIfAbsent(r.name, () => {}).add(r.id);
+    }
+    for (final n in notebook.notebooks) {
+      if (_inShare(n)) ids.putIfAbsent(n.name, () => {}).add(n.id);
+    }
+    for (final e in ids.entries) {
+      if (e.value.length < 2) continue;
+      final sorted = e.value.toList()..sort();
+      final lo = sorted.first;
+      for (final h in sorted.skip(1)) {
+        final mine = notebook.notebook(h);
+        if (mine == null || !_inShare(mine) || notebook.notebook(lo) != null) continue;
+        await _reid(mine, lo);
+        if (recs[h]?.kind == RecordKind.live) {
+          final a = NbRecord.alias(h, lo, now);
+          await folder.writeText('$h/$kRecordFile', a.text);
+          recs[h] = a;
+        }
+      }
+    }
+    // Each notebook here and its record.
+    for (final n in [...notebook.notebooks]) {
+      if (!_inShare(n)) continue;
+      final r = recs[n.id];
+      final snap = _snap[n.id];
+      if (r == null) {
+        final rec = NbRecord.live(n.id, nameAt: now, body: _recBody(n));
+        await folder.writeText('${n.id}/$kRecordFile', rec.text);
+        recs[n.id] = rec;
+        _snap[n.id] = (name: n.name, at: now);
+      } else if (r.kind == RecordKind.live) {
+        final localChanged = snap != null && n.name != snap.name;
+        if (localChanged) {
+          final at = max(now, r.at + 1);
+          final rec = NbRecord.live(n.id, nameAt: at, body: {...r.body, 'name': n.name});
+          await folder.writeText('${n.id}/$kRecordFile', rec.text);
+          recs[n.id] = rec;
+          _snap[n.id] = (name: n.name, at: at);
+        } else {
+          var name = n.name;
+          if (r.name != n.name && !notebook.nameTaken(r.name, exceptId: n.id)) {
+            name = (await notebook.saveNotebook(id: n.id, def: n.def.copyWith(name: r.name))).name;
+          }
+          _snap[n.id] = (name: name, at: r.at);
+        }
+      }
+    }
+    // Tombstones: a notebook deleted on another device, and one deleted here (not when the list of notebooks could not be read:
+    // everything would look deleted).
+    _tombDirs.clear();
+    _tombBooks.clear();
+    final local = {for (final n in notebook.notebooks) n.id};
+    final listed = notebook.error == null && !notebook.loading;
+    for (final id in [..._snap.keys]) {
+      if (local.contains(id) || !listed) continue;
+      _snap.remove(id);
+      if (recs[id]?.kind == RecordKind.live) {
+        final t = NbRecord.tombstone(id, now);
+        await folder.writeText('$id/$kRecordFile', t.text);
+        recs[id] = t;
+      }
+    }
+    for (final e in recs.entries) {
+      final r = e.value;
+      if (r.kind != RecordKind.tombstone) continue;
+      if (now - r.at > kTombstoneDays * 86400000) {
+        await folder.delete('${e.key}/$kRecordFile');
+        continue;
+      }
+      _tombDirs.add(e.key);
+      _tombBooks.add(r.id);
+      await onTombstone?.call(r.id, r.at);
+    }
+    // A record for a notebook that is not here yet: made here with the id the record has (unless a lower id has the same name:
+    // that one is the notebook, and this record will be merged into it).
+    _recByName = {for (final r in recs.values) if (r.kind == RecordKind.live) r.name: r.body};
+    for (final r in recs.values.where((r) => r.kind == RecordKind.live).toList()) {
+      if (notebook.notebook(r.id) != null) continue;
+      if ((ids[r.name] ?? const <String>{}).any((x) => x.compareTo(r.id) < 0)) continue;
+      if (notebook.nameTaken(r.name)) continue;
+      await _makeBook(id: r.id, name: r.name, shared: r.body);
+      _snap[r.id] = (name: r.name, at: r.at);
+    }
+    // Which notebook each folder's entries belong to (only notebooks here and in the share).
+    _dirNb = {};
+    for (final e in recs.entries) {
+      var r = e.value;
+      for (var i = 0; i < 5 && r.kind == RecordKind.alias && recs[r.aliasOf] != null; i++) {
+        r = recs[r.aliasOf]!;
+      }
+      final n = r.kind == RecordKind.live ? notebook.notebook(r.id) : null;
+      if (n != null && _inShare(n)) _dirNb[e.key] = n.id;
+    }
+  }
+
+  /// Format 2: the entries in the share, by their id.
+  Future<Map<String, _Unit>> _scanIds(Map<String, _Unit> out, List<_Unit> newOutside, List<SyncConflict> unreadable, Map<String, (Notebook, NbEntry)> cache) async {
+    final ignored = <(_Unit, _Unit)>[];
+    void put(_Unit u) {
+      final prev = out[u.doc.id];
+      if (prev == null) {
+        out[u.doc.id] = u;
+      } else if (_dirNb[_topDir(prev.path)] == _dirNb[_topDir(u.path)] && _topDir(prev.path) != _topDir(u.path) && (_dirNb[_topDir(u.path)] == _topDir(u.path) || _dirNb[_topDir(prev.path)] == _topDir(prev.path))) {
+        // The same entry in a notebook's own folder and in the folder of an id merged into it (both devices wrote it before they
+        // agreed on the id): the entry is the one in the notebook's own folder; the other is the old place, not a copy.
+        final keep = _dirNb[_topDir(u.path)] == _topDir(u.path) ? u : prev;
+        final other = identical(keep, u) ? prev : u;
+        out[u.doc.id] = keep;
+        ignored.add((other, keep));
+      } else {
+        // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
+        final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
+        final other = identical(keep, prev) ? u : prev;
+        out[u.doc.id] = keep;
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra)));
+      }
+    }
+
+    for (final f in await folder.list('')) {
+      if (!f.path.endsWith(kNoteExt) || !f.path.contains('/')) continue;
+      final book = switch (_dirNb[_topDir(f.path)]) { final id? => notebook.notebook(id), null => null };
+      if (book == null) continue;
+      final text = await folder.readText(f.path);
+      if (text == null) continue;
+      final probe = parseObsidian(text, fallbackId: '', fallbackNotebook: book.name, fieldProps: const {});
+      if (probe == null) {
+        final known = _items.entries.where((e) => e.value.path == f.path).firstOrNull;
+        if (!_ignored.contains(f.path)) {
+          unreadable.add(SyncConflict(entryId: known?.key ?? '', kind: ConflictKind.unreadable, title: f.path.split('/').last, path: f.path));
+        }
+        continue;
+      }
+      final doc = _inBook(parseObsidian(text, fallbackId: '', fallbackNotebook: book.name, fieldProps: _propTypes(book))!, book.name);
+      final u = _Unit(f.path, text, doc);
+      if (doc.id.isEmpty) {
+        newOutside.add(u);
+        continue;
+      }
+      put(u);
+    }
+    // The old place of an entry whose own-folder copy says the same goes (nothing is lost: the text is in the other file).
+    for (final (other, keep) in ignored) {
+      if (other.text == keep.text) await folder.delete(other.path);
+    }
+    return out;
+  }
+
+  /// A notebook's field names (kept in a sync state file, by notebook id) move to its new id; saved at once, and running it again
+  /// changes nothing. A step of the re-id journal.
+  static Future<void> moveProps(File f, String oldId, String newId) async {
+    if (!await f.exists()) return;
+    final j = jsonDecode(await f.readAsString());
+    final props = j is Map ? j['props'] : null;
+    if (j is! Map || props is! Map || !props.containsKey(oldId)) return;
+    final m = {...props};
+    final moved = m.remove(oldId);
+    m.putIfAbsent(newId, () => moved);
+    await writeStringAtomic(f, jsonEncode({...j, 'props': m}));
+  }
+
   // ---- the run ----
 
   /// One sync. Errors reaching the folder are thrown (the status line shows them); nothing in Cache is lost.
@@ -648,8 +939,14 @@ class NotebookSync {
     _sharedBooks = null;
     if (!await folder.reachable()) throw const FileSystemException("Can't reach the folder");
     await notebook.reload();
+    if (idLayout) {
+      await _syncRecords();
+    } else if (kind == SyncKind.share) {
+      _v2Dirs = (await readShareDirs(folder)).keys.toSet();
+    }
     final books = notebook.notebooks;
     final byName = {for (final n in books) n.name: n};
+    if (kind == SyncKind.share) _outNames = {for (final n in books) if (!_inShare(n)) n.name};
     final cache = <String, (Notebook, NbEntry)>{};
     for (final n in books) {
       for (final e in await notebook.entries(n.id)) {
@@ -684,6 +981,9 @@ class NotebookSync {
       final c = cache[id];
       final s = _items[id];
       final f = outside[id];
+      // Format 2: a notebook another device deleted: what to do with its entries is for onTombstone, not for a missing file.
+      if (idLayout && ((c != null && _tombBooks.contains(c.$1.id)) || (s != null && _tombDirs.contains(_topDir(s.path))))) continue;
+      if (idLayout && s != null && f != null && f.path != s.path) s.path = f.path;
       if (s != null && s.imp != null) {
         // An imported note moved or renamed outside: it is followed there.
         if (f != null && f.path != s.path) s.path = f.path;
@@ -821,7 +1121,7 @@ class NotebookSync {
     }
     _conflicts = conflicts;
     r.conflicts = conflicts.length;
-    if (!_logseq) await _writeBooks(books);
+    if (!_logseq && !idLayout) await _writeBooks(books);
     await _save();
     return r;
   }

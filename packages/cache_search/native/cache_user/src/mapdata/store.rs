@@ -543,6 +543,17 @@ impl MapStore {
         Ok(())
     }
 
+    /// A Places notebook got another id: its layer (and the lines and areas kept with it) now belongs to the new one.
+    pub fn rename_notebook_layer(&self, old: &str, new: &str) -> Result<()> {
+        let c = self.db()?;
+        // Only when the new id has no layer yet, so running it again changes nothing.
+        c.execute(
+            "UPDATE map_lists SET notebook_id=?2 WHERE notebook_id=?1 AND NOT EXISTS (SELECT 1 FROM map_lists WHERE notebook_id=?2)",
+            [old, new],
+        )?;
+        Ok(())
+    }
+
     /// Adds lines and areas to the layer of a Places notebook (from a file imported into it; points become its entries).
     /// Returns how many were added; none when the notebook has no layer yet.
     pub fn add_notebook_shapes(&self, notebook_id: &str, shapes: &[Feature]) -> Result<usize> {
@@ -1020,6 +1031,19 @@ mod tests {
         let mut st = c.prepare("SELECT name, used_at FROM map_lists ORDER BY id").unwrap();
         let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<std::result::Result<Vec<_>, _>>().unwrap();
         r
+    }
+
+    #[test]
+    fn a_layer_follows_its_notebook_to_a_new_id() {
+        let t = Tmp::new("notebook-reid");
+        let s = t.store();
+        s.sync_notebook_layers(&[book("nb-a", "Caches", &[("Cache 1", 42.55, -113.79)])]).unwrap();
+        s.add_notebook_shapes("nb-a", &[Feature { name: "Walk".into(), notes: String::new(), geom: Geom::Line(vec![(42.5, -113.8), (42.6, -113.7)]) }]).unwrap();
+        s.rename_notebook_layer("nb-a", "nb-b").unwrap();
+        s.sync_notebook_layers(&[book("nb-b", "Caches", &[("Cache 1", 42.55, -113.79)])]).unwrap();
+        let l = v(&s.list_json().unwrap());
+        assert_eq!(l["layers"].as_array().unwrap().len(), 1);
+        assert_eq!((l["layers"][0]["notebook_id"].clone(), l["layers"][0]["lines"].clone()), (json!("nb-b"), json!(1)));
     }
 
     #[test]

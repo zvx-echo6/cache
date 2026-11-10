@@ -9,6 +9,7 @@ import '../notebook_state.dart';
 import 'folder.dart';
 import 'folder_access.dart';
 import 'formats.dart';
+import 'share_format.dart';
 import 'sync_engine.dart';
 import '../../platform/app_log.dart';
 
@@ -54,7 +55,20 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor});
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.peerCaps, this.setCaps, this.onTombstone, this.clock});
+
+  /// The time (tests give one).
+  final DateTime Function()? clock;
+
+  /// The linked devices and what each says about itself (its `caps`, null for a version that says nothing), by device id; null while
+  /// that is not known yet (sharing is not running). Notebook sync keeps its format 1 folders until every one has said format 2.
+  final Map<String, Map<String, dynamic>?>? Function()? peerCaps;
+
+  /// Tells the linked devices this device's notebook format and whether it still keeps format 1 folders.
+  final Future<void> Function(Map<String, dynamic> caps)? setCaps;
+
+  /// A notebook another device deleted (its tombstone in the share): the decision point for what that does here.
+  final Future<void> Function(String notebookId, int at)? onTombstone;
 
   final NotebookState notebook;
 
@@ -81,6 +95,31 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   final Map<String, List<String>> _merged = {};
   final Map<String, int> _notAdded = {};
   final Map<String, ({Set<String> imported, Set<String> stopped})> _links = {};
+
+  /// Notebook sync's share: the share has a notebook in a format newer than this version reads, so nothing of it syncs.
+  bool _formatBlocked = false;
+  bool get formatBlocked => _formatBlocked;
+
+  /// The text under Notebooks in Sharing when notebook sync cannot go on, else null.
+  String? get sharingNote {
+    if (_formatBlocked) return kUpdateNeededNote;
+    if (_corrupt) return 'Notebook sync is paused: its settings could not be read.';
+    if (notebook.replayError != null) return 'Notebook sync is paused: a notebook change did not finish. Cache will try again.';
+    return null;
+  }
+
+  /// `targets.json` could not be read: nothing syncs (private notebooks would look switched off) and no notebook id change is
+  /// finished, until it can be.
+  bool _corrupt = false;
+
+  /// Format 1 and 2 together: `legacy` is `on` (format 1 folders kept current beside the format 2 ones), `off` (this device stopped
+  /// writing and reading them) or `cleaned` (removed from the share); and what each linked device last said.
+  String _legacy = 'on';
+  final Map<String, ({bool legacyOff})> _peerFormat = {};
+  Map<String, dynamic>? _advertised;
+  bool _formatRead = false;
+
+  String get legacyState => _legacy;
 
   /// Notes imported by their tag in the last sync: the app's name ("Obsidian") and their titles. Read and cleared by
   /// [takeImported] (the snack bar "2 notes added from Obsidian").
@@ -179,6 +218,28 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     unawaited(syncAll());
   }
 
+  /// A notebook got another id: the field names every connected folder keeps for it (Obsidian, Logseq and notebook sync state)
+  /// move to the new id. One step of the re-id journal: it can run again.
+  Future<void> moveFieldMaps(String oldId, String newId) async {
+    await init();
+    if (_corrupt) throw StateError('the notebook connections could not be read');
+    // Every connection's state, and notebook sync's two (the share is a connection only once it has synced; its files are there
+    // from the version that made them): format 1's `share.json` and format 2's `share2.json`.
+    for (final id in {..._targets.map((t) => t.id), 'share', 'share2'}) {
+      await NotebookSync.moveProps(File('${(await dir()).path}/$id.json'), oldId, newId);
+    }
+  }
+
+  @override
+  Future<void> notebookReid(String oldId, String newId) async {
+    await init();
+    if (_corrupt) throw StateError('the notebook connections could not be read');
+    if (!_privateBooks.remove(oldId)) return;
+    _privateBooks.add(newId);
+    await _saveTargets();
+    notifyListeners();
+  }
+
   Future<File> _targetsFile() async => File('${(await dir()).path}/targets.json');
 
   Future<void> init() async {
@@ -193,6 +254,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
         if (j is Map && j['private_included'] is List) _privateBooks = {for (final x in j['private_included'] as List) '$x'};
       }
     } catch (e) {
+      _corrupt = true;
       logError('Notebook connections', error: e);
     }
     try {
@@ -263,15 +325,22 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     return t;
   }
 
-  Future<NotebookSync> _engine(SyncTargetConfig t) async {
+  /// The engine of a connection. Notebook sync has two: format 2 (`share2.json`, notebooks in `<id>/` folders) always, and, while
+  /// [legacy] is asked for, format 1 (`share.json`, one folder per notebook name) for the devices that only know that.
+  Future<NotebookSync> _engine(SyncTargetConfig t, {bool legacy = false}) async {
     final folder = await _folder(t.path);
+    final v2 = t.kind == SyncKind.share && !legacy;
     ({String format, String dir, bool org})? ls;
     if (t.kind == SyncKind.logseq || t.kind == SyncKind.logseqExport) ls = readLogseqConfig(await folder.readText('logseq/config.edn'));
     final e = NotebookSync(
       notebook: notebook,
       kind: t.kind,
       folder: folder,
-      stateFile: File('${(await dir()).path}/${t.id}.json'),
+      stateFile: File('${(await dir()).path}/${t.id}${v2 ? '2' : ''}.json'),
+      idLayout: v2,
+      clock: clock,
+      onTombstone: v2 ? onTombstone : null,
+      idForName: t.kind == SyncKind.share && legacy ? (name) async => (await idsByName(folder))[name] : null,
       includePrivate: t.kind != SyncKind.share,
       privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
@@ -307,6 +376,11 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
           }
           _status[t.id] = 'Syncing...';
           notifyListeners();
+          if (t.kind == SyncKind.share) {
+            await _syncShare(t);
+            notifyListeners();
+            continue;
+          }
           try {
             final e = await _engine(t);
             final r = await e.run();
@@ -334,10 +408,120 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     }
   }
 
+  // ---- notebook sync's share: format 2, and format 1 beside it for devices that only know that ----
+
+  Future<File> _formatFile() async => File('${(await dir()).path}/share-format.json');
+
+  Future<void> _readFormat() async {
+    if (_formatRead) return;
+    _formatRead = true;
+    try {
+      final f = await _formatFile();
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      _legacy = const {'on', 'off', 'cleaned'}.contains(j['legacy']) ? j['legacy'] as String : 'on';
+      for (final e in (j['peers'] as Map? ?? const {}).entries) {
+        _peerFormat['${e.key}'] = (legacyOff: (e.value as Map)['legacy_off'] == true);
+      }
+    } catch (e) {
+      // Unreadable: format 1 folders are kept (the safe side) until the devices have said it again.
+      logError('Notebook sync: share format state unreadable', error: e);
+    }
+  }
+
+  Future<void> _saveFormat() async {
+    final f = await _formatFile();
+    await f.parent.create(recursive: true);
+    await writeStringAtomic(f, jsonEncode({'legacy': _legacy, 'peers': {for (final e in _peerFormat.entries) e.key: {'legacy_off': e.value.legacyOff}}}));
+  }
+
+  /// One sync of the notebooks share. While any linked device has not said it keeps format 2, the format 1 folders (one per
+  /// notebook name) are kept current beside the `<id>/` ones: what an older device writes there is read in, and what is written
+  /// here is written there too. Only when every linked device has said format 2, and then that it stopped reading them, are they
+  /// removed (without a tombstone: nothing reads that as a delete).
+  Future<void> _syncShare(SyncTargetConfig t) async {
+    if (_corrupt) {
+      _status[t.id] = 'Paused.';
+      return;
+    }
+    if (notebook.replayError != null) {
+      try {
+        await notebook.replayReid();
+      } catch (_) {}
+      if (notebook.replayError != null) {
+        _status[t.id] = 'Paused.';
+        return;
+      }
+    }
+    await _readFormat();
+    NotebookSync? v2;
+    NotebookSync? v1;
+    try {
+      final folder = await _folder(t.path);
+      await readShareDirs(folder);
+      _formatBlocked = false;
+      if (_legacy == 'on') {
+        v1 = await _engine(t, legacy: true);
+        await v1.run();
+      }
+      v2 = await _engine(t);
+      final r = await v2.run();
+      _merged[t.id] = r.merged;
+      await _formatStep(folder, t);
+      _conflicts[t.id] = [...v2.conflicts, ...?v1?.conflicts];
+      final n = _conflicts[t.id]!.length;
+      _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';
+    } on NotebookFormatTooNew {
+      _formatBlocked = true;
+      _status[t.id] = kUpdateNeededNote;
+    } on FileSystemException catch (x) {
+      _status[t.id] = (x.osError?.errorCode == 28 || x.osError?.errorCode == 112) ? "Can't write: storage is full." : "Can't reach the folder.";
+    } catch (x) {
+      _status[t.id] = "Can't reach the folder.";
+      logError('Notebook sync', error: x, detail: t.id);
+    }
+  }
+
+  /// After a good sync: what the linked devices say decides whether format 1 goes on, stops, or is removed; and this device says
+  /// the same to them.
+  Future<void> _formatStep(SyncFolder folder, SyncTargetConfig t) async {
+    final peers = peerCaps?.call();
+    if (peers != null) {
+      for (final e in peers.entries) {
+        final caps = e.value;
+        final f = caps?['notebook_format'];
+        if (f is num && f >= kShareFormat) _peerFormat[e.key] = (legacyOff: caps?['notebook_legacy'] == false);
+      }
+      _peerFormat.removeWhere((id, _) => !peers.containsKey(id));
+      final allV2 = peers.keys.every(_peerFormat.containsKey);
+      final allOff = peers.keys.every((id) => _peerFormat[id]?.legacyOff == true);
+      if (_legacy == 'on' && allV2) {
+        _legacy = 'off';
+      } else if (_legacy != 'on' && !allV2) {
+        _legacy = 'on';
+      }
+      if (_legacy == 'off' && allOff) {
+        for (final p in await legacyFiles(folder)) {
+          await folder.delete(p);
+        }
+        final old = File('${(await dir()).path}/${t.id}.json');
+        if (await old.exists()) await old.delete();
+        _legacy = 'cleaned';
+      }
+      await _saveFormat();
+    }
+    final caps = {'notebook_format': kShareFormat, 'notebook_legacy': _legacy == 'on'};
+    if (!mapEquals(caps, _advertised)) {
+      _advertised = caps;
+      await setCaps?.call(caps);
+    }
+  }
+
   Future<void> resolve(String id, SyncConflict c, {required bool keepCache}) async {
     final t = _targets.where((x) => x.id == id).firstOrNull;
     if (t == null) return;
-    final e = await _engine(t);
+    final e = await _engine(t, legacy: t.kind == SyncKind.share && !c.path.endsWith(kNoteExt));
     await e.resolve(c, keepCache: keepCache);
     _conflicts[id] = [for (final x in conflicts(id)) if (!(x.entryId == c.entryId && x.kind == c.kind && x.path == c.path)) x];
     notifyListeners();

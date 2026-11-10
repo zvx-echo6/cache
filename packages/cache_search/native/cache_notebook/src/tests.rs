@@ -395,3 +395,28 @@ fn a_version_1_database_gains_props() {
     let v: String = c.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, "2");
 }
+
+#[test]
+fn a_notebook_takes_another_id_with_its_entries() {
+    let (nb, _t) = notebook("reid");
+    let id = new_log(&nb, generator());
+    let e = add(&nb, &id, "2026-11-01T10:00:00-07:00", json!({}));
+    let eid = e["id"].as_str().unwrap();
+    let j = journal_id(&nb);
+    assert_eq!(err(&nb, "notebook_reid", json!({"id": id, "new_id": j})).code, "bad_json");
+    assert_eq!(err(&nb, "notebook_reid", json!({"id": "nope", "new_id": "x1"})).code, "not_found");
+    assert_eq!(err(&nb, "notebook_reid", json!({"id": id, "new_id": "bad id"})).code, "bad_json");
+    let n = call(&nb, "notebook_reid", json!({"id": id, "new_id": "shared-id-1"}));
+    assert_eq!((n["id"].clone(), n["entries"].clone()), (json!("shared-id-1"), json!(1)));
+    // run again after it went through (a replay): the same answer
+    assert_eq!(call(&nb, "notebook_reid", json!({"id": id, "new_id": "shared-id-1"}))["id"], "shared-id-1");
+    assert_eq!(call(&nb, "entry", json!({"id": eid}))["notebook_id"], "shared-id-1");
+    assert_eq!(call(&nb, "entries", json!({"notebook_id": "shared-id-1"}))["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(err(&nb, "notebook", json!({"id": id})).code, "not_found");
+    // the saved-places link follows
+    let sp = call(&nb, "saved_places", json!({}));
+    let sp_id = sp["id"].as_str().unwrap().to_string();
+    let r = call(&nb, "notebook_reid", json!({"id": sp_id, "new_id": "places-shared"}));
+    assert_eq!(r["saved_places"], true);
+    assert_eq!(call(&nb, "saved_places", json!({}))["id"], "places-shared");
+}

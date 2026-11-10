@@ -18,7 +18,7 @@ use serde_json::{json, Map, Value};
 use std::sync::atomic::Ordering;
 
 /// The ops that change notebooks or entries (after them the map layers are brought in step).
-const CHANGES: [&str; 5] = ["notebook_save", "notebook_delete", "entry_save", "entry_delete", "import"];
+const CHANGES: [&str; 6] = ["notebook_save", "notebook_reid", "notebook_delete", "entry_save", "entry_delete", "import"];
 
 fn nb_err(e: cache_notebook::Error) -> Error {
     Error::new(ErrorCode::from_str_code(e.code), e.message)
@@ -106,6 +106,7 @@ impl Ext {
                     _ => self.import(&args)?.to_string(),
                 }
             }
+            "notebook_reid" => self.reid(args_json)?,
             _ => nb.call(op, args_json).map_err(nb_err)?,
         };
         if CHANGES.contains(&op) {
@@ -114,6 +115,33 @@ impl Ext {
             }
         }
         Ok(out)
+    }
+
+    /// `notebook_reid`, the map layer first (a layer that points to an id no notebook has is deleted by the next sync), then the
+    /// notebook. Each step can be run again; the app's re-id journal does that after a kill. If the notebook is refused the layer
+    /// goes back.
+    fn reid(&self, args_json: Option<&str>) -> Result<String> {
+        let a: Value = serde_json::from_str(args_json.unwrap_or("{}")).map_err(|e| Error::bad_json(format!("args: {e}")))?;
+        let (old, new) = (a["id"].as_str().unwrap_or_default().to_string(), a["new_id"].as_str().unwrap_or_default().to_string());
+        let map = self.map_data.as_deref();
+        if let Some(m) = map {
+            m.rename_notebook_layer(&old, &new).map_err(user_err)?;
+        }
+        match self.nb()?.call("notebook_reid", args_json).map_err(nb_err) {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                if let Some(m) = map {
+                    let _ = m.rename_notebook_layer(&new, &old);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// The app's re-id journal (`reid-journal.json` beside the user database) is there: a re-id is half done. Until the app has
+    /// finished it, no layer is added, changed or deleted by a notebook change.
+    fn reid_pending(&self) -> bool {
+        self.user_db.as_deref().and_then(|p| std::path::Path::new(p).parent()).is_some_and(|d| d.join("reid-journal.json").exists())
     }
 
     fn saved_id(&self) -> Result<String> {
@@ -279,6 +307,9 @@ impl Ext {
 
     /// Every Places notebook but the saved places' as a map layer.
     fn sync_layers(&self) -> Result<()> {
+        if self.reid_pending() {
+            return Ok(());
+        }
         let (Some(map), Some(nb)) = (self.map_data.as_deref(), self.notebook.as_ref()) else { return Ok(()) };
         let books = nb.places_books().map_err(nb_err)?;
         let layers: Vec<NotebookLayer> = books

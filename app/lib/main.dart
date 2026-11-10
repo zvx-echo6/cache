@@ -346,6 +346,7 @@ class _CacheAppState extends State<CacheApp> {
       list: () => NotebooksScreen(deps: notebookDeps),
       items: () => notebookItems(notebooks),
       remoteItem: notebookRemoteItem,
+      alongside: (share, path) => notebookAlongside(notebooks, share, path),
       setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
     // The Shared folder of 1.0 is gone: SharingState stops sharing it at start (retiredShares), and its files stay where they are.
@@ -644,6 +645,9 @@ class _CacheAppState extends State<CacheApp> {
     dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    // Linked devices say their notebook format with the data they already send; format 1 folders stay until all have said 2.
+    peerCaps: () => sharing.running ? {for (final p in sharing.peers) '${p['id']}': (p['caps'] as Map?)?.cast<String, dynamic>()} : null,
+    setCaps: sharing.setCaps,
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -831,6 +835,19 @@ class _CacheAppState extends State<CacheApp> {
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
       await _soft('notebooks', () async {
+        // A notebook id change a kill left half done is finished before anything syncs (see NotebookState.reidNotebook): what keeps
+        // notebook ids is wired first (private sharing, the shortcuts, the field names), then the journal is replayed. A replay that
+        // fails does not hold the app: it is logged, the journal stays, and notebook sync waits and shows a state.
+        if (!plat.isWeb) {
+          notebooks.privateSharing = connections;
+          notebooks.reidJournal = File('${await appSupportPath()}/reid-journal.json');
+          notebooks.reidSteps['shortcuts'] = (o, n) async => layout.renameNotebook(o, n);
+          notebooks.reidSteps['field names'] = connections.moveFieldMaps;
+          await _layoutRead;
+          try {
+            await notebooks.replayReid();
+          } catch (_) {}
+        }
         await notebooks.start();
         notebookActions.start();
       });
@@ -849,6 +866,9 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
+      // Notebook sync that cannot go on (a newer format in the share, a notebook change to finish) is said under Notebooks in Sharing.
+      sharing.kindWarning = (id) => id == 'notebooks' ? connections.sharingNote : null;
+      connections.addListener(sharing.poke);
       // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
       if (!plat.isWeb) {
         unawaited(connections.syncAll());

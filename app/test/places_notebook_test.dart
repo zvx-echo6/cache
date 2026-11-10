@@ -127,6 +127,25 @@ void main() {
       expect(find.byKey(const ValueKey('place-delete')), findsOneWidget);
     });
 
+    testWidgets('a place form open while the notebook gets another id saves under the new id', (tester) async {
+      final r = _Rig();
+      final book = await r.saved();
+      await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
+      await tester.tap(find.byKey(const ValueKey('add-place')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('place-name')), 'North Gate');
+      await tester.pumpAndSettle();
+      await r.nb.reidNotebook(book.id, 'places-shared');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('place-name')), findsOneWidget, reason: 'the form is still open');
+      await tester.dragUntilVisible(find.byKey(const ValueKey('place-save')), find.byType(ListView), const Offset(0, -300));
+      await tester.tap(find.byKey(const ValueKey('place-save')));
+      await tester.pumpAndSettle();
+      final saved = r.store.entries.firstWhere((e) => e['title'] == 'North Gate');
+      expect(saved['notebook_id'], 'places-shared');
+      expect(find.text('This notebook is gone'), findsNothing);
+    });
+
     testWidgets('Add place: the colour nobody uses yet, weather on with its gear, a custom alert rule, then Save', (tester) async {
       final r = _Rig();
       final book = await r.saved();

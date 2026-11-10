@@ -148,6 +148,9 @@ class SharingState extends ChangeNotifier {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
+        // What this device tells the linked devices about itself: its notebook format, and that it still keeps format 1 folders
+        // (notebook sync says otherwise through [setCaps] once every linked device has said format 2).
+        'caps': {'notebook_format': 2, 'notebook_legacy': true},
       });
       await _applyPolicy();
       await refresh();
@@ -211,6 +214,18 @@ class SharingState extends ChangeNotifier {
   Map<String, dynamic>? linkOf(String peer) => (peerOf(peer)?['link'] as Map?)?.cast<String, dynamic>();
 
   /// Sets what this device and [peer] keep about their link; [peer] takes it with the next sync.
+  /// What this device says about itself to the linked devices (the engine's `caps`).
+  Future<void> setCaps(Map<String, dynamic> caps) async {
+    if (_core != null) await _call('set_caps', {'caps': caps});
+  }
+
+  /// What Sharing says under a kind besides its summary when something stops it (notebook sync: "Update Cache on this device ..."),
+  /// set by the app.
+  String? Function(String kindId)? kindWarning;
+
+  /// Redraws Sharing when something the app keeps for it changed.
+  void poke() => notifyListeners();
+
   Future<void> setLink(String peer, Map<String, Object?> link) => _call('set_link', {'peer': peer, 'link': link});
 
   /// The keys for [peer] ({secure-storage name: key}): held by the sync engine in memory only and sent only to [peer], over its

@@ -165,6 +165,49 @@ void main() {
     expect(find.text('Thu 29 Oct · Home'), findsOneWidget);
   });
 
+  testWidgets('an editor open while the notebook gets another id keeps its text and saves under the new id; Close still leaves', (tester) async {
+    final r = _Rig();
+    await r.nb.start();
+    await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: r.nb.journal!.id));
+    await tester.tap(find.text('Write an entry'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('editor-text')), 'First part.');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(r.store.entries.single['notebook_id'], isNot('journal-shared'));
+    // linked devices settle on another id while the editor is open
+    await r.nb.reidNotebook(r.nb.journal!.id, 'journal-shared');
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('editor-text')), 'First part. And more.');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(r.store.entries.single['notebook_id'], 'journal-shared');
+    expect(r.store.entries.single['body'], 'First part. And more.');
+    expect(find.text('This notebook is gone'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('editor-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('editor-close')), findsNothing, reason: 'the editor closed');
+    expect(find.textContaining('Unfinished entry'), findsOneWidget);
+    expect(find.text('This notebook is gone'), findsNothing);
+  });
+
+  testWidgets('the Places notebook screen follows a re-id: its places stay, nothing says gone', (tester) async {
+    final r = _Rig();
+    await r.nb.start();
+    final p = await r.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Camps', fields: [], sort: NotebookSort.recent));
+    await r.nb.saveEntry(notebookId: p.id, occurredAt: '2026-10-25T16:12:00-06:00', title: 'North gate', place: const NbPlace(lat: 43.6, lon: -116.2));
+    await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: p.id));
+    expect(find.text('North gate'), findsOneWidget);
+    await r.nb.reidNotebook(p.id, 'camps-shared');
+    await tester.pumpAndSettle();
+    expect(find.text('This notebook is gone'), findsNothing);
+    expect(find.text('North gate'), findsOneWidget);
+    expect(r.store.entries.single['notebook_id'], 'camps-shared');
+    await r.nb.saveEntry(notebookId: 'camps-shared', occurredAt: '2026-10-26T16:12:00-06:00', title: 'South gate', place: const NbPlace(lat: 43.7, lon: -116.3));
+    await tester.pumpAndSettle();
+    expect(find.text('South gate'), findsOneWidget);
+  });
+
   testWidgets('swipe to delete has Undo; once the time is up the entry is gone', (tester) async {
     final r = _Rig();
     await r.nb.start();
