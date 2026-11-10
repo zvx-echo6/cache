@@ -6,6 +6,7 @@ release notes).
 
 ## Unreleased
 
+- Android: Cache now ships for 64-bit ARM phones only (x86 devices and Chromebooks are not supported)
 - Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
 
 ## 1.1.0 (build 47, test) - 2026-11-09

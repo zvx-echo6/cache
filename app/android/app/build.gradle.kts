@@ -27,7 +27,8 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // 64-bit ARM only: the search core, llama, libzim, Valhalla and iroh are built for arm64-v8a only, so an x86_64 slice would load but not work.
+        ndk { abiFilters += listOf("arm64-v8a") }
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
