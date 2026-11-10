@@ -10,6 +10,10 @@ class FakeSync implements SyncCoreLike {
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
 
+  /// The free space and the kept-free reserve `status` answers.
+  int freeBytes = 10 << 30;
+  int reserveBytes = 1 << 30;
+
   /// This device's key.
   String id = 'me';
   bool closed = false;
@@ -38,8 +42,8 @@ class FakeSync implements SyncCoreLike {
           'name': name,
           'relay': 'https://relay.example',
           'network': true,
-          'free_bytes': 10 << 30,
-          'reserve_bytes': 1 << 30,
+          'free_bytes': freeBytes,
+          'reserve_bytes': reserveBytes,
           'peers': peers,
           'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],

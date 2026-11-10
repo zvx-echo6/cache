@@ -163,7 +163,8 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
     final k = context.t;
     final free = d.device.freeBytes();
     final total = sizes?.total ?? 0;
-    final tooBig = free != null && total > free;
+    final usable = d.device.usableBytes();
+    final tooBig = (usable ?? free) != null && total > (usable ?? free)!;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(key: const ValueKey('wizard-back'), tooltip: 'Back', icon: const Icon(Icons.arrow_back), onPressed: _back),
@@ -193,7 +194,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
       bottomNavigationBar: Dock(
         maxWidth: 560,
         children: [
-          if (_step == 3) SpaceLine(label: (s) => widget.again ? (total == 0 ? 'Nothing new to add' : '$s to add') : '$s selected', bytes: total, free: free),
+          if (_step == 3) SpaceLine(label: (s) => widget.again ? (total == 0 ? 'Nothing new to add' : '$s to add') : '$s selected', bytes: total, free: free, usable: usable),
           StepDots(step: _step, of: kWizardSteps),
           PillButton(
             key: const ValueKey('wizard-next'),

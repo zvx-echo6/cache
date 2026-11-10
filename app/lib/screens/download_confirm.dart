@@ -262,7 +262,7 @@ class _DownloadDialog extends StatelessWidget {
             const SizedBox(height: 10),
             _Bar(free: free, bytes: total, fits: fits),
             const SizedBox(height: 6),
-            _small(context, 'Device storage', fits ? '${formatBytes(free)} free, ${formatBytes(free - total)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
+            _small(context, 'Device storage', fits ? '${formatBytes(free)} free, ${formatBytes(free > total ? free - total : 0)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
           ],
           if (footnote != null) ...[
             const SizedBox(height: 8),

@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../files.dart';
 import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
+import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
@@ -27,7 +28,9 @@ class SharingState extends ChangeNotifier {
     this.linkShares = const [],
     this.deviceName = 'Cache device',
     SyncOpener? opener,
-  }) : _opener = opener ?? _openReal;
+    int Function(String dir)? reserveBytes,
+  }) : _reserveBytes = reserveBytes ?? _storageReserve,
+       _opener = opener ?? _openReal;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -43,6 +46,11 @@ class SharingState extends ChangeNotifier {
   final List<DataKind> kinds;
   final String deviceName;
   final SyncOpener _opener;
+
+  /// What Cache leaves free on the phone, for the volume holding a folder: the same rule Storage shows ([reserveFor]).
+  final int Function(String dir) _reserveBytes;
+
+  static int _storageReserve(String dir) => reserveFor(totalBytesOnDisk(dir));
 
   SyncCoreLike? _core;
   bool _enabled = false;
@@ -136,6 +144,8 @@ class SharingState extends ChangeNotifier {
       _core = await _opener({
         'dir': dir.path,
         'name': deviceName,
+        // The engine keeps the same space free as Storage shows, so This device and Storage agree.
+        'reserve_bytes': _reserveBytes((await supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
         'local_deletes': {for (final a in always) a.id: a.localDeletes},
         'last': {for (final a in always) a.id: a.last},

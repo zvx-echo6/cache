@@ -71,8 +71,12 @@ abstract interface class DiscoverDevice implements DiscoverPorts {
   /// What an outside source gives ("Forecast and alerts").
   String providerDetail(RecipeItem item);
 
-  /// Free space on the device; null when it cannot be told.
+  /// Free space on the device as the screens show it (free now); null when it cannot be told.
   int? freeBytes();
+
+  /// What a download may use: the allowance (free now, and on iPhone half of what iOS can purge) less what Cache leaves for the
+  /// phone. The Get sheet, the wizard and the activity page check sizes against this, not against [freeBytes].
+  int? usableBytes();
 
   /// The item's download as the app's download rows show it.
   DlState progressOf(RecipeItem item);
