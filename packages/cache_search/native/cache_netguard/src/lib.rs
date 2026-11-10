@@ -261,9 +261,10 @@ mod tests {
         assert!(r.resolve("127.0.0.1:80").is_err());
     }
 
-    /// The test hooks must reach a crate only through its [dev-dependencies], never its [dependencies] or a [features] entry: a normal
-    /// or release build then has no way to let loopback through. Reads the manifest of every workspace member (the members list in
-    /// the workspace root) and the root itself.
+    /// The test hooks must reach a crate only through its [dev-dependencies]: no `cache_netguard` entry outside a dev-dependencies table
+    /// may name the `test-hooks` feature, and no `[features]` entry may enable `cache_netguard/test-hooks`, so a normal or release
+    /// build has no way to let loopback through. Reads the manifest of every workspace member (the members list in the workspace root)
+    /// and the root itself. A crate's own, unrelated feature that is also called `test-hooks` is not this feature and is ignored.
     #[test]
     fn the_test_hooks_feature_is_only_ever_a_dev_dependency() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -277,22 +278,37 @@ mod tests {
         for m in &manifests {
             let text = std::fs::read_to_string(m).unwrap_or_else(|e| panic!("{}: {e}", m.display()));
             let own = m.parent().is_some_and(|d| d.ends_with("cache_netguard"));
-            let mut section = String::new();
+            // statements: a `key = value` joined over its lines (a multi-line array or inline table), with the table it sits in
+            let (mut section, mut stmt, mut depth) = (String::new(), String::new(), 0i32);
             for line in text.lines() {
                 let t = line.trim();
-                if t.starts_with('[') {
-                    section = t.to_string();
-                }
-                if t.starts_with('#') || !t.contains("test-hooks") {
+                if t.is_empty() || t.starts_with('#') {
                     continue;
                 }
+                if depth == 0 && t.starts_with('[') {
+                    section = t.to_string();
+                    continue;
+                }
+                stmt.push_str(t);
+                stmt.push(' ');
+                depth += t.matches(['[', '{']).count() as i32 - t.matches([']', '}']).count() as i32;
+                if depth > 0 {
+                    continue;
+                }
+                depth = 0;
+                let s = std::mem::take(&mut stmt);
                 if own {
                     // this crate defines the feature, and nothing else in it may mention it
-                    assert!(section == "[features]" && t.starts_with("test-hooks") && t.ends_with("[]"), "{}: {t}", m.display());
-                } else {
+                    if s.contains("test-hooks") {
+                        assert!(section == "[features]" && s.trim() == "test-hooks = []", "{}: {s}", m.display());
+                    }
+                    continue;
+                }
+                assert!(!s.contains("cache_netguard/test-hooks"), "{}: a feature enables cache_netguard/test-hooks: {s}", m.display());
+                let about_netguard = s.starts_with("cache_netguard") || section.contains("cache_netguard");
+                if about_netguard && s.contains("test-hooks") {
                     seen += 1;
-                    assert!(section.contains("dev-dependencies"), "{}: test-hooks outside a dev-dependencies table ({section}): {t}", m.display());
-                    assert!(t.contains("cache_netguard") || section.contains("cache_netguard") || t.starts_with("features"), "{}: {t}", m.display());
+                    assert!(section.contains("dev-dependencies"), "{}: cache_netguard test-hooks outside a dev-dependencies table ({section}): {s}", m.display());
                 }
             }
         }
