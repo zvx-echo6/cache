@@ -699,6 +699,8 @@ class NotebookSync {
       final name = j?['def'] is Map ? (j!['def'] as Map)['name'] : null;
       final mine = id == null ? null : notebook.notebook(id);
       if (mine == null || name is! String || name.trim().isEmpty) continue;
+      // A file this device wrote for that id in that folder is the notebook's old place here (renamed on this device): not followed.
+      if (_idDirs[dir] == mine.id) continue;
       if (_dirOf(mine) == dir || folderName(name) != dir || notebook.notebooks.any((n) => _dirOf(n) == dir) || notebook.nameTaken(name, exceptId: mine.id)) continue;
       await notebook.saveNotebook(id: mine.id, def: mine.def.copyWith(name: name.trim()));
       _dirs = folderNames(notebook.notebooks);
