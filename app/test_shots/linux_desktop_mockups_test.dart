@@ -274,6 +274,21 @@ class _Rig {
 }
 
 
+/// Brings the widget keyed [key] on screen, scrolling whichever list holds it; false when it is not there at this width.
+Future<bool> _reveal(WidgetTester tester, String key) async {
+  final f = find.byKey(ValueKey(key));
+  if (f.evaluate().isEmpty) {
+    for (var i = find.byType(Scrollable).evaluate().length - 1; i >= 0 && f.evaluate().isEmpty; i--) {
+      try {
+        await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).at(i), maxScrolls: 30);
+      } on StateError {
+        continue;
+      }
+    }
+  }
+  return f.evaluate().isNotEmpty;
+}
+
 void _file(Directory d, String name, int bytes) => File('${d.path}/$name').openSync(mode: FileMode.write)
   ..truncateSync(bytes)
   ..closeSync();
@@ -369,13 +384,13 @@ void main() {
 
         await show(rig.shell());
         await openLibrary();
+        // At 1280 and up the Library shows its rows, list and detail at once, so a key may already be on screen and a key far down a
+        // list is found by trying each scrollable; a key that is not shown at this width is not tapped.
         for (final k in ['library-bookshelves', 'shelf-200', 'shelf-210', 'book-aid']) {
-          final f = find.byKey(ValueKey(k));
-          if (f.evaluate().isEmpty) {
-            await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).last);
+          if (await _reveal(tester, k)) {
+            await tester.tap(find.byKey(ValueKey(k)).first);
+            await _settle(tester);
           }
-          await tester.tap(f.first);
-          await _settle(tester);
         }
         await shot('library-book-open');
 
