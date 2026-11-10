@@ -26,7 +26,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // BuildConfig.CACHE_LITERT is true only with cacheLiteRt=true: MainActivity guards its LiteRT hook with it, so R8 drops the hook
+    // from every other build.
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
+        buildConfigField("boolean", "CACHE_LITERT", if (liteRt) "true" else "false")
         // A side-by-side test build (android-test-apk.yml sets the Gradle property cacheTestApk=true): its own package
         // (com.happylittlellc.cache.test, so its own data) and the label "Cache test". Plugin providers use ${applicationId}.
         val testApk = (project.findProperty("cacheTestApk") as String?) == "true"
