@@ -364,6 +364,39 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return null;
   }
 
+  /// True when a picture is saved for [z] (`.icon.png`: the person's choice or the catalogue's); that one shows over the ZIM's own.
+  bool hasSavedIcon(ZimFile z) => !plat.isWeb && _iconFile(z.path).existsSync();
+
+  /// Saves [png] as [z]'s icon (the catalogue's), replacing the old one in one step, and tells the rows.
+  Future<void> saveIcon(ZimFile z, Uint8List png) async {
+    await writeBytesAtomic(_iconFile(z.path), png);
+    if (!_closed) notifyListeners();
+  }
+
+  /// The ZIM's own icon read through the core now (null when it has none or there is no core).
+  @visibleForTesting
+  Future<Uint8List?> illustrationBytes(ZimFile z) async {
+    final core = _core, id = idOf(z);
+    if (core == null || id == null) return null;
+    return core.zimIllustration(id);
+  }
+
+  /// Reads [z]'s own icon again and replaces the cached `.illustration.png`. False when the ZIM has none (the cache is kept as it was).
+  /// Never touches `.icon.png`.
+  Future<bool> refreshIllustration(ZimFile z) async {
+    try {
+      final png = await illustrationBytes(z);
+      if (png == null || png.isEmpty) return false;
+      await writeBytesAtomic(_illustrationFile(z.path), png);
+      _illustrationAsked.add(z.path);
+      if (!_closed) notifyListeners();
+      return true;
+    } catch (e) {
+      logError('ZIM icon', error: e);
+      return false;
+    }
+  }
+
   void _readIllustration(ZimFile z) {
     final core = _core, id = idOf(z);
     if (core == null || id == null || !_illustrationAsked.add(z.path)) return;

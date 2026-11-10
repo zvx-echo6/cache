@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/browse_state.dart';
@@ -21,7 +23,8 @@ void main() {
   });
   tearDown(() => tmp.deleteSync(recursive: true));
 
-  BrowseState make(Future<String> Function(Uri) fetch) => BrowseState(
+  BrowseState make(Future<String> Function(Uri) fetch, {Future<Uint8List?> Function(Uri)? iconFetch}) => BrowseState(
+        iconFetch: iconFetch,
         sources: sources,
         catalog: catalogWith(fetch),
         policy: testPolicy(),
@@ -157,6 +160,33 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-delete')));
     await tester.pumpAndSettle();
     expect(sources.zims, isEmpty);
+  });
+
+  testWidgets('Get icon from source shows "Getting icon…" while it works, then says how it went', (tester) async {
+    File('${sources.zimsDir!.path}/wikivoyage_en_europe_maxi_2026-09.zim').writeAsBytesSync(List.filled(2048, 0));
+    await sources.refresh();
+    sources.titles[sources.zims.single.path] = 'Wikivoyage Europe';
+    final gate = Completer<Uint8List?>();
+    final b = make(recorded, iconFetch: (u) => gate.future);
+    await tester.runAsync(b.init);
+    await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('library-zims')));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Wikivoyage Europe'));
+    await tester.pumpAndSettle();
+    expect(find.text('Get icon from source'), findsOneWidget);
+    await tester.tap(find.text('Get icon from source'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Getting icon…'), findsOneWidget);
+    await tester.runAsync(() async {
+      gate.complete(null);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('No icon found at the source'), findsOneWidget);
   });
 
   testWidgets('with nothing installed the Library explains and offers Add to Library', (tester) async {
