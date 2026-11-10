@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
+import '../../desktop/notebook_chips.dart';
 import '../../layout/adaptive.dart';
 
 import '../../notebook/notebook_model.dart';
@@ -134,7 +136,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     id: 'notebooks',
     listName: 'Notebooks',
     // A tablet shows the shelf across the page until a notebook is opened beside it (no empty pane).
-    listAloneUntilChosen: true,
+    // (On the Linux desktop the detail pane is always beside the 300-wide shelf, with "Choose an item" until one is opened.)
+    listAloneUntilChosen: !isLinuxDesktop(context),
     list: Builder(
       builder: (c) {
         _pane = c;
@@ -200,10 +203,9 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               if (again.isNotEmpty) ...[
                 Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
                 const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
+                // The Linux desktop shows them as one row that scrolls sideways; anywhere else they wrap.
+                LogAgainChips(
+                  chips: [
                     for (final n in again)
                       ActionChip(key: ValueKey('again-${n.id}'), avatar: const Icon(Icons.add, size: 18), label: Text(n.name), onPressed: () => _quickAdd(n)),
                   ],
