@@ -161,6 +161,9 @@ void main() {
       await show(TurnPhase.searching, '');
       expect(find.text('Calculated'), findsOneWidget);
       await show(TurnPhase.answering, 'Store one gallon');
+      expect(find.byKey(const ValueKey('answer-progress')), findsNothing);
+      expect(find.text('Preparing answer…'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(find.text('3 steps'), findsOneWidget);
       expect(find.text('Calculated'), findsNothing);
       expect(find.bySemanticsLabel('3 steps, show steps'), findsOneWidget);

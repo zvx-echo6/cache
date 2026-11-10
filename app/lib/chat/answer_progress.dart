@@ -126,6 +126,8 @@ class _AnswerProgressState extends State<AnswerProgress> {
               ? stepPresent(ToolStep(activeTool))
               : 'Preparing answer…',
       TurnPhase.done => failed || text.isEmpty ? null : 'Answer delivered',
+      // The answer is writing: the text is the progress, and the trail line sits right above it.
+      TurnPhase.answering when text.isNotEmpty => null,
       _ => 'Preparing answer…',
     };
     // Promotion of the current text into notes leaves this rendered text intact.

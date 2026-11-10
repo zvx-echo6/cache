@@ -33,11 +33,13 @@ void main() {
 
       const note = 'I will look that up.';
       await show(TurnPhase.answering, text: note);
+      // While text writes there is no status line; it comes back for the tool call, and then stays put across tools.
+      expect(find.byKey(const ValueKey('answer-progress')), findsNothing);
+      await show(TurnPhase.searching, tool: 'search', notes: [note]);
       final progress = tester.element(
         find.byKey(const ValueKey('answer-progress')),
       );
       final initialPosition = tester.getTopLeft(find.byType(AnswerMarkdown));
-      await show(TurnPhase.searching, tool: 'search', notes: [note]);
       expect(find.text('Searching your library…'), findsOneWidget);
       expect(
         tester.widget<AnswerMarkdown>(find.byType(AnswerMarkdown)).text,

@@ -79,6 +79,8 @@ void main() {
         await shoot('b-writing');
 
         await tester.tap(find.byKey(const ValueKey('answer-trail-toggle')));
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump(const Duration(seconds: 1));
         await shoot('c-expanded');
 
         await tester.pumpWidget(const SizedBox.shrink());
