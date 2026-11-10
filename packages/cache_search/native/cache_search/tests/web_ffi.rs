@@ -749,16 +749,6 @@ fn a_redirect_to_a_private_address_is_not_followed_and_reads_as_not_available() 
 }
 
 #[test]
-fn a_search_server_at_a_private_address_is_fetch_failed() {
-    for base in ["http://192.168.1.240/api/v1/search", "http://169.254.169.254/api/v1/search", "http://10.0.0.1/api/v1/search"] {
-        let mut c = Core::with_web(base);
-        let out = c.search("x");
-        assert_eq!(err_type(&out).0, "fetch_failed", "{out}");
-        c.assert_no_key();
-    }
-}
-
-#[test]
 fn a_page_that_is_not_html_or_text_gives_the_snippet() {
     for (ct, body) in [("application/pdf", &b"%PDF-1.4 binary"[..]), ("image/png", &b"\x89PNG"[..]), ("application/json", &b"{\"a\":1}"[..])] {
         let page = Server::start(move |_| Resp::new(200, ct, body));

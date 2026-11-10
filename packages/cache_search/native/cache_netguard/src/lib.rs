@@ -82,8 +82,22 @@ pub fn loopback_everywhere_for_tests() {
     LOOPBACK_ALL.store(true, Ordering::Relaxed);
 }
 
-fn loopback_allowed(ip: IpAddr) -> bool {
-    ip.is_loopback() && (LOOPBACK_ALL.load(Ordering::Relaxed) || LOOPBACK_HERE.with(|c| c.get()) > 0)
+static LOOPBACK_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
+/// Tests only: loopback is reachable on this one port, from every thread, from now on. Every other loopback port stays refused, so a
+/// test can reach its own origin server and still see a redirect to anything else on this machine refused.
+#[doc(hidden)]
+pub fn loopback_port_for_tests(port: u16) {
+    if let Ok(mut p) = LOOPBACK_PORTS.lock() {
+        p.push(port);
+    }
+}
+
+fn loopback_allowed(a: &SocketAddr) -> bool {
+    a.ip().is_loopback()
+        && (LOOPBACK_ALL.load(Ordering::Relaxed)
+            || LOOPBACK_HERE.with(|c| c.get()) > 0
+            || LOOPBACK_PORTS.lock().map(|p| p.contains(&a.port())).unwrap_or(false))
 }
 
 /// Looks a name up like the system does and refuses it when any address it gives is not public. It is the connect-time check:
@@ -112,7 +126,7 @@ impl ureq::Resolver for PublicResolver {
         if self.exempt.iter().any(|h| h.eq_ignore_ascii_case(&host)) && !addrs.is_empty() {
             return Ok(addrs);
         }
-        if addrs.is_empty() || addrs.iter().any(|a| !is_public(a.ip()) && !loopback_allowed(a.ip())) {
+        if addrs.is_empty() || addrs.iter().any(|a| !is_public(a.ip()) && !loopback_allowed(a)) {
             self.refused.store(true, Ordering::Relaxed);
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "that address is not on the public internet"));
         }
