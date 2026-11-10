@@ -125,7 +125,10 @@ void main() {
     await settle(tester);
     expect(find.text('Watch and add 1 PDF'), findsOneWidget);
     await tapKey(tester, 'watch-new-only');
-    await settle(tester);
+    // saving the folder and its first check are real file work, given real time
+    for (var i = 0; i < 60 && find.byType(WatchedFoldersPage).evaluate().isEmpty; i++) {
+      await settle(tester);
+    }
     expect(find.byType(WatchedFoldersPage), findsOneWidget);
     expect(w.watch.folders.single.name, 'Manuals');
     expect(w.pdf.state.jobs, isEmpty);

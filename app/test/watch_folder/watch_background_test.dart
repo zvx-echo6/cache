@@ -77,6 +77,7 @@ void main() {
     });
 
     Future<(AddPdfState, AddPdfJob, FakeIngestCalls)> kept(Directory dir, FakeIngestCalls calls) async {
+      dir.createSync(recursive: true);
       final first = testAddPdfState(dir);
       final f = File('${dir.path}/x.pdf')..writeAsStringSync('pdf');
       final j = await first.add(pdfPath: f.path, fileName: 'x.pdf', bytes: 3, title: 'x', target: _lib);
