@@ -553,6 +553,33 @@ pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// `notebook_reid`: `{"id","new_id"}`. Gives a notebook another id (linked devices that made the same notebook each under their
+/// own id settle on one): its entries and the saved-places link follow. The new id must not be in use. Returns the notebook.
+pub fn notebook_reid(c: &mut Connection, args: &Value) -> Result<Value> {
+    check_keys(args, &["id", "new_id"])?;
+    let id = str_arg(args, "id")?;
+    let new_id = str_arg(args, "new_id")?;
+    if !valid_id(new_id) {
+        return Err(Error::bad("new_id must be letters, digits and -"));
+    }
+    let tx = c.transaction()?;
+    if load_notebook(&tx, id)?.is_none() {
+        return Err(Error::not_found(format!("no notebook with id {id:?}")));
+    }
+    if id != new_id {
+        if load_notebook(&tx, new_id)?.is_some() {
+            return Err(Error::bad(format!("a notebook with id {new_id:?} already exists")));
+        }
+        tx.execute("UPDATE notebooks SET id=?2, rev=rev+1 WHERE id=?1", params![id, new_id])?;
+        tx.execute("UPDATE entries SET notebook_id=?2 WHERE notebook_id=?1", params![id, new_id])?;
+        tx.execute("UPDATE meta SET value=?2 WHERE key='saved_places_notebook' AND value=?1", params![id, new_id])?;
+    }
+    let n = load_notebook(&tx, new_id)?.expect("renamed above");
+    let out = notebook_json(&tx, &n)?;
+    tx.commit()?;
+    Ok(out)
+}
+
 /// `notebook_delete`: `{"id"}`. The notebook, its entries and their photos and files. `{"deleted":"<id>","entries":n}`.
 pub fn notebook_delete(c: &mut Connection, media: &Path, args: &Value) -> Result<Value> {
     check_keys(args, &["id"])?;

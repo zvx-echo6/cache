@@ -118,6 +118,7 @@ impl Notebook {
             "notebooks" => store::notebooks(c, &args)?,
             "notebook" => store::notebook_get(c, &args)?,
             "notebook_save" => store::notebook_save(c, &args)?,
+            "notebook_reid" => store::notebook_reid(c, &args)?,
             "notebook_delete" => store::notebook_delete(c, &media, &args)?,
             "entries" => store::entries(c, &args)?,
             "entry" => store::entry_get(c, &args)?,

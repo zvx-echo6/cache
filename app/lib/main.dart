@@ -848,6 +848,7 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
+      notebooks.onNotebookReid = layout.renameNotebook;
       // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
       if (!plat.isWeb) {
         unawaited(connections.syncAll());

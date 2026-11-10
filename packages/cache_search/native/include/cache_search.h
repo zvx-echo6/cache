@@ -608,6 +608,8 @@ char *cs_place_delete(cs_handle *h, const char *key);
  *   "notebook_save"   {"id"?,"template"?,"def","private"?,"map"?,"template_ref"?}   makes a notebook (no id, or a new id;
  *                                                     "template" required) or replaces its definition and switches (a
  *                                                     switch left out keeps its value); fields without fid are new
+ *   "notebook_reid"   {"id","new_id"}                   gives a notebook another id (its entries, the saved-places link and
+ *                                                     its map layer follow); the new id must be unused
  *   "notebook_delete" {"id"}                            the notebook, its entries and their photos and files:
  *                                                     {"deleted":"<id>","entries":n}
  *   "entries"         {"notebook_id","limit"? (default 1000)}   {"entries":[entry...]}, drafts included

@@ -40,6 +40,9 @@ class NbHit {
 abstract class PrivateSharing {
   bool included(String notebookId);
   Future<void> setIncluded(String notebookId, bool on);
+
+  /// A notebook got another id (linked devices settling on one): what is kept under the old id moves to the new one.
+  Future<void> notebookReid(String oldId, String newId) async {}
 }
 
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
@@ -57,6 +60,9 @@ class NotebookState extends ChangeNotifier {
 
   /// Private notebooks included in sync and sharing; null where there is no sync.
   PrivateSharing? privateSharing;
+
+  /// After a notebook got another id ([reidNotebook]): whatever else keeps notebook ids (the Home shortcuts) follows.
+  void Function(String oldId, String newId)? onNotebookReid;
 
   List<Notebook> _notebooks = const [];
   bool _loading = true;
@@ -151,6 +157,16 @@ class NotebookState extends ChangeNotifier {
             'map': ?map,
             'template_ref': ?templateRef,
           })));
+
+  /// Gives a notebook another id: its entries, the Places link and its map layer follow in the core, and what the app keeps
+  /// under the old id (private sharing, shortcuts) is moved to the new one. Linked devices that each made the same notebook
+  /// settle on one id this way (see NotebookSync).
+  Future<Notebook> reidNotebook(String id, String newId) async {
+    final n = await _change(() async => Notebook.fromJson(await backend.call('notebook_reid', {'id': id, 'new_id': newId})));
+    await privateSharing?.notebookReid(id, newId);
+    onNotebookReid?.call(id, newId);
+    return n;
+  }
 
   Future<void> deleteNotebook(String id) => _change(() => backend.call('notebook_delete', {'id': id}));
 

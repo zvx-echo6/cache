@@ -179,6 +179,15 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     unawaited(syncAll());
   }
 
+  @override
+  Future<void> notebookReid(String oldId, String newId) async {
+    await init();
+    if (!_privateBooks.remove(oldId)) return;
+    _privateBooks.add(newId);
+    await _saveTargets();
+    notifyListeners();
+  }
+
   Future<File> _targetsFile() async => File('${(await dir()).path}/targets.json');
 
   Future<void> init() async {

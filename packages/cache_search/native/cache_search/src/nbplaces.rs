@@ -18,7 +18,7 @@ use serde_json::{json, Map, Value};
 use std::sync::atomic::Ordering;
 
 /// The ops that change notebooks or entries (after them the map layers are brought in step).
-const CHANGES: [&str; 5] = ["notebook_save", "notebook_delete", "entry_save", "entry_delete", "import"];
+const CHANGES: [&str; 6] = ["notebook_save", "notebook_reid", "notebook_delete", "entry_save", "entry_delete", "import"];
 
 fn nb_err(e: cache_notebook::Error) -> Error {
     Error::new(ErrorCode::from_str_code(e.code), e.message)
@@ -106,7 +106,19 @@ impl Ext {
                     _ => self.import(&args)?.to_string(),
                 }
             }
-            _ => nb.call(op, args_json).map_err(nb_err)?,
+            _ => {
+                let out = nb.call(op, args_json).map_err(nb_err)?;
+                if op == "notebook_reid" {
+                    // The notebook's map layer (and the lines and areas kept with it) follows its new id.
+                    if let (Some(map), Some(a)) = (self.map_data.as_deref(), args_json) {
+                        let a: Value = serde_json::from_str(a).unwrap_or(Value::Null);
+                        if let (Some(old), Some(new)) = (a["id"].as_str(), a["new_id"].as_str()) {
+                            map.rename_notebook_layer(old, new).map_err(user_err)?;
+                        }
+                    }
+                }
+                out
+            }
         };
         if CHANGES.contains(&op) {
             if let Err(e) = self.sync_layers() {

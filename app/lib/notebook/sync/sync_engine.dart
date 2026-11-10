@@ -19,6 +19,9 @@ import '../../platform/app_log.dart';
 /// - [share]: Cache's own folder that notebook sync keeps the same on the linked devices, two-way, in the Obsidian format.
 enum SyncKind { obsidian, logseq, logseqExport, share }
 
+/// The file in each notebook's folder (notebook sync) that carries the notebook's id, so it is the same on every linked device.
+const String kNotebookIdFile = 'notebook.json';
+
 /// What needs a person's decision.
 enum ConflictKind { bothChanged, removedOutside, unreadable }
 
@@ -518,8 +521,13 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
+    // The id the notebook has on the other devices: from its folder; else the old map file's. An id another notebook here
+    // already has is never taken (saving under it would change that notebook).
+    var id = kind == SyncKind.share ? _idIn(await folder.readText('${folderName(d.notebook)}/$kNotebookIdFile')) : null;
+    id ??= shared?['id'] as String?;
+    if (id != null && notebook.notebook(id) != null) id = null;
     final made = await notebook.saveNotebook(
-      id: shared?['id'] as String?,
+      id: id,
       template: (shared?['template'] as String?) ?? 'notes',
       def: shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)) : NotebookDef(name: d.notebook, fields: const [], sort: NotebookSort.recent),
       private: shared?['private'] == true,
@@ -542,6 +550,62 @@ class NotebookSync {
         ...def,
         'fields': [for (final f in (def['fields'] as List? ?? const [])) if ((f as Map)['hidden'] != true) {...f}..remove('fid')],
       };
+
+  // ---- notebook ids between linked devices ----
+
+  /// The id in a notebook's id file, or null when it is not one.
+  static String? _idIn(String? text) {
+    if (text == null) return null;
+    try {
+      final j = jsonDecode(text);
+      final id = j is Map ? j['id'] : null;
+      return id is String && RegExp(r'^[A-Za-z0-9-]{1,64}$').hasMatch(id) ? id : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Linked devices that each made the same notebook (same folder) must end with one id for it. Every notebook's folder carries
+  /// a small `notebook.json` with its id (a file of its own, so there is no shared map for two devices to change at once). The
+  /// lowest id found, in the folder's file and in the conflict copies that sync keeps when two devices wrote it at once, and
+  /// this device's own, wins on every device; a device with another id takes the winner's (its entries, private-sharing choice,
+  /// shortcuts and Places link follow) and writes it. Notebooks left out of the sync (private ones not included) are not touched.
+  Future<void> _settleIds() async {
+    if (kind != SyncKind.share) return;
+    final copy = RegExp(r'^notebook \(conflict, .*\)\.json$');
+    for (final n in [...notebook.notebooks]) {
+      if (!(includePrivate || !n.private || privateBooks.contains(n.id))) continue;
+      final dir = folderNameOf(n);
+      final files = [
+        for (final f in await folder.list(dir))
+          if (f.path.startsWith('$dir/') && (f.path.substring(dir.length + 1) == kNotebookIdFile || copy.hasMatch(f.path.substring(dir.length + 1)))) f.path,
+      ];
+      var winner = n.id;
+      for (final p in files) {
+        final id = _idIn(await folder.readText(p));
+        if (id != null && id.compareTo(winner) < 0) winner = id;
+      }
+      // Another notebook here already has that id (not this folder's): leave this one as it is.
+      if (winner != n.id && notebook.notebook(winner) != null) winner = n.id;
+      if (winner != n.id) {
+        final old = n.id;
+        await notebook.reidNotebook(old, winner);
+        final props = _props.remove(old);
+        if (props != null) _props.putIfAbsent(winner, () => props);
+        if (privateBooks.contains(old)) {
+          privateBooks
+            ..remove(old)
+            ..add(winner);
+        }
+      }
+      final text = '${jsonEncode({'id': winner})}\n';
+      final path = '$dir/$kNotebookIdFile';
+      if (await folder.readText(path) != text) await folder.writeText(path, text);
+      for (final p in files) {
+        if (p != path) await folder.delete(p);
+      }
+    }
+  }
 
   Map<String, dynamic>? _sharedBooks;
 
@@ -648,6 +712,7 @@ class NotebookSync {
     _sharedBooks = null;
     if (!await folder.reachable()) throw const FileSystemException("Can't reach the folder");
     await notebook.reload();
+    await _settleIds();
     final books = notebook.notebooks;
     final byName = {for (final n in books) n.name: n};
     final cache = <String, (Notebook, NbEntry)>{};

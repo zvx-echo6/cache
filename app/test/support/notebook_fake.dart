@@ -38,6 +38,7 @@ class FakeNotebookBackend implements NotebookBackend {
         'notebooks' => {'notebooks': [for (final n in _ordered()) _nbJson(n)]},
         'notebook' => _nbJson(_nb(a['id'] as String)),
         'notebook_save' => _nbJson(_save(a)),
+        'notebook_reid' => _nbJson(_reid(a['id'] as String, a['new_id'] as String)),
         'notebook_delete' => _deleteNb(a['id'] as String),
         'entries' => {'entries': [for (final e in _entriesOf(_nb(a['notebook_id'] as String)['id'] as String)) _entryJson(e)]},
         'entry' => _entryJson(_entry(a['id'] as String)),
@@ -178,6 +179,18 @@ class FakeNotebookBackend implements NotebookBackend {
       ..['updated'] = now
       ..['rev'] = (old['rev'] as int) + 1;
     return old;
+  }
+
+  Map<String, dynamic> _reid(String id, String newId) {
+    final n = _nb(id);
+    if (id != newId) {
+      if (notebooks.any((x) => x['id'] == newId)) throw CacheSearchException('bad_json', 'a notebook with id "$newId" already exists');
+      n['id'] = newId;
+      for (final e in entries.where((e) => e['notebook_id'] == id)) {
+        e['notebook_id'] = newId;
+      }
+    }
+    return n;
   }
 
   Map<String, dynamic> _deleteNb(String id) {
