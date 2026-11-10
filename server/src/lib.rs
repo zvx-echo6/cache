@@ -11,6 +11,7 @@ pub mod libbuild;
 pub mod config;
 pub mod embed;
 pub mod fetch;
+pub mod fetch_scope;
 pub mod helper;
 pub mod http;
 pub mod keys;
