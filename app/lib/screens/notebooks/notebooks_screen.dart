@@ -152,7 +152,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     final k = context.t;
     final hasMenu = widget.deps.connections != null || widget.deps.pin != null;
     // The Linux desktop: from 1280 the 300-wide shelf is permanent, so it has no hide button. At 1024 to 1279 the button stays and
-    // Search moves into the overflow menu (or, with no menu, the title is a little smaller) so the title is not cut.
+    // Search moves into the overflow menu when there is one; with no menu it stays in the header beside add, and the
+    // smaller title still fits.
     final wide = isLinuxWide(context);
     final narrow = isLinuxDesktop(context) && !wide;
     final searchInMenu = narrow && hasMenu;

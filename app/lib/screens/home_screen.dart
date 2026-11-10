@@ -245,22 +245,19 @@ class _HomeScreenState extends State<HomeScreen> {
             // on the left and the Set up card and the shortcuts on the right, instead of one column a few rows of which show.
             if (!typing && (desktop != null || (isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth))) {
               const right = {HomeBlock.setup, HomeBlock.shortcuts};
-              // The Linux desktop's update banner has no 1040 cap: it spans to the right gutter; the blocks under it keep theirs.
-              final capped = desktop == null ? 0.0 : padding.right - desktop.gutter;
-              Widget desktopCap(Widget w) => desktop == null ? w : Padding(padding: EdgeInsets.only(right: capped), child: w);
               return ListView(
                 key: const ValueKey('home-two-columns'),
-                padding: desktop == null ? padding : padding.copyWith(right: desktop.gutter),
+                padding: padding,
                 children: [
                   if (widget.updates != null) UpdateBanner(updates: widget.updates!),
-                  desktopCap(Row(
+                  Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(flex: desktop != null ? 3 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
                       SizedBox(width: desktop != null ? 24 : 16),
                       Expanded(flex: desktop != null ? 2 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
                     ],
-                  )),
+                  ),
                   if (desktop == null) editHome,
                 ],
               );

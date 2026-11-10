@@ -178,7 +178,7 @@ class _VideosScreenState extends State<VideosScreen> {
       ),
       if (video.saved.isEmpty)
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 4, 4, 8),
           child: Text(
             'Nothing on this device yet. Find a video on a site and choose Download.',
             key: const ValueKey('videos-empty'),
@@ -188,7 +188,7 @@ class _VideosScreenState extends State<VideosScreen> {
       for (final g in groups) ...[
         if (g.heading != null)
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 10, 4, 2),
+            padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 10, 4, 2),
             child: Semantics(header: true, child: Text(g.heading!, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text))),
           ),
         if (twoAcross) ..._pairs([for (final d in g.videos) _savedRow(context, d)]) else for (final d in g.videos) _savedRow(context, d),
@@ -208,7 +208,7 @@ class _VideosScreenState extends State<VideosScreen> {
                 ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 0, 4, 6),
           child: Text('Find videos on a site', style: TextStyle(fontSize: 15, color: k.secondary)),
         ),
         for (final i in video.instances)
@@ -354,7 +354,7 @@ class _VideosScreenState extends State<VideosScreen> {
     if (rows.isEmpty) {
       return [
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 16, 4, 0),
           child: Text('No saved video matches "$_searched".', style: TextStyle(fontSize: 16, color: k.secondary)),
         ),
       ];

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
 import '../../theme.dart';
 import '../../video/format.dart';
 
@@ -165,7 +166,8 @@ class SectionHeading extends StatelessWidget {
         ),
       );
     return Padding(
-      padding: EdgeInsets.fromLTRB(4, trailing == null ? top : top - 8, 0, trailing == null ? 6 : 0),
+      // The Linux desktop's heading starts on the content's left edge (the phone's 4-pixel inset put it 4 right of the rows).
+      padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, trailing == null ? top : top - 8, 0, trailing == null ? 6 : 0),
       child: trailing == null ? heading : Row(children: [Expanded(child: heading), trailing!]),
     );
   }

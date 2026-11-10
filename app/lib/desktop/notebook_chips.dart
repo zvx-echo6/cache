@@ -14,22 +14,20 @@ class LogAgainChips extends StatefulWidget {
 }
 
 class _LogAgainChipsState extends State<LogAgainChips> {
-  bool _more = false;
+  final _scroll = ScrollController();
 
-  void _measure(ScrollMetrics m) {
-    final more = m.extentAfter > 0.5;
-    if (more == _more) return;
-    // Metrics arrive during layout: set the flag after the frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && more != _more) setState(() => _more = more);
-    });
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final chips = widget.chips;
     if (!isLinuxDesktop(context)) return Wrap(spacing: 8, runSpacing: 4, children: chips);
-    Widget row = SingleChildScrollView(
+    final row = SingleChildScrollView(
+      controller: _scroll,
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
@@ -40,28 +38,22 @@ class _LogAgainChipsState extends State<LogAgainChips> {
         ],
       ),
     );
-    row = NotificationListener<ScrollMetricsNotification>(
-      onNotification: (n) {
-        _measure(n.metrics);
-        return false;
-      },
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          _measure(n.metrics);
-          return false;
+    // More to the right than shows: a 24-pixel fade at the right edge, from the pane's background to transparent. The mask reads the
+    // scroll position when it paints (after layout), so the first frame is right and no state has to catch up; it repaints on scroll.
+    return AnimatedBuilder(
+      animation: _scroll,
+      builder: (context, child) => ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (r) {
+          final p = _scroll.hasClients ? _scroll.position : null;
+          final more = p != null && p.hasContentDimensions && p.maxScrollExtent - p.pixels > 0.5;
+          return LinearGradient(
+            colors: [Colors.black, Colors.black, more ? const Color(0x00000000) : Colors.black],
+            stops: [0, (1 - 24 / r.width).clamp(0.0, 1.0), 1],
+          ).createShader(r);
         },
-        child: row,
+        child: child,
       ),
-    );
-    // More to the right than shows: a 24-pixel fade at the right edge. (The mask is always there, so the row keeps its place when
-    // it stops fading.)
-    final end = _more ? const Color(0x00000000) : Colors.black;
-    return ShaderMask(
-      blendMode: BlendMode.dstIn,
-      shaderCallback: (r) => LinearGradient(
-        colors: [Colors.black, Colors.black, end],
-        stops: [0, (1 - 24 / r.width).clamp(0.0, 1.0), 1],
-      ).createShader(r),
       child: row,
     );
   }

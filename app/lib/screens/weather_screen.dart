@@ -261,7 +261,11 @@ class _WeatherScreenState extends State<WeatherScreen> {
             const SizedBox(height: 12),
             widget.turnOn == null
                 ? OutlinedButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings'))
-                : TextButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
+                : TextButton(
+                    // On the desktop the button's text starts at the buttons' left edge.
+                    style: desk ? TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0)) : null,
+                    onPressed: widget.onOpenSettings,
+                    child: const Text('Open Weather and alerts settings')),
           ],
         ],
         ),
