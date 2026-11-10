@@ -33,6 +33,7 @@ import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart' show ZimFile;
 import 'package:cache/theme.dart';
 import 'package:cache/update/app_update.dart';
+import 'package:cache/update/update_ui.dart';
 import 'package:cache_search/cache_search.dart' show SearchCore, SourceStatus;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
