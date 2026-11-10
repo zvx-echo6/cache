@@ -181,8 +181,7 @@ const int kChatUbatch = 512;
 /// The tensor-aware memory a model needs while it answers, in bytes, by part.
 @immutable
 class MemoryNeed {
-  const MemoryNeed({required this.core, required this.outputEmbd, required this.lookup, required this.kv, required this.compute, required this.headroom, required this.fromHeader, int? total})
-    : _total = total;
+  const MemoryNeed({required this.core, required this.outputEmbd, required this.lookup, required this.kv, required this.compute, required this.headroom, required this.fromHeader, this.sizeTotal});
 
   /// Every tensor read in full each token: attention, FFN, per-layer projections, norms.
   final int core;
@@ -199,9 +198,11 @@ class MemoryNeed {
 
   /// True when this came from the file's header; false for the size-based fallback (then only the total is known).
   final bool fromHeader;
-  final int? _total;
 
-  int get total => _total ?? core + outputEmbd + lookup + kv + compute + headroom;
+  /// The size-based total when the header could not be read ([fromHeader] false); the parts are then not known.
+  final int? sizeTotal;
+
+  int get total => sizeTotal ?? core + outputEmbd + lookup + kv + compute + headroom;
 
   /// The load log line.
   String get logLine => fromHeader
@@ -298,7 +299,7 @@ Future<MemoryNeed?> memoryNeedForFile(String path, {int nCtx = 8192, int? fallba
   } catch (_) {}
   try {
     final size = fallbackBytes ?? await File(path).length();
-    return MemoryNeed(core: 0, outputEmbd: 0, lookup: 0, kv: 0, compute: 0, headroom: 0, fromHeader: false, total: modelMemoryNeedBySize(size));
+    return MemoryNeed(core: 0, outputEmbd: 0, lookup: 0, kv: 0, compute: 0, headroom: 0, fromHeader: false, sizeTotal: modelMemoryNeedBySize(size));
   } catch (_) {
     return null;
   }
