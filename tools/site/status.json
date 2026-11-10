@@ -18,9 +18,14 @@
        "text": "Launch check on a Pixel 8: the new Library, Bookshelves, adding a PDF with OCR, search inside it, Ask with a cited page, Discover, a route with guidance."
       },
       {
-       "chip": "Sending",
+       "chip": "Live",
+       "tone": "ok",
+       "text": "On Google Play testing (internal, closed and open)."
+      },
+      {
+       "chip": "In review",
        "tone": "info",
-       "text": "To TestFlight (public testers) and Google Play testing."
+       "text": "On TestFlight, waiting for Apple's beta review before public testers get it."
       },
       {
        "chip": "Waiting",
