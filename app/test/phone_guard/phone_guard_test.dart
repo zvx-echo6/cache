@@ -47,7 +47,8 @@ const String _dir = 'goldens/';
 /// A phone upright and held sideways.
 const Map<String, Size> _sizes = {'portrait': Size(390, 844), 'landscape': Size(844, 390)};
 
-final Object _skip = Platform.isLinux ? false : 'The pictures are drawn on Linux; text on another system differs by a pixel here and there.';
+/// The pictures are drawn on Linux; text on another system differs by a pixel here and there, so the tests run on Linux only.
+final bool _skip = !Platform.isLinux;
 
 Future<void> _settle(WidgetTester tester, [int n = 10]) async {
   for (var i = 0; i < n; i++) {
