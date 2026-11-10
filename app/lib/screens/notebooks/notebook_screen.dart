@@ -260,7 +260,8 @@ class _NotebookScreenState extends State<NotebookScreen> {
       body: _entries == null
           ? const Center(child: CircularProgressIndicator())
           : LayoutBuilder(builder: (context, cts) => ListView(
-              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 96),
+              // The Linux desktop: left-aligned under the page bar's title, on the page gutter, at most 760 wide (settingsDetailPad).
+              padding: settingsDetailPad(context, cts.maxWidth).copyWith(top: 8, bottom: 96),
               children: [
                 if (book.isLog) _lastDone(book, now, k),
                 if (draft != null)
