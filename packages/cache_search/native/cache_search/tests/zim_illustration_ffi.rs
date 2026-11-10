@@ -162,8 +162,8 @@ fn a_zim_answers_its_own_png_illustration() {
     let t = TempDir::new("icon");
     let page = ("Main", "Main", "text/html", b"<html><body>hi</body></html>".to_vec());
     let (a, b, c) = (t.0.join("icon.zim"), t.0.join("none.zim"), t.0.join("junk.zim"));
-    write_zim(&a, U_ICON, "icon_test", &[page.clone()], Some(&PNG));
-    write_zim(&b, U_NONE, "none_test", &[page.clone()], None);
+    write_zim(&a, U_ICON, "icon_test", std::slice::from_ref(&page), Some(&PNG));
+    write_zim(&b, U_NONE, "none_test", std::slice::from_ref(&page), None);
     write_zim(&c, U_JUNK, "junk_test", &[page], Some(b"GIF89a not a png at all"));
     let (h, ids) = open(&[&a, &b, &c]);
     assert_eq!(ids, [U_ICON, U_NONE, U_JUNK]);
@@ -172,6 +172,6 @@ fn a_zim_answers_its_own_png_illustration() {
     assert_eq!(b64_decode(v["png_base64"].as_str().unwrap()), PNG.to_vec());
 
     for id in [U_NONE, U_JUNK, "0badc0de-0000-4000-8000-00000000ffff"] {
-        assert_eq!(h.zim_illustration(id).err().expect(id).code, ErrorCode::NotFound, "{id}");
+        assert_eq!(h.zim_illustration(id).expect_err(id).code, ErrorCode::NotFound, "{id}");
     }
 }
