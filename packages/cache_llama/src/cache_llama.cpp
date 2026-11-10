@@ -220,7 +220,7 @@ void cl_logi(const char * fmt, ...) {
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
-int         g_preread_mbps   = 60;     // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
+int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)

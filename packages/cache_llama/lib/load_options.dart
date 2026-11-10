@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-/// The gentle pre-read's rate in MB/s when nothing says otherwise.
-const int kDefaultPrereadMbps = 60;
+/// The gentle pre-read's rate in MB/s when nothing says otherwise: 0, off.
+const int kDefaultPrereadMbps = 0;
 
 /// The cl_configure options for the next load, as JSON. [prefixDir]: where the fixed prompt start (system prompt and tools) is
 /// saved between runs; null: not saved. [repackWeights] (Android, measurement only): repack the CPU weights instead of keeping

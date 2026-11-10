@@ -206,30 +206,30 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (c) async => f(c));
     tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
 
-    test('the pre-read is on at 60 MB/s unless the bench says otherwise', () async {
-      expect(kDefaultPrereadMbps, 60);
-      expect(BenchOptions.off.prereadMbps, 60);
-      expect(jsonDecode(llamaLoadOptions())['preread_mbps'], 60);
+    test('the pre-read is off (0) unless the bench asks for it', () async {
+      expect(kDefaultPrereadMbps, 0);
+      expect(BenchOptions.off.prereadMbps, 0);
+      expect(jsonDecode(llamaLoadOptions())['preread_mbps'], 0);
     });
 
-    test('an extra that was given counts, 0 turns the pre-read off', () async {
+    test('an extra that was given counts (60 turns the pre-read on)', () async {
+      answer((_) => {'testApk': true, 'preread_mbps': 60});
+      expect((await readBenchOptions(android: true)).prereadMbps, 60);
       answer((_) => {'testApk': true, 'preread_mbps': 40});
-      expect((await readBenchOptions(android: true)).prereadMbps, 40);
-      answer((_) => {'testApk': true, 'preread_mbps': 0});
       final o = await readBenchOptions(android: true);
-      expect(o.prereadMbps, 0);
-      expect('$o', 'preread_mbps=0');
+      expect(o.prereadMbps, 40);
+      expect('$o', 'preread_mbps=40');
     });
 
     test('the default when the extra is absent (release build), the build is not Android, or the channel does not answer', () async {
       answer((_) => {'testApk': false});
-      expect((await readBenchOptions(android: true)).prereadMbps, 60);
+      expect((await readBenchOptions(android: true)).prereadMbps, 0);
       answer((_) => {'preread_mbps': 0});
-      expect((await readBenchOptions(android: false)).prereadMbps, 60, reason: 'only Android asks');
+      expect((await readBenchOptions(android: false)).prereadMbps, 0, reason: 'only Android asks');
       answer((_) => throw PlatformException(code: 'x'));
-      expect((await readBenchOptions(android: true)).prereadMbps, 60);
+      expect((await readBenchOptions(android: true)).prereadMbps, 0);
       answer((_) => 'nonsense');
-      expect((await readBenchOptions(android: true)).prereadMbps, 60);
+      expect((await readBenchOptions(android: true)).prereadMbps, 0);
     });
   });
 }
