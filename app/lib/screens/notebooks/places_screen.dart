@@ -20,6 +20,7 @@ import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
+import 'photo_viewer.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart' show NotebookDeps;
 import 'place_alert_sheet.dart';
@@ -569,7 +570,10 @@ class PlaceView extends StatelessWidget {
                 ],
                 if (e.photos.isNotEmpty) ...[
                   const SizedBox(height: 14),
-                  Wrap(spacing: 8, runSpacing: 8, children: [for (final ph in e.photos) NbThumb(notebook: nb, id: ph.id, size: 96)]),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (var i = 0; i < e.photos.length; i++)
+                      GestureDetector(key: ValueKey('photo-${e.photos[i].id}'), onTap: () => openPhotoViewer(context, nb, [for (final p in e.photos) p.id], i), child: NbThumb(notebook: nb, id: e.photos[i].id, size: 96)),
+                  ]),
                 ],
                 if (pd?.directions != null && p != null) ...[
                   const SizedBox(height: 16),
