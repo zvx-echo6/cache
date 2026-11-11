@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../brand.dart';
 import '../desktop/desktop.dart';
+import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
 import '../discover/ui/home_card.dart';
 import '../layout/edit_home_screen.dart';
@@ -101,7 +102,19 @@ class _HomeScreenState extends State<HomeScreen> {
   LayoutState get layout => widget.layout;
 
   @override
+  void initState() {
+    super.initState();
+    homeSearchRequests.addListener(_focusSearch);
+  }
+
+  /// The "/" key on the Linux desktop: the search box has the focus once Home is the page shown.
+  void _focusSearch() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _focus.requestFocus();
+  });
+
+  @override
   void dispose() {
+    homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
     _focus.dispose();

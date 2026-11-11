@@ -6,6 +6,7 @@ import '../layout/modules.dart';
 import '../theme.dart';
 import 'desktop.dart';
 import 'desktop_theme.dart';
+import 'shortcuts.dart';
 
 /// The frame of Cache on Linux in a window 1024 wide or more: a sidebar (232 wide from 1280, else a 72-pixel rail) with Home and
 /// every module in the Modules screen's order, Settings pinned at the bottom, and the page beside it. The phone's pinned set is
@@ -197,16 +198,19 @@ class _DesktopShellState extends State<DesktopShell> {
       ),
     );
 
-    return Material(
+    return DesktopKeys(
+      onHome: widget.onHome,
+      child: Material(
       color: k.background,
       child: Row(
         children: [
           sidebar,
           // A snackbar sits at the bottom left of the page area, so it is told that area's width.
           Expanded(
-            child: LayoutBuilder(builder: (context, c) => DesktopThemeScope(regionWidth: c.maxWidth, child: widget.child)),
+            child: LayoutBuilder(builder: (context, c) => DesktopThemeScope(regionWidth: c.maxWidth, focusRing: false, child: widget.child)),
           ),
         ],
+      ),
       ),
     );
   }
