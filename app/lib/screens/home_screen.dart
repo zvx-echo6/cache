@@ -11,6 +11,7 @@ import '../discover/ui/kit.dart' show DTile;
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart' show ModuleId;
+import '../models/search_model.dart' show SearchModel;
 import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
@@ -106,6 +107,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     homeSearchRequests.addListener(_focusSearch);
+    // The cursor is in the search box: the search model loads ahead of the first search.
+    _focus.addListener(() {
+      if (_focus.hasFocus) SearchModel.aboutToSearch();
+    });
   }
 
   /// The "/" key on the Linux desktop: the search box has the focus once Home is the page shown.

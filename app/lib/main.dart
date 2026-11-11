@@ -750,7 +750,8 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) indexing.setOpen(true);
       },
-      // The search model is held warm while Cache is in front, and let go when it goes to the back; back in front loads it again.
+      // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
+      // search box does (SearchModel.aboutToSearch).
       onStateChange: searchModel.onLifecycle,
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
@@ -805,11 +806,6 @@ class _CacheAppState extends State<CacheApp> {
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();
-    // The search model loads in the background once the first frame is up and the start-up work (the chat model at start) is
-    // done; the start never waits for it.
-    if (!plat.isWeb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_appRead.then((_) => searchModel.warmLoad())));
-    }
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
