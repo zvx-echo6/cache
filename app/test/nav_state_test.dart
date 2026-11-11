@@ -578,5 +578,48 @@ void main() {
       expect(nav.routeStart!.lat, 42.7);
       expect(nav.routeStart!.lon, -113.9);
     });
+
+    test('arrival is final: the position service is let go, and later fixes neither reroute nor speak', () async {
+      final json = await guideTo('Juniper Depot');
+      expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');
+      // The core answers the fix at the door with "arrived", slowly; the next fix, a walk away from the line, is "off route".
+      final gate = Completer<void>();
+      var asked = 0;
+      backend.onProgress = (r, lat, lon) async {
+        asked++;
+        if (asked == 1) {
+          await gate.future;
+          return MapProgress.fromJson(fakeProgressJson(json, 1.0, arrived: true));
+        }
+        return MapProgress.fromJson(fakeProgressJson(json, 0.99, offset: 200, offRoute: true, offCount: 3));
+      };
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-new', name: 'Juniper Depot'));
+      gps.controller.add(fixAt(42.5, -113.5));
+      await settle(10);
+      gps.controller.add(fixAt(42.502, -113.5));
+      await settle(10);
+      gate.complete();
+      await settle(40);
+      expect(nav.arrived, isTrue);
+      expect(nav.phase, NavPhase.guiding, reason: 'the arrived banner stays until it is dismissed');
+      expect(nav.progress!.arrived, isTrue);
+      expect(speaker.said.last, 'You have arrived at Juniper Depot.');
+      expect(asked, 1, reason: 'the fix that was waiting is not followed after arrival');
+      expect(gps.stops, 1, reason: 'the position service stops at arrival, not at Done');
+      expect(location.streamHealthy, isTrue, reason: 'the map has its own position stream back');
+      // Fixes after arrival go nowhere.
+      gps.controller.add(fixAt(42.504, -113.5));
+      await settle(40);
+      expect(asked, 1);
+      expect(speaker.said, isNot(contains('Rerouting.')));
+      expect(speaker.said.last, 'You have arrived at Juniper Depot.');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'only the preview asked for a route');
+      expect(nav.route!.routeId, 'r1');
+      expect(nav.arrived, isTrue);
+      await nav.finish();
+      expect(nav.phase, NavPhase.browsing);
+      expect(nav.arrived, isFalse);
+      expect(nav.selected, isNull);
+    });
   });
 }

@@ -617,7 +617,7 @@ class NavState extends ChangeNotifier {
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
   Future<void> _handleFix(Fix f) async {
-    if (!guiding) return;
+    if (!guiding || arrived) return;
     lastFix = f;
     // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
     for (final (i, s) in stops.indexed) {
@@ -630,7 +630,7 @@ class NavState extends ChangeNotifier {
     _busyProgress = true;
     try {
       Fix? cur = f;
-      while (cur != null && guiding) {
+      while (cur != null && guiding && !arrived) {
         _pendingFix = null;
         await _progressFor(cur);
         cur = _pendingFix;
@@ -646,7 +646,7 @@ class NavState extends ChangeNotifier {
     try {
       final p = await backend.progress(r, lat: f.lat, lon: f.lon, accuracyM: f.accuracyM, now: _clock(), sendRoute: _sendRoute);
       _sendRoute = false;
-      if (!guiding || route?.routeId != r.routeId) return;
+      if (!guiding || arrived || route?.routeId != r.routeId) return;
       progress = p;
       if (!_routeStarted) {
         _routeStarted = true;
@@ -656,8 +656,11 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
+        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
+        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
         notifyListeners();
+        await _stopTracking();
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -711,13 +714,26 @@ class NavState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lets go of what guidance holds to follow the phone: its fixes, the position service (with its notification and wake
+  /// lock) and the hold on the map's own position stream. The guidance fix is forgotten with them, so [here] is the phone's
+  /// own position again. Calling it again is harmless.
+  Future<void> _stopTracking() async {
+    final sub = _fixSub;
+    _fixSub = null;
+    _pendingFix = null;
+    lastFix = null;
+    try {
+      await sub?.cancel();
+      await positionSource.stop();
+    } finally {
+      location.holdStream(false);
+    }
+  }
+
   /// End guidance: stop the position service and the voice, back to the map with the place still selected.
   Future<void> end() async {
     if (!guiding) return;
-    await _fixSub?.cancel();
-    _fixSub = null;
-    await positionSource.stop();
-    location.holdStream(false);
+    await _stopTracking();
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
