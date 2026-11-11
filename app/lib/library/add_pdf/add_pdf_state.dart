@@ -570,19 +570,27 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
             progress: () => ((j.fraction * 1000).round(), 1000),
             pulse: () => (j.state, j.pagesDone, j.piecesDone, j.scansDone, j.scanInBatch, j.busy, _beat),
             step: () => j.stepWords,
-            start: () async => _runs[j.id] = AddPdfRun(this, j),
+            // a run of this job still stopping (Cache went to the back and came back) is let finish first: never two at once
+            start: () async {
+              final old = _runs[j.id];
+              if (old != null) {
+                logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
+                await old.stop();
+              }
+              return _runs[j.id] = AddPdfRun(this, j);
+            },
           ),
     ];
   }
 
-  Future<void> _permitFor(AddPdfJob job) async {
+  Future<void> _permitFor(AddPdfJob job, {bool Function()? stop}) async {
     final p = permit;
     if (p != null) return p(job);
     final t = indexThrottleShared;
     if (t == null) return;
     // Resume anyway: a low battery does not hold this one
     if (job.anyway && t.duty.paused && t.duty.hold == IndexHold.battery) return;
-    await t.permit();
+    await t.permit(stop: stop);
   }
 
   // ---- what the person does
@@ -847,8 +855,9 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     unawaited(save());
   }
 
-  void _endRun(AddPdfJob job) {
-    _runs.remove(job.id);
+  void _endRun(AddPdfJob job, AddPdfRun run) {
+    // only this run's entry: a newer run of the job may already be there
+    if (identical(_runs[job.id], run)) _runs.remove(job.id);
     job
       ..busy = false
       ..scanInBatch = 0;
@@ -893,17 +902,24 @@ class AddPdfRun implements IndexRun {
   final Completer<bool> _done = Completer<bool>();
   bool _stop = false;
 
+  /// Completes when the run is asked to stop: waits (the throttle's permit, a busy library, a held job folder) end then.
+  final Completer<void> _stopAsked = Completer<void>();
+
+  /// [f], or less: it ends when the run is asked to stop.
+  Future<void> _orStop(Future<void> f) => Future.any([f, _stopAsked.future]);
+
   @override
   Future<bool> get finished => _done.future;
 
   void _finish(bool ok) {
     if (_done.isCompleted) return;
-    state._endRun(job);
+    state._endRun(job, this);
     _done.complete(ok);
   }
 
   Future<void> stop() async {
     _stop = true;
+    if (!_stopAsked.isCompleted) _stopAsked.complete();
     await _done.future;
   }
 
@@ -920,7 +936,7 @@ class AddPdfRun implements IndexRun {
       // a number kept on disk is confirmed by starting from the job folder first (a stale one is never stepped)
       if (job.coreJob == null || job.coreFromDisk) await _startWaiting();
       while (!_stop) {
-        await state._permitFor(job);
+        await _orStop(state._permitFor(job, stop: () => _stop));
         if (_stop) break;
         final t0 = state._clock();
         Map<String, dynamic> s;
@@ -935,7 +951,7 @@ class AddPdfRun implements IndexRun {
               logInfo('Add PDF: waiting for another PDF to be saved', job: job.key);
             }
             state._changed();
-            await Future<void>.delayed(state.busyWait);
+            await _orStop(Future<void>.delayed(state.busyWait));
             continue;
           }
           if (e.code == 'not_found') {
@@ -990,7 +1006,7 @@ class AddPdfRun implements IndexRun {
         if (!_jobDirInUse(e)) rethrow;
         if (_stop || i + 1 >= state.inUseTries) throw const _Held();
         if (i == 0) logInfo('Add PDF: another run still holds this PDF; waiting for it', job: job.key);
-        await Future<void>.delayed(state.busyWait);
+        await _orStop(Future<void>.delayed(state.busyWait));
       }
     }
   }
@@ -1015,7 +1031,7 @@ class AddPdfRun implements IndexRun {
       engine,
       betweenPages: () async {
         job.worked += state._clock().difference(t0);
-        await state._permitFor(job);
+        await _orStop(state._permitFor(job, stop: () => _stop));
         if (_stop) throw const _Stopped();
       },
       onPage: (_) {

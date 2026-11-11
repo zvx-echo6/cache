@@ -520,15 +520,26 @@ class _CacheAppState extends State<CacheApp> {
   }
 
   Future<void> _toBackAfterPause() async {
-    await indexing.closed;
-    await addPdf.save();
-    await watchFolders.save();
-    if (_atFront) return;
-    _bgOpenTimer?.cancel();
-    _bgOpenTimer = null;
-    _bgLock?.appClosed();
-    if (Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson)) unawaited(scheduleWatchAdd());
-    await _writeBackgroundContext();
+    try {
+      await backgroundHandOff(
+        closed: indexing.closed,
+        save: () async {
+          await addPdf.save();
+          await watchFolders.save();
+        },
+        atFront: () => _atFront,
+        release: () {
+          _bgOpenTimer?.cancel();
+          _bgOpenTimer = null;
+          _bgLock?.appClosed();
+        },
+        hasWork: () => Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson),
+        queueAdd: scheduleWatchAdd,
+      );
+      await _writeBackgroundContext();
+    } catch (e, st) {
+      logError('Background hand-off failed', error: e, stack: st);
+    }
   }
 
   Future<void> _writeBackgroundContext() async {

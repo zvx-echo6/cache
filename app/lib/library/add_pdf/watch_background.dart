@@ -83,6 +83,43 @@ Future<void> scheduleWatchAdd({bool next = false, Duration delay = Duration.zero
   }
 }
 
+/// How long Cache, going to the back, waits for its index work to stop before handing off anyway (a PDF step in flight cannot
+/// be cut short; a job folder still in use is then a hold and a retry for the background run, never a failure).
+const Duration kHandOffWait = Duration(seconds: 30);
+
+/// Cache going to the back hands Add PDF's work to the background: it waits for its index work to stop (at most [wait]), saves,
+/// lets go of the lock and queues the background add when the watched folders have PDFs still to add. Each step is logged.
+/// Returns what happened: "front" (back at the front meanwhile: nothing handed off), "nothing" (nothing to add), "queued", or
+/// "queued after wait" (the work was still stopping after [wait]).
+Future<String> backgroundHandOff({
+  required Future<void> closed,
+  required Future<void> Function() save,
+  required bool Function() atFront,
+  required void Function() release,
+  required bool Function() hasWork,
+  required Future<void> Function() queueAdd,
+  Duration wait = kHandOffWait,
+}) async {
+  logInfo('Background hand-off: waiting for index work to stop');
+  final stopped = await closed.then((_) => true).timeout(wait, onTimeout: () => false);
+  logInfo(stopped
+      ? 'Background hand-off: index work stopped'
+      : 'Background hand-off: index work still stopping after ${wait.inSeconds} s; handing off anyway');
+  await save();
+  if (atFront()) {
+    logInfo('Background hand-off: Cache is at the front again; nothing handed off');
+    return 'front';
+  }
+  release();
+  if (!hasWork()) {
+    logInfo('Background hand-off: lock released; nothing to add');
+    return 'nothing';
+  }
+  await queueAdd();
+  logInfo('Background hand-off: lock released; adding queued for the background while charging');
+  return stopped ? 'queued' : 'queued after wait';
+}
+
 /// The detect job: counts what is new in each watched folder that can be reached, records it, and queues an add when there is
 /// any. Not while Cache is open (Cache checks for itself then).
 Future<String> watchDetectJob({required String support, BackgroundLock? lock, WatchFolderAccess access = const WatchFolderAccess(), Future<void> Function()? queueAdd, DateTime Function()? clock}) async {

@@ -3,6 +3,7 @@
 // (charging, battery, heat), adds only what the watched folders found, in slices that stop for the time budget or for Cache
 // coming to the front, and queues the next slice.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/background/background_lock.dart';
@@ -11,7 +12,9 @@ import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/add_pdf/watch_background.dart';
 import 'package:cache/library/add_pdf/watch_folders.dart';
 import 'package:cache/platform/battery.dart';
+import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/search/index_throttle.dart';
+import 'package:cache/settings/space.dart';
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -376,6 +379,113 @@ void main() {
       }
       expect(File('$support/ingest/jobs.json').readAsStringSync(), contains('"core_job":1'));
       await (run as AddPdfRun).stop();
+    });
+  });
+
+  group('going to the back (the Pixel run of 2026-11-10)', () {
+    /// A PDF step that cannot be cut short (PDFium reading big pages took minutes on the phone): it ends only when the test
+    /// lets it.
+    ({FakeIngestCalls calls, Completer<void> release, List<int> inFlight}) longStep() {
+      final release = Completer<void>();
+      final inFlight = <int>[0, 0];
+      return (
+        calls: FakeIngestCalls({
+          'step': (_) async {
+            inFlight[0]++;
+            if (inFlight[0] > inFlight[1]) inFlight[1] = inFlight[0];
+            await release.future;
+            inFlight[0]--;
+            return progress('reading', pages: 194, pagesDone: 1);
+          },
+        }),
+        release: release,
+        inFlight: inFlight,
+      );
+    }
+
+    Future<void> until(bool Function() ok) async {
+      for (var i = 0; i < 200 && !ok(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    test('a step still running when Cache goes to the back: the add is queued within the wait anyway, and the lock let go', () async {
+      final l = longStep();
+      final s = AddPdfState(calls: l.calls, dir: () async => Directory('$support/ingest'), engines: () async => const {}, permit: (_) async {}, busyWait: const Duration(milliseconds: 1));
+      final f = File('${tmp.path}/w.pdf')..writeAsStringSync('pdf');
+      final job = await s.add(pdfPath: f.path, fileName: 'w.pdf', bytes: 3, title: 'w', target: _lib, watchId: 'f1', watchName: 'Manuals', checkId: 'c1', watchHash: 'h');
+      final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => const BatteryReading(percent: 90, charging: true));
+      sched.setOpen(true);
+      await sched.kick();
+      await until(() => l.inFlight[0] == 1);
+      expect(l.inFlight[0], 1, reason: 'the step is in flight');
+      lock.appOpened();
+      sched.setOpen(false);
+      var queued = 0;
+      final sw = Stopwatch()..start();
+      final out = await backgroundHandOff(
+        closed: sched.closed,
+        save: s.save,
+        atFront: () => false,
+        release: lock.appClosed,
+        hasWork: () => s.active.any((j) => j.watchId != null && !j.pausedByPerson),
+        queueAdd: () async => queued++,
+        wait: const Duration(milliseconds: 300),
+      ).timeout(const Duration(seconds: 5));
+      expect(out, 'queued after wait');
+      expect(queued, 1);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(lock.appOpen, isFalse);
+      expect(job.status, AddPdfStatus.active);
+      l.release.complete();
+      await sched.closed;
+      sched.dispose();
+      s.dispose();
+    });
+
+    test("a run waiting on the throttle's permit stops at once when asked (the permit loop ends on stop)", () async {
+      // a severe thermal status holds work: the permit waits
+      final th = IndexThrottle(read: () async => const BatteryReading(percent: 90, charging: true, thermal: Thermal.severe), mobile: true, every: const Duration(milliseconds: 20));
+      addTearDown(th.dispose);
+      var stop = false;
+      final waiting = th.permit(stop: () => stop);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      stop = true;
+      await waiting.timeout(const Duration(seconds: 2));
+      // and a run held at its permit stops when paused
+      final before = indexThrottleShared;
+      indexThrottleShared = th;
+      addTearDown(() => indexThrottleShared = before);
+      final s = AddPdfState(calls: FakeIngestCalls(), dir: () async => Directory('$support/ingest'), engines: () async => const {}, busyWait: const Duration(milliseconds: 1));
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/t.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 't.pdf', bytes: 3, title: 't', target: _lib);
+      final run = await (await s.pending()).single.start();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await run.pause().timeout(const Duration(seconds: 2));
+      expect(await run.finished, isFalse);
+    });
+
+    test('to the back and straight back to the front: never two runs of the same PDF at once', () async {
+      final l = longStep();
+      final s = AddPdfState(calls: l.calls, dir: () async => Directory('$support/ingest'), engines: () async => const {}, permit: (_) async {}, busyWait: const Duration(milliseconds: 1));
+      final f = File('${tmp.path}/d.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'd.pdf', bytes: 3, title: 'd', target: _lib);
+      final first = await (await s.pending()).single.start();
+      await until(() => l.inFlight[0] == 1);
+      // to the back: asked to stop, its step still running
+      final stopping = first.pause();
+      // back to the front: the scheduler starts the job again
+      final second = (await s.pending()).single.start();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(l.calls.argsOf('start'), hasLength(1), reason: 'the second run has not started while the first is still stopping');
+      l.release.complete();
+      await stopping;
+      final run2 = await second.timeout(const Duration(seconds: 2));
+      await until(() => l.calls.argsOf('step').length >= 2);
+      expect(l.inFlight[1], 1, reason: 'never two steps of the same PDF at once');
+      await run2.pause();
+      s.dispose();
     });
   });
 }
