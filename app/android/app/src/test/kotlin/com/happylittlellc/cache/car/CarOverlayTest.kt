@@ -173,9 +173,9 @@ class CarOverlayTest {
         val m = l.mini!!
         assertEquals(88f + 16f, c.left, 0.01f)
         assertEquals(380f, c.width(), 0.01f)
-        // The card's top is where the mock's 97 high card had it; the larger text made it 115 high, downwards.
+        // The card's top is where the mock's 97 high card had it; the larger text made it 121 high, downwards.
         assertEquals(560f - 16f - 58f - 97f, c.top, 0.01f)
-        assertEquals(115f, c.height(), 0.01f)
+        assertEquals(121f, c.height(), 0.01f)
         assertEquals(220f, m.width(), 0.01f)
         assertEquals(140f, m.height(), 0.01f)
         assertEquals(1280f - 16f - 84f, m.right, 0.01f)
@@ -257,12 +257,12 @@ class CarOverlayTest {
         // The host's buttons showing: the visible area is the stable area.
         val shown = CarOverlayPainter.layout(1280, 720, mainStable, 1f, showClimb = true, showMini = true, stable = mainStable)
         // The climb card's top left corner and its right end are the approved ones; its bottom was 623 before its text grew.
-        assertRect(520f, 526f, 845f, 641f, shown.climb)
+        assertRect(520f, 526f, 845f, 647f, shown.climb)
         assertRect(861f, 541f, 1081f, 681f, shown.mini)
         assertVehicleClear(shown, mainStable)
         // The buttons hidden: the visible area reaches 77 px further right, the vehicle stays.
         val hidden = CarOverlayPainter.layout(1280, 720, Rect(504, 91, 1258, 697), 1f, showClimb = true, showMini = true, stable = mainStable)
-        assertRect(520f, 526f, 900f, 641f, hidden.climb)
+        assertRect(520f, 526f, 900f, 647f, hidden.climb)
         assertRect(938f, 541f, 1158f, 681f, hidden.mini)
         assertVehicleClear(hidden, mainStable)
     }
@@ -291,6 +291,10 @@ class CarOverlayTest {
         val c = shown.climb!!
         assertEquals(520f, c.left, 0.51f)
         assertEquals(keep.left, c.right, 0.01f)
+        // Its top is where the 97 high card had it, and the taller card still ends inside the area.
+        assertEquals(306f, c.top, 0.51f)
+        assertEquals(427f, c.bottom, 0.51f)
+        assertTrue(c.bottom <= stable.bottom - 16f)
         assertTrue(c.right < 843f - 14f)
         assertVehicleClear(shown, stable)
         // The buttons hidden: the mini map has room right of the vehicle, the climb card still ends short of it.
@@ -401,11 +405,17 @@ class CarOverlayTest {
         for (size in listOf(CarOverlayPainter.CLIMB_LABEL_SIZE, CarOverlayPainter.CLIMB_FIGURE_SIZE, CarOverlayPainter.CLIMB_GRADE_SIZE)) {
             assertTrue("$size", size >= CarOverlayPainter.HOST_MIN_TEXT)
         }
-        // The figure stays the largest line. The card holds the three lines: it is 115 high, as wide as before.
-        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= CarOverlayPainter.CLIMB_LABEL_SIZE)
-        assertEquals(115f, CarOverlayPainter.CLIMB_H, 0f)
+        // The figure is the main thing: 34, well above the two 24 lines (the mock had it at twice its label).
+        assertEquals(34f, CarOverlayPainter.CLIMB_FIGURE_SIZE, 0f)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= 1.4f * CarOverlayPainter.CLIMB_LABEL_SIZE)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= 1.4f * CarOverlayPainter.CLIMB_GRADE_SIZE)
+        // The card holds the three lines: it is 121 high, as wide as before, and the figure clears the label above it.
+        assertEquals(121f, CarOverlayPainter.CLIMB_H, 0f)
         assertEquals(380f, CarOverlayPainter.CLIMB_W, 0f)
-        assertTrue(CarOverlayPainter.CLIMB_PAD_Y * 2 + CarOverlayPainter.CLIMB_LABEL_SIZE + 31f + 29f <= CarOverlayPainter.CLIMB_H)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_DROP >= CarOverlayPainter.CLIMB_FIGURE_SIZE)
+        assertTrue(CarOverlayPainter.CLIMB_GRADE_DROP >= CarOverlayPainter.CLIMB_GRADE_SIZE)
+        val lines = CarOverlayPainter.CLIMB_LABEL_SIZE + CarOverlayPainter.CLIMB_FIGURE_DROP + CarOverlayPainter.CLIMB_GRADE_DROP
+        assertTrue(CarOverlayPainter.CLIMB_PAD_Y * 2 + lines <= CarOverlayPainter.CLIMB_H)
     }
 
     private fun luminance(c: Int): Double {

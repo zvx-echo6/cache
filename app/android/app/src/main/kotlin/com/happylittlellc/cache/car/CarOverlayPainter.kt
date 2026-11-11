@@ -34,7 +34,7 @@ object CarOverlayPainter {
     // ---- layout (mock pixels at density 1.0) ---------------------------------------------------------------------
     const val MARGIN = 16f
     const val CLIMB_W = 380f
-    const val CLIMB_H = 115f
+    const val CLIMB_H = 121f
     const val CLIMB_PAD_X = 18f
     const val CLIMB_PAD_Y = 14f
     const val CLIMB_TEXT_W = 168f
@@ -50,15 +50,20 @@ object CarOverlayPainter {
     const val HOST_MIN_TEXT = 24f
 
     /** The climb card's three lines: the label, the figure (bold) and the grade line (semibold). The mock had 13, 26 and 15;
-     * the label and the grade line were raised to the host's smallest size, the figure was already above it. */
+     * the label and the grade line were raised to the host's smallest size, and the figure to 34 so it still reads as the
+     * main thing beside them. */
     const val CLIMB_LABEL_SIZE = HOST_MIN_TEXT
-    const val CLIMB_FIGURE_SIZE = 26f
+    const val CLIMB_FIGURE_SIZE = 34f
     const val CLIMB_GRADE_SIZE = HOST_MIN_TEXT
 
+    /** From the label's baseline down to the figure's, and from the figure's down to the grade line's. */
+    const val CLIMB_FIGURE_DROP = 37f
+    const val CLIMB_GRADE_DROP = 29f
+
     /** Free map under the climb card. With the mock's 97 high card this was 58 (room for the host's travel-estimate card);
-     * the card grew 18 downwards for its larger text, so its top edge stays where it was. The host keeps its own cards out
+     * the card grew 24 downwards for its larger text, so its top edge stays where it was. The host keeps its own cards out
      * of the visible area, so nothing of the host's is under the card. */
-    const val ETA_CLEARANCE = 40f
+    const val ETA_CLEARANCE = 34f
     const val MINI_W = 220f
     const val MINI_H = 140f
 
@@ -190,14 +195,14 @@ object CarOverlayPainter {
         val figure = climbText(c.climbAheadM, imperial)
         var y = r.top + (CLIMB_PAD_Y + CLIMB_LABEL_SIZE) * d
         canvas.drawText(label, x0, y, labelPaint)
-        y += 31f * d
+        y += CLIMB_FIGURE_DROP * d
         canvas.drawText(figure, x0, y, figurePaint)
         var textW = max(labelPaint.measureText(label), figurePaint.measureText(figure))
         val g = c.gradePct
         val into = c.steepestInM
         if (g != null && into != null) {
             val grade = "${gradeText(g)} in ${aheadText(into, imperial)}"
-            y += 29f * d
+            y += CLIMB_GRADE_DROP * d
             canvas.drawText(grade, x0, y, gradePaint)
             textW = max(textW, gradePaint.measureText(grade))
         }
