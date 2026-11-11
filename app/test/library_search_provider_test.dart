@@ -58,16 +58,17 @@ CsNative _coreNative() => FakeNative()..replies['search'] = jsonEncode({'results
 
 /// Sources whose searches go through a real core: the worker isolate and its dispatcher, over a fake native layer.
 class _ThroughCore extends FakeSources {
-  _ThroughCore(super.dir, this.core);
+  _ThroughCore(super.dir, this.worker);
 
-  final SearchCore core;
+  /// Not named `core`: that would replace the inherited [SourcesState.core].
+  final SearchCore worker;
 
   @override
   bool get coreReady => true;
 
   @override
   Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) =>
-      core.search(query, k: k, offset: offset, sources: zimIds);
+      worker.search(query, k: k, offset: offset, sources: zimIds);
 }
 
 /// Sources whose core answers every search with [hits].
