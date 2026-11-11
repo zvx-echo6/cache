@@ -52,7 +52,7 @@ class FakeSession implements LlamaSession {
   Completer<void>? unloadGate;
 
   @override
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = 0}) async {
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = 0, int nUbatch = 0}) async {
     calls.add('load');
     await loadGate?.future;
     return _info;

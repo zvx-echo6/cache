@@ -28,11 +28,13 @@ class MainActivity : FlutterActivity() {
     // build nothing is read and the channel answers zeros.
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
     private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
+    private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
         if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
+        if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -160,6 +162,8 @@ class MainActivity : FlutterActivity() {
                         if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
                         val days = benchDateOffsetDays
                         if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
+                        val ub = benchUbatch
+                        if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
                         result.success(out)
                     }
                     else -> result.notImplemented()

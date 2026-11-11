@@ -411,7 +411,8 @@ class AppState extends ChangeNotifier {
     logInfo('Bench options: $benchOptions');
     benchDateOffsetDays = benchOptions.dateOffsetDays;
     if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps);
+    if (benchOptions.ubatch != 0) logInfo('Bench options: cache_ubatch=${benchOptions.ubatch}');
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps, nUbatch: benchOptions.ubatch);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.

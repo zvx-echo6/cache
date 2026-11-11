@@ -115,8 +115,9 @@ class LlamaSession {
   /// Loads the model (replacing a model loaded before). Throws a [StateError] with the reason on failure.
   /// On Android the CPU weights stay file-backed in the mmap; [repackWeights] repacks them instead, for measurement only (see
   /// cl_configure). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs; null: not saved.
-  /// [prereadMbps]: the gentle pre-read rate in MB/s after the load (default [kDefaultPrereadMbps]; 0: off).
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps}) async {
+  /// [prereadMbps]: the gentle pre-read rate in MB/s after the load (default [kDefaultPrereadMbps]; 0: off). [nUbatch]: test builds
+  /// only, the context's n_ubatch (0: llama.cpp's default).
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps, int nUbatch = 0}) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
@@ -127,7 +128,7 @@ class LlamaSession {
       'id': id,
       'path': path,
       'nCtx': nCtx,
-      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights, prereadMbps: prereadMbps),
+      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights, prereadMbps: prereadMbps, nUbatch: nUbatch),
     });
     final r = await c.future;
     if (r['error'] != null) throw StateError(r['error'] as String);

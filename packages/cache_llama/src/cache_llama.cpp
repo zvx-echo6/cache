@@ -223,6 +223,7 @@ void cl_logi(const char * fmt, ...) {
 // ---------------- options (cl_configure) ----------------
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
+int         g_n_ubatch       = 0;      // test builds: the context's n_ubatch, 0 = llama.cpp's default (cl_configure "n_ubatch")
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
 int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
 
@@ -944,6 +945,7 @@ int cl_configure(const char * options_json) {
         auto j = common_json::parse(options_json ? options_json : "{}");
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
+        if (j.contains("n_ubatch") && j.at("n_ubatch").is_number()) g_n_ubatch = std::max(0, j.at("n_ubatch").get<int>());
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
         if (j.contains("preread_mbps") && j.at("preread_mbps").is_number()) g_preread_mbps = std::max(0, j.at("preread_mbps").get<int>());
         return 0;
@@ -973,10 +975,12 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
         int  preread_mbps  = 0;
+        int  n_ubatch_opt  = 0;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
             preread_mbps  = g_preread_mbps;
+            n_ubatch_opt  = g_n_ubatch;
             h->prefix_dir = g_prefix_dir;
         }
         (void) repack_opt_in;
@@ -1015,6 +1019,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = (uint32_t) n_ctx;
         cp.n_batch         = 512;
+        if (n_ubatch_opt > 0) cp.n_ubatch = (uint32_t) n_ubatch_opt;  // test builds only: the app sends it only from the bench extra
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
         // llama.cpp's own abort hook: a stop ends an in-flight prompt decode (llama_decode returns 2). Only while the prompt is
@@ -1028,6 +1033,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
+        if (n_ubatch_opt > 0) cl_logi("engine: n_ubatch=%u (asked for %d)", (unsigned) llama_n_ubatch(h->ctx), n_ubatch_opt);
         advise_lookup_tensors(model_path);
 
         if (!plan.cpus.empty()) {

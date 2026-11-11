@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 /// (MainActivity, BuildConfig.TEST_APK); every other build answers nothing, so the app's default applies.
 @immutable
 class BenchOptions {
-  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0});
+  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0});
 
   /// The native gentle pre-read's rate in MB/s: [kDefaultPrereadMbps] unless the extra was given; 0 turns it off.
   final int prereadMbps;
@@ -17,10 +17,13 @@ class BenchOptions {
   /// day's prompt start). Nothing else changes. 0: no shift.
   final int dateOffsetDays;
 
+  /// `--ei cache_ubatch N`: the chat context's n_ubatch for a measurement; 0: llama.cpp's default.
+  final int ubatch;
+
   static const BenchOptions off = BenchOptions();
 
   @override
-  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}';
+  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}';
 }
 
 const MethodChannel kBenchChannel = MethodChannel('cache/bench');
@@ -33,11 +36,14 @@ Future<BenchOptions> readBenchOptions({MethodChannel channel = kBenchChannel, bo
     final m = await channel.invokeMethod<Object?>('get');
     if (m is! Map) return BenchOptions.off;
     final mbps = m['preread_mbps'];
-    // The date extra counts only when the build says it is the test APK (the release build never sends it).
+    // The two measurement extras count only when the build says it is the test APK (the release build never sends them).
+    final test = m['testApk'] == true;
     final days = m['date_offset_days'];
+    final ub = m['cache_ubatch'];
     return BenchOptions(
       prereadMbps: mbps is int && mbps >= 0 ? mbps : kDefaultPrereadMbps,
-      dateOffsetDays: m['testApk'] == true && days is int ? days : 0,
+      dateOffsetDays: test && days is int ? days : 0,
+      ubatch: test && ub is int && ub > 0 ? ub : 0,
     );
   } catch (_) {
     return BenchOptions.off;
