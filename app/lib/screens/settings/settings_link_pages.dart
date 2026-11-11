@@ -4,7 +4,7 @@ import '../../sharing/settings_sync.dart';
 import '../../theme.dart';
 import 'widgets.dart';
 
-/// A linked device's page, its Settings section: how settings go between the two (Match, Send mine, Off), then What's included
+/// A linked device's page, its Settings section: how settings go between the two (Match both ways, Send mine, Take theirs, Off), then What's included
 /// and API keys while they go. The device it is chosen on is where settings come from. On the device that follows the other's
 /// settings, the middle choice says so ("Follows Desk's settings").
 class DeviceSettingsSection extends StatelessWidget {
@@ -57,11 +57,9 @@ class DeviceSettingsSection extends StatelessWidget {
             const GroupLabel('Settings'),
             SettingsGroup(
               rows: [
-                choice('match', SettingsLink.match, 'Match', 'Changes on either device go to both.'),
-                if (receiving)
-                  choice('send', SettingsLink.sending, "Follows $name's settings", 'Changes on $name come here. Changes you make here stay here.', on: true)
-                else
-                  choice('send', SettingsLink.sending, 'Send mine', '$name follows my settings. Its own changes stay on $name.'),
+                choice('match', SettingsLink.match, 'Match both ways', 'Changes on either device go to both.'),
+                choice('send', SettingsLink.sending, 'Send mine to $name', '$name follows my settings. Its own changes stay on $name.'),
+                choice('receive', SettingsLink.receiving, "Take $name's settings", "Changes on $name come here. Changes you make here stay here."),
                 choice('off', SettingsLink.off, 'Off', 'Each keeps its own.'),
                 if (link != SettingsLink.off) ...[
                   SettingsRow(
@@ -90,8 +88,18 @@ class DeviceSettingsSection extends StatelessWidget {
   }
 }
 
-/// Asked once, right after a new link: how settings go between this device and [name] ([SettingsSync.answer]). Until it is
-/// answered nothing goes; closing it is Off, unless the other device has answered meanwhile.
+/// What the pair's answer is, as the device that did not answer reads it ("Pixel is sending its settings to this phone").
+String settingsLinkNotice(SettingsLink link, String name) => switch (link) {
+  SettingsLink.receiving => '$name is sending its settings to this phone',
+  SettingsLink.sending => '$name is taking this phone\'s settings',
+  SettingsLink.match => 'Match both ways is on',
+  SettingsLink.off => 'Settings stay separate',
+};
+
+/// Asked once, right after a new link: one question for the pair, how settings go between this device and [name]
+/// ([SettingsSync.answer]). The first answer from either device sets both sides; when the other device answers first this turns
+/// into a plain notice of what it chose, with OK, and cannot override it. Until answered nothing goes; closing it is Off, unless
+/// the other device has answered meanwhile.
 Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String peer, String name) async {
   final to = await showDialog<SettingsLink>(
     context: context,
@@ -105,22 +113,36 @@ Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String pee
         chevron: false,
         onTap: () => Navigator.pop(ctx, value),
       );
-      return AlertDialog(
-        key: const ValueKey('ask-settings-link'),
-        title: Text('Sync Cache settings with $name?'),
-        contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-        content: SizedBox(
-          width: 400,
-          child: SingleChildScrollView(
-            child: SettingsGroup(
-              rows: [
-                choice('match', SettingsLink.match, Icons.sync, 'Match', 'Changes on either device go to both.'),
-                choice('send', SettingsLink.sending, Icons.north_east, 'Send mine', '$name follows my settings.'),
-                choice('off', SettingsLink.off, Icons.block, 'Off', "Each keeps its own. You can change this on $name's page."),
-              ],
+      return ListenableBuilder(
+        listenable: sync,
+        builder: (ctx, _) {
+          if (sync.decidedByOther(peer)) {
+            return AlertDialog(
+              key: const ValueKey('settings-link-notice'),
+              title: Text(settingsLinkNotice(sync.linkWith(peer), name)),
+              content: const Text('Change this any time on the device\'s page.'),
+              actions: [TextButton(key: const ValueKey('notice-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+            );
+          }
+          return AlertDialog(
+            key: const ValueKey('ask-settings-link'),
+            title: Text('Sync Cache settings with $name?'),
+            contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+            content: SizedBox(
+              width: 400,
+              child: SingleChildScrollView(
+                child: SettingsGroup(
+                  rows: [
+                    choice('match', SettingsLink.match, Icons.sync, 'Match both ways', 'Changes on either device go to both.'),
+                    choice('send', SettingsLink.sending, Icons.north_east, 'Send mine to $name', '$name follows my settings.'),
+                    choice('receive', SettingsLink.receiving, Icons.south_west, "Take $name's settings", 'This device follows $name.'),
+                    choice('off', SettingsLink.off, Icons.block, 'Off', "Each keeps its own. You can change this on $name's page."),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       );
     },
   );
