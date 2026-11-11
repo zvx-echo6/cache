@@ -57,7 +57,7 @@ jobs:
       - name: Draw the renders
         working-directory: app
         env:
-          TESTS: ${{ (github.event.inputs.guide == 'true' && 'test_shots/guide_shots_test.dart') || github.event.inputs.tests || (github.ref_name == 'rel-30' && 'test_shots/desktop_renders_test.dart') || 'test_shots/downloads_renders_test.dart' }}
+          TESTS: ${{ (github.event.inputs.guide == 'true' && 'test_shots/guide_shots_test.dart') || github.event.inputs.tests || (github.ref_name == 'rel-30' && 'test_shots/desktop_renders_test.dart') || 'test_shots/linux_ux_renders_test.dart' }}
         run: |
           # shellcheck disable=SC2086
           flutter test --no-pub --update-goldens $TESTS

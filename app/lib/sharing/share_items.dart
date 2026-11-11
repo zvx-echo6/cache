@@ -39,6 +39,10 @@ ShareItem? libraryRemoteItem(String share, String path, int bytes) {
   return path.toLowerCase().endsWith('.zim') ? ShareItem.plain(share, path, bytes) : null;
 }
 
+/// What goes with a ZIM in the Library's shared folder without being an item: the icon saved beside it (`<zim>.icon.png`), so a
+/// ZIM that is switched off, or fetched on its own, takes its picture with it and leaves none behind.
+List<String> libraryAlongside(String share, String path) => share == 'library' && path.toLowerCase().endsWith('.zim') ? ['$path.icon.png'] : const [];
+
 /// The name of the regions' item: their road routing, places and off-road packs (kept together, shared by every region).
 const String kDirectionsItemName = 'Directions, places and off-road';
 

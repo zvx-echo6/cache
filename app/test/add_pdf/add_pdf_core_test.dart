@@ -7,11 +7,13 @@
 //
 // Needs: CACHE_ADD_PDF_CORE=1, libcache_search.so and libcache_llama.so on LD_LIBRARY_PATH, CACHE_EMBED_LIB and CACHE_EMBED_MODEL.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/library/add_pdf/add_pdf_calls.dart';
 import 'package:cache/library/add_pdf/add_pdf_engines.dart' show kPdfiumVersion;
+import 'package:cache/library/add_pdf/add_pdf_slice.dart';
 import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache_llama/cache_llama.dart';
@@ -236,4 +238,142 @@ void main() {
       tmp.deleteSync(recursive: true);
     }
   }, skip: _on ? false : 'needs the real core (CACHE_ADD_PDF_CORE=1; CI add-pdf-core job)', timeout: const Timeout(Duration(minutes: 45)));
+
+  test('a background slice stopped mid-PDF, in each phase, resumes on the next slice: one book, fully searchable, nothing half-added in between', () async {
+    await pdfiumForTests();
+    final env = Platform.environment;
+    final core = await SearchCore.open(const []);
+    final tmp = Directory.systemTemp.createTempSync('add-pdf-resume');
+    try {
+      final classifier = File('${tmp.path}/models/cache-classifier-2.bin')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(File('assets/models/cache-classifier-2.bin').readAsBytesSync());
+      final engines = {
+        'pdfium_lib': Pdfrx.pdfiumModulePath,
+        'pdfium_version': kPdfiumVersion,
+        'embed_lib': env['CACHE_EMBED_LIB'],
+        'embed_model': env['CACHE_EMBED_MODEL'],
+        'embed_sha256': 'c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb',
+        'classifier': classifier.path,
+      };
+      final calls = CoreIngestCalls(init: () async {});
+      final embedder = CacheEmbedder(modelPath: env['CACHE_EMBED_MODEL']!);
+      try {
+        for (final phase in ['reading', 'needs_ocr', 'embedding', 'writing']) {
+          final scanned = phase == 'needs_ocr';
+          final lib = '${tmp.path}/$phase/libraries/my-books';
+          Directory('${tmp.path}/$phase/libraries').createSync(recursive: true);
+          final id = 'my-books-$phase';
+          final settings = ownLibrarySettings(title: 'My books', id: id, isDefault: true);
+          await makeBlankLibrary(core, lib, settings, Directory('${tmp.path}/$phase/tmp')..createSync());
+          final ingest = Directory('${tmp.path}/$phase/ingest');
+          final shelves = '${tmp.path}/$phase/bookshelves';
+          Future<Map<String, dynamic>> shelf() async => {
+            'dir': shelves,
+            'dev': 'ci-device',
+            'libraries': [
+              {'library_id': id, 'dir': lib},
+            ],
+          };
+          // the first slice: stopped right before a step while the job is in [phase] (deterministic: the step waits until
+          // the slice has asked the run to pause, as the time budget or Cache coming to the front would)
+          var hit = false;
+          final gate = Completer<void>();
+          final first = AddPdfState(
+            calls: calls,
+            dir: () async => ingest,
+            engines: () async => engines,
+            ocrEngine: () async => FakeOcrEngine(engine: 'fake-ocr', version: '1', pages: {1: _radio}),
+            bookshelves: shelf,
+            // the least work per step, so each phase lasts several steps and the stop lands inside it
+            stepBudgetMs: 1,
+            permit: (job) async {
+              if (!hit && job.state == phase) {
+                hit = true;
+                await gate.future;
+              }
+            },
+          );
+          final bytes = scanned ? scannedPdf() : textPdf('Water purification manual', [for (var i = 0; i < 12; i++) i.isEven ? _water : _water.reversed.toList()]);
+          final f = File('${tmp.path}/$phase/picked.pdf')..writeAsBytesSync(bytes);
+          final title = scanned ? 'Field radio handbook' : 'Water purification manual';
+          final job = await first.add(pdfPath: f.path, fileName: 'picked.pdf', bytes: bytes.length, title: title, target: AddPdfTarget(title: 'My books', path: lib, isDefault: true));
+          final r1 = await AddPdfSlice(
+            first,
+            lookEvery: const Duration(milliseconds: 2),
+            stopAsked: () {
+              if (hit && !gate.isCompleted) Timer(const Duration(milliseconds: 10), gate.complete);
+              return hit;
+            },
+          ).run().timeout(const Duration(minutes: 10));
+          // ignore: avoid_print
+          print('$phase: first slice ${r1.words}; job ${job.state} ${job.status.name}');
+          expect(hit, isTrue, reason: 'the job reached $phase');
+          expect(r1.more, isTrue, reason: '$phase: stopped mid-PDF');
+          expect(job.status, AddPdfStatus.active, reason: '$phase: ${job.errorCode} ${job.errorMessage}');
+          await first.save();
+          first.dispose();
+
+          // in between: nothing of it is in the library or its search
+          final shelfDir = Directory('$lib/bookshelf');
+          List<String> pdfs() => shelfDir.existsSync() ? [for (final e in shelfDir.listSync()) if (e.path.endsWith('.pdf')) e.path] : const [];
+          expect(pdfs(), isEmpty, reason: '$phase: no book file before the commit');
+          final word = scanned ? 'simplex' : 'purification';
+          Future<List<String>> found() async {
+            final searcher = await SearchCore.open([SourceConfig.library(path: '$lib/shard', indexDir: '$lib/index', settings: settings)]);
+            try {
+              SearchResponse? r;
+              for (var i = 0; i < 50 && r == null; i++) {
+                try {
+                  final v = await embedder.embed(scanned ? 'two meter simplex calling frequency' : 'how long do I boil water to make it safe');
+                  r = await searcher.search(word, k: 10, queryVector: QueryVector(embedder.modelId, v));
+                } on CacheSearchException catch (e) {
+                  if (e.code != 'busy') rethrow;
+                  await Future<void>.delayed(const Duration(milliseconds: 200));
+                }
+              }
+              return [for (final h in r!.results) if (h.title.startsWith(title)) '${h.title} @ ${h.address}'];
+            } finally {
+              await searcher.close();
+            }
+          }
+
+          expect(await found(), isEmpty, reason: '$phase: nothing half-indexed is searchable');
+
+          // the next slice, as a new background run: the job read back from disk, resumed from its job folder
+          final second = AddPdfState(
+            calls: calls,
+            dir: () async => ingest,
+            engines: () async => engines,
+            ocrEngine: () async => FakeOcrEngine(engine: 'fake-ocr', version: '1', pages: {1: _radio}),
+            bookshelves: shelf,
+            permit: (_) async {},
+          );
+          final r2 = await AddPdfSlice(second).run().timeout(const Duration(minutes: 20));
+          final done = second.byId(job.id)!;
+          // ignore: avoid_print
+          print('$phase: second slice ${r2.words}; ${done.status.name} ${done.errorCode ?? ''} ${jsonEncode(done.result)}');
+          expect(r2.more, isFalse);
+          expect(done.status, AddPdfStatus.done, reason: '$phase: ${done.errorCode} ${done.errorMessage}');
+          expect(second.jobs, hasLength(1));
+          expect(pdfs(), hasLength(1), reason: '$phase: exactly one book');
+          final hits = await found();
+          expect(hits, isNotEmpty, reason: '$phase: searchable');
+          // ignore: avoid_print
+          print('$phase: found $hits');
+          // one book: one copy in the Bookshelves view (a second add would be a spare copy, a second key)
+          final view = jsonEncode(await core.shelvesResolve({'dir': shelves, 'libraries': (await shelf())['libraries']}));
+          expect(view, contains(done.result!['copy'] as String));
+          expect((done.result!['same'] as List?) ?? const [], isEmpty, reason: '$phase: not a copy of a half-added first one');
+          if (scanned) expect(((done.result!['ocr'] as Map)['pages_ocrd'] as num), 1);
+          second.dispose();
+        }
+      } finally {
+        await embedder.dispose();
+      }
+    } finally {
+      await core.close();
+      tmp.deleteSync(recursive: true);
+    }
+  }, skip: _on ? false : 'needs the real core (CACHE_ADD_PDF_CORE=1; CI add-pdf-core job)', timeout: const Timeout(Duration(minutes: 60)));
 }

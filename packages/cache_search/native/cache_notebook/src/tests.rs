@@ -352,6 +352,13 @@ fn props_mark_a_place_and_take_it_off_the_map() {
     let c = call(&nb, "entry_save", json!({"id": b["id"], "notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "title": "Cache 2", "place": {"lat": 43.7, "lon": -116.2}}));
     assert!(c.get("props").is_none());
     assert_eq!(pins(json!({})).len(), 2);
+    // a place's own icon
+    let d = call(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:32:00-06:00", "title": "Cache 3",
+        "place": {"lat": 43.8, "lon": -116.3}, "props": {"icon": "water_2", "color": "blue", "on_map": true}}));
+    assert_eq!(d["props"], json!({"icon": "water_2", "color": "blue", "on_map": true}));
+    for bad in [json!({"icon": "Water"}), json!({"icon": ""}), json!({"icon": 3}), json!({"icon": "a".repeat(41)})] {
+        assert_eq!(err(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:32:00-06:00", "props": bad})).code, "bad_json");
+    }
     for bad in [json!({"color": "Red!"}), json!({"on_map": "no"}), json!({"size": 3}), json!([1])] {
         assert_eq!(err(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "props": bad})).code, "bad_json");
     }
@@ -394,4 +401,25 @@ fn a_version_1_database_gains_props() {
     let c = rusqlite::Connection::open(t.0.join("notebook.sqlite")).unwrap();
     let v: String = c.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, "2");
+}
+
+#[test]
+fn a_notebook_has_an_icon_and_a_colour_of_its_own() {
+    let (nb, _t) = notebook("icon_color");
+    // neither: as before, and neither key comes back
+    let a = call(&nb, "notebook_save", json!({"template": "places", "def": {"name": "Trail places", "fields": []}}));
+    assert!(a["def"].get("icon").is_none() && a["def"].get("color").is_none());
+    // both, kept and returned
+    let b = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Trail places", "icon": "trailhead", "color": "teal", "fields": []}}));
+    assert_eq!((b["def"]["icon"].clone(), b["def"]["color"].clone()), (json!("trailhead"), json!("teal")));
+    let again = call(&nb, "notebook", json!({"id": a["id"]}));
+    assert_eq!((again["def"]["icon"].clone(), again["def"]["color"].clone()), (json!("trailhead"), json!("teal")));
+    // taken off again
+    let c = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Trail places", "fields": []}}));
+    assert!(c["def"].get("icon").is_none() && c["def"].get("color").is_none());
+    for bad in [json!({"icon": "Trail head"}), json!({"icon": 5}), json!({"color": "Teal"}), json!({"color": "#3fbfae"}), json!({"color": ""})] {
+        let mut def = json!({"name": "Trail places", "fields": []});
+        def.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert_eq!(err(&nb, "notebook_save", json!({"id": a["id"], "def": def})).code, "bad_json", "{bad}");
+    }
 }

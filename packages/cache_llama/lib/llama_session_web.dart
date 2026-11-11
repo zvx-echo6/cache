@@ -1,6 +1,7 @@
 // Web build: there is no llama.cpp in a browser. The model runs on the Cache server and this session talks to it over /api/llm v1
 // (server/docs/llm-protocol.md), same origin, with the page's cookies. Same public API as llama_session_io.dart. On the web the
 // `path` of [load] is the model id the server lists (GET /api/llm/models).
+import 'load_options.dart' show kDefaultPrereadMbps;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
@@ -24,8 +25,8 @@ class LlamaSession {
 
   /// Loads the model with this id on the server (replacing the one loaded before; the server has one for all browsers).
   /// Throws a [StateError] with the reason on failure.
-  /// [repackWeights] and [prefixDir] are the phone's (the server decides for its own model): not used here.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir}) async {
+  /// [repackWeights], [prefixDir] and [prereadMbps] are the phone's (the server decides for its own model): not used here.
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps}) async {
     _modelId = null;
     final r = await _post('/api/llm/load', {'v': 1, 'model': path, 'n_ctx': nCtx});
     final body = await _text(r);
@@ -85,9 +86,9 @@ class LlamaSession {
             _queue.add(null);
             c.add(message);
             ended = true;
-          case LlmError(:final message):
+          case LlmError():
             _queue.add(null);
-            fail(StateError(message));
+            fail(e.toException());
             ended = true;
         }
         if (ended) break;

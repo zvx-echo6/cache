@@ -3,17 +3,14 @@ package com.happylittlellc.cache
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.Context
-import android.os.BatteryManager
 import android.os.Bundle
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.os.Build
-import android.os.PowerManager
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -27,9 +24,24 @@ class MainActivity : FlutterActivity() {
     private var keyboardVisible = false
     private val restoreSystemBars = Runnable { applySystemBars() }
 
+    // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
+    // build nothing is read and the channel answers zeros.
+    private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+
+    private fun readBenchExtras(i: Intent?) {
+        if (!BuildConfig.TEST_APK || i == null) return
+        if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        readBenchExtras(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         super.onCreate(savedInstanceState)
+        readBenchExtras(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -135,15 +147,22 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        // The whole-route picture during guidance (RouteSnapshot.kt).
-        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
+        // The bench's options (test APK only; nothing in the release build).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "read" -> result.success(battery())
+                    // Only what was given: no "preread_mbps" key when the extra is absent, and never in the release build.
+                    "get" -> {
+                        val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
+                        val mbps = benchPrereadMbps
+                        if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        result.success(out)
+                    }
                     else -> result.notImplemented()
                 }
             }
+        // The whole-route picture during guidance (RouteSnapshot.kt).
+        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -154,7 +173,6 @@ class MainActivity : FlutterActivity() {
         memoryChannel = null
         // The engine can outlive this activity while the car screen uses it: let go of the handlers that need the activity.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery").setMethodCallHandler(null)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
@@ -198,40 +216,7 @@ class MainActivity : FlutterActivity() {
         memoryChannel?.invokeMethod("trim", mapOf("level" to level) + memory())
     }
 
-    // Battery level and whether the phone is plugged in (lib/platform/battery.dart): long automatic work (search indexes)
-    // waits for charging or enough battery. The sticky battery broadcast answers at once and needs no permission.
-    private fun battery(): Map<String, Any> {
-        val status: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = status?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = status?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        val plugged = status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val percent = if (level >= 0 && scale > 0) level * 100 / scale else -1
-        val out = mutableMapOf<String, Any>("percent" to percent, "charging" to (plugged != 0), "thermal" to thermal())
-        headroom()?.let { out["headroom"] = it }
-        return out
-    }
-
-    // How warm the phone is (Android 10 and later): background index work eases off as it warms and pauses when severe.
-    private fun thermal(): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "unknown"
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return "unknown"
-        return when (pm.currentThermalStatus) {
-            PowerManager.THERMAL_STATUS_NONE -> "nominal"
-            PowerManager.THERMAL_STATUS_LIGHT -> "light"
-            PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
-            PowerManager.THERMAL_STATUS_SEVERE -> "severe"
-            else -> "critical"
-        }
-    }
-
-    // The thermal headroom over the next 10 seconds (Android 11 and later; 1.0 is where the phone throttles hard), null where
-    // the phone does not give one.
-    private fun headroom(): Double? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return null
-        val h = pm.getThermalHeadroom(10)
-        return if (h.isNaN()) null else h.toDouble()
-    }
+    // Battery and heat (co.cache/battery) are answered by the cache_device plugin, in every engine.
 
     private fun notificationsGranted() =
         checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

@@ -1,7 +1,9 @@
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
+import '../../platform.dart' as plat;
 import '../../theme.dart';
+import '../../video/video_media.dart';
 import '../../video/video_state.dart';
 import 'channel_screen.dart';
 import 'instance_sheet.dart';
@@ -184,7 +186,7 @@ class _ChannelsState extends State<_Channels> {
               children: [
                 CircleAvatar(
                   backgroundColor: k.background,
-                  backgroundImage: c.avatar == null ? null : NetworkImage(c.avatar!),
+                  backgroundImage: c.avatar == null ? null : NetworkImage(plat.isWeb ? VideoMedia.resolve(VideoMedia.remote(c.avatar!)).toString() : c.avatar!),
                   child: c.avatar == null ? Icon(Icons.tv, color: k.secondary) : null,
                 ),
                 const SizedBox(width: 14),

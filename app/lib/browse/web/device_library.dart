@@ -89,9 +89,30 @@ class DeviceLibrary extends ChangeNotifier {
     this.onItemsChanged,
     this.build,
   }) : _leaveWarning = leaveWarning ?? setLeaveWarning {
-    build?.addListener(notifyListeners);
+    build?.addListener(_onBuild);
     build?.sizeOf = (id) => items.where((i) => i.kind == 'library' && i.name == id).firstOrNull?.bytes;
     build?.freeSpace = () => space.free;
+  }
+
+  /// What the built libraries looked like at the last change of the build controller (books, passages, published, waiting for the
+  /// search copy). When it changes, a book went in or out or a library was published, so the sizes of the libraries on the device and
+  /// the books the app lists are read again, without waiting for the timer.
+  String? _builtSignature;
+
+  void _onBuild() {
+    notifyListeners();
+    final b = build;
+    if (b == null || !b.loaded || _disposed) return;
+    final sig = [for (final l in b.libraries) '${l.id}:${l.books}:${l.passages}:${l.published}:${l.dirty}'].join('|');
+    final before = _builtSignature;
+    _builtSignature = sig;
+    if (before == null || before == sig || !_started) return;
+    unawaited(() async {
+      await refresh();
+      try {
+        await onItemsChanged?.call().timeout(const Duration(seconds: 20));
+      } catch (_) {}
+    }());
   }
 
   final DeviceApi api;
@@ -456,7 +477,7 @@ class DeviceLibrary extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     if (upload?.running == true) _leaveWarning(false);
-    build?.removeListener(notifyListeners);
+    build?.removeListener(_onBuild);
     build?.dispose();
     super.dispose();
   }

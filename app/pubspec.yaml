@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.0+47
+version: 1.1.0+49
 
 environment:
   sdk: ^3.12.2
@@ -43,6 +43,9 @@ dependencies:
   # Add PDF: reading scanned pages on the phone (Apple Vision on iPhone and iPad, ML Kit's bundled Latin model on Android).
   cache_ocr:
     path: ../packages/cache_ocr
+  # Battery and heat readings in every engine (the app's and WorkManager's background one).
+  cache_device:
+    path: ../packages/cache_device
   geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
   maplibre_gl: ^0.27.1
@@ -88,6 +91,8 @@ dependencies:
   # (FPDF_GetPageLabel), for making a ZIM's PDFs searchable. MIT. Pinned to exactly the version pdfrx already resolves (in the
   # lockfile before as a dependency of pdfrx): no new code ships, the same PDFium is used. Approved 2026-11-02.
   pdfium_dart: 0.2.5
+  # Material Symbols (Google's icon font, Apache-2.0; community package, fonts unchanged): the map icons for notebooks and places. Approved 2026-11-10.
+  material_symbols_icons: 4.2960.0
 
 dev_dependencies:
   flutter_test:
