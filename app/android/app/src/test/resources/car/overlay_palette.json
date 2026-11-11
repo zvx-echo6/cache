@@ -15,7 +15,7 @@
     "cardText": "#dcc9a3",
     "cardSecondary": "#b0a58a",
     "hatch": "#dcc9a3",
-    "miniBg": "#2a3036",
+    "miniBg": "#1a1d1f",
     "miniBorder": "#5e5a4f"
   },
   "light": {
@@ -34,7 +34,7 @@
     "cardText": "#1a1d1f",
     "cardSecondary": "#55594f",
     "hatch": "#1a1d1f",
-    "miniBg": "#fffdf8",
+    "miniBg": "#f3ebd9",
     "miniBorder": "#aca99b"
   },
   "parchment": {
@@ -53,7 +53,7 @@
     "cardText": "#1a1d1f",
     "cardSecondary": "#4a4638",
     "hatch": "#1a1d1f",
-    "miniBg": "#e8dbbc",
+    "miniBg": "#dcc9a3",
     "miniBorder": "#9a8e73"
   },
   "tactical": {
@@ -72,7 +72,7 @@
     "cardText": "#ff5a4a",
     "cardSecondary": "#e0473c",
     "hatch": "#e0473c",
-    "miniBg": "#120404",
+    "miniBg": "#000000",
     "miniBorder": "#401310"
   }
 }

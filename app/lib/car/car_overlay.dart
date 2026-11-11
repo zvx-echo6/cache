@@ -266,9 +266,7 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
   c['cardText'] = id == CacheThemeId.tactical ? k.accent : k.text;
   c['cardSecondary'] = id == CacheThemeId.tactical ? k.text : k.secondary;
   c['hatch'] = k.text;
-  // The mini map is a card like the climb card: the same card color (it used the theme's page background, which in Light is
-  // beige beside a white card).
-  c['miniBg'] = k.surface;
+  c['miniBg'] = k.background; // Deliberate: the mini map sits on the theme's page background, not the card color (the approved look).
   c['miniBorder'] = _mix(k.background, k.secondary, 0.45);
   return {for (final e in c.entries) e.key: _hex(e.value)};
 }

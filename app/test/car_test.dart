@@ -381,15 +381,14 @@ void main() {
       expect(carOverlayColors(CacheThemeId.parchment)['cardSecondary'], '#4a4638');
     });
 
-    test('the mini map and the climb card have the same card color in all four themes', () {
+    test('the mini map keeps the page background of its theme, which is not the card color (the approved look)', () {
+      expect(carOverlayColors(CacheThemeId.light)['miniBg'], '#f3ebd9');
+      expect(carOverlayColors(CacheThemeId.parchment)['miniBg'], '#dcc9a3');
+      expect(carOverlayColors(CacheThemeId.dark)['miniBg'], '#1a1d1f');
+      expect(carOverlayColors(CacheThemeId.tactical)['miniBg'], '#000000');
       for (final id in CacheThemeId.values) {
-        final c = carOverlayColors(id);
-        expect(c['miniBg'], c['card'], reason: id.name);
+        expect(carOverlayColors(id)['miniBg'], isNot(carOverlayColors(id)['card']), reason: id.name);
       }
-      expect(carOverlayColors(CacheThemeId.light)['miniBg'], '#fffdf8');
-      expect(carOverlayColors(CacheThemeId.parchment)['miniBg'], '#e8dbbc');
-      expect(carOverlayColors(CacheThemeId.dark)['miniBg'], '#2a3036');
-      expect(carOverlayColors(CacheThemeId.tactical)['miniBg'], '#120404');
     });
 
     test('the Kotlin tests read the same palette: the fixture is these colors', () {
