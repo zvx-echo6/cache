@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -21,6 +22,12 @@ import kotlin.math.sqrt
  * Sizes are the mock's pixels at density 1.0 (a 1280 x 560 screen), scaled by [density]. The pieces stay inside the visible
  * area the host reports (SurfaceCallback.onVisibleAreaChanged), because the host draws its own guidance card, action strip and
  * map buttons over the rest of the surface.
+ *
+ * The pieces never lie over the vehicle. While guiding, the camera (CarMapRenderer.follow) puts the position marker at
+ * [vehiclePoint] of the stable area, and the road ahead runs up the screen from it. [keepClear] is that marker and the column
+ * above it; a piece that would reach into it gives way: the mini map is not drawn, the climb card ends short of it or, when
+ * that leaves too little for its text and shape, is not drawn either. The camera is not moved to make room: on a short screen
+ * the road ahead is worth more than a card.
  */
 object CarOverlayPainter {
     // ---- layout (mock pixels at density 1.0) ---------------------------------------------------------------------
@@ -42,20 +49,51 @@ object CarOverlayPainter {
     /** The mini map keeps clear of the map buttons at the right edge. */
     const val MINI_RIGHT_CLEARANCE = 84f
 
+    /** While guiding the camera leaves this share of the area's height free above the position, so more of the road ahead shows. */
+    const val GUIDANCE_TOP_SHARE = 0.35
+
+    /** The main map's position marker (the car-pos layer): its radius and its ring, which is drawn outside the radius. */
+    const val POS_RADIUS = 10f
+    const val POS_RING = 4f
+
+    /** Free map kept on each side of the marker and of the road ahead of it. */
+    const val VEHICLE_SIDE = 16f
+
+    /** The extra top padding of the guidance camera for [area] (the stable area, as CarMapRenderer.follow uses it). */
+    fun guidanceTopInset(area: Rect): Double = area.height() * GUIDANCE_TOP_SHARE
+
+    /** Where the guidance camera draws the position: the middle of [area] sideways, and the middle of what is left of its
+     * height under [guidanceTopInset]. */
+    fun vehiclePoint(area: Rect): PointF =
+        PointF((area.left + area.right) / 2f, area.top + area.height() * ((1.0 + GUIDANCE_TOP_SHARE) / 2.0).toFloat())
+
+    /** What no piece may cover: the position marker with [VEHICLE_SIDE] on each side, and the column above it (the road
+     * ahead) up to the top of [area]. Under the marker is road already driven, so a piece may begin right below it. */
+    fun keepClear(area: Rect, density: Float): RectF {
+        val v = vehiclePoint(area)
+        val r = (POS_RADIUS + POS_RING) * density
+        val half = r + VEHICLE_SIDE * density
+        return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + r)
+    }
+
     /** Where the two pieces go, in surface pixels; null when a piece is off or does not fit. */
     data class Layout(val climb: RectF?, val mini: RectF?)
 
-    fun layout(width: Int, height: Int, visible: Rect?, density: Float, showClimb: Boolean, showMini: Boolean): Layout {
-        val area = Rect(visible ?: Rect(0, 0, width, height)).also { it.intersect(0, 0, width, height) }
+    /** [visible] is where the pieces may go (it changes as the host shows and hides its buttons); [stable] is the area the
+     * camera places the vehicle in. Each falls back to the other, then to the whole surface, as CarMapRenderer.follow does. */
+    fun layout(width: Int, height: Int, visible: Rect?, density: Float, showClimb: Boolean, showMini: Boolean, stable: Rect? = null): Layout {
+        val full = Rect(0, 0, width, height)
+        val area = Rect(visible ?: stable ?: full).also { it.intersect(0, 0, width, height) }
         if (area.isEmpty) return Layout(null, null)
         val d = density
+        val keep = keepClear(stable ?: visible ?: full, d)
         var mini: RectF? = null
         if (showMini) {
             val w = MINI_W * d
             val h = MINI_H * d
             val right = area.right - (MARGIN + MINI_RIGHT_CLEARANCE) * d
             val r = RectF(right - w, area.bottom - MARGIN * d - h, right, area.bottom - MARGIN * d)
-            if (r.left >= area.left && r.top >= area.top) mini = r
+            if (r.left >= area.left && r.top >= area.top && !RectF.intersects(r, keep)) mini = r
         }
         var climb: RectF? = null
         if (showClimb) {
@@ -66,16 +104,18 @@ object CarOverlayPainter {
             w = min(w, area.right - MARGIN * d - left)
             val h = CLIMB_H * d
             val bottom = area.bottom - (MARGIN + ETA_CLEARANCE) * d
+            // The vehicle or the road ahead would be under the card: the card ends short of them.
+            if (RectF.intersects(RectF(left, bottom - h, left + w, bottom), keep)) w = keep.left - left
             if (w >= (CLIMB_PAD_X * 2 + CLIMB_TEXT_W + CLIMB_GAP + 60f) * d && bottom - h >= area.top) climb = RectF(left, bottom - h, left + w, bottom)
         }
         return Layout(climb, mini)
     }
 
     /** Both pieces for [trip] (the switches are the trip's), in the car's day or night colors. */
-    fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float) {
+    fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null) {
         val pal = trip.palette?.forMode(dark) ?: return
         if (!trip.guiding) return
-        val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null, showMini = trip.overlay.miniMap && trip.overview != null)
+        val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null, showMini = trip.overlay.miniMap && trip.overview != null, stable = stable)
         val climb = trip.climb
         if (l.climb != null && climb != null) drawClimbCard(canvas, l.climb, climb, trip.imperial, pal, density)
         val ov = trip.overview

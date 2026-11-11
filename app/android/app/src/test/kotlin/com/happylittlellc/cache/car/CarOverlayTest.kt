@@ -208,6 +208,125 @@ class CarOverlayTest {
         assertNull(tiny.mini)
     }
 
+    // ---- the vehicle stays clear (areas as measured on the car simulator, density 1) ------------------------------------
+
+    /** The marker as the map draws it (radius and ring) and the road ahead of it (the route's 12 px casing, up to the top of
+     * the area): worked out here from the camera's rule, not from the painter's keep-clear zone. */
+    private fun assertVehicleClear(l: CarOverlayPainter.Layout, stable: Rect) {
+        val vx = (stable.left + stable.right) / 2f
+        val vy = stable.top + stable.height() * 0.675f
+        val marker = RectF(vx - 14f, vy - 14f, vx + 14f, vy + 14f)
+        val ahead = RectF(vx - 6f, stable.top.toFloat(), vx + 6f, vy)
+        for (r in listOfNotNull(l.climb, l.mini)) {
+            assertFalse("$r is over the vehicle $marker", RectF.intersects(r, marker))
+            assertFalse("$r is over the road ahead $ahead", RectF.intersects(r, ahead))
+        }
+    }
+
+    private fun assertRect(left: Float, top: Float, right: Float, bottom: Float, r: RectF?) {
+        assertNotNull(r)
+        assertEquals(left, r!!.left, 0.51f)
+        assertEquals(top, r.top, 0.51f)
+        assertEquals(right, r.right, 0.51f)
+        assertEquals(bottom, r.bottom, 0.51f)
+    }
+
+    private val mainStable = Rect(504, 91, 1181, 697)
+
+    @Test
+    fun theCameraPutsTheVehicleWhereTheLayoutExpectsIt() {
+        // 1280 x 720: the marker was measured at (843, 500).
+        val v = CarOverlayPainter.vehiclePoint(mainStable)
+        assertEquals(843f, v.x, 1f)
+        assertEquals(500f, v.y, 1f)
+        // The same share the camera pads the top with: the point is the middle of what is left under it.
+        val inset = CarOverlayPainter.guidanceTopInset(mainStable)
+        assertEquals(0.35 * 606, inset, 1e-6)
+        assertEquals((91 + inset + 697) / 2.0, v.y.toDouble(), 0.01)
+        val keep = CarOverlayPainter.keepClear(mainStable, 1f)
+        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 14f && keep.left <= v.x - 14f && keep.right >= v.x + 14f)
+    }
+
+    @Test
+    fun at1280x720TheApprovedLayoutDoesNotMove() {
+        // The host's buttons showing: the visible area is the stable area.
+        val shown = CarOverlayPainter.layout(1280, 720, mainStable, 1f, showClimb = true, showMini = true, stable = mainStable)
+        assertEquals(520f, shown.climb!!.left, 0.51f)
+        assertEquals(526f, shown.climb!!.top, 0.51f)
+        assertEquals(845f, shown.climb!!.right, 0.51f)
+        assertRect(861f, 541f, 1081f, 681f, shown.mini)
+        assertVehicleClear(shown, mainStable)
+        // The buttons hidden: the visible area reaches 77 px further right, the vehicle stays.
+        val hidden = CarOverlayPainter.layout(1280, 720, Rect(504, 91, 1258, 697), 1f, showClimb = true, showMini = true, stable = mainStable)
+        assertEquals(520f, hidden.climb!!.left, 0.51f)
+        assertEquals(526f, hidden.climb!!.top, 0.51f)
+        assertEquals(900f, hidden.climb!!.right, 0.51f)
+        assertRect(938f, 541f, 1158f, 681f, hidden.mini)
+        assertVehicleClear(hidden, mainStable)
+    }
+
+    @Test
+    fun at800x480NeitherPieceIsDrawnBecauseBothWouldCoverTheVehicle() {
+        val stable = Rect(344, 80, 711, 387)
+        val l = CarOverlayPainter.layout(800, 480, stable, 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(l.mini)
+        assertNull(l.climb)
+        // The climb card alone has no room either.
+        assertNull(CarOverlayPainter.layout(800, 480, stable, 1f, showClimb = true, showMini = false, stable = stable).climb)
+        // The buttons hidden (more room on the right): still on the vehicle, still not drawn.
+        val hidden = CarOverlayPainter.layout(800, 480, Rect(344, 80, 788, 387), 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(hidden.mini)
+        assertVehicleClear(hidden, stable)
+    }
+
+    @Test
+    fun onTheWideScreenTheClimbCardEndsShortOfTheVehicleAndTheMiniMapGoesFirst() {
+        // 1280 x 500: the vehicle is level with the cards.
+        val stable = Rect(504, 91, 1181, 477)
+        val keep = CarOverlayPainter.keepClear(stable, 1f)
+        val shown = CarOverlayPainter.layout(1280, 500, stable, 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(shown.mini)
+        val c = shown.climb!!
+        assertEquals(520f, c.left, 0.51f)
+        assertEquals(keep.left, c.right, 0.01f)
+        assertTrue(c.right < 843f - 14f)
+        assertVehicleClear(shown, stable)
+        // The buttons hidden: the mini map has room right of the vehicle, the climb card still ends short of it.
+        val hidden = CarOverlayPainter.layout(1280, 500, Rect(504, 91, 1258, 477), 1f, showClimb = true, showMini = true, stable = stable)
+        assertRect(938f, 321f, 1158f, 461f, hidden.mini)
+        assertEquals(keep.left, hidden.climb!!.right, 0.01f)
+        assertVehicleClear(hidden, stable)
+    }
+
+    @Test
+    fun inTheNarrowPaneAndInSplitViewOnlyTheMiniMapIsDrawnBelowTheVehicle() {
+        // The 410 px pane.
+        val narrow = Rect(12, 84, 398, 613)
+        val n = CarOverlayPainter.layout(410, 700, narrow, 1f, showClimb = true, showMini = true, stable = narrow)
+        assertNull(n.climb)
+        assertRect(78f, 457f, 298f, 597f, n.mini)
+        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 14f)
+        assertVehicleClear(n, narrow)
+        // Split view, 770 px.
+        val split = Rect(344, 81, 683, 687)
+        val s = CarOverlayPainter.layout(770, 700, split, 1f, showClimb = true, showMini = true, stable = split)
+        assertNull(s.climb)
+        assertRect(363f, 531f, 583f, 671f, s.mini)
+        assertVehicleClear(s, split)
+    }
+
+    @Test
+    fun aPieceThatWouldCoverTheVehicleIsNeverReturnedWhateverTheAreas() {
+        for (w in 300..1300 step 50) for (h in 250..750 step 50) for (inset in listOf(0, 40, 120)) {
+            val stable = Rect(inset, inset / 2, w - inset / 3, h - inset / 4)
+            for (extra in listOf(0, 77)) {
+                val visible = Rect(stable.left, stable.top, minOf(w, stable.right + extra), stable.bottom)
+                assertVehicleClear(CarOverlayPainter.layout(w, h, visible, 1f, showClimb = true, showMini = true, stable = stable), stable)
+                assertVehicleClear(CarOverlayPainter.layout(w, h, visible, 1f, showClimb = true, showMini = false, stable = stable), stable)
+            }
+        }
+    }
+
     // ---- texts and geometry ---------------------------------------------------------------------------------------------
 
     @Test

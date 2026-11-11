@@ -18,6 +18,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private var width = 0
     private var height = 0
     private var visible: Rect? = null
+    private var stable: Rect? = null
     private var dark = false
     private var shown: CarTrip = CarTrip.EMPTY
     private var pending: CarTrip? = null
@@ -40,8 +41,10 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         height = h
     }
 
-    fun setVisibleArea(r: Rect?) {
-        visible = r?.let { Rect(it) }
+    /** The host's two areas: the pieces go in [visible], the camera places the vehicle in [stable] (CarOverlayPainter.layout). */
+    fun setAreas(visible: Rect?, stable: Rect?) {
+        this.visible = visible?.let { Rect(it) }
+        this.stable = stable?.let { Rect(it) }
         invalidate()
     }
 
@@ -68,7 +71,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     override fun onDraw(canvas: Canvas) {
         val w = if (width > 0) width else getWidth()
         val h = if (height > 0) height else getHeight()
-        CarOverlayPainter.draw(canvas, shown, dark, w, h, visible, density)
+        CarOverlayPainter.draw(canvas, shown, dark, w, h, visible, density, stable)
     }
 
     companion object {
