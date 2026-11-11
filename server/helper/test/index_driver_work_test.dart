@@ -268,6 +268,24 @@ void main() {
     expect(pdfCore.calls, ['list:id-a.zim', 'list:id-a.zim', 'open:id-a.zim', 'add:a.pdf', 'close', 'finish']);
   });
 
+  test('with only PDF work left, paused indexing still reports work (index.pause busy), so Resume stays on offer', () async {
+    status['a.zim'] = _st('a.zim', pdf: {'state': 'none'});
+    final driver = make(withPdf: true)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    final op = IndexPauseOp(driver);
+    driver.tick();
+    driver.pause();
+    await pumpEventQueue();
+    expect(driver.busy, isFalse, reason: 'the PDF run ended as paused');
+    expect(driver.hasWork, isTrue);
+    expect(op.handle('index.pause', const {}), {'paused': true, 'busy': true});
+    driver.resume();
+    driver.tick();
+    await pumpEventQueue();
+    expect(pdfCore.calls, contains('finish'));
+    expect(op.handle('index.pause', const {}), {'paused': false, 'busy': false});
+  });
+
   test('a ZIM whose PDF index is ready, or that has no PDFs, is left alone', () async {
     status['ready.zim'] = _st('ready.zim', pdf: {'state': 'ready', 'snapshot': 's'});
     status['none.zim'] = _st('none.zim', pdf: {'state': 'none'});

@@ -100,7 +100,8 @@ class IndexDriver {
   bool get hasWork {
     if (busy || _waiting) return true;
     try {
-      return _next() != null;
+      // PDF work counts too: with only PDFs left and indexing paused, nothing runs, and Resume must stay on offer.
+      return _next() != null || _nextPdf() != null;
     } catch (_) {
       return false;
     }
@@ -297,7 +298,19 @@ class IndexDriver {
   /// there is none, or the core has no PDF index calls.
   bool _startPdf() {
     final w = pdf;
-    if (w == null || !w.core.available) return false;
+    final next = _nextPdf();
+    if (w == null || next == null) return false;
+    _tried.add(next.key);
+    _pdfBusy = true;
+    unawaited(_runPdf(w, next.path, next.id, next.key));
+    return true;
+  }
+
+  /// The next ZIM whose PDFs are still to be indexed, from the status [_next] last read; null when there is none or the core has
+  /// no PDF index calls. Starts nothing.
+  ({String path, String id, String key})? _nextPdf() {
+    final w = pdf;
+    if (w == null || !w.core.available) return null;
     for (final src in _sources) {
       if (src['kind'] == 'library') continue;
       final path = src['path'] as String;
@@ -308,12 +321,9 @@ class IndexDriver {
       if (state == 'ready' || state == 'opening') continue;
       final key = 'zim-pdf/$id';
       if (_tried.contains(key) || failures.containsKey(key) || _pdfCounts['$path|$id'] == 0) continue;
-      _tried.add(key);
-      _pdfBusy = true;
-      unawaited(_runPdf(w, path, id, key));
-      return true;
+      return (path: path, id: id, key: key);
     }
-    return false;
+    return null;
   }
 
   Future<void> _runPdf(PdfWork w, String path, String id, String key) async {
