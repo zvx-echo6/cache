@@ -173,7 +173,9 @@ class CarOverlayTest {
         val m = l.mini!!
         assertEquals(88f + 16f, c.left, 0.01f)
         assertEquals(380f, c.width(), 0.01f)
-        assertEquals(560f - 16f - 58f, c.bottom, 0.01f)
+        // The card's top is where the mock's 97 high card had it; the larger text made it 115 high, downwards.
+        assertEquals(560f - 16f - 58f - 97f, c.top, 0.01f)
+        assertEquals(115f, c.height(), 0.01f)
         assertEquals(220f, m.width(), 0.01f)
         assertEquals(140f, m.height(), 0.01f)
         assertEquals(1280f - 16f - 84f, m.right, 0.01f)
@@ -254,16 +256,13 @@ class CarOverlayTest {
     fun at1280x720TheApprovedLayoutDoesNotMove() {
         // The host's buttons showing: the visible area is the stable area.
         val shown = CarOverlayPainter.layout(1280, 720, mainStable, 1f, showClimb = true, showMini = true, stable = mainStable)
-        assertEquals(520f, shown.climb!!.left, 0.51f)
-        assertEquals(526f, shown.climb!!.top, 0.51f)
-        assertEquals(845f, shown.climb!!.right, 0.51f)
+        // The climb card's top left corner and its right end are the approved ones; its bottom was 623 before its text grew.
+        assertRect(520f, 526f, 845f, 641f, shown.climb)
         assertRect(861f, 541f, 1081f, 681f, shown.mini)
         assertVehicleClear(shown, mainStable)
         // The buttons hidden: the visible area reaches 77 px further right, the vehicle stays.
         val hidden = CarOverlayPainter.layout(1280, 720, Rect(504, 91, 1258, 697), 1f, showClimb = true, showMini = true, stable = mainStable)
-        assertEquals(520f, hidden.climb!!.left, 0.51f)
-        assertEquals(526f, hidden.climb!!.top, 0.51f)
-        assertEquals(900f, hidden.climb!!.right, 0.51f)
+        assertRect(520f, 526f, 900f, 641f, hidden.climb)
         assertRect(938f, 541f, 1158f, 681f, hidden.mini)
         assertVehicleClear(hidden, mainStable)
     }
@@ -391,6 +390,45 @@ class CarOverlayTest {
         val x = overlayView()
         x.setTrip(CarTrip.from(mapOf("phase" to "previewing", "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"))), dark = true, now = true)
         assertEquals(Pair(false, false), painted(x))
+    }
+
+    // ---- the climb card's text: size and contrast -----------------------------------------------------------------------
+
+    @Test
+    fun noTextOnTheClimbCardIsSmallerThanTheHostsSmallestLine() {
+        // The host's smallest line on the guidance screen is 24 px at density 1 (measured on the car simulator).
+        assertEquals(24f, CarOverlayPainter.HOST_MIN_TEXT, 0f)
+        for (size in listOf(CarOverlayPainter.CLIMB_LABEL_SIZE, CarOverlayPainter.CLIMB_FIGURE_SIZE, CarOverlayPainter.CLIMB_GRADE_SIZE)) {
+            assertTrue("$size", size >= CarOverlayPainter.HOST_MIN_TEXT)
+        }
+        // The figure stays the largest line. The card holds the three lines: it is 115 high, as wide as before.
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= CarOverlayPainter.CLIMB_LABEL_SIZE)
+        assertEquals(115f, CarOverlayPainter.CLIMB_H, 0f)
+        assertEquals(380f, CarOverlayPainter.CLIMB_W, 0f)
+        assertTrue(CarOverlayPainter.CLIMB_PAD_Y * 2 + CarOverlayPainter.CLIMB_LABEL_SIZE + 31f + 29f <= CarOverlayPainter.CLIMB_H)
+    }
+
+    private fun luminance(c: Int): Double {
+        fun ch(v: Int): Double {
+            val s = v / 255.0
+            return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * ch((c shr 16) and 0xFF) + 0.7152 * ch((c shr 8) and 0xFF) + 0.0722 * ch(c and 0xFF)
+    }
+
+    private fun contrast(a: Int, b: Int): Double {
+        val x = luminance(a)
+        val y = luminance(b)
+        return (maxOf(x, y) + 0.05) / (minOf(x, y) + 0.05)
+    }
+
+    @Test
+    fun textOnTheClimbCardReadsAtFourAndAHalfToOneInAllFourThemes() {
+        for (theme in listOf("light", "parchment", "dark", "tactical")) {
+            val p = trip(theme).palette!!.night
+            assertTrue("$theme figures ${contrast(p.cardText, p.card)}", contrast(p.cardText, p.card) >= 4.5)
+            assertTrue("$theme label ${contrast(p.cardSecondary, p.card)}", contrast(p.cardSecondary, p.card) >= 4.5)
+        }
     }
 
     // ---- texts and geometry ---------------------------------------------------------------------------------------------

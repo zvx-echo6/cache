@@ -33,16 +33,31 @@ object CarOverlayPainter {
     // ---- layout (mock pixels at density 1.0) ---------------------------------------------------------------------
     const val MARGIN = 16f
     const val CLIMB_W = 380f
-    const val CLIMB_H = 97f
+    const val CLIMB_H = 115f
     const val CLIMB_PAD_X = 18f
     const val CLIMB_PAD_Y = 14f
-    const val CLIMB_TEXT_W = 132f
+    const val CLIMB_TEXT_W = 168f
     const val CLIMB_GAP = 16f
     const val SHAPE_W = 196f
     const val SHAPE_H = 52f
 
-    /** The host's own travel-estimate card sits under the climb card at the bottom left (12 + 26 + 12 high, an 8 gap). */
-    const val ETA_CLEARANCE = 58f
+    /** The narrowest shape still worth drawing beside the text. */
+    const val SHAPE_MIN_W = 60f
+
+    /** The smallest text the host itself draws on the guidance screen (the second line of its estimate card and the next
+     * step: 24 px at density 1.0, measured on the car simulator). No text on the pieces is smaller. */
+    const val HOST_MIN_TEXT = 24f
+
+    /** The climb card's three lines: the label, the figure (bold) and the grade line (semibold). The mock had 13, 26 and 15;
+     * the label and the grade line were raised to the host's smallest size, the figure was already above it. */
+    const val CLIMB_LABEL_SIZE = HOST_MIN_TEXT
+    const val CLIMB_FIGURE_SIZE = 26f
+    const val CLIMB_GRADE_SIZE = HOST_MIN_TEXT
+
+    /** Free map under the climb card. With the mock's 97 high card this was 58 (room for the host's travel-estimate card);
+     * the card grew 18 downwards for its larger text, so its top edge stays where it was. The host keeps its own cards out
+     * of the visible area, so nothing of the host's is under the card. */
+    const val ETA_CLEARANCE = 40f
     const val MINI_W = 220f
     const val MINI_H = 140f
 
@@ -106,7 +121,7 @@ object CarOverlayPainter {
             val bottom = area.bottom - (MARGIN + ETA_CLEARANCE) * d
             // The vehicle or the road ahead would be under the card: the card ends short of them.
             if (RectF.intersects(RectF(left, bottom - h, left + w, bottom), keep)) w = keep.left - left
-            if (w >= (CLIMB_PAD_X * 2 + CLIMB_TEXT_W + CLIMB_GAP + 60f) * d && bottom - h >= area.top) climb = RectF(left, bottom - h, left + w, bottom)
+            if (w >= (CLIMB_PAD_X * 2 + CLIMB_TEXT_W + CLIMB_GAP + SHAPE_MIN_W) * d && bottom - h >= area.top) climb = RectF(left, bottom - h, left + w, bottom)
         }
         return Layout(climb, mini)
     }
@@ -166,19 +181,30 @@ object CarOverlayPainter {
     fun drawClimbCard(canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float) {
         canvas.drawRoundRect(r, 16f * d, 16f * d, fill(pal.card))
         val x0 = r.left + CLIMB_PAD_X * d
-        // Text column: label 13, figure 26 bold, grade line 15 semibold (the mock's sizes).
-        var y = r.top + CLIMB_PAD_Y * d + 13f * d
-        canvas.drawText("Climb ahead", x0, y, text(pal.cardSecondary, 13f * d, 400))
+        // Text column: the label, the figure in bold, the grade line in semibold, one under the other as in the mock.
+        val labelPaint = text(pal.cardSecondary, CLIMB_LABEL_SIZE * d, 400)
+        val figurePaint = text(pal.cardText, CLIMB_FIGURE_SIZE * d, 700)
+        val gradePaint = text(pal.cardText, CLIMB_GRADE_SIZE * d, 600)
+        val label = "Climb ahead"
+        val figure = climbText(c.climbAheadM, imperial)
+        var y = r.top + (CLIMB_PAD_Y + CLIMB_LABEL_SIZE) * d
+        canvas.drawText(label, x0, y, labelPaint)
         y += 31f * d
-        canvas.drawText(climbText(c.climbAheadM, imperial), x0, y, text(pal.cardText, 26f * d, 700))
+        canvas.drawText(figure, x0, y, figurePaint)
+        var textW = max(labelPaint.measureText(label), figurePaint.measureText(figure))
         val g = c.gradePct
         val into = c.steepestInM
         if (g != null && into != null) {
-            y += 22f * d
-            canvas.drawText("${gradeText(g)} in ${aheadText(into, imperial)}", x0, y, text(pal.cardText, 15f * d, 600))
+            val grade = "${gradeText(g)} in ${aheadText(into, imperial)}"
+            y += 29f * d
+            canvas.drawText(grade, x0, y, gradePaint)
+            textW = max(textW, gradePaint.measureText(grade))
         }
-        val shapeW = min(SHAPE_W * d, r.right - CLIMB_PAD_X * d - (x0 + (CLIMB_TEXT_W + CLIMB_GAP) * d))
-        val shape = RectF(r.right - CLIMB_PAD_X * d - shapeW, r.centerY() - SHAPE_H * d / 2, r.right - CLIMB_PAD_X * d, r.centerY() + SHAPE_H * d / 2)
+        // The shape takes what the text leaves (a long figure pushes it right), and is left out when that is too little.
+        val shapeRight = r.right - CLIMB_PAD_X * d
+        val shapeW = min(SHAPE_W * d, shapeRight - (x0 + max(CLIMB_TEXT_W * d, textW) + CLIMB_GAP * d))
+        if (shapeW < SHAPE_MIN_W * d * 0.5f) return
+        val shape = RectF(shapeRight - shapeW, r.centerY() - SHAPE_H * d / 2, shapeRight, r.centerY() + SHAPE_H * d / 2)
         drawShape(canvas, shape, c, pal, d)
     }
 
