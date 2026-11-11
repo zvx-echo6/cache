@@ -8,6 +8,7 @@ release notes).
 
 ### New
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
+- Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
