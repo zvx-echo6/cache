@@ -14,6 +14,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+// ignore: depend_on_referenced_packages
 import 'package:pdfrx_engine/pdfrx_engine.dart';
 
 /// The core's one native PDFium font mapper, as the app asks for it wherever it starts pdfrx (app/lib/pdf/pdfium_init.dart): the core
