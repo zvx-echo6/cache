@@ -247,6 +247,9 @@ impl Helper {
         if let Some(guide) = self.cfg.guide_package.as_ref().filter(|g| g.is_file()) {
             cmd.env("CACHE_GUIDE_LIBRARY", guide);
         }
+        // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
+        // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.
+        cmd.env(cache_netguard::ENV_VAR, cache_netguard::ENV_VALUE);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
         }

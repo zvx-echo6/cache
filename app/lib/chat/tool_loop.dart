@@ -7,6 +7,7 @@ import '../actions/confirm.dart';
 import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
+import 'progress_steps.dart';
 import 'navigation_action.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
@@ -47,9 +48,13 @@ class TurnUpdate {
     this.cited = const [],
     this.error,
     this.activeTool,
+    this.step,
+    this.finishedStep,
     this.completedToolText,
     this.promptTokens = 0,
     this.generatedTokens = 0,
+    this.chatFull = false,
+    this.cutShort = false,
   });
 
   final TurnPhase phase;
@@ -64,10 +69,22 @@ class TurnUpdate {
   /// Machine tool name for the current progress label; never sent to the model.
   final String? activeTool;
 
+  /// The tool call that runs now, with its own arguments, for the progress line; never sent to the model.
+  final ToolStep? step;
+
+  /// A tool call that just finished, for the trail of steps above the progress line; never sent to the model.
+  final ToolStep? finishedStep;
+
   /// A completed tool round's commentary, retained in the visible work flow.
   final String? completedToolText;
   final int promptTokens;
   final int generatedTokens;
+
+  /// Only with [phase] done: the next request did not fit the context, so there is no answer and the chat is full.
+  final bool chatFull;
+
+  /// Only with [phase] done: the answer ended because the context filled up, so it is cut off.
+  final bool cutShort;
 }
 
 /// Runs one conversation: sends messages and tool schemas, runs the tools the model asks for (at most
@@ -227,12 +244,22 @@ class ToolLoop {
         logDetail('Ask tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
       }
       if (seed != null) {
-        yield TurnUpdate(phase: TurnPhase.searching, activeTool: seed.name);
         final call = _numbered(seed.name, seed.arguments);
+        final step = _stepOf(call);
+        yield TurnUpdate(phase: TurnPhase.searching, activeTool: seed.name, step: step);
         _messages.add({'role': 'assistant', 'content': null, 'tool_calls': [call.toJson()]});
         await _addResult(call);
+        yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
       }
       while (true) {
+        // Stop came while no generation was running (the tool schemas were being read, or a tool was running): the step has
+        // finished and its result is kept, but no further generation starts. The turn ends as one stopped before the model's
+        // first word does: an empty answer in the conversation and the done update.
+        if (_stopped) {
+          _messages.add({'role': 'assistant', 'content': ''});
+          yield TurnUpdate(phase: TurnPhase.done, promptTokens: promptTokens, generatedTokens: generatedTokens);
+          return;
+        }
         // After kMaxToolRounds rounds the same tool schemas are still sent (a request without them renders a different prompt,
         // which the engine would read again from the tool schemas on), with tool calls switched off and the nudge.
         final capped = rounds >= kMaxToolRounds || finalAnswer;
@@ -292,8 +319,10 @@ class ToolLoop {
           _messages.add({...last.toMessage(), 'tool_calls': [for (final c in calls) c.toJson()]});
           yield TurnUpdate(phase: TurnPhase.searching, activeTool: calls.first.name, completedToolText: _clean(last.content).trim());
           for (final call in calls) {
-            yield TurnUpdate(phase: TurnPhase.searching, activeTool: call.name);
+            final step = _stepOf(call);
+            yield TurnUpdate(phase: TurnPhase.searching, activeTool: call.name, step: step);
             await _addResult(call);
+            yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
           }
           rounds++;
           continue;
@@ -308,12 +337,25 @@ class ToolLoop {
           cited: [for (final n in check.kept) _results[n]!],
           promptTokens: promptTokens,
           generatedTokens: generatedTokens,
+          cutShort: last.cutByContext,
         );
         return;
       }
+    } on ContextFullException catch (e) {
+      logError('Ask: the chat is full (${e.detail})');  // the engine text goes to the log, never to the screen
+      yield const TurnUpdate(phase: TurnPhase.done, chatFull: true);
     } catch (e) {
       yield TurnUpdate(phase: TurnPhase.done, error: e.toString().replaceFirst('Bad state: ', ''));
     }
+  }
+
+  /// [call] as the progress line shows it. A `read` carries the title of the earlier result it opens (null when that number is not
+  /// one of this conversation's results).
+  ToolStep _stepOf(ToolCall call) {
+    final args = call.argumentsMap;
+    if (call.name != 'read') return ToolStep(call.name, args);
+    final n = args['n'];
+    return ToolStep(call.name, args, n is num ? _results[n.toInt()]?.result.title : null);
   }
 
   /// Runs [call] and adds its tool message; an `act` call that needs a tap shows its confirm card.

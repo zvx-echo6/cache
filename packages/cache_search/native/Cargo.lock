@@ -840,6 +840,7 @@ dependencies = [
 name = "cache_layers"
 version = "0.1.0"
 dependencies = [
+ "cache_netguard",
  "flate2",
  "image-webp",
  "libc",
@@ -858,6 +859,7 @@ name = "cache_live"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cache_netguard",
  "cache_places",
  "cache_tool",
  "cache_user",
@@ -886,6 +888,13 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cache_netguard"
+version = "0.1.0"
+dependencies = [
+ "ureq",
 ]
 
 [[package]]
@@ -946,6 +955,7 @@ dependencies = [
 name = "cache_regions"
 version = "0.1.0"
 dependencies = [
+ "cache_netguard",
  "cache_places",
  "cache_snapshot",
  "cache_sync",
@@ -973,6 +983,7 @@ dependencies = [
  "cache_layers",
  "cache_live",
  "cache_navigate",
+ "cache_netguard",
  "cache_notebook",
  "cache_places",
  "cache_regions",
@@ -1030,6 +1041,7 @@ dependencies = [
  "cache_classify",
  "cache_embed",
  "cache_ingest",
+ "cache_netguard",
  "cache_shelves",
  "cache_sync",
  "http-body-util",
@@ -1114,6 +1126,7 @@ dependencies = [
 name = "cache_video"
 version = "0.1.0"
 dependencies = [
+ "cache_netguard",
  "chrono",
  "libc",
  "percent-encoding",

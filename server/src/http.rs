@@ -19,6 +19,10 @@
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
+//!                                              The link (and `icon_url`) must be a public address: 400 invalid for a private, loopback,
+//!                                              link-local (169.254.169.254), Tailscale (100.64/10) or other non-public one, and the job fails
+//!                                              if the name or a redirect leads to one (checked at connect time; `fetch_scope::guarded_agent`).
+//!                                              The catalog hosts are the only exception.
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
 //!   POST /api/library/jobs/<id>/pause|resume -> a waiting or running download stops and keeps its part file (state "paused"); Resume continues it
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
@@ -27,8 +31,15 @@
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
-//!   GET  /api/fetch?url=<encoded>           -> the answer of a catalog host (allow-list in `fetch`), streamed, at most 50 MB
-//!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
+//!   GET  /api/fetch?url=<encoded>[&scope=catalog|models|video|user][&plain=1]
+//!                                            -> the answer of an address the scope allows (rules in `fetch_scope`), streamed. `catalog`
+//!                                               (default): the catalog hosts, at most 50 MB. The other scopes read other servers: a
+//!                                               public address only (never private, loopback or link-local, checked after DNS and on
+//!                                               every redirect), text, JSON, XML or a picture, at most 8 MB; `models` Hugging Face's API,
+//!                                               `video` a PeerTube site's /api/v1/ and caption and thumbnail files, `user` an address the
+//!                                               person typed. `plain=1` also takes http on port 80 (video, user). Errors: 400 invalid,
+//!                                               403 host_not_allowed | scope_off, 413 too_large, 415 unsupported_type, 429 busy, 502
+//!                                               upstream_status | unreachable. (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
 //!   /api/build/...                          -> building libraries from PDFs and the drop folder; the whole list is in server/BUILD-API.md
 //!                                              (libraries, books, upload, queue, drop folder)
 //!   GET  /api/models/embedder               -> {state:"missing"|"downloading"|"ready"|"error", bytes?,total?,error?, file,size,library_found}
@@ -47,6 +58,10 @@
 //!                                              allow-popups` (no allow-same-origin), so a page in it has no origin and cannot use the
 //!                                              session. The URL's token is the only credential here (the cookie is not read), and the
 //!                                              token opens nothing under /api/. 401 for a missing, wrong or expired token.
+//!   GET|HEAD /api/video/media/<path>        -> a saved video, sound, caption or picture of <data>/app/docs/videos, with Range (see `video`)
+//!   GET|HEAD /api/video/zim/<zim id>/<entry> -> a video or caption entry of a ZIM, with Range
+//!   GET  /api/video/stream?u=<url>          -> a video site's stream, caption or picture read by the server (public hosts only), with Range;
+//!                                              an HLS playlist comes back with its parts rewritten to this route
 //!   GET  /api/tiles/layers/<id>/<z>/<x>/<y>[.ext] and /api/tiles/layers/<id>/tilejson.json
 //!                                           -> the core's local tile server's answer, unchanged (200 tile, 204 none, 503 + Retry-After for a
 //!                                              tile that may come later); the session cookie is the credential. See `tiles`.
@@ -198,6 +213,7 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
                     ("Content-Type", s.content_type.unwrap_or_else(|| "application/octet-stream".into())),
                     // whatever the catalog sends is data for the app to read, never a page of this origin
                     ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+                    ("X-Content-Type-Options", "nosniff".into()),
                 ],
                 body: vec![],
                 stream: Some(s.rx),
@@ -855,6 +871,11 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.build.upload(&lib, replace.as_deref(), &query, len, req.into_body()).await)
+    } else if signed_in && matches!(method.as_str(), "GET" | "HEAD") && path.starts_with("/api/video/") {
+        // Videos: files, ZIM entries and streams, with Range (see `video`); the Range header is read here.
+        let range = req.headers().get(hyper::header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let query = req.uri().query().unwrap_or("").to_string();
+        crate::video::serve(app.helper.clone(), &method, &path, &query, range.as_deref()).await
     } else {
         match Limited::new(req.into_body(), limit).collect().await {
             Ok(b) => route(&app, &method, &target, cookie.as_deref(), &b.to_bytes()).await,

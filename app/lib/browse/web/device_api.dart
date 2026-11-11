@@ -129,8 +129,22 @@ abstract class DeviceApi {
   /// The search core reads the library folders again (after the browser put a library in place).
   Future<void> rescan();
 
-  /// Reads a catalogue address through the device (it only reads the catalogue hosts the app uses).
-  Future<List<int>> fetch(Uri url);
+  /// Reads an address through the device. [scope] says what kind of read it is and so which addresses the device allows: null is
+  /// the catalogue hosts the app uses; see [FetchScope]. [plain] also accepts http (the phone's `httpsOnly: false`).
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false});
+}
+
+/// The kinds of read Cache Server's `/api/fetch` knows (server/src/fetch_scope.rs). Each allows its own addresses and holds the answer
+/// to small text, data or pictures; none reaches a private address.
+class FetchScope {
+  /// Hugging Face's model API, and the catalogue hosts.
+  static const String models = 'models';
+
+  /// A PeerTube site's API, and its caption and thumbnail files.
+  static const String video = 'video';
+
+  /// An address the person typed (an own data source): any public host.
+  static const String user = 'user';
 }
 
 /// How long a call to the device may take before it counts as not answering. Without a limit one call that never ends would stop the
@@ -229,8 +243,8 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   @override
-  Future<List<int>> fetch(Uri url) async {
-    final r = await _send('GET', '/api/fetch?url=${Uri.encodeComponent(url.toString())}');
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) async {
+    final r = await _send('GET', '/api/fetch?url=${Uri.encodeComponent(url.toString())}${scope == null ? '' : '&scope=$scope'}${plain ? '&plain=1' : ''}');
     if (r.statusCode != 200) throw _error(r);
     return r.bodyBytes;
   }

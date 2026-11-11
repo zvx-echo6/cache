@@ -590,6 +590,43 @@ impl ZimSource {
     }
 }
 
+/// The ZIM's own icon: the `Illustration_48x48@1` metadata entry, a PNG.
+const ILLUSTRATION: &str = "Illustration_48x48@1";
+/// An illustration larger than this is not an icon; it is left out rather than sent across the FFI.
+const ILLUSTRATION_MAX: usize = 1 << 20;
+const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+impl ZimSource {
+    /// The bytes of the `Illustration_48x48@1` metadata (a PNG), or `not_found` when the ZIM has none (or it is not a PNG).
+    /// Read through the `zim` crate: metadata is a few small entries, so libzim's archive is not needed (or opened) for it.
+    pub fn illustration_png(&self) -> Result<Vec<u8>> {
+        let missing = || Error::not_found(format!("zim {} has no illustration", self.id));
+        let c = self.zim()?.metadata(ILLUSTRATION).map_err(Error::from)?.ok_or_else(missing)?;
+        if c.len().map_err(Error::from)? > ILLUSTRATION_MAX {
+            return Err(missing());
+        }
+        let b = c.to_vec().map_err(Error::from)?;
+        if b.len() < PNG_MAGIC.len() || b[..PNG_MAGIC.len()] != PNG_MAGIC {
+            return Err(missing());
+        }
+        Ok(b)
+    }
+}
+
+/// Standard base64 with padding (the FFI answers are JSON text).
+pub fn base64_encode(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = ((c[0] as u32) << 16) | ((*c.get(1).unwrap_or(&0) as u32) << 8) | (*c.get(2).unwrap_or(&0) as u32);
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
 fn redirect_chain_error() -> Error {
     Error::internal(format!("redirect chain longer than {MAX_REDIRECT_HOPS} hops"))
 }
@@ -598,6 +635,13 @@ fn redirect_chain_error() -> Error {
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+
+    #[test]
+    fn base64_matches_the_standard_vectors() {
+        for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(base64_encode(i.as_bytes()), o);
+        }
+    }
 
     const U: &str = "17e9fb54-9554-d2cd-e15f-17cf750882d1";
 

@@ -3,7 +3,7 @@
 
 use crate::error::{Error, Result};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -15,6 +15,8 @@ pub fn user_agent() -> String {
 
 /// Counting semaphore.
 pub struct Gate {
+    /// The layer's name, for the log.
+    name: String,
     state: Mutex<(usize, usize)>, // (in flight, limit)
     cv: Condvar,
 }
@@ -66,8 +68,8 @@ pub fn set_upstream_timeout(d: Duration) {
 }
 
 impl Gate {
-    fn new(limit: usize) -> Arc<Gate> {
-        Arc::new(Gate { state: Mutex::new((0, limit.max(1))), cv: Condvar::new() })
+    fn new(name: &str, limit: usize) -> Arc<Gate> {
+        Arc::new(Gate { name: name.to_string(), state: Mutex::new((0, limit.max(1))), cv: Condvar::new() })
     }
     pub fn acquire(self: &Arc<Gate>) -> Permit {
         let mut g = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -105,7 +107,7 @@ static GATES: OnceLock<Mutex<HashMap<String, Arc<Gate>>>> = OnceLock::new();
 pub fn gate_for(layer: &str, limit: usize) -> Arc<Gate> {
     let m = GATES.get_or_init(Default::default);
     let mut m = m.lock().unwrap_or_else(|e| e.into_inner());
-    let g = m.entry(layer.to_string()).or_insert_with(|| Gate::new(limit));
+    let g = m.entry(layer.to_string()).or_insert_with(|| Gate::new(layer, limit));
     if let Ok(mut s) = g.state.lock() {
         s.1 = limit.max(1);
     }
@@ -135,7 +137,8 @@ pub fn mark_network_up() {
 fn agent() -> &'static ureq::Agent {
     static A: OnceLock<ureq::Agent> = OnceLock::new();
     A.get_or_init(|| {
-        ureq::AgentBuilder::new()
+        // the public-address guard when the Linux server's helper installed it (a no-op on a phone)
+        cache_netguard::guarded(ureq::AgentBuilder::new())
             .timeout_connect(Duration::from_secs(8))
             .timeout(Duration::from_secs(60))
             .user_agent(&user_agent())
@@ -218,6 +221,9 @@ pub fn get(url: &str, range: Option<(u64, u64)>, gate: Option<&Arc<Gate>>) -> Re
                 if matches!(t.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed) {
                     connect_failures += 1;
                     if connect_failures >= 2 {
+                        if refused_by_guard(&t) {
+                            log_refusal_once(gate.map_or_else(|| host_of(url), |g| g.name.clone()), &host_of(url));
+                        }
                         DOWN_UNTIL.store(now() + 15, Ordering::Relaxed);
                         break;
                     }
@@ -226,6 +232,36 @@ pub fn get(url: &str, range: Option<(u64, u64)>, gate: Option<&Arc<Gate>>) -> Re
         }
     }
     Err(Error::fetch_failed(last))
+}
+
+/// Whether the connection failed because the public-address guard refused the address (cache_netguard's resolver answers
+/// `PermissionDenied`), not because the network is down.
+fn refused_by_guard(t: &ureq::Transport) -> bool {
+    let mut src = std::error::Error::source(t);
+    while let Some(e) = src {
+        if e.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied) {
+            return true;
+        }
+        src = e.source();
+    }
+    false
+}
+
+/// The host part of an address (no scheme, path, query or credentials, so nothing secret reaches the log).
+fn host_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let auth = rest.split(['/', '?', '#']).next().unwrap_or("");
+    auth.rsplit('@').next().unwrap_or("").to_string()
+}
+
+/// One line per layer (or per host, for a read with no layer) when the guard refused an address, so a bad layer URL shows in the log
+/// instead of looking like a network that is down. There is no logging crate in the core; the other crates print like this.
+fn log_refusal_once(who: String, host: &str) {
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let first = SEEN.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).insert(who.clone());
+    if first {
+        eprintln!("cache_layers: {who}: {host} is not on the public internet, so the server's address guard refused it; check the layer's URL");
+    }
 }
 
 fn finish_range(status: u16, mut body: Vec<u8>, range: Option<(u64, u64)>) -> Result<Response> {

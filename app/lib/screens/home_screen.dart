@@ -3,11 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../desktop/desktop.dart';
+import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
 import '../discover/ui/home_card.dart';
+import '../discover/ui/kit.dart' show DTile;
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart' show ModuleId;
+import '../models/search_model.dart' show SearchModel;
 import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
@@ -100,7 +104,23 @@ class _HomeScreenState extends State<HomeScreen> {
   LayoutState get layout => widget.layout;
 
   @override
+  void initState() {
+    super.initState();
+    homeSearchRequests.addListener(_focusSearch);
+    // The cursor is in the search box: the search model loads ahead of the first search.
+    _focus.addListener(() {
+      if (_focus.hasFocus) SearchModel.aboutToSearch();
+    });
+  }
+
+  /// The "/" key on the Linux desktop: the search box has the focus once Home is the page shown.
+  void _focusSearch() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _focus.requestFocus();
+  });
+
+  @override
   void dispose() {
+    homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
     _focus.dispose();
@@ -161,17 +181,30 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final typing = _query.text.trim().isNotEmpty;
+    final desktop = DesktopMetrics.of(context);
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
-        title: const BrandWordmark(height: 30),
+        // The wide desktop's sidebar carries the wordmark, so the bar says where we are; the rail has none, so the bar keeps it.
+        title: isLinuxWide(context) ? const Text('Home') : const BrandWordmark(height: 30),
+        // On the Linux desktop Settings has its place in the sidebar, and Edit Home is the page's one action, here.
         actions: [
-          IconButton(
-            key: const ValueKey('home-settings'),
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: widget.onOpenSettings,
-          ),
+          if (desktop != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton(
+                key: const ValueKey('edit-home'),
+                onPressed: () => _editHome(context),
+                child: const Text('Edit Home', style: TextStyle(fontSize: 15)),
+              ),
+            ),
+          if (desktop == null)
+            IconButton(
+              key: const ValueKey('home-settings'),
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: widget.onOpenSettings,
+            ),
         ],
       ),
       body: ListenableBuilder(
@@ -210,10 +243,13 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
           return LayoutBuilder(builder: (context, cts) {
-            final padding = ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
+            // The desktop dashboard: left-aligned under the bar, at most 1040 wide, on the page gutter.
+            final padding = desktop != null
+                ? EdgeInsets.fromLTRB(desktop.gutter, 24, (cts.maxWidth - desktop.gutter - 1040).clamp(desktop.gutter, double.infinity).toDouble(), 24)
+                : ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
             // A short, wide window (a phone held sideways): two columns, so the first screen shows the search box and the weather
             // on the left and the Set up card and the shortcuts on the right, instead of one column a few rows of which show.
-            if (!typing && isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth) {
+            if (!typing && (desktop != null || (isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth))) {
               const right = {HomeBlock.setup, HomeBlock.shortcuts};
               return ListView(
                 key: const ValueKey('home-two-columns'),
@@ -223,12 +259,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
-                      const SizedBox(width: 16),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
+                      Expanded(flex: desktop != null ? 3 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
+                      SizedBox(width: desktop != null ? 24 : 16),
+                      Expanded(flex: desktop != null ? 2 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
                     ],
                   ),
-                  editHome,
+                  if (desktop == null) editHome,
                 ],
               );
             }
@@ -241,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 for (final b in blocks)
                   if (typing && b != HomeBlock.ask) const SizedBox.shrink() else block(b),
                 if (typing) _resultList(k),
-                if (!typing) editHome,
+                if (!typing && desktop == null) editHome,
               ],
             );
           });
@@ -501,7 +537,9 @@ class ShortcutCard extends StatelessWidget {
     final s = shortcut;
     final double a = large ? 56 : 32;
     final Widget art = switch (s.kind) {
-      ShortcutKind.module => BrandTileImage(s.module!.tile, size: a),
+      ShortcutKind.module => s.module!.tile == null
+          ? DTile(s.module!.icon, size: a)
+          : BrandTileImage(s.module!.tile!, size: a),
       ShortcutKind.chat => BrandTileImage(BrandTile.chat, size: a),
       ShortcutKind.page => BrandTileImage(BrandTile.library, size: a),
       ShortcutKind.place => SizedBox(height: a, width: a, child: Icon(Icons.place_outlined, size: a * 0.8, color: k.accent)),
@@ -631,6 +669,8 @@ class _WeatherCard extends StatelessWidget {
         ],
       );
     }
+    // The desktop puts the button at the end of the title row instead of a full-width bar under it.
+    final trailing = isLinuxDesktop(context) && action != null;
     return InkWell(
       key: const ValueKey('home-weather'),
       onTap: onTap,
@@ -641,7 +681,7 @@ class _WeatherCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            top,
+            if (trailing) Row(children: [Expanded(child: top), const SizedBox(width: 16), SizedBox(width: 180, child: action)]) else top,
             if (h.message == null && h.alerts.isNotEmpty)
               for (final a in h.alerts.take(4))
                 Padding(
@@ -681,7 +721,7 @@ class _WeatherCard extends StatelessWidget {
                 ),
               ),
             if (h.alerts.length > 4) Padding(padding: const EdgeInsets.only(top: 6), child: Text('${h.alerts.length - 4} more in Weather', style: small)),
-            if (action != null) ...[const SizedBox(height: 10), action],
+            if (action != null && !trailing) ...[const SizedBox(height: 10), action],
           ],
         ),
       ),

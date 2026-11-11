@@ -19,11 +19,14 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.guide});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
+
+  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart); null in tests.
+  final void Function()? onOpened;
 
   /// Starts the index jobs of the sources just opened (null in tests that do not index).
   final IndexDriver? indexer;
@@ -57,6 +60,7 @@ class OpenOp implements OpHandler {
     final g = guide;
     // A sources.json is the operator's own list: the guide is not added to it.
     if (g != null && given is! List) unawaited(g.ensure());
+    onOpened?.call();
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
 }
@@ -110,6 +114,8 @@ class IndexStateOp implements OpHandler {
   Object? handle(String op, Map<String, dynamic> a) => {
         for (final e in indexer.progress.entries) e.key: {'fraction': e.value, 'error': null},
         for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
+        // Only while the host holds index work: why ("heat" or "memory"), under a key no source path can be.
+        if (indexer.hold != null) 'hold': {'fraction': null, 'error': null, 'hold': indexer.hold},
       };
 }
 

@@ -10,7 +10,8 @@ import 'cache_llama_bindings.dart';
 
 /// Turns text into a vector with an embedding GGUF (cl_embed_load, cl_embed). The model loads on the first call, in its own
 /// background isolate, and is let go after [idleFor] without a call (it takes about 700 MB while loaded); the next call loads
-/// it again.
+/// it again. [warm] loads it ahead of a call, and while [keepLoaded] is true there is no idle release (the app sets it while it
+/// holds the model warm in the foreground, and frees the model itself with [free]).
 ///
 /// THE SETTINGS MATCH THE PACK BUILDER (cache_embed in the core): context 512, vectors normalised. The pooling comes from the
 /// model's own metadata. A query then gets the same vector here as `places_pack embed` gave the pack's texts.
@@ -21,6 +22,9 @@ class CacheEmbedder {
   final String modelPath;
   final int threads;
   final Duration idleFor;
+
+  /// True: the model is not let go after [idleFor] (only [free] or [dispose] let it go).
+  bool keepLoaded = false;
 
   /// The context length cl_embed_load is given.
   static const int nCtx = 512;
@@ -71,9 +75,22 @@ class CacheEmbedder {
     _idle?.cancel();
     _toWorker!.send({'type': 'embed', 'id': id, 'path': modelPath, 'threads': threads, 'text': text});
     final r = await c.future;
-    _idle = Timer(idleFor, free);
+    if (!keepLoaded) _idle = Timer(idleFor, free);
     if (r['error'] != null) throw StateError(r['error'] as String);
     return (r['vector'] as TransferableTypedData).materialize().asFloat32List().toList();
+  }
+
+  /// Loads the model now, without embedding anything. Throws a [StateError] with the reason when it cannot load.
+  Future<void> warm() async {
+    await _ensureWorker();
+    final id = _nextId++;
+    final c = Completer<Map<String, dynamic>>();
+    _pending[id] = c;
+    _idle?.cancel();
+    _toWorker!.send({'type': 'load', 'id': id, 'path': modelPath, 'threads': threads});
+    final r = await c.future;
+    if (!keepLoaded) _idle = Timer(idleFor, free);
+    if (r['error'] != null) throw StateError(r['error'] as String);
   }
 
   /// Lets the model go (the next [embed] loads it again).
@@ -107,28 +124,41 @@ void _embedWorker(SendPort toMain) {
   var nEmbd = 0;
   final err = malloc<Uint8>(_kErr).cast<Utf8>();
   final info = malloc<Uint8>(_kInfo).cast<Utf8>();
+  String? loadError;
+
+  // Loads the model when it is not loaded; false (with loadError) when it cannot.
+  bool ensureLoaded(Map msg) {
+    loadError = null;
+    if (handle != nullptr) return true;
+    final p = (msg['path'] as String).toNativeUtf8();
+    handle = b.clEmbedLoad(p, CacheEmbedder.nCtx, msg['threads'] as int, err, _kErr);
+    malloc.free(p);
+    if (handle == nullptr) {
+      loadError = 'The embedding model did not load: ${err.toDartString()}';
+      return false;
+    }
+    final n = b.clEmbedInfo(handle, info, _kInfo);
+    nEmbd = n < 0 ? 0 : ((jsonDecode(info.toDartString()) as Map)['n_embd'] as num).toInt();
+    if (nEmbd <= 0) {
+      b.clEmbedFree(handle);
+      handle = nullptr;
+      loadError = 'The embedding model did not say its size';
+      return false;
+    }
+    return true;
+  }
 
   rp.listen((dynamic m) {
     final msg = m as Map;
     switch (msg['type']) {
+      case 'load':
+        ensureLoaded(msg);
+        toMain.send(loadError == null ? {'id': msg['id']} : {'id': msg['id'], 'error': loadError});
       case 'embed':
         final id = msg['id'];
-        if (handle == nullptr) {
-          final p = (msg['path'] as String).toNativeUtf8();
-          handle = b.clEmbedLoad(p, CacheEmbedder.nCtx, msg['threads'] as int, err, _kErr);
-          malloc.free(p);
-          if (handle == nullptr) {
-            toMain.send({'id': id, 'error': 'The embedding model did not load: ${err.toDartString()}'});
-            break;
-          }
-          final n = b.clEmbedInfo(handle, info, _kInfo);
-          nEmbd = n < 0 ? 0 : ((jsonDecode(info.toDartString()) as Map)['n_embd'] as num).toInt();
-          if (nEmbd <= 0) {
-            b.clEmbedFree(handle);
-            handle = nullptr;
-            toMain.send({'id': id, 'error': 'The embedding model did not say its size'});
-            break;
-          }
+        if (!ensureLoaded(msg)) {
+          toMain.send({'id': id, 'error': loadError});
+          break;
         }
         final text = (msg['text'] as String).toNativeUtf8();
         final out = malloc<Float>(nEmbd);

@@ -5,6 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import '../chat/system_prompt.dart';
 import '../chat/navigation_action.dart';
 import '../chat/tool.dart';
+import '../platform/app_log.dart';
 import 'core_numbering.dart';
 
 /// The search core's tools for one chat: the schemas of every installed tool (cs_tool_schemas) and one call
@@ -75,12 +76,15 @@ class CoreToolHost implements ToolHost {
   Future<HostToolResult> call(String name, Map<String, dynamic> args, DateTime now) async {
     var sent = args;
     final query = args['query'];
+    final timing = Stopwatch()..start();
     if (name == 'search' && query is String && queryVector != null) {
       final v = await queryVector!(query);
       if (v != null) sent = {...args, 'query_vector': v.toJson()};
     }
+    final embedMs = timing.elapsedMilliseconds;
     final conv = await numbering.conversation;
     final o = await conv.tool(name, sent, now: isoWithOffset(now));
+    if (name == 'search') logInfo('Search timing: embed $embedMs ms, core ${timing.elapsedMilliseconds - embedMs} ms');
     var content = o.content;
     var ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title, link: i.link, time: i.time, pdfPage: i.pdfPage, quote: i.quote, timeEnd: i.timeEnd, lang: i.lang)];
     final run = name == 'act' ? hostRun(content) : null;

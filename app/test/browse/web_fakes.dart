@@ -22,6 +22,8 @@ class FakeDeviceApi implements DeviceApi {
   Uint8List fetchBody = Uint8List(0);
   Object? fetchError;
   Uri? fetched;
+  String? fetchedScope;
+  bool fetchedPlain = false;
 
   /// What a removal does besides being recorded (a test that keeps real files removes them here).
   void Function(String id)? onRemove;
@@ -95,8 +97,10 @@ class FakeDeviceApi implements DeviceApi {
   Future<void> rescan() async => rescans++;
 
   @override
-  Future<List<int>> fetch(Uri url) async {
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) async {
     fetched = url;
+    fetchedScope = scope;
+    fetchedPlain = plain;
     if (fetchError != null) throw fetchError!;
     return fetchBody;
   }
@@ -211,5 +215,5 @@ class FakeDeviceApiView implements DeviceApi {
   @override
   Future<void> rescan() => inner.rescan();
   @override
-  Future<List<int>> fetch(Uri url) => inner.fetch(url);
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) => inner.fetch(url, scope: scope, plain: plain);
 }

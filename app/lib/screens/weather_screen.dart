@@ -7,6 +7,8 @@ import '../weather/places.dart';
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'weather_turn_on.dart';
+import '../desktop/desktop.dart';
+import '../desktop/weather_layout.dart';
 import '../layout/adaptive.dart' show ContentWidth;
 
 /// The Weather module: for each watched place, the forecast day by day and everything that is happening near it (warnings,
@@ -140,13 +142,17 @@ class _WeatherScreenState extends State<WeatherScreen> {
         listenable: w,
         builder: (context, _) {
           final st = w.status();
+          // On the Linux desktop an empty page is one centred card, which holds the status line too.
+          final card = isLinuxDesktop(context) && (w.enabledSources.isEmpty || (places != null && places.isEmpty));
           return RefreshIndicator(
             onRefresh: _update,
             child: LayoutBuilder(builder: (context, cts) => ListView(
-              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 4, bottom: 24),
+              padding: weatherPadding(context, cts.maxWidth, centered: card),
               children: [
-                _statusBox(context, st),
-                const SizedBox(height: 12),
+                if (!card) ...[
+                  _statusBox(context, st),
+                  const SizedBox(height: 12),
+                ],
                 if (w.enabledSources.isEmpty)
                   widget.turnOn == null
                       ? _empty(context, 'Nothing is switched on yet.', 'Choose weather, alerts or fires in Settings > Weather and alerts.')
@@ -186,12 +192,10 @@ class _WeatherScreenState extends State<WeatherScreen> {
                       if (views == null) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
                       final forecast = [for (final v in views) if (v.group == LiveGroup.forecast) v];
                       final alerts = [for (final v in views) if (v.group == LiveGroup.alerts) v];
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (final v in forecast) _forecast(context, v),
+                      return WeatherColumns(
+                        main: [for (final v in forecast) _forecast(context, v)],
+                        side: [
                           if (alerts.isNotEmpty) ...[
-                            const SizedBox(height: 8),
                             Text('Happening nearby', style: TextStyle(fontSize: 13, letterSpacing: 0.6, color: k.secondary)),
                             const SizedBox(height: 6),
                             ..._alerts(context, alerts),
@@ -237,29 +241,37 @@ class _WeatherScreenState extends State<WeatherScreen> {
   Widget _empty(BuildContext context, String a, String b, {bool offerTurnOn = true}) {
     final k = context.t;
     // The words and the buttons keep to a narrow column, centred, on a wide window.
-    return Padding(
+    // (On the Linux desktop the heading and the words are left-aligned and the buttons sit in a row.)
+    final desk = isLinuxDesktop(context);
+    final body = Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
       child: ContentWidth(
         maxWidth: 440,
         child: Column(
+        crossAxisAlignment: desk ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
+          Text(a, textAlign: desk ? TextAlign.start : TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
-          Text(b, textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
+          Text(b, textAlign: desk ? TextAlign.start : TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
           if (widget.turnOn case final t? when offerTurnOn) ...[
             const SizedBox(height: 16),
-            WeatherTurnOnButtons(turnOn: t),
+            WeatherTurnOnButtons(turnOn: t, inline: desk),
           ],
           if (widget.onOpenSettings != null) ...[
             const SizedBox(height: 12),
             widget.turnOn == null
                 ? OutlinedButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings'))
-                : TextButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
+                : TextButton(
+                    // On the desktop the button's text starts at the buttons' left edge.
+                    style: desk ? TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0)) : null,
+                    onPressed: widget.onOpenSettings,
+                    child: const Text('Open Weather and alerts settings')),
           ],
         ],
         ),
       ),
     );
+    return isLinuxDesktop(context) ? WeatherEmptyCard(status: _statusBox(context, w.status()), child: body) : body;
   }
 
   String _ageLine(SourceView v) {

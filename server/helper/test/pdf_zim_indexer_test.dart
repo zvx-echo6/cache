@@ -18,7 +18,7 @@ class FakeCore implements PdfIndexCore {
   List<Map<String, dynamic>> added = [];
   Map<String, dynamic>? addedPages;
   String? addedTitle;
-  PdfFinishState finish = PdfFinishState.done;
+  PdfFinishState finishState = PdfFinishState.done;
   void Function()? onAdd;
 
   @override
@@ -65,7 +65,7 @@ class FakeCore implements PdfIndexCore {
   @override
   Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid}) async {
     calls.add('finish:$indexesDir:$zimUuid');
-    return _Job(finish);
+    return _Job(finishState);
   }
 }
 
@@ -136,6 +136,21 @@ void main() {
     expect(ix.done, 1);
   });
 
+  test('a PDF the reader failed on (crash, time limit, kill) is logged with its name and why, and is not recorded as damaged', () async {
+    core.entries['zim:u1/crash.pdf'] = Uint8List(1);
+    byLength[1] = const PdfTextResult.failed('ended by signal 11');
+    core.entries['zim:u1/ok.pdf'] = Uint8List(4);
+    byLength[4] = const PdfTextResult(status: 'ok', size: 4, sha256: 'h4', pages: ['hello world']);
+    final lines = <String>[];
+    final ix = ZimPdfIndexer(core: core, read: read, indexesDir: '/idx', log: lines.add);
+    expect(await ix.run(_list(['crash.pdf', 'ok.pdf'])), ZimPdfEnd.finished);
+    expect(lines, ['PDF not read (crash.pdf): the reader failed: ended by signal 11']);
+    expect(core.calls.where((c) => c.startsWith('skip:')), isEmpty);
+    expect(core.calls.where((c) => c.startsWith('add:')), hasLength(1));
+    expect(ix.skipped, 1);
+    expect(ix.done, 1);
+  });
+
   test('PDFs an earlier run finished are not read again', () async {
     core.doneBefore = {'a.pdf'};
     core.entries['zim:u1/b.pdf'] = Uint8List(4);
@@ -182,7 +197,7 @@ void main() {
   });
 
   test('a publish that fails fails the run with its reason; the build stays', () async {
-    core.finish = PdfFinishState.failed;
+    core.finishState = PdfFinishState.failed;
     core.entries['zim:u1/a.pdf'] = Uint8List(4);
     byLength[4] = const PdfTextResult(status: 'ok', size: 4, sha256: 'h', pages: ['hello world']);
     final ix = indexer();
@@ -198,5 +213,8 @@ void main() {
     expect(r.damaged, isFalse);
     expect(PdfTextResult.fromJson({'status': 'locked'}).locked, isTrue);
     expect(PdfTextResult.fromJson({'status': 'nonsense'}).damaged, isTrue);
+    const failed = PdfTextResult.failed('exit code 1');
+    expect(failed.failed, isTrue);
+    expect(failed.damaged, isFalse);
   });
 }

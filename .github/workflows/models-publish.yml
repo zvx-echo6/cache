@@ -133,6 +133,9 @@ jobs:
               print(f"200 {url}")
           print(f"OK: format {d['format']}, updated {d.get('updated', '(none)')}, {len(models)} models")
           PY
+      - name: Check app 1.0.30 can still read it
+        # Phones on 1.0.30 (build 46) read this same key. The checker mirrors that release's parser (see the script header).
+        run: python3 -I .github/scripts/check-models-compat-1.0.30.py "$SRC"
       - name: Upload if changed
         run: |
           new=$(md5sum "$SRC" | cut -d' ' -f1)

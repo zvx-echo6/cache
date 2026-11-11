@@ -9,6 +9,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../../chat/answer_markdown.dart' show answerStyle;
 import '../../layout/layout_state.dart';
 import '../../notebook/markdown_text.dart';
+import '../../notebook/map_icons.dart';
 import '../../notebook/media.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
@@ -18,6 +19,7 @@ import '../../notebook/places.dart';
 import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
+import 'icon_picker.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart' show NotebookDeps;
 import 'place_alert_sheet.dart';
@@ -140,7 +142,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
       photos: e.photos,
       files: e.files,
       private: e.private,
-      props: {...e.props, 'color': e.color ?? defaultMarkerColor(_entries ?? const []).id, 'on_map': !e.onMap},
+      props: {...e.props, if (e.color != null || book.def.color == null) 'color': e.color ?? defaultMarkerColor(_entries ?? const []).id, 'on_map': !e.onMap},
     );
   }
 
@@ -156,7 +158,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
       case 'import':
         await importPlacesInto(context, nb, notebookId: book.id, now: widget.deps.now);
       case 'edit':
-        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book)));
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book, icons: widget.deps.icons)));
       case 'map':
         await nb.setOnMap(book, !book.map);
       case 'home':
@@ -245,7 +247,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   }
 
   Widget _row(Notebook book, NbEntry e, CacheTokens k) {
-    final color = markerColor(e.color);
+    final color = markerColor(e.color ?? book.def.color);
     final h = _here;
     final id = watchId(e);
     final detail = [
@@ -285,7 +287,18 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
             key: ValueKey('marker-${e.id}'),
             radius: 24,
             onTap: () => _toggleMap(book, e),
-            child: SizedBox(width: 44, height: 44, child: Center(child: PlaceMarker(color: color, hidden: !e.onMap))),
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: PlaceMarker(
+                  color: color,
+                  hidden: !e.onMap,
+                  icon: widget.deps.icons == null ? null : iconForPlace(e, book).icon,
+                  pinStyle: widget.deps.icons?.pinStyle(),
+                ),
+              ),
+            ),
           ),
         ),
         title: name,
@@ -449,6 +462,25 @@ class PlaceView extends StatelessWidget {
   final Notebook book;
   final String entryId;
 
+  /// The place's own icon was changed here (null: use the notebook's): saved at once, and it goes to the top of Recent.
+  Future<void> _setIcon(NotebookState nb, NbEntry e, String? icon, MapIconSetup icons) async {
+    if (icon != null) icons.used?.call(icon);
+    await nb.saveEntry(
+      id: e.id,
+      notebookId: e.notebookId,
+      occurredAt: e.occurredAt,
+      title: e.title,
+      body: e.body,
+      values: e.values,
+      place: e.place,
+      photos: e.photos,
+      files: e.files,
+      draft: e.draft,
+      private: e.private,
+      props: {...e.props, 'icon': ?icon}..removeWhere((k, v) => k == 'icon' && icon == null),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final nb = deps.notebook;
@@ -467,6 +499,7 @@ class PlaceView extends StatelessWidget {
           final p = e.place;
           final pd = deps.placesDeps;
           final id = watchId(e);
+          final icons = deps.icons;
           return Scaffold(
             appBar: AppBar(
               title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -489,11 +522,28 @@ class PlaceView extends StatelessWidget {
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    PlaceMarker(color: markerColor(e.color), hidden: !e.onMap),
+                    if (icons == null)
+                      PlaceMarker(color: markerColor(e.color ?? book.def.color), hidden: !e.onMap)
+                    else
+                      PlaceIconButton(
+                        overrideId: e.icon,
+                        notebookIconId: book.def.icon ?? defaultNotebookIcon(book),
+                        notebookName: book.name,
+                        tint: iconTint(context, markerColor(e.color ?? book.def.color).color),
+                        recent: icons.recent(),
+                        pinStyle: icons.pinStyle(),
+                        onChanged: (id) => _setIcon(nb, e, id, icons),
+                      ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '),
-                          style: TextStyle(fontSize: 14, color: k.secondary)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          if (icons != null)
+                            Text(e.icon == null ? 'Icon: ${iconForPlace(e, book).label} (notebook icon)' : 'Icon: ${iconForPlace(e, book).label} (this place)', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -560,6 +610,7 @@ class PlaceForm extends StatefulWidget {
   /// The notebook's places (for the default colour).
   final List<NbEntry> others;
 
+
   @override
   State<PlaceForm> createState() => _PlaceFormState();
 }
@@ -571,8 +622,12 @@ class _PlaceFormState extends State<PlaceForm> {
   late final MarkdownController _notes = MarkdownController(text: widget.entry?.body ?? '');
   final TextEditingController _search = TextEditingController();
   late NbPlace? _pin = widget.entry?.place ?? widget.at;
-  late MarkerColor _color = widget.entry?.color != null ? markerColor(widget.entry!.color) : defaultMarkerColor(widget.others);
+  late MarkerColor _color = widget.entry?.color != null
+      ? markerColor(widget.entry!.color)
+      : (widget.book.def.color != null ? markerColor(widget.book.def.color) : defaultMarkerColor(widget.others));
   late bool _onMap = widget.entry?.onMap ?? true;
+  late String? _icon = widget.entry?.icon;
+  MapIconSetup? get _icons => widget.deps.icons;
   late bool _weather = _id == null ? true : pd?.watched(_id!) ?? false;
   late PlaceAlertRule _rule = _id == null ? PlaceAlertRule.same : pd?.alerts.ruleFor(_id!) ?? PlaceAlertRule.same;
   late List<NbPhoto> _photos = [...?widget.entry?.photos];
@@ -657,7 +712,13 @@ class _PlaceFormState extends State<PlaceForm> {
         photos: _photos,
         files: e?.files ?? const [],
         private: e?.private ?? false,
-        props: {...?e?.props, 'color': _color.id, 'on_map': _onMap},
+        props: {
+          ...?e?.props,
+          // A place's own colour only when it differs from its notebook's.
+          if (widget.book.def.color == null || _color.id != widget.book.def.color) 'color': _color.id,
+          'on_map': _onMap,
+          if (_icons != null && _icon != null) 'icon': _icon,
+        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && widget.book.def.color != null && _color.id == widget.book.def.color)),
       );
       _added.clear();
       final id = watchId(saved);
@@ -762,6 +823,38 @@ class _PlaceFormState extends State<PlaceForm> {
               decoration: const InputDecoration(labelText: 'Name', counterText: ''),
               onChanged: (_) => setState(() {}),
             ),
+            if (_icons != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  PlaceIconButton(
+                    overrideId: _icon,
+                    notebookIconId: widget.book.def.icon ?? defaultNotebookIcon(widget.book),
+                    notebookName: widget.book.name,
+                    tint: iconTint(context, _color.color),
+                    recent: _icons!.recent(),
+                    pinStyle: _icons!.pinStyle(),
+                    onChanged: (id) {
+                      if (id != null) _icons!.used?.call(id);
+                      setState(() => _icon = id);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Map icon', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        Text(
+                          _icon == null ? '${mapIconOrTemplate(widget.book.def.icon ?? defaultNotebookIcon(widget.book)).label} (notebook icon)' : '${mapIconOrTemplate(_icon).label} (this place)',
+                          style: TextStyle(fontSize: 16, color: k.text),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Text('Marker color', style: TextStyle(fontSize: 14, color: k.secondary)),
             Wrap(
@@ -799,7 +892,12 @@ class _PlaceFormState extends State<PlaceForm> {
             SwitchListTile(
               key: const ValueKey('place-on-map'),
               contentPadding: EdgeInsets.zero,
-              secondary: PlaceMarker(color: _color, hidden: !_onMap),
+              secondary: PlaceMarker(
+                color: _color,
+                hidden: !_onMap,
+                icon: _icons == null ? null : mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)).icon,
+                pinStyle: _icons?.pinStyle(),
+              ),
               title: const Text('Show on the map'),
               value: _onMap,
               onChanged: (v) => setState(() => _onMap = v),
