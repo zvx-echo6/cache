@@ -737,7 +737,12 @@ class NavState extends ChangeNotifier {
     final queued = _queuedReroute;
     _queuedReroute = null;
     final latest = lastFix ?? location.fix;
-    if (queued != null && guiding && latest != null) await _reroute(latest, force: true, say: queued);
+    if (queued == null || !guiding) return;
+    if (latest == null) {
+      _rerouteOnFix = queued;
+      return;
+    }
+    await _reroute(latest, force: true, say: queued);
   }
 
   void _say(String text) {

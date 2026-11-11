@@ -637,6 +637,37 @@ void main() {
         expect(speaker.said, contains('Adding a stop'));
       });
 
+      test('a queued reroute that finds no position when the first one ends runs on the next fix', () async {
+        await guideWith(routeJson);
+        gps.controller.add(fixAt(42.5, -113.78));
+        await settle();
+        final gate = Completer<void>();
+        var n = 0;
+        backend.onRoute = (to, mode, from) async {
+          n++;
+          if (n == 1) await gate.future;
+          return MapRoute.fromJson(fakeRouteJson(id: 'r$n'));
+        };
+        final first = nav.addStop(place('place:9', 'Store'));
+        await settle();
+        expect(nav.rerouting, isTrue);
+        final second = nav.addStop(place('place:10', 'Gas'));
+        await settle();
+        expect(await second, isTrue);
+        // the position is lost while the first one is under way
+        nav.lastFix = null;
+        location.fix = null;
+        gate.complete();
+        await first;
+        await settle();
+        expect(n, 1, reason: 'the queued one has no position to start from yet');
+        expect(nav.rerouting, isFalse);
+        gps.controller.add(fixAt(42.5, -113.77));
+        await settle(60);
+        expect(n, 2);
+        expect(names(backend.vias.last), ['Store', 'Gas']);
+      });
+
       test('a stop added after passing stop 0 is not treated as passed', () async {
         await startOn(routeJson);
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-a'));
