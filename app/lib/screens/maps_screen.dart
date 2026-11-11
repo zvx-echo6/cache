@@ -332,6 +332,9 @@ class _MapsScreenState extends State<MapsScreen> {
   }
 
   void _afterCameraSettles() {
+    // The style's set-up is asynchronous and can finish after this screen has gone: no timer is started then (dispose has
+    // already cancelled the last one, and nothing would cancel a new one).
+    if (!mounted) return;
     _idleTimer?.cancel();
     _idleTimer = Timer(const Duration(milliseconds: 400), () async {
       final c = _controller;
