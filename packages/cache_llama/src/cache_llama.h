@@ -56,6 +56,13 @@ CL_API int cl_start(void * h, const char * request_json, char * err, int err_len
 // (returns 0, no decode, cl_next returns -1, cl_finish gives an empty answer). A stop before it was queued does not affect it.
 CL_API int cl_start_e(void * h, const char * request_json, unsigned long long epoch, char * err, int err_len);
 
+// cl_start_e for a question the caller can cancel alone: [qid] (non-zero, unique per question) names it. cl_cancel_question(qid)
+// ends that question, queued or generating, as a stop does (cl_start returns 0 with no decode, cl_next returns -1, cl_finish gives
+// the answer so far), without touching a read ahead (cl_warm) running before it: the read goes on and saves its prefix. A cancel
+// during the question's own prompt read takes effect when its first token is asked for. Thread-safe.
+CL_API int cl_start_q(void * h, const char * request_json, unsigned long long epoch, unsigned long long qid, char * err, int err_len);
+CL_API void cl_cancel_question(void * h, unsigned long long qid);
+
 // Reads the prompt start ahead, before any question: [request_json] is a request as cl_start takes it but with no user message
 // (the system message, the tools, enable_thinking). It is rendered by the same code as cl_start's, the stable prompt start is
 // found the same way (the tokens the template renders for it with two different one-word questions share), and that start is

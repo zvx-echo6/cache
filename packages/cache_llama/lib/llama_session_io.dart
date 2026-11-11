@@ -9,6 +9,7 @@ import 'cache_llama_bindings.dart';
 import 'load_options.dart';
 import 'partial_message.dart';
 import 'warm_result.dart';
+import 'warm_stop.dart';
 
 /// Owns one loaded model. All native calls that can take time (load, start, token loop, parse) run
 /// in a long-lived background isolate; [stop] calls cl_stop directly (it is thread-safe).
@@ -24,7 +25,10 @@ class LlamaSession {
   final Map<int, StreamController<PartialMessage>> _gens = {};
   final Map<int, Completer<WarmResult>> _warms = {};
   int? _warmId; // the read ahead in flight (not a check)
-  bool _warmJoined = false; // a generation was sent behind it
+  final WarmStopPolicy _policy = WarmStopPolicy(); // what Stop does while a read ahead runs
+  int _qid = 0; // the unique number of each question sent (cl_start_q / cl_cancel_question)
+  int? _joinedGenId; // the question sent behind the read in flight, and its number
+  int _joinedQid = 0;
   CacheLlamaBindings? _mainBindings; // only used for cl_stop
   int _handleAddress = 0;
 
@@ -74,8 +78,9 @@ class LlamaSession {
         final c = _warms.remove(id);
         var joined = false;
         if (id == _warmId) {
-          joined = _warmJoined;
+          joined = _policy.joined;
           _warmId = null;
+          _policy.warmEnded();
         }
         c?.complete(WarmResult(
           switch (msg['rc'] as int) {
@@ -145,7 +150,12 @@ class LlamaSession {
       return Stream.error(StateError('No model is loaded'));
     }
     final id = _nextId++;
-    if (_warmId != null) _warmJoined = true; // it waits behind the read ahead and reuses it
+    final qid = ++_qid;
+    _policy.questionQueued(); // behind a read ahead it waits and reuses it
+    if (_warmId != null) {
+      _joinedGenId = id;
+      _joinedQid = qid;
+    }
     late StreamController<PartialMessage> c;
     c = StreamController<PartialMessage>(onCancel: () {
       if (_gens.containsKey(id)) stop();
@@ -156,7 +166,7 @@ class LlamaSession {
     // The stop epoch as of now (the question is queued): a stop that comes before the worker starts it, behind a read ahead for
     // example, ends it at once; a stop from before it was queued does not.
     final epoch = _handleAddress == 0 ? 0 : (_mainBindings?.clStopEpoch?.call(Pointer<Void>.fromAddress(_handleAddress)) ?? 0);
-    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null, 'epoch': epoch});
+    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null, 'epoch': epoch, 'qid': qid});
     return c.stream;
   }
 
@@ -172,7 +182,7 @@ class LlamaSession {
     _warms[id] = c;
     if (!checkOnly) {
       _warmId = id;
-      _warmJoined = false;
+      _policy.warmQueued();
     }
     // The stop epoch as of now, read here on the main isolate as cl_stop is called from here: a stop between this send and the
     // worker's cl_warm (the worker may be busy) is then seen by cl_warm, which reads nothing.
@@ -184,7 +194,8 @@ class LlamaSession {
   /// Aborts a read ahead in flight (cl_stop: llama.cpp's abort hook and the check between batches). Not when a question was sent
   /// behind it: the question needs what the read gives, and cl_stop would reach it too. Thread-safe.
   void cancelWarm() {
-    if (_warmId != null && !_warmJoined && _handleAddress != 0) {
+    _policy.backgrounded(); // from now a Stop is a full stop again
+    if (_warmId != null && _policy.canStopRead && _handleAddress != 0) {
       _mainBindings?.clStop(Pointer<Void>.fromAddress(_handleAddress));
     }
   }
@@ -198,16 +209,32 @@ class LlamaSession {
   }
 
   /// Ends the running generation early (the final message still arrives). Thread-safe.
+  ///
+  /// A question that joined a running read ahead is cancelled alone: the read goes on to the end and saves its prefix (cl_cancel_question;
+  /// the question's stream ends at once, empty, as a stop before the first token does). A second Stop, a Stop with Cache in the
+  /// background, and a Stop with no question joined are the native stop as always ([WarmStopPolicy]).
   void stop() {
-    if (_handleAddress != 0) {
-      _mainBindings?.clStop(Pointer<Void>.fromAddress(_handleAddress));
+    if (_handleAddress == 0) return;
+    final handle = Pointer<Void>.fromAddress(_handleAddress);
+    final gen = _joinedGenId;
+    if (_policy.onStop() == StopAction.cancelQuestion && _mainBindings?.clCancelQuestion != null && gen != null && _gens.containsKey(gen)) {
+      _mainBindings!.clCancelQuestion!(handle, _joinedQid);
+      final c = _gens.remove(gen);
+      c?.add(const PartialMessage(isFinal: true));
+      c?.close();
+      return;
     }
+    _mainBindings?.clStop(handle);
+  }
+
+  void _stopNative() {
+    if (_handleAddress != 0) _mainBindings?.clStop(Pointer<Void>.fromAddress(_handleAddress));
   }
 
   /// Frees the model's memory; the background isolate stays for the next [load]. A running generation is stopped first.
   Future<void> unload() async {
     if (_toWorker == null) return;
-    stop();
+    _stopNative();
     _handleAddress = 0;
     for (final c in _gens.values) {
       c.close();
@@ -220,7 +247,7 @@ class LlamaSession {
 
   /// Frees the model and ends the background isolate.
   Future<void> dispose() async {
-    stop();
+    _stopNative();
     _toWorker?.send({'type': 'free'});
     _handleAddress = 0;
     for (final c in _gens.values) {
@@ -294,7 +321,11 @@ void _workerMain(SendPort toMain) {
         }
         final clock = Stopwatch()..start();
         final req = (msg['request'] as String).toNativeUtf8();
-        final rc = b.clStartE != null ? b.clStartE!(handle, req, msg['epoch'] as int, err, _kErrLen) : b.clStart(handle, req, err, _kErrLen);
+        final rc = b.clStartQ != null
+            ? b.clStartQ!(handle, req, msg['epoch'] as int, msg['qid'] as int, err, _kErrLen)
+            : b.clStartE != null
+                ? b.clStartE!(handle, req, msg['epoch'] as int, err, _kErrLen)
+                : b.clStart(handle, req, err, _kErrLen);
         final startMs = clock.elapsedMilliseconds;
         malloc.free(req);
         if (rc != 0) {

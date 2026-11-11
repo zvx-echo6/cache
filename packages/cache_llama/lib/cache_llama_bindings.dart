@@ -16,6 +16,10 @@ typedef _EpochC = Uint64 Function(Pointer<Void>);
 typedef LlamaEpochCall = int Function(Pointer<Void>);
 typedef _StartEC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint64, Pointer<Utf8>, Int32);
 typedef LlamaStartECall = int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Utf8>, int);
+typedef _StartQC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint64, Uint64, Pointer<Utf8>, Int32);
+typedef LlamaStartQCall = int Function(Pointer<Void>, Pointer<Utf8>, int, int, Pointer<Utf8>, int);
+typedef _CancelQC = Void Function(Pointer<Void>, Uint64);
+typedef LlamaCancelQCall = void Function(Pointer<Void>, int);
 typedef _IntHC = Int32 Function(Pointer<Void>);
 typedef LlamaHandleIntCall = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
@@ -31,6 +35,8 @@ class CacheLlamaBindings {
       : clLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_load'),
         clInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_info'),
         clStart = lib.lookupFunction<_StartC, LlamaStartCall>('cl_start'),
+        clStartQ = lib.providesSymbol('cl_start_q') ? lib.lookupFunction<_StartQC, LlamaStartQCall>('cl_start_q') : null,
+        clCancelQuestion = lib.providesSymbol('cl_cancel_question') ? lib.lookupFunction<_CancelQC, LlamaCancelQCall>('cl_cancel_question') : null,
         clStartE = lib.providesSymbol('cl_start_e') ? lib.lookupFunction<_StartEC, LlamaStartECall>('cl_start_e') : null,
         clWarm = lib.providesSymbol('cl_warm') ? lib.lookupFunction<_WarmC, LlamaWarmCall>('cl_warm') : null,
         clStopEpoch = lib.providesSymbol('cl_stop_epoch') ? lib.lookupFunction<_EpochC, LlamaEpochCall>('cl_stop_epoch') : null,
@@ -74,6 +80,10 @@ class CacheLlamaBindings {
   final LlamaLoadCall clLoad;
   final LlamaBufferCall clInfo;
   final LlamaStartCall clStart;
+  /// cl_start_e for a question that can be cancelled alone (cl_cancel_question); null in an older library.
+  final LlamaStartQCall? clStartQ;
+  final LlamaCancelQCall? clCancelQuestion;
+
   /// cl_start with the stop epoch of when the question was queued; null in an older library (cl_start is used).
   final LlamaStartECall? clStartE;
 
