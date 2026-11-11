@@ -13,9 +13,11 @@ import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../platform.dart' as plat;
+import '../screens/download_confirm.dart' show downloadSpace;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
 import '../settings/data_policy.dart';
+import '../settings/space.dart';
 import 'offroad_catalogue.dart';
 import 'problem_words.dart';
 import 'region_catalogue.dart';
@@ -172,8 +174,8 @@ String regionPartWords(RegionPart part, String? code, String message) {
 enum RegionPhase { downloading, ready, paused, stopped, failed }
 
 /// Where one part of a region stands. [notAvailable]: nothing is published for the area yet (places: the region catalogue or the
-/// places server's current.json has none for it). It is not a failure: the region counts as complete and no retry is offered; a
-/// later Update adds the part once it is published.
+/// places server's current.json has none for it; directions: the published road routing has no tile over it). It is not a
+/// failure: the region counts as complete and no retry is offered; a later Update adds the part once it is published.
 enum PartState { ready, downloading, waiting, paused, stopped, failed, notAvailable }
 
 /// True when the core's places error says nothing is published (the places server has no current.json: HTTP 404 or 410 for it).
@@ -426,9 +428,11 @@ class LocalRegion {
       final total = (p['bytes'] as num?)?.toInt() ?? 0, done = (p['done_bytes'] as num?)?.toInt() ?? 0;
       final f = p['state'] == 'ready' ? 1.0 : (total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0));
       final e = p['error'];
-      // Places not published for the area: no current.json on the server, or the published index has no tile over it.
-      if (which == RegionPart.places &&
-          ((p['state'] == 'failed' && placesNotPublished(e is String ? e : null)) || (p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0))) {
+      // Nothing is published for the area: the published index has no tile over it (the core then reads "ready" with nothing to
+      // fetch, for road routing as for places: an area outside the published roads read "Ready" with no road data), or, for
+      // places, the server has no current.json.
+      final noTiles = p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0;
+      if (noTiles || (which == RegionPart.places && p['state'] == 'failed' && placesNotPublished(e is String ? e : null))) {
         return RegionPartStatus(kind, PartState.notAvailable);
       }
       return switch (p['state']) {
@@ -499,6 +503,10 @@ class LocalRegion {
   /// The places part is not published for this region's area yet (see [PartState.notAvailable]).
   bool get placesNotAvailable => parts.any((p) => p.kind == RegionPartKind.places && p.state == PartState.notAvailable);
 
+  /// The parts not published for this region's area yet, each as its row says it: "Places not available yet", and the same for
+  /// directions when the published roads do not reach the area. Empty when every part it has is published.
+  List<String> get notAvailableNotes => [for (final p in parts) if (p.state == PartState.notAvailable) '${p.name} ${p.words}'];
+
   /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting", or "Places not
   /// available yet". A part is used the moment its tiles are saved, so the parts that are ready are not named. Empty when every
   /// part is ready.
@@ -535,6 +543,7 @@ class RegionsState extends ChangeNotifier {
     ZimDownloader? packDownloader,
     this.position,
     this.focus,
+    this.spaceOf,
   }) : _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
@@ -552,6 +561,10 @@ class RegionsState extends ChangeNotifier {
 
   /// The published off-road packs; null: regions have no off-road part.
   final OffroadCatalogue? offroadCatalogue;
+
+  /// The storage a region is checked against before any of its parts starts ([download]); null: the one the download pop-up
+  /// reads, so the two agree.
+  final Space Function(String dir)? spaceOf;
 
   /// The phone's position (null while it is not known): a region downloads from there outwards.
   final ({double lat, double lon})? Function()? position;
@@ -698,7 +711,9 @@ class RegionsState extends ChangeNotifier {
       final go = List.of(_waiting);
       _waiting.clear();
       for (final w in go) {
-        await download(w.$1, routing: w.$2, map: w.$3, places: w.$4, offroad: w.$5);
+        // Its space was checked when the person chose it (the pop-up), and there is nowhere to say a refusal now: it starts as it
+        // always has, with each part's own check.
+        await _download(w.$1, routing: w.$2, map: w.$3, places: w.$4, offroad: w.$5, anyway: false, checkSpace: false);
       }
     }
     notifyListeners();
@@ -1025,7 +1040,7 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {
       return (null, _needsConnection);
     }
-    final packs = packsCovering(all, bounds);
+    final packs = packsCovering(all, bounds, states: await statesOf(r));
     if (packs.isEmpty) return (null, null);
     if (!plat.isWeb) _offroadPath ??= (await offroadDir()).path;
     if (maps.engine.layer(kOffroadElevationLayer) == null) return (null, 'Off-road needs the Elevation map layer, which is not installed.');
@@ -1042,6 +1057,20 @@ class RegionsState extends ChangeNotifier {
     return (OffroadPlan(out), null);
   }
 
+  /// The states or provinces the region list ties [r] to ([statesIn]): the state a county or city is in, the states a region of
+  /// several states holds. Its off-road data is theirs. Empty when the list does not say: an area drawn on the map, or the
+  /// region's country file is not on the phone and cannot be read now (the packs are then chosen by overlap).
+  Future<List<RegionRecord>> statesOf(RegionRecord r) async {
+    if (r.isDrawn || r.kind == kAreaRegionKind) return const [];
+    final loaded = catalogue.loadedShards.where((s) => s[r.id] != null).firstOrNull;
+    if (loaded != null) return statesIn(loaded.records, r.id);
+    try {
+      return statesIn((await catalogue.shard(r.id.split('-').first)).records, r.id);
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// One part's entry of the core's plan: its cost, or why it cannot be worked out. Nothing when the part is not there.
   static (PartPlan?, String?) _partPlan(RegionPart part, Object? e) {
     if (e is! Map) return (null, null);
@@ -1053,10 +1082,49 @@ class RegionsState extends ChangeNotifier {
   }
 
   /// Starts downloading the parts of [r] that were picked. Throws [MobileDataBlocked] before anything starts when the phone is on
-  /// mobile data and downloads may not use it, unless [anyway].
-  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false, bool anyway = false}) async {
+  /// mobile data and downloads may not use it, unless [anyway]. Throws the core's `no_space`, also before anything starts, when
+  /// what is known of the picked parts does not fit the phone ([_checkSpace]).
+  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false, bool anyway = false}) =>
+      _download(r, routing: routing, map: map, places: places, offroad: offroad, anyway: anyway, checkSpace: true);
+
+  /// What the picked parts of [r] would download, from the sizes the app already has: the region catalogue's, as [costOf] reads
+  /// them (for off-road, the terrain heights and only the packs not on the phone). A part with no size there counts as nothing:
+  /// an area drawn on the map has none, and neither has a map layer the catalogue does not size.
+  int knownDownloadBytes(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false}) {
+    final c = costOf(r);
+    return (map ? (c.map ?? 0) : 0) + (routing ? (c.routing ?? 0) : 0) + (places ? (c.places ?? 0) : 0) + (offroad ? (c.offroad ?? 0) : 0);
+  }
+
+  /// One check of the free space for the whole region, before any part of it starts. Each part checks only itself when it starts
+  /// (every map layer downloads as a job of its own, and so do the off-road terrain heights and each pack; none of them counts
+  /// the others or what Cache keeps free), so the parts of a region that did not fit could each pass and fill the phone together.
+  /// What is known of the region ([knownDownloadBytes]) must fit what a download may use ([Space.usable]), the rule and the
+  /// figures of the download pop-up; when it does not, the core's `no_space` is thrown and nothing has started. A part whose size
+  /// is not known is not counted: its own check when it starts still stands.
+  Future<void> _checkSpace(RegionRecord r, {required bool routing, required bool map, required bool places, required bool offroad}) async {
+    final bytes = knownDownloadBytes(r, routing: routing, map: map, places: places, offroad: offroad);
+    if (bytes <= 0) return;
+    Space? space;
+    try {
+      space = (spaceOf ?? downloadSpace)((await supportDir()).path);
+    } catch (_) {
+      // The storage cannot be read: each part's own check is what there is.
+    }
+    if (space != null && space.shortBy(bytes) > 0) throw const CacheSearchException('no_space', 'There is not enough free space on this device.');
+  }
+
+  Future<void> _download(
+    RegionRecord r, {
+    required bool routing,
+    required bool map,
+    required bool places,
+    required bool offroad,
+    required bool anyway,
+    required bool checkSpace,
+  }) async {
     await policy.checkDownload(anyway: anyway);
     places = places && placesAvailable;
+    if (checkSpace) await _checkSpace(r, routing: routing, map: map, places: places, offroad: offroad);
     final k = _kept[r.id] ??= _Kept(id: r.id, name: r.name);
     k.bbox ??= r.bbox;
     if (r.isDrawn || r.kind == kAreaRegionKind) k.kind ??= r.kind;

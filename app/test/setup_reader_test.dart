@@ -41,6 +41,16 @@ void main() {
     expect(regionSetupValue(r, age: '1 day old'), 'nothing ready yet');
   });
 
+  test('routing with no tile over the area: what the assistant reads has not changed', () {
+    // The Regions screens say "not available yet" for it now (it read "Ready" with no road data). This text is a tool result:
+    // it stays as it was until that change is approved on its own.
+    const none = {'state': 'ready', 'tiles': 0, 'bytes': 0, 'done_tiles': 0, 'done_bytes': 0};
+    final r = LocalRegion(id: 'drawn-1', name: 'Drawn area', areas: [map], routing: none, places: ready(20));
+    expect(r.parts.firstWhere((p) => p.kind == RegionPartKind.directions).state, PartState.notAvailable, reason: 'what the screens read');
+    expect(regionSetupValue(r, age: '3 weeks old'), 'maps, routing, places; 3 weeks old');
+    expect(regionSetupValue(LocalRegion(id: 'drawn-2', name: 'Drawn area', routing: none)), 'routing');
+  });
+
   test('a failed part reads as not finished', () {
     final r = LocalRegion(id: 'us-id', name: 'Idaho', routing: ready(100), places: {'state': 'failed', 'error': 'HTTP 503 from https://data.cached.info/places/b1/x.sqlite.gz'});
     expect(regionSetupValue(r), 'routing; places not finished');
