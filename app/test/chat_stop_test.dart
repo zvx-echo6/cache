@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/chat/tool.dart';
+import 'package:cache/history/titles.dart';
+import 'package:cache_llama/cache_llama.dart';
 import 'package:cache/chat/tool_loop.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,7 +31,55 @@ class GatedSearch extends Tool {
   }
 }
 
+/// A model that is still reading the prompt when Stop comes: generate waits for stop(), then ends with the final message a
+/// stopped native turn gives (nothing generated, empty content, no error), as cl_start's aborted prefill does.
+class PrefillStopBackend extends ScriptedBackend {
+  PrefillStopBackend(super.script);
+  final reading = Completer<void>();
+  final _stop = Completer<void>();
+  bool holdNext = true;
+
+  @override
+  Stream<PartialMessage> generate(Map<String, dynamic> request) async* {
+    if (holdNext && (request['messages'] as List).last['content'] != kTitlePrompt) {
+      holdNext = false;
+      requests.add(request);
+      reading.complete();
+      await _stop.future;
+      yield const PartialMessage(isFinal: true, content: '', promptTokens: 521, generatedTokens: 0);
+      return;
+    }
+    yield* super.generate(request);
+  }
+
+  @override
+  void stop() {
+    super.stop();
+    if (!_stop.isCompleted) _stop.complete();
+  }
+}
+
 void main() {
+  test('Stop while the model reads the prompt ends the turn like a stop during generation, and the next question works', () async {
+    final backend = PrefillStopBackend([(_) => say('North is that way.')]);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..setBackend(backend);
+    final sending = chat.send('Which way is north?');
+    await backend.reading.future;
+    expect(chat.busy, isTrue);
+    chat.stop();
+    await sending;
+    expect(chat.busy, isFalse);
+    expect(chat.canSend, isTrue);
+    expect(chat.messages.last.phase, TurnPhase.done);
+    expect(chat.messages.last.text, isEmpty);
+    expect(chat.messages.last.error, isNull);
+
+    await chat.send('And south?');
+    await chat.whenIdle();
+    expect(chat.messages.last.text, 'North is that way.');
+    expect(chat.messages.last.error, isNull);
+  });
+
   test('Stop while Ask runs a tool ends the turn: nothing more is generated, Send works again and the next question is answered', () async {
     final search = GatedSearch();
     final backend = ScriptedBackend([(_) => callSearch('compass'), (_) => say('North is that way.')]);
