@@ -57,6 +57,12 @@ struct Handle {
     int                       n_ctx = 0;
     ggml_threadpool_t         pool  = nullptr;  // pinned threadpool (Android with several CPU clusters), else null
     void                   (* pool_free)(ggml_threadpool_t) = nullptr;
+    // Test builds (cl_configure pool_pause): pause and resume of the pool, found beside pool_new. Null: not available, never paused.
+    void                   (* pool_pause)(ggml_threadpool_t)  = nullptr;
+    void                   (* pool_resume)(ggml_threadpool_t) = nullptr;
+    bool                      pool_paused  = false;
+    bool                      pool_timing  = false;  // a resume is waiting for its first decode to finish
+    long long                 pool_woke_ms = 0;
 
     // Tokens whose keys/values are in the KV cache, in order (the prompt of the last cl_start plus
     // everything generated and decoded since). The next cl_start reuses the common prefix.
@@ -226,6 +232,11 @@ std::string g_prefix_dir;
 int         g_n_ubatch       = 0;      // test builds: the context's n_ubatch, 0 = llama.cpp's default (cl_configure "n_ubatch")
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
 int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
+bool        g_pool_pause     = false;  // test builds: pause the chat threadpool while it is not decoding (cl_configure "pool_pause")
+int         g_pool_poll      = -1;     // test builds: the chat threadpool's poll level 0..100, -1 = ggml's default (cl_configure "pool_poll")
+// What the chat threadpool is doing now, for the embedder's log line: 0 none (no pinned pool), 1 awake, 2 paused; and its poll level.
+std::atomic<int> g_pool_state{0};
+std::atomic<int> g_pool_poll_used{-1};
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
@@ -380,6 +391,49 @@ using sclock = std::chrono::steady_clock;
 long long ms_since(sclock::time_point t0) {
     return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count();
 }
+
+// Milliseconds on a steady clock, for the pool lines of the log (they are compared with each other, not with the wall clock).
+long long stamp_ms() {
+    return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// The chat threadpool's rest (test builds only, cl_configure pool_pause): its threads sit parked while nothing decodes, so they do
+// not compete with another model (the embedder) for the cores. Awake only from the start of a decode to the end of the generation.
+// ggml also wakes a paused pool by itself when a graph is computed, so a paused pool is never used stuck; waking it first only
+// moves the cost to a place that is timed. Every call is a no-op unless the switch is on and the pool's pause functions were found.
+void pool_wake(Handle * h) {
+    if (!g_pool_pause || !h->pool || !h->pool_resume || !h->pool_paused) return;
+    h->pool_resume(h->pool);
+    h->pool_paused  = false;
+    h->pool_timing  = true;
+    h->pool_woke_ms = stamp_ms();
+    g_pool_state.store(1);
+    cl_logi("pool: resumed at %lld ms", h->pool_woke_ms);
+}
+
+void pool_sleep(Handle * h) {
+    if (!g_pool_pause || !h->pool || !h->pool_pause || h->pool_paused) return;
+    h->pool_pause(h->pool);
+    h->pool_paused = true;
+    h->pool_timing = false;
+    g_pool_state.store(2);
+    cl_logi("pool: paused at %lld ms", stamp_ms());
+}
+
+// The first decode after a resume has finished: how long the chat model waited for its threads (resume to first decode done).
+void pool_first_decode_done(Handle * h) {
+    if (!h->pool_timing) return;
+    h->pool_timing = false;
+    cl_logi("pool: first decode after resume done, %lld ms after the resume", stamp_ms() - h->pool_woke_ms);
+}
+
+// Puts the pool to rest when the scope ends, unless [keep] (a generation that goes on).
+struct PoolRest {
+    Handle * h;
+    bool     keep = false;
+    explicit PoolRest(Handle * x) : h(x) {}
+    ~PoolRest() { if (!keep) pool_sleep(h); }
+};
 
 // A request's messages, thinking switch, tools and tool_choice as the chat template takes them.
 common_chat_templates_inputs parse_chat_inputs(const common_json & req) {
@@ -542,6 +596,7 @@ int decode_tokens(Handle * h, const std::vector<llama_token> & tokens, size_t fr
         ~PrefillGuard() { f = false; }
     } prefill_guard(h->in_prefill);
     reached = from;
+    if (from < to) pool_wake(h);  // before the first batch: a paused pool is never what a decode waits on
     for (int i = (int) from; i < (int) to;) {
         int n = std::min(n_batch, (int) to - i);
         if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
@@ -563,6 +618,7 @@ int decode_tokens(Handle * h, const std::vector<llama_token> & tokens, size_t fr
             return -1;
         }
         h->prompt_decoded += n;
+        pool_first_decode_done(h);
         h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
         i += n;
         reached = (size_t) i;
@@ -940,8 +996,10 @@ static void free_handle(Handle * h) {
     h->session.reset();
     h->tmpls.reset();
     if (h->ctx)   llama_free(h->ctx);
+    if (h->pool && h->pool_paused && h->pool_resume) h->pool_resume(h->pool);  // freed awake
     if (h->pool)  h->pool_free(h->pool);
     if (h->model) llama_model_free(h->model);
+    g_pool_state.store(0);
     delete h;
 }
 
@@ -952,6 +1010,8 @@ int cl_configure(const char * options_json) {
         auto j = common_json::parse(options_json ? options_json : "{}");
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
+        if (j.contains("pool_pause") && j.at("pool_pause").is_boolean()) g_pool_pause = j.at("pool_pause").get<bool>();
+        if (j.contains("pool_poll") && j.at("pool_poll").is_number()) g_pool_poll = std::max(-1, std::min(100, j.at("pool_poll").get<int>()));
         if (j.contains("n_ubatch") && j.at("n_ubatch").is_number()) g_n_ubatch = std::max(0, j.at("n_ubatch").get<int>());
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
         if (j.contains("preread_mbps") && j.at("preread_mbps").is_number()) g_preread_mbps = std::max(0, j.at("preread_mbps").get<int>());
@@ -1053,10 +1113,47 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
                 ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
                 for (int c : plan.cpus) tpp.cpumask[c] = true;
                 tpp.strict_cpu = true;
+                if (g_pool_poll >= 0) tpp.poll = (uint32_t) g_pool_poll;  // test builds only: else ggml's default
                 h->pool = pool_new(&tpp);
                 if (h->pool) {
                     h->pool_free = pool_free;
                     llama_attach_threadpool(h->ctx, h->pool, nullptr);
+                    g_pool_state.store(1);
+                    g_pool_poll_used.store((int) tpp.poll);
+                    if (g_pool_pause) {
+                        // ggml_threadpool_pause / ggml_threadpool_resume (void (*)(ggml_threadpool_t)). At the pinned llama.cpp the CPU
+                        // backend's proc-address table has only ggml_threadpool_new and _free, so these are looked up in the backend
+                        // library that pool_new came from (the same library the registry gave): the registry first, then the loaded
+                        // variant's own symbols.
+                        h->pool_pause  = reg ? (void (*)(ggml_threadpool_t)) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_pause") : nullptr;
+                        h->pool_resume = reg ? (void (*)(ggml_threadpool_t)) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_resume") : nullptr;
+#if defined(__ANDROID__) || defined(CL_BACKEND_DL)
+                        if (!h->pool_pause || !h->pool_resume) {
+                            Dl_info info;
+                            if (dladdr((void *) pool_new, &info) && info.dli_fname) {
+                                if (void * lib = dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD)) {
+                                    h->pool_pause  = (void (*)(ggml_threadpool_t)) dlsym(lib, "ggml_threadpool_pause");
+                                    h->pool_resume = (void (*)(ggml_threadpool_t)) dlsym(lib, "ggml_threadpool_resume");
+                                    dlclose(lib);  // the backend keeps its own reference
+                                }
+                            }
+                        }
+#else
+                        if (!h->pool_pause || !h->pool_resume) {
+                            h->pool_pause  = &ggml_threadpool_pause;
+                            h->pool_resume = &ggml_threadpool_resume;
+                        }
+#endif
+                        if (!h->pool_pause || !h->pool_resume) {
+                            h->pool_pause = nullptr;
+                            h->pool_resume = nullptr;
+                            cl_logi("pool: pause is not available in this CPU backend; the pool stays awake");
+                        } else {
+                            cl_logi("pool: pause on (poll %u)", (unsigned) tpp.poll);
+                        }
+                    } else if (g_pool_poll >= 0) {
+                        cl_logi("pool: poll %u", (unsigned) tpp.poll);
+                    }
                 } else {
                     cl_logi("cannot create the pinned threadpool: threads not pinned");
                 }
@@ -1074,6 +1171,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         Handle * out = h.release();
+        pool_sleep(out);  // test builds with pool_pause: at rest until the first decode
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
             g_live.insert(out);
@@ -1130,6 +1228,7 @@ int cl_info(void * hp, char * out_json, int len) {
 
 int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, char * err, int err_len) {
     auto * h = (Handle *) hp;
+    PoolRest rest(h);  // the pool rests again on every way out except a generation that goes on (below)
     try {
         h->finished = true;
         h->session.reset();
@@ -1237,6 +1336,7 @@ int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, c
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
+        rest.keep   = true;  // the generation goes on: the pool stays awake until it ends (cl_next, cl_finish)
         return 0;
     } catch (const std::exception & e) {
         set_err(err, err_len, e.what());
@@ -1249,6 +1349,7 @@ enum { kWarmCovered = 0, kWarmRead = 1, kWarmStopped = 2, kWarmSkipped = 3 };
 
 int cl_warm(void * hp, const char * request_json, int check_only, unsigned long long epoch, int * n_tokens, char * err, int err_len) {
     auto * h = (Handle *) hp;
+    PoolRest rest(h);  // the read ahead ends with the pool at rest
     if (n_tokens) *n_tokens = 0;
     // Stopped after it was queued and before it began (Cache went to the back): nothing is read, and `stop` is left as it is.
     if (h->stop_epoch.load() != epoch) return kWarmStopped;
@@ -1334,11 +1435,13 @@ int cl_next(void * hp, char * buf, int buf_len) {
         if (h->n_past + 1 >= h->n_ctx) {
             h->finished = true;  // context full: this is the last token
             h->context_cut = true;
-        } else if (llama_decode(h->ctx, llama_batch_get_one(&tok, 1)) != 0) {
+        } else if ((pool_wake(h), llama_decode(h->ctx, llama_batch_get_one(&tok, 1))) != 0) {
             llama_memory_clear(llama_get_memory(h->ctx), true);  // the cache no longer matches `cached`
             h->cached.clear();
+            pool_sleep(h);
             return -2;
         } else {
+            pool_first_decode_done(h);
             h->n_past++;
             h->cached.push_back(tok);
         }
@@ -1402,6 +1505,7 @@ int cl_partial(void * hp, char * out_json, int len) {
 
 int cl_finish(void * hp, char * out_json, int len) {
     auto * h = (Handle *) hp;
+    pool_sleep(h);  // the generation is over (every round ends here): the pool rests while tools run and the person reads
     auto j = common_json::object();
     j["role"] = std::string("assistant");
     try {
@@ -1570,6 +1674,7 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
         std::vector<int8_t> want_out(tokens.size(), 1);  // pooling needs every token as an output
         batch.logits = want_out.data();
+        const int pool_state = g_pool_state.load();  // what the chat pool is doing as this encode starts
         const auto t_enc = std::chrono::steady_clock::now();
         int rc = h->encoder ? llama_encode(h->ctx, batch) : llama_decode(h->ctx, batch);
         const long long encode_ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_enc).count();
@@ -1582,7 +1687,8 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         float scale = (normalize && norm > 0.0) ? (float) (1.0 / std::sqrt(norm)) : 1.0f;
         for (int i = 0; i < h->n_embd; i++) out[i] = e[i] * scale;
         // Measurement: where the time of one embedding goes (the encode call alone, and the whole function).
-        cl_logi("embed: %d tokens, encode %lld ms, threads %d, total %lld ms", (int) tokens.size(), encode_ms, (int) llama_n_threads(h->ctx),
+        cl_logi("embed: %d tokens, encode %lld ms, threads %d, chat pool %s (poll %d), total %lld ms", (int) tokens.size(), encode_ms, (int) llama_n_threads(h->ctx),
+                pool_state == 2 ? "paused" : pool_state == 1 ? "awake" : "none", g_pool_poll_used.load(),
                 (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_all).count());
         return h->n_embd;
     } catch (const std::exception &) {

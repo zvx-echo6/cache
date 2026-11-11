@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 /// (MainActivity, BuildConfig.TEST_APK); every other build answers nothing, so the app's default applies.
 @immutable
 class BenchOptions {
-  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0, this.embedThreads = 0});
+  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0, this.embedThreads = 0, this.poolPause = false, this.poolPoll = -1});
 
   /// The native gentle pre-read's rate in MB/s: [kDefaultPrereadMbps] unless the extra was given; 0 turns it off.
   final int prereadMbps;
@@ -23,10 +23,17 @@ class BenchOptions {
   /// `--ei cache_embed_threads N`: the search model's thread count for a measurement; 0: the default (4).
   final int embedThreads;
 
+  /// `--ez cache_pool_pause true`: the chat threadpool rests while nothing decodes (an A/B measurement of contention with the
+  /// embedder). False: as always.
+  final bool poolPause;
+
+  /// `--ei cache_pool_poll N` (0 to 100): the chat threadpool's poll level; -1: ggml's default.
+  final int poolPoll;
+
   static const BenchOptions off = BenchOptions();
 
   @override
-  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}${embedThreads != 0 ? ', embed_threads=$embedThreads' : ''}';
+  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}${embedThreads != 0 ? ', embed_threads=$embedThreads' : ''}${poolPause ? ', pool_pause=true' : ''}${poolPoll >= 0 ? ', pool_poll=$poolPoll' : ''}';
 }
 
 const MethodChannel kBenchChannel = MethodChannel('cache/bench');
@@ -44,11 +51,15 @@ Future<BenchOptions> readBenchOptions({MethodChannel channel = kBenchChannel, bo
     final days = m['date_offset_days'];
     final ub = m['cache_ubatch'];
     final et = m['cache_embed_threads'];
+    final pp = m['cache_pool_pause'];
+    final pl = m['cache_pool_poll'];
     return BenchOptions(
       prereadMbps: mbps is int && mbps >= 0 ? mbps : kDefaultPrereadMbps,
       dateOffsetDays: test && days is int ? days : 0,
       ubatch: test && ub is int && ub > 0 ? ub : 0,
       embedThreads: test && et is int && et > 0 ? et : 0,
+      poolPause: test && pp == true,
+      poolPoll: test && pl is int && pl >= 0 ? (pl > 100 ? 100 : pl) : -1,
     );
   } catch (_) {
     return BenchOptions.off;

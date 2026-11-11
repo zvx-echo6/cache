@@ -29,6 +29,8 @@ class MainActivity : FlutterActivity() {
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
     private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
     private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
+    private var benchPoolPause: Boolean? = null  // cache_pool_pause: rest the chat threadpool while nothing decodes (measurement)
+    private var benchPoolPoll: Int? = null  // cache_pool_poll: the chat threadpool's poll level (measurement)
     private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
@@ -36,6 +38,8 @@ class MainActivity : FlutterActivity() {
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
         if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
         if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
+        if (i.hasExtra("cache_pool_pause")) benchPoolPause = i.getBooleanExtra("cache_pool_pause", false)
+        if (i.hasExtra("cache_pool_poll")) benchPoolPoll = i.getIntExtra("cache_pool_poll", 0)
         if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
     }
 
@@ -168,6 +172,10 @@ class MainActivity : FlutterActivity() {
                         if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
                         val et = benchEmbedThreads
                         if (BuildConfig.TEST_APK && et != null) out["cache_embed_threads"] = et
+                        val pp = benchPoolPause
+                        if (BuildConfig.TEST_APK && pp != null) out["cache_pool_pause"] = pp
+                        val pl = benchPoolPoll
+                        if (BuildConfig.TEST_APK && pl != null) out["cache_pool_poll"] = pl
                         result.success(out)
                     }
                     else -> result.notImplemented()

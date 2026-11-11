@@ -430,8 +430,10 @@ class AppState extends ChangeNotifier {
     benchEmbedThreads = benchOptions.embedThreads;
     if (benchOptions.embedThreads != 0) logInfo('Bench options: embed_threads=${benchOptions.embedThreads}');
     if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
+    if (benchOptions.poolPause) logInfo('Bench options: pool_pause=true');
+    if (benchOptions.poolPoll >= 0) logInfo('Bench options: pool_poll=${benchOptions.poolPoll}');
     if (benchOptions.ubatch != 0) logInfo('Bench options: cache_ubatch=${benchOptions.ubatch}');
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps, nUbatch: benchOptions.ubatch);
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps, nUbatch: benchOptions.ubatch, poolPause: benchOptions.poolPause, poolPoll: benchOptions.poolPoll);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
