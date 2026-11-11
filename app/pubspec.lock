@@ -940,7 +940,7 @@ packages:
     source: hosted
     version: "2.4.8"
   pdfrx_engine:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       path: "../third_party/pdfrx_engine"
       relative: true
