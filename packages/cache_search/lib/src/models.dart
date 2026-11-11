@@ -90,6 +90,24 @@ class SearchHit {
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
+
+  /// The hit as [SearchHit.fromJson] reads it. The worker sends its hits to the app with this, so the two sides share one
+  /// list of fields: a field added to the class goes here and in [SearchHit.fromJson], and nowhere else.
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'snippet': snippet,
+        'source_id': sourceId,
+        'source_kind': sourceKind,
+        'source_title': sourceTitle,
+        'page': page,
+        'pdf_page': ?pdfPage,
+        'link': ?link,
+        'time': ?time,
+        'time_end': ?timeEnd,
+        'lang': ?lang,
+        'quote': ?quote,
+      };
 }
 
 class SearchResponse {
@@ -106,6 +124,14 @@ class SearchResponse {
   final int totalEstimate;
   final List<String> vectorSources;
   final List<String> keywordOnlySources;
+
+  /// The response as [SearchResponse.fromJson] reads it (what the worker sends to the app).
+  Map<String, dynamic> toJson() => {
+        'results': [for (final h in results) h.toJson()],
+        'total_estimate': totalEstimate,
+        'vector_sources': vectorSources,
+        'keyword_only_sources': keywordOnlySources,
+      };
 }
 
 /// A query embedding made by the caller; the core uses it only for libraries embedded with [model].

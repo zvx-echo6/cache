@@ -95,25 +95,8 @@ class CoreDispatcher {
               ? null
               : QueryVector((a['queryVector'] as Map)['model'] as String, [for (final x in (a['queryVector'] as Map)['vector'] as List) (x as num).toDouble()]),
         );
-        result = {
-          'results': [
-            for (final h in r.results)
-              {
-                'address': h.address,
-                'title': h.title,
-                'snippet': h.snippet,
-                'source_id': h.sourceId,
-                'source_kind': h.sourceKind,
-                'source_title': h.sourceTitle,
-                'page': h.page,
-                // The worker passes on every field the app reads (a PDF passage's real page).
-                if (h.pdfPage != null) 'pdf_page': h.pdfPage,
-              }
-          ],
-          'total_estimate': r.totalEstimate,
-          'vector_sources': r.vectorSources,
-          'keyword_only_sources': r.keywordOnlySources,
-        };
+        // One serialisation for both directions (SearchHit.toJson and fromJson), so no field of a hit is lost on the way.
+        result = r.toJson();
       case 'read':
         final r = eng().read(a['address'] as String, maxChars: a['maxChars'] as int);
         result = {

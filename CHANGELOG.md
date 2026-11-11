@@ -15,6 +15,7 @@ release notes).
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
 - Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+- Home search: words said in videos and passages of EPUB books are now listed, and a PDF passage opens with the passage marked
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 
