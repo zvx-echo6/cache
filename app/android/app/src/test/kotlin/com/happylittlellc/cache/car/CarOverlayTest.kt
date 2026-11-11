@@ -304,22 +304,46 @@ class CarOverlayTest {
         assertTrue(l.box!!.right < main.left)
         assertClearAndInside(l, main, 1280, 720)
 
-        // No climb ahead: the mini map alone, still centred in the gap.
+        // No climb ahead: the mini map alone, exactly where it is with a climb. The box only shrinks from below.
         val m = layout(1280, 720, main, main, climb = false)
         assertEquals(CarOverlayMode.ONE_BOX, m.mode)
         assertNull(m.climb)
-        assertRect(91f, 343f, 351f, 483f, m.mini)
+        assertEquals(l.mini, m.mini)
+        assertRect(91f, 285f, 351f, 425f, m.mini)
         assertEquals(m.mini, m.box)
-        // The mini map switched off: the climb alone, in the same place.
+        // The mini map switched off: the climb alone, exactly where the box's lower part is.
         val c = layout(1280, 720, main, main, mini = false)
         assertNull(c.mini)
-        assertRect(91f, 355f, 351f, 471f, c.climb)
+        assertEquals(l.climb, c.climb)
+        assertRect(91f, 425f, 351f, 541f, c.climb)
         assertEquals(c.climb, c.box)
         // Both off: nothing.
         val none = layout(1280, 720, main, main, climb = false, mini = false)
         assertNull(none.mini)
         assertNull(none.climb)
         assertNull(none.box)
+    }
+
+    @Test
+    fun theMiniMapDoesNotMoveWhenAClimbAppearsOrEndsOnTheLargeLayout() {
+        // The same rectangle with and without a climb, with the host's buttons showing and hidden, at both densities.
+        for (area in listOf(main, mainHidden)) {
+            assertEquals(layout(1280, 720, area, main).mini, layout(1280, 720, area, main, climb = false).mini)
+        }
+        val a = Rect(1010, 182, 2354, 1394)
+        assertEquals(
+            CarOverlayPainter.layout(2560, 1440, a, 2f, showClimb = true, showMini = true, stable = a).mini,
+            CarOverlayPainter.layout(2560, 1440, a, 2f, showClimb = false, showMini = true, stable = a).mini,
+        )
+        // And as painted: the upper part of the picture (down to the divider) is the same pixels with and without a climb.
+        val with = drawn(1280, 720, main, trip("light"))
+        val without = drawn(1280, 720, main, trip("light", climb = false))
+        val mini = layout(1280, 720, main, main).mini!!
+        for (y in mini.top.toInt() until mini.bottom.toInt() - 24) for (x in mini.left.toInt() until mini.right.toInt()) {
+            if (with.getPixel(x, y) != without.getPixel(x, y)) throw AssertionError("the mini map differs at $x, $y")
+        }
+        assertEquals(CarOverlayPainter.HOST_CARD_FILL, without.getPixel(mini.left.toInt() + 30, mini.bottom.toInt() - 5))
+        assertEquals(0, without.getPixel(mini.left.toInt() + 30, mini.bottom.toInt() + 5))
     }
 
     @Test

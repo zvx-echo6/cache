@@ -27,7 +27,8 @@ import kotlin.math.sqrt
  * drive):
  *  - one box, on a screen whose left column has a tall enough gap between the host's turn card and its arrival card: the
  *    mini map on top and the climb under it (label, figure, grade line, shape), on the host cards' left edge, centred in the
- *    gap. With no climb to show it is the mini map alone; with the mini map switched off, the climb alone.
+ *    gap. With no climb to show it is the mini map alone, in the same place; with the mini map switched off, the climb
+ *    alone, where the box's lower part is.
  *  - split, everywhere else: the climb is a one-line card in that gap, as wide as the host's cards; the mini map is a tile in
  *    the bottom right corner of the visible area, full size or two thirds, whichever keeps clear of the vehicle.
  *
@@ -248,7 +249,9 @@ object CarOverlayPainter {
      * hides its buttons); [stable] is the area the camera places the vehicle in. Each falls back to the other, then to the
      * whole surface, as CarMapRenderer.follow does. Every piece is inside the surface and clear of [keepClear].
      *
-     * One box: on the host cards' left edge, centred in the gap between the turn card and the arrival card, on whole pixels.
+     * One box: on the host cards' left edge, the whole box centred in the gap between the turn card and the arrival card,
+     * on whole pixels. Each part keeps its place in the whole box when the other is not drawn: the mini map alone is the
+     * upper part (it does not move when a climb comes or goes), the climb alone the lower part.
      * All of that is estimated ([column], [columnGap]): a turn card taller than the tallest seen (three lines, lanes, a
      * junction picture) uses up the cushion above the box and then lies over its top, since the host draws above the app.
      *
@@ -272,15 +275,16 @@ object CarOverlayPainter {
         val left = colLeft.roundToInt().toFloat()
 
         if (mode == CarOverlayMode.ONE_BOX) {
-            val miniH = if (showMini) MINI_H * d else 0f
-            val h = miniH + if (showClimb) BOX_CLIMB_H * d else 0f
-            val top = ((gapTop + gapBottom - h) / 2f).roundToInt().toFloat()
-            val r = RectF(left, top, left + BOX_W * d, top + h)
-            if (h <= 0f || !fits(r)) return Layout(mode, null, null)
+            // The whole box is placed, whatever is drawn: each part keeps its place in it, so the mini map does not move
+            // when a climb comes into range or ends. The box only grows and shrinks downward.
+            val top = ((gapTop + gapBottom - (MINI_H + BOX_CLIMB_H) * d) / 2f).roundToInt().toFloat()
+            val whole = RectF(left, top, left + BOX_W * d, top + (MINI_H + BOX_CLIMB_H) * d)
+            if (!fits(whole)) return Layout(mode, null, null)
+            val split = top + MINI_H * d
             return Layout(
                 mode,
-                mini = if (showMini) RectF(r.left, r.top, r.right, r.top + miniH) else null,
-                climb = if (showClimb) RectF(r.left, r.top + miniH, r.right, r.bottom) else null,
+                mini = if (showMini) RectF(whole.left, whole.top, whole.right, split) else null,
+                climb = if (showClimb) RectF(whole.left, split, whole.right, whole.bottom) else null,
             )
         }
 
