@@ -581,6 +581,167 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// What the old `QueryParser`-built query found (as `keyword_hits` built it before `qbuild`), best first: the baseline the
+    /// replay of real model queries compared against.
+    fn old_ranked(oi: &LibOpenIndex, query: &str) -> Vec<String> {
+        let searcher = oi.reader.searcher();
+        let mut qp = tantivy::query::QueryParser::for_index(&oi.index, vec![oi.fields.title, oi.fields.body]);
+        qp.set_field_boost(oi.fields.title, 2.0);
+        let (q, _) = qp.parse_query_lenient(query);
+        crate::search::top_deterministic(&searcher, &*q, 20, oi.fields.point_id).unwrap().0.into_iter().map(|h| h.2).collect()
+    }
+
+    fn pos(r: &[String], id: &str) -> usize {
+        r.iter().position(|p| p == id).unwrap_or(usize::MAX)
+    }
+
+    // The replay of 218 real model queries (compare to the old parser) found two patterns where the first version of the
+    // builder was worse: a hyphenated compound counted like two free words (so "Long-Term Memory" came in), and a number-like
+    // word with a body match pushed the ".270" and ".223" passages out. A compound now weighs as ONE word. Each test below is
+    // a small library that mirrors one of those queries, asserting the ranking the old parser gave and the builder keeps.
+
+    #[test]
+    fn a_hyphenated_compound_weighs_as_one_word_not_two() {
+        let (d, oi) = index_of(
+            "cmp-longterm",
+            &[
+                ("ammo1", "Long-Term Ammunition Storage", "Ammunition should be stored dry in its original packaging. Long-term storage is best in a cool place."),
+                ("ammo2", "Ammunition Storage", "Proper long-term storage of ammunition keeps it dry and away from extremes."),
+                ("fuel", "Long-Term Fuel Storage", "Proper long-term fuel storage is necessary for ensuring availability."),
+                ("mem", "Long-Term Memory", "Long-term memory stores encoded information from short-term memory for extended periods of time."),
+                ("mem2", "Memory", "Long-term memory and short-term memory differ. The long-term store is large; long-term recall is slow."),
+            ],
+        );
+        let q = "storing ammunition long-term";
+        let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+        eprintln!("old {old:?}\nnew {new:?}");
+        for id in ["ammo1", "ammo2"] {
+            assert!(pos(&new, id) < pos(&new, "mem") && pos(&new, id) < pos(&new, "mem2"), "{id} above the memory passages: {new:?}");
+        }
+        // what the old parser put in its top 3 is in the top 3 now
+        for id in &old[..3.min(old.len())] {
+            assert!(pos(&new, id) < 3, "{id} was in the old top 3: {new:?}");
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_compound_does_not_outrank_the_rest_of_the_query() {
+        let (d, oi) = index_of(
+            "cmp-lowpower",
+            &[
+                ("unun", "Low-Power 10-Ratio Unun Construction", "This details the construction of a low-power 10-ratio unun with a tap."),
+                ("quad", "Low-Power Quadrifilar-Wound Unun Design", "A low-power quadrifilar unun design, tapped for two ratios."),
+                ("set", "Low Power Setting", "The radio is set to low power mode."),
+                ("ind", "Low Power Indicator", "Three red bars show that the radio is set to low power."),
+                ("tx", "Low Transmit Power Indicator", "The display shows low transmit power."),
+            ],
+        );
+        for q in ["low-power unun tap", "Unun tap low-power", "Low voltage single-cell Unun tap impedance"] {
+            let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+            eprintln!("{q}\nold {old:?}\nnew {new:?}");
+            for id in ["unun", "quad"] {
+                for other in ["set", "ind", "tx"] {
+                    assert!(pos(&new, id) < pos(&new, other), "{q:?}: {id} above {other}: {new:?}");
+                }
+            }
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_number_word_with_body_matches_keeps_the_other_numbers_passages() {
+        let (d, oi) = index_of(
+            "cmp-calibers",
+            &[
+                ("t1", ".30-06 Caliber Versatility", "The .30-06 caliber is highly versatile and suitable for hunting a wide range of game."),
+                ("t2", "The Versatility and Availability of .30-06 Caliber", "The .30-06 caliber is versatile and widely available."),
+                ("t3", "Capabilities of the 1917 Enfield .30-06", "The 1917 Enfield .30-06 rifle is capable for deer and elk."),
+                ("b1", "Ammunition for Rifles", "Rifles chambered in .30-06 take .30-06 cartridges; .30-06 loads are common; the .30-06 is old."),
+                ("b2", "Springfield Rifles", "The .30-06 Springfield rifle: .30-06 ammunition, .30-06 brass, .30-06 dies."),
+                ("r270", ".270 Winchester Cartridge Overview", "The .270 Winchester is a versatile hunting cartridge suitable for elk."),
+                ("elk", "Rifle Caliber Selection for Elk Hunting", "There is no single superior elk hunting caliber; rifle calibers differ."),
+            ],
+        );
+        for q in ["elk rifle calibers 30-06 vs .270", "elk meat processing 30-06 270 cal", "30-06 cartridge 270 cal bullet elk meat"] {
+            let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+            eprintln!("{q}\nold {old:?}\nnew {new:?}");
+            if old.iter().take(5).any(|p| p == "r270") {
+                assert!(pos(&new, "r270") < 5, "{q:?}: the .270 passage stays in the top 5: {new:?}");
+            }
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_cartridge_size_with_a_dot_keeps_the_direct_comparisons() {
+        let (d, oi) = index_of(
+            "cmp-223",
+            &[
+                ("d1", "5.56x45 vs .223 Cartridge Differences", "The 5.56x45mm cartridge has higher pressures than the .223 cartridge."),
+                ("d2", ".223 Remington Cartridge Details", "The .223 Remington (5.56 mm U.S.) has ballistics identical to the 5.56 NATO cartridge."),
+                ("d3", ".223 Remington vs. 5.56 NATO Cartridges", "The .223 Remington and 5.56 NATO cartridges are not identical."),
+                ("e1", "5.56mm vs. 7.62mm Cartridge Performance", "The 5.56mm cartridge (M193 or 62-grain NATO) is considered a light cartridge."),
+                ("e2", "5.56mm BALL Cartridge M193", "The M193 5.56mm BALL cartridge is a standard ammunition type used in rifles."),
+                ("e3", "5.56mm M200 Blank Cartridge", "The 5.56mm M200 blank cartridge is used for simulated firing; the 5.56mm blank has no bullet."),
+                ("e4", "Repurposing Cartridge Cases", ".223 or 5.56mm NATO cartridge cases with cracked necks can be reused for 5.56mm crafts."),
+            ],
+        );
+        for q in ["5.56mm cartridge vs .223 cartridge", "5.56mm cartridge vs .223 Remington cartridge", "5.56mm vs .223 Remington differences"] {
+            let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+            eprintln!("{q}\nold {old:?}\nnew {new:?}");
+            for id in ["d1", "d2", "d3"] {
+                if old.iter().take(3).any(|p| p == id) {
+                    assert!(pos(&new, id) < 4, "{q:?}: {id} stays near the top: {new:?}");
+                }
+            }
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_number_range_does_not_pull_in_a_look_alike_above_the_topic() {
+        let (d, oi) = index_of(
+            "cmp-3060",
+            &[
+                ("meat", "Cutting and Vacuum Sealing Elk Meat into Meal-Sized Portions", "The speaker is cutting the large pieces of elk meat into meal-sized portions."),
+                ("elk", "Elk", "Elk is a species of deer; the meat is lean."),
+                ("tri", "30-60-90 Triangles", "A 30-60-90 triangle is a right triangle with angles of 30, 60 and 90 degrees. Cut an angle."),
+                ("int", "30/60 Interval Training", "High-intensity intervals of 30 seconds and 60 seconds."),
+            ],
+        );
+        let q = "30-60 angle elk meat cut";
+        let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+        eprintln!("old {old:?}\nnew {new:?}");
+        assert!(pos(&new, "meat") < pos(&new, "tri"), "{new:?}");
+        assert_eq!(new.first().map(String::as_str), old.first().map(String::as_str), "the old top hit stays first: {new:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_gains_hold_passages_the_old_parser_could_not_find() {
+        let (d, oi) = index_of(
+            "cmp-gains",
+            &[
+                ("gen", "Generator troubleshooting", "If the generator won't run, check that the carburetor will prime and that fuel is reaching it."),
+                ("el", "Hunting notes", "Use 30-06 or .270 for elk; both are suitable. The 30-06 is the more common."),
+                ("other", "Tomatoes", "Tomatoes want sun and water."),
+            ],
+        );
+        for (q, id) in [("carburetor won't prime generator won't run", "gen"), ("30-06 or 270 for elk", "el")] {
+            let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+            eprintln!("{q}\nold {old:?}\nnew {new:?}");
+            assert_eq!(new.first().map(String::as_str), Some(id), "{q:?}: {new:?}");
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn a_query_with_nothing_to_search_finds_nothing_and_does_not_fail() {
         let (d, oi) = two_point_index("empty");

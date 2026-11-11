@@ -12,12 +12,12 @@
 //! - A word is analyzed with the index's own analyzer, token by token (a token is a run of letters and digits).
 //!   One token: a plain term clause, a term in any of the fields (title boosted).
 //!   Several tokens: a SHOULD of two clauses that add up in the score. (a) the all-terms conjunction: every token
-//!   MUST be in the title or the body (or the lead), which works on a field without positions, scored as ONE unit (its
+//!   MUST be in the body (the fields without positions), scored as ONE unit (its
 //!   parts' scores scaled by 1/n, see `one_unit`: a compound weighs like one word of the query, not like n words, or generic
 //!   passages with "long" and "term" would outrank those that match the rest of the query); (b) for each field that HAS
 //!   positions (the title, and a ZIM's lead), the exact phrase of the tokens at that field's normal weight, exactly what
-//!   the old parser scored. A passage that has the words in a title in the typed order matches both clauses and so ranks
-//!   above one that has them scattered, which matches only (a). The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
+//!   the old parser scored. A passage that has the words in a title in the typed order matches (b), as before, and (a) too
+//!   when its body has them, so it ranks above one that has them scattered in the body, which matches only (a). The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
 //!   matches a passage that has "don" and "t" anywhere. That is approximate, by the index's design (no change to the
 //!   index was asked for).
 //! - A token that has letters and digits together ("covid19") is ALSO tried split at the letter/digit boundary
@@ -194,23 +194,25 @@ fn tok_clause(cx: &Ctx, t: &Tok) -> Box<dyn Query> {
     Box::new(BooleanQuery::new(vec![(Occur::Should, lit), (Occur::Should, pieces)]))
 }
 
-/// Several tokens as one unit: the all-terms conjunction OR (adding to the score) the exact phrase on each field with
-/// positions. For a typed word the conjunction is asked of every field (each token in the title or the body); for a
-/// quoted phrase the fields with positions answer with the phrase, so the conjunction is asked of the others only (the
-/// body: approximate, see the module comment).
+/// Several tokens as one unit: the exact phrase on each field with positions (what the old parser asked, at the field's
+/// weight), plus the all-terms conjunction on the fields WITHOUT positions (the body), scored as one unit. The conjunction
+/// is not asked of the fields with positions: the phrase already covers them, and asking them for the scattered terms too
+/// would credit a title twice (phrase and terms) and lift passages that only match the compound above ones that match
+/// more of the query. (Only when every field has positions does a typed word ask the conjunction of all of them; a quoted
+/// phrase then has just the phrase.) The body cannot be asked for order, so for it this is approximate.
 fn multi_clause(cx: &Ctx, toks: &[Tok], quoted: bool) -> Box<dyn Query> {
     let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-    if quoted {
-        let flat: Vec<(Field, f32)> =
-            cx.fields.iter().copied().filter(|f| !cx.positional.iter().any(|p| p.0 == f.0)).collect();
-        if !flat.is_empty() {
-            let sub = Ctx { fields: &flat, positional: Vec::new() };
-            let conj: Vec<(Occur, Box<dyn Query>)> =
-                toks.iter().map(|t| (Occur::Must, term_clause(&sub, &t.literal))).collect();
-            clauses.push((Occur::Should, one_unit(Box::new(BooleanQuery::new(conj)), toks.len())));
-        }
+    let flat: Vec<(Field, f32)> = cx.fields.iter().copied().filter(|f| !cx.positional.iter().any(|p| p.0 == f.0)).collect();
+    let conj_fields: &[(Field, f32)] = if !flat.is_empty() {
+        &flat
+    } else if quoted {
+        &[]
     } else {
-        let conj: Vec<(Occur, Box<dyn Query>)> = toks.iter().map(|t| (Occur::Must, tok_clause(cx, t))).collect();
+        cx.fields
+    };
+    if !conj_fields.is_empty() {
+        let sub = Ctx { fields: conj_fields, positional: Vec::new() };
+        let conj: Vec<(Occur, Box<dyn Query>)> = toks.iter().map(|t| (Occur::Must, tok_clause(&sub, t))).collect();
         clauses.push((Occur::Should, one_unit(Box::new(BooleanQuery::new(conj)), toks.len())));
     }
     for (f, b) in &cx.positional {
