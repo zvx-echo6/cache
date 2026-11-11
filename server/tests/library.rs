@@ -536,6 +536,12 @@ async fn a_download_can_be_paused_and_resumed_from_its_part_file() {
     assert_eq!(rig.call("POST", &format!("/api/library/jobs/{aid}/resume"), "").await.1["error"]["code"], json!("not_paused"));
     assert_eq!(rig.call("POST", "/api/library/jobs/nope/pause", "").await.0, 404);
     assert_eq!(rig.call("POST", "/api/library/jobs/nope/resume", "").await.0, 404);
+    // no id at all is a 400, not a panic
+    for path in ["/api/library/jobs/pause", "/api/library/jobs/resume", "/api/library/jobs//pause", "/api/library/jobs//resume"] {
+        let (status, body) = rig.call("POST", path, "").await;
+        assert_eq!(status, 400, "{path}");
+        assert_eq!(body["error"]["code"], json!("invalid"), "{path}");
+    }
     stop(&rig).await;
 }
 
