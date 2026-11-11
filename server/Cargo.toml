@@ -26,6 +26,9 @@ test = false
 cache_embed = { path = "../packages/cache_search/native/cache_embed" }
 # The device identity (the iroh key pair in <data>/sync/identity.key); its id names this server's Bookshelves log. Nothing else of cache_sync is used.
 cache_sync = { path = "../packages/cache_search/native/cache_sync" }
+# The public-address guard: the one address rule and connect-time resolver, shared with the core crates; the server also names the
+# environment variable that installs it in the helper.
+cache_netguard = { path = "../packages/cache_search/native/cache_netguard" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "signal", "process", "io-util", "sync", "fs"] }
@@ -62,3 +65,7 @@ libc = "0.2"
 # (On Windows it comes from vcpkg instead: see server/README.md.)
 [target.'cfg(not(windows))'.dependencies]
 openssl = { version = "0.10.81", features = ["vendored"] }
+
+[dev-dependencies]
+# The loopback test hooks (compiled out of every normal and release build): a test's own origin server is let through the guard, one port at a time.
+cache_netguard = { path = "../packages/cache_search/native/cache_netguard", features = ["test-hooks"] }

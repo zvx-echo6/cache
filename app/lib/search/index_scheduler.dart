@@ -393,9 +393,16 @@ class IndexScheduler extends ChangeNotifier {
       _timer = Timer.periodic(every, (_) => kick());
       kick();
     } else {
-      unawaited(_pause(IndexWait.closed));
+      _closing = _pause(IndexWait.closed);
+      unawaited(_closing);
     }
   }
+
+  Future<void> _closing = Future<void>.value();
+
+  /// Ends when the work that ran when the app went to the back has stopped (it keeps what is done): only then may a background
+  /// run take the same work over.
+  Future<void> get closed => _closing;
 
   /// Looks for work and runs or pauses it by the rules now. While a look is under way, it is looked again after it, and the
   /// future ends when that is done too.

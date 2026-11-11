@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../desktop/desktop.dart';
 import '../theme.dart';
 
 /// Escapes citation markers like [1] so markdown shows them as plain text and never as a link.
@@ -20,9 +21,9 @@ String protectCitations(String text) {
 }
 
 /// Style sheet built only from the theme tokens, so all themes read well.
-MarkdownStyleSheet answerStyle(CacheTokens k) {
-  TextStyle body({double size = 18, FontWeight? weight, FontStyle? style, Color? color}) =>
-      TextStyle(fontSize: size, height: 1.45, fontWeight: weight, fontStyle: style, color: color ?? k.text);
+MarkdownStyleSheet answerStyle(CacheTokens k, {double text = 18, double line = 1.45}) {
+  TextStyle body({double? size, FontWeight? weight, FontStyle? style, Color? color}) =>
+      TextStyle(fontSize: size ?? text, height: line, fontWeight: weight, fontStyle: style, color: color ?? k.text);
   final p = body();
   return MarkdownStyleSheet(
     p: p,
@@ -68,7 +69,8 @@ class AnswerMarkdown extends StatelessWidget {
     return MarkdownBody(
       data: protectCitations(text),
       selectable: true,
-      styleSheet: answerStyle(context.t),
+      // The Linux desktop reads at 16 with 1.6 between lines.
+      styleSheet: isLinuxDesktop(context) ? answerStyle(context.t, text: 16, line: 1.6) : answerStyle(context.t),
       onTapLink: (text, href, title) {}, // links never open: the app works offline
     );
   }

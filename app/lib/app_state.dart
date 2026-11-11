@@ -12,6 +12,7 @@ import 'files.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/bench_options.dart';
 import 'platform/memory.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
@@ -64,7 +65,15 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
+  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench})
+      : memory = memory ?? readMemory,
+        _bench = bench ?? readBenchOptions;
+
+  /// The bench's launch options (test APK only; off everywhere else), read at each model load.
+  final Future<BenchOptions> Function() _bench;
+
+  /// The bench options of the last model load.
+  BenchOptions benchOptions = BenchOptions.off;
 
   /// The device's free memory (a test hook; the system's reading by default).
   final Future<MemoryReading?> Function() memory;
@@ -389,7 +398,10 @@ class AppState extends ChangeNotifier {
         // Without a folder the model loads without the saved prefix.
       }
     }
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
+    // The bench's options come before the load: the pre-read rate is a load option (0 when the bench set nothing).
+    benchOptions = await _bench();
+    logInfo('Bench options: $benchOptions');
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.

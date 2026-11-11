@@ -17,6 +17,7 @@ import '../regions/regions_state.dart';
 import '../search/index_scheduler.dart';
 import '../search/index_status.dart' show indexRowWords, zimIndexKeys;
 import '../settings/app_settings.dart';
+import '../settings/space.dart' show Space;
 import '../sources/sources_state.dart';
 import '../weather/weather_state.dart';
 import 'discover_state.dart';
@@ -319,6 +320,12 @@ class AppDiscoverDevice implements DiscoverDevice {
   int? freeBytes() {
     final dir = sources.zimsDir;
     return dir == null ? null : freeBytesOnDisk(dir.path);
+  }
+
+  @override
+  int? usableBytes() {
+    final dir = sources.zimsDir;
+    return dir == null ? null : Space.of(dir.path).usable;
   }
 
   @override

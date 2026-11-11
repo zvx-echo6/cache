@@ -299,6 +299,11 @@ char *cs_captions_search(cs_handle *h, const char *request_json);
 /* {"address":"zim:<uuid>/<main page path>"} */
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
 
+/* cs_zim_illustration: {"png_base64"} - the ZIM's own icon, its "Illustration_48x48@1" metadata (a PNG), base64 encoded. NULL
+ * (cs_last_error, code "not_found") for an unknown id or a ZIM without an illustration (or one that is not a PNG, or over 1 MiB).
+ * Read through the Rust zim crate, never libzim. */
+char *cs_zim_illustration(cs_handle *h, const char *zim_id);
+
 /* --- PDF indexes of ZIMs ---
  *
  * A ZIM's PDFs are searched by keyword like the rest of the ZIM: one Tantivy index per ZIM, no vectors, one document per piece
@@ -586,7 +591,7 @@ char *cs_place_delete(cs_handle *h, const char *key);
  *            "photos":[{"id","width"?,"height"?,"bytes"?}],"files":[{"id","name","mime"?,"bytes"?}],"props"?,"draft",
  *            "private","created","updated","rev"} (created/updated in Unix ms; rev counts changes; private = its own or its
  *            notebook's). A value is a number, true/false, text, a place, or a list of photo ids (a photo field). "props":
- *            {"color"?: a marker colour's name (lower-case letters), "on_map"?: false = not drawn on the map}.
+ *            {"color"?: a marker colour's name (lower-case letters), "icon"?: a map icon's id (lower-case letters, digits, _), "on_map"?: false = not drawn on the map}.
  * A notebook: {"id","template","def","private","map","template_ref","created","updated","last_used","rev","entries":n,
  *            "files":n,"places":n,"last_entry":entry|null} (counts of entries, attached files and entries with a place;
  *            counts and last_entry leave drafts out; last_used = when an entry was last

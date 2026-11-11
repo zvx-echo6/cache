@@ -27,7 +27,8 @@ tgz="$base/$name"
 dest="$base/linux-$arch-$ver"
 ok() { [ -f "$tgz" ] && [ "$(sha256sum "$tgz" | cut -d' ' -f1)" = "$sha256" ] && [ "$(md5sum "$tgz" | cut -d' ' -f1)" = "$md5" ]; }
 if ! ok; then
-  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tgz" "$url"
+  # download.openzim.org drops long transfers (2026-11-10: about 9 KB/s with closed connections), so resume (-C -) across up to 40 tries.
+  curl -fsSL --http1.1 -C - --retry 40 --retry-delay 5 --retry-all-errors -o "$tgz" "$url"
   ok || { rm -f "$tgz"; echo "checksum mismatch for $name (want sha256 $sha256, md5 $md5)" >&2; exit 1; }
 fi
 if ! ls "$dest"/lib/*/libzim.so >/dev/null 2>&1; then

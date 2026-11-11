@@ -7,7 +7,7 @@ library;
 import '../notebook_model.dart';
 
 /// Cache's own property names; a field whose name would collide gets `_field`.
-const List<String> kCacheProps = ['cache_id', 'notebook', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private'];
+const List<String> kCacheProps = ['cache_id', 'notebook', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private', 'cache_color', 'cache_icon', 'cache_on_map'];
 const List<String> _reserved = ['tags', 'aliases', 'cssclasses', 'id', 'alias', 'icon', 'template', 'public', 'collapsed', 'filters'];
 
 /// An entry as a file holds it: what Cache owns, field values by property name, and the properties it does not own (their
@@ -24,6 +24,7 @@ class EntryDoc {
     this.fields = const {},
     this.private = false,
     this.extra = const [],
+    this.props,
   });
 
   final String id;
@@ -42,6 +43,33 @@ class EntryDoc {
   final Map<String, Object?> fields;
   final bool private;
   final List<String> extra;
+
+  /// The entry's app properties that travel: `color` (a marker colour's name), `icon` (a map icon's id) and `on_map` (false: not
+  /// on the map). Null: the file says nothing about them (written before they travelled), so the entry keeps its own.
+  final Map<String, dynamic>? props;
+}
+
+/// The app properties a file carries, as three lines: [color] and [icon] say `default` when the entry has none (its notebook's
+/// shows), [on_map] is true or false. Written whenever the entry has any app property, so one file always holds all three and a
+/// cleared icon travels too.
+List<(String, Object)> appPropPairs(Map<String, dynamic>? props) {
+  if (props == null || props.isEmpty) return const [];
+  return [
+    ('cache_color', props['color'] is String ? props['color'] as String : 'default'),
+    ('cache_icon', props['icon'] is String ? props['icon'] as String : 'default'),
+    ('cache_on_map', props['on_map'] != false),
+  ];
+}
+
+/// The reverse of [appPropPairs]: null when none of the three is there.
+Map<String, dynamic>? readAppProps(Object? color, Object? icon, Object? onMap) {
+  if (color == null && icon == null && onMap == null) return null;
+  String? name(Object? v) => v is String && v.isNotEmpty && v != 'default' ? v : null;
+  return {
+    'color': ?name(color),
+    'icon': ?name(icon),
+    'on_map': onMap != false,
+  };
 }
 
 /// A label as a property name: lower snake case (`Run time` -> `run_time`), `_field` when it collides with Cache's names or
@@ -190,6 +218,9 @@ String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = con
     p('lon', d.place!.lon);
   }
   if (d.private) p('private', true);
+  for (final (k, v) in appPropPairs(d.props)) {
+    p(k, v);
+  }
   if (d.photos.isNotEmpty && !skip.contains('photos')) {
     b.writeln('photos:');
     for (final id in d.photos) {
@@ -291,6 +322,7 @@ EntryDoc? parseObsidian(String text,
     fields: fields,
     private: v('private') == true,
     extra: extra,
+    props: readAppProps(v('cache_color'), v('cache_icon'), v('cache_on_map')),
   );
 }
 
@@ -337,6 +369,9 @@ String renderLogseq(EntryDoc d) {
     p('lon', d.place!.lon);
   }
   if (d.private) p('private', true);
+  for (final (k, v) in appPropPairs(d.props)) {
+    p(k, v);
+  }
   for (final e in d.fields.entries) {
     final v = e.value;
     if (v == null || v is List) continue;
@@ -464,6 +499,7 @@ EntryDoc parseLogseq(LsBlock block, {required String day, required String fallba
     fields: fields,
     private: val(props['private'] ?? '') == true,
     extra: extra,
+    props: readAppProps(props['cache-color'] == null ? null : val(props['cache-color']!), props['cache-icon'] == null ? null : val(props['cache-icon']!), props['cache-on-map'] == null ? null : val(props['cache-on-map']!)),
   );
 }
 

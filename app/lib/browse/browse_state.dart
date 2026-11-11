@@ -342,6 +342,42 @@ class BrowseState extends ChangeNotifier {
 
   DateTime? lastUpdateCheck;
 
+  /// Get icon from source: the catalogue's picture for [z] again (its catalogue entry is found by the saved record, then fetched and
+  /// saved as `.icon.png`); else, or if that fails, the ZIM's own icon is read again. A picture the person chose is replaced only by
+  /// the catalogue's, never by the ZIM's own. True when the row now shows a picture that came from the source; false keeps what it had
+  /// (a letter, or the saved picture).
+  Future<bool> getIconFromSource(ZimFile z) async {
+    final o = sources.originOf(z);
+    if (o != null) {
+      try {
+        final list = (await catalog.entries(name: o.name, count: 30)).entries;
+        CatalogEntry? entry;
+        for (final e in list) {
+          if (o.catalogId.isNotEmpty && e.id == o.catalogId) {
+            entry = e;
+            break;
+          }
+        }
+        entry ??= list.where((e) => e.flavour == o.flavour && e.release == o.release).firstOrNull;
+        entry ??= list.where((e) => e.flavour == o.flavour).firstOrNull;
+        final url = entry?.iconUrl;
+        if (url != null) {
+          final png = await _iconFetch(url);
+          if (png != null && png.isNotEmpty) {
+            await sources.saveIcon(z, png);
+            return true;
+          }
+        }
+      } on CatalogException catch (e) {
+        logInfo('Get icon: catalogue not reached (${e.message})', detail: z.path);
+      } catch (e) {
+        logError('Get icon', error: e);
+      }
+    }
+    final own = await sources.refreshIllustration(z);
+    return own && !sources.hasSavedIcon(z);
+  }
+
   /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant). An update check is small
   /// and uses any connection.
   Future<void> checkUpdates() async {
@@ -745,7 +781,7 @@ class BrowseState extends ChangeNotifier {
 
 Future<Uint8List?> _fetchIcon(Uri url) async {
   try {
-    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15)));
+    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15), scope: FetchScope.user));
   } catch (_) {
     return null;
   }

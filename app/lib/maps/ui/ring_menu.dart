@@ -7,11 +7,14 @@ import '../../theme.dart';
 
 /// One wedge of a ring menu: a line icon and a short label.
 class RingItem {
-  const RingItem({required this.id, required this.label, required this.icon});
+  const RingItem({required this.id, required this.label, required this.icon, this.leading});
 
   final String id;
   final String label;
   final IconData icon;
+
+  /// Drawn in place of [icon] (a notebook's pin in the person's pin style).
+  final Widget? leading;
 }
 
 /// The most wedges a ring shows; with more items, the last wedge is More and pages the same ring.
@@ -113,7 +116,7 @@ class _RingMenuState extends State<RingMenu> {
                       key: ValueKey('ring-${widget.items[i].id}'),
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(widget.items[i].icon, size: 20, color: _hot == i ? k.onPrimary : k.text),
+                        widget.items[i].leading ?? Icon(widget.items[i].icon, size: 20, color: _hot == i ? k.onPrimary : k.text),
                         const SizedBox(height: 2),
                         Text(widget.items[i].label,
                             maxLines: 1,
