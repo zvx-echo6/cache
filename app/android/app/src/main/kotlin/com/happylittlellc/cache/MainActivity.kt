@@ -193,9 +193,13 @@ class MainActivity : FlutterActivity() {
                     android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
                     android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
                     android.app.ApplicationExitInfo.REASON_OTHER -> "other"
+                    // numbers from the ApplicationExitInfo reference (these two are API 34; the app's compileSdk may predate them)
+                    8 -> "permission changed"
+                    15 -> "app changed"
+                    16 -> "app updated"
                     else -> "reason ${e.reason}"
                 }
-                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
+                mapOf("time" to e.timestamp, "reason" to reason, "code" to e.reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
             }
         } catch (e: Exception) {
             emptyList()
