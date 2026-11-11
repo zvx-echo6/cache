@@ -69,6 +69,26 @@ void main() {
     test('the floor is 100 m, the car card\'s rule', () => expect(kChartMinSpanM, 100.0));
   });
 
+  group('the window never goes below 0 for a route at or above 0', () {
+    const floor = kChartMinSpanM * 3.28084;
+    test('a flat route at 20 ft: the window and so every grid label are 0 or more, and the line is inside it', () {
+      final (yMin, yMax) = chartWindow(20, 20.5, floor: floor);
+      expect(yMin, greaterThanOrEqualTo(0));
+      expect(yMax - yMin, closeTo(floor * 1.46, 0.01), reason: 'the same height as ever');
+      expect(20.0, inInclusiveRange(yMin, yMax));
+    });
+
+    test('a route that really goes below 0 still shows it', () {
+      final (yMin, _) = chartWindow(-50, -45, floor: floor);
+      expect(yMin, lessThan(-50));
+    });
+
+    test('well above 0 nothing changes: the window is centered on the profile', () {
+      final (yMin, yMax) = chartWindow(4300, 4310, floor: floor);
+      expect((yMin + yMax) / 2, closeTo(4305 - floor * 0.05, 0.5));
+    });
+  });
+
   group('the numbers are not changed by the floor', () {
     test('a 10 ft route still reports its own highest and lowest points', () {
       final p = _ramp(10, 0.3);

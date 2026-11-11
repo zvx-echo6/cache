@@ -47,6 +47,18 @@ double niceStep(double raw, {bool quarter = true}) {
   return best;
 }
 
+/// The heights the chart's full height covers, in the chart's unit, for a profile from [lo] to [hi]: its own range, or the [floor]
+/// when that is less (then the profile sits in the middle), with room below and above for the labels. A route at or above 0 never gets
+/// a window below 0.
+@visibleForTesting
+(double, double) chartWindow(double lo, double hi, {required double floor}) {
+  final span = math.max(hi - lo, floor);
+  final mid = (hi + lo) / 2;
+  var yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
+  if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
+  return (yMin, yMax);
+}
+
 /// The distance labels along the chart's foot (in the chart's own unit), as (distance, text). Enough decimals that no two read the
 /// same: the step is 1, 2 or 5 times a power of ten, and it needs as many decimals as that power is small.
 @visibleForTesting
@@ -141,11 +153,8 @@ class ElevationChartPainter extends CustomPainter {
       lo = math.min(lo, _h(e));
       hi = math.max(hi, _h(e));
     }
-    // The full height stands for the profile's own range, or for the floor when the range is less (then the profile sits in the
-    // middle of that height, as the car's card draws it).
     final span = math.max(hi - lo, _h(kChartMinSpanM));
-    final mid = (hi + lo) / 2;
-    final yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
+    final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM));
     final total = _d(profile.totalM);
     double x(double m) => l + (total <= 0 ? 0 : _d(m) / total * pw);
     double y(double hm) => t + (yMax - _h(hm)) / (yMax - yMin) * ph;

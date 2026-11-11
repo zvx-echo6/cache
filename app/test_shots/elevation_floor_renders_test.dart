@@ -36,6 +36,7 @@ ElevationProfile _route(double miles, double riseFt, double wiggleFt, double sta
 
 final _routes = <String, ElevationProfile Function()>{
   'flat': () => _route(0.3, -8, 1.5, 4310), // about 10 ft over 0.3 mi
+  'flat-sealevel': () => _route(0.3, -8, 1.5, 20), // the same flat route at about 20 ft
   'rolling': () => _route(3, 60, 45, 4900), // about 150 ft over 3 mi
   'mountain': () => _route(12, -1500, 400, 6800), // about 2,000 ft over 12 mi
 };
