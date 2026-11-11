@@ -449,5 +449,12 @@ pub fn probe(args: &str) -> Result<String> {
             Err(e) => json!({"ok": false, "version": null, "error": e}),
         },
     };
-    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier}).to_string())
+    let mut out = json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier});
+    // `dump`: {"pdf": "<path>", "dpi": 72}: what the job reads from that PDF, page by page (see cache_ingest::pdfium::dump)
+    if let Some(d) = v.get("dump") {
+        let pdf = d.get("pdf").and_then(Value::as_str).ok_or_else(|| Error::bad_json("dump.pdf must be a path"))?;
+        let dpi = d.get("dpi").and_then(Value::as_u64).unwrap_or(72) as u32;
+        out["dump"] = cache_ingest::pdfium::dump(text(&engines, "pdfium_lib"), Path::new(pdf), dpi).map_err(to_core)?;
+    }
+    Ok(out.to_string())
 }

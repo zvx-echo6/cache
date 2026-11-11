@@ -144,6 +144,23 @@ pub fn probe(path: Option<&str>) -> Result<&'static str> {
     Lib::bind(path).map(|(_, from)| from)
 }
 
+/// Every page of a PDF as the job reads it: the text layer, the printed label and a SHA-256 of the page drawn as a grayscale PNG at
+/// `dpi` (a change to how PDFium finds fonts shows in the text's spacing and in the picture). For tests and diagnostics; the job
+/// itself never calls it.
+pub fn dump(path: Option<String>, pdf: &Path, dpi: u32) -> Result<serde_json::Value> {
+    use sha2::{Digest, Sha256};
+    let engine = PdfiumEngine::new(path, None);
+    let doc = engine.open(pdf)?;
+    let mut pages = Vec::new();
+    for i in 0..doc.page_count() {
+        let text = doc.page_text(i)?;
+        let page = doc.render_gray_png(i, dpi)?;
+        let hex: String = Sha256::digest(&page.png).iter().map(|b| format!("{b:02x}")).collect();
+        pages.push(serde_json::json!({"text": text, "label": doc.page_label(i), "png_sha256": hex, "width": page.width, "height": page.height, "dpi": page.dpi}));
+    }
+    Ok(serde_json::json!({"title": doc.title(), "pages": pages}))
+}
+
 /// PDFium, found when the first PDF is opened.
 pub struct PdfiumEngine {
     path: Option<String>,
