@@ -4,6 +4,9 @@ import android.content.Context
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
+import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.MethodChannel
+import com.happylittlellc.cache.BuildConfig
 
 /**
  * The app's one Flutter engine, shared by the phone screen (MainActivity) and the car screen (CacheCarAppService).
@@ -26,7 +29,22 @@ object SharedEngine {
         engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ID, engine)
         CarLink.attach(engine)
+        answerBuild(engine.dartExecutor.binaryMessenger)
         return engine
+    }
+
+    /**
+     * What this build was made with, on the `cache/build` channel (lib/car/car_support.dart: Settings shows its Car group only
+     * when androidAuto is true). Dart asks once, at start, so the answer is set on the engine as it is made and needs no
+     * activity: when the car starts the app there is none, and the question used to go unanswered.
+     */
+    internal fun answerBuild(messenger: BinaryMessenger) {
+        MethodChannel(messenger, "cache/build").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "get" -> result.success(mapOf("androidAuto" to BuildConfig.CACHE_ANDROID_AUTO))
+                else -> result.notImplemented()
+            }
+        }
     }
 
     fun activityStarted() {
@@ -48,10 +66,14 @@ object SharedEngine {
         carSessions++
     }
 
-    /** A car session ended: with no activity either, nothing needs the engine any more. */
-    fun carEnded() {
+    /**
+     * A car session ended: with no activity either, nothing needs the engine any more, unless [keep] says the phone is still
+     * guiding (a real drive the car left; see CarSession.tearDown). A kept engine goes with the next activity or car session
+     * that ends without guidance, or with the process.
+     */
+    fun carEnded(keep: Boolean = false) {
         carSessions = (carSessions - 1).coerceAtLeast(0)
-        if (carSessions == 0 && !activityAttached) {
+        if (carSessions == 0 && !activityAttached && !keep) {
             val engine = FlutterEngineCache.getInstance().get(ID)
             drop()
             engine?.destroy()

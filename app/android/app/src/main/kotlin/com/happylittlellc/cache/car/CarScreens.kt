@@ -339,9 +339,8 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
         return b.build()
     }
 
-    private fun stop() {
-        CarLink.call("stop")
-    }
+    // End route: over on the car at once, and the phone is asked to end its guidance.
+    internal fun stop() = CarLink.stopGuidance()
 
     internal fun openOverview() = screenManager.push(RouteOverviewScreen(carContext, map))
 }

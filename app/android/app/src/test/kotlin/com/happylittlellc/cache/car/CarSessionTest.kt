@@ -3,7 +3,13 @@ package com.happylittlellc.cache.car
 import android.content.Intent
 import android.net.Uri
 import android.os.Looper
+import android.os.IBinder
 import androidx.car.app.CarContext
+import androidx.car.app.HostDispatcher
+import androidx.car.app.ICarHost
+import androidx.car.app.navigation.INavigationHost
+import androidx.car.app.navigation.NavigationManagerCallback
+import androidx.car.app.serialization.Bundleable
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Row
@@ -25,6 +31,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -70,8 +77,8 @@ class CarSessionTest {
     @After
     fun tearDown() = CarLink.reset()
 
-    private fun start(intent: Intent = Intent()): SessionController {
-        val c = SessionController(CarSession(startEngine = {}), car, intent)
+    private fun start(intent: Intent = Intent(), session: CarSession = CarSession(startEngine = {})): SessionController {
+        val c = SessionController(session, car, intent)
         // The test library drives the Session's public lifecycle only; the car context's own (which the ScreenManager follows,
         // as the host's does) is moved here too, so screens pushed later are created and started as on a real host.
         car.lifecycleOwner.registry.currentState = Lifecycle.State.CREATED
@@ -290,6 +297,190 @@ class CarSessionTest {
         push("trip", trip("browsing"))
         assertEquals(1, nav.navigationEndedCount)
         assertFalse(screens.top is NavigationScreen)
+    }
+
+    // Bug: after another navigation source took over, the car kept the old turn strip and no route could be started.
+    @Test
+    fun theHostTakingNavigationAwayEndsGuidanceAtOnceAndANewRouteCanStart() {
+        val asked = mutableListOf<String>()
+        var answerStop: ((Any?) -> Unit)? = null
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            if (method == "stop") answerStop = done else done(null)
+        }
+        start()
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is NavigationScreen)
+        // As the host does it: the library clears its own "navigating" flag, then calls the app's callback.
+        nav.onStopNavigation()
+        shadowOf(Looper.getMainLooper()).idle()
+        // Over on the car before the phone has answered anything: the trip, the screen, the host.
+        assertFalse(CarLink.trip.guiding)
+        assertNull(CarLink.trip.step)
+        assertNull(CarLink.trip.remainingS)
+        assertEquals(CarLink.EMPTY_GEOJSON, CarLink.routeGeoJson)
+        assertTrue(screens.top is HomeScreen)
+        assertEquals(1, nav.navigationEndedCount)
+        assertTrue("stop" in asked)
+        // A trip the phone sent before it heard the stop does not start guidance again.
+        push("trip", trip("guiding", guiding))
+        assertFalse(CarLink.trip.guiding)
+        assertEquals(1, nav.navigationStartedCount)
+        assertTrue(screens.top is HomeScreen)
+        // The phone has ended its guidance.
+        push("trip", trip("browsing"))
+        answerStop!!(null)
+        // A new route, in the same car session: the preview has Start, and starting tells the host again.
+        val screen = RoutePreviewScreen(car, CarMapRenderer(car), CarPlace("place:1", "Made Up Clinic", null, 42.5, -113.5, null))
+        push("trip", trip("previewing"))
+        assertEquals("Start", (templateOf(screen) as MapWithContentTemplate).actionStrip!!.actions[0].title.toString())
+        push("trip", trip("guiding", guiding))
+        assertTrue(CarLink.trip.guiding)
+        assertEquals(2, nav.navigationStartedCount)
+        assertTrue(screens.top is NavigationScreen)
+    }
+
+    // Car App Library 1.7.0: once the host has stopped navigation, the library's navigationEnded() sends nothing. If this
+    // test's first half ever fails, the library changed and HostNavigation can go.
+    @Test
+    fun afterAHostStopNavigationEndedStillReachesTheHost() {
+        var ended = 0
+        val navHost = object : INavigationHost.Stub() {
+            override fun navigationStarted() {}
+
+            override fun navigationEnded() {
+                ended++
+            }
+
+            override fun updateTrip(navState: Bundleable?) {}
+        }
+        val host = object : ICarHost.Stub() {
+            override fun startCarApp(intent: Intent?) {}
+
+            override fun getHost(type: String?): IBinder = navHost.asBinder()
+
+            override fun finish() {}
+        }
+        val dispatcher = HostDispatcher()
+        dispatcher.setCarHost(host)
+        val m = TestNavigationManager(car, dispatcher)
+        m.setNavigationManagerCallback(object : NavigationManagerCallback {})
+        m.navigationStarted()
+        m.onStopNavigation()
+        m.navigationEnded()
+        assertEquals(0, ended)
+        assertTrue(HostNavigation.endAfterHostStop(m))
+        assertEquals(1, ended)
+    }
+
+    @Test
+    fun endRouteIsOverOnTheCarAtOnce() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, _ -> asked += method }
+        start()
+        push("trip", trip("guiding", guiding))
+        (screens.top as NavigationScreen).stop()
+        // Before the phone answers (it never does in this test).
+        assertFalse(CarLink.trip.guiding)
+        assertTrue(screens.top is HomeScreen)
+        assertEquals(1, nav.navigationEndedCount)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("stop" in asked)
+    }
+
+    // Bug: unplugging the car ended the route on the phone.
+    @Test
+    fun theCarGoingAwayInARealDriveLeavesThePhoneGuidingAndComingBackShowsGuidance() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            done(null)
+        }
+        val kept = mutableListOf<Boolean>()
+        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        push("trip", trip("guiding", guiding))
+        // As the library does it when the session is destroyed: its own stop first (the app's callback is posted), then the
+        // session's teardown, then the callback.
+        nav.onStopNavigation()
+        c.moveToState(Lifecycle.State.DESTROYED)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("stop" in asked)
+        assertFalse(CarLink.carConnected)
+        // The engine guidance runs in stays for the phone.
+        assertEquals(listOf(true), kept)
+        // The car connects again; the phone, still guiding, pushes its trip.
+        car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
+        start()
+        assertTrue(screens.top is HomeScreen)
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is NavigationScreen)
+        assertEquals(1, nav.navigationStartedCount)
+        assertEquals(1, nav.tripsSent.size)
+    }
+
+    @Test
+    fun nothingIsKeptForATestDriveOrWithNoGuidance() {
+        CarLink.dartForTests = { _, _, done -> done(null) }
+        val kept = mutableListOf<Boolean>()
+        // No guidance when the car leaves.
+        start(session = CarSession(startEngine = {}, endEngine = { kept += it })).moveToState(Lifecycle.State.DESTROYED)
+        // A test drive (the host switched it on): it ends with the car session.
+        car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
+        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        nav.navigationManagerCallback!!.onAutoDriveEnabled()
+        push("trip", trip("guiding", guiding))
+        c.moveToState(Lifecycle.State.DESTROYED)
+        assertEquals(listOf(false, false), kept)
+    }
+
+    // Bug: a navigation request delivered to the phone's activity threw in Flutter and went nowhere.
+    @Test
+    fun aNavigationRequestThatReachedThePhoneGoesToTheCarSession() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic&intent=directions"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("Made Up Clinic", a["query"])
+        assertEquals(false, a["start"])
+        assertNull(a["lat"])
+    }
+
+    // Android Auto's own path: the request comes with the session's first screen, or to a session that is already up.
+    @Test
+    fun aNavigationRequestFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        val session = CarSession(startEngine = {})
+        start(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:42.5,-113.5")), session)
+        shadowOf(Looper.getMainLooper()).idle()
+        val first = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals(42.5, first["lat"])
+        assertEquals(true, first["start"])
+        asked.clear()
+        session.onNewIntent(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic")))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Made Up Clinic", (asked.single { it.first == "navigateTo" }.second as Map<*, *>)["query"])
+    }
+
+    // Bug: place rows showed the distance and never the address.
+    @Test
+    fun aPlaceRowShowsTheDistanceAndTheAddress() {
+        val row = placeRow(CarPlace("place:1", "Made Up Clinic", "12 Nowhere Lane", 42.5, -113.5, 2400.0), imperial = true) {}
+        val text = row.texts[0].toCharSequence() as android.text.Spanned
+        assertEquals("  · 12 Nowhere Lane", text.toString())
+        val spans = text.getSpans(0, text.length, androidx.car.app.model.DistanceSpan::class.java)
+        assertEquals(1, spans.size)
+        // The distance takes the place of the first character only; the address after it is text.
+        assertEquals(0, text.getSpanStart(spans[0]))
+        assertEquals(1, text.getSpanEnd(spans[0]))
     }
 
     @Test

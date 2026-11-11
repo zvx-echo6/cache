@@ -21,6 +21,9 @@ object CarLink {
         fun onNotice(text: String) {}
         fun onDartReady() {}
         fun onSavedChanged() {}
+
+        /** A navigation request that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
+        fun onNavRequest(req: NavRequest) {}
     }
 
     private var channel: MethodChannel? = null
@@ -44,6 +47,12 @@ object CarLink {
 
     /** Plays the prompts' audio focus; set by the car session. */
     var audio: CarAudio? = null
+
+    /**
+     * True from the moment the car side ended guidance ([stopGuidance]) until the phone has answered the stop. A trip the phone
+     * sent before it heard the stop still says "guiding": it is read as ended, so the car does not start guidance again from it.
+     */
+    private var stopping = false
 
     fun attach(engine: FlutterEngine) {
         channel?.setMethodCallHandler(null)
@@ -70,11 +79,37 @@ object CarLink {
     fun setCarConnected(on: Boolean) {
         carConnected = on
         if (!on) {
+            stopping = false
             trip = CarTrip.EMPTY
             routeGeoJson = null
             routeBounds = null
         }
         if (dartReady) channel?.invokeMethod("connected", mapOf("on" to on))
+    }
+
+    /**
+     * Guidance ends from the car side (End route, or the host stopped Cache's navigation): the trip the car reads says so at
+     * once, the route line goes, and the phone is asked to end its guidance. Nothing that depends on "guiding" waits for the
+     * phone's answer.
+     */
+    fun stopGuidance() {
+        if (trip.guiding) {
+            stopping = true
+            val t = trip.ended()
+            trip = t
+            routeGeoJson = EMPTY_GEOJSON
+            routeBounds = null
+            each { it.onTrip(t) }
+            each { it.onRoute(EMPTY_GEOJSON, null) }
+        }
+        call("stop") { stopping = false }
+    }
+
+    /** A navigation request for the car session that is attached; false when there is none to take it. */
+    fun navRequest(req: NavRequest): Boolean {
+        if (!carConnected) return false
+        each { it.onNavRequest(req) }
+        return true
     }
 
     /** For the tests: answers in place of Dart (a car session with no Flutter engine). */
@@ -119,7 +154,9 @@ object CarLink {
             }
             "trip" -> {
                 @Suppress("UNCHECKED_CAST")
-                val t = CarTrip.from(call.arguments as? Map<String, Any?> ?: emptyMap())
+                var t = CarTrip.from(call.arguments as? Map<String, Any?> ?: emptyMap())
+                // Sent before the phone heard the stop: guidance is over on the car. The phone's own "not guiding" clears it.
+                if (t.guiding && stopping) t = t.ended() else stopping = false
                 trip = t
                 result.success(null)
                 each { it.onTrip(t) }
@@ -164,6 +201,7 @@ object CarLink {
         routeGeoJson = null
         routeBounds = null
         carConnected = false
+        stopping = false
         dartReady = false
         channel = null
         audio = null

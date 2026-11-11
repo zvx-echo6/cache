@@ -77,6 +77,9 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
+            // One rule for the car screen (proguard-rules.pro). Flutter's Gradle plugin shrinks the release build and reads this
+            // file by its name already; it is named here too so the rule does not depend on that.
+            proguardFiles("proguard-rules.pro")
         }
     }
 

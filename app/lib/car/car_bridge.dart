@@ -131,20 +131,38 @@ class CarBridge {
     if (on) {
       _lastTrip = null;
       _lastRouteSig = null;
+      _pushedPhase = null;
       _schedule();
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
+      // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
+      // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
+      // position.
+      final testDrive = drive.simulating;
       drive.simulate = false;
+      if (testDrive && nav.guiding) unawaited(nav.end());
     }
   }
 
   // ---- pushing to the car ------------------------------------------------------------------------------------
 
+  /// The phase the car was last told.
+  NavPhase? _pushedPhase;
+
   void _schedule() {
     if (!connected.value) return;
+    // Guidance starting or ending (or a preview opening or closing) is told at once, whoever ended it (End route on either
+    // screen, the car's host, an arrival dismissed): nothing on the car that depends on "guiding" waits for the throttle.
+    if (nav.phase != _pushedPhase) {
+      _pushTimer?.cancel();
+      _pushTimer = null;
+      unawaited(push());
+      return;
+    }
     _pushTimer ??= Timer(throttle, () {
       _pushTimer = null;
       unawaited(push());
@@ -201,6 +219,7 @@ class CarBridge {
 
   Future<void> push() async {
     if (!connected.value) return;
+    _pushedPhase = nav.phase;
     final trip = snapshot();
     final text = jsonEncode(trip);
     if (text != _lastTrip) {
@@ -268,6 +287,8 @@ class CarBridge {
         return null;
       case 'stop':
         await nav.end();
+        // The car has the ended trip before this is answered.
+        await push();
         return null;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();

@@ -50,6 +50,7 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
+import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
@@ -824,9 +825,13 @@ class _CacheAppState extends State<CacheApp> {
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
   bool _coreDone = false;
 
+  final IgnoreRoutePushes _noRoutePushes = IgnoreRoutePushes();
+
   @override
   void initState() {
     super.initState();
+    // Before the app's own navigator starts listening: a page address from the platform is never pushed as a route.
+    WidgetsBinding.instance.addObserver(_noRoutePushes);
     ModelDownloads.shared = modelDownloads;
     // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
     // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
@@ -1162,6 +1167,7 @@ class _CacheAppState extends State<CacheApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_noRoutePushes);
     _lifecycle.dispose();
     _shareSync?.cancel();
     connections.dispose();
