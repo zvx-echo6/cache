@@ -77,14 +77,14 @@ def main():
         if i in KEEP:
             continue
         im = Image.open(f'{SRC}/{name}').convert('RGB')
-        if i in crops:
+        if i in MAPS or i.startswith(COMPARE):
+            # A map fills the screen to its foot: the whole screen less the status bar, nothing below the content to cut.
+            im = im.crop((0, STATUS, im.width, im.height))
+        elif i in crops:
             l, t, r, b = [round(v * RATIO) for v in crops[i]]
             im = im.crop((l, t, r, b))
             if i == 'chat-list':  # a drawer is as tall as the screen: the empty part under the chats is cut
                 im = im.crop((0, 0, im.width, max(trim_bottom(im, im.getpixel((4, im.height // 2))), 520 * RATIO)))
-        elif i in MAPS or i.startswith(COMPARE):
-            # A map fills the screen to its foot: nothing below the content to cut.
-            im = im.crop((0, STATUS, im.width, im.height))
         else:
             bg = im.getpixel((4, STATUS + 4))
             body = im.crop((0, STATUS, im.width, im.height))

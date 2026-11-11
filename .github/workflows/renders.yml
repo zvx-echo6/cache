@@ -64,9 +64,8 @@ jobs:
         working-directory: tools/guide/maps
         run: |
           node --version
-          # Until package-lock.json is committed, this run writes it (it is in the guide-maps artifact); from then on the
-          # packages are exactly the locked ones.
-          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          # Exactly the packages of package-lock.json.
+          npm ci --no-audit --no-fund
       - name: Write the map scenes
         if: ${{ github.event.inputs.guide == 'true' }}
         working-directory: app
@@ -75,9 +74,6 @@ jobs:
         run: flutter test --no-pub --update-goldens test_shots/guide_shots_test.dart
       - name: Render the maps
         if: ${{ github.event.inputs.guide == 'true' }}
-        env:
-          # The first runs of the renderer: what the map itself reports is printed, and does not stop the pictures.
-          GUIDE_MAPS_MAP_ERRORS: warn
         run: node tools/guide/maps/render.mjs
       - name: Draw the renders
         working-directory: app
@@ -123,6 +119,5 @@ jobs:
             app/test_shots/guide_maps/
             app/test_shots/guide/scenes/
             app/test_shots/guide/compare/
-            tools/guide/maps/package-lock.json
           if-no-files-found: warn
           retention-days: 14
