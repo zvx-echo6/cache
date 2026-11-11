@@ -16,6 +16,9 @@ class CacheEmbedder {
   final int threads;
   final Duration idleFor;
 
+  /// The server keeps the model: nothing here to hold.
+  bool keepLoaded = false;
+
   /// The context length cl_embed_load is given.
   static const int nCtx = 512;
 
@@ -25,6 +28,9 @@ class CacheEmbedder {
   /// The normalised vector of [text], made by the server. Throws [EmbedRemoteException] when it cannot (`model_missing`: the model is
   /// not there yet).
   Future<List<double>> embed(String text) async => (await embedRemote(_fetch, [text])).first;
+
+  /// The server keeps the model: nothing to load here.
+  Future<void> warm() async {}
 
   void free() {}
 
