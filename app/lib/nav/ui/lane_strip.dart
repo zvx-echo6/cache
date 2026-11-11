@@ -10,6 +10,14 @@ import '../../theme.dart';
 /// How much of the text colour a lane that does not work keeps.
 const double laneDimAlpha = 0.38;
 
+/// The arrow colour of a lane that also works: the secondary tone, except in Tactical, where that is nearly the dimmed lanes'
+/// dark red, so it takes the full text colour.
+Color laneValidColor(CacheTokens k) => k.monoLight != null ? k.text : k.secondary;
+
+/// The arrow colour of a lane that does not work: the text colour, 38% over the surface, opaque (a see-through arrow shows its
+/// stem under its head).
+Color laneDimColor(CacheTokens k) => Color.alphaBlend(k.text.withValues(alpha: laneDimAlpha), k.surface);
+
 enum LaneRole { active, valid, dim, plain }
 
 /// One arrow of a lane and its colour.
@@ -93,9 +101,8 @@ class LaneStrip extends StatelessWidget {
     final dirs = laneGlyphDirections(lane);
     final base = switch (role) {
       LaneRole.active => k.secondary,
-      LaneRole.valid => k.secondary,
-      // Opaque (a see-through arrow shows its stem under its head).
-      LaneRole.dim => Color.alphaBlend(k.text.withValues(alpha: laneDimAlpha), k.surface),
+      LaneRole.valid => laneValidColor(k),
+      LaneRole.dim => laneDimColor(k),
       LaneRole.plain => k.text,
     };
     final lit = lane.active == null || lane.active == LaneDirection.none ? LaneDirection.through : lane.active!;

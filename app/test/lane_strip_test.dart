@@ -100,14 +100,15 @@ void main() {
         // Another lane that works: the secondary tone, no tint.
         final valid = _glyph(tester, 2);
         expect(valid.role, LaneRole.valid);
-        expect({for (final a in valid.arrows) a.color}, {k.secondary});
+        expect({for (final a in valid.arrows) a.color}, {laneValidColor(k)});
         expect(tester.widget<Container>(find.byKey(const ValueKey('lane-2'))).decoration, isNull);
         // Lanes that do not work: dimmed.
         final dim = _glyph(tester, 0);
         expect(dim.role, LaneRole.dim);
-        expect(dim.arrows.single.color, Color.alphaBlend(k.text.withValues(alpha: laneDimAlpha), k.surface));
+        expect(dim.arrows.single.color, laneDimColor(k));
         expect(dim.arrows.single.color.a, 1.0);
-        expect(dim.arrows.single.color, isNot(k.secondary));
+        // Valid and dim must be told apart at a glance in every theme.
+        expect((valid.arrows.first.color.computeLuminance() - dim.arrows.single.color.computeLuminance()).abs(), greaterThan(0.08));
       });
     }
 
