@@ -332,15 +332,16 @@ class CarBridge {
       lon: s.lon,
       matched: 'saved');
 
-  /// Saved places whose name is the query come first, then the map search (by meaning when the search model is loaded). The
-  /// phone's own search panel is left as it is.
+  /// Saved places whose name is the query come first, then the map search by name, address and category word only: the car never
+  /// asks for a query vector, so the search model is not loaded for it (owner's decision). The phone's own search panel is left as
+  /// it is. Every car search path (the car's search box, a name in a navigation request) comes through here.
   Future<List<MapPlace>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
     final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
     List<MapPlace> found = const [];
     try {
-      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: true);
+      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
     return [...saved, ...found].take(12).toList();

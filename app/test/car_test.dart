@@ -14,6 +14,7 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/notebook/pin_image.dart' show PinStyle;
+import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
@@ -488,6 +489,29 @@ void main() {
       final st = await b.style(dark: true);
       expect((st!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
       b.dispose();
+    });
+
+    test('car search goes by name and address only: meaning false, and the search model is never asked for a vector', () async {
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      await fromCar('search', {'query': 'coffee'});
+      await fromCar('navigateTo', {'query': 'pharmacy', 'start': false});
+      expect(asked, isNotEmpty);
+      expect(asked, everyElement(isFalse), reason: 'every car search path asks with meaning off');
+
+      // The real backend: with meaning off it never calls the embedder (the search model); with it on (the phone) it does.
+      var embedded = 0;
+      final real = CoreMapBackend(() => throw StateError('no core in this test'), embedder: (q) async {
+        embedded++;
+        return null;
+      });
+      await expectLater(real.search('coffee', meaning: false), throwsStateError);
+      expect(embedded, 0);
+      await expectLater(real.search('coffee'), throwsStateError);
+      expect(embedded, 1, reason: 'control: the phone path does use the embedder');
     });
 
     test('the two car switches reach the car in the trip within one update', () async {
