@@ -661,12 +661,23 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             if (!force && lastCameraPhase == phase) return
             lastCameraPhase = phase
             if (b != null && b.size == 4) {
-                // The route's bounds as Dart sends them (MapRoute.bounds): south, west, north, east.
+                // The route's bounds as Dart sends them (MapRoute.bounds): south, west, north, east. North up and flat, said
+                // outright: without a bearing and a tilt MapLibre fits the bounds at the camera's present ones, which coming
+                // from guidance are the direction of travel and 45 degrees.
                 val bounds = LatLngBounds.Builder().include(LatLng(b[0], b[1])).include(LatLng(b[2], b[3])).build()
-                m.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, pad[0].toInt() + 40, pad[1].toInt() + 40, pad[2].toInt() + 40, pad[3].toInt() + 40))
+                m.moveCamera(
+                    CameraUpdateFactory.newLatLngBounds(
+                        bounds, ROUTE_VIEW_BEARING, ROUTE_VIEW_TILT, pad[0].toInt() + 40, pad[1].toInt() + 40, pad[2].toInt() + 40, pad[3].toInt() + 40,
+                    ),
+                )
             } else if (t.destinationLat != null && t.destinationLon != null) {
-                m.moveCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder().target(LatLng(t.destinationLat, t.destinationLon)).zoom(13.0).build()))
+                val cam = CameraPosition.Builder().target(LatLng(t.destinationLat, t.destinationLon)).zoom(13.0)
+                    .bearing(ROUTE_VIEW_BEARING).tilt(ROUTE_VIEW_TILT).build()
+                m.moveCamera(CameraUpdateFactory.newCameraPosition(cam))
             }
+            // Back in guidance the heading and the tilt return with the next placeCamera: leaving the overview and starting
+            // a route both come through follow(force = true). The glide does not touch the camera in these two phases
+            // (glideCamera), so nothing turns this view back.
             return
         }
         // Where the marker is drawn (in a glide: where it is at this moment); before any marker, the trip's position.
@@ -722,6 +733,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         private const val SRC_BADGE = "car-badge-src"
         private const val BADGE_IMAGE = "car-grade-badge-img"
         private const val ARROW_IMAGE = "car-pos-arrow-img"
+
+        /** The whole-route view (the route overview and the route choice): north up, not tilted. */
+        private const val ROUTE_VIEW_BEARING = 0.0
+        private const val ROUTE_VIEW_TILT = 0.0
 
         /** The arrow is turned again when the heading is this many degrees from the turn it has. */
         private const val ROTATE_STEP = 1f
