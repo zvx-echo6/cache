@@ -98,7 +98,7 @@ def release_of(it):
     """A body line "Release: X" overrides the field (for versions the Release field has no option for, e.g. 1.3)."""
     m = re.search(r"(?im)^\s*release:\s*(\d+\.\d+)\s*$", it["body"])
     return m.group(1) if m else it.get("Release")
-LATER = ("1.2", "1.3", "1.5")
+LATER = ("1.2", "1.3", "1.4", "1.5")
 cur = [i for i in items if i.get("Release") == RELEASE and release_of(i) == RELEASE]
 later = {r: [i["title"] for i in items if release_of(i) == r] for r in LATER}
 the_theme = theme(readme)
