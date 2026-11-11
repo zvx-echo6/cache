@@ -169,7 +169,7 @@ fn run_at(t: &NavigateTool, loc: Option<&Location>, args: Value, now: &str) -> R
     let ctx = ToolCtx { location: loc, places: &Saved, now, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args)? {
         ToolOutput::Json(v) => Ok(v),
-        ToolOutput::Text(_) => panic!("navigate gives JSON"),
+        ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("navigate gives JSON"),
     }
 }
 
