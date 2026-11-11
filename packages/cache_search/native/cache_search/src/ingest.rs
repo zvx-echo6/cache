@@ -308,7 +308,10 @@ impl Classifier for CoreClassifier {
     fn classify(&self, pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing> {
         let v = cache_pack::sorter::classify(&self.model, pieces).ok()?;
         let best = v.top.first()?;
-        let label = self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == best.division).map(|c| c.label.clone()).unwrap_or_else(|| best.division.clone());
+        let label_of = |div: &str| self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == div).map(|c| c.label.clone()).unwrap_or_else(|| div.to_string());
+        let label = label_of(&best.division);
+        // the top three, best first: kept in the pack so Unsorted can offer them
+        let suggestions = v.top.iter().map(|s| cache_pack::pack::ShelfSuggestion { div: s.division.clone(), label: label_of(&s.division), score: Some(s.score) }).collect();
         Some(Filing {
             suggested: cache_pack::pack::Suggested {
                 div: best.division.clone(),
@@ -317,6 +320,8 @@ impl Classifier for CoreClassifier {
                 classifier_version: Some(v.version),
                 source: "classifier".to_string(),
                 second_div: v.top.get(1).map(|s| s.division.clone()),
+                filed: Some(v.division.is_some()),
+                suggestions,
             },
             filed: v.division.is_some(),
         })

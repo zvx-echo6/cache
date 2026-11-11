@@ -153,7 +153,7 @@ class FakeShelvesCalls implements ShelvesCalls {
   Map<String, dynamic> _resolve(Map<String, dynamic> args) {
     final dir = args['dir'] as String;
     // the libraries' copies
-    final copies = <String, ({List<String> locs, String title, String? suggested, String? seedPlace, String? seedTitle})>{};
+    final copies = <String, ({List<String> locs, String title, String? suggested, bool? filed, List<Map<String, dynamic>> top, String? seedPlace, String? seedTitle})>{};
     for (final lib in (args['libraries'] as List).cast<Map>()) {
       final seedPlace = <String, String>{}, seedTitle = <String, String>{};
       final logs = Directory('${lib['dir']}/log');
@@ -174,6 +174,8 @@ class FakeShelvesCalls implements ShelvesCalls {
           locs: [...?prev?.locs, '${lib['library_id']}/${e.key}'],
           title: prev?.title ?? (book?['title'] as String? ?? h['title'] as String? ?? e.key),
           suggested: prev?.suggested ?? (book?['suggested'] as Map?)?['div'] as String?,
+          filed: prev?.filed ?? ((book?['suggested'] as Map?)?['filed'] is bool ? (book!['suggested'] as Map)['filed'] as bool : null),
+          top: prev?.top ?? [for (final x in ((book?['suggested'] as Map?)?['suggestions'] as List? ?? const [])) (x as Map).cast<String, dynamic>()],
           seedPlace: prev?.seedPlace ?? seedPlace[e.key],
           seedTitle: prev?.seedTitle ?? seedTitle[e.key],
         );
@@ -283,6 +285,8 @@ class FakeShelvesCalls implements ShelvesCalls {
       final held0 = [for (final c in g) if (held[c] case final h? when h.$1 == shelf) (c, h)]
         ..sort((a, b) => a.$2.$3 != b.$2.$3 ? a.$2.$3.compareTo(b.$2.$3) : a.$1.compareTo(b.$1));
       final sug = r.seedPlace ?? r.suggested;
+      // as the core says it: a seed place is the publisher's filing; a pack's `filed`, absent meaning not confident
+      final filed = r.seedPlace != null || r.filed == true;
       books[g.first] = {
         'title': shown,
         'title_from': title != null ? 'log' : (r.seedTitle != null ? 'seed' : 'pack'),
@@ -300,7 +304,9 @@ class FakeShelvesCalls implements ShelvesCalls {
         'author': null,
         'edition': null,
         'year': null,
-        'suggested': sug == null ? null : {'div': sug, 'label': null, 'from': r.seedPlace != null ? 'seed' : 'pack'},
+        'suggested': sug == null
+            ? null
+            : {'div': sug, 'label': null, 'from': r.seedPlace != null ? 'seed' : 'pack', 'filed': filed, if (r.top.isNotEmpty) 'suggestions': r.top},
       };
     }
     return {

@@ -185,7 +185,7 @@ mod tests {
 
     fn facts() -> BTreeMap<String, BookFacts> {
         let mut m = BTreeMap::new();
-        let mut a = BookFacts::new("Well Water", Some(Suggested { div: "210".into(), label: "Water".into(), score: Some(0.875), classifier_version: Some(3), source: "classifier".into(), second_div: Some("220".into()) }));
+        let mut a = BookFacts::new("Well Water", Some(Suggested { div: "210".into(), label: "Water".into(), score: Some(0.875), classifier_version: Some(3), source: "classifier".into(), second_div: Some("220".into()), filed: None, suggestions: vec![] }));
         a.compression = Some(CompressionOutcome {
             original_size: 9000,
             stored_size: 4000,

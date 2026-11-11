@@ -2,7 +2,7 @@
 
 use cache_shelves::events::{valid_relpath, FolderMode};
 use cache_shelves::import::import_own;
-use cache_shelves::library::{copies_path, copy_key, load_library, read_copies, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv};
+use cache_shelves::library::{copies_path, copy_key, load_library, read_copies, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv, SuggestedShelf};
 use cache_shelves::resolve::{resolve, TitleFrom};
 use cache_shelves::store::{parse_log, read_logs, LogWriter};
 use cache_shelves::view::{build_view, view_bytes, view_value};
@@ -396,7 +396,7 @@ fn shelf_title_removed_and_the_reading_copy() {
 #[test]
 fn the_suggestion_is_the_seed_place_then_the_pack() {
     let mut a = pf("A", "a", "A", 1);
-    a.suggested = Some(SuggestedDiv { div: s("440"), label: s("Stone") });
+    a.suggested = Some(SuggestedDiv { div: s("440"), label: s("Stone"), ..Default::default() });
     let mut l = lib("L", vec![a, pf("B", "b", "B", 1)]);
     l.seed.place.insert(s("a"), Some(s("450")));
     l.seed.place.insert(s("b"), None);
@@ -407,6 +407,54 @@ fn the_suggestion_is_the_seed_place_then_the_pack() {
     l.seed.place.clear();
     let sa = resolve(&[], &[l]).book_of("A").unwrap().suggested.clone().unwrap();
     assert_eq!((sa.div.as_str(), sa.label.as_deref(), sa.from), ("440", Some("Stone"), "pack"));
+}
+
+#[test]
+fn a_book_is_confident_only_when_the_pack_says_so_and_carries_its_top_three() {
+    let shelf = |d: &str, l: &str, x: f32| SuggestedShelf { div: s(d), label: s(l), score: Some(x) };
+    let top = vec![shelf("610", "Medicine", 0.41), shelf("620", "Engineering", 0.3), shelf("570", "Life sciences", 0.2)];
+    let mut a = pf("A", "a", "A", 1);
+    a.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(false), suggestions: top.clone() });
+    let mut b = pf("B", "b", "B", 1);
+    b.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(true), suggestions: top.clone() });
+    // an old pack: a division and no flag
+    let mut c = pf("C", "c", "C", 1);
+    c.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), ..Default::default() });
+    let mut d = pf("D", "d", "D", 1);
+    d.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(false), suggestions: top.clone() });
+    let mut l = lib("L", vec![a, b, c, d]);
+    l.seed.place.insert(s("d"), Some(s("620"))); // the publisher placed D
+    let r = resolve(&[], &[l.clone()]);
+    let sg = |k: &str| r.book_of(k).unwrap().suggested.clone().unwrap();
+    assert!(!sg("A").filed, "the sorter was not confident: stays in Unsorted");
+    assert_eq!(sg("A").top.iter().map(|x| x.div.as_str()).collect::<Vec<_>>(), ["610", "620", "570"]);
+    assert!(sg("B").filed);
+    assert!(!sg("C").filed, "no flag (an old pack) is not confident");
+    assert!(sg("C").top.is_empty());
+    assert!(sg("D").filed && sg("D").from == "seed", "a seed place is the publisher's own filing");
+    // and in the view, and through copies.jsonl
+    let view = view_value(&r, &[l.clone()], &[]);
+    assert_eq!(view["books"]["A"]["suggested"]["filed"], json!(false));
+    assert_eq!(view["books"]["A"]["suggested"]["suggestions"][2], json!({"div": "570", "label": "Life sciences", "score": 0.2f32}));
+    assert_eq!(view["books"]["C"]["suggested"]["filed"], json!(false));
+    assert!(view["books"]["C"]["suggested"].get("suggestions").is_none());
+    let line = l.copies[0].to_copies_line();
+    assert_eq!(PackFacts::from_copies_line(&line).unwrap().suggested, l.copies[0].suggested, "the copies line keeps the flag and the three");
+    let plain = l.copies[2].to_copies_line();
+    assert!(!plain.contains("filed") && !plain.contains("suggestions"), "an old copy writes the bytes it always did: {plain}");
+}
+
+#[test]
+fn a_header_with_filed_and_suggestions_is_read_from_the_pack() {
+    let line = json!({
+        "cdoc": 1, "doc_id": "wm", "doc_version": 1, "title": "T", "source": {"blake3": "stored"},
+        "book": {"title": "T", "original_blake3": "O", "suggested": {"div": "610", "label": "Medicine", "source": "classifier", "second_div": "620", "filed": false,
+            "suggestions": [{"div": "610", "label": "Medicine", "score": 0.41}, {"div": "620", "label": "Eng"}, {"div": "570"}]}}
+    })
+    .to_string();
+    let f = PackFacts::from_header_line(&line).unwrap().suggested.unwrap();
+    assert_eq!((f.filed, f.suggestions.len()), (Some(false), 3));
+    assert_eq!((f.suggestions[1].score, f.suggestions[2].label.as_str()), (None, ""));
 }
 
 #[test]

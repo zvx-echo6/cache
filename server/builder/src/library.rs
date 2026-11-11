@@ -10,7 +10,7 @@ use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
 use crate::source_identity::{write_source_identities, SourceIdentity, SOURCE_IDENTITIES_FILE};
 use crate::view::{view_value, write_view, BookFacts};
 use cache_shelves::events::FactFields;
-use cache_shelves::library::{content_hash, copy_key, PackFacts, SameInfo, SuggestedDiv};
+use cache_shelves::library::{content_hash, copy_key, PackFacts, SameInfo, SuggestedDiv, SuggestedShelf};
 use edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
     VectorStorageDatatype,
@@ -244,7 +244,12 @@ pub fn copies_entry(doc: &LibDoc, facts: &BookFacts) -> PackFacts {
         doc_id: doc.doc_id.clone(),
         version: doc.doc_version,
         title: facts.title.clone(),
-        suggested: facts.suggested.as_ref().map(|s| SuggestedDiv { div: s.div.clone(), label: s.label.clone() }),
+        suggested: facts.suggested.as_ref().map(|s| SuggestedDiv {
+            div: s.div.clone(),
+            label: s.label.clone(),
+            filed: s.filed,
+            suggestions: s.suggestions.iter().map(|x| SuggestedShelf { div: x.div.clone(), label: x.label.clone(), score: x.score }).collect(),
+        }),
         blake3: content_hash(original, source),
         original_blake3: original.map(str::to_string),
         source_blake3: source.map(str::to_string),
@@ -605,6 +610,16 @@ fn sort_book(model: &cache_classify::Model, pack: &Pack, names: &std::collection
                     classifier_version: Some(v.version),
                     source: "classifier".into(),
                     second_div: v.top.get(1).map(|s| s.division.clone()),
+                    filed: Some(v.division.is_some()),
+                    suggestions: v
+                        .top
+                        .iter()
+                        .map(|s| crate::pack::ShelfSuggestion {
+                            div: s.division.clone(),
+                            label: names.get(&s.division).cloned().unwrap_or_else(|| s.division.clone()),
+                            score: Some(s.score),
+                        })
+                        .collect(),
                 });
                 e.unsure = v.division.is_none();
                 row.score = best.score;

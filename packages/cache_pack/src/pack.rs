@@ -127,6 +127,26 @@ pub struct Suggested {
     pub source: String,
     #[serde(default)]
     pub second_div: Option<String>,
+    /// Whether the sorter was confident enough to file the book in `div` (the book is placed there when it is added). `false`: the
+    /// book stays in Unsorted and `suggestions` are offered. Absent in packs written before it was recorded; a reader takes absent as
+    /// "not confident" and never files the book from `div` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filed: Option<bool>,
+    /// The sorter's top three divisions, best first (each with its label and score); `div` is the first. Absent in older packs, which
+    /// have only `div` and `second_div`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<ShelfSuggestion>,
+}
+
+/// One of the sorter's top divisions for a book (`book.suggested.suggestions`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShelfSuggestion {
+    /// The three-digit division code, e.g. `"440"`.
+    pub div: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub score: Option<f32>,
 }
 
 impl Suggested {
@@ -146,6 +166,8 @@ impl Suggested {
             classifier_version: d.classifier_version,
             source: if d.source == "sorter" { "classifier".into() } else { "label".into() },
             second_div: d.second_division.clone(),
+            filed: None,
+            suggestions: Vec::new(),
         }
     }
 }
