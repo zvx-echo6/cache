@@ -19,12 +19,12 @@ use crate::index::{
     LIB_INDEX_FORMAT, MAX_BODY_BYTES,
 };
 use crate::library::{open_shard_for_scroll, resolve_settings};
-use crate::search::{query_term_texts, term_coverage, top_deterministic};
+use crate::qbuild;
+use crate::search::top_deterministic;
 use edge::{EdgeShardRead, PointId, ScrollRequest, WithVector};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::time::SystemTime;
-use tantivy::query::QueryParser;
 use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, FAST, STORED, STRING};
 use tantivy::{doc, Index, IndexReader, TantivyDocument};
 
@@ -105,21 +105,19 @@ pub struct KwHit {
     pub coverage: f32,
 }
 
-/// BM25 over title (boosted 2x, as for ZIMs) and body. Phrase queries only work on the title, the one field
-/// with positions. Hits are best first with ties broken by point id (see `top_deterministic`). Returns the hits
-/// and the number of matching documents.
+/// BM25 over title (boosted 2x, as for ZIMs) and body. The query is built by `qbuild` (not Tantivy's `QueryParser`), so a
+/// word like "COVID-19" or "don't" matches the body too, which has no positions; the title, which has them, also asks for
+/// the exact phrase. Hits are best first with ties broken by point id (see `top_deterministic`). Returns the hits and the
+/// number of matching documents.
 pub fn keyword_hits(oi: &LibOpenIndex, query: &str, candidates: usize) -> Result<(Vec<KwHit>, usize)> {
     let searcher = oi.reader.searcher();
-    let mut qp = QueryParser::for_index(&oi.index, vec![oi.fields.title, oi.fields.body]);
-    qp.set_field_boost(oi.fields.title, 2.0);
-    let (q, _errors) = qp.parse_query_lenient(query);
-    let (top, count) = top_deterministic(&searcher, &*q, candidates, oi.fields.point_id)
+    let plan = qbuild::build(&oi.index, &[(oi.fields.title, 2.0), (oi.fields.body, 1.0)], query)?;
+    let (top, count) = top_deterministic(&searcher, &*plan.query, candidates, oi.fields.point_id)
         .map_err(|e| Error::io(format!("tantivy: {e}")))?;
-    let terms = query_term_texts(&*q);
     let fields = [oi.fields.title, oi.fields.body];
     let hits = top
         .into_iter()
-        .map(|(raw, addr, point_id)| KwHit { point_id, raw, coverage: term_coverage(&searcher, addr, &terms, &fields) })
+        .map(|(raw, addr, point_id)| KwHit { point_id, raw, coverage: plan.coverage(&searcher, addr, &fields) })
         .collect();
     Ok((hits, count))
 }
@@ -364,3 +362,222 @@ pub fn append_documents(dir: &Path, docs: &[IndexDoc]) -> Result<Appended> {
     Ok(Appended::Yes)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The point whose text holds the words searched for.
+    const TARGET: &str = "target";
+
+    /// A device index built as `build_library_index` builds it (same schema, same analyzer) from (id, title, body) given
+    /// here, so no library file is needed.
+    fn index_of(name: &str, docs: &[(&str, &str, &str)]) -> (std::path::PathBuf, LibOpenIndex) {
+        let d = std::env::temp_dir().join(format!("cs-libindex-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let index = Index::create_in_dir(&d, build_schema().0).unwrap();
+        index.tokenizers().register(ANALYZER, make_analyzer(TOKENIZER));
+        let f = fields_of(&index).unwrap();
+        let mut w = index.writer(15_000_000).unwrap();
+        for (id, title, body) in docs {
+            w.add_document(doc!(f.point_id => *id, f.title => *title, f.body => *body, f.source_type => "pdf")).unwrap();
+        }
+        w.commit().unwrap();
+        drop(w);
+        let oi = LibOpenIndex::open(&d, TOKENIZER).unwrap();
+        (d, oi)
+    }
+
+    /// Two points: the target, whose body holds the words (the title has none of them), and one that holds none.
+    fn two_point_index(name: &str) -> (std::path::PathBuf, LibOpenIndex) {
+        index_of(
+            name,
+            &[
+                (
+                    TARGET,
+                    "Clinic handbook",
+                    "The COVID-19 ward is on the second floor. Staff don't enter without a mask. \
+                     The U.S. guidance was followed. The filters are state-of-the-art.",
+                ),
+                ("other", "Garden notes", "Tomatoes want sun and water. Prune them in spring."),
+            ],
+        )
+    }
+
+    /// The point ids `query` finds, best first.
+    fn ranked(oi: &LibOpenIndex, query: &str) -> Vec<String> {
+        keyword_hits(oi, query, 20).unwrap().0.into_iter().map(|h| h.point_id).collect()
+    }
+
+    /// The queries of `queries` that do not return the target point.
+    fn not_found(name: &str, queries: &[&'static str]) -> Vec<&'static str> {
+        let (d, oi) = two_point_index(name);
+        let missed = queries.iter().copied().filter(|q| !ranked(&oi, q).iter().any(|p| p == TARGET)).collect();
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+        missed
+    }
+
+    #[test]
+    fn words_typed_with_spaces_find_the_passage() {
+        // each word of these queries is one token, and one token is a plain term on the body
+        assert_eq!(not_found("spaces", &["covid 19", "state of the art", "second floor"]), Vec::<&str>::new());
+        // and the helper can tell found from not found
+        assert_eq!(not_found("spaces-none", &["zeppelin", "tomatoes"]), vec!["zeppelin", "tomatoes"]);
+    }
+
+    #[test]
+    fn words_typed_with_their_punctuation_find_the_passage() {
+        // The analyzer cuts each of these words into several tokens ("covid" + "19", "don" + "t", "u" + "s", "state" + "of" +
+        // "the" + "art"). Tantivy's query parser made that a phrase, a phrase needs positions, and `body` has frequencies only,
+        // so only titles were searched and the body passage was never found. `qbuild` asks the body for the tokens as an
+        // all-terms conjunction instead.
+        assert_eq!(
+            not_found("punctuation", &["COVID-19", "don't", "U.S.", "state-of-the-art"]),
+            Vec::<&str>::new(),
+            "typed as written in the passage, and not found"
+        );
+    }
+
+    #[test]
+    fn words_typed_without_their_punctuation_find_the_passage() {
+        // "covid19" is one token, not in the index ("COVID-19" is covid + 19); the query also tries it split at the
+        // letter/digit boundary
+        assert_eq!(not_found("joined", &["covid19", "Covid19"]), Vec::<&str>::new());
+    }
+
+    #[test]
+    #[ignore = "known gap: needs an index-side change (a separate decision); run with --ignored"]
+    fn words_typed_joined_without_punctuation_are_a_known_gap() {
+        // KNOWN GAPS, recorded. "dont" and "US" are single tokens ("dont", "us") that are not in the index: the passage's
+        // "don't" and "U.S." are indexed as don + t and u + s, and a query cannot know that "dont" was meant as don + t
+        // ("dont" could be a word) or "us" as u + s ("us" is a word). Only an index-side change (indexing the joined form
+        // too, which changes the analyzer and so LIB_INDEX_FORMAT) can join them. Not changed here, by decision.
+        assert_eq!(not_found("gap", &["dont", "US"]), Vec::<&str>::new(), "typed without the punctuation, and not found");
+    }
+
+    #[test]
+    fn an_apostrophe_word_ranks_the_real_passage_above_scattered_tokens() {
+        let (d, oi) = index_of(
+            "rank-dont",
+            &[
+                // the apostrophe word is in the title (the phrase on the title, which has positions)
+                ("title-phrase", "Don't panic", "A short guide to staying calm."),
+                // "Don" and a stray "t" in the body, once each, nothing in the title
+                ("scattered", "Garden notes", "Don planted the beds. Row t of the greenhouse is closed. Water daily."),
+                // "Don" only: no "t", so not a match for "don't"
+                ("don-only", "Staff list", "Don and Maria work on the ward."),
+                // the same words in the title but scattered, not as the phrase
+                ("title-scattered", "Don and the t shirt", "Notes."),
+            ],
+        );
+        let r = ranked(&oi, "don't");
+        assert_eq!(r.first().map(String::as_str), Some("title-phrase"), "the exact title phrase ranks first: {r:?}");
+        assert!(!r.iter().any(|p| p == "don-only"), "a passage with only 'Don' is not a match: {r:?}");
+        let pos = |id: &str| r.iter().position(|p| p == id).unwrap_or(usize::MAX);
+        assert!(pos("title-phrase") < pos("title-scattered"), "{r:?}");
+        assert!(pos("title-phrase") < pos("scattered"), "{r:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_body_with_the_apostrophe_word_ranks_above_a_body_with_scattered_tokens() {
+        // The body has no positions, so "don't" cannot be told from "Don ... t" by order. What can be told is how much of
+        // the passage is about it: the passage that says "don't" three times outscores the one with a stray "Don" and a stray
+        // "t" once each (term frequency), at the same length.
+        let (d, oi) = index_of(
+            "rank-dont-body",
+            &[
+                ("scattered", "Garden notes", "Don planted the beds on a sunny day. Row t of the greenhouse is closed for now."),
+                ("real", "Visitor rules", "Please don't run. Please don't shout. Please don't touch the beds near the greenhouse."),
+                ("don-only", "Staff list", "Don and Maria work on the ward."),
+            ],
+        );
+        let r = ranked(&oi, "don't");
+        assert_eq!(r.first().map(String::as_str), Some("real"), "{r:?}");
+        assert!(r.iter().any(|p| p == "scattered"), "the scattered one still matches, below: {r:?}");
+        assert!(!r.iter().any(|p| p == "don-only"), "{r:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_exact_title_phrase_ranks_above_scattered_body_terms() {
+        let (d, oi) = index_of(
+            "rank-phrase",
+            &[
+                ("scattered", "Garden notes", "The state keeps a record of the art shown in the art garden. Of note, the art of state."),
+                ("exact", "State-of-the-art filters", "Filters."),
+            ],
+        );
+        let r = ranked(&oi, "state-of-the-art");
+        assert_eq!(r.first().map(String::as_str), Some("exact"), "{r:?}");
+        assert!(r.iter().any(|p| p == "scattered"), "scattered terms still find the passage, below: {r:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_us_abbreviation_ranks_the_real_passage_first() {
+        let (d, oi) = index_of(
+            "rank-us",
+            &[
+                ("scattered", "Garden notes", "Plan U covers the north beds. Plan S covers the south beds. Water both."),
+                ("real", "Border rules", "The U.S. rules apply. The U.S. office is open. Ask the U.S. clerk about the beds."),
+                ("us-word", "Team notes", "Give us a call. The beds are ours."),
+            ],
+        );
+        let r = ranked(&oi, "U.S.");
+        assert_eq!(r.first().map(String::as_str), Some("real"), "{r:?}");
+        assert!(!r.iter().any(|p| p == "us-word"), "the word 'us' is not u + s: {r:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_quoted_phrase_is_exact_on_the_title_and_finds_the_passage_in_the_body() {
+        let (d, oi) = index_of(
+            "quoted",
+            &[
+                ("exact", "Second floor plan", "Rooms."),
+                ("reversed", "Floor second plan", "Rooms."),
+                (TARGET, "Clinic handbook", "The ward is on the second floor, past the lift."),
+            ],
+        );
+        let r = ranked(&oi, "\"second floor\"");
+        // exact on the title: the reversed title is not a match
+        assert!(r.iter().any(|p| p == "exact"), "{r:?}");
+        assert!(!r.iter().any(|p| p == "reversed"), "a title with the words in the other order is not the phrase: {r:?}");
+        // on the body (no positions) the passage is found, as an all-terms conjunction (approximate)
+        assert!(r.iter().any(|p| p == TARGET), "a quoted phrase finds the body passage: {r:?}");
+        // unquoted, the reversed title matches too (OR of the words)
+        let u = ranked(&oi, "second floor");
+        assert!(u.iter().any(|p| p == "reversed"), "{u:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_query_with_nothing_to_search_finds_nothing_and_does_not_fail() {
+        let (d, oi) = two_point_index("empty");
+        for q in ["", "   ", "---", "\"\"", "\" "] {
+            assert!(ranked(&oi, q).is_empty(), "{q:?}");
+        }
+        // several words stay OR
+        assert!(ranked(&oi, "tomatoes ward").len() == 2);
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_coverage_of_a_split_word_counts_the_literal_or_all_pieces() {
+        let (d, oi) = two_point_index("cov");
+        let h = keyword_hits(&oi, "covid19", 5).unwrap().0;
+        assert_eq!(h.len(), 1);
+        assert!((h[0].coverage - 1.0).abs() < 1e-6, "{}", h[0].coverage);
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

@@ -28,6 +28,7 @@ pub mod libupdate;
 pub mod nbplaces;
 pub mod pdfbuild;
 pub mod pdfindex;
+pub mod qbuild;
 pub mod search;
 pub mod shelves;
 pub mod snapshot;
