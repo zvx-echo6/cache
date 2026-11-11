@@ -28,12 +28,14 @@ class MainActivity : FlutterActivity() {
     // build nothing is read and the channel answers zeros.
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
     private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
+    private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
     private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
         if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
+        if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
         if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
     }
 
@@ -164,6 +166,8 @@ class MainActivity : FlutterActivity() {
                         if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
                         val ub = benchUbatch
                         if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
+                        val et = benchEmbedThreads
+                        if (BuildConfig.TEST_APK && et != null) out["cache_embed_threads"] = et
                         result.success(out)
                     }
                     else -> result.notImplemented()

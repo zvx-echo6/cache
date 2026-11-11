@@ -1514,6 +1514,10 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
             return nullptr;
         }
         h->n_ctx   = (int) llama_n_ctx(h->ctx);
+        // What the context really got (measurement): the threads, and the context, batch and micro-batch sizes.
+        cl_logi("embed load: n_threads=%d n_threads_batch=%d n_ctx=%u n_batch=%u n_ubatch=%u", (int) llama_n_threads(h->ctx),
+                (int) llama_n_threads_batch(h->ctx), (unsigned) llama_n_ctx(h->ctx), (unsigned) llama_n_batch(h->ctx),
+                (unsigned) llama_n_ubatch(h->ctx));
         h->n_embd  = llama_model_n_embd_out(h->model);
         if (h->n_embd <= 0) {
             h->n_embd = llama_model_n_embd(h->model);
@@ -1547,6 +1551,7 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
     auto * h = (EmbedHandle *) hp;
     if (!h || !text || !out) return -1;
     try {
+        const auto t_all = std::chrono::steady_clock::now();
         if (out_len < h->n_embd) return -2;
 
         auto tokens = common_tokenize(h->vocab, text, /*add_special*/ true, /*parse_special*/ false);
@@ -1565,7 +1570,9 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
         std::vector<int8_t> want_out(tokens.size(), 1);  // pooling needs every token as an output
         batch.logits = want_out.data();
+        const auto t_enc = std::chrono::steady_clock::now();
         int rc = h->encoder ? llama_encode(h->ctx, batch) : llama_decode(h->ctx, batch);
+        const long long encode_ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_enc).count();
         if (rc != 0) return -4;
 
         const float * e = llama_get_embeddings_seq(h->ctx, 0);
@@ -1574,6 +1581,9 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         for (int i = 0; i < h->n_embd; i++) norm += (double) e[i] * e[i];
         float scale = (normalize && norm > 0.0) ? (float) (1.0 / std::sqrt(norm)) : 1.0f;
         for (int i = 0; i < h->n_embd; i++) out[i] = e[i] * scale;
+        // Measurement: where the time of one embedding goes (the encode call alone, and the whole function).
+        cl_logi("embed: %d tokens, encode %lld ms, threads %d, total %lld ms", (int) tokens.size(), encode_ms, (int) llama_n_threads(h->ctx),
+                (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_all).count());
         return h->n_embd;
     } catch (const std::exception &) {
         return -1;

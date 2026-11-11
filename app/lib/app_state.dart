@@ -410,6 +410,8 @@ class AppState extends ChangeNotifier {
     benchOptions = await _bench();
     logInfo('Bench options: $benchOptions');
     benchDateOffsetDays = benchOptions.dateOffsetDays;
+    benchEmbedThreads = benchOptions.embedThreads;
+    if (benchOptions.embedThreads != 0) logInfo('Bench options: embed_threads=${benchOptions.embedThreads}');
     if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
     if (benchOptions.ubatch != 0) logInfo('Bench options: cache_ubatch=${benchOptions.ubatch}');
     return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps, nUbatch: benchOptions.ubatch);
