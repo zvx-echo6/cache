@@ -246,6 +246,33 @@ void main() {
       d.dispose();
     });
 
+    test('a Pause or Resume that fails says why until the next press, in the device\'s words when the download has ended', () async {
+      final d = make();
+      await d.start();
+      api.jobList = [job('p1', 'running', url: 'https://dl.example/p1.zim', bytes: 5, total: 20)];
+      await d.refresh();
+      var told = 0;
+      d.addListener(() => told++);
+      api.pauseError = const DeviceException('not_active', 'That download has already ended.', status: 409);
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, 'That download has already ended.');
+      expect(d.jobs.single.state, 'running');
+      expect(told, greaterThan(0), reason: 'the screen is told');
+      api.pauseError = const DeviceException('internal', 'boom', status: 500);
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, 'The download could not be paused. Try again.');
+      api.pauseError = null;
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, isNull, reason: 'the next press clears it');
+      api.resumeError = const DeviceException('not_paused', 'That download has already ended. Add it again.', status: 409);
+      await d.resumeJob(d.jobs.single);
+      expect(d.jobProblem, 'That download has already ended. Add it again.');
+      api.resumeError = const DeviceException('internal', 'boom', status: 500);
+      await d.resumeJob(d.jobs.single);
+      expect(d.jobProblem, 'The download could not be resumed. Try again.');
+      d.dispose();
+    });
+
     test('a library link is a library download; the words for a failure never name the machine', () async {
       final d = make();
       await d.start();

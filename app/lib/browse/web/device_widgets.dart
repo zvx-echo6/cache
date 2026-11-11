@@ -108,6 +108,11 @@ class DeviceLibraryTop extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                 child: Text(device.problem!, key: const ValueKey('device-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
               ),
+            if (device.jobProblem != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                child: Text(device.jobProblem!, key: const ValueKey('job-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
+              ),
             if (device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false)) WhileClosedCard(device: device),
             if (up != null) _uploadCard(up),
             if (device.build != null) BuildListCards(ctl: device.build!, onOpen: onOpenBuilt),

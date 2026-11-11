@@ -19,6 +19,10 @@ class FakeDeviceApi implements DeviceApi {
   int rescans = 0;
   int jobsReads = 0;
   DeviceException? failWith;
+
+  /// What Pause and Resume answer instead of doing it.
+  DeviceException? pauseError;
+  DeviceException? resumeError;
   Uint8List fetchBody = Uint8List(0);
   Object? fetchError;
   Uri? fetched;
@@ -77,12 +81,14 @@ class FakeDeviceApi implements DeviceApi {
   @override
   Future<void> pauseJob(String id) async {
     paused.add(id);
+    if (pauseError != null) throw pauseError!;
     _setState(id, 'paused');
   }
 
   @override
   Future<void> resumeJob(String id) async {
     resumed.add(id);
+    if (resumeError != null) throw resumeError!;
     _setState(id, 'queued');
   }
 
