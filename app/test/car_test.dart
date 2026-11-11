@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
+import 'package:cache/app_state.dart';
 import 'package:cache/car/car_overlay.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/nav/elevation/elevation_profile.dart';
@@ -15,6 +16,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -289,6 +291,14 @@ void main() {
       expect(carOverview(null, distanceAlongM: 0), isNull);
     });
 
+    test('the car map style: Tactical at night when Tactical is chosen, otherwise Light by day and Dark by night', () {
+      expect(carMapTheme(dark: true, chosen: CacheThemeId.tactical), CacheThemeId.tactical);
+      expect(carMapTheme(dark: false, chosen: CacheThemeId.tactical), CacheThemeId.light);
+      expect(carMapTheme(dark: true, chosen: CacheThemeId.dark), CacheThemeId.dark);
+      expect(carMapTheme(dark: true, chosen: CacheThemeId.light), CacheThemeId.dark);
+      expect(carMapTheme(dark: false, chosen: CacheThemeId.parchment), CacheThemeId.light);
+    });
+
     test('day and night themes: the chosen theme when it fits, else Light by day and Dark by night', () {
       expect(carDayTheme(CacheThemeId.parchment), CacheThemeId.parchment);
       expect(carDayTheme(CacheThemeId.light), CacheThemeId.light);
@@ -304,13 +314,19 @@ void main() {
     });
 
     test('palette colors come from the theme tokens: one route color, a white badge, and Tactical all red', () {
-      for (final id in [CacheThemeId.light, CacheThemeId.dark]) {
+      for (final id in [CacheThemeId.light, CacheThemeId.dark, CacheThemeId.parchment]) {
         final c = carOverlayColors(id);
-        expect(c['route'], mapPaletteFor(id).css('route'));
+        expect(c['route'], mapPaletteFor(id == CacheThemeId.parchment ? CacheThemeId.light : id).css('route'));
         final hsl = HSLColor.fromColor(Color(int.parse('FF${c['route']!.substring(1)}', radix: 16)));
         expect(hsl.hue, inInclusiveRange(180, 260), reason: '${id.name} route is blue, never a traffic color');
       }
-      expect(carOverlayColors(CacheThemeId.parchment)['route'], mapPaletteFor(CacheThemeId.parchment).css('route'));
+      // Parchment on the car: Light's blue for the route and everything made from it; the phone's Parchment map stays brown.
+      final pc = carOverlayColors(CacheThemeId.parchment);
+      expect(pc['route'], carOverlayColors(CacheThemeId.light)['route']);
+      expect(pc['posRing'], pc['route']);
+      expect(pc['badgeEdge'], pc['route']);
+      expect(mapPaletteFor(CacheThemeId.parchment).css('route'), '#7a4e1d');
+      expect((carOverlayPalette(CacheThemeId.parchment)['day'] as Map)['route'], carOverlayColors(CacheThemeId.light)['route']);
       expect(carOverlayColors(CacheThemeId.light)['badge'], '#ffffff');
       expect(carOverlayColors(CacheThemeId.dark)['badgeGlyph'], '#161b20');
       final t = carOverlayColors(CacheThemeId.tactical);
@@ -337,6 +353,23 @@ void main() {
       }
       expect(jsonDecode(f.readAsStringSync()), now, reason: 'run once with CAR_AA_WRITE_FIXTURE=1 to rewrite it');
     });
+  });
+
+  test('the car switches default to the constants and are kept with the app settings', () async {
+    final d = Directory.systemTemp.createTempSync('carset');
+    addTearDown(() => d.deleteSync(recursive: true));
+    final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
+    await a.init();
+    expect(a.carClimbAhead, kCarClimbAheadDefault);
+    expect(a.carRouteMiniMap, kCarRouteMiniMapDefault);
+    await a.setCarClimbAhead(false);
+    await a.setCarRouteMiniMap(false);
+    final b = AppState(settingsDirOverride: d, modelsDirOverride: d);
+    await b.init();
+    expect(b.carClimbAhead, isFalse);
+    expect(b.carRouteMiniMap, isFalse);
+    a.dispose();
+    b.dispose();
   });
 
   group('CarBridge over the platform channel', () {
@@ -369,6 +402,46 @@ void main() {
       bridge.dispose();
       maps.dispose();
       messenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('the car map style at night is the full Tactical style when Tactical is chosen, else Dark', () async {
+      await maps.engine.start();
+      Future<Map<String, Object?>?> styleFor(CacheThemeId t, {required bool dark}) =>
+          CarBridge(nav: nav, maps: maps, drive: drive, theme: () => t, glyphs: () async => 'file:///g/{fontstack}/{range}.pbf').style(dark: dark);
+      final tac = await styleFor(CacheThemeId.tactical, dark: true);
+      expect((tac!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
+      final dk = await styleFor(CacheThemeId.light, dark: true);
+      expect((dk!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.dark).css('route'));
+      final day = await styleFor(CacheThemeId.tactical, dark: false);
+      expect((day!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.light).css('route'));
+      expect(tac['style'], isNot(dk['style']));
+    });
+
+    test('the two car switches reach the car in the trip within one update', () async {
+      final climb = ValueNotifier(true);
+      final mini = ValueNotifier(true);
+      final changed = ValueNotifier(0);
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed,
+          overlay: () => carOverlaySwitches(climb: climb.value, miniMap: mini.value), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.2)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.74, heading: 90));
+      await settle();
+      Map lastOverlay() => (toCar.lastWhere((c) => c.method == 'trip').arguments as Map)['overlay'] as Map;
+      expect(lastOverlay(), {'climb': true, 'miniMap': true});
+      climb.value = false;
+      changed.value++;
+      await settle();
+      expect(lastOverlay(), {'climb': false, 'miniMap': true});
+      mini.value = false;
+      changed.value++;
+      await settle();
+      expect(lastOverlay(), {'climb': false, 'miniMap': false});
+      b.dispose();
     });
 
     test('places wait for the core when the car started the app', () async {

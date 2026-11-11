@@ -28,6 +28,11 @@ CacheThemeId carDayTheme(CacheThemeId chosen) => chosen == CacheThemeId.light ||
 /// The night theme: the chosen theme if it is Dark or Tactical, else Dark.
 CacheThemeId carNightTheme(CacheThemeId chosen) => chosen == CacheThemeId.dark || chosen == CacheThemeId.tactical ? chosen : CacheThemeId.dark;
 
+/// The theme whose map style the car map draws: by day Light's, by night Dark's, except that a chosen Tactical gets the full
+/// Tactical map style at night, the same palette the phone's map uses for Tactical (mapPaletteFor).
+CacheThemeId carMapTheme({required bool dark, required CacheThemeId chosen}) =>
+    !dark ? CacheThemeId.light : (chosen == CacheThemeId.tactical ? CacheThemeId.tactical : CacheThemeId.dark);
+
 /// The `climb` block, or null with no elevation data (the card is then not drawn).
 ///
 /// [distanceAlongM] is the core's metres along the route; [routeM] the route's length (the profile measures the same line a
@@ -198,7 +203,9 @@ Color _mix(Color a, Color b, double t) => Color.lerp(a, b, t)!;
 /// ramp, no white anywhere.
 Map<String, String> carOverlayColors(CacheThemeId id) {
   final k = cacheTokens[id]!;
-  final route = mapPaletteFor(id).css('route');
+  // Parchment's route is brown on the phone; on the car screen it uses Light's blue (route, mini map, climb shape and badge edge
+  // all come from this one color). The phone's Parchment is unchanged.
+  final route = mapPaletteFor(id == CacheThemeId.parchment ? CacheThemeId.light : id).css('route');
   final r = Color(int.parse('FF${route.substring(1)}', radix: 16));
   Map<String, Color> c;
   switch (id) {

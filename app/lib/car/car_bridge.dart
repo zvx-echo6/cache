@@ -15,6 +15,7 @@ import '../nav/speaker.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
+import 'car_overlay.dart';
 import 'car_trip.dart';
 
 /// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
@@ -32,6 +33,8 @@ class CarBridge {
     required this.drive,
     this.elevation,
     this.theme,
+    this.overlay,
+    this.settings,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -49,6 +52,11 @@ class CarBridge {
 
   /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
   final CacheThemeId Function()? theme;
+
+  /// The two car switches (Settings > Car); null: the defaults. [settings] tells the bridge when they may have changed, so the car
+  /// has the new trip within one update.
+  final Map<String, bool> Function()? overlay;
+  final Listenable? settings;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -91,6 +99,7 @@ class CarBridge {
     _channel.setMethodCallHandler(_onCall);
     nav.addListener(_schedule);
     elevation?.addListener(_schedule);
+    settings?.addListener(_schedule);
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
     try {
@@ -108,6 +117,7 @@ class CarBridge {
     _pushTimer?.cancel();
     nav.removeListener(_schedule);
     elevation?.removeListener(_schedule);
+    settings?.removeListener(_schedule);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -161,7 +171,7 @@ class CarBridge {
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
     elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route);
-    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
   }
 
   Future<void> push() async {
@@ -261,7 +271,7 @@ class CarBridge {
   /// with the colors of the route and the position for the lines the car adds on top.
   Future<Map<String, Object?>?> style({required bool dark}) async {
     if (!maps.engine.ready) return null;
-    final palette = mapPaletteFor(dark ? CacheThemeId.dark : CacheThemeId.light);
+    final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
     final String glyphs;
     try {
       glyphs = await _glyphs();

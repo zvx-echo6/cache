@@ -44,6 +44,7 @@ import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
+import 'car/car_overlay.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
@@ -938,6 +939,8 @@ class _CacheAppState extends State<CacheApp> {
         drive: carDrive,
         elevation: routeElevation,
         theme: () => app.theme,
+        overlay: () => carOverlaySwitches(climb: app.carClimbAhead, miniMap: app.carRouteMiniMap),
+        settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
