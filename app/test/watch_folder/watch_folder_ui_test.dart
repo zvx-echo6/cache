@@ -278,7 +278,7 @@ void main() {
     w.pausedOne();
     await tester.pumpWidget(app(LibraryPanes(root: (_) => LibraryRootPage(deps: w.pdf.deps), prefs: PanePrefs(dirOverride: w.pdf.tmp))));
     await settle(tester);
-    expect(find.text('Getting search ready · 0 of 1 done'), findsOneWidget);
+    expect(find.text('Paused · 1 PDF waiting'), findsOneWidget);
     expect(find.text('Water filter guide · Paused by you · Resume'), findsOneWidget);
     await tapKey(tester, 'index-overview');
     final job = w.pdf.state.jobs.single;

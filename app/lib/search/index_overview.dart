@@ -80,10 +80,11 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     final paused = stopped == null && !s.busy ? addPdfShared?.active.where((j) => j.pausedByPerson).toList() ?? const [] : const <AddPdfJob>[];
     final line = stopped != null
         ? 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done'
-        : (paused.isNotEmpty ? 'Getting search ready · 0 of ${paused.length} done' : s.line);
+        : (paused.isNotEmpty ? (paused.length == 1 ? 'Paused · 1 PDF waiting' : 'Paused · ${paused.length} PDFs waiting') : s.line);
     final done = _doneTotal;
     if (line == null && done == null) return const SizedBox.shrink();
-    final held = line != null && ((s.reason != IndexWait.none && stopped == null) || paused.isNotEmpty);
+    // everything paused by the person: said plainly, in the normal text color (nothing is wrong)
+    final held = line != null && s.reason != IndexWait.none && stopped == null && paused.isEmpty;
     var current = stopped != null
         ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}'
         : (paused.isNotEmpty ? '${paused.first.title} · Paused by you · Resume' : (line == null ? null : indexCurrentWords(s)));
