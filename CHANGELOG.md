@@ -9,6 +9,9 @@ release notes).
 ### New
 - Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
 
+### Fixed
+- Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
+
 ## 1.1.0 (build 49, test) - 2026-11-11
 
 ### Fixed

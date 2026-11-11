@@ -230,6 +230,9 @@ class NavState extends ChangeNotifier {
   bool voiceOn = true;
   bool rerouting = false;
   bool arrived = false;
+
+  /// The last fix guidance was given. Kept only while guidance follows the phone: it is forgotten when guidance ends, so it
+  /// never stands in for the phone's position afterwards.
   Fix? lastFix;
   GuidanceEngine? _engine;
   StreamSubscription<Fix>? _fixSub;
@@ -244,8 +247,12 @@ class NavState extends ChangeNotifier {
 
   Fix? get fix => location.fix;
 
-  /// The point directions start from: the phone's position.
-  GeoPoint? get here => (lastFix ?? location.fix) == null ? null : GeoPoint((lastFix ?? location.fix)!.lat, (lastFix ?? location.fix)!.lon);
+  /// The point directions start from: the phone's position. While guiding that is the fix guidance last had; at any other time
+  /// it is the position the phone has now, never the last fix of a trip that is over.
+  GeoPoint? get here {
+    final f = (guiding ? lastFix : null) ?? location.fix;
+    return f == null ? null : GeoPoint(f.lat, f.lon);
+  }
 
   // ---- search ------------------------------------------------------------------------------------------------
 
@@ -719,6 +726,7 @@ class NavState extends ChangeNotifier {
     progress = null;
     arrived = false;
     rerouting = false;
+    lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
   }
@@ -742,6 +750,7 @@ class NavState extends ChangeNotifier {
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);
+    lastFix = null;
     _events.close();
     super.dispose();
   }
