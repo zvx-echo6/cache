@@ -98,16 +98,7 @@ class CoreDispatcher {
         // One serialisation for both directions (SearchHit.toJson and fromJson), so no field of a hit is lost on the way.
         result = r.toJson();
       case 'read':
-        final r = eng().read(a['address'] as String, maxChars: a['maxChars'] as int);
-        result = {
-          'address': r.address,
-          'title': r.title,
-          'text': r.text,
-          'truncated': r.truncated,
-          'author': r.author,
-          'page': r.page,
-          'source_type': r.sourceType,
-        };
+        result = eng().read(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
       case 'zimGet':
         final z = eng().zimGet(a['address'] as String);
         result = [z.bytes, z.mime];
