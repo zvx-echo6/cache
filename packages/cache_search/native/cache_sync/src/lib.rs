@@ -732,8 +732,10 @@ impl Inner {
         Ok(existed)
     }
 
+    /// Writes the links and shares to disk. The lock is held through the write: one save at a time, and what is on disk is
+    /// never older than what a later save wrote (two saves at once would share the temporary file and could land out of order).
     fn save(&self) -> Result<()> {
-        let s = self.saved.lock().unwrap().clone();
+        let s = self.saved.lock().unwrap();
         write_saved(&self.saved_path(), &s)
     }
 
