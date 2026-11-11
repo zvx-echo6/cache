@@ -58,6 +58,7 @@ jobs:
           sparse-checkout: |
             .github
             app/pubspec.yaml
+            app/lib/version.dart
             app/android/play_release.py
             app/android/play_release_test.py
       - name: The upload script's tests (a fake Play)
@@ -94,15 +95,8 @@ jobs:
       # number), and the next step checks it is higher than every one already on Play.
       - name: Version and versionCode from pubspec.yaml
         id: v
-        run: |
-          line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
-          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\ *$ ]]; then
-            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<patch>+<build number>, as in 1.0.30+31, found: $line"; exit 1
-          fi
-          name=${BASH_REMATCH[1]} build=${BASH_REMATCH[2]}
-          echo "build_name=$name" >> "$GITHUB_OUTPUT"
-          echo "build_number=$build" >> "$GITHUB_OUTPUT"
-          echo "version $name, versionCode $build"
+        # Also fails when app/lib/version.dart has a different version or build number, or the build number is 1000 or more.
+        run: bash .github/scripts/app-version.sh --store
       - name: The versionCode is higher than every one on Play
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
