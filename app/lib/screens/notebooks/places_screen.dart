@@ -13,21 +13,25 @@ import '../../layout/layout_state.dart';
 import '../../notebook/markdown_text.dart';
 import '../../notebook/map_icons.dart';
 import '../../notebook/media.dart';
+import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
+import '../../notebook/pin_image.dart' show PinStyle;
 import '../../notebook/place_style.dart';
 import '../../notebook/places.dart';
 import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
+import 'map_spot_picker.dart';
+import 'photo_viewer.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart' show NotebookDeps;
 import 'place_alert_sheet.dart';
 
 /// A map that shows [pin] and, when [onPick] is given, moves it to where it is tapped (the place screen's map).
-typedef PlaceMapBuilder = Widget Function(BuildContext context, NbPlace? pin, ValueChanged<NbPlace>? onPick);
+typedef PlaceMapBuilder = Widget Function(BuildContext context, NbPlace? pin, ValueChanged<NbPlace>? onPick, PinLook look);
 
 /// What the Places notebooks need besides the store: the weather and alert switches of the saved places, the place map and
 /// directions. Weather and alerts are kept for saved places only (the saved-places notebook): a watched place's id is
@@ -41,6 +45,7 @@ class PlaceNotebookDeps {
     this.alertSetting,
     this.alertKinds,
     this.map,
+    this.pickerMap,
     this.directions,
     this.regions,
     this.hereOnMap,
@@ -61,6 +66,9 @@ class PlaceNotebookDeps {
   /// The kinds of alerts the sources that are on give (catalogue categories).
   final List<String> Function()? alertKinds;
   final PlaceMapBuilder? map;
+
+  /// The map of the full-screen "Choose on map" picker.
+  final SpotMapBuilder? pickerMap;
 
   /// Directions on the map to a place.
   final void Function(NbPlace place, String name)? directions;
@@ -539,7 +547,7 @@ class PlaceView extends StatelessWidget {
             body: LayoutBuilder(builder: (context, cts) => ListView(
               padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
               children: [
-                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null))),
+                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context))))),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -590,7 +598,10 @@ class PlaceView extends StatelessWidget {
                 ],
                 if (e.photos.isNotEmpty) ...[
                   const SizedBox(height: 14),
-                  Wrap(spacing: 8, runSpacing: 8, children: [for (final ph in e.photos) NbThumb(notebook: nb, id: ph.id, size: 96)]),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (var i = 0; i < e.photos.length; i++)
+                      GestureDetector(key: ValueKey('photo-${e.photos[i].id}'), onTap: () => openPhotoViewer(context, nb, [for (final p in e.photos) p.id], i), child: NbThumb(notebook: nb, id: e.photos[i].id, size: 96)),
+                  ]),
                 ],
                 if (pd?.directions != null && p != null) ...[
                   const SizedBox(height: 16),
@@ -719,6 +730,29 @@ class _PlaceFormState extends State<PlaceForm> {
     });
   }
 
+  /// The place's pin as it is now: its own icon, else its notebook's, else the template's; its colour (the notebook's, else the
+  /// default, is already in [_color]); red in Tactical.
+  PinLook _look(BuildContext context) => PinLook(icon: mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)), tint: pinTint(context, _color.color));
+
+  /// "Choose on map": the full-screen picker; Cancel (null) keeps the pin the place has.
+  Future<void> _chooseOnMap() async {
+    final pm = pd?.pickerMap;
+    if (pm == null) return;
+    final look = _look(context);
+    final got = await Navigator.of(context).push<NbPlace>(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (ctx) => MapSpotPicker(
+        map: pm,
+        places: widget.deps.places,
+        start: _pin,
+        icon: look.glyph,
+        tint: look.tint,
+        pinStyle: _icons?.pinStyle() ?? PinStyle.icon,
+      ),
+    ));
+    if (got != null && mounted) setState(() => _pin = got);
+  }
+
   Future<void> _save() async {
     final pin = _pin;
     final name = _name.text.trim();
@@ -830,15 +864,20 @@ class _PlaceFormState extends State<PlaceForm> {
               // 220 high, less on a short window (a phone held sideways), so the name and the switches show under it.
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p))),
+                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))),
               ),
+              if (pd?.pickerMap != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+                ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text(
                 pin == null
                     ? 'No position yet. Search for the place${pd?.map != null ? ' or tap the map' : ''}.'
-                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'tap the map to move the pin'].join(' · '),
+                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'drag the map or tap it to move the pin'].join(' · '),
                 key: const ValueKey('place-where'),
                 style: TextStyle(fontSize: 13, color: k.secondary),
               ),

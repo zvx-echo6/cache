@@ -364,6 +364,8 @@ class NotebookState extends ChangeNotifier {
   // ---- photos and files ----
 
   Future<File> photoFile(String id) async => File('${(await mediaDir()).path}/photos/$id.jpg');
+  /// The ~1600 px local preview of a photo (kept on this device only; a photo may not have one).
+  Future<File> previewFile(String id) async => File('${(await mediaDir()).path}/previews/$id.jpg');
   Future<File> thumbFile(String id) async => File('${(await mediaDir()).path}/thumbs/$id.jpg');
   Future<File> attachedFile(String id) async => File('${(await mediaDir()).path}/files/$id');
 }

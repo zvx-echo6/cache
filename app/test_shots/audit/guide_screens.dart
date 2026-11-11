@@ -1850,7 +1850,7 @@ class _NbRig {
     hereOnMap: () => true,
     setHereOnMap: (_) {},
     // The map is a platform view: the space is left empty, as in the Maps tests.
-    map: (context, pin, onPick) => const SizedBox.shrink(),
+    map: (context, pin, onPick, look) => const SizedBox.shrink(),
   );
 
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);

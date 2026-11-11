@@ -9,6 +9,9 @@ release notes).
 ### Changed
 - Notebooks: notebook sync keeps each notebook in its own folder under one id, so a notebook has the same id on every linked device and a rename on one device is a rename on the others; on update the share is converted once (the old folders go), and a device that has not updated Cache does not sync notebooks until it does
 - Sharing: a linked device on an older or newer Cache shows Version mismatch and nothing syncs until both match; Check again re-checks.
+### New
+- Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
+- Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
