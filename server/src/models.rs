@@ -153,11 +153,11 @@ impl ModelJobs {
     }
 
     fn parse(&self, body: &[u8]) -> Result<Request, ApiErr> {
-        let v: Value = serde_json::from_slice(body).map_err(|_| err(400, "bad_request", "the body is not JSON"))?;
+        let v: Value = serde_json::from_slice(body).map_err(|_| err(400, "bad_request", "The request could not be read."))?;
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
-        let name = s("name").ok_or_else(|| err(400, "bad_request", "a file name is needed"))?;
+        let name = s("name").ok_or_else(|| err(400, "bad_request", "A file name is needed."))?;
         if !valid_model_id(&name) || name == self.embed_file {
-            return Err(err(400, "bad_model", "that is not a model file name"));
+            return Err(err(400, "bad_model", "That is not a model file name."));
         }
         let size = v.get("size").and_then(Value::as_u64).unwrap_or(0);
         let sha256 = s("sha256").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -166,16 +166,16 @@ impl ModelJobs {
             let path = s("path").unwrap_or_else(|| name.clone());
             let parts: Vec<&str> = repo.split('/').collect();
             if parts.len() != 2 || !parts.iter().all(|p| plain(p)) || !plain(&rev) {
-                return Err(err(400, "bad_request", "that is not a Hugging Face repository"));
+                return Err(err(400, "bad_request", "That is not a Hugging Face repository."));
             }
             let segs: Vec<&str> = path.split('/').collect();
             if segs.iter().any(|g| g.is_empty() || *g == "." || *g == ".." || g.bytes().any(|b| b < 0x20 || b == b'\\')) {
-                return Err(err(400, "bad_request", "that is not a file path"));
+                return Err(err(400, "bad_request", "That is not a file path."));
             }
             let enc: Vec<String> = segs.iter().map(|g| pct(g)).collect();
             format!("https://huggingface.co/{repo}/resolve/{rev}/{}", enc.join("/"))
         } else {
-            s("url").ok_or_else(|| err(400, "bad_request", "a repository or an address is needed"))?
+            s("url").ok_or_else(|| err(400, "bad_request", "A repository or an address is needed."))?
         };
         if !self.host_ok(&url) {
             return Err(err(403, "host_not_allowed", "The server downloads models only from Hugging Face and Cache's own address."));
@@ -321,7 +321,7 @@ impl ModelJobs {
                         break (None, have, have);
                     }
                     if have == 0 || restarted {
-                        return Err(Stop::msg("The download server would not continue the file."));
+                        return Err(Stop::msg("The download site would not continue the file."));
                     }
                     let _ = std::fs::remove_file(&part);
                     have = 0;
@@ -331,14 +331,14 @@ impl ModelJobs {
                 Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
                     return Err(Stop::msg("This model needs a Hugging Face account to download. Get it in a browser, then use \"Choose a file\"."));
                 }
-                Err(ureq::Error::Status(code, _)) => return Err(Stop::msg(format!("The download server answered {code}."))),
+                Err(ureq::Error::Status(code, _)) => return Err(Stop::msg(format!("The download site answered {code}."))),
                 Err(e) => return Err(Stop::msg(format!("The connection failed: {e}"))),
             };
             let status = resp.status();
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
                 hops += 1;
-                let loc = resp.header("location").filter(|_| hops <= 8).ok_or_else(|| Stop::msg("The download server redirected too many times."))?;
-                cur = fetch::resolve(&cur, loc).ok_or_else(|| Stop::msg("The download server sent a bad redirect."))?;
+                let loc = resp.header("location").filter(|_| hops <= 8).ok_or_else(|| Stop::msg("The download site redirected too many times."))?;
+                cur = fetch::resolve(&cur, loc).ok_or_else(|| Stop::msg("The download site sent a bad redirect."))?;
                 continue;
             }
             match status {
@@ -346,7 +346,7 @@ impl ModelJobs {
                     let cr = resp.header("content-range").unwrap_or("").to_string();
                     let from = cr.strip_prefix("bytes ").and_then(|r| r.split('-').next()).and_then(|s| s.trim().parse::<u64>().ok());
                     if from != Some(have) {
-                        return Err(Stop::msg("The download server continued from the wrong place. Try again."));
+                        return Err(Stop::msg("The download site continued from the wrong place. Try again."));
                     }
                     let total = cr.rsplit('/').next().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(expect);
                     break (Some(resp.into_reader()), have, total);
@@ -355,11 +355,11 @@ impl ModelJobs {
                     let total = resp.header("content-length").and_then(|t| t.parse::<u64>().ok()).unwrap_or(expect);
                     break (Some(resp.into_reader()), 0, total);
                 }
-                other => return Err(Stop::msg(format!("The download server answered {other}."))),
+                other => return Err(Stop::msg(format!("The download site answered {other}."))),
             }
         };
         if expect > 0 && total != expect {
-            return Err(Stop::msg("The file on the server is not the size the list says."));
+            return Err(Stop::msg("The file on the download site is not the size the list says."));
         }
         let margin = (total / 20).max(64 << 20);
         if let Some(avail) = free_bytes(&dir) {
@@ -417,7 +417,7 @@ impl ModelJobs {
     pub fn pause(self: &Arc<Self>, name: &str) -> Result<Value, ApiErr> {
         {
             let mut g = self.lock();
-            let j = g.jobs.iter_mut().find(|j| j.name == name).ok_or_else(|| err(404, "not_found", "no such download"))?;
+            let j = g.jobs.iter_mut().find(|j| j.name == name).ok_or_else(|| err(404, "not_found", "No such download."))?;
             match j.state {
                 State::Queued => j.state = State::Paused,
                 State::Running => j.ctl.store(PAUSE, Ordering::SeqCst),
@@ -432,7 +432,7 @@ impl ModelJobs {
     pub fn resume(self: &Arc<Self>, name: &str) -> Result<Value, ApiErr> {
         {
             let mut g = self.lock();
-            let j = g.jobs.iter_mut().find(|j| j.name == name).ok_or_else(|| err(404, "not_found", "no such download; ask for it again"))?;
+            let j = g.jobs.iter_mut().find(|j| j.name == name).ok_or_else(|| err(404, "not_found", "No such download. Ask for it again."))?;
             if matches!(j.state, State::Paused | State::Failed) {
                 j.state = State::Queued;
                 j.error = None;
@@ -446,7 +446,7 @@ impl ModelJobs {
     /// `DELETE /api/models/downloads/<name>`: stops it and throws away what it saved.
     pub fn remove(self: &Arc<Self>, name: &str) -> Result<Value, ApiErr> {
         if !valid_model_id(name) {
-            return Err(err(400, "bad_model", "that is not a model file name"));
+            return Err(err(400, "bad_model", "That is not a model file name."));
         }
         {
             let mut g = self.lock();
@@ -520,9 +520,9 @@ impl ModelJobs {
         if self.lock().jobs.iter().any(|j| j.name == name && matches!(j.state, State::Queued | State::Running)) {
             return Err(err(409, "busy", "That model is downloading now."));
         }
-        let len = content_length.ok_or_else(|| err(411, "length_required", "The upload needs a Content-Length."))?;
+        let len = content_length.ok_or_else(|| err(411, "length_required", "The upload did not say how big the file is. Try again."))?;
         let dir = self.partial_dir();
-        std::fs::create_dir_all(&dir).map_err(|e| err(500, "server_error", format!("could not make the upload folder: {e}")))?;
+        std::fs::create_dir_all(&dir).map_err(|e| err(500, "server_error", format!("Could not make the upload folder: {e}")))?;
         if let Some(avail) = free_bytes(&dir) {
             if avail < len.saturating_add(HEADROOM) {
                 return Err(err(507, "no_space", format!("Not enough free space on the server: {} MB needed (and 1 GB to spare), {} MB free.", len >> 20, avail >> 20)));
@@ -534,23 +534,23 @@ impl ModelJobs {
             if matches!(e.raw_os_error(), Some(28) | Some(112)) {
                 err(507, "no_space", "The server ran out of space during the upload.")
             } else {
-                err(500, "server_error", format!("could not write the upload: {e}"))
+                err(500, "server_error", format!("Could not write the upload: {e}"))
             }
         };
         let mut f = tokio::fs::File::create(&part).await.map_err(werr)?;
         let mut got = 0u64;
         while let Some(frame) = body.frame().await {
-            let frame = frame.map_err(|e| err(400, "upload_interrupted", format!("the upload was cut off: {e}")))?;
+            let frame = frame.map_err(|e| err(400, "upload_interrupted", format!("The upload was cut off: {e}")))?;
             if let Ok(data) = frame.into_data() {
                 got += data.len() as u64;
                 if got > len {
-                    return Err(err(400, "invalid", "the body is longer than its Content-Length"));
+                    return Err(err(400, "invalid", "The upload was bigger than it said it would be."));
                 }
                 f.write_all(&data).await.map_err(werr)?;
             }
         }
         if got != len {
-            return Err(err(400, "upload_interrupted", "the upload ended before its Content-Length"));
+            return Err(err(400, "upload_interrupted", "The upload stopped before the whole file arrived. Try again."));
         }
         f.flush().await.map_err(werr)?;
         f.sync_all().await.map_err(werr)?;
@@ -616,8 +616,8 @@ pub fn memory_from(meminfo: &str) -> Option<Value> {
 
 /// `GET /api/system/memory`.
 pub fn memory() -> Result<Value, ApiErr> {
-    let text = std::fs::read_to_string("/proc/meminfo").map_err(|_| err(503, "memory_unknown", "this server cannot read its memory"))?;
-    memory_from(&text).ok_or_else(|| err(503, "memory_unknown", "this server cannot read its memory"))
+    let text = std::fs::read_to_string("/proc/meminfo").map_err(|_| err(503, "memory_unknown", "This server cannot read its memory."))?;
+    memory_from(&text).ok_or_else(|| err(503, "memory_unknown", "This server cannot read its memory."))
 }
 
 #[cfg(test)]
