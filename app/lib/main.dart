@@ -113,6 +113,7 @@ import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
+import 'platform/model_release.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -858,7 +859,20 @@ class _CacheAppState extends State<CacheApp> {
       },
       // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
       // search box does (SearchModel.aboutToSearch).
-      onStateChange: searchModel.onLifecycle,
+      onStateChange: (state) {
+        searchModel.onLifecycle(state);
+        // The chat model is let go after a grace period in the back with no answer being written; back in front cancels it.
+        switch (state) {
+          case AppLifecycleState.hidden:
+          case AppLifecycleState.paused:
+            _modelRelease.toBackground();
+          case AppLifecycleState.resumed:
+            _modelRelease.toFront();
+          case AppLifecycleState.inactive:
+          case AppLifecycleState.detached:
+            break;
+        }
+      },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         if (!plat.isWeb) indexing.setOpen(false);
@@ -899,8 +913,11 @@ class _CacheAppState extends State<CacheApp> {
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
     // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading)) return;
-      searchModel.onTrim(level);
+      // Android 14 and later no longer send levels 10 to 19; older Androids do, and the chat model goes at once.
+      // Going to the back (UI_HIDDEN and beyond) starts the grace period of the release below.
+      if (trimMeansBackground(level)) _modelRelease.toBackground();
+      if (releaseModelOn(level, reading)) searchModel.onTrim(level);
+      if (!releaseChatModelNowOn(level)) return;
       if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
@@ -1085,6 +1102,12 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
+  late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
+    busy: () => chat.busy,
+    loaded: () => app.active != null,
+    release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
+    changes: chat,
+  );
   int? _backendGeneration;
   bool? _scheduledFor;
   bool _askedNotifications = false;
@@ -1153,6 +1176,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _modelRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
