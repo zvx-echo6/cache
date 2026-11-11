@@ -419,6 +419,16 @@ class CarOverlayTest {
         assertEquals(Pair(false, false), painted(x))
     }
 
+    @Test
+    fun theClimbCardIsNotDrawnOnArrival() {
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        // Arrived, and the trip still carries a climb: the card goes, the mini map stays.
+        v.setTrip(trip("dark").copy(arrived = true), dark = true, now = true)
+        assertEquals(Pair(false, true), painted(v))
+    }
+
     // ---- the climb card's text: size and contrast -----------------------------------------------------------------------
 
     @Test

@@ -262,10 +262,71 @@ void main() {
       // On the steep part: it counts from the position, and it is 0 m away.
       final on = carClimb(p, distanceAlongM: 10000, routeM: total)!;
       expect(on['steepestInM'], 0);
-      // Past it: no steep climb, so no grade and no span.
-      final past = carClimb(p, distanceAlongM: 12000, routeM: total)!;
-      expect(past['gradePct'], isNull);
-      expect(past['steepFrom'], isNull);
+      // Past it: no climb ahead, so no block (the card is not drawn).
+      expect(carClimb(p, distanceAlongM: 12000, routeM: total), isNull);
+    });
+
+    // A profile of straight stretches: [at] metres along and the height there, sampled every 40 m.
+    ElevationProfile stretches(List<(double, double)> at) {
+      final dist = <double>[], h = <double>[];
+      for (var d = 0.0; d <= at.last.$1; d += 40) {
+        var k = 1;
+        while (k < at.length - 1 && at[k].$1 < d) {
+          k++;
+        }
+        final t = (d - at[k - 1].$1) / (at[k].$1 - at[k - 1].$1);
+        dist.add(d);
+        h.add(at[k - 1].$2 + (at[k].$2 - at[k - 1].$2) * t);
+      }
+      return ElevationProfile.fromSamples(dist, h, totalM: at.last.$1);
+    }
+
+    test('no climb block unless a climb of at least 3% is ahead', () {
+      expect(kCarClimbMinGrade, 0.03);
+      // Flat: nothing.
+      final flat = stretches([(0, 1000), (9660, 1000)]);
+      expect(carClimb(flat, distanceAlongM: 0, routeM: 9660), isNull);
+      // Six miles that rise 160 ft (49 m) evenly, about half a percent: the climb finder calls it a climb, the car shows none.
+      final gentle = stretches([(0, 1000), (9660, 1049)]);
+      expect(gentle.steepestClimbAhead(0), isNotNull);
+      expect(gentle.steepestClimbAhead(0)!.grade, lessThan(kCarClimbMinGrade));
+      expect(carClimbAhead(gentle, 0), isNull);
+      expect(carClimb(gentle, distanceAlongM: 0, routeM: 9660), isNull);
+      // 2% for 9 km: still none.
+      final two = stretches([(0, 1000), (9000, 1180), (12000, 1180)]);
+      expect(carClimb(two, distanceAlongM: 0, routeM: 12000), isNull);
+      // Flat for 20 miles, then 5% for half a mile (40 m up over 800 m), then flat: the card is there from the start, says 5%
+      // and how far, and its shape reaches to the climb; once the climb is behind there is no card.
+      final far = stretches([(0, 1000), (32200, 1000), (33000, 1040), (40000, 1040)]);
+      final c = carClimb(far, distanceAlongM: 0, routeM: 40000)!;
+      expect(c['gradePct'] as double, closeTo(5, 1));
+      expect(c['steepestInM'] as double, closeTo(32200, 400));
+      expect(c['windowM'] as double, greaterThanOrEqualTo(33000));
+      expect(c['steepFrom'], isNotNull);
+      expect(carClimb(far, distanceAlongM: 20000, routeM: 40000), isNotNull);
+      expect(carClimb(far, distanceAlongM: 34000, routeM: 40000), isNull);
+      // Just under and just over the floor.
+      expect(carClimb(stretches([(0, 1000), (2000, 1000), (4000, 1050), (6000, 1050)]), distanceAlongM: 0, routeM: 6000), isNull);
+      expect(carClimb(stretches([(0, 1000), (2000, 1000), (4000, 1070), (6000, 1070)]), distanceAlongM: 0, routeM: 6000), isNotNull);
+    });
+
+    test('the mini map and the map badge mark a steepest point only for a climb of at least 3%', () {
+      final r = MapRoute.fromJson(routeJson);
+      final gentle = stretches([(0, 1000), (r.distanceM, 1000 + r.distanceM * 0.005)]);
+      expect(gentle.steepestClimbAhead(0), isNotNull);
+      expect(carOverview(r, distanceAlongM: 0, profile: gentle)!['steep'], isNull);
+      final steep = stretches([(0, 1000), (r.distanceM / 2, 1000), (r.distanceM / 2 + 1000, 1060), (r.distanceM, 1060)]);
+      expect((carOverview(r, distanceAlongM: 0, profile: steep)!['steep'] as Map)['gradePct'] as double, closeTo(6, 1));
+    });
+
+    test('no climb block on arrival', () async {
+      await guide(0.1);
+      final total = nav.route!.distanceM;
+      expect(carTrip(nav, elevation: profile(total)).containsKey('climb'), isTrue);
+      nav.arrived = true;
+      final t = carTrip(nav, elevation: profile(total));
+      expect(t['arrived'], isTrue);
+      expect(t.containsKey('climb'), isFalse);
     });
 
     test('the climb block is in the trip while guiding, with the heights and the overview', () async {
