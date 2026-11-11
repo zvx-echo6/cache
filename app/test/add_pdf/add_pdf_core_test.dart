@@ -102,6 +102,25 @@ List<int> _pdf(List<List<int>> objs, {int? info}) {
   return out;
 }
 
+/// Waits until [searcher] has finished opening its library. The core opens a library on a background thread after cs_open and a
+/// search skips one that is still opening (or that an add is writing) without an error, so a search made right after
+/// SearchCore.open can come back empty for a library that has the book. Fails, saying what it was stuck in, when the library
+/// reports an error or is not open after about ten seconds.
+Future<SourceStatus> libraryOpened(SearchCore searcher, String what) async {
+  var stuck = 'not in the status list';
+  for (var i = 0; i < 50; i++) {
+    final libs = [for (final s in await searcher.status()) if (s.kind == 'library') s];
+    if (libs.isNotEmpty) {
+      final s = libs.first;
+      if (s.error != null) fail('$what: the library did not open: ${s.error!.code} ${s.error!.message}');
+      if (!s.opening && !s.updating) return s;
+      stuck = s.updating ? 'updating' : 'opening';
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+  }
+  fail('$what: the library was still $stuck after 50 looks, 200 ms apart');
+}
+
 void main() {
   test('Add PDF on the real core: a text PDF, a scanned PDF (OCR) and a copy end in a searchable book and Bookshelves events', () async {
     await pdfiumForTests();
@@ -205,6 +224,7 @@ void main() {
       final searcher = await SearchCore.open([SourceConfig.library(path: '$lib/shard', indexDir: '$lib/index', settings: settings)]);
       final embedder = CacheEmbedder(modelPath: env['CACHE_EMBED_MODEL']!);
       try {
+        await libraryOpened(searcher, 'My books');
         final v = await embedder.embed('how long do I boil water to make it safe');
         SearchResponse? r;
         for (var i = 0; i < 50 && r == null; i++) {
@@ -322,6 +342,8 @@ void main() {
           Future<List<String>> found() async {
             final searcher = await SearchCore.open([SourceConfig.library(path: '$lib/shard', indexDir: '$lib/index', settings: settings)]);
             try {
+              // the library is open in this handle before it is searched: an empty answer then means the book is not there
+              await libraryOpened(searcher, phase);
               SearchResponse? r;
               for (var i = 0; i < 50 && r == null; i++) {
                 try {
