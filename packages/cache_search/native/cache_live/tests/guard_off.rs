@@ -1,4 +1,4 @@
-//! cache_live with the guard not installed (a phone): its request client reaches this machine and follows a redirect to it, as it always did.
+//! cache_live with the guard not installed (a phone): its request client reaches this machine, as it always did.
 //! Separate from guard_on.rs because the guard is installed per process.
 
 use std::io::{Read, Write};
@@ -33,12 +33,14 @@ fn without_the_guard_a_loopback_address_is_reachable() {
     assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
 
+/// The client follows no redirect by itself (it would carry a key header to any host and go from https to http): the request
+/// code follows them, one checked hop at a time. tests/redirects.rs has those, on this machine and without the guard as here.
 #[test]
-fn without_the_guard_a_redirect_to_this_machine_is_followed() {
+fn the_client_follows_no_redirect_by_itself() {
     assert!(!cache_netguard::installed());
     let (port2, hits2) = listen("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string());
-    let (port1, _hits1) = listen(format!("HTTP/1.1 302 Found\r\nLocation: http://[::ffff:127.0.0.1]:{port2}/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+    let (port1, hits1) = listen(format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port2}/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
     let r = cache_live::request::agent(5).get(&format!("http://127.0.0.1:{port1}/x")).call();
-    assert!(r.is_ok(), "{:?}", r.err());
-    assert_eq!(hits2.load(Ordering::SeqCst), 1);
+    assert_eq!(r.map(|r| r.status()).ok(), Some(302));
+    assert_eq!((hits1.load(Ordering::SeqCst), hits2.load(Ordering::SeqCst)), (1, 0));
 }

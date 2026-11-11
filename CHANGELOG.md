@@ -19,6 +19,7 @@ release notes).
 - Home: the weather card no longer says "no forecast yet" while a forecast is stored; when the current reading is too old to show, it shows today's forecast under the day's name, with its age
 - Home and Weather: a warning that has ended no longer shows again for a moment each time Cache opens
 - Weather alerts: an alert no longer pops up twice when two updates or two checks run in the same moment, and a damaged record of what you were already told is read from a spare copy, so it no longer brings every alert back
+- Weather and alerts: a source's address can no longer be redirected from https to plain http, and a source's key is no longer sent on to a server the source does not name
 - Weather alerts: with Where I am watched, the same fire no longer pops up again each time you move about a kilometre; it pops up once more only if it comes close enough to be serious
 
 ## 1.1.0 (build 49, test) - 2026-11-11
