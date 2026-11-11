@@ -166,6 +166,10 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
     Screen(carContext) {
     private var results: List<CarPlace>? = preset
     private var searching = false
+
+    // The text the results are for (what was last searched: typed, submitted, or the text the screen was opened with). The
+    // template puts it in the box, so when the screen is shown again (Back from a route) the box and the list still agree.
+    private var query: String = initial.orEmpty()
     private var seq = 0
     private val main = Handler(Looper.getMainLooper())
     private var pending: Runnable? = null
@@ -187,6 +191,7 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
 
     private fun find(text: String) {
         val mine = ++seq
+        query = text
         if (text.isBlank()) {
             results = null
             searching = false
@@ -205,6 +210,10 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
 
     internal fun textChanged(searchText: String) {
         pending?.let { main.removeCallbacks(it) }
+        pending = null
+        // The box holds what the list is already for (the host says so when it shows the screen again with its text): nothing
+        // to look up.
+        if (searchText == query && !searching && (results != null || searchText.isBlank())) return
         val r = Runnable { find(searchText) }
         pending = r
         main.postDelayed(r, 600)
@@ -224,7 +233,7 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
             .setHeaderAction(Action.BACK)
             .setSearchHint("Search for a place")
             .setShowKeyboardByDefault(results == null && initial == null)
-        initial?.let { b.setInitialSearchText(it) }
+        if (query.isNotEmpty()) b.setInitialSearchText(query)
         val list = results
         if (searching && list == null) {
             b.setLoading(true)
