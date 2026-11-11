@@ -18,14 +18,30 @@ fn call(e: &SyncEngine, m: &str, a: Value) -> Value {
     e.call(m, &a).unwrap_or_else(|err| panic!("{m}: {err:#}"))
 }
 
-fn wait(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
+/// Waits for `ok`; on a timeout the panic carries the activity of `engines`, so a failure says what they did.
+fn wait(what: &str, secs: u64, engines: &[&SyncEngine], mut ok: impl FnMut() -> bool) {
     for _ in 0..secs * 4 {
         if ok() {
             return;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    panic!("timed out waiting for {what}");
+    panic!("timed out waiting for {what}\n{}", engines.iter().map(|e| call(e, "status", json!({}))["log"].to_string()).collect::<Vec<_>>().join("\n"));
+}
+
+/// Runs `swap` (a folder taken away and the share re-pointed) with `e`'s rounds held part way through a rescan, after the
+/// folder was read: a round reading the folder while it is being taken away would find files gone and record real deletes,
+/// which is right for the engine and not what these tests are about. `dir` is `e`'s own folder.
+fn with_rounds_held(e: &SyncEngine, dir: &Path, swap: impl FnOnce()) {
+    let (hold, held) = (dir.join("hold-rescan"), dir.join("hold-rescan.held"));
+    std::fs::write(&hold, b"").unwrap();
+    wait("a rescan held", 60, &[e], || {
+        call(e, "sync_now", json!({}));
+        held.exists()
+    });
+    swap();
+    std::fs::remove_file(&hold).unwrap();
+    wait("the held rescan let go", 60, &[e], || !held.exists());
 }
 
 fn log(e: &SyncEngine) -> String {
@@ -84,13 +100,13 @@ fn a_missing_folder_is_an_error_and_never_scanned_as_empty() {
     put(&f.join("keep.txt"), "kept");
     put(&f.join("sub/also.txt"), "also");
     call(&a, "share_add", json!({"path": f, "name": "Notebooks", "id": "nb1"}));
-    wait("the files indexed", 30, || {
+    wait("the files indexed", 30, &[&a], || {
         call(&a, "sync_now", json!({}));
         call(&a, "status", json!({}))["shares"][0]["files"] == 2
     });
     // The folder goes (a stale container path): an error in the activity, and no delete recorded.
     std::fs::rename(&f, tmp.path().join("elsewhere")).unwrap();
-    wait("the missing error", 30, || {
+    wait("the missing error", 30, &[&a], || {
         call(&a, "sync_now", json!({}));
         log(&a).contains("is missing")
     });
@@ -113,20 +129,22 @@ fn a_repoint_records_no_deletes_and_pulls_missing_files_back() {
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     call(&b, "link", json!({"code": code}));
     call(&a, "share_add", json!({"path": fa, "name": "Notebooks", "id": "nb1"}));
-    wait("the offer on B", 30, || {
+    wait("the offer on B", 30, &[&a, &b], || {
         call(&b, "sync_now", json!({}));
         call(&b, "status", json!({}))["offers"].as_array().map(|o| !o.is_empty()).unwrap_or(false)
     });
     call(&b, "share_join", json!({"id": "nb1", "path": fb_old}));
-    wait("the files on B", 60, || fb_old.join("three.txt").exists() && fb_old.join("sub/two.txt").exists() && fb_old.join("one.txt").exists());
+    wait("the files on B", 60, &[&a, &b], || fb_old.join("three.txt").exists() && fb_old.join("sub/two.txt").exists() && fb_old.join("one.txt").exists());
 
     // The container moves: the old folder is gone, the files are in a new one, same content.
     let fb_same = tmp.path().join("new-container-same");
     put(&fb_same.join("one.txt"), "first");
     put(&fb_same.join("sub/two.txt"), "second");
     put(&fb_same.join("three.txt"), "third");
-    std::fs::remove_dir_all(&fb_old).unwrap();
-    call(&b, "share_add", json!({"path": fb_same, "name": "Notebooks", "id": "nb1"}));
+    with_rounds_held(&b, &db, || {
+        std::fs::remove_dir_all(&fb_old).unwrap();
+        call(&b, "share_add", json!({"path": fb_same, "name": "Notebooks", "id": "nb1"}));
+    });
     for _ in 0..3 {
         call(&b, "sync_now", json!({}));
         call(&a, "sync_now", json!({}));
@@ -138,13 +156,13 @@ fn a_repoint_records_no_deletes_and_pulls_missing_files_back() {
     std::thread::sleep(Duration::from_millis(1100));
     put(&fa.join("one.txt"), "edited on the desk");
     call(&a, "sync_now", json!({}));
-    wait("the edit on B", 60, || {
+    wait("the edit on B", 60, &[&a, &b], || {
         call(&b, "sync_now", json!({}));
         std::fs::read_to_string(fb_same.join("one.txt")).map(|s| s == "edited on the desk").unwrap_or(false)
     });
     // After that first scan, a real delete on B is a delete again.
     std::fs::remove_file(fb_same.join("three.txt")).unwrap();
-    wait("a real delete reaching A", 60, || {
+    wait("a real delete reaching A", 60, &[&a, &b], || {
         call(&b, "sync_now", json!({}));
         call(&a, "sync_now", json!({}));
         !fa.join("three.txt").exists()
@@ -153,15 +171,17 @@ fn a_repoint_records_no_deletes_and_pulls_missing_files_back() {
     // The container moves again, onto a folder with FEWER files: nothing is deleted on A, and B gets the rest back.
     let fb_few = tmp.path().join("new-container-fewer");
     put(&fb_few.join("one.txt"), "edited on the desk");
-    std::fs::remove_dir_all(&fb_same).unwrap();
-    call(&b, "share_join", json!({"id": "nb1", "path": fb_few}));
+    with_rounds_held(&b, &db, || {
+        std::fs::remove_dir_all(&fb_same).unwrap();
+        call(&b, "share_join", json!({"id": "nb1", "path": fb_few}));
+    });
     assert!(log(&b).contains("folder moved after an update"));
     for _ in 0..3 {
         call(&b, "sync_now", json!({}));
         call(&a, "sync_now", json!({}));
         std::thread::sleep(Duration::from_secs(2));
     }
-    wait("the missing file pulled back", 60, || {
+    wait("the missing file pulled back", 60, &[&a, &b], || {
         call(&b, "sync_now", json!({}));
         fb_few.join("sub/two.txt").exists()
     });

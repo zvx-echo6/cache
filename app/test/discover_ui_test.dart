@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/discover/discover_state.dart';
@@ -219,5 +220,58 @@ void main() {
     expect(again.firstRunDone, isTrue);
     expect(again.ledger.has('homestead'), isTrue);
     expect(again.ledger.items.keys, contains('library:usda-2015_en'));
+  });
+
+  group('first run done is told before init ends (Home shows the Discover card at once, not the Set up card first)', () {
+    late Directory dir;
+    late File file;
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('discover');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      file = File('${dir.path}/discover.json');
+    });
+
+    test('a device set up before Discover: told before discover.json is saved', () async {
+      // the catalogue read is held, so init cannot end until the test lets it
+      final held = Completer<String>();
+      final d = DiscoverState(device: dev, settingsDirOverride: dir, bundled: () => held.future);
+      // (first run done, started, discover.json is there) at each notice
+      final seen = <(bool, bool, bool)>[];
+      d.addListener(() => seen.add((d.firstRunDone, d.started, file.existsSync())));
+      var ended = false;
+      final init = d.init(setUpBefore: true).then((_) => ended = true);
+      for (var i = 0; i < 400 && !file.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(file.existsSync(), isTrue);
+      expect(seen, isNotEmpty);
+      expect(seen.first, (true, false, false), reason: 'told when the flag is set, before the save');
+      expect(ended, isFalse);
+      held.complete(bundledDiscover());
+      await init;
+      expect(d.started, isTrue);
+      expect(d.firstRunDone, isTrue);
+    });
+
+    test('a device with discover.json: told when the file is read, before the catalogue', () async {
+      await makeDiscover(dev, dir: dir);
+      expect(file.existsSync(), isTrue);
+      final held = Completer<String>();
+      final d = DiscoverState(device: dev, settingsDirOverride: dir, bundled: () => held.future);
+      final seen = <(bool, bool)>[];
+      d.addListener(() => seen.add((d.firstRunDone, d.started)));
+      var ended = false;
+      final init = d.init().then((_) => ended = true);
+      for (var i = 0; i < 400 && seen.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(seen, isNotEmpty);
+      expect(seen.first, (true, false));
+      expect(ended, isFalse);
+      held.complete(bundledDiscover());
+      await init;
+      expect(d.started, isTrue);
+    });
   });
 }

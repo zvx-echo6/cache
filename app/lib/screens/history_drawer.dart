@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../chat/chat_controller.dart';
+import '../desktop/desktop.dart';
 import '../history/conversation_store.dart';
 import '../history/date_groups.dart';
 import '../history/share.dart';
@@ -199,7 +200,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
         ),
       );
     if (widget.docked) {
-      return SizedBox(key: const ValueKey('chat-list-docked'), width: widget.width ?? kDockedChatListWidth, child: Material(color: k.background, child: body));
+      return SizedBox(key: const ValueKey('chat-list-docked'), width: widget.width ?? DesktopMetrics.of(context)?.listWidth ?? kDockedChatListWidth, child: Material(color: k.background, child: body));
     }
     return Drawer(width: widget.width, backgroundColor: k.background, child: body);
   }

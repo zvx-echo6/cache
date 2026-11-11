@@ -230,7 +230,8 @@ class TwoPaneState extends State<TwoPane> {
             child: Center(
               child: ConstrainedBox(
                 // With the list hidden the detail takes the whole width.
-                constraints: BoxConstraints(maxWidth: hidden ? double.infinity : (desktop ? kDesktopDetailMaxWidth : kDetailMaxWidth)),
+                // (Cache on Linux's desktop window has no 640 cap at 1024 to 1279: the page bar and its hairline span the pane.)
+                constraints: BoxConstraints(maxWidth: hidden ? double.infinity : (desktop || isLinuxDesktop(context) ? kDesktopDetailMaxWidth : kDetailMaxWidth)),
                 // The detail's own Navigator: its page's barrier blocks semantics only inside this container (see the list's).
                 child: Semantics(
                   container: true,

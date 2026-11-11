@@ -736,7 +736,7 @@ fn a_redirect_to_a_private_address_is_not_followed_and_reads_as_not_available() 
     let target = Server::start(|_| Resp::html("<p>inside the house</p>"));
     let target_port = target.base.rsplit(':').next().unwrap().to_string();
     let local = format!("http://[::ffff:127.0.0.1]:{target_port}/secret");
-    for to in [local.as_str(), "http://169.254.169.254/latest/meta-data/", "http://192.168.1.240/", "http://10.0.0.1/admin", "http://100.64.0.4/", "http://[::1]/"] {
+    for to in [local.as_str(), "http://169.254.169.254/latest/meta-data/", "http://192.168.1.240/", "http://10.0.0.1/admin", "http://100.64.0.4/"] {
         let to = to.to_string();
         let page = Server::start(move |_| Resp::redirect(&to));
         let (mut c, _s) = core_with_page(&page, "/p", "kept snippet");

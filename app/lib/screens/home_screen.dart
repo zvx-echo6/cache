@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../brand.dart';
 import '../desktop/desktop.dart';
+import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
 import '../discover/ui/home_card.dart';
+import '../discover/ui/kit.dart' show DTile;
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart' show ModuleId;
+import '../models/search_model.dart' show SearchModel;
 import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
@@ -101,7 +104,23 @@ class _HomeScreenState extends State<HomeScreen> {
   LayoutState get layout => widget.layout;
 
   @override
+  void initState() {
+    super.initState();
+    homeSearchRequests.addListener(_focusSearch);
+    // The cursor is in the search box: the search model loads ahead of the first search.
+    _focus.addListener(() {
+      if (_focus.hasFocus) SearchModel.aboutToSearch();
+    });
+  }
+
+  /// The "/" key on the Linux desktop: the search box has the focus once Home is the page shown.
+  void _focusSearch() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _focus.requestFocus();
+  });
+
+  @override
   void dispose() {
+    homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
     _focus.dispose();
@@ -518,7 +537,9 @@ class ShortcutCard extends StatelessWidget {
     final s = shortcut;
     final double a = large ? 56 : 32;
     final Widget art = switch (s.kind) {
-      ShortcutKind.module => BrandTileImage(s.module!.tile, size: a),
+      ShortcutKind.module => s.module!.tile == null
+          ? DTile(s.module!.icon, size: a)
+          : BrandTileImage(s.module!.tile!, size: a),
       ShortcutKind.chat => BrandTileImage(BrandTile.chat, size: a),
       ShortcutKind.page => BrandTileImage(BrandTile.library, size: a),
       ShortcutKind.place => SizedBox(height: a, width: a, child: Icon(Icons.place_outlined, size: a * 0.8, color: k.accent)),

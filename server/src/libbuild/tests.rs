@@ -491,6 +491,25 @@ fn the_core_only_ever_sees_a_whole_shard() {
     }
 }
 
+/// A built library has a catalogue, as the one-shot builder's libraries do: `documents.tsv` lists the books (a browser reads them
+/// from it).
+#[test]
+fn a_built_library_has_documents_tsv() {
+    let d = TempDir::new("b15cat");
+    let (svc, _) = rig_with(&d, cfg());
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "a.pdf", &book("one", 3, None));
+    drain(&svc);
+    let live = svc.live_dir(&lib);
+    let tsv = std::fs::read_to_string(live.join("documents.tsv")).unwrap();
+    assert_eq!(tsv.lines().count(), 2, "{tsv}");
+    // and the local view, format 2, which carries each book's compression and OCR
+    let view: serde_json::Value = serde_json::from_slice(&std::fs::read(live.join(".local/docs.json")).unwrap()).unwrap();
+    assert_eq!(view["format"], 2);
+    assert_eq!(view["docs"].as_object().unwrap().len(), 1);
+    assert!(view["docs"].as_object().unwrap().values().all(|v| v.get("compression").is_some() && v.get("ocr").is_some()));
+}
+
 #[test]
 fn books_are_published_when_the_queue_for_the_library_is_empty_or_after_the_interval() {
     let d = TempDir::new("b16");

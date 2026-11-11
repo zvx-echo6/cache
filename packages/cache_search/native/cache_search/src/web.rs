@@ -114,13 +114,12 @@ impl WebSearchProvider for KagiProvider {
         let auth = format!("Bearer {key}");
         let body = json!({"query": query, "limit": limit}).to_string();
         *lock(&self.failure) = None;
-        let reply = http_request(
+        let reply = request_unguarded_for_search(
             self.base_url.trim(),
             &[("Authorization", auth.as_str()), ("Accept", "application/json"), ("Content-Type", "application/json")],
             Some(body),
             deadline,
             API_CAP,
-            false, // the provider's own endpoint is owner configuration, not guarded
         )
         .map_err(|f| {
             // the key is in a header and the query in the body, neither in an error; the tool scrubs the key from both anyway
@@ -430,12 +429,19 @@ fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, 
 /// runs on its own thread; if it has not answered by the deadline the call returns `TimedOut` and the thread ends by
 /// itself when its own request times out.
 pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
-    http_request(url, headers, None, deadline, cap, true)
+    request(url, headers, None, deadline, cap, true)
 }
 
-/// `http_get`, or a POST with `body` when one is given (no redirects are followed differently; same limits). `guarded` refuses every
-/// address that is not on the public internet, on each hop; `http_get` (the page read) is always guarded.
-pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize, guarded: bool) -> std::result::Result<HttpReply, HttpFailure> {
+/// The search provider's POST. Its endpoint is owner configuration (a self-hosted or stand-in server is legitimate), so this one is
+/// not guarded; everything the model reads through it is, by `http_get`. Private on purpose: no caller outside this file can turn the
+/// guard off for a page read.
+fn request_unguarded_for_search(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
+    request(url, headers, body, deadline, cap, false)
+}
+
+/// A GET, or a POST with `body` when one is given (no redirects are followed differently; same limits). `guarded` refuses every
+/// address that is not on the public internet, on each hop.
+fn request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize, guarded: bool) -> std::result::Result<HttpReply, HttpFailure> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(HttpFailure::timed_out("the deadline had passed before the request started"));

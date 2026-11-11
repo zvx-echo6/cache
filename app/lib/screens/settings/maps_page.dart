@@ -3,7 +3,11 @@ import 'package:flutter/material.dart';
 import '../../maps/layers/layer_def.dart';
 import '../../maps/ui/catalogue_screen.dart';
 import '../../maps/ui/format.dart';
+import '../../notebook/map_icons.dart';
+import '../../notebook/pin_image.dart';
+import '../../notebook/place_style.dart';
 import '../../regions/regions_state.dart';
+import '../../theme.dart';
 import '../../regions/ui/region_page.dart';
 import '../../regions/ui/regions_screen.dart';
 import 'deps.dart';
@@ -94,6 +98,26 @@ class _MapsPageState extends State<MapsPage> {
               ],
             ),
             if (local.isNotEmpty) const NoteText('Tap a region to open it. Press and hold for Carry on, Check for update and Delete.'),
+            SettingsGroup(
+              label: 'Pin style',
+              rows: [
+                for (final s in PinStyle.values)
+                  SettingsRow(
+                    key: ValueKey('pin-style-${s.name}'),
+                    leading: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Center(child: PinGlyph(icon: mapIcon('water').icon, tint: pinTint(context, markerColor('teal').color), style: s, size: 36)),
+                    ),
+                    title: s.label,
+                    status: [Part(s.hint)],
+                    trailing: s == maps.pinStyle ? Icon(Icons.check, color: context.t.accent) : null,
+                    chevron: false,
+                    onTap: () => maps.setPinStyle(s),
+                  ),
+              ],
+            ),
+            const NoteText('On the map, in places and in the long-press ring. Kept on this device.'),
             SettingsGroup(
               label: 'Layers',
               rows: [
