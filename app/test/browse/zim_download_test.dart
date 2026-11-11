@@ -189,4 +189,50 @@ void main() {
     expect(await hashFile(f.path), sha256.convert(f.readAsBytesSync()).toString());
     expect(await hashFile(f.path, kind: 'md5'), md5.convert(f.readAsBytesSync()).toString());
   });
+
+  group('a full disk', () {
+    test('stops the download, deletes the partial file and says so in plain words', () async {
+      final k = FakeKiwix(data(2 << 20));
+      await k.start();
+      addTearDown(k.stop);
+      final part = File('${tmp.path}/f.part')..writeAsBytesSync(k.bytes.sublist(0, 100000)); // a part from an earlier try
+      var writes = 0;
+      final d = ZimDownloader(
+        freeSpace: (_) => 1 << 40,
+        writeChunk: (raf, chunk) async {
+          if (++writes >= 1) {
+            throw FileSystemException('write failed', part.path, const OSError('No space left on device', 28));
+          }
+          await raf.writeFrom(chunk);
+        },
+      );
+      await expectLater(
+        d.download(url: k.url, part: part, sha256Url: Uri.parse('${k.url}.sha256')),
+        throwsA(
+          isA<DownloadException>()
+              .having((e) => e.code, 'code', 'no_space')
+              .having((e) => e.message, 'message', allOf(contains('out of space'), contains('removed'))),
+        ),
+      );
+      expect(part.existsSync(), isFalse, reason: 'the partial file does not keep the room that is left');
+      expect(writes, 1, reason: 'it stopped at the first write that failed');
+    });
+
+    test('another write error keeps the partial file', () async {
+      final k = FakeKiwix(data(2 << 20));
+      await k.start();
+      addTearDown(k.stop);
+      final part = File('${tmp.path}/f.part')..writeAsBytesSync(k.bytes.sublist(0, 100000)); // a part from an earlier try
+      var writes = 0;
+      final d = ZimDownloader(
+        freeSpace: (_) => 1 << 40,
+        writeChunk: (raf, chunk) async {
+          if (++writes >= 1) throw FileSystemException('write failed', part.path, const OSError('Input/output error', 5));
+          await raf.writeFrom(chunk);
+        },
+      );
+      await expectLater(d.download(url: k.url, part: part), throwsA(isA<DownloadException>().having((e) => e.code, 'code', 'failed')));
+      expect(part.existsSync(), isTrue);
+    });
+  });
 }

@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
+import '../../desktop/fact_table.dart';
+import '../../linux_ui.dart';
 import '../../platform/app_log.dart';
 import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
 import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
+import '../../share/share_fallback.dart' show kDownloadStarted;
 import '../../video/format.dart';
 import '../../weather/catalogue.dart' show isAllowedAddress;
 import '../../weather/weather_state.dart';
@@ -66,6 +70,35 @@ class _StoragePageState extends State<StoragePage> {
         final colors = _colors(k);
         final free = u.freeBytes;
         final clean = u.cleanupBytes;
+        final desktop = isLinuxDesktop(context);
+        // The Clean up and Kept free rows: on the desktop one card of flat 44-pixel rows, in the table's own row language.
+        final rows = <Widget>[
+                SettingsRow(
+                  key: const ValueKey('clean-up'),
+                  compact: desktop,
+                  icon: Icons.cleaning_services_outlined,
+                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
+                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
+                  trailing: _cleaning
+                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
+                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
+                ),
+                if (!linuxUi)
+                  SwitchRow(
+                  title: 'Mobile data downloads',
+                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
+                  value: s.mobileForDownloads,
+                  onChanged: s.setMobileForDownloads,
+                ),
+                SettingsRow(
+                  key: const ValueKey('kept-free'),
+                  compact: desktop,
+                  icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
+                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
+                  status: const [Part('10% of storage, 5 to 20 GB')],
+                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
+                ),
+              ];
         return SettingsPage(
           title: 'Storage',
           children: [
@@ -77,7 +110,7 @@ class _StoragePageState extends State<StoragePage> {
                 Text(
                   [
                     u.measured ? '${formatBytes(u.usedBytes)} used by Cache' : 'Measuring…',
-                    free == null ? 'free space unknown' : '${formatBytes(free)} free on this device',
+                    free == null ? 'free space unknown' : '${formatBytes(free)} free on ${linuxUi ? 'the server' : 'this device'}',
                   ].join(' · '),
                   key: const ValueKey('storage-line'),
                   maxLines: 1,
@@ -86,46 +119,62 @@ class _StoragePageState extends State<StoragePage> {
                 ),
               ],
             ),
-            SettingsGroup(
-              rows: [
-                SettingsRow(
-                  key: const ValueKey('clean-up'),
-                  icon: Icons.cleaning_services_outlined,
-                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
-                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
-                  trailing: _cleaning
-                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
-                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
-                ),
-                SwitchRow(
-                  title: 'Mobile data downloads',
-                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
-                  value: s.mobileForDownloads,
-                  onChanged: s.setMobileForDownloads,
-                ),
-                SettingsRow(
-                  key: const ValueKey('kept-free'),
-                  icon: Icons.phone_android,
-                  title: 'Kept free for the device',
-                  status: const [Part('10% of storage, 5 to 20 GB')],
-                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
-                ),
-              ],
-            ),
-            const NoteText('Weather and alerts always update, on any connection.'),
-            SettingsGroup(
-              rows: [
-                for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
-              ],
-            ),
+            if (desktop)
+              Material(
+                color: k.surface,
+                borderRadius: BorderRadius.circular(14),
+                clipBehavior: Clip.antiAlias,
+                child: Column(children: [for (var i = 0; i < rows.length; i++) ...[if (i > 0) Divider(height: 1, color: k.secondary.withValues(alpha: 0.2)), rows[i]]]),
+              )
+            else
+              SettingsGroup(rows: rows),
+            if (!linuxUi) const NoteText('Weather and alerts always update, on any connection.'),
+            // The Linux desktop shows the kinds as a table; every other window keeps the rows.
+            if (isLinuxDesktop(context))
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const GroupLabel('What Cache stores'),
+                  FactTable(
+                    headers: const ['Kind', 'Items', 'Size'],
+                    rows: [for (var i = 0; i < kinds.length; i++) _factRow(kinds[i], colors[i % colors.length])],
+                  ),
+                ],
+              )
+            else
+              SettingsGroup(
+                rows: [
+                  for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
+                ],
+              ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
+              status: linuxUi ? 'Log: ${logLevelTitle(appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather))),
             ),
           ],
         );
       },
+    );
+  }
+
+  FactRow _factRow(DataKind kind, Color color) {
+    final k = context.t;
+    final n = kind.count?.call();
+    final list = kind.list;
+    return FactRow(
+      key: ValueKey('kind-${kind.id}'),
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(kind.icon, size: 22, color: k.secondary),
+          Positioned(right: -3, bottom: -3, child: Container(width: 9, height: 9, decoration: BoxDecoration(color: color, shape: BoxShape.circle))),
+        ],
+      ),
+      label: kind.label,
+      items: n?.toString(),
+      size: u.measured ? formatBytes(u.bytesOf(kind.id)) : 'Measuring…',
+      onTap: list == null ? null : () => _open(list()),
     );
   }
 
@@ -230,7 +279,8 @@ class IndexingSpeedPage extends StatelessWidget {
         return SettingsPage(
           title: 'Advanced',
           children: [
-            SettingsGroup(
+            if (!linuxUi)
+              SettingsGroup(
               label: 'Background indexing speed',
               rows: [
                 choice('indexing-gentle', 'Gentle', 'Keeps the device cool and the battery longer', false),
@@ -251,7 +301,7 @@ class IndexingSpeedPage extends StatelessWidget {
                   ),
               ],
             ),
-            const NoteText('The log stays on this device. Nothing leaves it unless you tap Share log.'),
+            NoteText('The log stays on ${linuxUi ? 'the server' : 'this device'}. Nothing leaves it unless you tap Share log.'),
             SettingsGroup(
               rows: [
                 SettingsRow(
@@ -259,14 +309,25 @@ class IndexingSpeedPage extends StatelessWidget {
                   icon: Icons.ios_share,
                   title: 'Share log',
                   status: [Part(log.dir == null ? 'No log yet' : appLogSize())],
-                  onTap: log.dir == null ? null : () => shareAppLog(context),
+                  onTap: log.dir == null
+                      ? null
+                      : linuxUi
+                      ? () => say(context, kDownloadStarted)
+                      : () => shareAppLog(context),
                 ),
                 SettingsRow(
                   key: const ValueKey('log-clear'),
                   icon: Icons.delete_outline,
                   title: 'Clear log',
                   chevron: false,
-                  onTap: log.dir == null ? null : log.clear,
+                  onTap: log.dir == null
+                      ? null
+                      : linuxUi
+                      ? () {
+                          log.clear();
+                          say(context, 'Log cleared');
+                        }
+                      : log.clear,
                 ),
               ],
             ),

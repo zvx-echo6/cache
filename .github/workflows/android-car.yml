@@ -25,7 +25,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-car-${{ github.ref }}
+  # rel-1.1 and main: a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
+  group: android-car-${{ (github.ref == 'refs/heads/rel-1.1' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:

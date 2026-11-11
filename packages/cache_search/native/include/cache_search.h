@@ -591,7 +591,7 @@ char *cs_place_delete(cs_handle *h, const char *key);
  *            "photos":[{"id","width"?,"height"?,"bytes"?}],"files":[{"id","name","mime"?,"bytes"?}],"props"?,"draft",
  *            "private","created","updated","rev"} (created/updated in Unix ms; rev counts changes; private = its own or its
  *            notebook's). A value is a number, true/false, text, a place, or a list of photo ids (a photo field). "props":
- *            {"color"?: a marker colour's name (lower-case letters), "on_map"?: false = not drawn on the map}.
+ *            {"color"?: a marker colour's name (lower-case letters), "icon"?: a map icon's id (lower-case letters, digits, _), "on_map"?: false = not drawn on the map}.
  * A notebook: {"id","template","def","private","map","template_ref","created","updated","last_used","rev","entries":n,
  *            "files":n,"places":n,"last_entry":entry|null} (counts of entries, attached files and entries with a place;
  *            counts and last_entry leave drafts out; last_used = when an entry was last

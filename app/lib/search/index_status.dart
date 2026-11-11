@@ -9,12 +9,14 @@ String indexPartWord(String kind) => switch (kind) {
   'zim-epub' => 'EPUBs',
   'zim-captions' || 'captions' => 'captions',
   'pdf-add' => 'Add PDF',
+  'watch-check' => 'new PDFs',
   _ => 'the search index',
 };
 
 /// "Making PDFs searchable"; the seal of an older index: "Getting the search index ready".
 String indexDoingWords(String kind) => switch (kind) {
   'pdf-add' => 'Adding a PDF',
+  'watch-check' => 'Checking for new PDFs',
   'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'Making ${indexPartWord(kind)} searchable',
   _ => 'Getting the search index ready',
 };
@@ -22,6 +24,7 @@ String indexDoingWords(String kind) => switch (kind) {
 /// "Waiting to make PDFs searchable"; the seal: "Waiting to get the search index ready".
 String indexWaitingWords(String kind) => switch (kind) {
   'pdf-add' => 'Waiting to add a PDF',
+  'watch-check' => 'Waiting to check for new PDFs',
   'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'Waiting to make ${indexPartWord(kind)} searchable',
   _ => 'Waiting to get the search index ready',
 };
@@ -98,6 +101,8 @@ String? indexCurrentWords(IndexScheduler s) {
   if (i == null) return null;
   // a PDF being added: its title and the phase it is in ("Water purification manual · Reading scanned pages (OCR)")
   if (i.kind == 'pdf-add') return '${i.title} · ${i.step ?? indexWaitingWords(i.kind)}';
+  // the watched folders' check: "Watched folders · Checking for new PDFs"
+  if (i.kind == 'watch-check') return '${i.title} · ${i.step ?? indexWaitingWords(i.kind)}';
   final name = i.title.isEmpty ? indexPartWord(i.kind) : '${i.title} · ${indexPartWord(i.kind)}';
   final p = i.progress;
   return p == null || p.$2 <= 0 ? name : '$name ${indexOf(p)}';

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../../chat/ask_focus.dart';
 import '../../files.dart';
 import '../notebook_model.dart';
 import '../notebook_state.dart';
@@ -332,8 +333,14 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   SyncTargetConfig? _shareTarget() {
     final have = _targets.where((t) => t.kind == SyncKind.share).firstOrNull;
-    if (have != null) return have;
     final d = shareFolder?.call();
+    if (have != null) {
+      // The app's folder path changes across iOS installs and updates: the saved one is re-rooted at the current folder.
+      if (d == null || d.path == have.path) return have;
+      final moved = SyncTargetConfig(id: have.id, kind: have.kind, path: d.path, paused: have.paused, display: have.display, importTag: have.importTag);
+      _targets = [for (final t in _targets) t.id == have.id ? moved : t];
+      return moved;
+    }
     if (d == null) return null;
     final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path);
     _targets = [..._targets, t];
@@ -384,6 +391,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
         _again = false;
         final share = shareOn?.call() == true ? _shareTarget() : null;
         for (final t in [..._targets.where((t) => t.kind != SyncKind.share), ?share]) {
+          // While Ask answers, the next folder waits (the one syncing finishes); sync goes on where it left off.
+          await askIdle(worker: 'Notebook sync');
           if (t.paused) {
             _status[t.id] = 'Paused.';
             continue;

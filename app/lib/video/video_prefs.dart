@@ -2,13 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../app_fs.dart';
+
 /// What the player remembers on this device (never synced; kept beside the app's other files, not in the shared videos folder):
 /// where each video was left, and the last captions choice.
 class VideoPrefs {
-  /// Kept in [file]; null keeps it in memory only (tests).
-  VideoPrefs({this.file});
+  /// Kept in [file]; null keeps it in memory only (tests). A browser keeps it through [fs] in the support folder on the server,
+  /// as `video-prefs.json` (the phone's file name), so every browser of that server shares it.
+  VideoPrefs({this.file, this.fs});
 
   final File? file;
+  final AppFs? fs;
+
+  /// The prefs file's name in the support folder.
+  static const String fileName = 'video-prefs.json';
 
   /// At most this many videos keep a place; the oldest goes first.
   static const int maxPositions = 300;
@@ -30,9 +37,12 @@ class VideoPrefs {
     if (_loaded) return;
     _loaded = true;
     final f = file;
-    if (f == null) return;
+    final fs = this.fs;
+    if (f == null && fs == null) return;
     try {
-      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final text = f != null ? await f.readAsString() : await fs!.readString(AppRoot.support, fileName);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       final p = (j['positions'] as Map?)?.cast<String, dynamic>() ?? const {};
       for (final e in p.entries) {
         final v = (e.value as Map).cast<String, dynamic>();
@@ -92,7 +102,7 @@ class VideoPrefs {
   }
 
   void _save() {
-    if (file == null) return;
+    if (file == null && fs == null) return;
     _dirty = true;
     _writing ??= _write();
   }
@@ -107,6 +117,11 @@ class VideoPrefs {
           'quality': _qualityChoice,
           'positions': {for (final e in _positions.entries) e.key: {'ms': e.value.ms, 'at': e.value.at}},
         });
+        final fs = this.fs;
+        if (file == null && fs != null) {
+          await fs.writeStringAtomic(AppRoot.support, fileName, body);
+          continue;
+        }
         final f = file!;
         await f.parent.create(recursive: true);
         final tmp = File('${f.path}.tmp');

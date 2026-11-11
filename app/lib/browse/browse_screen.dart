@@ -34,10 +34,11 @@ import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../video/format.dart';
-import 'catalogue_screen.dart' show AddToLibraryScreen;
+import 'catalogue_screen.dart' show AddToLibraryScreen, YourOwnGroup;
 import 'browse_state.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/discover_screen.dart';
+import 'free_space.dart' show freeBytesOnDisk;
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
@@ -150,6 +151,10 @@ class _BrowseScreenState extends State<BrowseScreen> {
     holdsBooks: (l) => switch (_shelves) {
       final CdsShelfSource c => c.holdsBooks(l),
       _ => false,
+    },
+    booksIn: (l) => switch (_shelves) {
+      final CdsShelfSource c => c.booksIn(l),
+      _ => 0,
     },
     rootTop: (ctx) => [
       if (libs?.task case final t?) _taskRow(ctx.t, t),
@@ -280,7 +285,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
-  int? get _free => b.device != null ? b.device!.spaceForDialog.usable : b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
+  int? get _free => b.device != null ? b.device!.spaceForDialog.free : freeBytesOnDisk(sources.zimsDir?.path ?? '.');
 
   LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome, bool parts = true}) {
     final id = sources.idOf(z);
@@ -448,7 +453,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   /// name Add to Library; the catalogue's own page where the app has no Discover (tests).
   Widget _addPage() {
     final d = DiscoverState.shared;
-    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources);
+    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources, yourOwn: YourOwnGroup.forBrowse(b));
   }
 
   /// The 1.1 Library's Add to Library: in the detail on a desktop window, else a page of its own.

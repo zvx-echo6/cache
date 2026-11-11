@@ -20,6 +20,7 @@ pub mod llm;
 pub mod pages;
 pub mod tiles;
 pub mod tls;
+pub mod video;
 pub mod webfiles;
 
 use std::io::Write;

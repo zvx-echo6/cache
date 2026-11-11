@@ -157,6 +157,8 @@ class FakeNotebookBackend implements NotebookBackend {
     final stored = {
       for (final k in const ['id', 'version', 'author', 'group']) if (def[k] != null) k: def[k],
       'name': name,
+      if (def['icon'] != null) 'icon': def['icon'],
+      if (def['color'] != null) 'color': def['color'],
       'due_every': def['due_every'],
       if (def['shape'] != null) 'shape': def['shape'],
       'fields': fields,

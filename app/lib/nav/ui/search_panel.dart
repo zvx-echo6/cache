@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/map_widgets.dart';
+import '../../models/search_model.dart' show SearchModel;
 import '../../regions/regions_state.dart';
 import '../../regions/ui/region_actions.dart';
 import '../../regions/ui/regions_screen.dart';
@@ -38,6 +39,8 @@ class _NavSearchBarState extends State<NavSearchBar> {
     nav.addListener(_sync);
     _focus.addListener(() {
       if (_focus.hasFocus) nav.openSearch();
+      // The cursor is in the map's search box: the search model loads ahead of the first search.
+      if (_focus.hasFocus) SearchModel.aboutToSearch();
     });
   }
 

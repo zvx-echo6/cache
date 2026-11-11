@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
+import '../../notebook/notebook_map.dart' show repeaterPinName;
+import '../../notebook/pin_image.dart' show PinStyle;
+import '../../theme.dart' show CacheThemeId;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
 import 'protomaps_layout.dart';
@@ -51,6 +54,9 @@ const String kMeasureLine = 'measure-line';
 const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
+
+/// Pixels per point of the pin images (renderPinPng): the symbol layer draws them this much smaller.
+const double kPinImageRatio = 3;
 
 /// The name of the heading marker image the screen adds to the style.
 const String kHeadingImage = 'position-heading';
@@ -105,6 +111,7 @@ Map<String, dynamic> buildMapStyle({
   required List<StyleLayerUse> layers,
   required String Function(LayerDef) tilesUrl,
   required String glyphsUrl,
+  PinStyle? pinStyle,
 }) {
   final sources = <String, dynamic>{};
   final basemap = layers.where((u) => u.def.kind == LayerKind.basemap).firstOrNull;
@@ -205,7 +212,7 @@ Map<String, dynamic> buildMapStyle({
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
-  all.addAll(_routeLayers(palette));
+  all.addAll(_routeLayers(palette, pinStyle));
   all.addAll(_positionLayers(palette));
 
   return {
@@ -388,7 +395,7 @@ List<Map<String, dynamic>> _vectorOverlay(MapPalette p, LayerDef d, String src, 
 
 /// The route: the other routes in grey, then the chosen one with an outline, drawn solid on roads, dashed over open ground
 /// and dotted along a trail; and the pins (search results small, the chosen place large).
-List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
+List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
       {
         'id': kRouteAlt,
         'type': 'line',
@@ -444,25 +451,58 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
         'layout': {'line-cap': 'round', 'line-join': 'round'},
         'paint': {'line-color': p.css('routeOffroad'), 'line-width': 3, 'line-dasharray': [2, 1]},
       },
-      {
-        'id': kUserRepeaters,
-        'type': 'circle',
-        'source': kUserSource,
-        'filter': ['==', ['geometry-type'], 'Point'],
-        'paint': {'circle-radius': 5, 'circle-color': p.css('routeCasing'), 'circle-stroke-width': 2, 'circle-stroke-color': p.css('route')},
-      },
-      {
-        'id': kNotebookPins,
-        'type': 'circle',
-        'source': kNotebookSource,
-        'paint': {
-          'circle-radius': 6,
-          'circle-color': p.css('routeCasing'),
-          'circle-stroke-width': 3,
-          // A place's own marker colour (Places notebooks), else the pin colour.
-          'circle-stroke-color': ['to-color', ['get', 'color'], p.css('pin')],
+      if (pinStyle == null)
+        {
+          'id': kUserRepeaters,
+          'type': 'circle',
+          'source': kUserSource,
+          'filter': ['==', ['geometry-type'], 'Point'],
+          'paint': {'circle-radius': 5, 'circle-color': p.css('routeCasing'), 'circle-stroke-width': 2, 'circle-stroke-color': p.css('route')},
+        }
+      else
+        // A repeater list's repeaters: the radio tower in the person's pin style.
+        {
+          'id': kUserRepeaters,
+          'type': 'symbol',
+          'source': kUserSource,
+          'filter': ['==', ['geometry-type'], 'Point'],
+          'layout': {
+            'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical),
+            'icon-size': 1 / kPinImageRatio,
+            'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
         },
-      },
+      if (pinStyle == null)
+        {
+          'id': kNotebookPins,
+          'type': 'circle',
+          'source': kNotebookSource,
+          'paint': {
+            'circle-radius': 6,
+            'circle-color': p.css('routeCasing'),
+            'circle-stroke-width': 3,
+            // A place's own marker colour (Places notebooks), else the pin colour.
+            'circle-stroke-color': ['to-color', ['get', 'color'], p.css('pin')],
+          },
+        }
+      else
+        // A notebook's places with their icon: one image per style, icon and colour (named in the feature's `pin`, see
+        // notebook_map.dart), drawn at 1/kPinImageRatio of its pixels. The teardrop's point is the bottom of its image.
+        {
+          'id': kNotebookPins,
+          'type': 'symbol',
+          'source': kNotebookSource,
+          'filter': ['has', 'pin'],
+          'layout': {
+            'icon-image': ['get', 'pin'],
+            'icon-size': 1 / kPinImageRatio,
+            'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+        },
       {
         'id': kMeasureLine,
         'type': 'line',

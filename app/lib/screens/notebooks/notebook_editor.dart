@@ -1,22 +1,28 @@
 import 'package:flutter/material.dart';
 
+import '../../notebook/map_icons.dart';
 import '../../notebook/notebook_model.dart';
+import '../../notebook/place_style.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
+import 'icon_picker.dart';
 
 /// Making a notebook from a template, or editing one (UX 3.4): Name; FIELDS with Add field (each: label, type, unit for a number,
 /// choices for a choice); "Due again" for a log; Private; "Show on map" once entries have places. Create is off until there is a
 /// name; a name another notebook has says so. Once there are entries a field's type is fixed, and taking out a field that holds
 /// values hides it (the store keeps them).
 class NotebookEditor extends StatefulWidget {
-  const NotebookEditor({super.key, required this.notebook, this.existing, this.template}) : assert(existing != null || template != null);
+  const NotebookEditor({super.key, required this.notebook, this.existing, this.template, this.icons}) : assert(existing != null || template != null);
 
   final NotebookState notebook;
   final Notebook? existing;
   final NotebookTemplate? template;
+
+  /// Map icons: the "Map icon" row under the name. Null leaves it out.
+  final MapIconSetup? icons;
 
   @override
   State<NotebookEditor> createState() => _NotebookEditorState();
@@ -27,6 +33,8 @@ class _NotebookEditorState extends State<NotebookEditor> {
   late final TextEditingController _name = TextEditingController(text: widget.existing?.name ?? _freeName(widget.template!.name));
   late List<LogField> _fields = [for (final f in _start.fields) if (!f.hidden) f];
   late String? _due = _start.dueEvery;
+  late String? _icon = _start.icon;
+  late String? _color = _start.color;
   late bool _private = widget.existing?.private ?? widget.template!.private;
   late bool _map = widget.existing?.map ?? widget.template!.map;
   late bool _shared = widget.existing == null ? false : widget.notebook.privateSharing?.included(widget.existing!.id) ?? false;
@@ -57,7 +65,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
       _error = null;
     });
     // Fields taken out are left out; the store keeps those with values, hidden.
-    final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null);
+    final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null, icon: widget.icons == null ? null : _icon, clearIcon: widget.icons != null && _icon == null, color: widget.icons == null ? null : _color);
     try {
       final e = widget.existing;
       final saved = await widget.notebook.saveNotebook(
@@ -191,6 +199,18 @@ class _NotebookEditorState extends State<NotebookEditor> {
             onChanged: (_) => setState(() {}),
           ),
           if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: TextStyle(color: k.emergency))),
+          if (widget.icons != null) ...[
+            const SizedBox(height: 8),
+            MapIconRow(
+              iconId: _icon,
+              defaultId: widget.existing != null ? defaultNotebookIcon(widget.existing!) : defaultIconFor(widget.template!.template, log: _start.quickAdd),
+              tint: iconTint(context, markerColor(_color).color),
+              recent: widget.icons!.recent(),
+              pinStyle: widget.icons!.pinStyle(),
+              onChanged: (id) => setState(() => _icon = id),
+            ),
+            NotebookColorRow(colorId: _color, onChanged: (c) => setState(() => _color = c)),
+          ],
           const SizedBox(height: 20),
           Text('FIELDS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
           Text('When, text, place and photos are always there.', style: TextStyle(fontSize: 14, color: k.secondary)),

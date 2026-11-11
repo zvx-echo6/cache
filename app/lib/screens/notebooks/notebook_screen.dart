@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../layout/adaptive.dart';
 
+import '../../desktop/desktop.dart';
 import '../../layout/layout_state.dart';
 import '../../maps/user_layers.dart';
 import '../../nav/units.dart';
@@ -16,6 +17,7 @@ import '../../notebook/places.dart';
 import '../../theme.dart';
 import 'entry_editor.dart';
 import 'field_inputs.dart';
+import 'icon_picker.dart' show MapIconSetup;
 import 'notebook_editor.dart';
 import 'notebook_search_screen.dart';
 import 'places_screen.dart';
@@ -36,6 +38,7 @@ class NotebookDeps {
     this.onShowRepeater,
     this.onRepeaterDirections,
     this.fmt,
+    this.icons,
   });
 
   /// The same deps with the repeater lists' map actions (the shell's: they switch to Maps).
@@ -52,6 +55,7 @@ class NotebookDeps {
     onShowRepeater: onShow,
     onRepeaterDirections: onDirections,
     fmt: fmt,
+    icons: icons,
   );
 
   /// A repeater list's row tapped: Maps opens on the repeater with its card; null: rows do nothing.
@@ -62,6 +66,9 @@ class NotebookDeps {
 
   /// Distances in the person's units (the map's).
   final Fmt? fmt;
+
+  /// Map icons: the icon picker's Recent and the pin style. Null leaves the icon controls out (tests).
+  final MapIconSetup? icons;
 
   final NotebookState notebook;
   final PlaceChoices places;
@@ -191,7 +198,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   Future<void> _menu(Notebook book, String choice) async {
     switch (choice) {
       case 'edit':
-        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book)));
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book, icons: widget.deps.icons)));
       case 'map':
         await nb.setOnMap(book, !book.map);
       case 'home':
@@ -228,10 +235,20 @@ class _NotebookScreenState extends State<NotebookScreen> {
     final all = [for (final e in _entries ?? const <NbEntry>[]) if (!nb.isHidden(e.id)) e];
     final draft = book.isLog ? null : all.where((e) => e.draft).firstOrNull;
     final entries = [for (final e in all) if (!e.draft) e];
+    // The Linux desktop has no floating button. A Log has "Add entry" in its page; another notebook has it in the page bar.
+    final desktop = isLinuxDesktop(context);
     return Scaffold(
       appBar: AppBar(leading: paneShowButton(context), 
         title: Text(book.name),
         actions: [
+          if (desktop && !book.isLog)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: SizedBox(
+                height: 36,
+                child: FilledButton(key: const ValueKey('notebook-add'), onPressed: () => _open(book, null), child: const Text('New entry')),
+              ),
+            ),
           IconButton(
             key: const ValueKey('notebook-search'),
             tooltip: 'Search',
@@ -252,7 +269,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: desktop ? null : FloatingActionButton(
         key: const ValueKey('notebook-add'),
         tooltip: book.isLog ? 'Add entry' : 'New entry',
         onPressed: () => _open(book, null),
@@ -261,7 +278,8 @@ class _NotebookScreenState extends State<NotebookScreen> {
       body: _entries == null
           ? const Center(child: CircularProgressIndicator())
           : LayoutBuilder(builder: (context, cts) => ListView(
-              padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 96),
+              // The Linux desktop: left-aligned under the page bar's title, on the page gutter, at most 760 wide (settingsDetailPad).
+              padding: settingsDetailPad(context, cts.maxWidth).copyWith(top: 8, bottom: 96),
               children: [
                 if (book.isLog) _lastDone(book, now, k),
                 if (draft != null)

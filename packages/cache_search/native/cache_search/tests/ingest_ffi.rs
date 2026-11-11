@@ -239,6 +239,10 @@ fn probe_reports_missing_engines_and_hashes_the_model_without_failing() {
     // hashing can be skipped
     let r = probe(json!({"engines": {"embed_model": model}, "hash_model": false}));
     assert_eq!((r["model"]["ok"].clone(), r["model"]["sha256"].clone()), (json!(true), Value::Null));
+    // the embedder's load can be skipped: the model file is still checked
+    let r = probe(json!({"engines": {"embed_lib": tmp.0.join("none-llama.so"), "embed_model": model, "embed_sha256": abc}, "load_embedder": false}));
+    assert_eq!(r["embedder"], json!({"ok": null, "skipped": true}));
+    assert_eq!(r["model"], json!({"ok": true, "sha256": abc, "expected": abc, "matches": true}));
     // a missing model, and no engines at all: reported, not an error
     let r = probe(json!({"engines": {"embed_model": tmp.0.join("gone.gguf")}}));
     assert_eq!(r["model"]["ok"], false);

@@ -80,7 +80,7 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
       final key = 'library/${libs.statusOf(l)?.sourceId ?? libs.idOf(l) ?? l.folderName}';
       final phase = libs.phaseOf(l);
       final n = libs.docsOf(l);
-      final shelfBooks = books ? d.shelves.bookCount : 0;
+      final shelfBooks = books ? d.booksIn(l) : 0;
       final f = libs.indexFraction(l);
       final words = _scheduled(key);
       out.add(

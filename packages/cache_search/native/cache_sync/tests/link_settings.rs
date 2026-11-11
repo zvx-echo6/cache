@@ -276,3 +276,22 @@ fn links_made_before_new_links_started_off_become_match_once() {
     assert_eq!(peer(&a, "old-one")["link"], json!({"mode": "match"}));
     a.close();
 }
+
+#[test]
+fn the_first_answer_to_the_link_question_is_the_pairs_and_a_late_one_does_not_undo_it() {
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (a, b) = (engine(da.path(), "Tablet", json!({})), engine(db.path(), "Pixel", json!({})));
+    link(&a, &b);
+    let (ia, ib) = (id(&a), id(&b));
+    // Both answer before either hears the other: a sends (earlier), b answers Off (later, and stamped later).
+    let from_a = json!({"mode": "send", "from": ia, "by": ia, "at": 1000});
+    let from_b = json!({"mode": "off", "from": ib, "by": ib, "at": 2000});
+    call(&a, "set_link", json!({"peer": ib, "link": from_a}));
+    std::thread::sleep(Duration::from_millis(20));
+    call(&b, "set_link", json!({"peer": ia, "link": from_b}));
+    rounds(&[&a, &b]);
+    for (e, other) in [(&a, &ib), (&b, &ia)] {
+        let link = peer(e, other)["link"].clone();
+        assert_eq!((link["mode"].as_str(), link["from"].as_str()), (Some("send"), Some(ia.as_str())), "{link}");
+    }
+}

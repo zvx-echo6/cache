@@ -5,12 +5,14 @@ import 'dart:io';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../maps/ui/format.dart';
 import '../platform.dart' as plat;
 import '../platform/app_log.dart';
+import '../platform/memory.dart';
 import '../sources/sources_state.dart' show LibraryEmbedding;
 import 'hf_hub.dart';
 import 'model_downloads.dart';
@@ -113,6 +115,36 @@ class SearchEmbedder {
     return (e.modelId, await e.embed(text));
   }
 
+  /// True while the model is held warm ([warm] ran and [release] has not).
+  bool get isWarm => _warm;
+  bool _warm = false;
+
+  /// Loads the model now and holds it (no idle release) until [release]. False when there is no model file here (nothing was
+  /// loaded) or the browser holds the model on the server. A load that fails throws.
+  Future<bool> warm() async {
+    if (remote) return false;
+    var e = _embedder;
+    if (e == null) {
+      final file = File('${(await modelsDir()).path}${Platform.pathSeparator}$fileName');
+      if (!file.existsSync()) return false;
+      e = _embedder ??= _make(file.path);
+    }
+    e.keepLoaded = true;
+    _warm = true;
+    await e.warm();
+    return true;
+  }
+
+  /// Lets the model go from memory and goes back to loading on use and idling out. True when there was a model to let go.
+  bool release() {
+    final e = _embedder;
+    _warm = false;
+    if (e == null) return false;
+    e.keepLoaded = false;
+    e.free();
+    return true;
+  }
+
   /// The map search's query vector.
   Future<MapQueryVector?> call(String text) async {
     final v = await embed(text);
@@ -137,7 +169,11 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
     bool? remote,
     EmbedHttp? serverHttp,
     this.pollInterval = const Duration(seconds: 2),
-  }) : _modelsDir = modelsDir,
+    Future<MemoryReading?> Function()? readMemoryNow,
+    Map<String, int> Function()? readCounters,
+  }) : _readMemory = readMemoryNow ?? readMemory,
+       _readCounters = readCounters ?? _processCounters,
+       _modelsDir = modelsDir,
        _make = make,
        remote = remote ?? plat.isWeb,
        _http = serverHttp ?? _serverHttp {
@@ -167,6 +203,9 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
   /// Web: the model is the server's, not a file here; [state] and [has] follow `GET /api/models/embedder` ([refreshServer]).
   final bool remote;
   final EmbedHttp _http;
+
+  final Future<MemoryReading?> Function() _readMemory;
+  final Map<String, int> Function() _readCounters;
 
   /// How often [ensure] asks the server how its download goes.
   final Duration pollInterval;
@@ -243,6 +282,98 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
     }
   }
 
+  // ---------------- warm while the person is in Ask or in search ----------------
+
+  /// Memory kept free on top of the model's file before it is loaded ahead of use.
+  static const int warmMargin = 512 << 20;
+
+  /// True while the app is in front. Opening Cache or coming back to the front loads nothing: the model is loaded and held
+  /// warm (no idle release) by [warmLoad], which runs when the person opens Ask or a search box ([aboutToSearch]).
+  bool _foreground = true;
+  bool _warmWanted = false;
+  Future<void>? _warmRun;
+
+  /// True while the model is loaded ahead of use and held.
+  bool get isWarm => embedder.isWarm;
+
+  /// The person opened Ask or put the cursor in a search box: the app's search model loads ahead of the search ([warmLoad]).
+  static void aboutToSearch() => unawaited(shared?.warmLoad());
+
+  /// Loads the search model in the background when it is installed and the phone has room for it (its file plus
+  /// [warmMargin]); a search then finds it loaded. Never throws; call it without awaiting. Does nothing in a browser, where the
+  /// server holds the model, when the model is not here, when memory is short or unknown, or when it is loaded or loading.
+  Future<void> warmLoad() {
+    if (remote || _disposed) return Future.value();
+    // One load at a time: a call that comes while one runs (a resume right after a release) goes after it.
+    final run = (_warmRun ?? Future<void>.value()).then((_) => _warmLoad());
+    _warmRun = run;
+    return run.whenComplete(() {
+      if (identical(_warmRun, run)) _warmRun = null;
+    });
+  }
+
+  Future<void> _warmLoad() async {
+    _warmWanted = true;
+    try {
+      final entry = app.searchModel;
+      if (entry == null || embedder.isWarm || !_foreground) return;
+      final need = entry.size + warmMargin;
+      final reading = await _readMemory();
+      if (!_warmWanted || _disposed) return;
+      if (reading == null || reading.avail < need) {
+        logInfo('Search model: warm load skipped (${reading == null ? 'memory unknown' : 'available ${reading.avail >> 20} MB'}, needs ${need >> 20} MB)');
+        return;
+      }
+      logInfo('Search model: warm load started');
+      final before = _readCounters();
+      final sw = Stopwatch()..start();
+      final loaded = await embedder.warm();
+      if (!loaded) return;
+      final after = _readCounters();
+      logInfo('Search model: loaded in ${sw.elapsedMilliseconds} ms (${_countersText(before, after)})');
+      // Let go while it loaded (Cache went to the back, or memory ran short): the release came first and wins.
+      if (!_warmWanted) embedder.release();
+    } catch (e) {
+      logError('Search model: warm load', error: e);
+      embedder.release();
+    }
+  }
+
+  /// The app's lifecycle: hidden, paused or detached lets the model go. Back in front (resumed) loads nothing: Ask or a
+  /// search box opened again does ([aboutToSearch]), and a search before that loads it on use. Inactive (a dialog, the
+  /// notification shade) changes nothing.
+  void onLifecycle(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _foreground = true;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _foreground = false;
+        _release('background');
+      case AppLifecycleState.inactive:
+        break;
+    }
+  }
+
+  /// Android's onTrimMemory at a level the app acts on ([releaseModelOn]): the model goes; the next search loads it again.
+  void onTrim(int level) => _release('trim level $level');
+
+  /// iOS's memory warning: the model goes; the next search loads it again.
+  void onMemoryWarning() => _release('memory warning');
+
+  void _release(String why) {
+    _warmWanted = false;
+    if (embedder.release()) logInfo('Search model: released ($why)');
+  }
+
+  static String _countersText(Map<String, int> a, Map<String, int> b) {
+    String mb(Map<String, int> m, String k) => m[k] == null ? '?' : '${m[k]! ~/ 1024}';
+    if (a.isEmpty && b.isEmpty) return 'memory unknown';
+    return 'RSS ${mb(a, 'VmRSS_kb')}/${mb(b, 'VmRSS_kb')}, anon ${mb(a, 'RssAnon_kb')}/${mb(b, 'RssAnon_kb')}, '
+        'file ${mb(a, 'RssFile_kb')}/${mb(b, 'RssFile_kb')} MB (before/after)';
+  }
+
   @override
   String get defaultModel => spec.fileName;
 
@@ -282,6 +413,16 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
       e.dispose();
     }
     super.dispose();
+  }
+}
+
+/// This process's memory counters from /proc/self/status (Android and Linux); empty elsewhere.
+Map<String, int> _processCounters() {
+  try {
+    if (!(Platform.isAndroid || Platform.isLinux)) return const {};
+    return procMemoryCounters(File('/proc/self/status').readAsStringSync());
+  } catch (_) {
+    return const {};
   }
 }
 

@@ -5,6 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../platform.dart' as plat;
 import '../../platform/system_ui.dart';
 import 'package:video_player/video_player.dart';
 
@@ -12,6 +13,7 @@ import '../../layout/adaptive.dart';
 import '../../theme.dart';
 import '../../video/captions.dart';
 import '../../video/format.dart';
+import '../../video/video_media.dart';
 import '../../video/video_prefs.dart';
 import 'widgets.dart';
 
@@ -185,7 +187,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// The track the transcript shows: the captions choice, else the cited language's, else the first.
   int get _shown => _on ?? _citedTrack ?? 0;
 
-  bool get _mobile => widget.mobileOverride ?? (Platform.isAndroid || Platform.isIOS);
+  bool get _mobile => widget.mobileOverride ?? (plat.isAndroid || plat.isIOS);
 
   @override
   void initState() {
@@ -266,6 +268,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   VideoPlayerController _make() {
     if (widget.controllerFactory != null) return widget.controllerFactory!(_src);
+    if (plat.isWeb) {
+      // A browser plays through the server: a saved file or ZIM entry from its routes, a stream through its proxy (it adds no login
+      // header of its own; a private video's file token is already in the address).
+      final a = _src.isLocal ? VideoMedia.file(_src.location) : VideoMedia.remote(_src.location);
+      return VideoPlayerController.networkUrl(VideoMedia.resolve(a));
+    }
     return _src.isLocal ? VideoPlayerController.file(File(_src.location)) : VideoPlayerController.networkUrl(Uri.parse(_src.location));
   }
 
