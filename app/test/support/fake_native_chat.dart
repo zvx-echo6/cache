@@ -44,6 +44,12 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   /// Runs after each decoded batch of a read (a test holds the read here).
   Future<void> Function(int tokensDecoded)? afterBatch;
 
+  /// Grows with every stop, as cl_stop_epoch does; a read stopped between its queueing and its start reads nothing.
+  int stopEpoch = 0;
+
+  /// Holds a read in the worker before it begins (the worker busy with an earlier call).
+  Future<void>? holdBeforeRead;
+
   Future<void> _tail = Future.value();
   bool _stop = false;
   bool _warming = false;
@@ -124,7 +130,13 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       _warming = true;
       _joined = false;
     }
+    final epoch = stopEpoch; // read when it is queued, as the session does
     return _enqueue(() async {
+      if (!checkOnly) await holdBeforeRead;
+      if (epoch != stopEpoch) {
+        if (!checkOnly) _warming = false;
+        return const WarmResult(WarmOutcome.stopped);
+      }
       final tokens = stableStart(request);
       if (!loaded || tokens == null) {
         if (!checkOnly) _warming = false;
@@ -174,6 +186,7 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   void cancelWarm() {
     if (_warming && !_joined) {
       stopCalls++;
+      stopEpoch++;
       _stop = true;
     }
   }
@@ -204,5 +217,8 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   }
 
   @override
-  void stop() => _stop = true;
+  void stop() {
+    stopEpoch++;
+    _stop = true;
+  }
 }

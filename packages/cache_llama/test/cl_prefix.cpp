@@ -63,7 +63,7 @@ int main(int argc, char ** argv) {
             char werr[512] = "";
             int  wn = 0;
             const auto w0 = clk::now();
-            const int  wrc = cl_warm(h, wreq.c_str(), s.value("check_only", false) ? 1 : 0, &wn, werr, sizeof(werr));
+            const int  wrc = cl_warm(h, wreq.c_str(), s.value("check_only", false) ? 1 : 0, cl_stop_epoch(h), &wn, werr, sizeof(werr));
             json wo;
             wo["label"]   = s.value("label", "");
             wo["warm"]    = wrc;  // 0 covered, 1 read (or needs reading), 2 stopped, 3 nothing to read, -1 error

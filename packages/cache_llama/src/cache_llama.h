@@ -59,12 +59,18 @@ CL_API int cl_start(void * h, const char * request_json, char * err, int err_len
 // cl_start (one handle, one call at a time); cl_stop may end it from any thread (llama.cpp's abort hook and the check between
 // batches apply, as when cl_start reads a prompt): batches decoded whole stay in the cache, a batch aborted midway clears it, and
 // no prefix file is written unless the whole start was decoded.
+// [epoch]: cl_stop_epoch as of when the call was queued.
 // [check_only] non-zero: renders and tokenizes but decodes nothing and changes no cache. [n_tokens] (may be null): the tokens
 // still to read (check_only), read (done) or read before the stop.
 // Returns 0 when the stable start is covered already (the KV cache holds it, or a saved prefix file does: nothing to do),
 // 1 when it needs reading (check_only) or was read, 2 when stopped before it was whole, 3 when there is nothing to read (no
 // prefix folder, no tools, no system message, or a start too short or too long), -1 on error (reason in err).
-CL_API int cl_warm(void * h, const char * request_json, int check_only, int * n_tokens, char * err, int err_len);
+CL_API int cl_warm(void * h, const char * request_json, int check_only, unsigned long long epoch, int * n_tokens, char * err, int err_len);
+
+// The stop epoch: it grows by one with every cl_stop. The caller reads it (from any thread, as it calls cl_stop) when it queues a
+// cl_warm and passes it as [epoch]; a cl_warm that finds a newer one was stopped while it waited and returns 2 at once, reading
+// nothing and leaving the stop flag alone. Thread-safe.
+CL_API unsigned long long cl_stop_epoch(void * h);
 
 // Prompt tokens decoded since the load by cl_start and cl_warm together (tokens taken from the cache or a file are not counted).
 // For tests: a start read ahead and then reused is decoded once.

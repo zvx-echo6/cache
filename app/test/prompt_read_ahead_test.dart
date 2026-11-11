@@ -165,6 +165,25 @@ void main() {
     expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after ${native.batch} of '));
   });
 
+  test('Cache going to the back after the read is queued and before it starts: nothing is read, and it is logged as stopped', () async {
+    final hold = Completer<void>();
+    native.holdBeforeRead = hold.future; // the worker is busy with an earlier call
+    final reading = ahead.start();
+    for (var i = 0; i < 20 && native.checks == 0; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(native.readCalls, 0);
+    ahead.toBackground();
+    hold.complete();
+    await reading;
+    expect(native.readCalls, 0);
+    expect(native.decoded, 0);
+    expect(native.cached, isEmpty);
+    expect(native.files, isEmpty);
+    expect(readLog().last, matches(RegExp(r'^Prompt read ahead: skipped \(stopped after 0 of \d+ tokens\)$')));
+  });
+
   test('leaving Ask with Cache still in front lets the read finish', () async {
     final inRead = Completer<void>();
     final leave = Completer<void>();

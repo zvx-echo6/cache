@@ -170,7 +170,10 @@ class LlamaSession {
       _warmId = id;
       _warmJoined = false;
     }
-    _toWorker!.send({'type': 'warm', 'id': id, 'request': jsonEncode(request), 'checkOnly': checkOnly});
+    // The stop epoch as of now, read here on the main isolate as cl_stop is called from here: a stop between this send and the
+    // worker's cl_warm (the worker may be busy) is then seen by cl_warm, which reads nothing.
+    final epoch = _handleAddress == 0 ? 0 : (_mainBindings?.clStopEpoch?.call(Pointer<Void>.fromAddress(_handleAddress)) ?? 0);
+    _toWorker!.send({'type': 'warm', 'id': id, 'request': jsonEncode(request), 'checkOnly': checkOnly, 'epoch': epoch});
     return c.future;
   }
 
@@ -336,7 +339,7 @@ void _workerMain(SendPort toMain) {
         final req = (msg['request'] as String).toNativeUtf8();
         final n = malloc<Int32>();
         n.value = 0;
-        final rc = b.clWarm!(handle, req, checkOnly ? 1 : 0, n, err, _kErrLen);
+        final rc = b.clWarm!(handle, req, checkOnly ? 1 : 0, msg['epoch'] as int, n, err, _kErrLen);
         final tokens = n.value;
         malloc.free(req);
         malloc.free(n);

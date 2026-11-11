@@ -80,6 +80,7 @@ struct Handle {
     bool                                 finished    = true;
     bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
+    std::atomic<unsigned long long>      stop_epoch{0};  // bumped by every cl_stop: a queued cl_warm that sees a new one was stopped before it began
     std::atomic<bool>                    in_prefill{false};  // cl_start is decoding the prompt: llama.cpp's abort hook obeys `stop`
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
 
@@ -1223,9 +1224,11 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
 // cl_warm results.
 enum { kWarmCovered = 0, kWarmRead = 1, kWarmStopped = 2, kWarmSkipped = 3 };
 
-int cl_warm(void * hp, const char * request_json, int check_only, int * n_tokens, char * err, int err_len) {
+int cl_warm(void * hp, const char * request_json, int check_only, unsigned long long epoch, int * n_tokens, char * err, int err_len) {
     auto * h = (Handle *) hp;
     if (n_tokens) *n_tokens = 0;
+    // Stopped after it was queued and before it began (Cache went to the back): nothing is read, and `stop` is left as it is.
+    if (h->stop_epoch.load() != epoch) return kWarmStopped;
     try {
         auto req = common_json::parse(request_json);
         const common_chat_templates_inputs in = parse_chat_inputs(req);
@@ -1248,7 +1251,13 @@ int cl_warm(void * hp, const char * request_json, int check_only, int * n_tokens
         if (n_tokens) *n_tokens = (int) (want - have);
         if (check_only) return kWarmRead;
 
+        // Clear the flag, then look at the epoch again: a cl_stop before this point bumped it (and is seen here); one after it sets
+        // the flag again, which the decode obeys.
         h->stop = false;
+        if (h->stop_epoch.load() != epoch) {
+            h->stop = true;
+            return kWarmStopped;
+        }
         h->prefix_note.clear();
         size_t want_now = want;
         bool covered = true;
@@ -1390,7 +1399,13 @@ int cl_bos_token(void * hp) {
     return llama_vocab_get_add_bos(h->vocab) ? (int) llama_vocab_bos(h->vocab) : -1;
 }
 
-void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
+void cl_stop(void * hp) {
+    auto * h = (Handle *) hp;
+    h->stop_epoch.fetch_add(1);  // before the flag: a cl_warm that clears the flag and then sees this epoch unchanged is stopped by the flag
+    h->stop.store(true);
+}
+
+unsigned long long cl_stop_epoch(void * hp) { return ((Handle *) hp)->stop_epoch.load(); }
 
 void cl_free(void * hp) {
     auto * h = (Handle *) hp;
