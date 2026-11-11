@@ -166,6 +166,8 @@ class WeatherState extends ChangeNotifier {
     OwnFetch? ownFetch,
     this.ownTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
+    this.hereSettle = const Duration(seconds: 45),
+    this.hereGap = const Duration(minutes: 15),
   }) : _fetch = fetch ?? fetchBytes,
        _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
@@ -173,6 +175,12 @@ class WeatherState extends ChangeNotifier {
   final AppSettings settings;
   final DataPolicy policy;
   final LiveCore core;
+
+  /// How long "Where I am" must stay at its key before its sources are fetched ([positionChanged]).
+  final Duration hereSettle;
+
+  /// The least time between two fetches for "Where I am" that [positionChanged] starts.
+  final Duration hereGap;
   final TokenStore secrets;
 
   /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
@@ -1042,6 +1050,50 @@ class WeatherState extends ChangeNotifier {
     if (key == _hereSeen) return;
     _hereSeen = key;
     notifyListeners();
+    if (key != null) _scheduleHereFetch(hereSettle);
+  }
+
+  Timer? _hereTimer;
+  DateTime? _hereFetchedAt;
+
+  /// "Where I am" moved to a place nothing was downloaded for, so Home said "no forecast yet" until the next scheduled update
+  /// (build 48). Once the key has settled ([hereSettle], restarted by each move) its sources are fetched for that place alone, at
+  /// most once per [hereGap]. Like every update it uses any connection (mobile data too) and none while offline; the core's own
+  /// refresh intervals and quotas still apply, so a fresh copy is not downloaded again.
+  void _scheduleHereFetch(Duration after) {
+    _hereTimer?.cancel();
+    if (_disposed || !_started) return;
+    _hereTimer = Timer(after, () async {
+      final last = _hereFetchedAt;
+      if (last != null && _now().difference(last) < hereGap) {
+        _scheduleHereFetch(hereGap - _now().difference(last));
+        return;
+      }
+      await _fetchHere();
+    });
+  }
+
+  Future<void> _fetchHere() async {
+    if (_disposed || _updating) return;
+    final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
+    final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
+    if (srcs.isEmpty || here.isEmpty) return;
+    if (await policy.probe.current() == ConnectionKind.none) return;
+    _hereFetchedAt = _now();
+    await _syncFolder();
+    await pushPolicy();
+    await Future.wait([
+      for (final c in srcs)
+        () async {
+          try {
+            await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+          } catch (e) {
+            logInfo('Live update for where I am, ${c.id}: failed');
+          }
+        }(),
+    ]);
+    notifyListeners();
+    await checkAlerts();
   }
 
   /// "Where I am" is ticked and its position is not known yet: the place is waiting, not missing.
@@ -1306,8 +1358,14 @@ class WeatherState extends ChangeNotifier {
         () async {
           try {
             final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-            _shown['${c.id} ${p.id}'] = g;
-            kept = true;
+            // An answer with no items (a fetch that failed, a place not downloaded yet) must not wipe the last good one kept for
+            // Home at start (a source with nothing to say gives a "none active" item, never an empty list).
+            final key = '${c.id} ${p.id}';
+            final had = (_shown[key]?['items'] as List?)?.isNotEmpty ?? false;
+            if (!had || (g['items'] as List?)?.isNotEmpty == true) {
+              _shown[key] = g;
+              kept = true;
+            }
             return _viewOf(c, p, g);
           } on CacheSearchException catch (e) {
             return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
@@ -1605,6 +1663,7 @@ class WeatherState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _hereTimer?.cancel();
     settings.removeListener(_onSettings);
     _sub?.cancel();
     super.dispose();

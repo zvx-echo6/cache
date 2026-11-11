@@ -81,7 +81,12 @@ class Harness {
     fetch: web.fetch,
     ownFetch: web.tryFetch,
     clock: () => clock,
+    hereSettle: hereSettle,
+    hereGap: hereGap,
   );
+
+  Duration hereSettle = const Duration(milliseconds: 30);
+  Duration hereGap = const Duration(minutes: 15);
 
   /// The settled end of a restart: the same folder, settings and keys, a new object.
   Future<Harness> restart() async {
@@ -962,6 +967,47 @@ void main() {
         ],
       });
       expect((await h.weather.homeCard()).forecastMissing, isTrue);
+    });
+
+    test('what is kept for Home is not wiped by a later answer with no items', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await homeWeather(h.weather), contains('45 °F'));
+      h.core.stored['openmeteo-forecast'] = {'age': '4 hours old', 'expired': true, 'items': <Map<String, dynamic>>[], 'last_error': {'code': 'fetch_failed', 'message': 'HTTP 500'}};
+      await h.weather.homeCard();
+      expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2), reason: 'the last good answer stays');
+      expect(h.weather.homeCardNow()?.temperature, '45 °F');
+    });
+
+    test('"Where I am" moving to a new key fetches for it once it settles, at most every 15 minutes', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.fetches.clear();
+      Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 150));
+      List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
+      h.here = (lat: 42.60, lon: -113.79);
+      h.weather.positionChanged();
+      h.here = (lat: 42.70, lon: -113.79);
+      h.weather.positionChanged();
+      expect(hereKeys(), isEmpty, reason: 'not before it settles');
+      await settle();
+      expect(hereKeys(), ['at:42.70,-113.79'], reason: 'one fetch, for where it settled');
+      h.here = (lat: 42.80, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys(), hasLength(1), reason: 'not again inside the gap');
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.here = (lat: 42.90, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys().last, 'at:42.90,-113.79');
+      h.probe.kind = ConnectionKind.none;
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.here = (lat: 43.0, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys(), hasLength(2), reason: 'nothing while offline');
     });
 
     test('Home weather: the field names the definition uses now', () async {
