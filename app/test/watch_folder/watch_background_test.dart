@@ -11,6 +11,7 @@ import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/add_pdf/watch_background.dart';
 import 'package:cache/library/add_pdf/watch_folders.dart';
 import 'package:cache/platform/battery.dart';
+import 'package:cache/search/index_throttle.dart';
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -214,7 +215,8 @@ void main() {
     test('heat, a low battery or no charger: it does not start, and tries again later', () async {
       await make();
       for (final (b, why) in [
-        (const BatteryReading(percent: 80, charging: true, thermal: Thermal.moderate), 'heat'),
+        // the app's throttle: a severe thermal status pauses index work (moderate and the headroom forecast only slow it)
+        (const BatteryReading(percent: 80, charging: true, thermal: Thermal.severe), 'heat'),
         (const BatteryReading(percent: 15, charging: false), 'unplugged'),
         (const BatteryReading(percent: 60, charging: false), 'unplugged'),
       ]) {
@@ -285,13 +287,95 @@ void main() {
         return progress('embedding', pages: 1, pagesDone: 1, pieces: 100, piecesDone: 1);
       }}));
       var b = _charging;
-      final slice = AddPdfSlice(pdf, held: () async => addPdfHeld(b), lookEvery: const Duration(milliseconds: 20));
+      final th = IndexThrottle(read: () async => b, mobile: true);
+      addTearDown(th.dispose);
+      final slice = AddPdfSlice(pdf, held: () => addPdfHeldNow(th), lookEvery: const Duration(milliseconds: 20));
       final running = slice.run();
       await Future<void>.delayed(const Duration(milliseconds: 80));
       b = const BatteryReading(percent: 80, charging: true, thermal: Thermal.severe);
       final r = await running;
       expect(r.why, 'heat');
       expect(r.more, isTrue);
+    });
+  });
+
+  group('the same rules as the app', () {
+    test("the slice follows the app's throttle: one embed thread on a phone, and it rests by the throttle's duty", () async {
+      var t = DateTime(2026, 11, 10, 20);
+      final slept = <Duration>[];
+      // charging, but the headroom forecast is warm: the throttle slows the work (a share under one) and rests between bursts
+      final th = IndexThrottle(
+        read: () async => const BatteryReading(percent: 80, charging: true, thermal: Thermal.nominal, headroom: 0.85),
+        mobile: true,
+        clock: () => t = t.add(const Duration(seconds: 1)),
+        sleep: (d) async => slept.add(d),
+      );
+      addTearDown(th.dispose);
+      final before = indexThrottleShared;
+      indexThrottleShared = th;
+      addTearDown(() => indexThrottleShared = before);
+      final calls = FakeIngestCalls({
+        'step': steps([
+          progress('reading', pagesDone: 1),
+          progress('reading', pagesDone: 2),
+          progress('embedding', pagesDone: 3, pieces: 4, piecesDone: 1),
+          progress('embedding', pagesDone: 3, pieces: 4, piecesDone: 3),
+          progress('done', result: {'copy': 'c' * 64}),
+        ]),
+      });
+      // no permit of its own: the job follows indexThrottleShared, as in the app and in the background add
+      final s = AddPdfState(calls: calls, dir: () async => Directory('$support/ingest'), engines: () async => const {}, busyWait: const Duration(milliseconds: 1));
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/p.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'p.pdf', bytes: 3, title: 'p', target: _lib);
+      final r = await AddPdfSlice(s, throttle: th, lookEvery: const Duration(milliseconds: 10)).run();
+      expect(r.added, 1);
+      expect(((calls.argsOf('start').single['opts'] as Map)['embed_threads']), 1, reason: "the throttle's thread count on a phone");
+      expect(th.duty.share, lessThan(1));
+      expect(th.duty.hold, IndexHold.heat);
+      expect(slept.where((d) => d > Duration.zero), isNotEmpty, reason: 'it rests between bursts, by the duty');
+    });
+
+    test("a job folder another run of this process still holds is a hold: the job waits, then is left active for later, never failed", () async {
+      var held = true;
+      final calls = FakeIngestCalls({
+        'start': (_) => held ? throw CacheSearchException('io', 'a job already uses this job_dir') : {'job': 3, 'resumed': true, 'pages': 3},
+        'step': steps([progress('done', result: {'copy': 'c' * 64})]),
+      });
+      final s = AddPdfState(calls: calls, dir: () async => Directory('$support/ingest'), engines: () async => const {}, permit: (_) async {}, busyWait: const Duration(milliseconds: 1), inUseTries: 3);
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/q.pdf')..writeAsStringSync('pdf');
+      final job = await s.add(pdfPath: f.path, fileName: 'q.pdf', bytes: 3, title: 'q', target: _lib);
+      var run = await (await s.pending()).single.start();
+      expect(await run.finished, isFalse);
+      expect(job.status, AddPdfStatus.active, reason: 'not "could not be added"');
+      expect(job.errorCode, isNull);
+      expect(calls.argsOf('start'), hasLength(3), reason: 'it waited and tried again');
+      // the other run let go: the next run carries on
+      held = false;
+      run = await (await s.pending()).single.start();
+      expect(await run.finished, isTrue);
+      expect(job.status, AddPdfStatus.done);
+    });
+
+    test("the core's job number is on disk as soon as the core gives it", () async {
+      final calls = FakeIngestCalls({
+        'step': (_) async {
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+          return progress('reading', pages: 100, pagesDone: 1);
+        },
+      });
+      final s = AddPdfState(calls: calls, dir: () async => Directory('$support/ingest'), engines: () async => const {}, permit: (_) async {}, busyWait: const Duration(milliseconds: 1));
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/r.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'r.pdf', bytes: 3, title: 'r', target: _lib);
+      final run = await (await s.pending()).single.start();
+      // while it is still reading (before any state change wrote the list)
+      for (var i = 0; i < 50 && !File('$support/ingest/jobs.json').readAsStringSync().contains('"core_job"'); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(File('$support/ingest/jobs.json').readAsStringSync(), contains('"core_job":1'));
+      await (run as AddPdfRun).stop();
     });
   });
 }

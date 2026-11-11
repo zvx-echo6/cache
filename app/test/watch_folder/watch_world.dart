@@ -155,6 +155,16 @@ class WatchWorld {
     ]);
   }
 
+  /// The Library card for a PDF the person paused (nothing else running): it stays, with Resume reachable.
+  void pausedOne() {
+    pdf.scheduler
+      ..fixed = {}
+      ..runningKey = null
+      ..done = 0
+      ..total = 0;
+    pdf.state.debugSet([waterRunning..pausedByPerson = true]);
+  }
+
   void dispose() {
     watchFoldersShared = null;
     watch.dispose();

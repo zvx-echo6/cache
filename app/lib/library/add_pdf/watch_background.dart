@@ -10,6 +10,8 @@ import '../../background/background_tasks.dart';
 import '../../notebook/sync/folder.dart' show FolderFile;
 import '../../platform/app_log.dart';
 import '../../platform/battery.dart';
+import '../../search/index_throttle.dart';
+import '../../settings/app_settings.dart';
 import '../../weather/background.dart' show backgroundReady;
 import 'add_pdf_calls.dart';
 import 'add_pdf_engines.dart';
@@ -135,15 +137,25 @@ Future<String> watchAddJob({
   WatchFoldersState? watch,
   Duration budget = kAddPdfSliceBudget,
   Future<void> Function({bool next, Duration delay})? queue,
+  IndexThrottle? throttle,
 }) async {
   final l = lock ?? BackgroundLock(Directory(backgroundDir(support)));
   final again = queue ?? ({bool next = false, Duration delay = Duration.zero}) => scheduleWatchAdd(next: next, delay: delay);
-  final first = addPdfHeld(await battery());
+  // the app's own indexing rules: its throttle (thermal headroom and status, battery, the person's speed) over cache_device's
+  // readings, the same as adding a PDF in the app
+  final th = throttle ?? IndexThrottle(read: battery, mobile: Platform.isAndroid || Platform.isIOS, speed: await _indexSpeed());
+  final first = await addPdfHeldNow(th);
   if (first != null) {
+    if (throttle == null) th.dispose();
     await again(delay: kWatchAddRetry);
     return 'held: $first';
   }
-  if (!l.hold(kAddPdfWork)) return l.appOpen ? 'skipped: Cache is open' : 'skipped: another run is adding';
+  if (!l.hold(kAddPdfWork)) {
+    if (throttle == null) th.dispose();
+    return l.appOpen ? 'skipped: Cache is open' : 'skipped: another run is adding';
+  }
+  final before = indexThrottleShared;
+  indexThrottleShared = th;
   final refresh = Timer.periodic(BackgroundLock.refreshEvery, (_) => l.refresh(kAddPdfWork));
   final ingest = Directory('$support${Platform.pathSeparator}ingest');
   final s = state ?? await _backgroundAddPdfState(support, ingest);
@@ -161,12 +173,15 @@ Future<String> watchAddJob({
       stopAsked: () => l.stopAsked(kAddPdfWork),
       // only what the watched folders found: a PDF added by hand is added while Cache is open, as always
       only: (j) => j.watchId != null,
-      held: () async => addPdfHeld(await battery()),
+      throttle: th,
+      held: () async => addPdfHeld(th),
     ).run();
     // more to do: the next slice, unless Cache took over (it carries on itself)
     if (r.more && r.why != 'app') await again(next: r.why == 'time', delay: r.why == 'time' ? Duration.zero : kWatchAddRetry);
     return r.words;
   } finally {
+    indexThrottleShared = before;
+    if (throttle == null) th.dispose();
     refresh.cancel();
     await s.save();
     await w.save();
@@ -190,8 +205,19 @@ Future<AddPdfState> _backgroundAddPdfState(String support, Directory ingest) asy
     engines: () async => addPdfEngines(support: Directory(support), modelsDir: Directory('${await appFilesPath()}${Platform.pathSeparator}models')),
     ocrEngine: deviceOcrEngine,
     bookshelves: () async => shelves,
-    permit: (_) async {},
+    // no permit of its own: the jobs follow the throttle the job set up (indexThrottleShared), as in the app
   );
+}
+
+/// The person's indexing speed (Settings > Storage), as the app's throttle uses it.
+Future<IndexSpeed> _indexSpeed() async {
+  try {
+    final s = AppSettings();
+    await s.init();
+    return s.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle;
+  } catch (_) {
+    return IndexSpeed.gentle;
+  }
 }
 
 /// The app writes what the add task needs (see [watchAddContextFile]).

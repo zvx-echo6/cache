@@ -102,6 +102,9 @@ void main() {
         await shoot(tester, size, '4-progress', theme, progress);
         w.foundDone();
         await shoot(tester, size, '4-summary', theme, progress);
+        // a PDF the person paused, nothing else running: the Library card stays, so its Resume can be reached
+        w.pausedOne();
+        await shoot(tester, size, '4-paused-card', theme, panes);
         // 5. A folder that can't be reached: the row, the card, Choose again
         w.unreachable();
         await shoot(tester, size, '5-add-row', theme, add);

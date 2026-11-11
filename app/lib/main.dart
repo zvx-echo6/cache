@@ -489,6 +489,7 @@ class _CacheAppState extends State<CacheApp> {
   /// Back at the front: a background run adding PDFs is stopped first; when one ran meanwhile, Add PDF's jobs and the watched
   /// folders are read again; then index work and the watched folders' check go on.
   Future<void> _backToFront() async {
+    _atFront = true;
     final l = _bgLock;
     if (l != null) {
       _bgAppOpen();
@@ -506,14 +507,27 @@ class _CacheAppState extends State<CacheApp> {
     unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
   }
 
-  /// To the back: background runs may go ahead; PDFs a watched folder found that are still to add are added in the background
-  /// while charging (Android).
+  /// Cache is at the front (false from going to the back until it comes back).
+  bool _atFront = true;
+
+  /// To the back: once the index work that ran has really stopped and Add PDF's jobs are on disk, background runs may go ahead,
+  /// and PDFs a watched folder found that are still to add are added in the background while charging (Android). Letting go
+  /// earlier let a background slice start a PDF the app was still pausing (the job folder was still held; Pixel, 2026-11-10).
   void _toBack() {
+    _atFront = false;
+    unawaited(_toBackAfterPause());
+  }
+
+  Future<void> _toBackAfterPause() async {
+    await indexing.closed;
+    await addPdf.save();
+    await watchFolders.save();
+    if (_atFront) return;
     _bgOpenTimer?.cancel();
     _bgOpenTimer = null;
     _bgLock?.appClosed();
-    if (Platform.isAndroid && addPdf.active.any((j) => j.watchId != null)) unawaited(scheduleWatchAdd());
-    unawaited(_writeBackgroundContext());
+    if (Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson)) unawaited(scheduleWatchAdd());
+    await _writeBackgroundContext();
   }
 
   Future<void> _writeBackgroundContext() async {

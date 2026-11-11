@@ -16,7 +16,7 @@ import '../../sources/libraries_state.dart';
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
 import '../../weather/words.dart' show agoWords, dayWords;
-import '../book_pages.dart' show openPlace, PlaceChip;
+import '../book_pages.dart' show openPlace, PlaceChip, showDeleteBook;
 import '../cds.dart';
 import '../library_pages.dart';
 import '../library_panes.dart';
@@ -798,7 +798,31 @@ class AddPdfJobCard extends StatelessWidget {
 
 Future<void> _cancel(BuildContext context, AddPdfState state, AddPdfJob job) async {
   if (job.status == AddPdfStatus.active && !await confirmStopAdding(context)) return;
+  // it finished while the question was open: the book is in the library, so it is said, and the person keeps it or deletes it
+  // (the book's own Delete, which asks as it always does); stopping it now would only hide its card
+  if (job.status == AddPdfStatus.done) {
+    if (context.mounted) await showFinishedFirst(context, state, job);
+    return;
+  }
   await state.cancel(job);
+}
+
+/// The PDF finished before the stop: "It finished first", Keep, or Delete it (the book's Delete sheet).
+Future<void> showFinishedFirst(BuildContext context, AddPdfState state, AddPdfJob job) async {
+  final deps = addPdfLibraryDeps;
+  final book = addPdfBook(deps, job);
+  final delete = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('It finished first'),
+      content: Text('${job.title} was added to ${job.libraryTitle} before it could stop.'),
+      actions: [
+        _Txt(key: const ValueKey('add-pdf-keep'), label: 'Keep it', onPressed: () => Navigator.of(ctx).pop(false)),
+        if (deps != null && book != null) _Txt(key: const ValueKey('add-pdf-delete-it'), label: 'Delete it', danger: true, onPressed: () => Navigator.of(ctx).pop(true)),
+      ],
+    ),
+  );
+  if (delete == true && deps != null && book != null && context.mounted) await showDeleteBook(context, deps, book);
 }
 
 /// The PDF running now: its phases in order (done, running, to come), the time left, Pause and Cancel.

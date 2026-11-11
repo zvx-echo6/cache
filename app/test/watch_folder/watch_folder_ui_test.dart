@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/layout/adaptive.dart' show PanePrefs;
 import 'package:cache/library/add_pdf/add_pdf_pages.dart';
+import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/library_pages.dart';
 import 'package:cache/library/library_panes.dart';
 import 'package:cache/platform/battery.dart';
@@ -269,5 +270,40 @@ void main() {
     expect(find.byKey(const ValueKey('add-watched')), findsOneWidget);
     expect(find.text('Checked 2 hours ago'), findsOneWidget);
     expect(find.text('Add a folder'), findsOneWidget);
+  });
+
+  testWidgets('7. A paused PDF stays reachable: the Library card says so and opens its Resume, with nothing else running', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await WatchWorld.make());
+    w.pausedOne();
+    await tester.pumpWidget(app(LibraryPanes(root: (_) => LibraryRootPage(deps: w.pdf.deps), prefs: PanePrefs(dirOverride: w.pdf.tmp))));
+    await settle(tester);
+    expect(find.text('Getting search ready · 0 of 1 done'), findsOneWidget);
+    expect(find.text('Water filter guide · Paused by you · Resume'), findsOneWidget);
+    await tapKey(tester, 'index-overview');
+    final job = w.pdf.state.jobs.single;
+    expect(find.byKey(ValueKey('add-pdf-act-${job.id}')), findsOneWidget);
+    expect(find.text('Resume'), findsOneWidget);
+  });
+
+  testWidgets('8. Stop adding, when the PDF finished while the question was open: "It finished first", Keep it keeps the book', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await WatchWorld.make());
+    w.pdf.runOne();
+    await tester.pumpWidget(app(AddPdfProgressPage(state: w.pdf.state, deps: w.pdf.deps, scheduler: w.pdf.scheduler)));
+    await settle(tester);
+    await tapKey(tester, 'add-pdf-cancel-job');
+    expect(find.text('Stop adding this PDF?'), findsOneWidget);
+    // it finishes now, before the answer
+    final job = w.pdf.state.jobs.single
+      ..status = AddPdfStatus.done
+      ..state = 'done'
+      ..result = {'copy': 'water', 'pieces': 10, 'same': const [], 'shelf': null, 'suggested': null};
+    await tapKey(tester, 'add-pdf-stop');
+    expect(find.text('It finished first'), findsOneWidget);
+    expect(find.text('${job.title} was added to My books before it could stop.'), findsOneWidget);
+    await tapKey(tester, 'add-pdf-keep');
+    expect(find.text('It finished first'), findsNothing);
+    expect(w.pdf.state.jobs, contains(job), reason: 'nothing was cancelled behind the person\'s back');
   });
 }

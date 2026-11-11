@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import '../../platform/battery.dart';
+import '../../search/index_throttle.dart';
 import 'add_pdf_state.dart';
 
 /// How long one background slice of adding PDFs runs (WorkManager stops a worker after about 10 minutes).
@@ -23,14 +23,25 @@ class AddPdfSliceResult {
   String get words => 'added $added${stopped > 0 ? ', $stopped could not be added' : ''}${more ? ', more to do ($why)' : ''}';
 }
 
-/// Why background work must stop now by the indexing rules, or null: unplugged (the slice runs only while charging), a low
-/// battery, or the phone warm (the thermal status moderate or warmer, as the app's index work pauses at).
-String? addPdfHeld(BatteryReading? b) {
-  if (b == null) return null;
-  if (!b.charging) return 'unplugged';
-  if (b.low) return 'battery';
-  if (b.thermal.hot) return 'heat';
-  return null;
+/// Why background work must stop now, or null: unplugged (the slice runs only while charging), else the app's own indexing
+/// rules through its throttle ([IndexThrottle]: the thermal headroom forecast and status, and the battery), the same rules as
+/// adding a PDF in the app.
+String? addPdfHeld(IndexThrottle t) {
+  final r = t.reading;
+  if (r != null && !r.charging) return 'unplugged';
+  final d = t.duty;
+  if (!d.paused) return null;
+  return switch (d.hold) {
+    IndexHold.heat => 'heat',
+    IndexHold.battery => 'battery',
+    _ => 'busy',
+  };
+}
+
+/// [addPdfHeld] for a reading on its own (the throttle reads it first).
+Future<String?> addPdfHeldNow(IndexThrottle t) async {
+  await t.read(fresh: true);
+  return addPdfHeld(t);
 }
 
 /// One background slice of Add PDF's jobs: each job in turn through the same runs the app's index scheduler starts (the core's
@@ -39,7 +50,7 @@ String? addPdfHeld(BatteryReading? b) {
 /// Pause pauses it: the core keeps what is done, nothing is visible in the library until its journaled commit, and the next run
 /// resumes it from the same job folder.
 class AddPdfSlice {
-  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.lookEvery = const Duration(seconds: 15), DateTime Function()? clock})
+  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.throttle, this.lookEvery = const Duration(seconds: 15), DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
 
   final AddPdfState state;
@@ -49,6 +60,10 @@ class AddPdfSlice {
 
   /// Only these jobs (the watched folders'); all when null.
   final bool Function(AddPdfJob job)? only;
+
+  /// The app's indexing throttle, read while the slice runs (the scheduler does the same for the app's index work); the jobs
+  /// follow its duty through [indexThrottleShared].
+  final IndexThrottle? throttle;
   final Duration lookEvery;
   final DateTime Function() _clock;
 
@@ -60,6 +75,17 @@ class AddPdfSlice {
   }
 
   Future<AddPdfSliceResult> run() async {
+    // read once now, so the first job starts with the duty (and thread count) the device calls for
+    await throttle?.read(fresh: true);
+    throttle?.watch(true);
+    try {
+      return await _run();
+    } finally {
+      throttle?.watch(false);
+    }
+  }
+
+  Future<AddPdfSliceResult> _run() async {
     final end = _clock().add(budget);
     var added = 0, stopped = 0;
     Future<String?> why() async {

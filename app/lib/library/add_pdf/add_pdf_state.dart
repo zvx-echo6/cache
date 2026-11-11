@@ -328,8 +328,13 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.stepBudgetMs = 400,
     this.busyWait = const Duration(seconds: 4),
     this.mayRun,
+    this.inUseTries = 15,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
+
+  /// How many times a start waits [busyWait] for another run of this process to let go of the job folder (the app's run that is
+  /// pausing, or a background slice stopping) before the job is left for later. Never a failure.
+  final int inUseTries;
 
   /// Asked before the jobs are offered as work: false while a background run is adding PDFs (the app asks it to stop and offers
   /// them again at its next look). Null: always.
@@ -753,6 +758,8 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       ..pages = (r['pages'] as num?)?.toInt() ?? job.pages;
     logInfo('Add PDF: ${r['resumed'] == true ? 'resumed' : 'started'} (${job.pages} pages)', job: job.key);
     _changed();
+    // on disk at once: another run of this process (a background slice, or the app after one) carries on this core job by it
+    await save();
     return job.coreJob!;
   }
 
@@ -868,6 +875,11 @@ class _Stopped implements Exception {
   const _Stopped();
 }
 
+/// Another run of this process still holds the job folder: the job is left as it is, for later.
+class _Held implements Exception {
+  const _Held();
+}
+
 /// One job running for the scheduler: start (or resume) the core's job, then step it, the throttle permitting before each step;
 /// a `needs_ocr` batch is read with the phone's engine and handed back. Finished true when the book is saved, false when it
 /// stopped (paused, held, failed).
@@ -906,7 +918,7 @@ class AddPdfRun implements IndexRun {
     final calls = state.calls;
     try {
       // a number kept on disk is confirmed by starting from the job folder first (a stale one is never stepped)
-      if (job.coreJob == null || job.coreFromDisk) await state._startCore(job);
+      if (job.coreJob == null || job.coreFromDisk) await _startWaiting();
       while (!_stop) {
         await state._permitFor(job);
         if (_stop) break;
@@ -954,6 +966,9 @@ class AddPdfRun implements IndexRun {
       _finish(false);
     } on _Stopped {
       _finish(false);
+    } on _Held {
+      logInfo('Add PDF: another run still holds this PDF; it is left for later', job: job.key);
+      _finish(false);
     } on CacheSearchException catch (e) {
       state._failed(job, e.code, e.message, needed: e.needed);
       _finish(false);
@@ -961,6 +976,22 @@ class AddPdfRun implements IndexRun {
       logError('Add PDF: the job broke', error: e, stack: st, job: job.key);
       state._failed(job, 'io', '$e');
       _finish(false);
+    }
+  }
+
+  /// Starts (or carries on) the core's job; while another run of this process still holds the job folder (it is pausing or
+  /// stopping), it waits and tries again, then leaves the job for later ([_Held]). Never a failure.
+  Future<void> _startWaiting() async {
+    for (var i = 0;; i++) {
+      try {
+        await state._startCore(job);
+        return;
+      } catch (e) {
+        if (!_jobDirInUse(e)) rethrow;
+        if (_stop || i + 1 >= state.inUseTries) throw const _Held();
+        if (i == 0) logInfo('Add PDF: another run still holds this PDF; waiting for it', job: job.key);
+        await Future<void>.delayed(state.busyWait);
+      }
     }
   }
 
