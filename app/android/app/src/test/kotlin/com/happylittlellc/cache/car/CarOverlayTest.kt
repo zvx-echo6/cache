@@ -215,12 +215,13 @@ class CarOverlayTest {
 
     // ---- the vehicle stays clear (areas as measured on the car simulator, density 1) ------------------------------------
 
-    /** The marker as the map draws it (radius and ring) and the road ahead of it (the route's 12 px casing, up to the top of
-     * the area): worked out here from the camera's rule, not from the painter's keep-clear zone. */
+    /** The marker as the map draws it (the arrow pointing up the screen: 30 wide, its tip 19 above the position and its tails
+     * 15 below) and the road ahead of it (the route's 12 px casing, up to the top of the area): worked out here from the
+     * camera's rule, not from the painter's keep-clear zone. */
     private fun assertVehicleClear(l: CarOverlayPainter.Layout, stable: Rect) {
         val vx = (stable.left + stable.right) / 2f
         val vy = stable.top + stable.height() * 0.675f
-        val marker = RectF(vx - 14f, vy - 14f, vx + 14f, vy + 14f)
+        val marker = RectF(vx - 15f, vy - 19f, vx + 15f, vy + 15f)
         val ahead = RectF(vx - 6f, stable.top.toFloat(), vx + 6f, vy)
         for (r in listOfNotNull(l.climb, l.mini)) {
             assertFalse("$r is over the vehicle $marker", RectF.intersects(r, marker))
@@ -249,7 +250,27 @@ class CarOverlayTest {
         assertEquals(0.35 * 606, inset, 1e-6)
         assertEquals((91 + inset + 697) / 2.0, v.y.toDouble(), 0.01)
         val keep = CarOverlayPainter.keepClear(mainStable, 1f)
-        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 14f && keep.left <= v.x - 14f && keep.right >= v.x + 14f)
+        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 15f && keep.left <= v.x - 15f && keep.right >= v.x + 15f)
+    }
+
+    @Test
+    fun theKeepClearZoneIsTheArrowsSizeAndNoSmallerThanTheDot() {
+        // The arrow, pointing up the screen as it does while guiding: half its 30 px width to each side of the position, its
+        // tails 15 px below it. The dot (drawn while no heading is known) is 14 px each way, so the zone covers it too.
+        assertEquals(15f, CarOverlayPainter.MARKER_SIDE, 0f)
+        assertEquals(15f, CarOverlayPainter.MARKER_BELOW, 0f)
+        val dot = CarOverlayPainter.POS_RADIUS + CarOverlayPainter.POS_RING
+        assertTrue(CarOverlayPainter.MARKER_SIDE >= dot && CarOverlayPainter.MARKER_BELOW >= dot)
+        val v = CarOverlayPainter.vehiclePoint(mainStable)
+        val keep = CarOverlayPainter.keepClear(mainStable, 1f)
+        // 16 px of free map beside the arrow on each side; under its tails a piece may begin.
+        assertEquals(v.x - 31f, keep.left, 0.01f)
+        assertEquals(v.x + 31f, keep.right, 0.01f)
+        assertEquals(v.y + 15f, keep.bottom, 0.01f)
+        // Twice the density: twice the zone.
+        val keep2 = CarOverlayPainter.keepClear(mainStable, 2f)
+        assertEquals(v.x - 62f, keep2.left, 0.01f)
+        assertEquals(v.y + 30f, keep2.bottom, 0.01f)
     }
 
     @Test
@@ -295,7 +316,9 @@ class CarOverlayTest {
         assertEquals(306f, c.top, 0.51f)
         assertEquals(427f, c.bottom, 0.51f)
         assertTrue(c.bottom <= stable.bottom - 16f)
-        assertTrue(c.right < 843f - 14f)
+        // It ends 16 px short of the arrow's left edge: at 811.5 (812.5 when the marker was the 14 px dot).
+        assertEquals(811.5f, c.right, 0.01f)
+        assertTrue(c.right < 843f - 15f)
         assertVehicleClear(shown, stable)
         // The buttons hidden: the mini map has room right of the vehicle, the climb card still ends short of it.
         val hidden = CarOverlayPainter.layout(1280, 500, Rect(504, 91, 1258, 477), 1f, showClimb = true, showMini = true, stable = stable)
@@ -311,7 +334,7 @@ class CarOverlayTest {
         val n = CarOverlayPainter.layout(410, 700, narrow, 1f, showClimb = true, showMini = true, stable = narrow)
         assertNull(n.climb)
         assertRect(78f, 457f, 298f, 597f, n.mini)
-        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 14f)
+        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 15f)
         assertVehicleClear(n, narrow)
         // Split view, 770 px.
         val split = Rect(344, 81, 683, 687)
@@ -468,6 +491,78 @@ class CarOverlayTest {
         val w = two.width
         assertEquals(pal.badge, two.getPixel(w / 2, 4))
         for (x in w - 2 - 8 until w - 2 - 4) for (y in 0 until two.height) assertFalse(two.getPixel(x, y) == pal.badgeGlyph)
+    }
+
+    // ---- the vehicle's arrow (the main map's position marker) --------------------------------------------------------------
+
+    /** The first and last row, and in a row the first and last column, that hold any paint. */
+    private fun paintedRows(b: Bitmap): IntRange {
+        val rows = (0 until b.height).filter { y -> (0 until b.width).any { x -> b.getPixel(x, y) != 0 } }
+        return rows.first()..rows.last()
+    }
+
+    private fun paintedColumns(b: Bitmap, y: Int): List<Int> = (0 until b.width).filter { x -> b.getPixel(x, y) != 0 }
+
+    @Test
+    fun theArrowIsAPointedChevronInTheTwoColorsWithItsTipAtTheTop() {
+        val fill = 0xFF2F7DF6.toInt()
+        val ring = 0xFFFFFFFF.toInt()
+        val b = CarOverlayPainter.arrowBitmap(fill, ring, 1f)
+        // Not empty, and both colors are there: the fill at the position (the picture's middle), the outline round it.
+        val px = IntArray(b.width * b.height)
+        b.getPixels(px, 0, b.width, 0, 0, b.width, b.height)
+        assertTrue(px.any { it == fill })
+        assertTrue(px.any { it == ring })
+        assertEquals(fill, b.getPixel(b.width / 2, b.height / 2))
+        // 34 px from the tip to the tails: clearly bigger than the 28 px dot, smaller than a host button (52 px in this
+        // file's stand-in for the host).
+        val rows = paintedRows(b)
+        val tall = rows.last - rows.first + 1
+        assertTrue("$tall", tall in 33..35)
+        assertTrue(CarOverlayPainter.ARROW_H > 2 * (CarOverlayPainter.POS_RADIUS + CarOverlayPainter.POS_RING))
+        assertTrue(CarOverlayPainter.ARROW_H < 52f)
+        // The tip is at the top, on the middle line: the first painted row holds only a few pixels, all at the middle.
+        val top = paintedColumns(b, rows.first)
+        assertTrue("$top", top.isNotEmpty() && top.size <= 4 && top.all { it >= b.width / 2 - 2 && it <= b.width / 2 + 1 })
+        // It widens downwards to two tails with the notch between them: near the last row the middle is empty and there is
+        // paint on both sides of it, as far out as the arrow is wide.
+        val y = rows.last - 2
+        val tail = paintedColumns(b, y)
+        assertEquals(0, b.getPixel(b.width / 2, y))
+        assertEquals(0, b.getPixel(b.width / 2 - 1, y))
+        assertTrue("$tail", tail.any { it < b.width / 2 - 8 } && tail.any { it > b.width / 2 + 8 })
+        assertTrue("$tail", tail.last() - tail.first() + 1 in 27..30)
+        // The position is the picture's middle (the map turns the picture about it): 19 px under the tip, 15 above the tails.
+        assertEquals(19f, b.height / 2f - rows.first, 1f)
+        assertEquals(15f, rows.last + 1 - b.height / 2f, 1f)
+        // Twice the density: twice the picture, and it says so (the map then shows it pixel for pixel).
+        val b2 = CarOverlayPainter.arrowBitmap(fill, ring, 2f)
+        val rows2 = paintedRows(b2)
+        assertTrue(rows2.last - rows2.first + 1 in 67..69)
+        assertEquals(160, b.density)
+        assertEquals(320, b2.density)
+        // Each theme's own colors: another fill, another picture.
+        val other = CarOverlayPainter.arrowBitmap(0xFFC0392B.toInt(), 0xFF000000.toInt(), 1f)
+        assertEquals(0xFFC0392B.toInt(), other.getPixel(other.width / 2, other.height / 2))
+        assertFalse(other.sameAs(b))
+    }
+
+    @Test
+    fun theArrowKeepsTheLastHeadingAndThereIsNoneUntilOneIsKnown() {
+        // The phone's heading when it gives one.
+        assertEquals(45.0, CarMarkerMotion.heading(45.0, 90.0)!!, 0.0)
+        assertEquals(45.0, CarMarkerMotion.heading(45.0, null)!!, 0.0)
+        // None with this position: the last one known.
+        assertEquals(90.0, CarMarkerMotion.heading(null, 90.0)!!, 0.0)
+        // None ever: no heading, so no arrow (the dot is drawn), never a made-up direction.
+        assertNull(CarMarkerMotion.heading(null, null))
+        // Not a number is no heading.
+        assertEquals(90.0, CarMarkerMotion.heading(Double.NaN, 90.0)!!, 0.0)
+        assertNull(CarMarkerMotion.heading(Double.POSITIVE_INFINITY, null))
+        // Headings are kept as 0 up to 360.
+        assertEquals(350.0, CarMarkerMotion.heading(-10.0, null)!!, 1e-9)
+        assertEquals(0.0, CarMarkerMotion.heading(360.0, null)!!, 1e-9)
+        assertEquals(5.0, CarMarkerMotion.heading(725.0, null)!!, 1e-9)
     }
 
     // ---- the mini map's destination ---------------------------------------------------------------------------------------

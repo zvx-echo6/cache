@@ -74,9 +74,27 @@ object CarOverlayPainter {
     /** While guiding the camera leaves this share of the area's height free above the position, so more of the road ahead shows. */
     const val GUIDANCE_TOP_SHARE = 0.35
 
-    /** The main map's position marker (the car-pos layer): its radius and its ring, which is drawn outside the radius. */
+    /** The main map's position marker while no heading was ever known (the car-pos-dot layer): its radius and its ring, which
+     * is drawn outside the radius. */
     const val POS_RADIUS = 10f
     const val POS_RING = 4f
+
+    /** The main map's position marker once a heading is known (the car-pos layer): an arrowhead, [ARROW_W] wide and [ARROW_H]
+     * from its tip to its two tails, outline included. The position is the point [ARROW_AHEAD] behind the tip, on the middle
+     * line: the arrow turns about it. */
+    const val ARROW_W = 30f
+    const val ARROW_H = 34f
+    const val ARROW_AHEAD = 19f
+    const val ARROW_OUTLINE = 3f
+
+    /** How deep the notch at the back is cut, from the tails towards the tip. */
+    const val ARROW_NOTCH = 8.5f
+
+    /** How far the marker reaches from the position, sideways and downwards on the screen. While guiding the map is turned to
+     * the heading, so the arrow points up the screen: half its width to each side, and its tails below. Neither is smaller than
+     * the dot, which is drawn instead of the arrow while no heading is known. */
+    const val MARKER_SIDE = ARROW_W / 2f
+    const val MARKER_BELOW = ARROW_H - ARROW_AHEAD
 
     /** Free map kept on each side of the marker and of the road ahead of it. */
     const val VEHICLE_SIDE = 16f
@@ -93,9 +111,8 @@ object CarOverlayPainter {
      * ahead) up to the top of [area]. Under the marker is road already driven, so a piece may begin right below it. */
     fun keepClear(area: Rect, density: Float): RectF {
         val v = vehiclePoint(area)
-        val r = (POS_RADIUS + POS_RING) * density
-        val half = r + VEHICLE_SIDE * density
-        return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + r)
+        val half = (MARKER_SIDE + VEHICLE_SIDE) * density
+        return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + MARKER_BELOW * density)
     }
 
     /** Where the two pieces go, in surface pixels; null when a piece is off or does not fit. */
@@ -308,6 +325,41 @@ object CarOverlayPainter {
         drawBadge(Canvas(bmp), w / 2f, h / 2f, gradeText(gradePct), pal, d)
         return bmp
     }
+
+    // ---- the vehicle's arrow (the main map's position marker) ------------------------------------------------------------
+
+    /** The arrowhead pointing up, with the position at (cx, cy): a pointed chevron with a notch at the back, filled with
+     * [fill] and outlined with [outline]. The outline is drawn on the shape's edge with round corners, so the shape's own
+     * corners sit half an outline inside the sizes above. */
+    fun drawArrow(canvas: Canvas, cx: Float, cy: Float, fill: Int, outline: Int, d: Float) {
+        val o = ARROW_OUTLINE / 2f
+        val tipY = cy - (ARROW_AHEAD - o) * d
+        val tailY = cy + (MARKER_BELOW - o) * d
+        val wing = (MARKER_SIDE - o) * d
+        val p = Path()
+        p.moveTo(cx, tipY)
+        p.lineTo(cx + wing, tailY)
+        p.lineTo(cx, tailY - ARROW_NOTCH * d)
+        p.lineTo(cx - wing, tailY)
+        p.close()
+        canvas.drawPath(p, fill(fill))
+        canvas.drawPath(p, stroke(outline, ARROW_OUTLINE * d))
+    }
+
+    /** The arrow as a picture (a MapLibre symbol image), unrotated: the tip at the top. The position is the picture's middle,
+     * which is what the map puts on the position and turns the picture about; that is why there is empty room under the tails.
+     * The picture says it is drawn at [d], so the map shows it pixel for pixel on a map of that density. */
+    fun arrowBitmap(fill: Int, outline: Int, d: Float): Bitmap {
+        val w = ceil(ARROW_W * d).toInt() + 2 * ARROW_BITMAP_PAD
+        val h = ceil(2 * ARROW_AHEAD * d).toInt() + 2 * ARROW_BITMAP_PAD
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        drawArrow(Canvas(bmp), w / 2f, h / 2f, fill, outline, d)
+        bmp.density = (160f * d).roundToInt()
+        return bmp
+    }
+
+    /** Empty pixels around the arrow in its picture. */
+    const val ARROW_BITMAP_PAD = 2
 
     // ---- the route mini map --------------------------------------------------------------------------------------------
 

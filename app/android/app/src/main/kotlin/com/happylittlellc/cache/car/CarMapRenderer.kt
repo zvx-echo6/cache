@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.car.app.CarContext
 import androidx.car.app.SurfaceCallback
 import androidx.car.app.SurfaceContainer
@@ -32,6 +33,7 @@ import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 
@@ -58,6 +60,10 @@ import kotlin.math.max
  * renderer and no MapLibre change, and it sits exactly over the map in the same pixels. The pieces are static: the View repaints
  * only in steps (at most once every few seconds) and nothing is animated or touchable. The grade badge and the driven path are
  * MapLibre layers (they are part of the map, so they follow the camera).
+ *
+ * The vehicle is an arrow (CarOverlayPainter.arrowBitmap, a symbol layer above the route and the badge) turned to the heading,
+ * with its turn tied to the map, so it points the right way whether the map is turned to the heading or north is up. While no
+ * heading was ever known it is the plain dot instead.
  */
 class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
@@ -82,6 +88,21 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var badgeKey: String? = null
     private var routeColorKey: String? = null
 
+    /** The map's pixels per density-independent pixel (the car surface's, which the map's own View has too). */
+    private var density = 1f
+
+    /** The vehicle's two markers (the arrow, and the dot for when no heading is known), kept so that showing a heading does
+     * not look them up in the style each time. Both belong to the present style and go with it. */
+    private var arrowLayer: SymbolLayer? = null
+    private var dotLayer: CircleLayer? = null
+
+    /** Which of the two is showing (null: neither yet), and the turn the arrow was last given. */
+    private var arrowShown: Boolean? = null
+    private var shownRotation = Float.NaN
+
+    /** The last heading the phone gave: the arrow keeps it while a position comes without one. */
+    private var lastHeading: Double? = null
+
     /** The camera keeps the position in view (the Recenter button turns it back on after panning). */
     var following = true
         private set
@@ -103,6 +124,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         releaseMap()
         width = surfaceContainer.width
         height = surfaceContainer.height
+        density = surfaceContainer.dpi / 160f
         try {
             MapLibre.getInstance(carContext.applicationContext)
             // The tiles come from the app's own server on 127.0.0.1: never let MapLibre think it is offline (as the phone's map).
@@ -273,7 +295,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             }
             @Suppress("UNCHECKED_CAST")
             colors = DEFAULT_COLORS + ((res["colors"] as? Map<String, String>) ?: emptyMap())
-            style = null
+            dropStyle()
             m.setStyle(Style.Builder().fromJson(json)) { st ->
                 if (attempt != styleAttempt) return@setStyle
                 style = st
@@ -339,12 +361,60 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 PropertyFactory.iconImage(BADGE_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
             ),
         )
-        st.addLayer(
-            CircleLayer("car-pos", SRC_POS).withProperties(
-                PropertyFactory.circleColor(colors.getValue("position")), PropertyFactory.circleRadius(CarOverlayPainter.POS_RADIUS),
-                PropertyFactory.circleStrokeColor(colors.getValue("positionRing")), PropertyFactory.circleStrokeWidth(CarOverlayPainter.POS_RING),
-            ),
+        // The vehicle, above everything else on the map: the dot while no heading is known, otherwise the arrow. Both start
+        // hidden; showHeading shows the one that applies. The arrow's picture is made here, so each style (each theme, day
+        // and night) has it in its own colors.
+        val dot = CircleLayer("car-pos-dot", SRC_POS).withProperties(
+            PropertyFactory.circleColor(colors.getValue("position")), PropertyFactory.circleRadius(CarOverlayPainter.POS_RADIUS),
+            PropertyFactory.circleStrokeColor(colors.getValue("positionRing")), PropertyFactory.circleStrokeWidth(CarOverlayPainter.POS_RING),
+            PropertyFactory.visibility(Property.NONE),
         )
+        st.addLayer(dot)
+        st.addImage(ARROW_IMAGE, CarOverlayPainter.arrowBitmap(colorOf("position"), colorOf("positionRing"), density))
+        // Turned with the map (so the heading is a compass heading whatever way the map is turned), but upright on the screen
+        // when the map is tilted, as the dot was: its size on the screen does not change with the tilt.
+        val arrow = SymbolLayer("car-pos", SRC_POS).withProperties(
+            PropertyFactory.iconImage(ARROW_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
+            PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+            PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
+            PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE),
+        )
+        st.addLayer(arrow)
+        dotLayer = dot
+        arrowLayer = arrow
+        arrowShown = null
+        shownRotation = Float.NaN
+    }
+
+    /** One of the style's colors as a number (they come as "#rrggbb"); the default when it does not read as a color. */
+    private fun colorOf(key: String): Int = try {
+        Color.parseColor(colors.getValue(key))
+    } catch (e: IllegalArgumentException) {
+        Color.parseColor(DEFAULT_COLORS.getValue(key))
+    }
+
+    /** The marker for [heading] (degrees from north; NaN when none is known): the arrow turned to it, or the dot with none.
+     * Only what changed is sent to the map; the arrow is turned again once the heading is [ROTATE_STEP] away from its turn. */
+    private fun showHeading(heading: Double) {
+        val arrow = !heading.isNaN()
+        if (arrowShown != arrow) {
+            arrowShown = arrow
+            arrowLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.VISIBLE else Property.NONE))
+            dotLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.NONE else Property.VISIBLE))
+        }
+        if (!arrow) return
+        val r = heading.toFloat()
+        if (shownRotation.isNaN() || abs(r - shownRotation) >= ROTATE_STEP) {
+            shownRotation = r
+            arrowLayer?.setProperties(PropertyFactory.iconRotate(r))
+        }
+    }
+
+    /** The present style is going (a new one is loading, or the map is released): nothing of it is used again. */
+    private fun dropStyle() {
+        style = null
+        arrowLayer = null
+        dotLayer = null
     }
 
     override fun onTrip(trip: CarTrip) {
@@ -410,6 +480,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private fun applyTrip(t: CarTrip) {
         val st = style ?: return
         st.getSourceAs<GeoJsonSource>(SRC_POS)?.setGeoJson(point(t.lat, t.lon))
+        val heading = CarMarkerMotion.heading(t.heading, lastHeading)
+        lastHeading = heading
+        showHeading(heading ?: Double.NaN)
         val showDest = t.phase != "browsing"
         st.getSourceAs<GeoJsonSource>(SRC_DEST)?.setGeoJson(if (showDest) point(t.destinationLat, t.destinationLon) else CarLink.EMPTY_GEOJSON)
         applyDriven(t)
@@ -461,7 +534,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private fun releaseMap() {
         styleAttempt++
         main.removeCallbacks(reload)
-        style = null
+        dropStyle()
         map = null
         mapView?.let {
             try {
@@ -495,6 +568,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         private const val SRC_DRIVEN = "car-driven-src"
         private const val SRC_BADGE = "car-badge-src"
         private const val BADGE_IMAGE = "car-grade-badge-img"
+        private const val ARROW_IMAGE = "car-pos-arrow-img"
+
+        /** The arrow is turned again when the heading is this many degrees from the turn it has. */
+        private const val ROTATE_STEP = 1f
         private val DEFAULT_COLORS = mapOf(
             "route" to "#2f7df6", "routeCasing" to "#0b3a8a", "routeOffroad" to "#d9822b", "routeAlternate" to "#8aa4c8",
             "position" to "#2f7df6", "positionRing" to "#ffffff", "pin" to "#d93a3a",
