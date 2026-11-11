@@ -1812,7 +1812,29 @@ impl SyncEngine {
                 if inner2.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                inner2.round().await;
+                // The round runs as a task of its own: if it panics, only that round ends, and the next one comes after the usual
+                // wait (in the loop itself a panic would end every later round until the app is started again).
+                let inner3 = inner2.clone();
+                let one = tokio::spawn(async move {
+                    #[cfg(feature = "test-hooks")]
+                    {
+                        // One round that panics: when `<dir>/panic-round` exists (taken away first, so only one does).
+                        let marker = inner3.dir.join("panic-round");
+                        if marker.exists() {
+                            let _ = std::fs::remove_file(&marker);
+                            panic!("test: a round panicked");
+                        }
+                    }
+                    inner3.round().await
+                });
+                if let Err(e) = one.await {
+                    if e.is_panic() {
+                        let p = e.into_panic();
+                        let msg = p.downcast_ref::<&str>().map(|m| m.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "no details".into());
+                        // Said even if the panic left the run log's lock poisoned: this line must not end the loop too.
+                        inner2.run.lock().unwrap_or_else(|l| l.into_inner()).note(format!("Sync stopped on an internal error and started again: {msg}"));
+                    }
+                }
                 let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
                 let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
             }
