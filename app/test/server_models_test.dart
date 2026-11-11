@@ -220,6 +220,25 @@ void main() {
     expect(d.stateOf(_hf).phase, DlPhase.idle);
   });
 
+  test('a server that cannot be asked shows on the row of what was downloading, and clears when it answers', () async {
+    await d.start(_hf);
+    fake.jobs['tiny-Q4.gguf'] = {'name': 'tiny-Q4.gguf', 'state': 'running', 'done': 400, 'total': 1000};
+    await d.refreshRemote();
+    expect(d.serverProblem, isNull);
+    fake.failWith = 401;
+    await d.refreshRemote();
+    expect(d.serverProblem, 'Sign in again.');
+    final out = d.stateOf(_hf);
+    expect((out.phase, out.waitLine, out.done), (DlPhase.waiting, 'Sign in again.', 400));
+    fake.failWith = 500;
+    await d.refreshRemote();
+    expect(d.stateOf(_hf).waitLine, 'The server could not be reached.');
+    fake.failWith = null;
+    await d.refreshRemote();
+    expect(d.serverProblem, isNull);
+    expect(d.stateOf(_hf).phase, DlPhase.running);
+  });
+
   test('a refused request ends in a failed row, not a thrown error', () async {
     fake.failWith = 403;
     await d.start(_hf);

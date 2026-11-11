@@ -9,6 +9,7 @@ import '../downloads/download_row.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
+import '../platform/app_log.dart' show logError;
 import '../platform/memory.dart' show modelMemoryNeed, readMemory;
 import 'device_memory.dart';
 import 'hf_hub.dart';
@@ -435,6 +436,11 @@ class ModelDownloads extends ChangeNotifier {
   /// The server has the search model.
   bool get searchModelReady => _searchReady;
 
+  /// Why the server's downloads could not be read at the last ask ("Sign in again.", "The server could not be reached."); null
+  /// when it answered. The rows of the downloads that were going show it.
+  String? get serverProblem => _serverProblem;
+  String? _serverProblem;
+
   /// The download whose failure [error] tells, when the server's list said it (null: nothing, or a request the server refused).
   String? _errorOf;
 
@@ -461,10 +467,17 @@ class ModelDownloads extends ChangeNotifier {
       final list = await server.downloads();
       final ready = await server.searchModelReady();
       if (_disposed) return;
+      _serverProblem = null;
       await _applyRemote(list, ready);
     } catch (e) {
-      // not reachable now: what is shown stays, and the next ask may work
-      if (!_disposed && error == null && _remote.values.any((d) => d.active)) notifyListeners();
+      // Not reachable now, or the session ended: the rows of what was going say so (their progress is no longer known), and the
+      // next ask may work. Logged when it starts, not at every ask.
+      final words = e is ServerModelsException && e.status == 401 ? 'Sign in again.' : 'The server could not be reached.';
+      if (_serverProblem != words) {
+        logError('Model downloads: the server could not be asked', error: e);
+        _serverProblem = words;
+        if (!_disposed) notifyListeners();
+      }
     }
     _schedule();
   }
@@ -610,7 +623,8 @@ class ModelDownloads extends ChangeNotifier {
     unawaited(() async {
       try {
         await _server!.pause(f.fileName);
-      } catch (_) {
+      } catch (e) {
+        logError('Model download could not be paused', error: e, detail: f.fileName);
         _pausing = null;
       }
       await refreshRemote();
@@ -639,7 +653,8 @@ class ModelDownloads extends ChangeNotifier {
     notifyListeners();
     try {
       await _server!.remove(name);
-    } catch (_) {
+    } catch (e) {
+      logError('Model download could not be removed', error: e, detail: name);
       _discardAfter = null;
     }
     await refreshRemote();
@@ -650,6 +665,9 @@ class ModelDownloads extends ChangeNotifier {
     final r = _remote[name];
     if (r != null) {
       final size = r.total > 0 ? r.total : f.size;
+      // the server cannot be asked: what was going shows why its progress stands still
+      final problem = _serverProblem;
+      if (problem != null && r.active) return DlState(DlPhase.waiting, done: r.done, total: size, waitLine: problem);
       switch (r.state) {
         case 'running' || 'verifying':
           if (_pausing == name || _discardAfter == name) return DlState(DlPhase.pausing, done: r.done, total: size);

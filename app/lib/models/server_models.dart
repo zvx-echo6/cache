@@ -36,8 +36,11 @@ class ServerDownload {
 
 /// The server said no, or could not be asked; [message] is for people.
 class ServerModelsException implements Exception {
-  const ServerModelsException(this.message);
+  const ServerModelsException(this.message, {this.status = 0});
   final String message;
+
+  /// The HTTP status the server answered with (401: the session ended); 0 when it did not answer at all.
+  final int status;
   @override
   String toString() => message;
 }
@@ -78,7 +81,7 @@ class ServerModels {
     } catch (e) {
       throw ServerModelsException('The server could not be reached: $e');
     }
-    if (r.status != 200) throw ServerModelsException(_why(r.status, r.body));
+    if (r.status != 200) throw ServerModelsException(_why(r.status, r.body), status: r.status);
     try {
       final j = jsonDecode(r.body);
       return j is Map ? j['result'] : null;
