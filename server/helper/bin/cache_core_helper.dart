@@ -69,7 +69,7 @@ Future<void> main() async {
       FsOps(support: dirs.support, docs: dirs.docs),
       regionsOps,
       VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve),
-      HistoryOps(Directory('${dirs.support.path}/history')),
+      HistoryOps(Directory('${dirs.support.path}/history'), log: log),
       keys,
     ],
     hook: keys,

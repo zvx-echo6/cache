@@ -25,11 +25,16 @@ import 'line_protocol.dart';
 ///   history.purgeDeleted {olderThanMs?} -> int       deleted for at least that long
 ///   history.deleteAll {} -> int
 class HistoryOps implements OpHandler {
-  HistoryOps(this.dir, {DateTime Function()? now}) : _now = now ?? DateTime.now {
+  HistoryOps(this.dir, {DateTime Function()? now, void Function(String message)? log, void Function(File file)? deleteFile})
+      : _now = now ?? DateTime.now,
+        _delete = deleteFile ?? ((f) => f.deleteSync()),
+        _log = log ?? ((m) => stderr.writeln('cache_core_helper: $m')) {
     _load();
   }
 
   final Directory dir;
+  final void Function(String message) _log;
+  final void Function(File file) _delete; // tests may make a delete fail
   final DateTime Function() _now;
 
   final Map<int, Map<String, dynamic>> _convs = {};
@@ -48,27 +53,51 @@ class HistoryOps implements OpHandler {
         final n = f.uri.pathSegments.last;
         if (n == 'tombstones.json') {
           try {
-            _tombs = [for (final t in jsonDecode(f.readAsStringSync()) as List) (t as Map).cast<String, dynamic>()];
-          } catch (_) {}
+            for (final t in jsonDecode(f.readAsStringSync()) as List) {
+              // One bad tombstone is skipped; the rest still count (its id has no rev to keep).
+              try {
+                final m = (t as Map).cast<String, dynamic>();
+                _id(m['id'], 'id');
+                final r = (m['rev'] as num).toInt();
+                _tombs.add(m);
+                _rev = _rev > r ? _rev : r;
+              } catch (e) {
+                _log('history: skipped a tombstone: $e');
+              }
+            }
+          } catch (e) {
+            _log('history: cannot read tombstones.json: $e');
+          }
           continue;
         }
         if (!n.startsWith('c') || !n.endsWith('.json')) continue;
         try {
           final c = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
           final id = (c['id'] as num).toInt();
+          final rev = (c['rev'] as num).toInt(); // inside the guard: a file with no numeric rev is skipped, never stops the helper
+          if (c['messages'] is! List) throw const FormatException('no messages list');
           _convs[id] = c;
+          _rev = _rev > rev ? _rev : rev;
         } catch (e) {
-          stderr.writeln('cache_core_helper: history: skipped $n: $e');
+          _log('history: skipped $n: $e');
         }
       }
     } catch (e) {
-      stderr.writeln('cache_core_helper: history: cannot read ${dir.path}: $e');
+      _log('history: cannot read ${dir.path}: $e');
     }
-    for (final c in _convs.values) {
-      _rev = _rev > (c['rev'] as num).toInt() ? _rev : (c['rev'] as num).toInt();
-    }
+    // A tombstone says the conversation was purged for good: a file that is still there (its delete failed) goes now.
     for (final t in _tombs) {
-      _rev = _rev > (t['rev'] as num).toInt() ? _rev : (t['rev'] as num).toInt();
+      final id = (t['id'] as num).toInt();
+      final f = _file(id);
+      try {
+        if (f.existsSync()) {
+          _delete(f);
+          _log('history: removed c$id.json, which a tombstone says was purged');
+        }
+      } catch (e) {
+        _log('history: cannot remove c$id.json (purged): $e');
+      }
+      _convs.remove(id);
     }
   }
 
@@ -93,6 +122,29 @@ class HistoryOps implements OpHandler {
   static int _id(Object? v, String what) {
     if (v is num) return v.toInt();
     throw CacheSearchException('bad_args', '"$what" must be a number');
+  }
+
+  /// The types the client reads (`_apply`); anything else is refused so one bad write cannot stop every tab's sync.
+  static void _checkField(String key, Object? v) {
+    final ok = switch (key) {
+      'title' || 'titleSource' || 'model' => v is String,
+      'updated' => v is num,
+      'pinned' || 'deleted' => v is bool,
+      'numbering' => v == null || v is String,
+      _ => true,
+    };
+    if (!ok) throw CacheSearchException('bad_args', '"$key" has the wrong type');
+  }
+
+  static void _checkMessage(Map m) {
+    bool str(String k) => m[k] is String;
+    bool num_(String k) => m[k] == null || m[k] is num;
+    if (!str('role') || !str('content') || m['message'] is! Map || !(m['citations'] == null || m['citations'] is List) ||
+        !(m['error'] == null || m['error'] is String) || !(m['inTranscript'] == null || m['inTranscript'] is bool) ||
+        !(m['navigationActions'] == null || m['navigationActions'] is List) ||
+        !num_('created') || !num_('promptTokens') || !num_('generatedTokens') || !num_('durationMs')) {
+      throw const CacheSearchException('bad_args', 'The message has a field of the wrong type');
+    }
   }
 
   Map<String, dynamic>? _conv(Object? id) => _convs[_id(id, 'id')];
@@ -136,6 +188,9 @@ class HistoryOps implements OpHandler {
         final f = a['fields'];
         if (c == null || f is! Map) return false;
         for (final e in f.entries) {
+          if (_fields.contains(e.key)) _checkField(e.key as String, e.value);
+        }
+        for (final e in f.entries) {
           if (!_fields.contains(e.key)) continue;
           c[e.key as String] = e.value;
           if (e.key == 'deleted') c['deletedAt'] = e.value == true ? _now().millisecondsSinceEpoch : null;
@@ -147,6 +202,7 @@ class HistoryOps implements OpHandler {
         final m = a['message'];
         if (c == null || m is! Map) return false;
         final mid = _id(m['id'], 'message.id');
+        _checkMessage(m);
         final list = c['messages'] as List;
         if (list.any((x) => (x as Map)['id'] == mid)) return false;
         list.add(m.cast<String, dynamic>());
@@ -210,8 +266,10 @@ class HistoryOps implements OpHandler {
     _convs.remove(id);
     try {
       final f = _file(id);
-      if (f.existsSync()) f.deleteSync();
-    } catch (_) {}
+      if (f.existsSync()) _delete(f);
+    } catch (e) {
+      _log('history: cannot delete c$id.json (a tombstone is saved; it is retried at the next start): $e');
+    }
     _tombs.add({'id': id, 'rev': ++_rev});
     if (_tombs.length > _maxTombs) _tombs = _tombs.sublist(_tombs.length - _maxTombs);
   }

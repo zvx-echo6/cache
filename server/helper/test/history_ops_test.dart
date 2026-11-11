@@ -77,4 +77,81 @@ void main() {
     expect(h.handle('history.removeMessage', {'id': 1, 'messageId': 1}), isTrue);
     expect((((sync(h)['conversations'] as List).single as Map)['messages'] as List).single['id'], 2);
   });
+
+  group('a damaged store', () {
+    late Directory hdir;
+    late List<String> logs;
+    setUp(() {
+      hdir = Directory('${tmp.path}/history')..createSync(recursive: true);
+      logs = [];
+    });
+    HistoryOps open() => HistoryOps(hdir, now: () => clock, log: logs.add);
+
+    test('a file with no numeric rev, and a tombstone without one, are logged and skipped; the helper starts', () {
+      File('${hdir.path}/c5.json').writeAsStringSync('{"id":5,"title":"no rev","messages":[]}');
+      File('${hdir.path}/c6.json').writeAsStringSync('{"id":6,"rev":"x","messages":[]}');
+      File('${hdir.path}/c7.json').writeAsStringSync('{"id":7,"rev":4,"title":"ok","messages":[]}');
+      File('${hdir.path}/tombstones.json').writeAsStringSync('[{"id":9},{"id":8,"rev":6}]');
+      final o = open();
+      final s = sync(o);
+      expect([for (final c in s['conversations'] as List) (c as Map)['id']], [7]);
+      expect(s['gone'], [8]);
+      expect(s['rev'], 6);
+      expect(logs.where((l) => l.contains('c5.json')), hasLength(1));
+      expect(logs.where((l) => l.contains('c6.json')), hasLength(1));
+      expect(logs.where((l) => l.contains('tombstone')), hasLength(1));
+    });
+
+    test('a purged conversation whose file could not be deleted is deleted at the next start', () {
+      final o = open();
+      o.handle('history.create', {'conversation': {'id': 1, 'title': 'T'}});
+      o.handle('history.update', {'id': 1, 'fields': {'deleted': true}});
+      final file = File('${hdir.path}/c1.json');
+      final copy = file.readAsStringSync();
+      expect(o.handle('history.purge', {'id': 1}), isTrue);
+      file.writeAsStringSync(copy); // as if the delete had failed
+      final again = open();
+      expect(file.existsSync(), isFalse, reason: 'the tombstone says it is purged');
+      expect(sync(again)['conversations'], isEmpty);
+      expect(sync(again)['gone'], [1]);
+      expect(logs.any((l) => l.contains('purged')), isTrue);
+    });
+
+    test('a failed delete in a purge is logged', () {
+      final o = HistoryOps(hdir, now: () => clock, log: logs.add, deleteFile: (f) => throw const FileSystemException('locked'));
+      o.handle('history.create', {'conversation': {'id': 2, 'title': 'T'}});
+      o.handle('history.update', {'id': 2, 'fields': {'deleted': true}});
+      expect(o.handle('history.purge', {'id': 2}), isTrue);
+      expect(logs.any((l) => l.contains('cannot delete c2.json')), isTrue);
+    });
+  });
+
+  test('history.update and history.addMessage refuse fields of the wrong type with bad_args, and store nothing', () {
+    create(1);
+    String code(void Function() f) {
+      try {
+        f();
+      } on Exception catch (e) {
+        return (e as dynamic).code as String;
+      }
+      return 'none';
+    }
+
+    for (final f in [
+      {'title': 5}, {'updated': 'x'}, {'deleted': 'yes'}, {'pinned': 1}, {'model': []}, {'numbering': 3}, {'titleSource': {}},
+    ]) {
+      expect(code(() => h.handle('history.update', {'id': 1, 'fields': f})), 'bad_args', reason: '$f');
+    }
+    expect(code(() => h.handle('history.update', {'id': 1, 'fields': {'title': 'ok', 'pinned': 'x'}})), 'bad_args');
+    expect(((sync(h)['conversations'] as List).single as Map)['title'], 'T', reason: 'a refused update changes nothing');
+    final bad = [
+      {...msg(1), 'role': 3}, {...msg(2), 'content': null}, {...msg(3), 'message': 'x'}, {...msg(4), 'citations': 'x'},
+      {...msg(5), 'created': 'x'}, {...msg(6), 'inTranscript': 'x'}, {...msg(7), 'navigationActions': {}},
+    ];
+    for (final m in bad) {
+      expect(code(() => h.handle('history.addMessage', {'id': 1, 'message': m})), 'bad_args', reason: '$m');
+    }
+    expect(((sync(h)['conversations'] as List).single as Map)['messages'], isEmpty);
+    expect(h.handle('history.addMessage', {'id': 1, 'message': msg(8)}), isTrue);
+  });
 }
