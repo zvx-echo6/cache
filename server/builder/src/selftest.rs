@@ -42,6 +42,10 @@ fn scanned_bitmap(lines: &[String]) -> (u32, u32, Vec<u8>) {
     let s = 300.0 / 72.0;
     let pix = p.to_pixmap(&Matrix::new_scale(s, s), &Colorspace::device_gray(), false, false).expect("draw the page to scan");
     assert_eq!(pix.n(), 1);
+    // The picture must really hold text: a blank page would make every OCR test read nothing and look like an OCR failure.
+    let dark = pix.samples().iter().filter(|&&v| v < 128).count() as f64 / pix.samples().len().max(1) as f64;
+    eprintln!("selftest scan bitmap {}x{}: {:.2}% dark pixels", pix.width(), pix.height(), dark * 100.0);
+    assert!(dark > 0.002 && dark < 0.5, "the generated scan is blank or solid ({:.3}% dark pixels): its text was not drawn", dark * 100.0);
     (pix.width(), pix.height(), pix.samples().to_vec())
 }
 

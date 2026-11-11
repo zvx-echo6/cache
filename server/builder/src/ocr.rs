@@ -59,7 +59,7 @@ impl OcrSettings {
             dirs.push(exe_dir.join("lib").join("tessdata"));
             dirs.push(exe_dir.join("..").join("lib").join("tessdata"));
         }
-        dirs.into_iter().find(|d| d.join(format!("{OCR_LANG}.traineddata")).is_file()).map(OcrSettings::new)
+        dirs.into_iter().find(|d| d.join(format!("{OCR_LANG}.traineddata")).is_file()).map(|d| OcrSettings::new(std::fs::canonicalize(&d).unwrap_or(d)))
     }
 
     /// The settings as a JSON text, for the child's environment.
@@ -105,18 +105,34 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
     if pages.is_empty() {
         return Ok(Vec::new());
     }
-    if !s.datadir.join(format!("{}.traineddata", s.lang)).is_file() {
-        return Err(Error::new(format!("no {}.traineddata in {}", s.lang, s.datadir.display())));
+    // A missing folder or language file is an error here: MuPDF's OCR would otherwise write a PDF with no text and no message.
+    // The folder is made absolute (the installed program's working folder is not `lib/tessdata`), and Tesseract is given the folder
+    // that holds `<lang>.traineddata` itself (it appends the file name; see ccutil.cpp main_setup in Tesseract).
+    let datadir_abs = std::fs::canonicalize(&s.datadir).map_err(|e| Error::new(format!("the OCR data folder {} is not usable: {e}", s.datadir.display())))?;
+    let traineddata = datadir_abs.join(format!("{}.traineddata", s.lang));
+    let td_size = std::fs::metadata(&traineddata).map(|m| if m.is_file() { m.len() } else { 0 }).unwrap_or(0);
+    if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
+        eprintln!("OCR data: datadir={} lang={} {} exists={} size={} bytes", datadir_abs.display(), s.lang, traineddata.display(), td_size > 0, td_size);
+    }
+    if td_size == 0 {
+        return Err(Error::new(format!("no {}.traineddata in {}", s.lang, datadir_abs.display())));
     }
     let doc = Document::from_bytes(pdf, "application/pdf").map_err(|e| Error::ctx("opening the PDF", e))?;
     let src = PdfDocument::try_from(doc).map_err(|e| Error::ctx("reading the PDF", e))?;
     let out = work.join("ocr-pages.pdf");
     let out_str = out.to_str().ok_or_else(|| Error::new("the OCR work folder has an unusable name"))?;
-    let datadir = s.datadir.to_str().ok_or_else(|| Error::new("the OCR data folder has an unusable name"))?;
+    let datadir = datadir_abs.to_str().ok_or_else(|| Error::new("the OCR data folder has an unusable name"))?;
+    if datadir.contains(',') {
+        return Err(Error::new(format!("the OCR data folder {datadir} has a comma in its name, which MuPDF's option list cannot carry")));
+    }
     // The page is drawn to a gray bitmap here, at `dpi`, and that bitmap is what MuPDF's OCR writer gets as a one-page image (the way
-    // the mupdf crate's own OCR test feeds it); the writer draws it 1:1 (resolution 72 on a page as many points as the bitmap has
-    // pixels) and hands the pixels to Tesseract. The scratch page is therefore in pixels, and is scaled back to points below.
-    let options = format!("resolution=72,colorspace=gray,compression=flate,ocr-language={},ocr-datadir={}", s.lang, datadir);
+    // the mupdf crate's own OCR test feeds it). The writer renders its page at `resolution=<dpi>` from a page `dpi`-scaled down to points,
+    // which gives exactly the bitmap's pixels (the draw device rounds to whole pixels), so the image goes 1:1 to Tesseract, which is
+    // told the true resolution (300, not 72).
+    // `colorspace=rgb` and not `gray`: the writer (MuPDF 1.27.2 source/fitz/output-pdfocr.c, post_skew_write_band, the `n == 1` branch,
+    // lines 446-455) copies the first row of the page into every row of the bitmap it gives Tesseract (the source pointer is never
+    // advanced), so a gray page reads as blank and Tesseract returns nothing without an error. The RGB branch (lines 456-468) advances.
+    let options = format!("resolution={},colorspace=rgb,compression=flate,ocr-language={},ocr-datadir={}", s.dpi, s.lang, datadir);
     let scale = s.dpi as f32 / 72.0;
     // Pages that were drawn, in the order they went into the scratch PDF, with the size they have in the source (points).
     let mut drawn: Vec<(usize, f32, f32)> = Vec::new();
@@ -127,7 +143,11 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
             let Ok(bounds) = page.bounds() else { continue };
             let Ok(pix) = page.to_pixmap(&Matrix::new_scale(scale, scale), &Colorspace::device_gray(), false, true) else { continue };
             let Ok(image) = Image::from_pixmap(&pix) else { continue };
-            let (pw, ph) = (pix.width() as f32, pix.height() as f32);
+            let (pw, ph) = (pix.width() as f32 * 72.0 / s.dpi as f32, pix.height() as f32 * 72.0 / s.dpi as f32);
+            if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
+                let dark = pix.samples().iter().filter(|&&v| v < 128).count();
+                eprintln!("OCR input page {i}: bitmap {}x{} n={} dark pixels {:.2}% ({dark} of {})", pix.width(), pix.height(), pix.n(), 100.0 * dark as f64 / pix.samples().len().max(1) as f64, pix.samples().len());
+            }
             let Ok(dev) = writer.begin_page(Rect { x0: 0.0, y0: 0.0, x1: pw, y1: ph }) else { continue };
             let filled = dev.fill_image(&image, &Matrix::new_scale(pw, ph), 1.0, ColorParams::default());
             writer.end_page(dev).map_err(|e| Error::ctx("reading a scanned page", e))?;
