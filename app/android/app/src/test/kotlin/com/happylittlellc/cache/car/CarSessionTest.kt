@@ -106,9 +106,10 @@ class CarSessionTest {
         val info = t.navigationInfo as RoutingInfo
         assertEquals("Turn left onto Road 1.", info.currentStep!!.cue.toString())
         assertNotNull(t.destinationTravelEstimate)
-        // End route, Route overview, the voice switch.
-        assertEquals(3, t.actionStrip!!.actions.size)
+        // End route, Add a stop, Route overview, the voice switch: the library allows 4 in a navigation action strip.
+        assertEquals(4, t.actionStrip!!.actions.size)
         assertEquals("End route", t.actionStrip!!.actions[0].title.toString())
+        assertEquals("Add a stop", t.actionStrip!!.actions[1].title.toString())
         // The map buttons: pan, zoom in, zoom out (Recenter joins once the map was moved).
         assertEquals(3, t.mapActionStrip!!.actions.size)
         assertEquals(androidx.car.app.model.Action.TYPE_PAN, t.mapActionStrip!!.actions[0].type)
@@ -277,8 +278,7 @@ class CarSessionTest {
         )
         push("trip", trip("guiding", guiding + mapOf("routes" to two)))
         val nav = screens.top as NavigationScreen
-        // The overview button is the second one in the action strip.
-        assertEquals(3, (templateOf(nav) as NavigationTemplate).actionStrip!!.actions.size)
+        assertEquals(4, (templateOf(nav) as NavigationTemplate).actionStrip!!.actions.size)
         nav.openOverview()
         assertTrue(screens.top is RouteOverviewScreen)
         val t = templateOf(screens.top) as MapWithContentTemplate
@@ -289,6 +289,85 @@ class CarSessionTest {
         push("trip", trip("guiding", guiding + mapOf("routes" to two)))
         assertTrue(screens.top is RouteOverviewScreen)
         // Guidance ending takes the car back to the map.
+        push("trip", trip("browsing"))
+        assertTrue(screens.top is HomeScreen)
+    }
+
+    @Test
+    fun addAStopListsSavedPlacesAndSearchAndChoosingOneReturnsToGuidance() {
+        start()
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            when (method) {
+                "saved" -> done(listOf(mapOf("id" to "place:1", "name" to "Twin Falls Public Library", "address" to "", "lat" to 42.6, "lon" to -113.7, "distanceM" to 11700.0)))
+                "addStop" -> done(true)
+                else -> done(null)
+            }
+        }
+        push("trip", trip("guiding", guiding))
+        val navScreen = screens.top as NavigationScreen
+        navScreen.openAddStop()
+        shadowOf(Looper.getMainLooper()).idle()
+        val add = screens.top as AddStopScreen
+        val t = templateOf(add) as MapWithContentTemplate
+        assertEquals("Add a stop", (t.contentTemplate as ListTemplate).header!!.title.toString())
+        val rows = (t.contentTemplate as ListTemplate).singleList!!.items
+        assertEquals(1, rows.size)
+        assertEquals(1, t.actionStrip!!.actions.size)
+        // A trip update while it is up does not throw it away (guidance goes on under it).
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is AddStopScreen)
+        // Choosing a saved place asks the phone and is back on guidance.
+        (rows[0] as androidx.car.app.model.Row).onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {
+            override fun onSuccess(response: androidx.car.app.serialization.Bundleable?) {}
+            override fun onFailure(response: androidx.car.app.serialization.Bundleable) {}
+        })
+        shadowOf(Looper.getMainLooper()).idle()
+        val call = asked.single { it.first == "addStop" }
+        assertEquals(mapOf("lat" to 42.6, "lon" to -113.7, "name" to "Twin Falls Public Library"), call.second)
+        assertTrue(screens.top is NavigationScreen)
+    }
+
+    @Test
+    fun aStopThatCannotBeAddedSaysSoAndStillReturnsToGuidance() {
+        start()
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            when (method) {
+                "saved" -> done(listOf(mapOf("id" to "place:1", "name" to "Library", "address" to "", "lat" to 42.6, "lon" to -113.7, "distanceM" to 100.0)))
+                "addStop" -> done(false)
+                else -> done(null)
+            }
+        }
+        push("trip", trip("guiding", guiding))
+        (screens.top as NavigationScreen).openAddStop()
+        shadowOf(Looper.getMainLooper()).idle()
+        val rows = ((templateOf(screens.top) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items
+        (rows[0] as androidx.car.app.model.Row).onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {
+            override fun onSuccess(response: androidx.car.app.serialization.Bundleable?) {}
+            override fun onFailure(response: androidx.car.app.serialization.Bundleable) {}
+        })
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(screens.top is NavigationScreen)
+        assertEquals(1, asked.count { it == "addStop" })
+    }
+
+    @Test
+    fun searchingForAStopIsOneMoreScreenAndGuidanceEndingClearsTheWholeStack() {
+        start()
+        CarLink.dartForTests = { _, _, done -> done(null) }
+        push("trip", trip("guiding", guiding))
+        (screens.top as NavigationScreen).openAddStop()
+        shadowOf(Looper.getMainLooper()).idle()
+        val before = screens.screensPushed.size
+        // Search joins the stack in pick mode: three screens deep from guidance at most (guidance, add a stop, search).
+        (screens.top as AddStopScreen).let { it.screenManager.push(SearchScreen(car, CarMapRenderer(car), pick = {})) }
+        assertTrue(screens.top is SearchScreen)
+        push("trip", trip("guiding", guiding))
+        assertTrue("a trip update leaves the stop search up", screens.top is SearchScreen)
+        assertEquals(before + 1, screens.screensPushed.size)
         push("trip", trip("browsing"))
         assertTrue(screens.top is HomeScreen)
     }

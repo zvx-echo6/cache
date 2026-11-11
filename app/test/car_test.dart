@@ -542,6 +542,25 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('Add a stop from the car calls NavState and answers its result: true while guiding, false at the most stops or with no route', () async {
+      expect(await fromCar('addStop', {'lat': 42.9, 'lon': -113.9, 'name': 'Store'}), isFalse, reason: 'no route yet');
+      expect(await fromCar('addStop', {'name': 'No place'}), isFalse, reason: 'no coordinates');
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital'});
+      expect(nav.guiding, isTrue);
+      expect(await fromCar('addStop', {'lat': 42.9, 'lon': -113.9, 'name': 'Store'}), isTrue);
+      expect([for (final s in nav.stops) s.name], ['Store']);
+      expect(nav.stops.single.lat, 42.9);
+      expect(backend.vias.last.map((m) => m['name']), ['Store'], reason: 'the route was worked out again with it');
+      for (var i = 1; i < NavState.maxStops; i++) {
+        expect(await fromCar('addStop', {'lat': 42.9 + i / 100, 'lon': -113.9, 'name': 'S$i'}), isTrue);
+      }
+      expect(await fromCar('addStop', {'lat': 43.5, 'lon': -113.9, 'name': 'Too many'}), isFalse);
+      expect(nav.stops.length, NavState.maxStops);
+    });
+
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Burley Library')]);

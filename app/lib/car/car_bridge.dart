@@ -264,6 +264,8 @@ class CarBridge {
       case 'autoDrive':
         drive.simulate = a['on'] == true;
         return null;
+      case 'addStop':
+        return addStop(lat: (a['lat'] as num?)?.toDouble(), lon: (a['lon'] as num?)?.toDouble(), name: a['name'] as String?);
       case 'navigateTo':
         return navigateTo(
           lat: (a['lat'] as num?)?.toDouble(),
@@ -333,6 +335,14 @@ class CarBridge {
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
     return [...saved, ...found].take(12).toList();
+  }
+
+  /// Add a stop while guiding (or previewing): a place chosen in the car joins the route. True when it was added, false when the route
+  /// has the most stops it can or no route is shown.
+  Future<bool> addStop({double? lat, double? lon, String? name}) async {
+    if (lat == null || lon == null || (lat == 0 && lon == 0)) return false;
+    final n = (name ?? '').trim();
+    return nav.addStop(MapPlace.pin(lat, lon, name: n.isEmpty ? 'Dropped pin' : n));
   }
 
   /// A navigation request from another app or the assistant (Android Auto's `androidx.car.app.action.NAVIGATE` with a `geo:`
