@@ -1,10 +1,12 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart' show IconData;
+import 'package:material_symbols_icons/symbols.dart';
 
 import 'notebook_model.dart';
 
-/// The map icons a notebook or a single place can have: preparedness icons from Flutter's own Material Icons (Apache-2.0; no
-/// package is added). A notebook's icon is `def.icon`, a place's own is `props.icon`; both are the [id] below, which is what
-/// is stored and synced, so an id is never renamed or reused once it ships.
+/// The map icons a notebook or a single place can have, from Google's Material Symbols (the `material_symbols_icons` package,
+/// Apache-2.0). A notebook's icon is `def.icon`, a place's own is `props.icon`; both are the [id] below, which is what is stored
+/// and synced, so an id is never renamed or reused once it ships. Every icon is a constant, so a release build keeps only these
+/// glyphs of the font (icon tree-shaking); search reaches this list, not the whole font.
 class MapIcon {
   const MapIcon(this.id, this.label, this.icon, [this.words = '']);
 
@@ -24,135 +26,172 @@ const String kPlacesIcon = 'pin';
 /// The icon a repeater list starts with.
 const String kRepeaterIcon = 'radio_tower';
 
-/// About 90 icons, grouped as the picker lists them when nothing is typed.
+/// The curated preparedness icons, in the groups the picker lists them in when nothing is typed.
 const List<MapIcon> kMapIcons = [
   // Places
-  MapIcon('pin', 'Pin', Icons.place, 'place marker spot location'),
-  MapIcon('flag', 'Flag', Icons.flag, 'point rally mark'),
-  MapIcon('star', 'Star', Icons.star, 'favorite important'),
-  MapIcon('bookmark', 'Bookmark', Icons.bookmark, 'saved'),
-  MapIcon('home', 'Home', Icons.home, 'house base'),
-  MapIcon('meeting', 'Meeting', Icons.group, 'rally people family group'),
-  MapIcon('handshake', 'Contact', Icons.handshake, 'neighbor friend trade'),
-  MapIcon('lookout', 'Lookout', Icons.visibility, 'view watch observe'),
+  MapIcon('pin', 'Pin', Symbols.location_on, 'place marker spot location waypoint point'),
+  MapIcon('rally', 'Rally point', Symbols.flag, 'meeting muster gather meet regroup'),
+  MapIcon('star', 'Star', Symbols.star, 'favorite important'),
+  MapIcon('bookmark', 'Bookmark', Symbols.bookmark, 'saved'),
+  MapIcon('home', 'Home', Symbols.home, 'house base'),
+  MapIcon('meeting', 'Meeting', Symbols.groups, 'people family group'),
+  MapIcon('contact', 'Contact', Symbols.handshake, 'neighbor friend trade'),
+  MapIcon('lookout', 'Lookout', Symbols.visibility, 'view watch observe'),
+  MapIcon('binoculars', 'Scout', Symbols.search, 'look search survey'),
+  MapIcon('target', 'Target', Symbols.my_location, 'gps fix position'),
   // Water
-  MapIcon('water', 'Water', Icons.water_drop, 'drink spring well source'),
-  MapIcon('drinking', 'Safe water', Icons.local_drink, 'potable safe fountain'),
-  MapIcon('river', 'River ford', Icons.kayaking, 'ford creek stream paddle'),
-  MapIcon('swim', 'Swim', Icons.pool, 'lake pond'),
-  MapIcon('boat', 'Boat', Icons.directions_boat, 'ramp launch dock'),
-  MapIcon('sailing', 'Sailing', Icons.sailing, 'sail'),
-  MapIcon('anchor', 'Anchor', Icons.anchor, 'harbor marina'),
-  MapIcon('shower', 'Shower', Icons.shower, 'wash'),
-  MapIcon('restroom', 'Restroom', Icons.wc, 'toilet latrine'),
+  MapIcon('water', 'Water', Symbols.water_drop, 'spring well creek stream source drink seep lake pond'),
+  MapIcon('safe_water', 'Safe water', Symbols.water_bottle, 'potable drinking treated filtered'),
+  MapIcon('river_crossing', 'River ford', Symbols.waves, 'ford wade creek stream cross river shallow'),
+  MapIcon('pump', 'Pump', Symbols.water_pump, 'well hand pump windmill'),
+  MapIcon('tank', 'Tank', Symbols.water_full, 'cistern storage trough reservoir'),
+  MapIcon('flood', 'Flood', Symbols.flood, 'high water overflow'),
+  MapIcon('leak', 'Washout', Symbols.water_damage, 'leak erosion'),
+  MapIcon('boat', 'Boat', Symbols.directions_boat, 'ramp launch dock'),
+  MapIcon('sailing', 'Sailing', Symbols.sailing, 'sail'),
+  MapIcon('paddle', 'Paddle', Symbols.kayaking, 'kayak canoe raft'),
+  MapIcon('anchor', 'Anchor', Symbols.anchor, 'harbor marina'),
+  MapIcon('shower', 'Shower', Symbols.shower, 'wash'),
+  MapIcon('restroom', 'Restroom', Symbols.wc, 'toilet latrine outhouse'),
   // Fire
-  MapIcon('fire', 'Fire', Icons.local_fire_department, 'burn wildfire flame'),
-  MapIcon('fire_pit', 'Fire pit', Icons.fireplace, 'ring campfire'),
-  MapIcon('grill', 'Stove', Icons.outdoor_grill, 'cook grill bbq'),
-  MapIcon('propane', 'Propane', Icons.propane_tank, 'gas fuel tank'),
-  MapIcon('extinguisher', 'Fire safety', Icons.fire_extinguisher, 'safety'),
-  MapIcon('fire_station', 'Fire station', Icons.fire_truck, 'engine truck'),
+  MapIcon('fire', 'Fire', Symbols.local_fire_department, 'burn wildfire flame'),
+  MapIcon('fire_pit', 'Fire pit', Symbols.fireplace, 'ring campfire hearth'),
+  MapIcon('stove', 'Stove', Symbols.outdoor_grill, 'cook grill bbq'),
+  MapIcon('propane', 'Propane', Symbols.propane_tank, 'gas fuel tank'),
+  MapIcon('extinguisher', 'Fire safety', Symbols.fire_extinguisher, 'extinguisher'),
+  MapIcon('fire_station', 'Fire station', Symbols.fire_truck, 'engine truck'),
+  MapIcon('hydrant', 'Hydrant', Symbols.fire_hydrant, 'hydrant standpipe'),
   // Shelter and camp
-  MapIcon('camp', 'Camp', Icons.holiday_village, 'campsite tent site'),
-  MapIcon('cabin', 'Cabin', Icons.cabin, 'hut lodge'),
-  MapIcon('shelter', 'Shelter', Icons.night_shelter, 'refuge cover'),
-  MapIcon('bed', 'Bed', Icons.hotel, 'sleep lodging motel'),
-  MapIcon('house', 'House', Icons.cottage, 'cottage home'),
-  MapIcon('tree', 'Tree', Icons.park, 'park woods'),
-  MapIcon('forest', 'Forest', Icons.forest, 'woods timber'),
-  MapIcon('plants', 'Plants', Icons.eco, 'forage leaf garden'),
+  MapIcon('camp', 'Camp', Symbols.camping, 'tent campsite camping site bivouac'),
+  MapIcon('shelter', 'Shelter', Symbols.night_shelter, 'refuge cover lean-to hut'),
+  MapIcon('cabin', 'Cabin', Symbols.cabin, 'lodge hut'),
+  MapIcon('campground', 'Campground', Symbols.holiday_village, 'camp sites cabins'),
+  MapIcon('bed', 'Bed', Symbols.hotel, 'sleep lodging motel'),
+  MapIcon('house', 'House', Symbols.cottage, 'cottage home'),
+  MapIcon('tree', 'Tree', Symbols.park, 'woods'),
+  MapIcon('forest', 'Forest', Symbols.forest, 'woods timber'),
+  MapIcon('plants', 'Plants', Symbols.eco, 'forage leaf garden'),
+  MapIcon('door', 'Door', Symbols.door_front, 'entrance'),
   // Medical
-  MapIcon('hospital', 'Hospital', Icons.local_hospital, 'clinic emergency room'),
-  MapIcon('first_aid', 'First aid', Icons.medical_services, 'medical kit doctor'),
-  MapIcon('bandage', 'Bandage', Icons.healing, 'wound injury'),
-  MapIcon('medicine', 'Medicine', Icons.medication, 'pills prescription'),
-  MapIcon('pharmacy', 'Pharmacy', Icons.local_pharmacy, 'drug store'),
-  MapIcon('blood', 'Blood', Icons.bloodtype, 'donor'),
-  MapIcon('health', 'Health', Icons.health_and_safety, 'shield cross'),
+  MapIcon('first_aid', 'First aid', Symbols.medical_services, 'medical kit doctor'),
+  MapIcon('hospital', 'Hospital', Symbols.local_hospital, 'clinic emergency room er'),
+  MapIcon('bandage', 'Bandage', Symbols.healing, 'wound injury'),
+  MapIcon('medicine', 'Medicine', Symbols.medication, 'pills prescription'),
+  MapIcon('pharmacy', 'Pharmacy', Symbols.local_pharmacy, 'drug store'),
+  MapIcon('health', 'Health', Symbols.health_and_safety, 'shield cross'),
+  MapIcon('blood', 'Blood', Symbols.bloodtype, 'donor'),
+  MapIcon('ems', 'Ambulance', Symbols.emergency, 'ems paramedic'),
+  MapIcon('stethoscope', 'Clinic', Symbols.stethoscope, 'doctor nurse'),
   // Radio and signal
-  MapIcon('radio_tower', 'Radio tower', Icons.cell_tower, 'repeater antenna mast site'),
-  MapIcon('radio', 'Radio', Icons.radio, 'handheld ham gmrs'),
-  MapIcon('antenna', 'Antenna', Icons.settings_input_antenna, 'aerial'),
-  MapIcon('repeater', 'Repeater', Icons.podcasts, 'broadcast relay'),
-  MapIcon('signal', 'Signal', Icons.wifi_tethering, 'coverage reception'),
-  MapIcon('router', 'Router', Icons.router, 'node mesh gateway'),
-  MapIcon('satellite', 'Satellite', Icons.satellite_alt, 'sat gps'),
-  MapIcon('phone', 'Phone', Icons.phone, 'call landline'),
-  MapIcon('message', 'Message', Icons.sms, 'text drop mailbox'),
-  MapIcon('announce', 'Announce', Icons.campaign, 'net siren'),
-  MapIcon('sos', 'SOS', Icons.sos, 'distress help'),
+  MapIcon('radio_tower', 'Radio tower', Symbols.cell_tower, 'repeater antenna mast site radio tower'),
+  MapIcon('radio', 'Radio', Symbols.radio, 'handheld ham gmrs'),
+  MapIcon('antenna', 'Antenna', Symbols.settings_input_antenna, 'aerial mast'),
+  MapIcon('repeater', 'Repeater', Symbols.podcasts, 'broadcast relay radio tower'),
+  MapIcon('signal', 'Signal', Symbols.wifi_tethering, 'coverage reception'),
+  MapIcon('coverage', 'Coverage', Symbols.signal_cellular_alt, 'bars cell'),
+  MapIcon('router', 'Mesh node', Symbols.router, 'mesh gateway router'),
+  MapIcon('satellite', 'Satellite', Symbols.satellite_alt, 'sat gps'),
+  MapIcon('phone', 'Phone', Symbols.call, 'landline'),
+  MapIcon('message', 'Message', Symbols.sms, 'text mailbox'),
+  MapIcon('announce', 'Announce', Symbols.campaign, 'net siren'),
+  MapIcon('sos', 'SOS', Symbols.sos, 'distress help'),
   // Trail
-  MapIcon('trailhead', 'Trailhead', Icons.hiking, 'trail hike walk'),
-  MapIcon('peak', 'Peak', Icons.terrain, 'mountain summit ridge'),
-  MapIcon('viewpoint', 'Viewpoint', Icons.landscape, 'overlook scenic'),
-  MapIcon('walk', 'Walk', Icons.directions_walk, 'foot path'),
-  MapIcon('bike', 'Bike', Icons.directions_bike, 'bicycle'),
-  MapIcon('signpost', 'Signpost', Icons.signpost, 'sign marker'),
-  MapIcon('junction', 'Junction', Icons.alt_route, 'fork split'),
-  MapIcon('compass', 'Compass', Icons.explore, 'bearing direction'),
-  MapIcon('navigate', 'Navigate', Icons.navigation, 'route heading'),
-  MapIcon('map', 'Map', Icons.map, 'chart'),
-  MapIcon('snowshoe', 'Snowshoe', Icons.snowshoeing, 'winter'),
-  MapIcon('ski', 'Ski', Icons.downhill_skiing, 'snow'),
-  // Car and fuel
-  MapIcon('car', 'Car', Icons.directions_car, 'vehicle truck'),
-  MapIcon('motorcycle', 'Motorcycle', Icons.two_wheeler, 'moto atv'),
-  MapIcon('fuel', 'Fuel', Icons.local_gas_station, 'gas diesel station'),
-  MapIcon('charging', 'Charging', Icons.ev_station, 'electric'),
-  MapIcon('parking', 'Parking', Icons.local_parking, 'lot'),
-  MapIcon('garage', 'Garage', Icons.garage, 'shop mechanic'),
-  MapIcon('road', 'Road', Icons.traffic, 'gate closure'),
-  MapIcon('construction', 'Roadwork', Icons.construction, 'work closure'),
+  MapIcon('trailhead', 'Trailhead', Symbols.hiking, 'trail hike walk'),
+  MapIcon('peak', 'Peak', Symbols.terrain, 'mountain summit ridge'),
+  MapIcon('summit', 'Summit', Symbols.mountain_flag, 'top peak'),
+  MapIcon('viewpoint', 'Viewpoint', Symbols.landscape, 'overlook scenic'),
+  MapIcon('walk', 'Walk', Symbols.directions_walk, 'foot path'),
+  MapIcon('bike', 'Bike', Symbols.directions_bike, 'bicycle'),
+  MapIcon('signpost', 'Signpost', Symbols.signpost, 'sign marker'),
+  MapIcon('junction', 'Junction', Symbols.alt_route, 'fork split'),
+  MapIcon('compass', 'Compass', Symbols.explore, 'bearing direction'),
+  MapIcon('navigate', 'Navigate', Symbols.navigation, 'route heading'),
+  MapIcon('map', 'Map', Symbols.map, 'chart'),
+  MapIcon('snowshoe', 'Snowshoe', Symbols.snowshoeing, 'winter'),
+  MapIcon('ski', 'Ski', Symbols.downhill_skiing, 'snow'),
+  MapIcon('fence', 'Fence', Symbols.fence, 'boundary'),
+  MapIcon('gate', 'Gate', Symbols.gate, 'locked closed'),
+  // Vehicles and fuel
+  MapIcon('car', 'Car', Symbols.directions_car, 'vehicle truck'),
+  MapIcon('truck', 'Truck', Symbols.local_shipping, 'haul freight'),
+  MapIcon('motorcycle', 'Motorcycle', Symbols.two_wheeler, 'moto atv'),
+  MapIcon('fuel', 'Fuel', Symbols.local_gas_station, 'gas diesel station'),
+  MapIcon('charging', 'Charging', Symbols.ev_station, 'electric'),
+  MapIcon('parking', 'Parking', Symbols.local_parking, 'lot'),
+  MapIcon('garage', 'Garage', Symbols.garage, 'shop mechanic'),
+  MapIcon('road', 'Road', Symbols.traffic, 'closure'),
+  MapIcon('roadwork', 'Roadwork', Symbols.construction, 'work closure'),
+  MapIcon('helicopter', 'Helicopter', Symbols.helicopter, 'landing zone lz air'),
+  MapIcon('airstrip', 'Airstrip', Symbols.local_airport, 'airport plane runway'),
   // Food
-  MapIcon('food', 'Food', Icons.restaurant, 'eat meal'),
-  MapIcon('cafe', 'Cafe', Icons.local_cafe, 'coffee'),
-  MapIcon('kitchen', 'Kitchen', Icons.kitchen, 'pantry'),
-  MapIcon('food_bank', 'Food bank', Icons.food_bank, 'supplies'),
-  MapIcon('soup', 'Meal site', Icons.soup_kitchen, 'shelter kitchen'),
-  MapIcon('farm', 'Farm', Icons.agriculture, 'ranch tractor field'),
-  MapIcon('grass', 'Grass', Icons.grass, 'pasture meadow'),
-  MapIcon('pets', 'Animals', Icons.pets, 'livestock dog'),
-  // Cache, gear and power
-  MapIcon('cache', 'Cache', Icons.inventory_2, 'stash box supplies stored'),
-  MapIcon('backpack', 'Pack', Icons.backpack, 'bag bug out gear'),
-  MapIcon('lock', 'Lock', Icons.lock, 'locked gate secure'),
-  MapIcon('key', 'Key', Icons.vpn_key, 'access code'),
-  MapIcon('tools', 'Tools', Icons.handyman, 'repair hardware'),
-  MapIcon('build', 'Build', Icons.build, 'wrench'),
-  MapIcon('flashlight', 'Light', Icons.flashlight_on, 'lamp torch'),
-  MapIcon('power', 'Power', Icons.bolt, 'electric outlet'),
-  MapIcon('electric', 'Electric', Icons.electrical_services, 'line plug'),
-  MapIcon('battery', 'Battery', Icons.battery_full, 'charge'),
-  MapIcon('solar', 'Solar', Icons.solar_power, 'panel'),
-  MapIcon('store', 'Store', Icons.store, 'shop buy trade'),
+  MapIcon('food', 'Food', Symbols.restaurant, 'eat meal'),
+  MapIcon('cafe', 'Cafe', Symbols.local_cafe, 'coffee'),
+  MapIcon('kitchen', 'Kitchen', Symbols.kitchen, 'pantry'),
+  MapIcon('food_bank', 'Food bank', Symbols.food_bank, 'supplies'),
+  MapIcon('meal_site', 'Meal site', Symbols.soup_kitchen, 'kitchen'),
+  MapIcon('farm', 'Farm', Symbols.agriculture, 'ranch tractor field'),
+  MapIcon('grass', 'Grass', Symbols.grass, 'pasture meadow'),
+  MapIcon('animals', 'Animals', Symbols.pets, 'livestock dog'),
+  MapIcon('fish', 'Fish', Symbols.set_meal, 'fishing'),
+  // Cache and gear
+  MapIcon('cache', 'Cache', Symbols.inventory_2, 'stash box supplies stored'),
+  MapIcon('backpack', 'Pack', Symbols.backpack, 'bag bug out gear'),
+  MapIcon('lock', 'Lock', Symbols.lock, 'locked secure'),
+  MapIcon('key', 'Key', Symbols.vpn_key, 'access code'),
+  MapIcon('tools', 'Tools', Symbols.handyman, 'repair hardware'),
+  MapIcon('wrench', 'Wrench', Symbols.build, 'wrench'),
+  MapIcon('flashlight', 'Light', Symbols.flashlight_on, 'lamp torch'),
+  MapIcon('power', 'Power', Symbols.bolt, 'electric outlet'),
+  MapIcon('electric', 'Electric', Symbols.electrical_services, 'line plug'),
+  MapIcon('battery', 'Battery', Symbols.battery_full, 'charge'),
+  MapIcon('solar', 'Solar', Symbols.solar_power, 'panel'),
+  MapIcon('store', 'Store', Symbols.store, 'shop buy trade'),
+  MapIcon('shelves', 'Shelves', Symbols.shelves, 'storage warehouse'),
   // Danger and weather
-  MapIcon('danger', 'Danger', Icons.dangerous, 'hazard no keep out'),
-  MapIcon('warning', 'Warning', Icons.warning, 'caution'),
-  MapIcon('problem', 'Problem', Icons.report_problem, 'issue washout'),
-  MapIcon('alert', 'Alert', Icons.crisis_alert, 'emergency'),
-  MapIcon('flood', 'Flood', Icons.flood, 'high water'),
-  MapIcon('storm', 'Storm', Icons.thunderstorm, 'lightning'),
-  MapIcon('tornado', 'Tornado', Icons.tornado, 'twister'),
-  MapIcon('wind', 'Wind', Icons.air, 'gust'),
-  MapIcon('cold', 'Cold', Icons.ac_unit, 'snow ice freeze'),
-  MapIcon('heat', 'Heat', Icons.thermostat, 'hot temperature'),
-  MapIcon('volcano', 'Volcano', Icons.volcano, 'eruption'),
-  MapIcon('police', 'Police', Icons.local_police, 'sheriff law'),
-  MapIcon('security', 'Security', Icons.security, 'guard safe'),
+  MapIcon('danger', 'Danger', Symbols.warning, 'hazard caution keep out'),
+  MapIcon('no_go', 'No go', Symbols.dangerous, 'stop closed forbidden'),
+  MapIcon('skull', 'Poison', Symbols.skull, 'toxic deadly'),
+  MapIcon('alert', 'Alert', Symbols.crisis_alert, 'emergency'),
+  MapIcon('storm', 'Storm', Symbols.thunderstorm, 'lightning'),
+  MapIcon('tornado', 'Tornado', Symbols.tornado, 'twister'),
+  MapIcon('wind', 'Wind', Symbols.air, 'gust'),
+  MapIcon('cold', 'Cold', Symbols.ac_unit, 'snow ice freeze'),
+  MapIcon('heat', 'Heat', Symbols.thermostat, 'hot temperature'),
+  MapIcon('sun', 'Sun', Symbols.wb_sunny, 'sunny clear'),
+  MapIcon('rain', 'Rain', Symbols.rainy, 'wet'),
+  MapIcon('snow', 'Snow', Symbols.snowing, 'winter'),
+  MapIcon('volcano', 'Volcano', Symbols.volcano, 'eruption'),
+  MapIcon('police', 'Police', Symbols.local_police, 'sheriff law'),
+  MapIcon('security', 'Security', Symbols.security, 'guard safe'),
+  MapIcon('bug', 'Pests', Symbols.bug_report, 'insects snake'),
 ];
+
 
 /// The icon with id [id]; the pin for a name this Cache does not know (an icon a newer Cache added) or none.
 MapIcon mapIcon(String? id) => kMapIcons.firstWhere((i) => i.id == id, orElse: () => kMapIcons.first);
 
-/// The icons whose label or words contain [query] (every typed word), in the picker's order; all of them for a blank query. This
-/// searches a fixed list of names, it does not read the person's own text.
+/// The icons whose label or words contain [query] (every typed word), best matches first: a label that starts with the word, then
+/// a label that contains it, then the other words (synonyms). All of them for a blank query. This searches a fixed list of names,
+/// it does not read the person's own text.
+/// Every icon the picker lists: the preparedness icons, then the template icons.
+final List<MapIcon> _all = [...kMapIcons, ...kTemplateIcons];
+
 List<MapIcon> searchMapIcons(String query) {
   final words = query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-  if (words.isEmpty) return kMapIcons;
-  return [
-    for (final i in kMapIcons)
-      if (words.every((w) => '${i.label} ${i.words}'.toLowerCase().contains(w))) i,
-  ];
+  if (words.isEmpty) return _all;
+  final scored = <(int, MapIcon)>[];
+  for (final (i, ic) in _all.indexed) {
+    final label = ic.label.toLowerCase(), all = '$label ${ic.words}'.toLowerCase();
+    if (!words.every(all.contains)) continue;
+    final rank = words.every(label.startsWith) || words.every((w) => label.split(' ').any((x) => x.startsWith(w)))
+        ? 0
+        : words.every(label.contains)
+            ? 1
+            : 2;
+    scored.add((rank * 1000 + i, ic));
+  }
+  scored.sort((a, b) => a.$1.compareTo(b.$1));
+  return [for (final s in scored) s.$2];
 }
 
 /// The icon id a notebook shows when it has none of its own: a pin for Places, a radio tower for repeater lists, else the icon
@@ -168,12 +207,12 @@ String defaultIconFor(String template, {bool log = false}) => switch (template) 
     };
 
 /// The icon ids of the per-template icons the Maps ring draws today (journal, notes, log, other). They are part of the set so a
-/// notebook can keep them, and sit after the preparedness icons in the picker.
+/// notebook can keep them, and the picker lists them after the preparedness icons.
 const List<MapIcon> kTemplateIcons = [
-  MapIcon('journal', 'Journal', Icons.edit_note, 'diary write'),
-  MapIcon('notes', 'Notes', Icons.sticky_note_2_outlined, 'list plan'),
-  MapIcon('log', 'Log', Icons.event_available_outlined, 'done again schedule'),
-  MapIcon('book', 'Notebook', Icons.book_outlined, 'book'),
+  MapIcon('journal', 'Journal', Symbols.edit_note, 'diary write'),
+  MapIcon('notes', 'Notes', Symbols.sticky_note_2, 'list plan'),
+  MapIcon('log', 'Log', Symbols.event_available, 'done again schedule'),
+  MapIcon('book', 'Notebook', Symbols.book_2, 'book'),
 ];
 
 /// [mapIcon] over the preparedness icons and the template icons.

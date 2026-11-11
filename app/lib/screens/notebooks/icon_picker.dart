@@ -4,19 +4,17 @@ import 'package:flutter/material.dart';
 
 import '../../notebook/map_icons.dart';
 import '../../notebook/notebook_model.dart' show NbEntry;
+import '../../notebook/place_style.dart';
 import '../../notebook/pin_image.dart' show glyphOn;
 import '../../theme.dart';
 
 /// What the screens need to offer map icons (null leaves the icon controls out, as before): the icons chosen lately, and what to do
 /// when the icon of a place that is only being viewed changes (the view saves it at once; the edit screens save with Save).
 class MapIconSetup {
-  const MapIconSetup({required this.recent, this.onPlaceIcon, this.notebookTint});
+  const MapIconSetup({required this.recent, this.onPlaceIcon});
 
   final RecentIcons recent;
   final void Function(NbEntry place, String? icon)? onPlaceIcon;
-
-  /// The colour the notebook settings draw the notebook's icon in.
-  final Color? notebookTint;
 }
 
 /// [own] on the light and dark themes; the red of the theme in Tactical (red only).
@@ -196,7 +194,7 @@ class _Disc extends StatelessWidget {
         color: filled ? tint : Colors.transparent,
         border: filled ? null : Border.all(color: k.text.withValues(alpha: 0.6), width: 1.2),
       ),
-      child: Icon(icon, size: size * 0.58, color: filled ? glyphOn(tint) : k.text),
+      child: Icon(icon, size: size * 0.6, fill: filled ? 1 : 0, weight: filled ? 500 : 400, color: filled ? glyphOn(tint) : k.text),
     );
   }
 }
@@ -310,6 +308,61 @@ class MapIconRow extends StatelessWidget {
         );
         if (pick != null) onChanged(pick.id);
       },
+    );
+  }
+}
+
+/// The notebook settings' "Pin color" row: the seven marker colours as swatches. A new place of the notebook starts with it; a
+/// place can have its own.
+class NotebookColorRow extends StatelessWidget {
+  const NotebookColorRow({super.key, required this.colorId, required this.onChanged});
+
+  final String? colorId;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final chosen = markerColor(colorId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Text('Pin color', style: TextStyle(fontSize: 16, color: k.text)),
+        Text('Its places start with this color. A place can have its own.', style: TextStyle(fontSize: 14, color: k.secondary)),
+        Wrap(
+          children: [
+            for (final c in kMarkerColors)
+              Semantics(
+                button: true,
+                selected: c.id == chosen.id,
+                label: c.spoken,
+                onTap: () => onChanged(c.id),
+                excludeSemantics: true,
+                child: InkResponse(
+                  key: ValueKey('nb-color-${c.id}'),
+                  radius: 22,
+                  onTap: () => onChanged(c.id),
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Center(
+                      child: Container(
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: c.color,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: c.id == chosen.id ? k.text : Colors.transparent, width: 2.5),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

@@ -88,6 +88,8 @@ dependencies:
   # (FPDF_GetPageLabel), for making a ZIM's PDFs searchable. MIT. Pinned to exactly the version pdfrx already resolves (in the
   # lockfile before as a dependency of pdfrx): no new code ships, the same PDFium is used. Approved 2026-11-02.
   pdfium_dart: 0.2.5
+  # Material Symbols (Google's icon font, Apache-2.0; community package, fonts unchanged): the map icons for notebooks and places. Approved 2026-11-10.
+  material_symbols_icons: 4.2960.0
 
 dev_dependencies:
   flutter_test:

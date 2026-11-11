@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../notebook/map_icons.dart';
 import '../../notebook/notebook_model.dart';
+import '../../notebook/place_style.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
@@ -33,6 +34,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
   late List<LogField> _fields = [for (final f in _start.fields) if (!f.hidden) f];
   late String? _due = _start.dueEvery;
   late String? _icon = _start.icon;
+  late String? _color = _start.color;
   late bool _private = widget.existing?.private ?? widget.template!.private;
   late bool _map = widget.existing?.map ?? widget.template!.map;
   late bool _shared = widget.existing == null ? false : widget.notebook.privateSharing?.included(widget.existing!.id) ?? false;
@@ -63,7 +65,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
       _error = null;
     });
     // Fields taken out are left out; the store keeps those with values, hidden.
-    final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null, icon: widget.icons == null ? null : _icon, clearIcon: widget.icons != null && _icon == null);
+    final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null, icon: widget.icons == null ? null : _icon, clearIcon: widget.icons != null && _icon == null, color: widget.icons == null ? null : _color);
     try {
       final e = widget.existing;
       final saved = await widget.notebook.saveNotebook(
@@ -202,10 +204,11 @@ class _NotebookEditorState extends State<NotebookEditor> {
             MapIconRow(
               iconId: _icon,
               defaultId: widget.existing != null ? defaultNotebookIcon(widget.existing!) : defaultIconFor(widget.template!.template, log: _start.quickAdd),
-              tint: iconTint(context, widget.icons!.notebookTint ?? k.accent),
+              tint: iconTint(context, markerColor(_color).color),
               recent: widget.icons!.recent,
               onChanged: (id) => setState(() => _icon = id),
             ),
+            NotebookColorRow(colorId: _color, onChanged: (c) => setState(() => _color = c)),
           ],
           const SizedBox(height: 20),
           Text('FIELDS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
