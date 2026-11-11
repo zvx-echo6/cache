@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
+
 ## 1.1.0 (build 49, test) - 2026-11-11
 
 ### Fixed
