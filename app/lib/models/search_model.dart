@@ -12,6 +12,7 @@ import '../app_state.dart';
 import '../maps/ui/format.dart';
 import '../platform.dart' as plat;
 import '../platform/app_log.dart';
+import '../platform/bench_options.dart' show benchEmbedThreads;
 import '../platform/memory.dart';
 import '../sources/sources_state.dart' show LibraryEmbedding;
 import 'hf_hub.dart';
@@ -80,7 +81,7 @@ class SearchEmbedder {
     bool? remote,
     this.serverReady,
   }) : remote = remote ?? plat.isWeb,
-       _make = make ?? ((p) => CacheEmbedder(modelPath: p));
+       _make = make ?? ((p) => CacheEmbedder(modelPath: p, threads: benchEmbedThreads > 0 ? benchEmbedThreads : 4)..onTiming = logInfo);
 
   final Future<Directory> Function() modelsDir;
   final String fileName;

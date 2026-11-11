@@ -184,6 +184,22 @@ class ToolLoop {
 
   List<Map<String, dynamic>> get _schemas => host == null ? [for (final t in _tools.values) t.toSchema()] : _hostSchemas;
 
+  /// Reads the core's tool schemas for the next request (a turn does it first, and so does [warmRequest]).
+  Future<void> _loadSchemas() async {
+    if (host == null) return;
+    _hostSchemas = await host!.schemas();
+    logDetail('Ask tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
+  }
+
+  /// The request of the prompt read ahead: the request of a conversation's first model round (the same [_request] a turn builds,
+  /// with the system prompt and the tool schemas as a turn reads them now), with no messages after the system prompt. The engine
+  /// reads the part of the prompt the template renders before any question (the system prompt and the tools) from it, so this is the
+  /// only way the read ahead builds a request, and a change to a turn's request reaches it.
+  Future<Map<String, dynamic>> warmRequest() async {
+    await _loadSchemas();
+    return _request(const [], _schemas.isNotEmpty, prompt: systemPrompt?.call() ?? kSystemPrompt);
+  }
+
   /// [noToolCalls]: the tools stay in the request, so the rendered prompt start is the same as in the rounds before, but the
   /// model may not call them (`tool_choice` "none": no tool-call grammar, and the engine stops at a tool-call opening).
   Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools,
@@ -239,10 +255,7 @@ class ToolLoop {
     final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
     var finalAnswer = false;
     try {
-      if (host != null) {
-        _hostSchemas = await host!.schemas();
-        logDetail('Ask tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
-      }
+      await _loadSchemas();
       if (seed != null) {
         final call = _numbered(seed.name, seed.arguments);
         final step = _stepOf(call);

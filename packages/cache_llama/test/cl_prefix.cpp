@@ -4,7 +4,7 @@
 // Nothing is generated: each request's prompt is read and the next one starts from it, as the assistant message the script
 // carries replaces what the model would have written.
 // Usage: cl_prefix <model.gguf> <turns.json> [prefix_dir]
-//   turns.json: [{"label": "...", "request": {...}, "generate": N} | {"reload": true}, ...]; "reload" frees the model and loads
+//   turns.json: [{"label": "...", "request": {...}, "generate": N} | {"label": "...", "warm": {...}, "check_only": false} | {"reload": true}, ...]; "reload" frees the model and loads
 //   it again (an app restart: only the saved prefix, if a prefix_dir is given, survives it); "generate" (optional) generates N
 //   tokens and prints them (with "temperature": 0 in the request, a restored prefix must give the same text as a fresh read).
 // Output: one JSON object per request on stdout.
@@ -55,6 +55,26 @@ int main(int argc, char ** argv) {
             fflush(stdout);
             continue;
         }
+        // "warm": reads the prompt start of that request (no user message) ahead with cl_warm, as the app does when Ask is shown; the
+        // next request's "reused" then shows how much of its start the read ahead gave. "decoded" is cl_prompt_decoded: the prompt
+        // tokens the model has decoded since the load (the start is decoded once, by the read ahead or by the question, never both).
+        if (s.contains("warm")) {
+            const std::string wreq = s.at("warm").dump();
+            char werr[512] = "";
+            int  wn = 0;
+            const auto w0 = clk::now();
+            const int  wrc = cl_warm(h, wreq.c_str(), s.value("check_only", false) ? 1 : 0, cl_stop_epoch(h), &wn, werr, sizeof(werr));
+            json wo;
+            wo["label"]   = s.value("label", "");
+            wo["warm"]    = wrc;  // 0 covered, 1 read (or needs reading), 2 stopped, 3 nothing to read, -1 error
+            wo["tokens"]  = wn;
+            wo["ms"]      = (long long) std::chrono::duration<double, std::milli>(clk::now() - w0).count();
+            wo["decoded"] = cl_prompt_decoded(h);
+            if (wrc < 0) wo["error"] = std::string(werr);
+            printf("%s\n", wo.dump().c_str());
+            fflush(stdout);
+            continue;
+        }
         const std::string req = s.at("request").dump();
         char err[512] = "";
         const auto t0 = clk::now();
@@ -76,6 +96,7 @@ int main(int argc, char ** argv) {
         o["reused"]    = cl_reused_tokens(h);
         o["evaluated"] = cl_prompt_tokens(h) - cl_reused_tokens(h);
         o["start_ms"]  = (long long) ms;
+        o["decoded"]   = cl_prompt_decoded(h);
         if (cl_prefix_note(h, note.data(), (int) note.size()) > 0) o["note"] = std::string(note.data());
         if (gen > 0) o["text"] = text;
         printf("%s\n", o.dump().c_str());

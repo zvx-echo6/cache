@@ -23,6 +23,9 @@ class CacheEmbedder {
   final int threads;
   final Duration idleFor;
 
+  /// Gets one line per embedding: `Embed: worker M ms, round trip R ms` (the app logs it). Null: not reported.
+  void Function(String line)? onTiming;
+
   /// True: the model is not let go after [idleFor] (only [free] or [dispose] let it go).
   bool keepLoaded = false;
 
@@ -73,8 +76,11 @@ class CacheEmbedder {
     final c = Completer<Map<String, dynamic>>();
     _pending[id] = c;
     _idle?.cancel();
+    final clock = Stopwatch()..start();
     _toWorker!.send({'type': 'embed', 'id': id, 'path': modelPath, 'threads': threads, 'text': text});
     final r = await c.future;
+    // Measurement: the round trip here, and the time the worker spent around the native call (sent back in the reply).
+    if (r['workerMs'] != null) onTiming?.call('Embed: worker ${r['workerMs']} ms, round trip ${clock.elapsedMilliseconds} ms');
     if (!keepLoaded) _idle = Timer(idleFor, free);
     if (r['error'] != null) throw StateError(r['error'] as String);
     return (r['vector'] as TransferableTypedData).materialize().asFloat32List().toList();
@@ -162,7 +168,9 @@ void _embedWorker(SendPort toMain) {
         }
         final text = (msg['text'] as String).toNativeUtf8();
         final out = malloc<Float>(nEmbd);
+        final clock = Stopwatch()..start();
         final n = b.clEmbed(handle, text, out, nEmbd, 1);
+        final workerMs = clock.elapsedMilliseconds;
         malloc.free(text);
         if (n != nEmbd) {
           malloc.free(out);
@@ -171,7 +179,7 @@ void _embedWorker(SendPort toMain) {
         }
         final v = Float32List.fromList(out.asTypedList(nEmbd));
         malloc.free(out);
-        toMain.send({'id': id, 'vector': TransferableTypedData.fromList([v])});
+        toMain.send({'id': id, 'vector': TransferableTypedData.fromList([v]), 'workerMs': workerMs});
       case 'free':
         if (handle != nullptr) {
           b.clEmbedFree(handle);
