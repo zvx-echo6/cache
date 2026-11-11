@@ -185,7 +185,7 @@ void main() {
   });
 
   group('Stop and a question', () {
-    test('a question that joins the read, then Stop: the read aborts, the turn ends stopped (empty, no error), the next question works', () async {
+    Future<(Future<void>, Future<void>, Completer<void>)> joinedQuestion() async {
       final inRead = Completer<void>();
       final go = Completer<void>();
       native.afterBatch = (n) async {
@@ -201,19 +201,70 @@ void main() {
         await Future<void>.delayed(Duration.zero);
       }
       expect(native.questionRequests, hasLength(1), reason: 'the question is sent (queued behind the read)');
-      chat.stop();
+      return (reading, asked, go);
+    }
+
+    test('a question that joined the read, then Stop: only the question is cancelled, the read finishes and saves, and the next question restores the whole start', () async {
+      final (reading, asked, go) = await joinedQuestion();
+      chat.stop(); // the person taps Stop a few seconds into the read
       go.complete();
       await reading;
       await asked;
-      expect(native.files, isEmpty, reason: 'the read was aborted: no prefix file');
-      expect(native.decoded, native.batch, reason: 'one whole batch of the read; the question decoded nothing');
+      final start = native.reads.single;
+      expect(native.files, hasLength(1), reason: 'the read ran to the end and saved the prefix');
+      expect(native.files.first, start);
+      expect(native.stopCalls, 0);
+      expect(native.decoded, start.length, reason: 'the whole start was read, and the cancelled question decoded nothing');
       expect(chat.messages.last.error, isNull);
       expect(chat.messages.last.text, isEmpty);
-      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
+      expect(readLog().last, startsWith('Prompt read ahead: done, ${start.length} tokens'));
       native.afterBatch = null;
       await chat.send('and then?');
       expect(chat.messages.last.error, isNull);
       expect(chat.messages.last.text, 'ok');
+      expect(native.lastReused, greaterThanOrEqualTo(start.length), reason: 'the next question restores the whole start');
+      expect(native.decoded, native.questions.last.length, reason: 'the start once, the question after it once');
+    });
+
+    test('a second Stop is the full stop: the read aborts and nothing is saved', () async {
+      final (reading, asked, go) = await joinedQuestion();
+      chat.stop();
+      native.stop(); // a second Stop
+      go.complete();
+      await reading;
+      await asked;
+      expect(native.files, isEmpty);
+      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
+    });
+
+    test('Cache in the background, then Stop on the joined question: the read stops as before', () async {
+      final (reading, asked, go) = await joinedQuestion();
+      ahead.toBackground();
+      chat.stop();
+      go.complete();
+      await reading;
+      await asked;
+      expect(native.files, isEmpty);
+      expect(native.stopCalls + native.stopEpoch, greaterThan(0));
+      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
+    });
+
+    test('a Stop with no question joined is the full stop', () async {
+      final inRead = Completer<void>();
+      final go = Completer<void>();
+      native.afterBatch = (n) async {
+        if (!inRead.isCompleted) {
+          inRead.complete();
+          await go.future;
+        }
+      };
+      final reading = ahead.start();
+      await inRead.future;
+      native.stop();
+      go.complete();
+      await reading;
+      expect(native.files, isEmpty);
+      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
     });
 
     test('a Stop before the question is sent has no effect on it', () async {

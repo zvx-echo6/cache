@@ -86,6 +86,8 @@ struct Handle {
     bool                                 finished    = true;
     bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
+    std::atomic<unsigned long long>      cancel_qid{0};  // cl_cancel_question: the one queued or running question whose turn is cancelled (the read ahead is not)
+    unsigned long long                   cur_qid = 0;    // the question cl_start_q began (0: none)
     std::atomic<unsigned long long>      stop_epoch{0};  // bumped by every cl_stop: a queued cl_warm that sees a new one was stopped before it began
     std::atomic<bool>                    in_prefill{false};  // cl_start is decoding the prompt: llama.cpp's abort hook obeys `stop`
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
@@ -1226,9 +1228,10 @@ int cl_info(void * hp, char * out_json, int len) {
     }
 }
 
-int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, char * err, int err_len) {
+int cl_start_q(void * hp, const char * request_json, unsigned long long epoch, unsigned long long qid, char * err, int err_len) {
     auto * h = (Handle *) hp;
     PoolRest rest(h);  // the pool rests again on every way out except a generation that goes on (below)
+    h->cur_qid = qid;
     try {
         h->finished = true;
         h->session.reset();
@@ -1290,7 +1293,7 @@ int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, c
         // stopped, or the person tapped Stop): it ends as a stop before the first token does, with no decode. `stop` was cleared at
         // the top, so the epoch is looked at after that clear: a stop before it is seen here, one after it sets the flag the decode
         // obeys. A stop before the question was queued is not seen: the caller read the epoch when it queued it.
-        if (h->stop_epoch.load() != epoch) {
+        if (h->stop_epoch.load() != epoch || (qid != 0 && h->cancel_qid.load() == qid)) {
             cl_logi("question stopped before it began");
             h->finished = true;
             return 0;
@@ -1406,6 +1409,12 @@ int cl_warm(void * hp, const char * request_json, int check_only, unsigned long 
 
 int cl_prompt_decoded(void * hp) { return (int) ((Handle *) hp)->prompt_decoded; }
 
+int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, char * err, int err_len) {
+    return cl_start_q(hp, request_json, epoch, 0, err, err_len);
+}
+
+void cl_cancel_question(void * hp, unsigned long long qid) { ((Handle *) hp)->cancel_qid.store(qid); }
+
 int cl_start(void * hp, const char * request_json, char * err, int err_len) {
     // No epoch from the caller: the question counts as queued now, so no earlier stop can end it.
     return cl_start_e(hp, request_json, ((Handle *) hp)->stop_epoch.load(), err, err_len);
@@ -1414,7 +1423,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
 int cl_next(void * hp, char * buf, int buf_len) {
     auto * h = (Handle *) hp;
     try {
-        if (h->finished || h->stop.load()) {
+        if (h->finished || h->stop.load() || (h->cur_qid != 0 && h->cancel_qid.load() == h->cur_qid)) {
             h->finished = true;
             return -1;
         }

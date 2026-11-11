@@ -55,8 +55,12 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
 
   Future<void> _tail = Future.value();
   bool _stop = false;
-  bool _warming = false;
-  bool _joined = false;
+  /// The session's rule for Stop around a read ahead (the real one: packages/cache_llama/lib/warm_stop.dart).
+  final WarmStopPolicy policy = WarmStopPolicy();
+  int _qid = 0;
+  int _joinedQid = 0;
+  final Set<int> _cancelledQids = {};
+  StreamController<PartialMessage>? _joinedStream;
 
   /// Tool names of the request, in the rendering. The fake template has the system message first and the tools after it.
   static List<String> render(Map<String, dynamic> request, {List<Map<String, dynamic>>? messages}) {
@@ -188,19 +192,18 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   @override
   Future<WarmResult> warm(Map<String, dynamic> request, {bool checkOnly = false}) {
     if (!checkOnly) {
-      _warming = true;
-      _joined = false;
+      policy.warmQueued();
     }
     final epoch = stopEpoch; // read when it is queued, as the session does
     return _enqueue(() async {
       if (!checkOnly) await holdBeforeRead;
       if (epoch != stopEpoch) {
-        if (!checkOnly) _warming = false;
+        if (!checkOnly) policy.warmEnded();
         return const WarmResult(WarmOutcome.stopped);
       }
       final tokens = stableStart(request);
       if (!loaded || tokens == null) {
-        if (!checkOnly) _warming = false;
+        if (!checkOnly) policy.warmEnded();
         return const WarmResult(WarmOutcome.skipped);
       }
       // cl_warm counts the whole start as stable (also in a check: it records it for the next question of the shape)
@@ -210,7 +213,7 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       final inMem = _common(cached, tokens);
       final best = _fileBest(tokens);
       if (inMem >= tokens.length || best >= tokens.length) {
-        if (!checkOnly) _warming = false;
+        if (!checkOnly) policy.warmEnded();
         return const WarmResult(WarmOutcome.covered);
       }
       final have = inMem > best ? inMem : best;
@@ -228,8 +231,9 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       final from = i;
       while (i < tokens.length) {
         if (_stop) {
-          _warming = false;
-          return WarmResult(WarmOutcome.stopped, tokens: i - from, joined: _joined);
+          final j = policy.joined;
+          policy.warmEnded();
+          return WarmResult(WarmOutcome.stopped, tokens: i - from, joined: j);
         }
         final n = (tokens.length - i) < batch ? tokens.length - i : batch;
         for (var k = i; k < i + n; k++) {
@@ -241,15 +245,16 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
         await afterBatch?.call(i);
       }
       _saveFile(tokens);
-      final joined = _joined;
-      _warming = false;
+      final joined = policy.joined;
+      policy.warmEnded();
       return WarmResult(WarmOutcome.read, tokens: i - from, joined: joined);
     });
   }
 
   @override
   void cancelWarm() {
-    if (_warming && !_joined) {
+    policy.backgrounded();
+    if (policy.warmInFlight && policy.canStopRead) {
       stopCalls++;
       stopEpoch++;
       _stop = true;
@@ -260,15 +265,22 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
 
   @override
   Stream<PartialMessage> generate(Map<String, dynamic> request) {
-    if (_warming) _joined = true;
+    policy.questionQueued();
+    final qid = ++_qid;
     questionRequests.add(request);
     final epoch = stopEpoch; // read when it is queued, as the session does
     final c = StreamController<PartialMessage>();
+    if (policy.warmInFlight) {
+      _joinedQid = qid;
+      _joinedStream = c;
+    }
     _enqueue(() async {
-      if (epoch != stopEpoch) {
+      if (epoch != stopEpoch || _cancelledQids.contains(qid)) {
         // Stopped after it was queued and before it began: it ends as a stop before the first token does.
-        c.add(const PartialMessage(isFinal: true));
-        await c.close();
+        if (!c.isClosed) {
+          c.add(const PartialMessage(isFinal: true));
+          await c.close();
+        }
         return;
       }
       _stop = false;
@@ -309,14 +321,24 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       cached = [...tokens, 'ok'];
       await holdGenerate;
       final stopped = _stop;
-      c.add(PartialMessage(isFinal: true, content: stopped ? 'part' : 'ok', promptTokens: tokens.length, reusedTokens: keep));
-      await c.close();
+      if (!c.isClosed) {
+        c.add(PartialMessage(isFinal: true, content: stopped ? 'part' : 'ok', promptTokens: tokens.length, reusedTokens: keep));
+        await c.close();
+      }
     });
     return c.stream;
   }
 
   @override
   void stop() {
+    // As LlamaSession.stop: a Stop on a question that joined a running read cancels the question only.
+    final joined = _joinedStream;
+    if (policy.onStop() == StopAction.cancelQuestion && joined != null && !joined.isClosed) {
+      _cancelledQids.add(_joinedQid);
+      joined.add(const PartialMessage(isFinal: true));
+      joined.close();
+      return;
+    }
     stopEpoch++;
     _stop = true;
   }
