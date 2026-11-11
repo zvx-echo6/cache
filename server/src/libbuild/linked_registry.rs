@@ -125,6 +125,17 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
                  }
              }
          }
+         // A file that moved or was renamed inside this folder is the same book at a new path. When a complete
+         // walk finds a book at one of its places, its old place in this folder is dropped (the shelf entry, call
+         // number and indexing stay with the book). A book whose only place has gone keeps that place, marked
+         // unavailable: a missing file is never removed from the library on its own.
+         if scanned.complete && !scanned.unavailable {
+             for book in &mut self.data.books {
+                 if book.locations.iter().any(|l| l.root_id == root.id && l.available) {
+                     book.locations.retain(|l| l.root_id != root.id || l.available);
+                 }
+             }
+         }
          let pending = self.data.roots[index].state.values()
              .filter(|state| state.blake3.is_none()).count();
          let errors = scanned.errors.iter()
@@ -148,6 +159,8 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
      self.persist()?;
      Ok(ScanReport { roots: reports, books: self.data.books.clone() })
  }
+ /// The registry as saved, read without validating or touching anything (for the automatic-check scheduler).
+ pub fn read_saved(sidecar:&Path)->io::Result<RegistryData>{let f=sidecar.join("linked-registry.json");if !f.is_file(){return Ok(RegistryData::default())}serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)}
  /// Local configuration includes absolute roots; never expose this in a shared response.
  pub fn local_config(&self)->&RegistryData{&self.data}
 }

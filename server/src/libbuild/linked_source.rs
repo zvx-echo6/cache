@@ -324,6 +324,23 @@ pub fn read_only_source_path(root: &Path, relative: &str, expected_blake3: &str)
     fn setup()->(Temp,PathBuf) {let t=Temp::new();let root=fs::canonicalize(&t.0).unwrap();(t,root)}
     #[test] fn read_only_and_quiet_reuse() { let (_t,root)=setup();fs::write(root.join("a.PDF"),b"abc").unwrap();let a=scan_linked_root(&root,&[],&ScanState::new(),1,0);let meta=fs::metadata(root.join("a.PDF")).unwrap();assert!(a.candidates.len()==1);assert_eq!(fs::metadata(root.join("a.PDF")).unwrap().len(),meta.len());let mut opened=read_only_source_path(&root,"a.PDF",&a.candidates[0].blake3).unwrap();let mut bytes=Vec::new();opened.read_to_end(&mut bytes).unwrap();assert_eq!(bytes,b"abc");let b=scan_linked_root(&root,&[],&a.state,99,500);assert_eq!(a.candidates[0].blake3,b.candidates[0].blake3);assert_eq!(a.state["a.PDF"].first_observed_ms,b.state["a.PDF"].first_observed_ms); }
     #[test] fn settle_change_rename_duplicate_and_unavailable() { let (_t,root)=setup();fs::write(root.join("a.pdf"),b"old").unwrap();let mut s=scan_linked_root(&root,&[],&ScanState::new(),10,100);assert!(s.candidates.is_empty());s=scan_linked_root(&root,&[],&s.state,111,100);assert_eq!(s.candidates.len(),1);fs::write(root.join("a.pdf"),b"new! ").unwrap();let changed=scan_linked_root(&root,&[],&s.state,200,100);assert!(changed.candidates.is_empty());let settled=scan_linked_root(&root,&[],&changed.state,301,100);assert_eq!(settled.candidates.len(),1);fs::rename(root.join("a.pdf"),root.join("b.pdf")).unwrap();let renamed=scan_linked_root(&root,&[],&settled.state,400,0);assert_eq!(renamed.candidates.len(),1);assert_eq!(renamed.candidates[0].blake3,settled.candidates[0].blake3);fs::write(root.join("c.pdf"),b"new! ").unwrap();let dup=scan_linked_root(&root,&[],&renamed.state,500,0);assert_eq!(dup.candidates.iter().filter(|c|c.blake3==renamed.candidates[0].blake3).count(),2);let gone=root.join("missing");let unavailable=scan_linked_root(&gone,&[],&dup.state,600,0);assert!(unavailable.unavailable);assert_eq!(unavailable.state,dup.state); }
+    #[test] fn a_file_that_changes_while_it_is_read_is_dropped_and_waits_again() {
+        use std::io::Write as _;
+        let (_t,root)=setup(); let path=root.join("big.pdf");
+        fs::write(&path,vec![1u8;300_000]).unwrap();
+        let first=scan_linked_root(&root,&[],&ScanState::new(),10,100); assert!(first.candidates.is_empty());
+        // the copy grows after the first chunk has been read
+        let mut grew=false;
+        let second=scan_linked_root_with_progress(&root,&[],&first.state,200,100,|_,_,_,_,_|{ if !grew { grew=true; OpenOptions::new().append(true).open(&path).unwrap().write_all(b"more").unwrap(); } });
+        assert!(second.candidates.is_empty(),"a half-read result is dropped");
+        assert!(second.errors.iter().any(|e|e.code=="file_changing"));
+        assert!(second.state["big.pdf"].blake3.is_none());
+        // it is seen with its new size, and read only once that has stayed the same for the settle delay
+        let third=scan_linked_root(&root,&[],&second.state,250,100); assert!(third.candidates.is_empty());
+        let fourth=scan_linked_root(&root,&[],&third.state,400,100);
+        assert_eq!(fourth.candidates.len(),1);
+        assert_eq!(fourth.candidates[0].blake3,blake3::hash(&fs::read(&path).unwrap()).to_hex().to_string());
+    }
     #[cfg(unix)] #[test] fn opener_rejects_symlink_ancestor_and_handle_survives_rename() {
         use std::os::unix::fs::symlink;
         let (_t,root)=setup(); fs::create_dir_all(root.join("dir")).unwrap(); fs::write(root.join("dir/file.pdf"),b"original").unwrap();

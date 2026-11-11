@@ -64,7 +64,7 @@ fn valid_rel(path: &Path) -> bool {
         && path.components().all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn library_path(data: &Path, id: &str) -> Result<PathBuf, ApiErr> {
+pub(super) fn library_path(data: &Path, id: &str) -> Result<PathBuf, ApiErr> {
     if !valid_id(id) {
         return Err(error(400, "invalid library id"));
     }
@@ -84,7 +84,7 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-fn runtime(sidecar: &Path) -> Arc<Mutex<JobFile>> {
+pub(super) fn runtime(sidecar: &Path) -> Arc<Mutex<JobFile>> {
     let mut runtimes = RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
         .lock().unwrap_or_else(|e| e.into_inner());
     runtimes.entry(sidecar.to_path_buf()).or_insert_with(|| {
@@ -152,7 +152,7 @@ struct Start {
     root_id: Option<String>,
 }
 
-fn is_active(path: &Path) -> bool {
+pub(super) fn is_active(path: &Path) -> bool {
     runtime(&path.join(".local")).lock().unwrap_or_else(|e| e.into_inner()).active.is_some()
 }
 
@@ -202,10 +202,22 @@ fn attached(file: &JobFile, scope: &Scope, synchronous: bool) -> Result<Option<C
 }
 
 fn start(
+    service: &BuildService,
+    path: &Path,
+    root_id: Option<String>,
+    legacy: Option<Sender<CheckResult>>,
+) -> Result<CheckJob, ApiErr> {
+    start_with(service, path, root_id, legacy, None)
+}
+
+/// Start (or attach to) a check. `auto_settle_ms` is `Some` for an automatic check: the settle rule is
+/// that delay, and the check never sleeps inside the job (the scheduler comes back after the delay).
+pub(super) fn start_with(
     _service: &BuildService,
     path: &Path,
     root_id: Option<String>,
     legacy: Option<Sender<CheckResult>>,
+    auto_settle_ms: Option<u64>,
 ) -> Result<CheckJob, ApiErr> {
     let sidecar = path.join(".local");
     let rt = runtime(&sidecar);
@@ -271,7 +283,7 @@ fn start(
     let worker_path = path.to_path_buf();
     let worker_rt = rt.clone();
     if let Err(e) = thread::Builder::new().name("linked-folder-check".into())
-        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy))
+        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy, auto_settle_ms))
     {
         finish_error(&sidecar, &rt, &e);
         return Err(error(500, "could not start linked-folder check"));
@@ -301,10 +313,11 @@ fn scan_pass(
     sidecar: &Path,
     progress: &mut ProgressState,
     bases: &ProgressBase,
+    settle_ms: u64,
 ) -> io::Result<ScanReport> {
     let registry_file = sidecar.join("linked-registry.json");
     let mut checkpoint_error = None;
-    let report = registry.scan_scoped_progress(root_id, 2_000, |root, seen, hashed, bytes, settling, observed| {
+    let report = registry.scan_scoped_progress(root_id, settle_ms, |root, seen, hashed, bytes, settling, observed| {
         let clock = now();
         let (seen_base, hash_base, byte_base) = bases.get(root).copied().unwrap_or_default();
         let mut file = rt.lock().unwrap_or_else(|e| e.into_inner());
@@ -370,7 +383,7 @@ fn progress_bases(job: &CheckJob) -> ProgressBase {
     ))).collect()
 }
 
-fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport) -> Vec<Value> {
+fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport, settle_ms: u64) -> Vec<Value> {
     report.roots.iter().map(|root| {
         let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
             .any(|location| location.root_id == root.root_id && location.available)).collect();
@@ -380,7 +393,7 @@ fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport) -> Vec<Valu
         ).sum();
         let settling = registry.local_config().roots.iter().find(|config| config.id == root.root_id)
             .map(|config| config.state.values().filter(|state|
-                state.blake3.is_none() && now().saturating_sub(state.first_observed_ms) < 2_000
+                state.blake3.is_none() && now().saturating_sub(state.first_observed_ms) < settle_ms
             ).count()).unwrap_or(0);
         json!({
             "root_id": root.root_id,
@@ -404,12 +417,13 @@ fn run_check(
     root_id: Option<String>,
     mut registry: LinkedRegistry,
     legacy: Option<Sender<CheckResult>>,
+    auto_settle_ms: Option<u64>,
 ) {
     let sidecar = path.join(".local");
     let result = {
         let operation = op_lock(&path);
         let _guard = operation.lock().unwrap_or_else(|e| e.into_inner());
-        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry);
+        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry, auto_settle_ms);
         if let Err(e) = &result {
             finish_error(&sidecar, &rt, e);
         }
@@ -427,7 +441,9 @@ fn run_check_locked(
     rt: &Arc<Mutex<JobFile>>,
     root_id: Option<&str>,
     registry: &mut LinkedRegistry,
+    auto_settle_ms: Option<u64>,
 ) -> io::Result<Value> {
+    let settle_ms = auto_settle_ms.unwrap_or(2_000);
     {
         let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = state.active.as_mut() {
@@ -438,19 +454,20 @@ fn run_check_locked(
     }
     let timestamp = now();
     let mut progress = ProgressState { last_checkpoint: timestamp, last_saved: timestamp, ..ProgressState::default() };
-    let mut report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &ProgressBase::new())?;
-    // Newly observed files need two unchanged seconds before they can be hashed.
-    if report.roots.iter().any(|root| root.complete && root.errors.is_empty() && root.pending > 0) {
+    let mut report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &ProgressBase::new(), settle_ms)?;
+    // Newly observed files need two unchanged seconds before they can be hashed. A manual check waits
+    // here; an automatic check never holds the job for its (longer) settle delay, the scheduler comes back.
+    if auto_settle_ms.is_none() && report.roots.iter().any(|root| root.complete && root.errors.is_empty() && root.pending > 0) {
         thread::sleep(Duration::from_millis(2_100));
         let bases = rt.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref()
             .map(progress_bases).unwrap_or_default();
         progress.checkpoint_seen.clear();
-        report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases)?;
+        report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases, settle_ms)?;
     }
     let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
     // Apply every future control, including controls for roots outside this job's scope.
     registry.reconcile_controls(&state.controls)?;
-    let roots = make_root_reports(registry, &report);
+    let roots = make_root_reports(registry, &report, settle_ms);
     let scanned: HashSet<_> = report.roots.iter().filter(|root| !root.paused)
         .map(|root| root.root_id.as_str()).collect();
     let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
@@ -558,7 +575,7 @@ pub fn request(
                 "local_config": config,
                 "capabilities": {
                     "reuse_existing": true, "index_new_pdfs": false,
-                    "automatic_checks": false, "sync_locations": false, "open_original": false
+                    "automatic_checks": true, "sync_locations": false, "open_original": false
                 }
             }))
         }

@@ -69,6 +69,8 @@ pub mod linked_source;
 pub mod linked_registry;
 pub mod linked_api;
 pub mod linked_checks;
+pub mod linked_watch;
+pub mod linked_auto;
 pub mod removed;
 pub mod same;
 pub mod shelves_api;
@@ -716,11 +718,12 @@ impl BuildService {
         *lock(&self.extractor) = e;
     }
 
-    /// Start the build thread and the drop-folder thread.
+    /// Start the build thread, the drop-folder thread and the linked-folder scheduler.
     pub fn start(self: &Arc<Self>) {
         let me = self.clone();
         std::thread::spawn(move || me.worker_loop());
         dropdir::start(self);
+        linked_auto::start(self);
     }
 
     /// Ask the threads to end (used by tests and at shutdown). A book being worked on when the service is stopped on purpose
