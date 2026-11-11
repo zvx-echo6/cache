@@ -1296,9 +1296,12 @@ class WeatherState extends ChangeNotifier {
     return updateNow();
   }
 
+  /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
+  static const String _needsKeyWords = 'needs a key';
+
   String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
     'quota' => 'reached its limit for now',
-    'key_missing' => 'needs a key',
+    'key_missing' => _needsKeyWords,
     'bad_response' => 'sent something Cache could not read',
     'fetch_failed' => _httpWords(e.message),
     _ => "couldn't update",
@@ -1391,9 +1394,11 @@ class WeatherState extends ChangeNotifier {
             }
             return _viewOf(c, p, g);
           } on CacheSearchException catch (e) {
-            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
+            // Nothing downloaded for a source that is on without its key: an update skips it, so "Update now to get it" could
+            // never come true. It says why instead, in the words a failed update has for it.
+            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? null : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message));
           } catch (_) {
-            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]);
+            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id] ?? (keyReady(c) ? null : _needsKeyWords));
           }
         }(),
     ]);

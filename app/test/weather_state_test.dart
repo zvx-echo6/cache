@@ -1091,6 +1091,24 @@ void main() {
       expect(h.weather.homeCardNow()?.temperature, '45 °F');
     });
 
+    // Design read: a source that is on without its key is skipped by every update, and the Weather screen said "Not downloaded
+    // yet. Update now to get it.", which could never come true.
+    test('a source that is on without its key says it needs a key, not that an update will get it', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.settings.setLiveSourcesOn({'firms-viirs-near'}, true);
+      await h.weather.sourcesChanged();
+      final views = await h.weather.viewFor((await h.weather.watchedPlaces()).single);
+      final firms = views.firstWhere((v) => v.source.id == 'firms-viirs-near');
+      expect((firms.missing, firms.error), (true, 'needs a key'));
+      // a source with nothing downloaded that needs no key (or has it) is as before
+      final fires = views.firstWhere((v) => v.source.id == 'wfigs-incidents-near');
+      expect((fires.missing, fires.error), (true, null));
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, 'made-up-key-for-a-test');
+      final after = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).firstWhere((v) => v.source.id == 'firms-viirs-near');
+      expect((after.missing, after.error), (true, null));
+    });
+
     // 1.1 audit: the core answers with an empty list when nothing is active (it leaves out what has ended). That answer did
     // not replace a kept one that had items, so a warning that ended came back at every start until the core answered.
     test('a warning that has ended does not come back from what is kept: an answer with none replaces it', () async {
