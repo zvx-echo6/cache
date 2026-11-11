@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+
 ### Fixed
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
