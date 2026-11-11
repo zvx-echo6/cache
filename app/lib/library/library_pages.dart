@@ -36,6 +36,7 @@ class LibraryDeps {
     required this.openGuide,
     required this.openOwnLibrary,
     required this.holdsBooks,
+    required this.booksIn,
     this.originals,
     this.regions,
     this.sharing,
@@ -64,6 +65,9 @@ class LibraryDeps {
 
   /// A library whose books are on Bookshelves (its search index is "Your books" in Catalog).
   final bool Function(LibraryItem item) holdsBooks;
+
+  /// How many books a library of books holds, shelved or not.
+  final int Function(LibraryItem item) booksIn;
 
   /// What shows above the four rows besides the search progress (a library being added).
   final List<Widget> Function(BuildContext context)? rootTop;
