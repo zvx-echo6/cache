@@ -731,6 +731,7 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
     default:
       break;
   }
+  if (addPdfShared?.awaitsWords(b.id) == true) return 'Adding to search index';
   if (b.pdfPath == null && !b.onServer) return 'Not on this device';
   return null;
 }

@@ -167,9 +167,11 @@ class SourceStatus {
     required this.docs,
     this.error,
     this.keywordSource,
+    this.keywordPending,
     this.embeddingModel,
     this.wholeLibraryOnly,
     this.sourceId,
+    this.settings,
     this.index,
     this.captionsIndex,
     this.epubIndex,
@@ -190,6 +192,8 @@ class SourceStatus {
       updating: (j['updating'] ?? false) as bool,
       docs: (j['docs'] ?? 0) as int,
       keywordSource: j['keyword_source'] as String?,
+      keywordPending: j['keyword_pending'] as bool?,
+      settings: j['settings'] is Map ? (j['settings'] as Map).cast<String, dynamic>() : null,
       embeddingModel: j['embedding_model'] as String?,
       wholeLibraryOnly: j['whole_library_only'] as bool?,
       sourceId: j['source_id'] as String?,
@@ -214,6 +218,13 @@ class SourceStatus {
   /// Where keyword search for this source comes from: "own" (the ZIM's built-in Xapian index, read through libzim), "device"
   /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
   final String? keywordSource;
+
+  /// A library that grows (one Add PDF writes to): true while its newest points are not in its keyword index yet (their words are
+  /// not searchable), false when they are; null for any other source, or one with no keyword index to be behind.
+  final bool? keywordPending;
+
+  /// A library's resolved settings (the core's own JSON), to hand back to a job that builds or extends its index.
+  final Map<String, dynamic>? settings;
 
   /// The embedding model a library's settings name (its query vectors must come from it); null for a ZIM or a library
   /// that names none.

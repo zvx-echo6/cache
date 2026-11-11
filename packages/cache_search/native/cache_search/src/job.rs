@@ -95,7 +95,7 @@ thread_local! {
 
 /// The kinds that do background index work, which run gently unless asked otherwise.
 fn gentle_kind(kind: &str) -> bool {
-    matches!(kind, "index_zim" | "index_library" | "index_seal" | "index_source" | "pdfindex_finish" | "test_pace")
+    matches!(kind, "index_zim" | "index_library" | "index_extend" | "index_seal" | "index_source" | "pdfindex_finish" | "test_pace")
 }
 
 /// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
@@ -243,6 +243,7 @@ impl Job {
         match kind {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
+            "index_extend" => Self::start_index_extend(params_json),
             "update_library" => Self::start_update_library(params_json),
             "library_manifest" => Self::start_library_manifest(params_json),
             "unpack_library" => Self::start_unpack_library(params_json),
@@ -483,6 +484,53 @@ impl Job {
                 },
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
+            )
+        })
+    }
+
+    /// Start an `index_extend` job: `{"library_path","indexes_dir","index_dir"?,"settings"?,"heap_mb"?}` (as `index_library` with an
+    /// indexes folder). Brings the library's newest keyword snapshot up to date with its shard as the next generation of the same
+    /// source: the old files hard-linked plus one new segment of the missing points (idxsnap::extend_library). `busy` while another
+    /// job builds the source or the library is being updated.
+    fn start_index_extend(params_json: &str) -> Result<Job> {
+        let p: IndexLibraryParams = serde_json::from_str(params_json)?;
+        let Some(root) = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from) else {
+            return Err(Error::bad_json("indexes_dir must not be empty"));
+        };
+        if p.library_path.is_empty() {
+            return Err(Error::bad_json("library_path must not be empty"));
+        }
+        if let Some(s) = &p.settings {
+            LibrarySettings::parse(s)?;
+        }
+        let lib_path = PathBuf::from(&p.library_path);
+        if !lib_path.is_dir() {
+            return Err(Error::not_found(format!("library folder {} not found", lib_path.display())));
+        }
+        let token = libreg::entry_for(&lib_path).begin_build()?;
+        let (library_id, version) = match p.settings.as_ref().map(LibrarySettings::parse).transpose()? {
+            Some(st) => (st.library_id, st.version),
+            None => (crate::library::dir_name(&lib_path), None),
+        };
+        let source_id = idxsnap::library_source_id(&library_id, version.as_deref());
+        let legacy = Some(PathBuf::from(&p.index_dir)).filter(|_| !p.index_dir.is_empty()).or_else(|| idxsnap::legacy_for(&root, &source_id));
+        let root = idxsnap::snap_root(&root, idxsnap::KIND_LIBRARY, &source_id, legacy.as_deref());
+        let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
+        let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+        let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
+        Self::spawn("cs-index-extend", (lock, token), 0, move |sh| {
+            idxsnap::extend_library(
+                &idxsnap::ExtendRequest {
+                    library_path: &lib_path,
+                    settings: settings.as_ref(),
+                    sd: &sd,
+                    source_id: &source_id,
+                    library_id: &library_id,
+                    version: version.as_deref(),
+                    heap_mb,
+                    checkpoint_docs: checkpoint,
+                },
+                &Self::hooks(sh),
             )
         })
     }

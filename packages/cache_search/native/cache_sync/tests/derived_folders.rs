@@ -82,6 +82,15 @@ fn patterns_match_by_segment() {
 }
 
 #[test]
+fn a_librarys_own_snapshots_beside_its_index_never_sync() {
+    let p = vec!["*/index".to_string(), "*/index-snapshots".to_string()];
+    assert!(excluded(&p, "lib1/index-snapshots"));
+    assert!(excluded(&p, "lib1/index-snapshots/library/mine/snap/b1/manifest.json"));
+    assert!(!excluded(&p, "lib1/index-snapshots2/x"));
+    assert!(!excluded(&p, "lib1/shard/index-snapshots/x"));
+}
+
+#[test]
 fn globs_within_a_segment_and_at_any_depth() {
     let p: Vec<String> = ["tiles.sqlite*", "**/*-shm", "places/index", "index"].iter().map(|s| s.to_string()).collect();
     for yes in ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "regions.sqlite-shm", "places/2026-10.sqlite-shm", "a/b/c/x-shm", "index", "index/2026-10.tsv", "places/index/2026-10.tsv"] {

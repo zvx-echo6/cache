@@ -498,6 +498,15 @@ class LibrariesState extends ChangeNotifier {
 
   SourceStatus? statusOf(LibraryItem l) => sources.statusAt(l.shardPath);
 
+  /// Whether the library in the folder [libraryPath] has points its keyword index lacks (see SourceStatus.keywordPending); null when
+  /// not known.
+  bool? wordsPendingAt(String libraryPath) {
+    for (final l in libraries) {
+      if (l.path == libraryPath) return statusOf(l)?.keywordPending;
+    }
+    return null;
+  }
+
   /// The library's own name: the core's, else its settings', else its folder's.
   String titleOf(LibraryItem l) {
     final t = statusOf(l)?.title;

@@ -567,6 +567,43 @@ mod sealed {
         }
     }
 
+    pub fn pending(h: *mut Handle) -> Value {
+        status(h)["sources"][0]["keyword_pending"].clone()
+    }
+
+    pub fn until_generation(h: *mut Handle, generation: u64) {
+        let t0 = std::time::Instant::now();
+        loop {
+            let s = status(h)["sources"][0].clone();
+            let snap = s["index"]["snapshot"].as_str().map(|n| n.to_string());
+            if let (Some(name), "snapshot") = (snap, s["index"]["location"].as_str().unwrap_or("")) {
+                let dir = std::path::PathBuf::from(s["index"]["dir"].as_str().unwrap());
+                let m: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+                if m["generation"].as_u64().unwrap_or(0) == generation && !name.is_empty() {
+                    return;
+                }
+            }
+            assert!(t0.elapsed().as_secs() < 60, "generation {generation} did not open: {s}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    pub fn extend(lib: &Path, indexes: &Path) -> Value {
+        let params = json!({"indexes_dir": indexes.to_str().unwrap(), "library_path": lib.join("shard").to_str().unwrap(), "settings": super::settings(), "heap_mb": 15});
+        let j = unsafe { cs_job_start(cstr("index_extend").as_ptr(), cstr(&params.to_string()).as_ptr()) };
+        assert!(!j.is_null(), "index_extend did not start: {:?}", take(unsafe { cs_last_error(std::ptr::null_mut()) }));
+        let t0 = std::time::Instant::now();
+        loop {
+            let p: Value = serde_json::from_str(&take(unsafe { cs_job_progress(j) }).unwrap()).unwrap();
+            if p["state"] != "running" {
+                unsafe { cs_job_free(j) };
+                return p;
+            }
+            assert!(t0.elapsed().as_secs() < 120);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     pub fn found(h: *mut Handle, word: &str) -> usize {
         let r = take(unsafe { cs_search(h, cstr(word).as_ptr(), cstr(r#"{"k": 20}"#).as_ptr()) }).expect("search result");
         let v: Value = serde_json::from_str(&r).unwrap();
@@ -578,11 +615,29 @@ mod sealed {
     }
 }
 
-/// The device sealed the library's keyword index into a snapshot, which removes `index/`. The next books added must still be found
-/// by their words (the add used to extend only an `index/` folder, which was gone, so they were silently left out).
-#[test]
-fn books_added_after_the_keyword_index_was_sealed_are_found_by_their_words() {
-    let tmp = TempDir::new("sealed-add");
+fn file_hashes(dir: &Path) -> std::collections::BTreeMap<String, (u64, String)> {
+    let mut m = std::collections::BTreeMap::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        if e.file_type().unwrap().is_file() {
+            m.insert(e.file_name().to_string_lossy().into_owned(), cache_search::snapshot::hash_file(&e.path()).map(|(h, n)| (n, h)).unwrap());
+        }
+    }
+    m
+}
+
+fn snap_dirs(indexes: &Path) -> Vec<PathBuf> {
+    let d = indexes.join("library").join("mine").join("snap");
+    let mut v: Vec<PathBuf> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
+    v.sort();
+    v
+}
+
+fn generation(dir: &Path) -> u64 {
+    let m: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    m["generation"].as_u64().unwrap_or(0)
+}
+
+fn sealed_library(tmp: &TempDir) -> (PathBuf, Service, PathBuf) {
     let lib = make_library(&tmp.0);
     let svc = service();
     add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
@@ -591,7 +646,6 @@ fn books_added_after_the_keyword_index_was_sealed_are_found_by_their_words() {
     let cfg = settings();
     let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &idx, heap_mb: 15, checkpoint_docs: 1000 };
     build_library_index(&p, &|_, _| {}, &|| false).unwrap();
-
     let indexes = tmp.0.join("indexes");
     let h = sealed::open(&lib, &indexes);
     let done = sealed::seal(&indexes);
@@ -599,18 +653,137 @@ fn books_added_after_the_keyword_index_was_sealed_are_found_by_their_words() {
     sealed::until_snapshot(h);
     assert_eq!(sealed::found(h, "quasar") > 0, true);
     sealed::close(h);
+    (lib, svc, indexes)
+}
 
-    // the sealed library takes two books one after the other, and each is found, with the first still found
+/// The device sealed the library's keyword index into a snapshot, which removes `index/`. The books added after it are in the shard
+/// and found by meaning at once; their words are added by one `index_extend` job as the next generation of the same snapshot. Until
+/// it has run the status says the words are pending, and the new book is not found by its words; afterwards it is, and the status
+/// says nothing is pending. The first generation's files are not touched: the next one links them.
+#[test]
+fn books_added_after_the_keyword_index_was_sealed_are_found_by_their_words_once_the_snapshot_is_extended() {
+    let tmp = TempDir::new("sealed-add");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    let g0 = snap_dirs(&indexes);
+    assert_eq!(g0.len(), 1);
+    assert_eq!(generation(&g0[0]), 0);
+    let g0_files = file_hashes(&g0[0]);
+
     add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
     let h = sealed::open(&lib, &indexes);
     sealed::until_snapshot(h);
-    assert!(sealed::found(h, "nebula") > 0, "the first book added after the seal is found");
+    assert_eq!(sealed::pending(h), json!(true), "its newest pieces are not in the keyword snapshot");
+    assert_eq!(sealed::found(h, "nebula"), 0, "so their words are not searchable yet");
     sealed::close(h);
-    add_book(&svc, &tmp.0, &lib, "Pulsar Guide", "pulsar", 5);
+
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["result"]["extended"], true, "{r}");
+    assert_eq!(r["result"]["generation"], 1);
+    assert!(r["result"]["added"].as_u64().unwrap() >= 3);
+    assert!(r["result"]["reused"].as_u64().unwrap() >= 1, "the old segment files are linked, not rewritten: {r}");
+    let g = snap_dirs(&indexes);
+    assert_eq!(g.len(), 2, "the first generation stays beside the next as the rollback");
+    let newest = g.iter().find(|d| generation(d) == 1).unwrap();
+    // the reuse proof: every file of generation 0 is exactly what it was
+    assert_eq!(file_hashes(&g0[0]), g0_files, "the old generation's files are untouched");
+    let g1 = file_hashes(newest);
+    let shared = g0_files.iter().filter(|(n, v)| g1.get(*n) == Some(*v)).count();
+    assert!(shared >= 1 && g1.len() > shared, "generation 1 reuses old files and adds new ones");
+
     let h = sealed::open(&lib, &indexes);
-    sealed::until_snapshot(h);
-    assert!(sealed::found(h, "pulsar") > 0, "the second book added after the seal is found");
-    assert!(sealed::found(h, "nebula") > 0 && sealed::found(h, "quasar") > 0, "the earlier books still are");
+    sealed::until_generation(h, 1);
+    assert!(sealed::found(h, "nebula") > 0, "the book's words are searchable after the extension");
+    assert!(sealed::found(h, "quasar") > 0, "the first book still is");
+    assert_eq!(sealed::pending(h), json!(false));
     sealed::close(h);
+
+    // a second add, a second generation; nothing to do when there is nothing to add
+    add_book(&svc, &tmp.0, &lib, "Pulsar Guide", "pulsar", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["generation"], 2, "{r}");
+    let again = sealed::extend(&lib, &indexes);
+    assert_eq!(again["result"]["unchanged"], true, "nothing new: no new generation: {again}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 2);
+    for w in ["pulsar", "nebula", "quasar"] {
+        assert!(sealed::found(h, w) > 0, "{w}");
+    }
+    assert_eq!(sealed::pending(h), json!(false));
+    sealed::close(h);
+    assert_eq!(snap_dirs(&indexes).len(), 2, "the highest generation and one rollback are kept");
     no_leftovers(&lib);
+}
+
+/// Where the old segments cannot be linked into the next generation, the extension is a whole build, published as the next generation:
+/// slower, but the words are searchable.
+#[test]
+fn an_extension_that_cannot_link_falls_back_to_a_whole_build() {
+    let tmp = TempDir::new("sealed-fallback");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    cache_search::idxsnap::force_no_link_under(&snap_dirs(&indexes)[0]);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["result"]["built"], true, "{r}");
+    assert_eq!(r["result"]["generation"], 1);
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    assert!(sealed::found(h, "nebula") > 0 && sealed::found(h, "quasar") > 0);
+    assert_eq!(sealed::pending(h), json!(false));
+    sealed::close(h);
+}
+
+/// A segment added to a folder of linked files: Tantivy writes new files only. A replaced point (the same id again) and a changed
+/// text are found as the new text; the old files are byte for byte what they were, including after a delete (a new `.del` file).
+#[test]
+fn a_linked_extension_writes_only_new_files_and_a_replaced_point_is_deleted_by_a_new_del_file() {
+    let tmp = TempDir::new("extend-linked");
+    let lib = make_library(&tmp.0);
+    let svc = service();
+    add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
+    let base = tmp.0.join("base");
+    std::fs::create_dir_all(&base).unwrap();
+    let cfg = settings();
+    let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &base, heap_mb: 15, checkpoint_docs: 1000 };
+    build_library_index(&p, &|_, _| {}, &|| false).unwrap();
+    let open = LibOpenIndex::open(&base, TOKENIZER).unwrap();
+    let first_id = {
+        let (hits, _) = keyword_hits(&open, "quasar", 5).unwrap();
+        hits[0].point_id.clone()
+    };
+    drop(open);
+    let before = file_hashes(&base);
+
+    // the next generation's folder: the same files by hard link, then one segment on top
+    let next = tmp.0.join("next");
+    std::fs::create_dir_all(&next).unwrap();
+    for n in before.keys().filter(|n| !["cache_search_index.json", ".tantivy-writer.lock", ".tantivy-meta.lock"].contains(&n.as_str())) {
+        std::fs::hard_link(base.join(n), next.join(n)).unwrap();
+    }
+    let docs = vec![
+        cache_search::libindex::IndexDoc { point_id: "new-1".into(), title: "T".into(), body: "zeppelin hangar".into(), source_type: String::new() },
+        cache_search::libindex::IndexDoc { point_id: first_id.clone(), title: "T".into(), body: "replacement words only".into(), source_type: String::new() },
+    ];
+    let segments_before = cache_search::libindex::append_segment(&next, TOKENIZER, &docs, 1, 15).unwrap();
+    assert_eq!(segments_before, 1);
+
+    assert_eq!(file_hashes(&base), before, "the old folder's files are exactly what they were: Tantivy wrote new files beside, linked ones untouched");
+    let after = file_hashes(&next);
+    let new_files: Vec<&String> = after.keys().filter(|n| !before.contains_key(*n)).collect();
+    assert!(!new_files.is_empty(), "a new segment's files");
+    assert!(new_files.iter().any(|n| n.ends_with(".del")), "the delete of the replaced point is a new .del file: {new_files:?}");
+    // no merge ran: every old segment file is still there under the same name and bytes
+    for (n, v) in before.iter().filter(|(n, _)| n.ends_with(".idx") || n.ends_with(".term") || n.ends_with(".store") || n.ends_with(".pos")) {
+        assert_eq!(after.get(n), Some(v), "{n}");
+    }
+    let open = LibOpenIndex::open(&next, TOKENIZER).unwrap();
+    assert!(!keyword_hits(&open, "zeppelin", 5).unwrap().0.is_empty(), "the new document is found");
+    assert!(!keyword_hits(&open, "replacement", 5).unwrap().0.is_empty(), "the replaced point has its new text");
+    let quasar = keyword_hits(&open, "quasar", 20).unwrap().0;
+    assert!(quasar.iter().all(|h| h.point_id != first_id), "and no longer its old text");
+    drop(open);
+    let old = LibOpenIndex::open(&base, TOKENIZER).unwrap();
+    assert!(keyword_hits(&old, "zeppelin", 5).unwrap().0.is_empty(), "the old folder does not have the new document");
+    assert!(keyword_hits(&old, "quasar", 20).unwrap().0.iter().any(|h| h.point_id == first_id), "and still has the old text");
 }

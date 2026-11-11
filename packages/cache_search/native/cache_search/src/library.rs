@@ -998,6 +998,7 @@ impl LibSlot {
     /// the old index it was sealed from is removed.
     pub fn refresh_snapshot(&mut self) {
         let sid = self.source_id();
+        self.snap.set_rule(idxsnap::pick_rule_for(&self.path));
         if let Some(name) = self.snap.refresh(self.indexes_dir.as_deref(), &sid) {
             self.kw = None;
             if let Some(root) = &self.indexes_dir {
@@ -1019,6 +1020,23 @@ impl LibSlot {
         self.legacy_state()
     }
 
+    /// For a library that grows (one Add PDF writes to): whether its newest points are not yet in its keyword index, so their words
+    /// are not searchable yet. `None` when it does not grow or has no keyword index to be behind. Cheap: counts only.
+    pub fn keyword_pending(&self) -> Option<bool> {
+        if !idxsnap::appendable_library(&self.path) {
+            return None;
+        }
+        let points = self.docs as u64;
+        if let Some(s) = self.snap.ready() {
+            let covered = s.manifest.extra.get("points").and_then(|p| p.as_u64()).unwrap_or(s.index.docs);
+            return Some(points > covered);
+        }
+        match self.legacy_state() {
+            IndexState::Done(meta) => Some(points > meta.total),
+            _ => None,
+        }
+    }
+
     /// State of the index in `index_dir` alone.
     pub fn legacy_state(&self) -> IndexState {
         index::index_state_for(self.index_dir.as_deref(), &libindex::source_key(self.id()), index::LIB_INDEX_FORMAT)
@@ -1032,11 +1050,8 @@ impl LibSlot {
             return Ok(self.snap.ready().map(|s| &s.index));
         }
         let IndexState::Done(meta) = self.legacy_state() else {
-            // A seal that moved the index away (where links are refused) leaves the open index serving until the snapshot is ready.
-            if !(self.kw.is_some() && self.snap.opening()) {
-                self.kw = None;
-            }
-            return Ok(self.kw.as_ref());
+            self.kw = None;
+            return Ok(None);
         };
         let dir = self.index_dir.clone().expect("done implies index_dir");
         if self.kw.as_ref().map(|o| o.is_outdated(&dir)).unwrap_or(true) {

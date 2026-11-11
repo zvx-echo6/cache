@@ -364,3 +364,97 @@ pub fn append_documents(dir: &Path, docs: &[IndexDoc]) -> Result<Appended> {
     Ok(Appended::Yes)
 }
 
+
+// ---------------------------------------------------------------------------------------------------------
+// Growing a snapshot: the points the shard has and an index lacks, and one segment added to a folder of linked segments
+
+/// The documents the shard has and `base` lacks (a point is in the index when a document with its id is), and the shard's point
+/// count. `progress(scrolled, total)` and `cancelled()` as in a build; `pace()` after each point. Reads the shard and `base` only.
+pub fn missing_documents(
+    library_path: &Path,
+    given: Option<&Value>,
+    base: &LibOpenIndex,
+    progress: &dyn Fn(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+    pace: &dyn Fn(),
+) -> Result<Option<(Vec<IndexDoc>, u64)>> {
+    let shard = open_shard_for_scroll(library_path)?;
+    let settings = resolve_settings(&shard, library_path, given)?;
+    let total = EdgeShardRead::count(&shard, edge::CountRequest::new())
+        .map_err(|e| Error::internal(format!("counting points: {e}")))? as u64;
+    let selector = settings.payload_selector();
+    let searcher = base.reader.searcher();
+    let (mut missing, mut scrolled, mut offset) = (Vec::new(), 0u64, None);
+    loop {
+        if cancelled() {
+            return Ok(None);
+        }
+        let mut sr = ScrollRequest::new();
+        sr.offset = offset;
+        sr.limit = Some(BATCH);
+        sr.with_payload = Some(selector.clone());
+        sr.with_vector = WithVector::Bool(false);
+        let (recs, next) =
+            EdgeShardRead::scroll(&shard, sr).map_err(|e| Error::internal(format!("scrolling the library: {e}")))?;
+        let empty = serde_json::Map::new();
+        for r in &recs {
+            scrolled += 1;
+            let pl = r.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
+            if settings.left_out(pl) {
+                continue;
+            }
+            let id = r.id.to_string();
+            let have = searcher.doc_freq(&tantivy::Term::from_field_text(base.fields.point_id, &id)).unwrap_or(0) > 0;
+            if !have {
+                missing.push(IndexDoc {
+                    point_id: id,
+                    title: settings.base_title(pl),
+                    body: settings.main_text(pl).unwrap_or_default(),
+                    source_type: settings.field_text(pl, &settings.fields.source_type).unwrap_or_default(),
+                });
+            }
+            pace();
+        }
+        progress(scrolled, total);
+        if next.is_none() || recs.is_empty() {
+            break;
+        }
+        offset = next;
+    }
+    Ok(Some((missing, total)))
+}
+
+/// More segments than this and an extension lets Tantivy merge (the cost of a merge is the merged segments, once in a while).
+pub const MAX_SEGMENTS_BEFORE_MERGE: usize = 40;
+
+/// Adds `docs` to the Tantivy index in `dir` as ONE new segment and commits. `dir` holds the files of the previous snapshot
+/// (hard links): Tantivy never writes into a segment file, only adds new ones and replaces `meta.json` and `.managed.json` by a
+/// rename, so the linked files are not touched. No merge runs (the old segments stay as they are) unless the index already has
+/// [`MAX_SEGMENTS_BEFORE_MERGE`] segments. Replace-by-id: a document with the same `point_id` is deleted first (new `.del` files).
+/// Returns the number of segments before.
+pub fn append_segment(dir: &Path, tokenizer: &str, docs: &[IndexDoc], threads: usize, heap_mb: usize) -> Result<usize> {
+    let index = tv(Index::open_in_dir(dir))?;
+    index.tokenizers().register(ANALYZER, make_analyzer(tokenizer));
+    let f = fields_of(&index)?;
+    let before = tv(index.searchable_segment_ids())?.len();
+    let mut cp = Checkpoint::from_index(&index);
+    let mut writer = tv(index.writer_with_num_threads::<TantivyDocument>(threads.max(1), heap_mb.max(15) * 1_000_000))?;
+    if before < MAX_SEGMENTS_BEFORE_MERGE {
+        writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
+    }
+    for d in docs {
+        writer.delete_term(tantivy::Term::from_field_text(f.point_id, &d.point_id));
+        tv(writer.add_document(doc!(
+            f.point_id => d.point_id.clone(),
+            f.title => d.title.clone(),
+            f.body => cap_bytes(&d.body, MAX_BODY_BYTES),
+            f.source_type => d.source_type.clone()
+        )))?;
+    }
+    cp.scrolled += docs.len() as u64;
+    cp.indexed += docs.len() as u64;
+    cp.finished = true;
+    commit(&mut writer, &cp)?;
+    tv(writer.wait_merging_threads())?;
+    Ok(before)
+}

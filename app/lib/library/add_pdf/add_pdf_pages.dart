@@ -675,7 +675,7 @@ class AddPdfProgressPage extends StatelessWidget {
     return Scaffold(
       appBar: compact ? AppBar(title: const Text('Progress')) : libraryAppBar(context, title: 'Adding a PDF'),
       body: ListenableBuilder(
-        listenable: Listenable.merge([state, ?s, ?deps?.shelves]),
+        listenable: Listenable.merge([state, ?s, ?deps?.shelves, ?deps?.sources]),
         builder: (context, _) {
           final jobs = state.jobs;
           return LayoutBuilder(
@@ -1089,9 +1089,13 @@ class _ResultCard extends StatelessWidget {
                   children: [
                     Text(job.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                     Text(
-                      same.isNotEmpty
+                      // "searchable" only once the keyword index has the book's words: until the index status has been read again after
+                      // the add, only where the book went; while the words are being added, that
+                      same.isNotEmpty || !job.wordsChecked
                           ? 'Added to ${job.libraryTitle}'
-                          : (shelf != null && pieces != null ? 'Added to ${job.libraryTitle} · $pieces pieces searchable' : 'Added to ${job.libraryTitle} · searchable'),
+                          : state.wordsPendingFor(job)
+                              ? 'Added to ${job.libraryTitle} · Adding to search index'
+                              : (shelf != null && pieces != null ? 'Added to ${job.libraryTitle} · $pieces pieces searchable' : 'Added to ${job.libraryTitle} · searchable'),
                       style: TextStyle(fontSize: 13, color: k.secondary),
                     ),
                   ],

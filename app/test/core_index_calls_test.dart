@@ -226,10 +226,53 @@ void main() {
     expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'not again, not even after a long wait');
     now = now.add(const Duration(hours: 1));
     expect(await CoreIndexWork(calls).pending(), isEmpty);
-    await appLog.flush();
-    final text = [for (final f in appLog.logFiles.reversed) f.readAsStringSync()].join();
-    expect(text, contains('ends: failed (io): segment.idx: Invalid cross-device link'));
+    final text = appLog.jobLines('library/my-books@1').join('\n');
+    expect(text, contains('ends: failed (io)'));
+    expect(text, contains('segment.idx: Invalid cross-device link'));
   });
+
+  test('a library whose newest points are not in its keyword snapshot is listed once, as index_extend, and clears itself', () async {
+    SourceStatus lib(bool pending) => SourceStatus.fromJson({
+          'id': 'my-books', 'kind': 'library', 'path': '/l/my-books/shard', 'title': 'My books', 'indexed': true, 'docs': 12,
+          'source_id': 'my-books@1', 'keyword_pending': pending,
+          'settings': {'library_id': 'my-books', 'version': '1'},
+          'index': {'kind': 'library', 'location': 'snapshot', 'snapshot': 'b1', 'format': 2},
+        });
+    statuses = [lib(true)];
+    final tasks = await CoreIndexWork(calls).pending();
+    expect([for (final t in tasks) t.key], ['library-words/my-books@1']);
+    expect(tasks.single.long, isFalse);
+    final run = await tasks.single.start();
+    expect(started.single.$1, 'index_extend');
+    expect(started.single.$2['indexes_dir'], '/s/shared-indexes');
+    expect(started.single.$2['library_path'], '/l/my-books/shard');
+    expect(started.single.$2['settings'], {'library_id': 'my-books', 'version': '1'});
+    job.now = const JobProgress(state: JobState.done, done: 1, total: 1);
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
+    // the status still says pending (not read again yet): not listed again at once
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+    // the snapshot has the words: nothing is listed; a later add lists it again
+    statuses = [lib(false)];
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+    statuses = [lib(true)];
+    expect([for (final t in await CoreIndexWork(calls).pending()) t.key], ['library-words/my-books@1']);
+  });
+
+  test('a seal the core declines (links cannot be made here) is not asked for again this session', () async {
+    statuses = [
+      SourceStatus.fromJson({
+        'id': 'lib', 'kind': 'library', 'path': '/l', 'title': 'L', 'indexed': true, 'docs': 1, 'source_id': 'my-books@1',
+        'index': {'kind': 'library', 'location': 'legacy', 'dir': '/l/index', 'needs_seal': true},
+      }),
+    ];
+    final run = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'unsupported');
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+    now = now.add(const Duration(hours: 2));
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+  });
+
 
   test('busy (a writer or merge still at work on the index) is tried again on a later pass, waiting longer each time', () async {
     statuses = [_zim('u1', index: {'kind': 'zim', 'location': 'legacy', 'dir': '/i/u1.idx', 'needs_seal': true})];

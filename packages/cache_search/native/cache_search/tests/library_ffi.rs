@@ -1404,10 +1404,11 @@ fn a_snapshot_an_earlier_build_made_in_the_indexes_folder_keeps_working_across_v
     let _ = std::fs::remove_dir_all(&far);
 }
 
-/// Where links are refused on one volume (Android's shared storage), the seal renames the files, also while the index is open, and
-/// the open index goes on serving.
+/// Where hard links cannot be made (Android's shared storage, where libraries live), the old index is not sealed: the index stays in
+/// its folder (Add PDF goes on extending it), the app is told once, the folder remembers it, and the status offers no seal again,
+/// so nothing is queued and nothing retries.
 #[test]
-fn the_seal_renames_when_links_are_refused_even_with_the_index_open() {
+fn where_links_are_refused_the_seal_is_declined_once_and_never_offered_again() {
     let f = make_fixture("nolink-seal");
     let root = f._tmp.0.clone();
     let (indexes, legacy) = (root.join("indexes"), root.join("kw_idx"));
@@ -1419,13 +1420,24 @@ fn the_seal_renames_when_links_are_refused_even_with_the_index_open() {
     let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
     let before = addrs(&ksearch(h, "xylophonic", 5));
     assert_eq!(before, vec!["lib:t/1234"]);
+    assert_eq!(status(h)["sources"][0]["index"]["needs_seal"], true, "before: a seal is offered");
     cache_search::idxsnap::force_no_link_under(&legacy);
-    let p = run_job("index_seal", seal_params(&indexes));
-    assert_eq!(p["state"], "done", "{p}");
-    assert_eq!(p["result"]["method"], "rename");
-    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before, "the open index goes on serving");
-    until_snapshot(h);
-    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
-    assert!(!legacy.join("meta.json").exists());
+    let j = unsafe { cs_job_start(cstr("index_seal").as_ptr(), cstr(&seal_params(&indexes).to_string()).as_ptr()) };
+    assert!(j.is_null(), "the seal is declined when the job is asked for");
+    assert_eq!(last_code(), "unsupported");
+    assert!(legacy.join(".no-seal").is_file(), "the folder remembers it");
+    let s = status(h)["sources"][0].clone();
+    assert!(s["index"].get("needs_seal").is_none(), "no seal is offered again: {s}");
+    assert_eq!(s["index"]["location"], "legacy");
+    assert_eq!(s["keyword_source"], "device");
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before, "the index goes on serving where it is");
+    assert!(!indexes.join("library").join("t@1").join("snap").exists(), "no snapshot was made");
+    unsafe { cs_close(h) };
+    // a later open and a later try: still declined, and the status offers nothing
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    assert!(status(h)["sources"][0]["index"].get("needs_seal").is_none());
+    let j = unsafe { cs_job_start(cstr("index_seal").as_ptr(), cstr(&seal_params(&indexes).to_string()).as_ptr()) };
+    assert!(j.is_null());
+    assert_eq!(last_code(), "unsupported");
     unsafe { cs_close(h) };
 }

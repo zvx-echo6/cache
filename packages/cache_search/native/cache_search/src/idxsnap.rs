@@ -23,7 +23,7 @@ use crate::index::{
     self, read_meta, stemmer_for_language, BuildParams, IndexMeta, IndexState, Lock, Outcome, ANALYZER, INDEX_FORMAT,
     LIB_INDEX_FORMAT, LOCK_FILE, META_FILE,
 };
-use crate::snapshot::{self, Compat, FileEntry, Manifest, Tokenizer, MANIFEST, META_LOCK, SNAP_DIR};
+use crate::snapshot::{self, Compat, FileEntry, Manifest, PickRule, Tokenizer, MANIFEST, META_LOCK, SNAP_DIR};
 use crate::zimsrc::ZimSource;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -172,8 +172,36 @@ pub fn note_legacy(indexes_dir: &Path, kind: &str, source_id: &str, dir: &Path) 
     }
 }
 
+pub fn legacy_for(indexes_dir: &Path, source_id: &str) -> Option<PathBuf> {
+    legacy_of(indexes_dir, KIND_LIBRARY, source_id)
+}
+
 fn legacy_of(indexes_dir: &Path, kind: &str, source_id: &str) -> Option<PathBuf> {
     LEGACY.lock().ok()?.as_ref()?.get(&legacy_key(indexes_dir, kind, source_id)).cloned()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Where hard links cannot be made
+
+/// Written inside a library's old `index/` folder when links cannot be made there (Android's shared storage): the index is not
+/// sealed into a snapshot, because a snapshot grows by hard-linking its files into the next generation. The marker is inside the
+/// folder the library share leaves out, so it never syncs.
+pub const NO_SEAL_MARK: &str = ".no-seal";
+
+/// True when a hard link can be made inside `dir` (a probe: one empty file linked to another name, both removed).
+pub fn links_work(dir: &Path) -> bool {
+    let (a, b) = (dir.join(".link-probe-a"), dir.join(".link-probe-b"));
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+    let ok = std::fs::write(&a, b"").is_ok() && link(&a, &b).is_ok();
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+    ok
+}
+
+/// This index folder was found unsealable here ([`NO_SEAL_MARK`]): its status never offers a seal and no job is queued for it.
+pub fn seal_blocked(legacy: &Path) -> bool {
+    legacy.join(NO_SEAL_MARK).is_file()
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -246,6 +274,21 @@ pub fn snap_root_with(
     local_root(legacy)
 }
 
+/// A library that grows: one Add PDF writes to has a `copies.jsonl` (in the library folder, or in its shard folder). Its keyword
+/// snapshot is extended by generations and picked by the highest ([`PickRule::HighestGeneration`]); every other library, and
+/// every ZIM, is picked by the earliest as before. `library_path` is the library's source path (its shard folder or the library).
+pub fn appendable_library(library_path: &Path) -> bool {
+    library_path.join("copies.jsonl").is_file() || library_path.parent().is_some_and(|p| p.join("copies.jsonl").is_file())
+}
+
+pub fn pick_rule_for(library_path: &Path) -> PickRule {
+    if appendable_library(library_path) {
+        PickRule::HighestGeneration
+    } else {
+        PickRule::Earliest
+    }
+}
+
 /// True while a Tantivy writer holds `<dir>/.tantivy-writer.lock` (it takes an exclusive `flock` on it, here probed without
 /// waiting). Sealing must not run beside a writer. Always false where the probe is not available.
 fn writer_live(dir: &Path) -> bool {
@@ -309,6 +352,8 @@ pub struct SnapSlot<T> {
     pending: Option<Cell<T>>,
     key: Option<(PathBuf, Vec<String>)>,
     tried: Option<Instant>,
+    /// How the snapshot is chosen: the earliest (all but a library that grows), or the highest generation (one that does).
+    rule: PickRule,
 }
 
 /// The folders under `snap/`, each marked when its manifest is there (so a snapshot whose manifest arrives later is looked at again).
@@ -321,7 +366,15 @@ fn listing_key(sd: &Path) -> Vec<String> {
 
 impl<T: Send + 'static> SnapSlot<T> {
     pub fn new(kind: &'static str, opener: fn(&Path, &Manifest) -> Result<T>) -> SnapSlot<T> {
-        SnapSlot { kind, opener, ready: None, pending: None, key: None, tried: None }
+        SnapSlot { kind, opener, ready: None, pending: None, key: None, tried: None, rule: PickRule::Earliest }
+    }
+
+    /// Choose by `rule` from now on (a library that grows takes its highest generation). A change makes the next look pick again.
+    pub fn set_rule(&mut self, rule: PickRule) {
+        if self.rule != rule {
+            self.rule = rule;
+            self.key = None;
+        }
     }
 
     pub fn ready(&self) -> Option<&SnapOpen<T>> {
@@ -390,13 +443,13 @@ impl<T: Send + 'static> SnapSlot<T> {
 
     fn start(&mut self, sd: PathBuf, source_id: String) {
         let cell: Cell<T> = Arc::new(Mutex::new(None));
-        let (c, kind, opener) = (cell.clone(), self.kind, self.opener);
+        let (c, kind, opener, rule) = (cell.clone(), self.kind, self.opener, self.rule);
         let spawned = std::thread::Builder::new().name("cs-open-snapshot".into()).spawn(move || {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                snapshot::pick(&sd, kind, &source_id, compat_of(kind)).and_then(|pk| {
+                snapshot::pick_with(&sd, kind, &source_id, compat_of(kind), rule).and_then(|pk| {
                     let index = opener(&pk.dir, &pk.manifest).ok()?;
                     // local clean-up: usable duplicates and older ones go, the one in use and a rollback stay
-                    snapshot::gc_local(&sd, kind, &source_id, compat_of(kind), &pk);
+                    snapshot::gc_local_with(&sd, kind, &source_id, compat_of(kind), &pk, rule);
                     Some(Box::new(SnapOpen { name: pk.name, manifest: pk.manifest, dir: pk.dir, index }))
                 })
             }))
@@ -711,6 +764,14 @@ pub fn prepare_seal(params_json: &str) -> Result<SealRequest> {
         .map(PathBuf::from)
         .or_else(|| legacy_of(Path::new(&p.indexes_dir), kind, &source_id))
         .ok_or_else(|| Error::not_found(format!("no old index is known for {kind} {source_id}")))?;
+    if kind == KIND_LIBRARY && legacy.is_dir() && !seal_blocked(&legacy) && !links_work(&legacy) {
+        // links are refused on this volume: remembered in the folder, so the app is told once and never asks again
+        let _ = std::fs::write(legacy.join(NO_SEAL_MARK), b"hard links cannot be made here\n");
+        return Err(Error::unsupported(format!("{} is on a volume that cannot hard-link; it stays where it is", legacy.display())));
+    }
+    if kind == KIND_LIBRARY && seal_blocked(&legacy) {
+        return Err(Error::unsupported(format!("{} cannot be sealed here", legacy.display())));
+    }
     let root = snap_root(Path::new(&p.indexes_dir), kind, &source_id, Some(&legacy));
     let sd = dir_for(&root, kind, &source_id);
     let lock = Lock::acquire(&snapshot::build_dir(&sd))?;
@@ -823,10 +884,6 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
         match link(&legacy.join(n), &to) {
             Ok(()) => placed.push((n.clone(), Placed::Linked)),
             Err(link_err) => {
-                // Where links are refused the files are moved, also while this process has the index open: on a Unix system an
-                // open file stays readable after its name moves, and the open index goes on serving until the snapshot is ready.
-                // Elsewhere an open file cannot be moved: busy, and a later try.
-                #[cfg(not(unix))]
                 if is_open(legacy) {
                     undo(&placed);
                     return Err(Error::busy(format!(
@@ -939,6 +996,200 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
     (h.set_result)(json!({
         "adopted": false, "snapshot": build_id, "files": files.len(), "bytes": bytes,
         "method": if moved { "rename" } else { "link" },
+    }));
+    Ok(Outcome::Done)
+}
+
+
+// ---------------------------------------------------------------------------------------------------------
+// Growing a library's snapshot (extension by generations)
+
+/// What `index_extend` needs.
+pub struct ExtendRequest<'a> {
+    pub library_path: &'a Path,
+    pub settings: Option<&'a Value>,
+    pub sd: &'a Path,
+    pub source_id: &'a str,
+    pub library_id: &'a str,
+    pub version: Option<&'a str>,
+    pub heap_mb: usize,
+    pub checkpoint_docs: usize,
+}
+
+fn stat_of(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let m = std::fs::metadata(p).ok()?;
+    Some((m.len(), m.modified().ok()))
+}
+
+/// Bring the library's newest snapshot up to date with its shard: the new snapshot is the old one's files (HARD-LINKED, so nothing is
+/// copied) plus ONE new segment holding the points the snapshot lacks, with a new `meta.json`, manifest and hashes, as generation
+/// g+1 of the same source. Only the new files are hashed (a linked file that is unchanged keeps the hash the old manifest gave it).
+/// A source with no usable snapshot is built whole. When links cannot be made, or extending fails, the library is built whole as
+/// generation g+1 (the fallback). `Done` with `{"extended":true,"generation","added","files","reused","snapshot"}`, `{"unchanged":true}`
+/// when the snapshot already has every point, or `{"built":true,...}` for a whole build.
+pub fn extend_library(r: &ExtendRequest, h: &Hooks) -> Result<Outcome> {
+    let (sd, sid) = (r.sd, r.source_id);
+    let build = snapshot::build_dir(sd);
+    let Some(base) = snapshot::pick_with(sd, KIND_LIBRARY, sid, compat_library, PickRule::HighestGeneration) else {
+        // nothing usable to grow: the usual whole build
+        let p = crate::libindex::LibBuildParams {
+            library_path: r.library_path,
+            settings: r.settings,
+            index_dir: sd,
+            heap_mb: r.heap_mb,
+            checkpoint_docs: r.checkpoint_docs,
+            threads: h.threads,
+            pace: None,
+        };
+        return run_library(&p, sd, sid, r.library_id, r.version, h);
+    };
+    let generation = snapshot::generation_of(&base.manifest);
+    match extend_from(r, h, &base, generation) {
+        Ok(out) => Ok(out),
+        Err(e) if e.code == ErrorCode::Cancelled => Ok(Outcome::Cancelled),
+        Err(e) => {
+            // the fallback: a whole build, published as the next generation
+            std::fs::create_dir_all(&build).map_err(|e| Error::io(format!("{}: {e}", build.display())))?;
+            (h.phase)("rebuild", 0, 1);
+            let mut extra = Map::new();
+            extra.insert("library_id".into(), json!(r.library_id));
+            if let Some(v) = r.version {
+                extra.insert("version".into(), json!(v));
+            }
+            extra.insert("generation".into(), json!(generation + 1));
+            let out = crate::libindex::build_library_index(
+                &crate::libindex::LibBuildParams {
+                    library_path: r.library_path,
+                    settings: r.settings,
+                    index_dir: &build,
+                    heap_mb: r.heap_mb,
+                    checkpoint_docs: r.checkpoint_docs,
+                    threads: h.threads,
+                    pace: None,
+                },
+                &*h.progress,
+                &*h.cancelled,
+            )?;
+            if out == Outcome::Cancelled {
+                return Ok(out);
+            }
+            match publish_build(sd, KIND_LIBRARY, sid, crate::libindex::TOKENIZER, extra, &*h.phase, &*h.cancelled)? {
+                Some((id, _)) => {
+                    (h.set_result)(json!({"built": true, "generation": generation + 1, "snapshot": id, "because": e.message}));
+                    Ok(Outcome::Done)
+                }
+                None => Ok(Outcome::Cancelled),
+            }
+        }
+    }
+}
+
+fn extend_from(r: &ExtendRequest, h: &Hooks, base: &snapshot::Picked, generation: u64) -> Result<Outcome> {
+    let sd = r.sd;
+    let build = snapshot::build_dir(sd);
+    let tokenizer = base.manifest.tokenizer.as_ref().map(|t| t.name.clone()).unwrap_or_else(|| crate::libindex::TOKENIZER.into());
+    // 1. what the shard has that the snapshot lacks
+    (h.phase)("scan", 0, 1);
+    let opened = crate::libindex::LibOpenIndex::open(&base.dir, &tokenizer)?;
+    let Some((missing, points)) =
+        crate::libindex::missing_documents(r.library_path, r.settings, &opened, &*h.progress, &*h.cancelled, &*h.pace)?
+    else {
+        return Err(Error::new(ErrorCode::Cancelled, "cancelled"));
+    };
+    let recorded = base.manifest.extra.get("points").and_then(|p| p.as_u64());
+    if missing.is_empty() && recorded == Some(points) {
+        (h.set_result)(json!({"unchanged": true, "generation": generation, "snapshot": base.name}));
+        return Ok(Outcome::Done);
+    }
+    drop(opened);
+    // 2. the new snapshot's folder: the old files, linked
+    let build_id = snapshot::new_build_id();
+    let stage = build.join(format!("publish-{build_id}"));
+    let _ = std::fs::remove_dir_all(&stage);
+    std::fs::create_dir_all(&stage).map_err(|e| Error::io(format!("{}: {e}", stage.display())))?;
+    let undo = || {
+        let _ = std::fs::remove_dir_all(&stage);
+        let _ = std::fs::remove_dir(&build);
+    };
+    let cleaned = (|| -> Result<(Vec<FileEntry>, u64, usize, usize)> {
+        let mut linked: Vec<String> = Vec::new();
+        (h.phase)("link", 0, base.manifest.files.len() as u64);
+        for f in &base.manifest.files {
+            if NOT_IN_SNAPSHOT.contains(&f.path.as_str()) {
+                continue;
+            }
+            link(&base.dir.join(&f.path), &stage.join(&f.path))
+                .map_err(|e| Error::io(format!("{}: cannot link into the next generation: {e}", f.path)))?;
+            linked.push(f.path.clone());
+        }
+        // 3. one new segment holding the missing points (no merge; Tantivy adds files and replaces meta.json by a rename)
+        (h.phase)("append", 0, missing.len() as u64);
+        let segments_before = crate::libindex::append_segment(&stage, &tokenizer, &missing, h.threads.unwrap_or(1), r.heap_mb)?;
+        let _ = std::fs::remove_file(stage.join(".tantivy-writer.lock"));
+        // 4. hashes: a linked file that is still the old one keeps its hash; everything else is hashed
+        let old: HashMap<&str, &FileEntry> = base.manifest.files.iter().map(|f| (f.path.as_str(), f)).collect();
+        let mut names: Vec<String> = std::fs::read_dir(&stage)
+            .map_err(|e| Error::io(format!("{}: {e}", stage.display())))?
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !NOT_IN_SNAPSHOT.contains(&n.as_str()) && n != MANIFEST && !n.ends_with(".tmp"))
+            .collect();
+        names.sort();
+        let total = names.len() as u64;
+        (h.phase)("verify", 0, total);
+        let (mut files, mut bytes, mut reused) = (Vec::new(), 0u64, 0usize);
+        for (k, n) in names.iter().enumerate() {
+            if (h.cancelled)() {
+                return Err(Error::new(ErrorCode::Cancelled, "cancelled"));
+            }
+            let same = old.get(n.as_str()).filter(|o| {
+                linked.contains(n) && stat_of(&stage.join(n)) == stat_of(&base.dir.join(n)) && stat_of(&stage.join(n)).map(|s| s.0) == Some(o.size)
+            });
+            let entry = match same {
+                Some(o) => {
+                    reused += 1;
+                    (*o).clone()
+                }
+                None => {
+                    let (sha256, size) = snapshot::hash_file(&stage.join(n))?;
+                    FileEntry { path: n.clone(), size, sha256 }
+                }
+            };
+            bytes += entry.size;
+            files.push(entry);
+            (h.phase)("verify", k as u64 + 1, total);
+        }
+        std::fs::write(stage.join(META_LOCK), b"").map_err(|e| Error::io(format!("{}: {e}", stage.display())))?;
+        Ok((files, bytes, reused, segments_before))
+    })();
+    let (files, bytes, reused, _segments_before) = match cleaned {
+        Ok(x) => x,
+        Err(e) => {
+            undo();
+            return Err(e);
+        }
+    };
+    if (h.cancelled)() {
+        undo();
+        return Ok(Outcome::Cancelled);
+    }
+    // 5. the manifest: the old one's facts, one generation more, the points it covers; published by one rename
+    let mut manifest = base.manifest.clone();
+    manifest.created = snapshot::iso_now();
+    manifest.extra.insert("generation".into(), json!(generation + 1));
+    manifest.extra.insert("points".into(), json!(points));
+    let st = snapshot::Stage::prepared(&build, build_id.clone(), stage.clone(), files.clone(), bytes);
+    (h.phase)("publish", 0, 1);
+    if let Err(e) = snapshot::publish(sd, st, manifest) {
+        undo();
+        return Err(e.into());
+    }
+    let _ = std::fs::remove_dir(&build);
+    (h.phase)("publish", 1, 1);
+    (h.set_result)(json!({
+        "extended": true, "generation": generation + 1, "added": missing.len(), "files": files.len(), "reused": reused,
+        "snapshot": build_id, "from": base.name,
     }));
     Ok(Outcome::Done)
 }
