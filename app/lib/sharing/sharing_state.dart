@@ -563,6 +563,10 @@ class SharingState extends ChangeNotifier {
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
 
   /// Asks one linked device for its version now (Check again on a device that differs): its `compat` afterwards ("ok" syncs at once).
+  /// Whether any linked device can sync with this one now (false when every one is on a version that cannot): Sync now on a kind or
+  /// an item does nothing then.
+  bool get canSync => peers.isEmpty || peers.any((p) => p['compat'] != 'peer_older' && p['compat'] != 'peer_newer');
+
   Future<String> checkVersion(String peer) async => ((await _call('check_version', {'peer': peer}))['compat'] as String?) ?? 'unknown';
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off

@@ -63,6 +63,9 @@ pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 /// format's meaning, how deletes or versions merge, the file transfer) raises `SYNC_PROTO` by one, and raises `SYNC_MIN_PROTO`
 /// to the same number when older devices must be cut off. Raise only `SYNC_PROTO` when older ones still work. An added optional
 /// field that older devices ignore needs no bump.
+///
+/// A change that moves or removes shared files raises BOTH SYNC_PROTO and SYNC_MIN_PROTO in the same commit, so devices on the older
+/// layout can't receive the removals.
 pub const SYNC_PROTO: u32 = 2;
 /// The oldest `SYNC_PROTO` this build syncs with (see [`SYNC_PROTO`]).
 pub const SYNC_MIN_PROTO: u32 = 2;
@@ -81,10 +84,11 @@ enum Compat {
 }
 
 impl Compat {
-    fn of(proto: u32, min: u32) -> Compat {
-        if proto < SYNC_MIN_PROTO {
+    /// `ours` is this device's `(SYNC_PROTO, SYNC_MIN_PROTO)`.
+    fn of(ours: (u32, u32), proto: u32, min: u32) -> Compat {
+        if proto < ours.1 {
             Compat::PeerOlder
-        } else if SYNC_PROTO < min {
+        } else if ours.0 < min {
             Compat::PeerNewer
         } else {
             Compat::Ok
@@ -229,6 +233,9 @@ pub struct Config {
     /// Tests only (the `test-hooks` feature): behave as Cache 1.0.x does, sending no version and gating nothing.
     #[serde(default)]
     pub legacy_proto: bool,
+    /// Tests only (the `test-hooks` feature): advertise this `(proto, min_proto)` instead of the constants.
+    #[serde(default)]
+    pub test_proto: Option<(u32, u32)>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -524,7 +531,7 @@ struct Gate {
     /// The linked devices known to speak a compatible version: only they may fetch files ([`Inner::compatible`]).
     compatible: Arc<RwLock<HashSet<EndpointId>>>,
     /// Tests only: gate nothing, as 1.0 does.
-    legacy: bool,
+    legacy: Arc<AtomicBool>,
 }
 
 impl EndpointHooks for Gate {
@@ -532,7 +539,7 @@ impl EndpointHooks for Gate {
         let id = conn.remote_id();
         let linked = self.allowed.read().map(|a| a.contains(&id)).unwrap_or(false);
         // Files (blobs) go only to a device known to be compatible; the file list and the keys are gated in the request itself.
-        let files_ok = conn.alpn() != iroh_blobs::ALPN || self.legacy || self.compatible.read().map(|a| a.contains(&id)).unwrap_or(false);
+        let files_ok = conn.alpn() != iroh_blobs::ALPN || self.legacy.load(Ordering::Relaxed) || self.compatible.read().map(|a| a.contains(&id)).unwrap_or(false);
         if conn.alpn() == PAIR_ALPN || (linked && files_ok) {
             AfterHandshakeOutcome::accept()
         } else if linked {
@@ -559,7 +566,11 @@ struct Inner {
     /// [`Config::app_version`].
     app_version: String,
     /// [`Config::legacy_proto`] (tests only).
-    legacy: bool,
+    legacy: Arc<AtomicBool>,
+    /// This device's `(proto, min_proto)`: the constants ([`Config::test_proto`] overrides them in tests).
+    ours: Mutex<(u32, u32)>,
+    /// The linked devices a Check again is asking now (one at a time each).
+    checking: Mutex<HashSet<String>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
     run: Mutex<Run>,
@@ -1341,9 +1352,9 @@ impl Inner {
             link,
             links: true,
             secrets,
-            proto: (!self.legacy).then_some(SYNC_PROTO),
-            min_proto: (!self.legacy).then_some(SYNC_MIN_PROTO),
-            app_version: (!self.legacy).then(|| self.app_version.clone()),
+            proto: (!self.legacy()).then_some(self.ours().0),
+            min_proto: (!self.legacy()).then_some(self.ours().1),
+            app_version: (!self.legacy()).then(|| self.app_version.clone()),
         }
     }
 
@@ -1357,8 +1368,8 @@ impl Inner {
             link: None,
             links: true,
             secrets: None,
-            proto: Some(SYNC_PROTO),
-            min_proto: Some(SYNC_MIN_PROTO),
+            proto: Some(self.ours().0),
+            min_proto: Some(self.ours().1),
             app_version: Some(self.app_version.clone()),
         }
     }
@@ -1379,13 +1390,22 @@ impl Inner {
             }
         } else {
             self.compatible.write().unwrap().remove(&id);
+            // It speaks another version now (a downgrade): what we know of it is out of date, so nothing is applied from its
+            // old file list.
+            let mut run = self.run.lock().unwrap();
+            if let Some(st) = run.peers.get_mut(peer) {
+                st.compat = compat;
+                st.index = None;
+            }
         }
     }
 
     /// Asks `p` for its file list and records the answer: its version, whether it can sync with this one, and (when it can) its
     /// file list, its copy of the link and its keys. A device that cannot keeps no file list here, so nothing from it is used.
-    async fn refresh_peer(&self, p: &Peer) {
-        let res = self.fetch_index(&p.id).await;
+    /// `quick`: the person is waiting (Check again), so shorter waits. Returns why it could not be reached, if so.
+    async fn refresh_peer(&self, p: &Peer, quick: bool) -> Option<String> {
+        let res = self.fetch_index(&p.id, quick).await;
+        let failed = res.as_ref().err().map(|e| format!("{e:#}"));
         let mut asks = None;
         let mut learned = None;
         // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
@@ -1404,7 +1424,7 @@ impl Inner {
                     st.error = None;
                     st.proto = Some(idx.proto.unwrap_or(1));
                     st.ver = idx.app_version.clone();
-                    st.compat = if self.legacy { Compat::Ok } else { Compat::of(idx.proto.unwrap_or(1), idx.min_proto.unwrap_or(1)) };
+                    st.compat = if self.legacy() { Compat::Ok } else { Compat::of(self.ours(), idx.proto.unwrap_or(1), idx.min_proto.unwrap_or(1)) };
                     if let Ok(id) = p.id.parse::<EndpointId>() {
                         if st.compat == Compat::Ok {
                             self.compatible.write().unwrap().insert(id);
@@ -1435,9 +1455,9 @@ impl Inner {
                 let _ = self.save();
             }
         }
-        let Some((link, secrets)) = asks else { return };
-        if self.legacy {
-            return;
+        let Some((link, secrets)) = asks else { return failed };
+        if self.legacy() {
+            return failed;
         }
         if let Some(l) = link {
             self.adopt_link(&p.id, l);
@@ -1453,6 +1473,7 @@ impl Inner {
                 }
             }
         }
+        failed
     }
 
     /// `share` is kept with the linked device `peer` ([`Config::with`]).
@@ -1626,10 +1647,10 @@ impl Inner {
             // A device whose version cannot sync with this one is checked once (when the app opens) and when the person asks
             // (`check_version`), not every round; the others keep the normal schedule.
             let skip = self.run.lock().unwrap().peers.get(&p.id).map(|st| st.compat.mismatch()).unwrap_or(false);
-            if skip && !self.legacy {
+            if skip && !self.legacy() {
                 continue;
             }
-            self.refresh_peer(p).await;
+            self.refresh_peer(p, false).await;
         }
         let mut paused = None;
         for p in &peers {
@@ -1662,18 +1683,28 @@ impl Inner {
         }
     }
 
+    fn legacy(&self) -> bool {
+        self.legacy.load(Ordering::Relaxed)
+    }
+
+    fn ours(&self) -> (u32, u32) {
+        *self.ours.lock().unwrap()
+    }
+
     /// A request on [`SYNC_ALPN`] with this version in it (1.0's has none).
     fn ask(&self, kind: &str) -> Vec<u8> {
-        if self.legacy {
+        if self.legacy() {
             kind.as_bytes().to_vec()
         } else {
-            format!("{kind}/{SYNC_PROTO}/{SYNC_MIN_PROTO}").into_bytes()
+            format!("{kind}/{}/{}", self.ours().0, self.ours().1).into_bytes()
         }
     }
 
-    async fn fetch_index(&self, peer: &str) -> Result<(RemoteIndex, String)> {
+    async fn fetch_index(&self, peer: &str, quick: bool) -> Result<(RemoteIndex, String)> {
         let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
-        let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
+        // `quick`: the person is waiting on a Check again.
+        let (connect, read) = if quick { (15, 30) } else { (30, 120) };
+        let conn = tokio::time::timeout(Duration::from_secs(connect), self.endpoint.connect(id, SYNC_ALPN))
             .await
             .map_err(|_| anyhow!("not reachable"))?
             .map_err(|e| anyhow!("not reachable: {e}"))?;
@@ -1681,7 +1712,7 @@ impl Inner {
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
         send.write_all(&self.ask("index")).await.map_err(|e| anyhow!("{e}"))?;
         send.finish().map_err(|e| anyhow!("{e}"))?;
-        let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(MAX_INDEX))
+        let bytes = tokio::time::timeout(Duration::from_secs(read), recv.read_to_end(MAX_INDEX))
             .await
             .map_err(|_| anyhow!("timed out reading the file list"))?
             .map_err(|e| anyhow!("{e}"))?;
@@ -2148,8 +2179,8 @@ impl ProtocolHandler for SyncProto {
         // Only a device that holds the link asks: a link made here by showing a code is confirmed by it (whatever its version).
         self.0.confirm_peer(&peer);
         let (kind, ver) = parse_ask(&ask);
-        let legacy = self.0.legacy;
-        let compat = if legacy { Compat::Ok } else { Compat::of(ver.map(|v| v.0).unwrap_or(1), ver.map(|v| v.1).unwrap_or(1)) };
+        let legacy = self.0.legacy();
+        let compat = if legacy { Compat::Ok } else { Compat::of(self.0.ours(), ver.map(|v| v.0).unwrap_or(1), ver.map(|v| v.1).unwrap_or(1)) };
         if !legacy {
             self.0.note_peer_compat(&peer, compat);
         }
@@ -2243,10 +2274,10 @@ impl SyncEngine {
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
 
         let compatible: Arc<RwLock<HashSet<EndpointId>>> = Arc::default();
-        let legacy = cfg!(feature = "test-hooks") && cfg.legacy_proto;
+        let legacy = Arc::new(AtomicBool::new(cfg!(feature = "test-hooks") && cfg.legacy_proto));
         let mut b = Endpoint::builder(presets::Minimal)
             .secret_key(secret.clone())
-            .hooks(Gate { allowed: allowed.clone(), compatible: compatible.clone(), legacy });
+            .hooks(Gate { allowed: allowed.clone(), compatible: compatible.clone(), legacy: legacy.clone() });
         b = if !cfg.relay {
             b.relay_mode(RelayMode::Disabled)
         } else if !cfg.relay_urls.is_empty() {
@@ -2305,6 +2336,8 @@ impl SyncEngine {
             compatible,
             app_version: cfg.app_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
             legacy,
+            ours: Mutex::new(if cfg!(feature = "test-hooks") { cfg.test_proto.unwrap_or((SYNC_PROTO, SYNC_MIN_PROTO)) } else { (SYNC_PROTO, SYNC_MIN_PROTO) }),
+            checking: Mutex::new(HashSet::new()),
             pairing: Mutex::new(None),
             run: Mutex::new(Run::default()),
             wanted,
@@ -2598,17 +2631,63 @@ impl SyncEngine {
                 });
                 Ok(json!({"ok": true}))
             }
+            #[cfg(feature = "test-hooks")]
+            "test_set_proto" => {
+                // Tests only: this device now behaves as `legacy` (no version, gates nothing, as 1.0) or advertises `proto`/`min`.
+                inner.legacy.store(args.get("legacy").and_then(|v| v.as_bool()).unwrap_or(false), Ordering::Relaxed);
+                let n = |k: &str, d: u32| args.get(k).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(d);
+                *inner.ours.lock().unwrap() = (n("proto", SYNC_PROTO), n("min", SYNC_MIN_PROTO));
+                Ok(json!({"ok": true}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_blob_probe" => {
+                // Tests only: opens a connection to `peer` on the files protocol and says how it ends: "open" when it stays up,
+                // else why it was closed.
+                let id: EndpointId = s("peer").ok_or_else(|| anyhow!("peer is required"))?.parse().map_err(|_| anyhow!("bad device key"))?;
+                let ep = inner.endpoint.clone();
+                let out = self.rt.block_on(async move {
+                    match tokio::time::timeout(Duration::from_secs(15), ep.connect(id, iroh_blobs::ALPN)).await {
+                        Err(_) => "timeout".to_string(),
+                        Ok(Err(e)) => format!("refused: {e}"),
+                        Ok(Ok(conn)) => match tokio::time::timeout(Duration::from_secs(3), conn.closed()).await {
+                            Err(_) => "open".to_string(),
+                            Ok(e) => format!("closed: {e}"),
+                        },
+                    }
+                });
+                Ok(json!({"result": out}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_fetch_secrets" => {
+                // Tests only: asks `peer` for the secrets it holds for this device, as a round would.
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let m = self.rt.block_on(inner.fetch_secrets(&id))?;
+                Ok(json!({"secrets": m}))
+            }
             "check_version" => {
                 // Asks one linked device now for its version, even when it was found to differ (the person's Check again); when
                 // the versions match it is synced at once. Answers what the status says of it.
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
                 let p = inner.saved.lock().unwrap().peers.iter().find(|p| p.id == id).cloned().ok_or_else(|| anyhow!("that device is not linked"))?;
-                self.rt.block_on(inner.refresh_peer(&p));
+                // Not when this device may not use the network (paused or metered): nothing is connected to then.
+                if !inner.may_use_network() {
+                    return Ok(json!({"ok": false, "compat": "network_off", "error": "Sync is paused: no network it may use"}));
+                }
+                // One check per device at a time.
+                if !inner.checking.lock().unwrap().insert(id.clone()) {
+                    return Ok(json!({"ok": false, "compat": "busy", "error": "already checking"}));
+                }
+                let failed = self.rt.block_on(inner.refresh_peer(&p, true));
+                inner.checking.lock().unwrap().remove(&id);
+                if let Some(e) = failed {
+                    // Not reached: what was known of it before is not shown as the answer.
+                    return Ok(json!({"ok": false, "compat": "unreachable", "error": e}));
+                }
                 let st = inner.run.lock().unwrap().peers.get(&id).cloned().unwrap_or_default();
                 if st.compat == Compat::Ok {
                     inner.wake.notify_one();
                 }
-                Ok(json!({"ok": st.error.is_none(), "compat": st.compat.label(), "peer_version": st.ver, "error": st.error}))
+                Ok(json!({"ok": true, "compat": st.compat.label(), "peer_version": st.ver, "error": null}))
             }
             "sync_now" => {
                 // With no scope, a round of everything now. With one, a round of just that (one device, some shared folders,
@@ -3024,15 +3103,17 @@ mod peer_tests {
 mod version_tests {
     use super::*;
 
+    const O: (u32, u32) = (SYNC_PROTO, SYNC_MIN_PROTO);
+
     #[test]
     fn the_range_decides() {
         // This build: SYNC_MIN_PROTO..=SYNC_PROTO. No version (1.0) is 1, so it is too old.
-        assert_eq!(Compat::of(SYNC_PROTO, SYNC_MIN_PROTO), Compat::Ok);
-        assert_eq!(Compat::of(1, 1), Compat::PeerOlder);
-        assert_eq!(Compat::of(SYNC_MIN_PROTO - 1, 1), Compat::PeerOlder);
+        assert_eq!(Compat::of(O, SYNC_PROTO, SYNC_MIN_PROTO), Compat::Ok);
+        assert_eq!(Compat::of(O, 1, 1), Compat::PeerOlder);
+        assert_eq!(Compat::of(O, SYNC_MIN_PROTO - 1, 1), Compat::PeerOlder);
         // A newer device that still accepts down to this one's version works; one that does not is the newer.
-        assert_eq!(Compat::of(SYNC_PROTO + 1, SYNC_PROTO), Compat::Ok);
-        assert_eq!(Compat::of(SYNC_PROTO + 1, SYNC_PROTO + 1), Compat::PeerNewer);
+        assert_eq!(Compat::of(O, SYNC_PROTO + 1, SYNC_PROTO), Compat::Ok);
+        assert_eq!(Compat::of(O, SYNC_PROTO + 1, SYNC_PROTO + 1), Compat::PeerNewer);
     }
 
     #[test]

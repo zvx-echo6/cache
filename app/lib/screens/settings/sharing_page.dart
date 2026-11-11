@@ -493,7 +493,7 @@ class _SharingKindPageState extends State<SharingKindPage> {
                       key: const ValueKey('kind-sync'),
                       icon: const Icon(Icons.sync, size: 20),
                       label: const Text('Sync all'),
-                      onPressed: _busy || !on ? null : () => _sync(() => s.syncKind(k), 'Syncing ${k.sharingLabel}'),
+                      onPressed: _busy || !on || !s.canSync ? null : () => _sync(() => s.syncKind(k), 'Syncing ${k.sharingLabel}'),
                     ),
                   ],
                 ),
@@ -508,6 +508,7 @@ class _SharingKindPageState extends State<SharingKindPage> {
                           item: i,
                           on: s.itemOn(k, i.item),
                           busy: _busy,
+                          canSync: s.canSync,
                           onChanged: (v) => _run(() => s.setItem(k, i.item, v)),
                           onSync: () => _sync(() => s.syncItem(i.item), 'Syncing ${i.item.name}'),
                         ),
@@ -524,13 +525,16 @@ class _SharingKindPageState extends State<SharingKindPage> {
 }
 
 class _ItemRow extends StatelessWidget {
-  const _ItemRow({super.key, required this.item, required this.on, required this.busy, required this.onChanged, required this.onSync});
+  const _ItemRow({super.key, required this.item, required this.on, required this.busy, required this.onChanged, required this.onSync, this.canSync = true});
 
   final SharedItem item;
   final bool on;
   final bool busy;
   final ValueChanged<bool> onChanged;
   final VoidCallback onSync;
+
+  /// False when every linked device is on a version that cannot sync with this one.
+  final bool canSync;
 
   @override
   Widget build(BuildContext context) {
@@ -546,7 +550,7 @@ class _ItemRow extends StatelessWidget {
             tooltip: 'Sync $name now',
             icon: const Icon(Icons.sync, size: 20),
             color: context.t.secondary,
-            onPressed: busy || !on ? null : onSync,
+            onPressed: busy || !on || !canSync ? null : onSync,
           ),
           const SizedBox(width: 4),
           Switch(value: on, onChanged: busy ? null : onChanged),
@@ -584,7 +588,16 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
     setState(() => _checking = true);
     try {
       final c = await s.checkVersion(widget.peer);
-      if (mounted) say(context, c == 'ok' ? 'Versions match. Syncing with $name starts again.' : (c == 'unknown' ? 'Could not reach $name.' : 'Still a different version.'));
+      // 'busy': a check of this device is already going (the button says Checking…), so nothing more to say.
+      if (mounted && c != 'busy') say(
+        context,
+        switch (c) {
+          'ok' => 'Versions match. Syncing with $name starts again.',
+          'unreachable' || 'unknown' => 'Could not reach $name.',
+          'network_off' => 'Sync is paused: no network it may use.',
+          _ => 'Still a different version.',
+        },
+      );
     } catch (e) {
       if (mounted) say(context, '$e');
     } finally {

@@ -73,7 +73,10 @@ class FakeSync implements SyncCoreLike {
         final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
         if (p == null) throw Exception('that device is not linked');
         if (holdCheck != null) await holdCheck!.future;
-        p['compat'] = checkResult[args['peer']] ?? p['compat'] ?? 'unknown';
+        final found = checkResult[args['peer']];
+        // The answers that say nothing of the device's version (not reached, no network allowed) leave what it had.
+        if (found == 'unreachable' || found == 'network_off' || found == 'busy') return {'ok': false, 'compat': found};
+        p['compat'] = found ?? p['compat'] ?? 'unknown';
         return {'ok': true, 'compat': p['compat'], 'peer_version': p['peer_version']};
       case 'share_add':
         // Like the engine: the same id again re-points the share (its name stays).

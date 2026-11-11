@@ -113,6 +113,20 @@ void main() {
         sync.holdCheck!.complete();
         sync.holdCheck = null;
         await _settle(tester);
+        // What Check again says afterwards (390 only): not reached, no network it may use, still different, and a match.
+        if (e.key == '390') {
+          var n = 5;
+          for (final x in const {'unreachable': 'not-reached', 'network_off': 'network-off', 'peer_older': 'still-different', 'ok': 'match'}.entries) {
+            await openSharing();
+            await _tap(tester, 'peer-peer1');
+            sync.checkResult['peer1'] = x.key;
+            await tester.tap(find.byKey(const ValueKey('device-check')));
+            await _settle(tester);
+            await snap(tester, _out, '${n++}-toast-${x.value}-${e.key}-$t');
+            sync.peers.first['compat'] = 'peer_older';
+          }
+          sync.checkResult.clear();
+        }
         await openSharing();
         await _tap(tester, 'peer-peer2');
         await snap(tester, _out, '3-device-we-are-older-${e.key}-$t');

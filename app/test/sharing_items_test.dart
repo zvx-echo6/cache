@@ -438,4 +438,42 @@ void main() {
     s.dispose();
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
+
+  testWidgets('Check again: not reached and no network allowed are said so; a stale mismatch is not shown as the answer; kind Sync waits when no device can sync', (tester) async {
+    final r = await tester.runAsync(_rig);
+    final s = r!.make();
+    await tester.runAsync(s.setUp);
+    r.sync.peers.add({'id': 'old', 'name': 'Pixel', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 60000, 'via': 'direct', 'error': null,
+      'compat': 'peer_older', 'peer_version': null, 'our_version': '1.1.0'});
+    await tester.runAsync(s.refresh);
+    expect(s.canSync, isFalse, reason: 'the only linked device is on a version that cannot sync');
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('peer-old')));
+    await tester.pumpAndSettle();
+
+    for (final e in {'unreachable': 'Could not reach Pixel.', 'network_off': 'Sync is paused: no network it may use.', 'peer_older': 'Still a different version.'}.entries) {
+      r.sync.checkResult['old'] = e.key;
+      await tester.tap(find.byKey(const ValueKey('device-check')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pumpAndSettle();
+      expect(find.text(e.value), findsOneWidget, reason: e.key);
+      expect(find.textContaining('Version mismatch: Pixel needs to update Cache'), findsOneWidget, reason: 'still shown, from the last answer, while the check said ${e.key}');
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+    }
+    r.sync.checkResult['old'] = 'ok';
+    await tester.tap(find.byKey(const ValueKey('device-check')));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(find.text('Versions match. Syncing with Pixel starts again.'), findsOneWidget);
+    expect(s.canSync, isTrue);
+
+    await tester.pumpWidget(const SizedBox());
+    s.dispose();
+    await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
 }
