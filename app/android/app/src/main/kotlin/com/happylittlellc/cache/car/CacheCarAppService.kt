@@ -83,8 +83,8 @@ class CarSession(
         val nav = carContext.getCarService(NavigationManager::class.java)
         navigation = nav
         nav.setNavigationManagerCallback(object : NavigationManagerCallback {
-            // The host stops Cache's guidance (another navigation app started, or the car asked): no more turns, notifications or
-            // voice from Cache, at once.
+            // The host stops Cache's guidance (another navigation app started, or the car's own navigation took over): no more
+            // turns, notifications or voice from Cache, at once, on the car and on the phone.
             //
             // The Car App Library also calls this when the session is destroyed (NavigationManager's own lifecycle observer;
             // the callback is posted, so it runs after tearDown). That is the car going away, not another navigation source:
@@ -93,15 +93,11 @@ class CarSession(
                 if (!ready) return
                 if (navigating) {
                     navigating = false
-                    try {
-                        navigation?.navigationEnded()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "navigationEnded", e)
-                    }
+                    HostNavigation.endAfterHostStop(nav)
                 }
                 notifications?.cancel()
                 audio?.release()
-                CarLink.call("stop")
+                CarLink.stopGuidance()
             }
 
             // Google Play's review: the next guidance is a simulated drive along the route.
@@ -226,5 +222,36 @@ class CarSession(
 
     companion object {
         private const val TAG = "CacheCar"
+    }
+}
+
+/**
+ * Telling the host that navigation ended after the host itself stopped it.
+ *
+ * Car App Library 1.7.0, NavigationManager: when the host stops navigation (onStopNavigation) the library clears its own
+ * "navigating" flag before it calls the app, and navigationEnded() does nothing while that flag is clear. So after a host stop
+ * the app has no public way to send "navigation ended", and Android Auto keeps what Cache last sent as an active trip: the
+ * turn strip stays over every other Cache screen and takes the place of their buttons (Start among them) until the car
+ * reconnects. Calling navigationStarted() first would send the message, but it also asks for the navigation focus back from
+ * whatever just took it, so it is not used.
+ *
+ * This sets the library's flag back (a private field, by name; android/app/proguard-rules.pro keeps the name) so that
+ * navigationEnded() reaches the host, and nothing else. If the field is not there (another library version), nothing is sent,
+ * as before.
+ */
+internal object HostNavigation {
+    private const val TAG = "CacheCar"
+    private const val FLAG = "mIsNavigating"
+
+    /** True when "navigation ended" was sent to the host. */
+    fun endAfterHostStop(nav: NavigationManager): Boolean = try {
+        val f = NavigationManager::class.java.getDeclaredField(FLAG)
+        f.isAccessible = true
+        f.setBoolean(nav, true)
+        nav.navigationEnded()
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "navigation ended could not be sent after the host's stop", e)
+        false
     }
 }

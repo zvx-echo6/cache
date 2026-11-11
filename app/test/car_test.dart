@@ -654,6 +654,25 @@ void main() {
       expect(drive.simulate, isFalse);
     });
 
+    // Guidance ending reaches the car at once, not after the throttle (ten seconds here, so a throttled push never arrives).
+    test('guidance ending is told to the car at once, from the car or from the phone', () async {
+      bridge.dispose();
+      bridge = CarBridge(nav: nav, maps: maps, drive: drive, throttle: const Duration(seconds: 10), glyphs: () async => 'file:///g/{fontstack}/{range}.pbf');
+      await bridge.start();
+      await guide();
+      expect(lastPhase(), 'guiding');
+      toCar.clear();
+      await fromCar('stop');
+      expect(lastPhase(), 'browsing');
+      expect((toCar.lastWhere((c) => c.method == 'route').arguments as Map)['geojson'], isNot(contains('LineString')));
+      // Ended on the phone (End route there, or an arrival dismissed).
+      await guide();
+      toCar.clear();
+      await nav.end();
+      await settle();
+      expect(lastPhase(), 'browsing');
+    });
+
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Burley Library')]);

@@ -131,6 +131,7 @@ class CarBridge {
     if (on) {
       _lastTrip = null;
       _lastRouteSig = null;
+      _pushedPhase = null;
       _schedule();
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
@@ -149,8 +150,19 @@ class CarBridge {
 
   // ---- pushing to the car ------------------------------------------------------------------------------------
 
+  /// The phase the car was last told.
+  NavPhase? _pushedPhase;
+
   void _schedule() {
     if (!connected.value) return;
+    // Guidance starting or ending (or a preview opening or closing) is told at once, whoever ended it (End route on either
+    // screen, the car's host, an arrival dismissed): nothing on the car that depends on "guiding" waits for the throttle.
+    if (nav.phase != _pushedPhase) {
+      _pushTimer?.cancel();
+      _pushTimer = null;
+      unawaited(push());
+      return;
+    }
     _pushTimer ??= Timer(throttle, () {
       _pushTimer = null;
       unawaited(push());
@@ -207,6 +219,7 @@ class CarBridge {
 
   Future<void> push() async {
     if (!connected.value) return;
+    _pushedPhase = nav.phase;
     final trip = snapshot();
     final text = jsonEncode(trip);
     if (text != _lastTrip) {
@@ -274,6 +287,8 @@ class CarBridge {
         return null;
       case 'stop':
         await nav.end();
+        // The car has the ended trip before this is answered.
+        await push();
         return null;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();

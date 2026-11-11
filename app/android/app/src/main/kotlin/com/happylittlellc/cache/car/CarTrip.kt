@@ -47,6 +47,17 @@ data class CarTrip(
     val guiding: Boolean get() = phase == "guiding"
     val previewing: Boolean get() = phase == "previewing"
 
+    /**
+     * This trip with guidance over, as the phone pushes it once its own guidance has ended (lib/car/car_trip.dart): back to
+     * browsing with no routes, step, estimate, climb or overview. The car side uses it to say so at once, before the phone has
+     * answered ([CarLink.stopGuidance]).
+     */
+    fun ended(): CarTrip = copy(
+        phase = "browsing", routing = false, error = null, routes = emptyList(), routeIndex = 0, routeId = null, arrived = false,
+        rerouting = false, step = null, then = null, currentRoad = null, remainingM = null, remainingS = null, etaMs = null,
+        climb = null, overview = null,
+    )
+
     companion object {
         val EMPTY = CarTrip(
             phase = "browsing", available = false, imperial = false, routing = false, error = null, destinationName = null,

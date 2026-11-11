@@ -299,6 +299,95 @@ class CarSessionTest {
         assertFalse(screens.top is NavigationScreen)
     }
 
+    // Bug: after another navigation source took over, the car kept the old turn strip and no route could be started.
+    @Test
+    fun theHostTakingNavigationAwayEndsGuidanceAtOnceAndANewRouteCanStart() {
+        val asked = mutableListOf<String>()
+        var answerStop: ((Any?) -> Unit)? = null
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            if (method == "stop") answerStop = done else done(null)
+        }
+        start()
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is NavigationScreen)
+        // As the host does it: the library clears its own "navigating" flag, then calls the app's callback.
+        nav.onStopNavigation()
+        shadowOf(Looper.getMainLooper()).idle()
+        // Over on the car before the phone has answered anything: the trip, the screen, the host.
+        assertFalse(CarLink.trip.guiding)
+        assertNull(CarLink.trip.step)
+        assertNull(CarLink.trip.remainingS)
+        assertEquals(CarLink.EMPTY_GEOJSON, CarLink.routeGeoJson)
+        assertTrue(screens.top is HomeScreen)
+        assertEquals(1, nav.navigationEndedCount)
+        assertTrue("stop" in asked)
+        // A trip the phone sent before it heard the stop does not start guidance again.
+        push("trip", trip("guiding", guiding))
+        assertFalse(CarLink.trip.guiding)
+        assertEquals(1, nav.navigationStartedCount)
+        assertTrue(screens.top is HomeScreen)
+        // The phone has ended its guidance.
+        push("trip", trip("browsing"))
+        answerStop!!(null)
+        // A new route, in the same car session: the preview has Start, and starting tells the host again.
+        val screen = RoutePreviewScreen(car, CarMapRenderer(car), CarPlace("place:1", "Made Up Clinic", null, 42.5, -113.5, null))
+        push("trip", trip("previewing"))
+        assertEquals("Start", (templateOf(screen) as MapWithContentTemplate).actionStrip!!.actions[0].title.toString())
+        push("trip", trip("guiding", guiding))
+        assertTrue(CarLink.trip.guiding)
+        assertEquals(2, nav.navigationStartedCount)
+        assertTrue(screens.top is NavigationScreen)
+    }
+
+    // Car App Library 1.7.0: once the host has stopped navigation, the library's navigationEnded() sends nothing. If this
+    // test's first half ever fails, the library changed and HostNavigation can go.
+    @Test
+    fun afterAHostStopNavigationEndedStillReachesTheHost() {
+        var ended = 0
+        val navHost = object : INavigationHost.Stub() {
+            override fun navigationStarted() {}
+
+            override fun navigationEnded() {
+                ended++
+            }
+
+            override fun updateTrip(navState: Bundleable?) {}
+        }
+        val host = object : ICarHost.Stub() {
+            override fun startCarApp(intent: Intent?) {}
+
+            override fun getHost(type: String?): IBinder = navHost.asBinder()
+
+            override fun finish() {}
+        }
+        val dispatcher = HostDispatcher()
+        dispatcher.setCarHost(host)
+        val m = TestNavigationManager(car, dispatcher)
+        m.setNavigationManagerCallback(object : NavigationManagerCallback {})
+        m.navigationStarted()
+        m.onStopNavigation()
+        m.navigationEnded()
+        assertEquals(0, ended)
+        assertTrue(HostNavigation.endAfterHostStop(m))
+        assertEquals(1, ended)
+    }
+
+    @Test
+    fun endRouteIsOverOnTheCarAtOnce() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, _ -> asked += method }
+        start()
+        push("trip", trip("guiding", guiding))
+        (screens.top as NavigationScreen).stop()
+        // Before the phone answers (it never does in this test).
+        assertFalse(CarLink.trip.guiding)
+        assertTrue(screens.top is HomeScreen)
+        assertEquals(1, nav.navigationEndedCount)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("stop" in asked)
+    }
+
     // Bug: unplugging the car ended the route on the phone.
     @Test
     fun theCarGoingAwayInARealDriveLeavesThePhoneGuidingAndComingBackShowsGuidance() {
