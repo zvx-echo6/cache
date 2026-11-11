@@ -417,6 +417,10 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
         let bytes = body.to_vec();
         return Some(blocking(move || crate::libbuild::linked_api::preview(&service, &bytes)).await);
     }
+    if method == "GET" && rest == "storage" {
+        let service = app.build.clone();
+        return Some(blocking(move || Ok(crate::libbuild::linked_api::storage(&service))).await);
+    }
     if method == "GET" && rest == "libraries" {
         let targets: Vec<Value> = app.library.items().await.into_iter()
             .filter(|item| item["kind"].as_str() == Some("library"))
@@ -937,7 +941,7 @@ mod tests {
     async fn api_needs_a_session() {
         let d = TempDir::new("http");
         let a = app(&d);
-        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example")] {
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example"), ("GET", "/api/linked-folders/storage"), ("GET", "/api/linked-folders/example/books/doc"), ("POST", "/api/linked-folders/example/books/doc/forget")] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
             let v: Value = serde_json::from_slice(&r.body).unwrap();

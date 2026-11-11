@@ -55,6 +55,8 @@ impl BuildService {
             mark(&mut out, &r.dir.join(COPIES_FILE));
             mark(&mut out, &r.dir.join("documents.tsv"));
             mark(&mut out, &r.packs());
+            // a linked file found or lost at a check changes which books are on this device
+            mark(&mut out, &r.dir.join(".local").join("linked-registry.json"));
             out.push('/');
         }
         out
@@ -89,11 +91,18 @@ impl BuildService {
                     }
                 }
             }
+            // this device's own fact, never part of a pack: is the book's PDF on this device (a filed copy, or a linked file that was
+            // present at the last check)? Only for a library this server builds.
+            let built: Option<BTreeMap<String, Book>> = lock(&self.st).libs.iter().find(|l| l.id == r.library_id).map(|l| l.books.iter().map(|b| (b.doc_id.clone(), b.clone())).collect());
+            let presence = self.linked_presence(&r.library_id);
             let mut docs = serde_json::Map::new();
             for (doc, (_, path)) in newest {
                 let Ok(line) = header_line(&path) else { continue };
                 let Ok(Value::Object(mut h)) = serde_json::from_str::<Value>(line.trim()) else { continue };
                 h.remove("samebook");
+                if let Some(b) = built.as_ref().and_then(|m| m.get(&doc)) {
+                    h.insert("on_device".into(), json!(self.pdf_on_device(&r.library_id, b, &presence)));
+                }
                 docs.insert(doc, Value::Object(h));
             }
             libs.insert(r.library_id.clone(), Value::Object(docs));

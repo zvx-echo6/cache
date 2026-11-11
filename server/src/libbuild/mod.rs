@@ -71,6 +71,7 @@ pub mod linked_api;
 pub mod linked_checks;
 pub mod linked_watch;
 pub mod linked_auto;
+pub mod linked_where;
 pub mod removed;
 pub mod same;
 pub mod shelves_api;
@@ -1017,7 +1018,12 @@ impl BuildService {
         // Compress first (in the crash-proof child, with the reading limits), then hash and keep the file that is stored: the
         // bookshelf hash, the pack's source hash and the device copy all refer to it. Reading (text, pages, resolution) is done on
         // that same file, so page numbers and the "better copy" comparison see what is really kept.
-        let choice = item.compression.unwrap_or_else(|| if item.origin == Origin::Drop { self.drop_compression() } else { Compression::OFF });
+        // A linked book is never compressed, whatever the item says: no copy is kept and the person's own file is never touched.
+        let choice = if item.origin == Origin::Linked {
+            Compression::OFF
+        } else {
+            item.compression.unwrap_or_else(|| if item.origin == Origin::Drop { self.drop_compression() } else { Compression::OFF })
+        };
         let mut compression: Option<CompressionOutcome> = None;
         let mut original_hash: Option<String> = None;
         if choice.level != Level::Off {

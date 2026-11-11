@@ -330,7 +330,7 @@ mod tests {
     use super::*;
     use crate::{
         libbuild::{
-            linked_registry::{BrowseMode, RegistryData},
+            linked_registry::RegistryData,
             tests::rig_with,
             BuildConfig,
         },
@@ -375,7 +375,7 @@ mod tests {
             fs::create_dir_all(&source).unwrap();
             let target = target.canonicalize().unwrap();
             let mut registry = LinkedRegistry::open(&target.join(".local"), &target).unwrap();
-            registry.register_root("root-a", "Folder".into(), BrowseMode::Keep, &source, vec![]).unwrap();
+            registry.register_root("root-a", "Folder".into(), &source, vec![]).unwrap();
             let source = source.canonicalize().unwrap();
             Rig { _data: data, svc, target, source }
         }

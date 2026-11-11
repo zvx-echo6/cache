@@ -1,7 +1,7 @@
 //! Authenticated local administration for linked-folder identity adoption and checks.
 use super::{
     linked_checks::{self, CheckJob, Counts, JobFile, Scope},
-    linked_registry::{BrowseMode, LinkedRegistry, ScanReport},
+    linked_registry::{LinkedRegistry, ScanReport},
     BuildService,
 };
 use crate::library::ApiErr;
@@ -28,7 +28,7 @@ static RUNTIMES: OnceLock<RuntimeMap> = OnceLock::new();
 static OPS: OnceLock<OperationMap> = OnceLock::new();
 static JOB_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-fn error(status: u16, message: impl Into<String>) -> ApiErr {
+pub(super) fn error(status: u16, message: impl Into<String>) -> ApiErr {
     ApiErr { status, code: "linked_folder", message: message.into() }
 }
 
@@ -43,7 +43,7 @@ fn issue_code(e: &io::Error) -> &'static str {
     }
 }
 
-fn io_error(e: io::Error) -> ApiErr {
+pub(super) fn io_error(e: io::Error) -> ApiErr {
     let status = match e.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => 400,
         io::ErrorKind::NotFound => 404,
@@ -51,6 +51,11 @@ fn io_error(e: io::Error) -> ApiErr {
         _ => 500,
     };
     error(status, format!("{}: {}", issue_code(&e), e))
+}
+
+fn overlaps(a: &Path, b: &Path) -> bool {
+    let (a, b) = (a.canonicalize().unwrap_or_else(|_| a.to_path_buf()), b.canonicalize().unwrap_or_else(|_| b.to_path_buf()));
+    a.starts_with(&b) || b.starts_with(&a)
 }
 
 fn valid_id(s: &str) -> bool {
@@ -130,8 +135,10 @@ fn persist(sidecar: &Path, file: &JobFile) -> io::Result<()> {
 struct Register {
     id: String,
     label: String,
+    /// The app still sends the old browse `mode`; it is read and ignored (there are no modes any more).
     #[serde(default)]
-    mode: BrowseMode,
+    #[allow(dead_code)]
+    mode: Option<Value>,
     root: PathBuf,
     #[serde(default)]
     exclusions: Vec<PathBuf>,
@@ -578,6 +585,11 @@ fn validate_preview(data: &Path, input: Preview) -> Result<(PathBuf, Vec<PathBuf
     Ok((root, input.exclusions))
 }
 
+/// `GET /api/linked-folders/storage`: what each linked folder holds, across all libraries (see `linked_where::storage`).
+pub fn storage(service: &BuildService) -> Value {
+    super::linked_where::storage(service)
+}
+
 pub fn preview(service: &BuildService, body: &[u8]) -> Result<Value, ApiErr> {
     let input: Preview = serde_json::from_slice(body).map_err(|e| error(400, e.to_string()))?;
     let (root, exclusions) = validate_preview(&service.data, input)?;
@@ -613,6 +625,23 @@ pub fn request(
             }))
         }
         ("GET", [action]) if action == "checks" => job_status(&sidecar),
+        ("GET", [books, doc]) if books == "books" => super::linked_where::places(service, library, doc),
+        ("POST", [books, doc, action]) if books == "books" && action == "forget" => {
+            if is_active(&target) {
+                return Err(error(409, "linked-folder check active; wait for it to finish"));
+            }
+            let operation = op_lock(&target);
+            let _guard = operation.try_lock().map_err(|_| error(409, "linked-folder configuration is busy"))?;
+            let rt = runtime(&sidecar);
+            let state = rt.lock().unwrap_or_else(|e| e.into_inner());
+            healthy(&state)?;
+            if state.active.is_some() {
+                return Err(error(409, "linked-folder check active; wait for it to finish"));
+            }
+            // The operation lock keeps any new check from starting; the book's removal takes its own locks.
+            drop(state);
+            super::linked_where::forget(service, library, &target, doc)
+        }
         ("POST", []) => {
             if is_active(&target) {
                 return Err(error(409, "linked-folder check active; wait for it to finish"));
@@ -630,8 +659,12 @@ pub fn request(
                 return Err(error(400, "folder label must contain 1 to 200 bytes"));
             }
             let (source, exclusions) = validate_preview(&service.data, Preview { root: input.root, exclusions: input.exclusions })?;
+            // the drop folder moves and makes files in its own folder: a linked folder must never be that folder, or around or inside it
+            if service.drop_folder_in_use().is_some_and(|folder| overlaps(&source, Path::new(&folder))) {
+                return Err(error(400, "linked originals must not overlap Cache managed data"));
+            }
             let mut registry = LinkedRegistry::open(&sidecar, &target).map_err(io_error)?;
-            registry.register_root(&input.id, input.label, input.mode, &source, exclusions).map_err(io_error)?;
+            registry.register_root(&input.id, input.label, &source, exclusions).map_err(io_error)?;
             state.registered_roots = registry.local_config().roots.iter().map(|root| root.id.clone()).collect();
             state.controls.remove(&input.id);
             persist(&sidecar, &state).map_err(io_error)?;
@@ -727,7 +760,7 @@ mod tests {
         let target = target.canonicalize().unwrap();
         let sidecar = target.join(".local");
         let mut registry = LinkedRegistry::open(&sidecar, &target).unwrap();
-        registry.register_root("root-a", "Folder".into(), BrowseMode::Keep, &source, vec![]).unwrap();
+        registry.register_root("root-a", "Folder".into(), &source, vec![]).unwrap();
         let (first_sender, first_receiver) = mpsc::channel();
         let first = start(&service, &target, Some("root-a".into()), Some(first_sender)).unwrap();
         assert!(runtime(&sidecar).lock().unwrap().registered_roots.contains("root-a"));
