@@ -171,6 +171,11 @@ class AppState extends ChangeNotifier {
   ModelSettings activeSettings = ModelSettings.none;
 
   Future<void> init() async {
+    // The bench's switch that Ask's open reads (test APK only; false everywhere else), before Ask can open.
+    try {
+      final b = await _bench();
+      benchDeferSearchLoad = b.deferSearchLoad;
+    } catch (_) {}
     final fs = createAppFs(supportOverride: settingsDirOverride);
     await fs.mkdir(AppRoot.support, '');
     _fs = fs;
@@ -428,6 +433,8 @@ class AppState extends ChangeNotifier {
     logInfo('Bench options: $benchOptions');
     benchDateOffsetDays = benchOptions.dateOffsetDays;
     benchEmbedThreads = benchOptions.embedThreads;
+    benchDeferSearchLoad = benchOptions.deferSearchLoad;
+    if (benchOptions.deferSearchLoad) logInfo('Bench options: defer_search_load=true');
     if (benchOptions.embedThreads != 0) logInfo('Bench options: embed_threads=${benchOptions.embedThreads}');
     if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
     if (benchOptions.poolPause) logInfo('Bench options: pool_pause=true');

@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 /// (MainActivity, BuildConfig.TEST_APK); every other build answers nothing, so the app's default applies.
 @immutable
 class BenchOptions {
-  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0, this.embedThreads = 0, this.poolPause = false, this.poolPoll = -1});
+  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0, this.embedThreads = 0, this.poolPause = false, this.poolPoll = -1, this.deferSearchLoad = false});
 
   /// The native gentle pre-read's rate in MB/s: [kDefaultPrereadMbps] unless the extra was given; 0 turns it off.
   final int prereadMbps;
@@ -30,10 +30,14 @@ class BenchOptions {
   /// `--ei cache_pool_poll N` (0 to 100): the chat threadpool's poll level; -1: ggml's default.
   final int poolPoll;
 
+  /// `--ez cache_defer_search_load true`: opening Ask loads the search model only after the prompt read ahead has finished, been
+  /// skipped or stopped (a search before then loads it at once). False: as always.
+  final bool deferSearchLoad;
+
   static const BenchOptions off = BenchOptions();
 
   @override
-  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}${embedThreads != 0 ? ', embed_threads=$embedThreads' : ''}${poolPause ? ', pool_pause=true' : ''}${poolPoll >= 0 ? ', pool_poll=$poolPoll' : ''}';
+  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}${embedThreads != 0 ? ', embed_threads=$embedThreads' : ''}${poolPause ? ', pool_pause=true' : ''}${poolPoll >= 0 ? ', pool_poll=$poolPoll' : ''}${deferSearchLoad ? ', defer_search_load=true' : ''}';
 }
 
 const MethodChannel kBenchChannel = MethodChannel('cache/bench');
@@ -53,12 +57,14 @@ Future<BenchOptions> readBenchOptions({MethodChannel channel = kBenchChannel, bo
     final et = m['cache_embed_threads'];
     final pp = m['cache_pool_pause'];
     final pl = m['cache_pool_poll'];
+    final ds = m['cache_defer_search_load'];
     return BenchOptions(
       prereadMbps: mbps is int && mbps >= 0 ? mbps : kDefaultPrereadMbps,
       dateOffsetDays: test && days is int ? days : 0,
       ubatch: test && ub is int && ub > 0 ? ub : 0,
       embedThreads: test && et is int && et > 0 ? et : 0,
       poolPause: test && pp == true,
+      deferSearchLoad: test && ds == true,
       poolPoll: test && pl is int && pl >= 0 ? (pl > 100 ? 100 : pl) : -1,
     );
   } catch (_) {
@@ -72,3 +78,6 @@ int benchDateOffsetDays = 0;
 
 /// The search model's thread count from the bench ([BenchOptions.embedThreads]); 0: the default. Always 0 outside the test APK.
 int benchEmbedThreads = 0;
+
+/// [BenchOptions.deferSearchLoad] now. Read at the app's start (before Ask can open) and at every model load. Always false outside the test APK.
+bool benchDeferSearchLoad = false;

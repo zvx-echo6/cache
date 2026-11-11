@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
     private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
     private var benchPoolPause: Boolean? = null  // cache_pool_pause: rest the chat threadpool while nothing decodes (measurement)
     private var benchPoolPoll: Int? = null  // cache_pool_poll: the chat threadpool's poll level (measurement)
+    private var benchDeferSearchLoad: Boolean? = null  // cache_defer_search_load: Ask's open loads the search model after the read ahead (measurement)
     private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
@@ -40,6 +41,7 @@ class MainActivity : FlutterActivity() {
         if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
         if (i.hasExtra("cache_pool_pause")) benchPoolPause = i.getBooleanExtra("cache_pool_pause", false)
         if (i.hasExtra("cache_pool_poll")) benchPoolPoll = i.getIntExtra("cache_pool_poll", 0)
+        if (i.hasExtra("cache_defer_search_load")) benchDeferSearchLoad = i.getBooleanExtra("cache_defer_search_load", false)
         if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
     }
 
@@ -176,6 +178,8 @@ class MainActivity : FlutterActivity() {
                         if (BuildConfig.TEST_APK && pp != null) out["cache_pool_pause"] = pp
                         val pl = benchPoolPoll
                         if (BuildConfig.TEST_APK && pl != null) out["cache_pool_poll"] = pl
+                        val ds = benchDeferSearchLoad
+                        if (BuildConfig.TEST_APK && ds != null) out["cache_defer_search_load"] = ds
                         result.success(out)
                     }
                     else -> result.notImplemented()

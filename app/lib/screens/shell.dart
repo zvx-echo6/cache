@@ -157,22 +157,43 @@ class _ShellState extends State<Shell> {
   /// none. Not when Ask was left while the model loaded; leaving Ask later, with Cache in front, does not stop a read.
   Future<void> _wakeAsk() async {
     _openingRead = false; // a new opening of Ask: it may have its read ahead
+    _endReadWait(); // an earlier opening's wait is over
+    _readEnded = Completer<void>();
     await widget.app.wake();
     _readAhead();
+    // No read is coming (the model did not load, there is no read ahead): nothing to wait for.
+    if (!_openingRead && widget.app.loading == null) _endReadWait();
   }
 
   /// This opening of Ask has had its read ahead (or has none to have).
   bool _openingRead = false;
 
+  /// Completes when this opening's read ahead has finished, been skipped or stopped, or none is coming (the test APK's switch that
+  /// defers the search model's load until then reads it).
+  Completer<void> _readEnded = Completer<void>()..complete();
+
+  void _endReadWait() {
+    if (!_readEnded.isCompleted) _readEnded.complete();
+  }
+
   /// Reads the prompt start ahead, once per opening of Ask, when Ask is shown and the model is loaded. When the model is still loading
   /// as Ask opens (the app start's load, which [AppState.wake] does not wait for) nothing is read yet, and [_onApp] asks again when
   /// the load completes, so a cold start with Ask open still gets its read.
   void _readAhead() {
-    if (_openingRead || !mounted || _module != ModuleId.ask) return;
+    if (!mounted || _module != ModuleId.ask) {
+      _endReadWait(); // Ask was left: no read to wait for
+      return;
+    }
+    if (_openingRead) return;
     final app = widget.app;
     if (app.active == null || app.loading != null) return;
     _openingRead = true;
-    unawaited(widget.readAhead?.start());
+    final ahead = widget.readAhead;
+    if (ahead == null) {
+      _endReadWait();
+    } else {
+      unawaited(ahead.start().whenComplete(_endReadWait));
+    }
   }
 
   /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
@@ -394,7 +415,7 @@ class _ShellState extends State<Shell> {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
     if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
-    if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
+    if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch(after: _readEnded.future);
     setState(() {
       _module = m;
       _onModules = false;

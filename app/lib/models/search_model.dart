@@ -12,7 +12,7 @@ import '../app_state.dart';
 import '../maps/ui/format.dart';
 import '../platform.dart' as plat;
 import '../platform/app_log.dart';
-import '../platform/bench_options.dart' show benchEmbedThreads;
+import '../platform/bench_options.dart' show benchEmbedThreads, benchDeferSearchLoad;
 import '../platform/memory.dart';
 import '../sources/sources_state.dart' show LibraryEmbedding;
 import 'hf_hub.dart';
@@ -298,7 +298,25 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
   bool get isWarm => embedder.isWarm;
 
   /// The person opened Ask or put the cursor in a search box: the app's search model loads ahead of the search ([warmLoad]).
-  static void aboutToSearch() => unawaited(shared?.warmLoad());
+  ///
+  /// [after] (the app's Ask opening, test APK switch `cache_defer_search_load` only): the load waits until it completes (the prompt read
+  /// ahead has finished, been skipped or stopped) and then runs. Without the switch, or without [after], the load starts at once, as
+  /// always. A search that needs the model before then loads it on use as always, so nothing waits on the deferral.
+  static void aboutToSearch({Future<void>? after}) {
+    final sm = shared;
+    if (sm == null) return;
+    if (after == null || !benchDeferSearchLoad) {
+      unawaited(sm.warmLoad());
+      return;
+    }
+    logInfo('search model load: deferred until the read is done');
+    final opened = Stopwatch()..start();
+    unawaited(after.then((_) {
+      if (sm._disposed) return null;
+      logInfo('search model load: started after the read (${opened.elapsedMilliseconds} ms after Ask open)');
+      return sm.warmLoad();
+    }));
+  }
 
   /// Loads the search model in the background when it is installed and the phone has room for it (its file plus
   /// [warmMargin]); a search then finds it loaded. Never throws; call it without awaiting. Does nothing in a browser, where the
