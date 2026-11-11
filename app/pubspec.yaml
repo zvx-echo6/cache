@@ -43,6 +43,9 @@ dependencies:
   # Add PDF: reading scanned pages on the phone (Apple Vision on iPhone and iPad, ML Kit's bundled Latin model on Android).
   cache_ocr:
     path: ../packages/cache_ocr
+  # Battery and heat readings in every engine (the app's and WorkManager's background one).
+  cache_device:
+    path: ../packages/cache_device
   geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
   maplibre_gl: ^0.27.1
