@@ -3,7 +3,13 @@ package com.happylittlellc.cache.car
 import android.content.Intent
 import android.net.Uri
 import android.os.Looper
+import android.os.IBinder
 import androidx.car.app.CarContext
+import androidx.car.app.HostDispatcher
+import androidx.car.app.ICarHost
+import androidx.car.app.navigation.INavigationHost
+import androidx.car.app.navigation.NavigationManagerCallback
+import androidx.car.app.serialization.Bundleable
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Row
@@ -25,6 +31,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -70,8 +77,8 @@ class CarSessionTest {
     @After
     fun tearDown() = CarLink.reset()
 
-    private fun start(intent: Intent = Intent()): SessionController {
-        val c = SessionController(CarSession(startEngine = {}), car, intent)
+    private fun start(intent: Intent = Intent(), session: CarSession = CarSession(startEngine = {})): SessionController {
+        val c = SessionController(session, car, intent)
         // The test library drives the Session's public lifecycle only; the car context's own (which the ScreenManager follows,
         // as the host's does) is moved here too, so screens pushed later are created and started as on a real host.
         car.lifecycleOwner.registry.currentState = Lifecycle.State.CREATED
@@ -290,6 +297,19 @@ class CarSessionTest {
         push("trip", trip("browsing"))
         assertEquals(1, nav.navigationEndedCount)
         assertFalse(screens.top is NavigationScreen)
+    }
+
+    // Bug: place rows showed the distance and never the address.
+    @Test
+    fun aPlaceRowShowsTheDistanceAndTheAddress() {
+        val row = placeRow(CarPlace("place:1", "Made Up Clinic", "12 Nowhere Lane", 42.5, -113.5, 2400.0), imperial = true) {}
+        val text = row.texts[0].toCharSequence() as android.text.Spanned
+        assertEquals("  · 12 Nowhere Lane", text.toString())
+        val spans = text.getSpans(0, text.length, androidx.car.app.model.DistanceSpan::class.java)
+        assertEquals(1, spans.size)
+        // The distance takes the place of the first character only; the address after it is text.
+        assertEquals(0, text.getSpanStart(spans[0]))
+        assertEquals(1, text.getSpanEnd(spans[0]))
     }
 
     @Test

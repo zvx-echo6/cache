@@ -163,11 +163,14 @@ object CarModels {
         return text
     }
 
-    /** "2.4 mi" for a place's distance, or null. */
+    /**
+     * "2.4 mi" for a place's distance, or null. The span ends with its one character and does not grow: a row appends the
+     * address after it (CarScreens.kt), and a span that took the appended text in made the host show the distance alone.
+     */
     fun placeDistance(meters: Double?, imperial: Boolean): CharSequence? {
         if (meters == null) return null
         val text = SpannableString(" ")
-        text.setSpan(DistanceSpan.create(distance(meters, imperial)), 0, 1, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+        text.setSpan(DistanceSpan.create(distance(meters, imperial)), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         return text
     }
 }

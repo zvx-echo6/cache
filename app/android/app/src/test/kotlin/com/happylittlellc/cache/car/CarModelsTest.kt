@@ -140,6 +140,15 @@ class CarModelsTest {
     }
 
     @Test
+    fun placeDistanceDoesNotTakeInTextAddedAfterIt() {
+        val row = android.text.SpannableStringBuilder(CarModels.placeDistance(2400.0, imperial = true)).append(" · 12 Nowhere Lane")
+        val spans = row.getSpans(0, row.length, DistanceSpan::class.java)
+        assertEquals(1, spans.size)
+        assertEquals(0, row.getSpanStart(spans[0]))
+        assertEquals(1, row.getSpanEnd(spans[0]))
+    }
+
+    @Test
     fun routeTitleLetsTheHostFormatTimeAndDistance() {
         val r = CarTrip.from(guidingMap).routes[0]
         val title = CarModels.routeTitle(r, imperial = true) as Spanned
