@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cache/chat/citations.dart';
@@ -55,6 +56,48 @@ class FakeSearch extends Tool {
 }
 
 SourceResult r(String t, String s) => SourceResult(title: t, snippet: s, address: 'local:$t');
+
+/// A search that waits for [release] before it returns, so a test can stop the turn while the tool runs.
+class GatedSearch extends Tool {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  int finished = 0;
+
+  @override
+  String get name => 'search';
+  @override
+  String get description => 'search';
+  @override
+  Map<String, dynamic> get parameters => {'type': 'object'};
+  @override
+  Future<List<SourceResult>> run(Map<String, dynamic> args) async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    finished++;
+    return [r('Compass', 'It points north.')];
+  }
+}
+
+/// Writes the start of an answer, then waits for stop() and ends with what it had written, as the engine does.
+class StoppableBackend implements ModelBackend {
+  final List<Map<String, dynamic>> requests = [];
+  final started = Completer<void>();
+  final _stop = Completer<void>();
+
+  @override
+  Stream<PartialMessage> generate(Map<String, dynamic> request) async* {
+    requests.add(request);
+    yield const PartialMessage(content: 'Boil the');
+    if (!started.isCompleted) started.complete();
+    await _stop.future;
+    yield const PartialMessage(isFinal: true, content: 'Boil the');
+  }
+
+  @override
+  void stop() {
+    if (!_stop.isCompleted) _stop.complete();
+  }
+}
 
 void main() {
   group('citation check', () {
@@ -277,6 +320,47 @@ void main() {
       final toolMsg = (backend.requests[1]['messages'] as List).last as Map;
       expect(toolMsg['content'], contains('no tool called nope'));
       expect(updates.last.error, isNull);
+    });
+
+    test('Stop while a tool runs: the tool finishes, no further generation starts, and the turn ends as a stopped answer does', () async {
+      final search = GatedSearch();
+      final backend = FakeBackend([(_) => toolCall('compass'), (_) => answer('The next answer.')]);
+      final loop = ToolLoop(backend: backend, tools: [search]);
+      final turn = loop.ask('compass?').toList();
+      await search.entered.future;
+      loop.stop();
+      search.release.complete();
+      final updates = await turn;
+      expect(search.finished, 1, reason: 'the running tool finishes');
+      expect(backend.requests, hasLength(1), reason: 'its result does not start another generation');
+      expect(updates.where((u) => u.phase == TurnPhase.done), hasLength(1));
+      expect(updates.last.phase, TurnPhase.done);
+      expect(updates.last.text, isEmpty);
+      expect(updates.last.error, isNull);
+      // The conversation keeps the call, its result and an empty answer: what Stop before the model's first word leaves.
+      expect([for (final m in loop.messages) m['role']], ['user', 'assistant', 'tool', 'assistant']);
+      expect(loop.messages[2]['content'], '[1] Compass — It points north.');
+      expect(loop.messages.last, {'role': 'assistant', 'content': ''});
+
+      // The next question is asked and answered as usual.
+      final next = await loop.ask('again?').toList();
+      expect(backend.requests, hasLength(2));
+      expect(next.last.phase, TurnPhase.done);
+      expect(next.last.text, 'The next answer.');
+    });
+
+    test('Stop while the answer is written ends the turn with the text so far', () async {
+      final backend = StoppableBackend();
+      final loop = ToolLoop(backend: backend, tools: const []);
+      final turn = loop.ask('water?').toList();
+      await backend.started.future;
+      loop.stop();
+      final updates = await turn;
+      expect(backend.requests, hasLength(1));
+      expect(updates.last.phase, TurnPhase.done);
+      expect(updates.last.text, 'Boil the');
+      expect(updates.last.error, isNull);
+      expect(loop.messages.last, {'role': 'assistant', 'content': 'Boil the'});
     });
   });
 

@@ -1076,6 +1076,13 @@ impl Handle {
         let p = z.main_page_path()?;
         Ok(json!({ "address": zimsrc::format_address(&z.id, &p) }).to_string())
     }
+
+    /// `cs_zim_illustration`: the ZIM's own icon (its `Illustration_48x48@1` metadata) as `{"png_base64"}`; `not_found` when the
+    /// ZIM has none.
+    pub fn zim_illustration(&self, zim_id: &str) -> Result<String> {
+        let png = self.zim(zim_id)?.illustration_png()?;
+        Ok(json!({ "png_base64": zimsrc::base64_encode(&png) }).to_string())
+    }
 }
 
 #[cfg(test)]

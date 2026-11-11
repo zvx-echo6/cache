@@ -253,6 +253,9 @@ class NotebookSync {
       fields: {for (final f in n.def.fields) if (f.fid != null && e.values.containsKey(f.fid) && m[f.fid] != null) m[f.fid]!: e.values[f.fid]},
       private: e.private,
       extra: _items[e.id]?.extra ?? const [],
+      // Only the Cache-to-Cache share carries them: a person's own Obsidian vault or Logseq graph gets no Cache properties it
+      // did not have.
+      props: kind != SyncKind.share || e.props.isEmpty ? null : {for (final k in const ['color', 'icon', 'on_map']) if (e.props[k] != null) k: e.props[k]},
     );
   }
 
@@ -370,7 +373,7 @@ class NotebookSync {
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
         final other = identical(keep, prev) ? u : prev;
         out[u.doc.id] = keep;
-        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra)));
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props)));
       }
     }
 
@@ -630,7 +633,7 @@ class NotebookSync {
             ],
       files: existing?.files ?? const [],
       private: kind == SyncKind.share ? d.private : (existing?.private ?? d.private),
-      props: existing?.props ?? const {},
+      props: (kind == SyncKind.share ? d.props : null) ?? existing?.props ?? const {},
     );
     _rec(id, _items[id]?.path ?? '', '', saved.rev, extra: extra);
     return saved;

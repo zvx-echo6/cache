@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
+class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsZimIconNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -574,6 +574,16 @@ class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative
 
   @override
   String? captionsSearch(int handle, String requestJson) => _callHS(_captionsSearch, handle, requestJson);
+
+  // ---- A ZIM's own icon: looked up on first use ----
+
+  late final _HStrStr? _zimIllustration = _lookupHS('cs_zim_illustration');
+
+  @override
+  bool get hasZimIllustration => _zimIllustration != null;
+
+  @override
+  String? zimIllustration(int handle, String zimId) => _callHS(_zimIllustration, handle, zimId);
 
   // ---- PDF indexes of ZIMs: looked up on first use ----
 

@@ -13,6 +13,7 @@ import 'models/recommendations.dart' show ModelSettings;
 import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/bench_options.dart';
 import 'platform/memory.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
@@ -65,9 +66,21 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, ServerModels? server})
-    : memory = memory ?? readMemory,
-      _server = server ?? (plat.isWeb ? ServerModels() : null);
+  AppState({
+    this.settingsDirOverride,
+    this.modelsDirOverride,
+    Future<MemoryReading?> Function()? memory,
+    Future<BenchOptions> Function()? bench,
+    ServerModels? server,
+  })  : memory = memory ?? readMemory,
+        _bench = bench ?? readBenchOptions,
+        _server = server ?? (plat.isWeb ? ServerModels() : null);
+
+  /// The bench's launch options (test APK only; off everywhere else), read at each model load.
+  final Future<BenchOptions> Function() _bench;
+
+  /// The bench options of the last model load.
+  BenchOptions benchOptions = BenchOptions.off;
 
   /// A browser: the model files are the server's (list, delete, upload); there is no models folder here.
   final ServerModels? _server;
@@ -412,7 +425,10 @@ class AppState extends ChangeNotifier {
         // Without a folder the model loads without the saved prefix.
       }
     }
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
+    // The bench's options come before the load: the pre-read rate is a load option (0 when the bench set nothing).
+    benchOptions = await _bench();
+    logInfo('Bench options: $benchOptions');
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.

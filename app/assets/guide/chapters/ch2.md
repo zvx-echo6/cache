@@ -137,7 +137,7 @@ Lists have no tick boxes until you ask for them.
 
 To use an item's menu:
 1. Press and hold the item. You feel a short buzz and it lifts.
-2. Pick an action. For a Library item: "Check for update", "Change icon", "Add to Home" or "Delete".
+2. Pick an action. For a Library item: "Check for update", "Change icon", "Get icon from source", "Add to Home" or "Delete".
 
 To act on several items:
 1. Tap "Select" in the list's header.
@@ -157,7 +157,7 @@ Delete always asks first. The pop-up shows what it frees and says "You can downl
 1. Open "Ask" from the bar. You can also type in the Home search box and tap "Ask Cache:".
 2. If "Ask" says "Ask needs a model on this device.", tap "Choose a model" first. If the title says "No model", tap it and choose a model.
 3. Type in "Ask anything" and tap "Send".
-4. Follow the progress: "Preparing answer…", "Looking this up…" and "Reading from source…". The work stays visible as the answer appears; "Answer delivered" marks completion. Tap "Stop" to stop it.
+4. Follow the progress. While Cache works, one line says what it is doing, such as searching your library, reading a source or calculating, and each finished step stays above it with a check. When the answer starts to appear, the steps fold into one line such as "3 steps"; tap it to show or hide them. "Answer delivered" marks completion. Tap "Stop" to stop it.
 
 Cache looks in your Library, libraries, downloaded places and maps, and weather data. If you set it up, it also searches the web when you're online.
 
@@ -431,13 +431,13 @@ On a tablet the Library's rows stay at the left and each one opens beside them. 
 
 1. Open "Library" and tap "ZIM Collections".
 2. Tap a row to open it in the reader.
-3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
+3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Get icon from source", "Add to Home" and "Delete".
 
 A badge shows only when something needs attention, for example "Update ready". Tap it to update.
 
 Under a row, a line can say how its search is going, for example `Making PDFs searchable · 340 of 5,768`. Tap that line to open it in "Catalog", where "Pause all" and "Resume" are.
 
-"Change icon" picks a picture from your device. "Delete" asks first and shows what it frees.
+"Change icon" picks a picture from your device. "Get icon from source" fetches the picture again from where the ZIM came from (Kiwix), or reads the one inside the ZIM; it says "No icon found at the source" when there is none. "Delete" asks first and shows what it frees.
 
 - If you see "No ZIM Collections yet. Add Wikipedia, medical guides or survival manuals.", tap "Add to Library".
 

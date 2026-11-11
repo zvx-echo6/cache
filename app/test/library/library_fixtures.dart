@@ -142,5 +142,6 @@ LibraryDeps testDeps({
       openGuide: (_) async {},
       openOwnLibrary: (_, _) {},
       holdsBooks: (l) => shelves is CdsShelfSource && shelves.holdsBooks(l),
+      booksIn: (l) => shelves is CdsShelfSource ? shelves.booksIn(l) : 0,
       whatsNew: () async => const ['- **A new Library:** four places in one.'],
     );

@@ -195,9 +195,14 @@ const int kTrimUiHidden = 20;
 /// Android says memory is short: [level] (onTrimMemory's) and the memory then.
 typedef MemoryTrim = void Function(int level, MemoryReading? reading);
 
-/// Calls [onTrim] each time Android sends onTrimMemory (Android only; elsewhere never).
-void listenMemoryTrim(MemoryTrim onTrim) {
+/// Calls [onTrim] each time Android sends onTrimMemory (Android only; elsewhere never), and [onWarning] each time iOS sends a
+/// memory warning (iOS only).
+void listenMemoryTrim(MemoryTrim onTrim, {void Function()? onWarning}) {
   kMemoryChannel.setMethodCallHandler((call) async {
+    if (call.method == 'memoryWarning') {
+      onWarning?.call();
+      return null;
+    }
     if (call.method != 'trim') return null;
     final m = call.arguments;
     final level = m is Map && m['level'] is int ? m['level'] as int : 0;

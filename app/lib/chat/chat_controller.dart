@@ -10,8 +10,10 @@ import '../history/markdown_export.dart';
 import '../history/titles.dart';
 import '../search/numbering_state.dart';
 import 'ask_about.dart';
+import 'ask_focus.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
+import 'progress_steps.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
@@ -32,7 +34,8 @@ class ChatMessage {
       : isUser = m.role == 'user',
         text = m.content,
         phase = TurnPhase.done,
-        error = m.error,
+        error = m.error == kChatFullCode ? null : m.error,
+        chatFull = m.error == kChatFullCode,
         navigationActions = m.navigationActions.isNotEmpty ? m.navigationActions : [
           for (final c in m.citations)
             if (c.address.startsWith('nav:') && c.address.length > 4) NavigationAction(address: c.address),
@@ -49,8 +52,19 @@ class ChatMessage {
   /// Ephemeral work shown continuously above the final answer, not model history.
   List<String> toolNotes = const [];
   String? activeTool;
+
+  /// The tool call running now, and the ones that finished in this answer (the trail above the progress line). Kept with the
+  /// message while the app runs, like [toolNotes]; not stored and never sent to the model.
+  ToolStep? activeStep;
+  List<ToolStep> steps = const [];
   List<NumberedResult> sources = const [];
   String? error;
+
+  /// The next question did not fit the chat's context: shown as a plain message with a New chat button, not as an error.
+  bool chatFull = false;
+
+  /// The answer ended because the chat's context filled up: shown with a note and a New chat button. Not stored.
+  bool cutShort = false;
   List<NavigationAction> navigationActions = const [];
 
   /// The confirm cards this answer asked for, in order.
@@ -62,6 +76,9 @@ class ChatMessage {
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
+
+/// What is kept in a stored message's error column for a reply that found the chat full; read back as [ChatMessage.chatFull].
+const String kChatFullCode = 'chat_full';
 
 /// The answer when the search core could not start: the question is never answered without its tools.
 const String kCoreDidNotStart = "Cache's search couldn't start, so this wasn't answered.";
@@ -79,9 +96,13 @@ class ChatController extends ChangeNotifier {
     this.numberingState,
     this.actions,
     this.waitForCore,
+    this.focus,
     required this.actCore,
     this.outcomeForm = kActOutcomeForm,
   });
+
+  /// Held while an answer generates, so background work waits (chat/ask_focus.dart); null: nothing is held.
+  final AskFocus? focus;
 
   /// The actions a confirm card runs; null: a tapped card fails.
   final ActionRegistry? actions;
@@ -355,6 +376,7 @@ class ChatController extends ChangeNotifier {
     var start = 0;
     final clock = Stopwatch()..start();
     TurnUpdate? last;
+    var focusing = false; // AskFocus is held from the first generation to the end of the turn
     try {
       await _cancelTitle(backend);
       if (cancelled()) return;
@@ -432,6 +454,8 @@ class ChatController extends ChangeNotifier {
         if (epoch == _epoch) notifyListeners();
       };
       final seeded = seed == null || loop.host == null ? null : (name: seed.toolName, arguments: spacedJson(seed.arguments));
+      focusing = true;
+      focus?.begin();
       await for (final u in loop.ask(text, seed: seeded, message: question)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
@@ -441,6 +465,7 @@ class ChatController extends ChangeNotifier {
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
+      if (focusing) focus?.end();
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
       if (loop != null && convId != null) {
@@ -571,6 +596,7 @@ class ChatController extends ChangeNotifier {
     var start = 0;
     final clock = Stopwatch()..start();
     TurnUpdate? last;
+    var focusing = false; // AskFocus is held from the first generation to the end of the turn
     try {
       var made = _loop;
       if (made == null) {
@@ -593,6 +619,8 @@ class ChatController extends ChangeNotifier {
         reply.navigationActions = [...reply.navigationActions, ...actions];
         if (epoch == _epoch) notifyListeners();
       };
+      focusing = true;
+      focus?.begin();
       await for (final u in loop.resume()) {
         if (epoch != _epoch) return;
         last = u;
@@ -602,6 +630,7 @@ class ChatController extends ChangeNotifier {
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
+      if (focusing) focus?.end();
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
       if (loop != null && convId != null) {
@@ -617,11 +646,23 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// An `act` step with the title of the action it runs, from the installed definitions.
+  ToolStep? _withActionTitle(ToolStep? step) {
+    if (step == null || step.tool != 'act') return step;
+    final id = step.arguments['action'];
+    return id is String ? step.withTitle(actions?.definition(id)?.title) : step;
+  }
+
   void _applyUpdate(ChatMessage reply, TurnUpdate update) {
     reply
       ..phase = update.phase
       ..error = update.error
-      ..activeTool = update.activeTool;
+      ..chatFull = update.chatFull
+      ..cutShort = update.cutShort
+      ..activeTool = update.activeTool
+      ..activeStep = _withActionTitle(update.step);
+    final finished = update.finishedStep;
+    if (finished != null) reply.steps = [...reply.steps, _withActionTitle(finished)!];
     final note = update.completedToolText;
     if (note != null) {
       if (note.isNotEmpty) reply.toolNotes = [...reply.toolNotes, note];
@@ -668,7 +709,7 @@ class ChatController extends ChangeNotifier {
             role: 'assistant',
             content: reply.text,
             message: {'role': 'assistant', 'content': reply.text},
-            error: reply.error ?? 'No answer was produced.',
+            error: reply.chatFull ? kChatFullCode : (reply.error ?? 'No answer was produced.'),
             navigationActions: reply.navigationActions,
             stats: stats,
             inTranscript: false,

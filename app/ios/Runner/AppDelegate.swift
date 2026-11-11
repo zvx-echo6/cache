@@ -86,6 +86,10 @@ import workmanager_apple
       }
       result(machine)
     }
+    // iOS's memory warning goes to the app, which lets the search model go (lib/platform/memory.dart, listenMemoryTrim).
+    NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
+      memory.invokeMethod("memoryWarning", arguments: nil)
+    }
     // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
     let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     // Monitoring is on from the start, so the first read already has the level (UIDevice reports -1 until it is on; the app

@@ -68,7 +68,9 @@ class LlamaSession {
         c?.close();
       case 'error':
         final c = _gens.remove(id);
-        c?.addError(StateError(msg['error'] as String));
+        c?.addError(msg['contextFull'] == true
+            ? ContextFullException(msg['error'] as String)
+            : StateError(msg['error'] as String));
         c?.close();
     }
   }
@@ -89,7 +91,8 @@ class LlamaSession {
   /// Loads the model (replacing a model loaded before). Throws a [StateError] with the reason on failure.
   /// On Android the CPU weights stay file-backed in the mmap; [repackWeights] repacks them instead, for measurement only (see
   /// cl_configure). [prefixDir]: where the fixed prompt start (system prompt and tools) is saved between runs; null: not saved.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir}) async {
+  /// [prereadMbps]: the gentle pre-read rate in MB/s after the load (default [kDefaultPrereadMbps]; 0: off).
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps}) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
@@ -100,7 +103,7 @@ class LlamaSession {
       'id': id,
       'path': path,
       'nCtx': nCtx,
-      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights),
+      'options': llamaLoadOptions(prefixDir: prefixDir, repackWeights: repackWeights, prereadMbps: prereadMbps),
     });
     final r = await c.future;
     if (r['error'] != null) throw StateError(r['error'] as String);
@@ -227,7 +230,8 @@ void _workerMain(SendPort toMain) {
         final startMs = clock.elapsedMilliseconds;
         malloc.free(req);
         if (rc != 0) {
-          toMain.send({'type': 'error', 'id': id, 'error': err.toDartString()});
+          // -3: the prompt does not fit the context (the chat is full); any other code is a plain failure.
+          toMain.send({'type': 'error', 'id': id, 'error': err.toDartString(), 'contextFull': rc == -3});
           break;
         }
         final maxTokens = msg['maxTokens'] as int?;

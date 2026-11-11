@@ -17,11 +17,14 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
+
+  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart); null in tests.
+  final void Function()? onOpened;
 
   /// Starts the index jobs of the sources just opened (null in tests that do not index).
   final IndexDriver? indexer;
@@ -48,6 +51,7 @@ class OpenOp implements OpHandler {
         'places: ${(f['places'] as Map)['available'] == true ? 'present' : 'none downloaded'}');
     dispatcher.handle('open', {'sources': sources, 'extra': extra});
     indexer?.useSources(sources);
+    onOpened?.call();
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
 }

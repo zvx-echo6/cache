@@ -10,6 +10,7 @@ enum ModuleId {
   maps('Maps', Icons.map_outlined, Icons.map, BrandTile.maps),
   videos('Videos', Icons.play_circle_outline, Icons.play_circle, BrandTile.videos),
   weather('Weather', Icons.cloud_outlined, Icons.cloud, BrandTile.weather),
+  discover('Discover', Icons.collections_bookmark_outlined, Icons.collections_bookmark, null),
   notebooks('Notebooks', Icons.book_outlined, Icons.book, BrandTile.journal),
   settings('Settings', Icons.settings_outlined, Icons.settings, BrandTile.settings);
 
@@ -21,8 +22,8 @@ enum ModuleId {
   final IconData icon;
   final IconData selectedIcon;
 
-  /// The painted tile used on Home shortcuts.
-  final BrandTile tile;
+  /// The painted tile used on Home shortcuts; null (Discover has no painted art) shows the module's icon in a plain tile.
+  final BrandTile? tile;
 
   static ModuleId? byName(String? n) {
     for (final m in ModuleId.values) {

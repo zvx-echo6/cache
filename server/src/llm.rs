@@ -9,7 +9,7 @@
 //! their place. Loading and generating are blocking (llama.cpp), so they run on worker threads, never on the async threads.
 
 use crate::library::ApiErr;
-use cache_embed::chat::{ChatModel, CHAT_DEFAULT_N_CTX};
+use cache_embed::chat::{ChatModel, StartFailure, CHAT_DEFAULT_N_CTX, START_CONTEXT_FULL};
 use hyper::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
@@ -29,6 +29,8 @@ pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// The range of `n_ctx` a client may ask for.
 pub const N_CTX_RANGE: std::ops::RangeInclusive<i64> = 256..=262_144;
 /// The message the app shows when `cl_next` fails (llama_session_io.dart).
+/// The `context_full` error: the client shows its own text for it.
+const CONTEXT_FULL: &str = "The chat is full";
 const GENERATION_FAILED: &str = "The model stopped with an error while answering";
 /// What the app uses when `cl_finish` fails (llama_session_io.dart `readJson`).
 const EMPTY_MESSAGE: &str = r#"{"role":"assistant","content":""}"#;
@@ -41,7 +43,7 @@ fn err(status: u16, code: &'static str, message: impl Into<String>) -> ApiErr {
 
 /// The native chat calls (`ChatModel` is the real one; the tests use a fake).
 pub trait ChatBackend: Send + Sync {
-    fn start(&self, request_json: &str) -> Result<(), String>;
+    fn start(&self, request_json: &str) -> Result<(), StartFailure>;
     /// `cl_next`: byte count of the token, -1 finished, -2 error.
     fn next(&self) -> i32;
     fn partial(&self) -> Option<String>;
@@ -52,7 +54,7 @@ pub trait ChatBackend: Send + Sync {
 }
 
 impl ChatBackend for ChatModel {
-    fn start(&self, r: &str) -> Result<(), String> {
+    fn start(&self, r: &str) -> Result<(), StartFailure> {
         ChatModel::start(self, r)
     }
     fn next(&self) -> i32 {
@@ -522,8 +524,13 @@ fn send_event(tx: &tokio::sync::mpsc::Sender<std::io::Result<Bytes>>, ev: Value,
 /// The worker of llama_session_io.dart (`case 'generate'`), call for call. `send` returns false once the client is gone.
 fn generate_loop(b: &dyn ChatBackend, gen_id: &str, request: &Value, send: &dyn Fn(Value) -> bool) {
     // jsonEncode(request): the whole map goes to the native layer ("max_tokens" is ignored there).
-    if let Err(m) = b.start(&request.to_string()) {
-        send(error_event("start_failed", &m));
+    if let Err(f) = b.start(&request.to_string()) {
+        // -3 (by the code, never the text): the prompt does not fit the context, the chat is full.
+        if f.code == START_CONTEXT_FULL {
+            send(error_event("context_full", CONTEXT_FULL));
+        } else {
+            send(error_event("start_failed", &f.message));
+        }
         return;
     }
     let max_tokens = max_tokens_of(request);
@@ -576,7 +583,7 @@ mod tests {
     struct Fake {
         tokens: i32,
         fail_after: Option<i32>,
-        fail_start: bool,
+        fail_start: Option<i32>,
         made: AtomicI32,
         stopped: AtomicBool,
         stops: AtomicI32,
@@ -591,7 +598,7 @@ mod tests {
             Arc::new(Fake {
                 tokens,
                 fail_after: None,
-                fail_start: false,
+                fail_start: None,
                 made: AtomicI32::new(0),
                 stopped: AtomicBool::new(false),
                 stops: AtomicI32::new(0),
@@ -603,14 +610,14 @@ mod tests {
     }
 
     impl ChatBackend for Fake {
-        fn start(&self, r: &str) -> Result<(), String> {
+        fn start(&self, r: &str) -> Result<(), StartFailure> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             *self.last_request.lock().unwrap() = r.to_string();
             // cl_start clears the stop flag first, then decodes the prompt (the hold stands in for that)
             self.made.store(0, Ordering::SeqCst);
             self.stopped.store(false, Ordering::SeqCst);
-            if self.fail_start {
-                return Err("bad template".into());
+            if let Some(code) = self.fail_start {
+                return Err(StartFailure { code, message: "bad template".into() });
             }
             if let Some(rx) = self.hold.lock().unwrap().take() {
                 let _ = rx.recv();
@@ -828,7 +835,7 @@ mod tests {
     }
 
     impl ChatBackend for Replay {
-        fn start(&self, _r: &str) -> Result<(), String> {
+        fn start(&self, _r: &str) -> Result<(), StartFailure> {
             Ok(())
         }
         fn next(&self) -> i32 {
@@ -931,12 +938,35 @@ mod tests {
         // cl_start refusing
         let d2 = TempDir::new("llm-err2");
         let mut f2 = Fake::new(5);
-        Arc::get_mut(&mut f2).unwrap().fail_start = true;
+        Arc::get_mut(&mut f2).unwrap().fail_start = Some(-1);
         let s2 = service(&d2, f2);
         s2.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         s2.run_generation(None, json!({"messages": []}), tx);
         assert_eq!(collect(rx), vec![error_event("start_failed", "bad template")]);
+    }
+
+    #[test]
+    fn cl_start_minus_3_is_context_full_and_any_other_code_is_start_failed() {
+        for (code, want) in [(-3, error_event("context_full", CONTEXT_FULL)), (-1, error_event("start_failed", "bad template")), (-2, error_event("start_failed", "bad template"))] {
+            let d = TempDir::new("llm-ctxfull");
+            let mut f = Fake::new(5);
+            Arc::get_mut(&mut f).unwrap().fail_start = Some(code);
+            let s = service(&d, f);
+            s.load("chat-a.gguf", 8192).unwrap();
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            s.run_generation(None, json!({"messages": []}), tx);
+            assert_eq!(collect(rx), vec![want], "cl_start code {code}");
+        }
+    }
+
+    /// #54: cl_finish adds "stop":"context" when an answer was cut off; the done event carries it to the browser.
+    #[test]
+    fn the_done_event_passes_stop_context_through() {
+        let ev = done_event(r#"{"role":"assistant","content":"cut","tool_calls":[],"stop":"context"}"#, 7, 3);
+        assert_eq!(ev["type"], "done");
+        assert_eq!(ev["stop"], "context");
+        assert_eq!((ev["prompt_tokens"].clone(), ev["generated_tokens"].clone()), (json!(7), json!(3)));
     }
 
     #[test]

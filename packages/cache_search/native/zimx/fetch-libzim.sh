@@ -19,7 +19,8 @@ tgz="$base/$name"
 dest="$base/android-arm64-$ver"
 ok() { [ -f "$tgz" ] && [ "$(md5sum "$tgz" | cut -d' ' -f1)" = "$md5" ]; }
 if ! ok; then
-  curl -fsSL -o "$tgz" "$url"
+  # download.openzim.org drops long transfers (2026-11-10), so resume (-C -) across up to 40 tries over HTTP/1.1.
+  curl -fsSL --http1.1 -C - --retry 40 --retry-delay 5 --retry-all-errors -o "$tgz" "$url"
   ok || { rm -f "$tgz"; echo "md5 mismatch for $name (want $md5)" >&2; exit 1; }
 fi
 if [ ! -f "$dest/lib/aarch64-linux-android/libzim.so" ]; then

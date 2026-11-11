@@ -22,10 +22,23 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+#if defined(__linux__) || defined(__ANDROID__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -64,8 +77,13 @@ struct Handle {
     int                                  n_prompt    = 0;
     int                                  n_generated = 0;
     bool                                 finished    = true;
+    bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
+
+    // Gentle pre-read of the model file into the page cache (cl_configure preread_mbps): one thread, stopped and joined in free_handle.
+    std::thread       preread;
+    std::atomic<bool> preread_stop{false};
 
     // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
     std::string weights        = "default";
@@ -203,6 +221,7 @@ void cl_logi(const char * fmt, ...) {
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
+int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
@@ -345,6 +364,230 @@ void prune_prefix_files(const std::string & dir) {
     for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
 }
 
+// ---------------- lookup-only tensors stay on flash ----------------
+// The embedding tables a token only looks one row up in (GET_ROWS): per_layer_token_embd (Gemma 4's per-layer table, 56% of the E2B
+// file) and token_embd when the model has a separate output.weight (tied to the output head, token_embd is read in full every token,
+// so it is not lookup-only). Their pages are advised MADV_RANDOM so the kernel does not read ahead around each row and fill memory
+// with pages that are used once. kPleAdvice is the one switch the bench compares (none = no advice).
+enum class PleAdvice { kRandom, kNone };
+constexpr PleAdvice kPleAdvice = PleAdvice::kRandom;
+
+#if defined(__linux__) || defined(__ANDROID__)
+// madvise(MADV_RANDOM) on the lookup-only tensors of the model file, inside its mmap (found from /proc/self/maps by file offset;
+// a tensor that is not inside a mapping of the model file, e.g. weights not file-mapped, is skipped). Logs once.
+void advise_lookup_tensors(const char * model_path) {
+    if (kPleAdvice == PleAdvice::kNone) {
+        cl_logi("PLE advice: none");
+        return;
+    }
+    struct Range { uint64_t off, size; };
+    std::vector<Range> ranges;
+    {
+        gguf_init_params gp;
+        gp.no_alloc = true;
+        gp.ctx      = nullptr;
+        gguf_context * g = gguf_init_from_file(model_path, gp);
+        if (!g) {
+            cl_logi("PLE advice: model header not read, nothing advised");
+            return;
+        }
+        const uint64_t base = gguf_get_data_offset(g);
+        const int64_t  n    = gguf_get_n_tensors(g);
+        bool has_output = false;
+        for (int64_t i = 0; i < n; i++) {
+            if (strcmp(gguf_get_tensor_name(g, i), "output.weight") == 0) has_output = true;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            const char * name = gguf_get_tensor_name(g, i);
+            const bool lookup = strncmp(name, "per_layer_token_embd", 20) == 0 || (has_output && strncmp(name, "token_embd", 10) == 0);
+            if (lookup) ranges.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+        }
+        gguf_free(g);
+    }
+    if (ranges.empty()) {
+        cl_logi("PLE advice: no lookup-only tensors in this model");
+        return;
+    }
+    struct Vma { uint64_t start, end, off; };
+    std::vector<Vma> vmas;
+    std::error_code ec;
+    const std::string real = std::filesystem::weakly_canonical(model_path, ec).string();
+    if (FILE * f = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long st, en, off;
+            int n = 0;
+            if (sscanf(line, "%llx-%llx %*4s %llx %*s %*s %n", &st, &en, &off, &n) < 3 || n <= 0) continue;
+            std::string path = line + n;
+            while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) path.pop_back();
+            if (path == model_path || (!real.empty() && path == real)) vmas.push_back({ st, en, off });
+        }
+        fclose(f);
+    }
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t bytes = 0;
+    int      err   = 0;
+    for (const auto & r : ranges) {
+        for (const auto & v : vmas) {
+            if (r.off < v.off || r.off + r.size > v.off + (v.end - v.start)) continue;
+            const uint64_t addr = v.start + (r.off - v.off);
+            const uint64_t lo   = (addr + ps - 1) & ~(ps - 1);          // rounded in: no neighbouring tensor's page is advised
+            const uint64_t hi   = (addr + r.size) & ~(ps - 1);
+            if (hi <= lo) break;
+            if (madvise((void *) lo, hi - lo, MADV_RANDOM) == 0) bytes += hi - lo; else err = errno;
+            break;
+        }
+    }
+    if (err != 0) {
+        cl_logi("PLE advice: random on %llu MB (errno %d)", (unsigned long long) (bytes >> 20), err);
+    } else {
+        cl_logi("PLE advice: random on %llu MB (ok)", (unsigned long long) (bytes >> 20));
+    }
+}
+#else
+void advise_lookup_tensors(const char *) {}
+#endif
+
+// ---------------- gentle pre-read ----------------
+// The first prompt of a chat faults in about 1.5 GB of the mmapped model within seconds, which pushes free pages under Android's
+// low-memory watermark and kills cached apps. Reading the file ahead at a low, steady rate spreads that out. It uses its own file
+// descriptor and never touches the mapping or the model. per_layer_token_embd is left alone: llama.cpp reads those rows lazily.
+[[maybe_unused]] constexpr uint64_t kPrereadStep = 1u << 20;  // 1 MiB
+
+// Milliseconds to sleep so that `bytes` read after `elapsed_us` microseconds never exceeds `mbps` MB/s (1 MB = 1 MiB). 0 if on pace.
+[[maybe_unused]] long long preread_sleep_ms(uint64_t bytes, long long elapsed_us, int mbps) {
+    if (mbps <= 0) return 0;
+    const long long due_us = (long long) ((double) bytes * 1e6 / ((double) mbps * 1048576.0));
+    const long long wait   = due_us - elapsed_us;
+    return wait > 0 ? (wait + 999) / 1000 : 0;
+}
+
+// File ranges to read: every tensor except per_layer_token_embd*, sorted by offset, adjacent or overlapping ranges merged.
+[[maybe_unused]] std::vector<std::pair<uint64_t, uint64_t>> preread_ranges(const char * model_path) {
+    std::vector<std::pair<uint64_t, uint64_t>> r;  // (offset, size)
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = nullptr;
+    gguf_context * g = gguf_init_from_file(model_path, gp);
+    if (!g) return r;
+    const uint64_t base = gguf_get_data_offset(g);
+    const int64_t  n    = gguf_get_n_tensors(g);
+    for (int64_t i = 0; i < n; i++) {
+        if (strncmp(gguf_get_tensor_name(g, i), "per_layer_token_embd", 20) == 0) continue;
+        r.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+    }
+    gguf_free(g);
+    std::sort(r.begin(), r.end());
+    std::vector<std::pair<uint64_t, uint64_t>> m;
+    for (const auto & x : r) {
+        if (x.second == 0) continue;
+        if (!m.empty() && x.first <= m.back().first + m.back().second) {
+            const uint64_t end = std::max(m.back().first + m.back().second, x.first + x.second);
+            m.back().second = end - m.back().first;
+        } else {
+            m.push_back(x);
+        }
+    }
+    return m;
+}
+
+#if defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(__APPLE__)
+typedef char mincore_vec_t;
+#else
+typedef unsigned char mincore_vec_t;
+#endif
+// Reads the model's tensor ranges into the page cache, paced to `mbps` MB/s. Steps whose pages are all resident already (found with
+// mincore() on this thread's own read-only mapping, never read through) are skipped and do not count toward the pace.
+void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
+    using clock = std::chrono::steady_clock;
+    const auto ranges = preread_ranges(path.c_str());
+    uint64_t total = 0;
+    for (const auto & r : ranges) total += r.second;
+    cl_logi("preread: start, %llu MB in %zu ranges at %d MB/s", (unsigned long long) (total >> 20), ranges.size(), mbps);
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        cl_logi("preread: stopped at 0 MB read (0 MB resident) after 0 ms (cannot open the file)");
+        return;
+    }
+    // Own mapping, only for mincore(); if it cannot be made, every step is read as before.
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t fsize = 0;
+    {
+        struct stat st;
+        if (fstat(fd, &st) == 0) fsize = (uint64_t) st.st_size;
+    }
+    void * map = (fsize > 0) ? mmap(nullptr, (size_t) fsize, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+    bool resident_check = map != MAP_FAILED;
+    if (!resident_check) cl_logi("preread: residency check off (mmap failed, errno %d), reading every step", errno);
+    const uint64_t map_end = (fsize + ps - 1) & ~(ps - 1);
+    std::vector<mincore_vec_t> vec;
+    std::vector<char> buf(kPrereadStep);
+    const auto t0 = clock::now();
+    auto since_us = [&]() { return (long long) std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count(); };
+    uint64_t done = 0;      // bytes passed (read or already resident)
+    uint64_t read_b = 0;    // bytes read: these count toward the pace
+    uint64_t resident_b = 0;
+    bool halted = false;
+    for (const auto & r : ranges) {
+        for (uint64_t pos = 0; pos < r.second && !halted; ) {
+            if (stop->load()) { halted = true; break; }
+            const uint64_t off  = r.first + pos;
+            const uint64_t want = std::min<uint64_t>(kPrereadStep, r.second - pos);
+            bool all_resident = false;
+            if (resident_check) {
+                const uint64_t lo = off & ~(ps - 1);
+                const uint64_t hi = std::min<uint64_t>((off + want + ps - 1) & ~(ps - 1), map_end);
+                if (hi > lo) {
+                    vec.assign((size_t) ((hi - lo) / ps), 0);
+                    if (mincore((char *) map + lo, (size_t) (hi - lo), vec.data()) == 0) {
+                        all_resident = true;
+                        for (mincore_vec_t v : vec) {
+                            if (!(v & 1)) { all_resident = false; break; }
+                        }
+                    } else {
+                        cl_logi("preread: residency check off (mincore failed, errno %d), reading every step", errno);
+                        resident_check = false;
+                    }
+                }
+            }
+            if (all_resident) {
+                pos        += want;
+                done       += want;
+                resident_b += want;
+                continue;
+            }
+            const ssize_t got = pread(fd, buf.data(), (size_t) want, (off_t) off);
+            if (got <= 0) { halted = true; break; }
+            pos    += (uint64_t) got;
+            done   += (uint64_t) got;
+            read_b += (uint64_t) got;
+            long long ms = preread_sleep_ms(read_b, since_us(), mbps);
+            while (ms > 0 && !stop->load()) {  // sleep in slices so a free is noticed within one step
+                const long long slice = std::min<long long>(ms, 20);
+                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+                ms -= slice;
+            }
+        }
+        if (halted) break;
+    }
+    if (map != MAP_FAILED) munmap(map, (size_t) fsize);
+    close(fd);
+    const long long ms = since_us() / 1000;
+    if (!halted && done >= total) {
+        cl_logi("preread: done, read %llu MB, already resident %llu MB, in %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
+    } else {
+        cl_logi("preread: stopped at %llu MB read (%llu MB resident) after %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
+    }
+}
+#else
+void preread_run(std::string, int, std::atomic<bool> *) {
+    cl_logi("preread: off");  // no pread() on this platform
+}
+#endif
+
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
         fputs(text, stderr);
@@ -467,6 +710,9 @@ static std::mutex          g_live_mu;
 static std::set<Handle *>  g_live;
 
 static void free_handle(Handle * h) {
+    // Stop the pre-read first: it must be gone before the model is.
+    h->preread_stop.store(true);
+    if (h->preread.joinable()) h->preread.join();
     h->smpl.reset();
     h->session.reset();
     h->tmpls.reset();
@@ -484,6 +730,7 @@ int cl_configure(const char * options_json) {
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
+        if (j.contains("preread_mbps") && j.at("preread_mbps").is_number()) g_preread_mbps = std::max(0, j.at("preread_mbps").get<int>());
         return 0;
     } catch (const std::exception &) {
         return -1;
@@ -510,9 +757,11 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
+        int  preread_mbps  = 0;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
+            preread_mbps  = g_preread_mbps;
             h->prefix_dir = g_prefix_dir;
         }
         (void) repack_opt_in;
@@ -535,6 +784,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
+        // llama.cpp's own on-demand reading of the tensors the architecture marks (Gemma 4's per-layer table): no read of the whole
+        // file up front, the rows a batch needs are prefetched. Needs mmap.
+        mp.lazy_mode = LLAMA_LAZY_MODE_ON;
+        cl_logi("engine: lazy=on");
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
@@ -556,6 +809,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
+        advise_lookup_tensors(model_path);
 
         if (!plan.cpus.empty()) {
             // A threadpool whose threads are each pinned to one of the chosen cores.
@@ -591,6 +845,15 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
             g_live.insert(out);
+        }
+        if (preread_mbps > 0) {
+            try {
+                out->preread = std::thread(preread_run, std::string(model_path), preread_mbps, &out->preread_stop);
+            } catch (const std::exception &) {
+                cl_logi("preread: off (thread not started)");
+            }
+        } else {
+            cl_logi("preread: off");
         }
         return out;
     } catch (const std::exception & e) {
@@ -645,6 +908,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_generated = 0;
         h->n_reused = 0;
         h->stop = false;
+        h->context_cut = false;
         h->stop_tokens.clear();
         h->prefix_note.clear();
 
@@ -703,7 +967,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_prompt = (int) tokens.size();
         if (h->n_prompt == 0 || h->n_prompt >= h->n_ctx) {
             set_err(err, err_len, "prompt does not fit the context (" + std::to_string(h->n_prompt) + " tokens)");
-            return -1;
+            return -3;  // context full: distinct from the other failures (-1)
         }
 
         // The stable prompt start. The prompt start of this request shape is the system prompt and the tool schemas the template
@@ -876,6 +1140,7 @@ int cl_next(void * hp, char * buf, int buf_len) {
 
         if (h->n_past + 1 >= h->n_ctx) {
             h->finished = true;  // context full: this is the last token
+            h->context_cut = true;
         } else if (llama_decode(h->ctx, llama_batch_get_one(&tok, 1)) != 0) {
             llama_memory_clear(llama_get_memory(h->ctx), true);  // the cache no longer matches `cached`
             h->cached.clear();
@@ -950,9 +1215,11 @@ int cl_finish(void * hp, char * out_json, int len) {
         const common_chat_msg & msg = h->session->finish(common_chat_input(h->generated.substr(h->fed)));
         h->fed = h->generated.size();
         msg_to_json(msg, j);
+        if (h->context_cut) j["stop"] = std::string("context");
     } catch (const std::exception & e) {
         j["content"]     = h->generated;
         j["parse_error"] = std::string(e.what());
+        if (h->context_cut) j["stop"] = std::string("context");
     }
     return put(j.dump(), out_json, len);
 }
@@ -1022,7 +1289,10 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
         llama_backend_init();
 
         auto h = std::make_unique<EmbedHandle>();
-        h->model = llama_model_load_from_file(model_path, llama_model_default_params());
+        // The weights stay memory-mapped from the file: no repacked anonymous copy of them.
+        llama_model_params mp = llama_model_default_params();
+        mp.use_extra_bufts    = false;
+        h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
             set_err(err, err_len, std::string("cannot load model: ") + model_path);
             return nullptr;
