@@ -1057,9 +1057,9 @@ class RegionsState extends ChangeNotifier {
     return (OffroadPlan(out), null);
   }
 
-  /// The states or provinces the region list ties [r] to ([statesIn]): the state a county or city is in, the states a region of
-  /// several states holds. Its off-road data is theirs. Empty when the list does not say: an area drawn on the map, or the
-  /// region's country file is not on the phone and cannot be read now (the packs are then chosen by overlap).
+  /// The states or provinces the region list says [r] is in ([statesIn]): a county's or a city's state. Its off-road data is
+  /// theirs. Empty when the list does not say: an area drawn on the map, a region larger than a state, or the region's country
+  /// file is not on the phone and cannot be read now (the packs are then chosen by their boxes).
   Future<List<RegionRecord>> statesOf(RegionRecord r) async {
     if (r.isDrawn || r.kind == kAreaRegionKind) return const [];
     final loaded = catalogue.loadedShards.where((s) => s[r.id] != null).firstOrNull;

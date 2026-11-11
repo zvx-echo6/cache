@@ -91,16 +91,14 @@ void main() {
       expect(() => parseOffroadCatalogue('{"component":"routing"}'), throwsFormatException);
     });
 
-    test('a box alone (no state known): the pack it lies deepest in; across a border, the packs that cover it; none near, none', () {
+    test('a box alone (no state known): the pack that holds it; across a border, every pack it meets; none near, none', () {
       List<String> ids(GeoBounds b) => [for (final p in packsCovering(packs, b)) p.id];
       // Twin Falls County: Idaho's box holds all of it; Utah's and Nevada's reach only its south (they end at 42.5)
       expect(ids(const GeoBounds(south: 41.99, west: -115.04, north: 42.92, east: -114.0)), ['idaho']);
       // Utah's and Nevada's boxes both hold this box in western Utah: it lies deeper in Utah's (Nevada's edge is 0.2 degrees off)
       expect(ids(const GeoBounds(south: 40.0, west: -114.0, north: 41.0, east: -113.5)), ['utah']);
-      // The Pacific Northwest's box: no pack holds it. Idaho's covers most of it and Nevada's adds ground west of Idaho's.
-      // Utah's reaches only a strip Idaho's already covers: it was listed here too (every pack the box met), a whole pack that
-      // brought nothing new.
-      expect(ids(const GeoBounds(south: 42.0, west: -125.0, north: 49.0, east: -111.0)), ['idaho', 'nevada']);
+      // the Pacific Northwest: no pack holds it, so the packs it meets
+      expect(ids(const GeoBounds(south: 42.0, west: -125.0, north: 49.0, east: -111.0)), ['idaho', 'utah', 'nevada']);
       expect(ids(const GeoBounds(south: 25.0, west: -82.0, north: 31.0, east: -80.0)), isEmpty);
     });
 
@@ -124,7 +122,7 @@ void main() {
       expect(ids(across), ['oregon']);
       // a metro area across the line is in both states: one pack each
       expect(ids(const GeoBounds(south: 43.6, west: -117.3, north: 44.2, east: -116.6), [idaho, oregon]), ['idaho', 'oregon']);
-      // a state with no pack of its own falls back to the box
+      // a state with no pack of its own: by the boxes
       const other = RegionRecord(id: 'us-xx', name: 'Elsewhere', kind: 'region', country: 'US');
       expect(ids(county, [other]), ['idaho']);
       // a state of the same name in another country is not this pack's
@@ -132,7 +130,7 @@ void main() {
       expect(ids(across, [abroad]), ['oregon']);
     });
 
-    test('the region list says which state a region is in, and which states a larger region holds', () {
+    test('the region list says which state a region is in', () {
       final us = RegionShard.parse('us', File('test/fixtures/regions_us.json').readAsStringSync()).records;
       List<String> states(String id) => [for (final r in statesIn(us, id)) r.id];
       expect(states('us-id'), ['us-id'], reason: 'a state is its own');
@@ -140,10 +138,10 @@ void main() {
       expect(states('us-id-twin-falls'), ['us-id'], reason: 'a city, through its county');
       expect(states('us-metro-twin-falls-id'), ['us-id']);
       expect(states('us-id-magic-valley'), ['us-id']);
-      expect(states('us-pacific-northwest'), ['us-id'], reason: 'a region of several states: the states in it (the fixture has Idaho of them)');
-      expect(states('us-intermountain-west'), ['us-id', 'us-ut']);
-      expect(states('us-mountain-west'), ['us-id', 'us-ut'], reason: 'at any distance: Idaho is in the Intermountain West, which is in it');
-      expect(states('us'), ['us-id', 'us-ut']);
+      // a region larger than a state is in none: its packs go by their boxes, as they did
+      expect(states('us-pacific-northwest'), isEmpty);
+      expect(states('us-intermountain-west'), isEmpty);
+      expect(states('us'), isEmpty);
       expect(states('nowhere'), isEmpty);
     });
   });

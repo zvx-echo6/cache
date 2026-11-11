@@ -150,35 +150,30 @@ class RegionRecord {
   }
 }
 
-/// The states or provinces (kind `region`) the region list ties region [id] to, from one country's [records]:
+/// The states or provinces (kind `region`) the region list says region [id] is in, from one country's [records]:
 /// - itself, when it is a state;
 /// - else the states it sits in, through its parents at any distance (a county's state; a city's, through its county; both
-///   states of a metro area that crosses a state line), or, when its parents name none, the state its id starts with (ids are
-///   `<state>-<name>`, "us-id-..." in Idaho);
-/// - else, for a region of several states or a country, the states that sit in it.
-/// Empty when [records] does not hold [id].
+///   states of a metro area that crosses a state line);
+/// - else the state its id starts with (ids are `<state>-<name>`, "us-id-..." in Idaho), when its parents name none.
+/// Empty when [records] does not hold [id], and for a region larger than a state (several states, a country): the list does
+/// not put those in one.
 List<RegionRecord> statesIn(Map<String, RegionRecord> records, String id) {
   final r = records[id];
   if (r == null) return const [];
   bool isState(RegionRecord? x) => x != null && x.kind == 'region';
   if (isState(r)) return [r];
-  // every region [from] sits in, nearest first
-  Set<String> above(String from) {
-    final seen = <String>{};
-    final todo = [from];
-    while (todo.isNotEmpty) {
-      for (final p in records[todo.removeAt(0)]?.parents ?? const <String>[]) {
-        if (seen.add(p)) todo.add(p);
-      }
+  // every region it sits in, nearest first
+  final above = <String>{};
+  final todo = [id];
+  while (todo.isNotEmpty) {
+    for (final p in records[todo.removeAt(0)]?.parents ?? const <String>[]) {
+      if (above.add(p)) todo.add(p);
     }
-    return seen;
   }
-
-  final up = [for (final p in above(id)) if (isState(records[p])) records[p]!];
+  final up = [for (final p in above) if (isState(records[p])) records[p]!];
   if (up.isNotEmpty) return up;
   final byId = records[id.split('-').take(2).join('-')];
-  if (isState(byId)) return [byId!];
-  return [for (final s in records.values) if (isState(s) && above(s.id).contains(id)) s];
+  return isState(byId) ? [byId!] : const [];
 }
 
 /// A place in the browse tree. The same region can sit under more than one parent (Idaho is in the Pacific Northwest and in the
