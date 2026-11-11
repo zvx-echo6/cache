@@ -53,6 +53,7 @@ class HomeWeather {
     this.place = '',
     this.temperature,
     this.conditions,
+    this.period,
     this.high,
     this.low,
     this.age,
@@ -74,6 +75,11 @@ class HomeWeather {
   /// "45 °F" and "clear sky", as the forecast source writes them.
   final String? temperature;
   final String? conditions;
+
+  /// The label of the forecast period [conditions], [high] and [low] are for ("Wed Nov 11"), when they are not a reading taken
+  /// now: the source's "Now" has ended and this is its forecast for the period that covers now. Home writes it before them, as
+  /// the Weather screen lists a period under its label. Null for a reading.
+  final String? period;
   final String? high;
   final String? low;
 
@@ -1527,8 +1533,11 @@ class WeatherState extends ChangeNotifier {
     // conditions) the nearest station that reports a temperature, else its first item. A source that lists no temperature (a
     // station with only wind and pressure) must not hide the one after it, so every source is scanned and temperature and
     // conditions each come from the best source that has them. Forecast /now items rank before station lists.
+    // A first item that reports no temperature is not known to be a reading: a forecast whose "Now" has ended lists only its
+    // periods (tonight, the days), so its conditions are never taken as the conditions now. It still gives the source's age.
     final nows = <(LiveItem, SourceView)>[];
     final stations = <(LiveItem, SourceView)>[];
+    final notReadings = <LiveItem>{};
     for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
       final own = [for (final i in v.items) if (i.address.endsWith('/now')) i];
@@ -1546,6 +1555,7 @@ class WeatherState extends ChangeNotifier {
           best = d;
         }
       }
+      if (pick == null) notReadings.add(v.items.first);
       stations.add((pick ?? v.items.first, v));
     }
     final ranked = [...nows, ...stations];
@@ -1555,11 +1565,31 @@ class WeatherState extends ChangeNotifier {
         age = v.age;
         forecastExpired = v.expired;
       }
-      conditions ??= i.fields['Conditions'];
+      if (!notReadings.contains(i)) conditions ??= i.fields['Conditions'];
+    }
+    // No reading: "Now" has ended (a forecast's own lasts 3 hours, and the next download can be hours away) or was never
+    // given, and no station reports. The forecast period that covers now stands in, under its own label and with its source's
+    // age, as the Weather screen lists it. It is a forecast, not a reading, so no temperature stands in for the one that ended.
+    String? period;
+    if (temperature == null && conditions == null) {
+      for (final v in views) {
+        if (v.group != LiveGroup.forecast) continue;
+        final i = _periodNow(v);
+        if (i == null) continue;
+        period = i.label;
+        conditions = i.fields['Conditions'];
+        // the high and low of that same period, never another day's under its label
+        high = i.fields['Daytime high'] ?? i.fields['High'];
+        low = i.fields['Low (early morning)'] ?? i.fields['Low'];
+        age = v.age;
+        forecastExpired = v.expired;
+        break;
+      }
     }
     // the day's high and low from the first source that has them; the names before "Daytime high" and "Low (early morning)" too,
     // for a definition not updated yet
     for (final v in views) {
+      if (period != null) break;
       if (v.group != LiveGroup.forecast) continue;
       for (final i in v.items) {
         if (i.address.endsWith('/now')) continue;
@@ -1573,7 +1603,7 @@ class WeatherState extends ChangeNotifier {
       if (high != null || low != null) break;
     }
     age ??= [for (final (_, v) in ranked) v.age].firstOrNull;
-    forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
+    if (period == null) forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
     final warnings = <HomeAlert>[];
     // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
     final listed = <(LiveItem, String)>[];
@@ -1607,16 +1637,55 @@ class WeatherState extends ChangeNotifier {
       place: p.name,
       temperature: temperature,
       conditions: conditions,
+      period: period,
       high: high,
       low: low,
       age: age,
       expired: forecastExpired,
-      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null,
+      // "no forecast yet" only when there is nothing to show: never beside a high and low
+      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null && high == null && low == null,
       alerts: [...warnings, ...fires],
       alertsKnown: anyAlerts,
       alertsExpired: alertsExpired,
       checked: checked,
     );
+  }
+
+  /// The forecast period of [v] that covers now, for Home when there is no reading: of the items that give "Conditions" (not
+  /// the "Now" item), the one that started last. A day ("2026-11-11") covers that date at the place and no other, so a day that
+  /// has passed is never shown as today; a period with a start time covers from then on (the core leaves out the periods that
+  /// have ended, and an item carries no end to check here). Null when no item is known to cover now.
+  LiveItem? _periodNow(SourceView v) {
+    final now = _now();
+    // the place's clock: the offset the core writes this source's times in, else the device's
+    final stamp = RegExp(r'([+-])(\d\d):(\d\d)$').firstMatch(v.fetchedAt?.trim() ?? '');
+    final offset = stamp == null
+        ? now.timeZoneOffset.inMinutes
+        : (stamp.group(1) == '-' ? -1 : 1) * (int.parse(stamp.group(2)!) * 60 + int.parse(stamp.group(3)!));
+    final there = now.toUtc().add(Duration(minutes: offset));
+    LiveItem? pick;
+    DateTime? best;
+    for (final i in v.items) {
+      if (i.address.endsWith('/now') || i.fields['Conditions'] == null) continue;
+      final t = i.time?.trim();
+      if (t == null) continue;
+      final DateTime from;
+      final day = RegExp(r'^(\d{4})-(\d\d)-(\d\d)$').firstMatch(t);
+      if (day != null) {
+        final y = int.parse(day.group(1)!), m = int.parse(day.group(2)!), d = int.parse(day.group(3)!);
+        if (y != there.year || m != there.month || d != there.day) continue;
+        from = DateTime.utc(y, m, d).subtract(Duration(minutes: offset));
+      } else {
+        final at = DateTime.tryParse(t);
+        if (at == null || at.isAfter(now)) continue;
+        from = at.toUtc();
+      }
+      if (best == null || from.isAfter(best)) {
+        pick = i;
+        best = from;
+      }
+    }
+    return pick;
   }
 
   // ---------------------------------------------------------------- what is remembered between starts

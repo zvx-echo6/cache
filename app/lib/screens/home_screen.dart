@@ -573,11 +573,15 @@ class ShortcutCard extends StatelessWidget {
 }
 
 /// The conditions and the day's high and low as the Weather card's line starts: "Rain · High 61 °F, low 42 °F" (the source
-/// writes "rain"; the line starts with a capital).
-String homeConditionsLine(HomeWeather h) => lineStart([
-  if (h.conditions != null) h.conditions!,
-  if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
-].join(' · '));
+/// writes "rain"; the line starts with a capital). When they are a forecast period's and not a reading taken now, the period's
+/// own label comes first, as the Weather screen lists it: "Wed Nov 11 · Rain · High 61 °F, low 42 °F".
+String homeConditionsLine(HomeWeather h) {
+  final line = lineStart([
+    if (h.conditions != null) h.conditions!,
+    if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
+  ].join(' · '));
+  return h.period == null || line.isEmpty ? line : '${h.period} · $line';
+}
 
 /// The one Weather and alerts card: a weather icon and the temperature in large type, the conditions and the day's high and low, and
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it

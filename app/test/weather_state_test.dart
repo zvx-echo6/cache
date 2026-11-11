@@ -994,6 +994,80 @@ void main() {
       expect((await h.weather.homeCard()).forecastMissing, isTrue);
     });
 
+    // 1.1 audit: a forecast's "Now" lasts 3 hours and the next download can be hours later. Home then took the source's first
+    // item ("Tonight", which has neither "Temperature" nor "Conditions") and said "no forecast yet" beside the day's high and low,
+    // with 16 days of forecast stored.
+    Map<String, dynamic> afterNow() => {
+      'fetched_at': '2026-10-26T11:00:00-06:00',
+      'age': '4 hours old',
+      'expired': false,
+      'items': [
+        {'address': 'live:openmeteo-forecast/x/tonight', 'label': 'Tonight (Mon Oct 26)', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Overnight low': '30 °F', 'Worst conditions': 'rain'}},
+        {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+        {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'clear sky'}},
+      ],
+    };
+
+    test('Home weather: when "Now" has ended, today\'s forecast under its own label with the age, and no temperature', () async {
+      // 15:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 21));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = afterNow();
+      final c = await h.weather.homeCard();
+      expect((c.period, c.conditions, c.high, c.low, c.age), ('Mon Oct 26', 'overcast', '52 °F', '30 °F', '4 hours old'));
+      expect(c.temperature, isNull, reason: 'a forecast is not a reading: nothing stands in for the temperature that ended');
+      expect(c.forecastMissing, isFalse, reason: 'days of forecast are stored');
+      expect(c.expired, isFalse);
+      // the next day, from the same stored copy: that day's forecast, not the day that has passed
+      h.clock = DateTime.utc(2026, 10, 27, 21);
+      final next = await h.weather.homeCard();
+      expect((next.period, next.conditions, next.high, next.low), ('Tue Oct 27', 'clear sky', '60 °F', '41 °F'));
+      // past every day it lists: no day is shown as today
+      h.clock = DateTime.utc(2026, 10, 29, 21);
+      final past = await h.weather.homeCard();
+      expect((past.period, past.conditions), (null, null));
+      // and with no item left it is still "no forecast yet"
+      h.core.stored['openmeteo-forecast'] = {'fetched_at': '2026-10-26T11:00:00-06:00', 'age': '3 days old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      expect((await h.weather.homeCard()).forecastMissing, isTrue);
+    });
+
+    test('Home weather: a day\'s forecast that comes first in the list is not shown as the conditions now', () async {
+      // the morning after: "Now" and "Tonight" have both ended, and the day's item comes first
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 15));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final f = afterNow();
+      (f['items'] as List).removeRange(0, 2);
+      f['age'] = '22 hours old';
+      h.core.stored['openmeteo-forecast'] = f;
+      final c = await h.weather.homeCard();
+      expect((c.period, c.conditions, c.high, c.low, c.age), ('Tue Oct 27', 'clear sky', '60 °F', '41 °F', '22 hours old'));
+      expect(c.temperature, isNull);
+    });
+
+    test('Home weather: a reading still comes first, and a period that has not started is not the one for now', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 21));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final f = afterNow();
+      (f['items'] as List).insert(0, {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T14:45:00-06:00', 'fields': {'Temperature': '45 °F', 'Conditions': 'clear sky'}});
+      h.core.stored['openmeteo-forecast'] = f;
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.period, c.high, c.low), ('45 °F', 'clear sky', null, '52 °F', '30 °F'));
+      // periods with a start time (a forecast written in parts of the day): the one under way, not the one to come
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T11:00:00-06:00',
+        'age': '4 hours old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/p1', 'label': 'This afternoon', 'time': '2026-10-26T12:00:00-06:00', 'fields': {'Conditions': 'sunny'}},
+          {'address': 'live:openmeteo-forecast/x/p2', 'label': 'Tonight', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Conditions': 'light rain'}},
+        ],
+      };
+      final part = await h.weather.homeCard();
+      expect((part.period, part.conditions, part.temperature), ('This afternoon', 'sunny', null));
+      h.clock = DateTime.utc(2026, 10, 27, 1); // 19:00 at the place
+      expect((await h.weather.homeCard()).period, 'Tonight');
+    });
+
     test('what is kept for Home is not wiped by a later answer with no items', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);
