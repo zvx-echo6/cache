@@ -16,7 +16,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../test/add_pdf/add_pdf_fixtures.dart';
 import '../test/add_pdf/add_pdf_world.dart';
 import 'shot_kit.dart';
 
@@ -73,6 +72,7 @@ void main() {
       w.state.wordsPending = (_) => pending;
       w.done(w.filed);
       await show(real.AddPdfProgressPage(state: w.state, deps: w.deps, scheduler: w.scheduler), '1-card-adding-to-search-index');
+      // ignore: invalid_use_of_visible_for_testing_member
       w.state.debugAwaitWords('water', 'unused');
       final book = w.shelves.book('water')!;
       await show(Builder(builder: (c) => Scaffold(appBar: AppBar(title: const Text('Shelf 530')), body: ListView(padding: const EdgeInsets.all(16), children: [_row(c, bookMark(w.deps, book))]))), '2-row-adding-to-search-index');
