@@ -806,7 +806,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         // llama.cpp's own abort hook: a stop ends an in-flight prompt decode (llama_decode returns 2). Only while the prompt is
         // read (in_prefill); a single-token decode while generating is never aborted.
         cp.abort_callback      = [](void * d) -> bool { auto * hh = (Handle *) d; return hh->in_prefill.load() && hh->stop.load(); };
-        cp.abort_callback_data = h;
+        cp.abort_callback_data = h.get();
         h->ctx = llama_init_from_model(h->model, cp);
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
