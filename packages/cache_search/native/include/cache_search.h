@@ -826,7 +826,9 @@ cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
  *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
  *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>,"app"?:{"<name>":<value>}}]}
  * ("app": the values the definition names for the app alone, as the response has them: an alert's message type, references and
- * VTEC. The live_data tool never includes them.)
+ * VTEC. The live_data tool never includes them. An item with a distance field also has "distances":{"<field label>":
+ * {"km":n,"inside":bool}}: the same distance as a number (km 0 and inside true when the place is inside the item's area), also
+ * for the app alone, so it never reads "inside the area" out of the field's text.)
  * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */

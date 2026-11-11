@@ -18,7 +18,7 @@ LiveGroup groupOf(Connector c) {
 
 /// One stored item of a source for a place, as the core gives it to the app.
 class LiveItem {
-  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false, this.area, this.app = const {}});
+  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false, this.area, this.app = const {}, this.distancesKm = const {}});
 
   factory LiveItem.fromJson(Map<String, dynamic> j) => LiveItem(
     address: '${j['address'] ?? ''}',
@@ -32,6 +32,11 @@ class LiveItem {
     noneActive: j['none_active'] == true,
     area: j['area'] is Map ? (j['area'] as Map).cast<String, dynamic>() : null,
     app: j['app'] is Map ? (j['app'] as Map).cast<String, dynamic>() : const {},
+    distancesKm: {
+      if (j['distances'] is Map)
+        for (final e in (j['distances'] as Map).entries)
+          if (e.value is Map && (e.value as Map)['km'] is num) '${e.key}': (e.value as Map)['inside'] == true ? 0.0 : ((e.value as Map)['km'] as num).toDouble(),
+    },
   );
 
   final String address;
@@ -51,6 +56,11 @@ class LiveItem {
   /// `vtec` (alert_watch.dart reads them). The model never sees it. Empty when the definition names nothing.
   final Map<String, dynamic> app;
 
+  /// The item's distance fields as numbers, by field label, in kilometres: 0 when the place is inside the item's area. The core
+  /// gives them beside the words ("6.2 mi S", "inside the area", "at the place"), which are for reading, not for working out
+  /// how near something is. Empty for an item stored before the core gave them.
+  final Map<String, double> distancesKm;
+
   /// The item's own key, the last part of its address (`live:<source>/<place>/<key>`): an alert's CAP identifier.
   String get key {
     final parts = address.split('/');
@@ -65,6 +75,13 @@ class LiveItem {
 
   /// How far the item is from the place, when the source gives it ("From the place" first, then a "Distance" field).
   String? get distance => fields[fromThePlace] ?? [for (final e in fields.entries) if (isDistance(e.key)) e.value].firstOrNull;
+
+  /// [distance] as a number of kilometres ([distancesKm] of the same field); null when the item has no distance, or was stored
+  /// before the core gave the number.
+  double? get distanceKm {
+    final label = fields[fromThePlace] != null ? fromThePlace : [for (final e in fields.entries) if (isDistance(e.key)) e.key].firstOrNull;
+    return label == null ? null : distancesKm[label];
+  }
 
   /// A short line under the label: the first two fields that are not the distance.
   String get summary => [

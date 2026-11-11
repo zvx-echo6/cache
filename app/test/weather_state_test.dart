@@ -1441,6 +1441,43 @@ void main() {
       expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire', 'Forleen fire']);
     });
 
+    // Design read: the app worked out how near a fire is from the words of its distance field. For a place inside a fire's mapped
+    // edge the words are "inside the area", with no number in them, so the fire had no distance and was never serious: under
+    // "Serious only" a fire you stood in did not pop up while one 9 miles away did. The core now gives the number beside the words.
+    test('a fire whose edge the place is inside is as near as a fire gets: serious, and it pops up under Serious only', () async {
+      LiveItem fire(String words, Map<String, Object>? number) => LiveItem.fromJson({
+        'address': 'live:wfigs-perimeters-near/x/1',
+        'label': 'Rock Creek fire perimeter',
+        'fields': {'From the place': words},
+        'distances': ?(number == null ? null : {'From the place': number}),
+      });
+      final inside = fire('inside the area', {'km': 0.0, 'inside': true});
+      expect(distanceMiles(inside), 0);
+      expect(isSerious(inside, fire: true), isTrue);
+      expect(isSerious(inside, fire: true, fireReachMiles: 1), isTrue, reason: 'inside any reach a place is set to');
+      expect(isSerious(fire('at the place', {'km': 0.02, 'inside': false}), fire: true), isTrue);
+      expect(distanceMiles(fire('20 km N', {'km': 20.0, 'inside': false})), closeTo(12.43, 0.01));
+      expect(isSerious(fire('20 km N', {'km': 20.0, 'inside': false}), fire: true), isFalse);
+      expect(distanceMiles(fire('8 mi SE', null)), 8, reason: 'stored before the core gave the number: the words, as before');
+      expect(inside.distance, 'inside the area', reason: 'what is shown stays the words');
+
+      final n = FakeNotifier();
+      h = await Harness.create(notifier: n);
+      expect(h.settings.popUpFor, PopUpFor.serious);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/in', 'label': 'Rock Creek fire', 'fields': {'From the place': 'inside the area'}, 'distances': {'From the place': {'km': 0.0, 'inside': true}}},
+          {'address': 'live:wfigs-incidents-near/x/far', 'label': 'East Fork fire', 'fields': {'From the place': '38 mi S'}, 'distances': {'From the place': {'km': 61.2, 'inside': false}}},
+        ],
+      };
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['Rock Creek fire']);
+      expect(n.shown.single.serious, isTrue);
+    });
+
     // 1.1 audit: a check reads what was told, shows, then writes. Two at once both saw a new alert before either had written.
     test('two alert checks at once tell a new fire once', () async {
       final n = FakeNotifier();

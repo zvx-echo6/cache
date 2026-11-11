@@ -92,8 +92,13 @@ bool raisesAlerts(SourceView v) => v.source.category == 'alerts' || v.source.cat
 /// How far out a fire near a place counts as serious, in miles, when nothing else is set for the place.
 const double kFireReachMiles = 10;
 
-/// An item's distance in miles from its distance field ("12 mi SE", "8.5 km N"), or null when it gives none.
+/// An item's distance in miles, or null when it gives none: the number the core gives beside its distance field (0 when the
+/// place is inside the item's area: a fire you are standing in is as near as a fire gets). The words of the field ("12 mi SE",
+/// "8.5 km N") are read only for an item stored before the core gave the number; "inside the area" has no number in it, which
+/// is how a place inside a fire's edge came to count as no distance at all.
 double? distanceMiles(LiveItem i) {
+  final km = i.distanceKm;
+  if (km != null) return km / 1.609344;
   final m = RegExp(r'^\s*([0-9]+(?:\.[0-9]+)?)\s*(mi|km|m)\b', caseSensitive: false).firstMatch(i.distance ?? '');
   if (m == null) return null;
   final v = double.parse(m.group(1)!);
@@ -437,7 +442,7 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
     for (final v in speaking) {
       for (final i in v.active) {
         if (custom) {
-          final mi = milesIn(i.distance);
+          final mi = distanceMiles(i) ?? milesIn(i.distance);
           if (mi != null && mi > rule.miles) continue;
         }
         final severity = i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;

@@ -69,6 +69,15 @@ pub struct Point {
     pub lon: f64,
 }
 
+/// A distance field's value as a number, for the app (its text, "6.2 mi S" or "inside the area", is for people and the model).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Dist {
+    /// Kilometres from the place to the item's nearest point; 0 when the place is inside its area.
+    pub km: f64,
+    /// The place is inside the item's area.
+    pub inside: bool,
+}
+
 /// One mapped item, as stored in live.sqlite.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Item {
@@ -83,6 +92,10 @@ pub struct Item {
     /// The definition's `app` values that the response had: for the app alone (`cs_live_get`), never in the tool's result.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub app: BTreeMap<String, Value>,
+    /// For each field that is a distance from the place, by the field's label: the distance as a number. For the app alone
+    /// (`cs_live_get`), which must not read "inside the area" or "at the place" out of the field's text; never in the tool's result.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub distances: BTreeMap<String, Dist>,
 }
 
 pub struct Mapped {
@@ -631,11 +644,30 @@ fn num_of(n: &Num, ctx: &Ctx) -> Option<f64> {
     }
 }
 
+/// What a field's distance text was written from: the field's own `distance`, or that of the `first_of` alternative that gave
+/// its value. None for a field that is not a distance.
+fn near_of_field(spec: &Spec, ctx: &Ctx) -> Option<Near> {
+    if let Some(d) = &spec.distance {
+        return near_of_spec(d, ctx);
+    }
+    near_of_field(spec.first_of.iter().find(|s| eval(s, ctx).is_some())?, ctx)
+}
+
 fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
     let key = eval(&def.key, ctx)?;
     let label = eval(&def.label, ctx)?;
     let fields: Vec<(String, String)> =
         def.fields.iter().filter_map(|f| Some((f.label.clone()?, eval(f, ctx)?))).collect();
+    let distances: BTreeMap<String, Dist> = def
+        .fields
+        .iter()
+        .filter_map(|f| {
+            let label = f.label.clone()?;
+            eval(f, ctx)?;
+            let n = near_of_field(f, ctx)?;
+            Some((label, Dist { km: if n.inside { 0.0 } else { (n.km * 1000.0).round() / 1000.0 }, inside: n.inside }))
+        })
+        .collect();
     let point = def.point.as_ref().and_then(|p| {
         let (lat, lon) = point_of(p, ctx)?;
         Some(Point { lat, lon })
@@ -663,6 +695,7 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
                 (v.to_string().len() <= crate::def::MAX_APP_BYTES).then(|| (name.clone(), v.clone()))
             })
             .collect(),
+        distances,
     })
 }
 
@@ -1217,7 +1250,7 @@ mod tests {
         assert!(m.items.iter().any(|i| i.key == "c"));
         // exists / missing
         let c = |v: Value| -> Cond { serde_json::from_value(v).unwrap() };
-        let it = Item { key: "k".into(), label: "l".into(), time: None, ends: None, fields: Fields(vec![("N".into(), "12 mph".into())]), point: None, area: None, app: BTreeMap::new() };
+        let it = Item { key: "k".into(), label: "l".into(), time: None, ends: None, fields: Fields(vec![("N".into(), "12 mph".into())]), point: None, area: None, app: BTreeMap::new(), distances: BTreeMap::new() };
         let r = json!({"x": 5, "s": "Hello World"});
         let cx = ctx(&r, &r, 0);
         assert!(cond_ok(&c(json!({"value":{"path":"x"},"exists":true})), &it, &cx));

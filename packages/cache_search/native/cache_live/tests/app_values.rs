@@ -159,3 +159,38 @@ fn a_definition_names_at_most_eight_app_values_by_plain_names() {
     let nine: serde_json::Map<String, Value> = (0..9).map(|i| (format!("v{i}"), json!("properties.id"))).collect();
     assert!(check(Value::Object(nine)).unwrap_err().contains("at most 8"));
 }
+
+/// A distance field also comes as a number, for the app alone: "inside the area" is words for people and the model, and the app
+/// read no number in them, so a place inside a fire's edge counted as no distance at all (not serious).
+#[test]
+fn a_distance_field_also_comes_as_a_number_for_the_app_and_inside_the_area_is_zero() {
+    let example = std::fs::read_to_string(manifest().join("tests/fixtures/nws_example_alerts.json")).unwrap();
+    let env = Env::new("distances", &built_in(), serve(example));
+    let place = json!({"key": "at:42.54,-113.79", "name": "current location", "lat": 42.536, "lon": -113.792});
+    let now = "2026-10-25T14:20:00-06:00";
+    let r = json!({"source": "alerts", "place": place, "now": now});
+    let got: Value = serde_json::from_str(&env.live.fetch(&r.to_string(), &env.places).unwrap()).unwrap();
+    let by_label = |label: &str| got["items"].as_array().unwrap().iter().find(|i| i["label"] == label).unwrap_or_else(|| panic!("{label}: {got}")).clone();
+    // outside an area: the same distance the text gives ("11 mi N"), in kilometres
+    let red = by_label("Red Flag Warning");
+    assert_eq!(red["fields"]["Distance"], "11 mi N");
+    assert_eq!(red["distances"]["Distance"]["inside"], false);
+    let km = red["distances"]["Distance"]["km"].as_f64().unwrap();
+    assert_eq!((km * 0.621_371_192).round(), 11.0, "{km} km");
+    // inside an area: the words stay, and the number is zero
+    let wind = by_label("Wind Advisory");
+    assert_eq!(wind["fields"]["Distance"], "inside the area");
+    assert_eq!(wind["distances"], json!({"Distance": {"km": 0.0, "inside": true}}));
+    // an alert with no area has no distance, in words or as a number
+    let tornado = by_label("Tornado Warning");
+    assert!(tornado["fields"].get("Distance").is_none() && tornado.get("distances").is_none(), "{tornado}");
+    // the model reads the words as before and no number
+    let t = LiveDataTool::new(env.live.cfg.clone());
+    let ctx = ToolCtx { location: None, places: &env.places, now, geocoder: None, live_fetcher: None };
+    let text = match t.run(&ctx, &json!({"source": "alerts", "place": "42.536,-113.792"})).unwrap() {
+        ToolOutput::Json(v) => v.to_string(),
+        ToolOutput::Text(_) => panic!("text"),
+    };
+    assert!(text.contains("\"Distance\":\"inside the area\"") && text.contains("\"Distance\":\"11 mi N\""), "{text}");
+    assert!(!text.contains("distances") && !text.contains("\"inside\""), "{text}");
+}
