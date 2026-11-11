@@ -30,4 +30,4 @@ Checked against the 1.7.0 sources (`androidx.car.app:app:1.7.0`). Cache draws th
 
 ## What Cache draws itself (on the map surface)
 
-The map, the route, the driven path, the grade badge, the climb-ahead card and the route mini map. Colors for these come from the same trip palette (`day` and `night`), chosen by the car's `isDarkMode`.
+The map, the route, the driven path, the grade badge, the climb ahead and the route mini map. The route, the driven path and the grade badge take their colors from the trip palette (`day` and `night`), chosen by the car's `isDarkMode`. The climb and the mini map do not: they are drawn like the host's own cards (dark fill, grey outline, white text, by day and by night), from constants in `CarOverlayPainter` measured on the desktop head unit.

@@ -17,31 +17,97 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Paints the two Cache-drawn pieces on the car's map (the approved design, mockup-androidauto): the climb-ahead card at the
- * bottom left and the route mini map at the bottom right. Pure drawing: a Canvas, the trip's blocks, a palette, a size, the
- * visible area and the density go in; nothing is read from the car, nothing moves, nothing is interactive.
+ * Paints Cache's own pieces on the car's map: the route mini map and the climb ahead. Pure drawing: a Canvas, the trip's
+ * blocks, a size, the host's areas and the density go in; nothing is read from the car, nothing moves, nothing is interactive.
  *
- * Sizes are the mock's pixels at density 1.0 (a 1280 x 560 screen), scaled by [density]. The pieces stay inside the visible
- * area the host reports (SurfaceCallback.onVisibleAreaChanged), because the host draws its own guidance card, action strip and
- * map buttons over the rest of the surface.
+ * The pieces look like the host's own cards, not like the app's theme ([HOST_STYLE]): the same dark fill, outline, corner and
+ * text colors by day and by night, as the host draws its cards.
  *
- * The pieces never lie over the vehicle. While guiding, the camera (CarMapRenderer.follow) puts the position marker at
+ * There are two layouts ([CarOverlayMode], chosen by [modeFor] from the stable area alone, so the choice holds for the whole
+ * drive):
+ *  - one box, on a screen whose left column has a tall enough gap between the host's turn card and its arrival card: the
+ *    mini map on top and the climb under it (label, figure, grade line, shape), on the host cards' left edge, centred in the
+ *    gap. With no climb to show it is the mini map alone; with the mini map switched off, the climb alone.
+ *  - split, everywhere else: the climb is a one-line card in that gap, as wide as the host's cards; the mini map is a tile in
+ *    the bottom right corner of the visible area, full size or two thirds, whichever keeps clear of the vehicle.
+ *
+ * No piece ever lies over the vehicle. While guiding, the camera (CarMapRenderer.follow) puts the position marker at
  * [vehiclePoint] of the stable area, and the road ahead runs up the screen from it. [keepClear] is that marker and the column
- * above it; a piece that would reach into it gives way: the mini map is not drawn, the climb card ends short of it or, when
- * that leaves too little for its text and shape, is not drawn either. The camera is not moved to make room: on a short screen
- * the road ahead is worth more than a card.
+ * above it; a piece that would reach into it is not drawn. The camera is not moved to make room.
  */
 object CarOverlayPainter {
     // ---- layout (mock pixels at density 1.0) ---------------------------------------------------------------------
     const val MARGIN = 16f
-    const val CLIMB_W = 380f
-    const val CLIMB_H = 121f
-    const val CLIMB_PAD_X = 18f
-    const val CLIMB_PAD_Y = 14f
-    const val CLIMB_TEXT_W = 168f
-    const val CLIMB_GAP = 16f
-    const val SHAPE_W = 196f
+
+    // ---- the look: the host's own cards. Measured on the desktop head unit (DHU 2.0, 1280 x 720 at 160 dpi, Android Auto
+    // ---- 17.9); the host's cards had these colors by day and by night there. Correct them here after a real car.
+
+    /** The host's arrival card: its fill, its 2 px outline, its corner radius; its first line's text and its second line's. */
+    const val HOST_CARD_FILL = 0xFF242627.toInt()
+    const val HOST_CARD_EDGE = 0xFF45474B.toInt()
+    const val HOST_CARD_RADIUS = 22f
+    const val HOST_CARD_EDGE_W = 2f
+    const val HOST_TEXT = 0xFFFFFFFF.toInt()
+    const val HOST_TEXT_SECONDARY = 0xFFC7CBD1.toInt()
+
+    /** On that dark ground: the route (the light blue of the app's dark map), the part already driven, and the dots. */
+    const val ON_DARK_ROUTE = 0xFF6BB4DE.toInt()
+    const val ON_DARK_DRIVEN = 0xFF5A6672.toInt()
+    const val ON_DARK_START = 0xFF8A96A3.toInt()
+
+    /** The colors every piece is painted with. The trip's theme palette does not color the pieces any more (it still colors
+     * what is part of the main map: the route, the driven part, the grade badge, and the host's turn card). */
+    val HOST_STYLE = CarOverlayColors(
+        theme = "host", route = ON_DARK_ROUTE, routeDriven = ON_DARK_DRIVEN, badge = 0xFFF4F6F8.toInt(), badgeGlyph = 0xFF161B20.toInt(),
+        badgeEdge = HOST_CARD_FILL, startDot = ON_DARK_START, destDot = HOST_TEXT, posFill = HOST_TEXT, posRing = ON_DARK_ROUTE,
+        card = HOST_CARD_FILL, cardText = HOST_TEXT, cardSecondary = HOST_TEXT_SECONDARY, hatch = HOST_TEXT, miniBg = HOST_CARD_FILL,
+        miniBorder = HOST_CARD_EDGE, hostCard = HOST_CARD_FILL,
+    )
+
+    // ---- the one box ---------------------------------------------------------------------------------------------------
+
+    /** The box's width. The mini map alone was 220; the climb's lines at the host's smallest text size need more: the grade
+     * line ("11% in 123.4 mi", 24 px semibold) measures up to about 175, and the figure (34 px bold, up to about 145) has the
+     * shape beside it, which needs [SHAPE_MIN_W]. 260 less the padding on both sides leaves 232: the longest line with room
+     * to spare, and 75 or more for the shape. */
+    const val BOX_W = 260f
+
+    /** The mini map's height in the box, and the corner tile's full size. */
+    const val MINI_H = 140f
+    const val MINI_W = 220f
+
+    /** The corner tile's smaller size, as a share of the full one. */
+    const val MINI_SMALL = 2f / 3f
+
+    /** The climb part's height: [BOX_PAD_TOP], the label, [CLIMB_FIGURE_DROP] to the figure, [CLIMB_GRADE_DROP] to the grade
+     * line, and 16 under it. */
+    const val BOX_CLIMB_H = 116f
+    const val BOX_PAD_X = 14f
+    const val BOX_PAD_TOP = 10f
+
+    /** Between the climb's text and its shape. */
+    const val CLIMB_GAP = 12f
     const val SHAPE_H = 52f
+
+    // ---- the one-line climb card ---------------------------------------------------------------------------------------
+
+    /** Its height (the shape's 52 with 6 above and below), its padding, the gap between its parts, and the least width of
+     * column it is drawn in. */
+    const val LINE_H = 64f
+    const val LINE_PAD_X = 16f
+    const val LINE_GAP = 12f
+    const val LINE_MIN_W = 200f
+
+    /** Its figure (bold) and its grade and distance: neither under the host's smallest text. The figure is smaller than in
+     * the box (34) so that the figure, the grade and the distance fit the host cards' width on the smallest screen. */
+    const val LINE_FIGURE_SIZE = 28f
+    const val LINE_TEXT_SIZE = HOST_MIN_TEXT
+
+    /** The widest the shape is drawn in the one-line card. */
+    const val LINE_SHAPE_W = 84f
+
+    /** The least free space above and below the one-line card in the gap. With less, no climb is drawn. */
+    const val LINE_CUSHION_MIN = 12f
 
     /** The owner's number (2026-11-11): the shape's full height stands for at least this much rise, in meters (about 330 ft),
      * within the stretch shown. A stretch that rises less is drawn as if it rose this much, so a small rise draws low and a
@@ -52,10 +118,10 @@ object CarOverlayPainter {
     const val SHAPE_MIN_W = 60f
 
     /** The smallest text the host itself draws on the guidance screen (the second line of its estimate card and the next
-     * step: 24 px at density 1.0, measured on the car simulator). No text on the pieces is smaller. */
+     * step: 24 px at density 1.0, measured on the car simulator). No text in the box is smaller. */
     const val HOST_MIN_TEXT = 24f
 
-    /** The climb card's three lines: the label, the figure (bold) and the grade line (semibold). The mock had 13, 26 and 15;
+    /** The climb's three lines: the label, the figure (bold) and the grade line (semibold). The mock had 13, 26 and 15;
      * the label and the grade line were raised to the host's smallest size, and the figure to 34 so it still reads as the
      * main thing beside them. */
     const val CLIMB_LABEL_SIZE = HOST_MIN_TEXT
@@ -66,15 +132,31 @@ object CarOverlayPainter {
     const val CLIMB_FIGURE_DROP = 37f
     const val CLIMB_GRADE_DROP = 29f
 
-    /** Free map under the climb card. With the mock's 97 high card this was 58 (room for the host's travel-estimate card);
-     * the card grew 24 downwards for its larger text, so its top edge stays where it was. The host keeps its own cards out
-     * of the visible area, so nothing of the host's is under the card. */
-    const val ETA_CLEARANCE = 34f
-    const val MINI_W = 220f
-    const val MINI_H = 140f
+    // ---- the host's left column. The host does not tell the app where its cards are. These are measured on the desktop head
+    // ---- unit (DHU 2.0 at 160 dpi, Android Auto 17.9) in density-independent pixels; correct them after a real car.
 
-    /** The mini map keeps clear of the map buttons at the right edge. */
-    const val MINI_RIGHT_CLEARANCE = 84f
+    /** The host's turn card and arrival card: their width where the screen has room, and the gap between their right edge
+     * and the visible (and stable) area's left edge. Measured at 1280 x 720: the cards run from x 92 to 492, the area starts
+     * at about 505. */
+    const val HOST_CARD_W = 400f
+    const val HOST_COLUMN_GAP = 14f
+
+    /** The least the host keeps between its cards and the edge of the screen. Measured at 800 x 480, where the cards are
+     * narrower and run from x 12 to 332. */
+    const val HOST_EDGE_GAP = 12f
+
+    /** From the stable area's top down to the bottom of the turn card in the tallest state seen: a two-line road name and
+     * the next-step row. Measured: the card ends at y 212 at 1280 x 720 and at 202 at 800 x 480, with the stable area
+     * starting at about 91 and 81. (With a one-line road name it ended at 180 on the wide screen.) */
+    const val TURN_CARD_BELOW_TOP = 121f
+
+    /** The arrival (travel estimate) card's height; its bottom is the stable area's bottom. Measured: y 615 to 697 at
+     * 1280 x 720, 305 to 388 at 800 x 480. */
+    const val ARRIVAL_CARD_H = 83f
+
+    /** The least free space above and below the whole box in the left column, so a card that grows does not reach it. With
+     * less, the layout is the split one. (1280 x 720 has about 73 each side.) */
+    const val BOX_CUSHION_MIN = 40f
 
     /** While guiding the camera leaves this share of the area's height free above the position, so more of the road ahead shows. */
     const val GUIDANCE_TOP_SHARE = 0.35
@@ -120,56 +202,157 @@ object CarOverlayPainter {
         return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + MARKER_BELOW * density)
     }
 
-    /** Where the two pieces go, in surface pixels; null when a piece is off or does not fit. */
-    data class Layout(val climb: RectF?, val mini: RectF?)
+    /** Where the pieces go, in surface pixels; null for a piece that is off or does not fit. In [CarOverlayMode.ONE_BOX] the
+     * [mini] map and the [climb] are the two parts of one box, the climb right under the mini map ([box] is their common
+     * outline); in [CarOverlayMode.SPLIT] the climb is the one-line card and the mini map is the corner tile. */
+    data class Layout(val mode: CarOverlayMode, val mini: RectF?, val climb: RectF?) {
+        val box: RectF?
+            get() = when {
+                mode != CarOverlayMode.ONE_BOX -> null
+                mini != null && climb != null -> RectF(mini.left, mini.top, climb.right, climb.bottom)
+                else -> mini ?: climb
+            }
+    }
 
-    /** [visible] is where the pieces may go (it changes as the host shows and hides its buttons); [stable] is the area the
-     * camera places the vehicle in. Each falls back to the other, then to the whole surface, as CarMapRenderer.follow does. */
+    /** The gap in the host's left column between its turn card and its arrival card, top and bottom, as estimated from
+     * [area] (the stable area) and the measured constants. */
+    fun columnGap(area: Rect, density: Float): Pair<Float, Float> =
+        Pair(area.top + TURN_CARD_BELOW_TOP * density, area.bottom - ARRIVAL_CARD_H * density)
+
+    /** The host cards' left and right edges: the right one [HOST_COLUMN_GAP] left of [area], the left one [HOST_CARD_W]
+     * further, and never nearer the screen's edge than [HOST_EDGE_GAP] (on a narrower screen the cards are narrower). */
+    fun column(area: Rect, density: Float): Pair<Float, Float> {
+        val right = area.left - HOST_COLUMN_GAP * density
+        return Pair(max(right - HOST_CARD_W * density, HOST_EDGE_GAP * density), right)
+    }
+
+    /**
+     * Which layout a screen gets. [area] is the stable area (falling back as in [layout]); the visible area's right edge,
+     * which moves when the host shows and hides its buttons, plays no part, so the choice holds for the whole drive.
+     *
+     * [CarOverlayMode.ONE_BOX] when the left column is wide enough for the box and the gap between the host's two cards
+     * holds the WHOLE box (mini map and climb) with [BOX_CUSHION_MIN] above and below. The whole box decides even while only
+     * one part is drawn, so the layout never changes when a climb comes or goes. Otherwise [CarOverlayMode.SPLIT].
+     */
+    fun modeFor(area: Rect, density: Float): CarOverlayMode {
+        val d = density
+        val (gapTop, gapBottom) = columnGap(area, d)
+        val (left, right) = column(area, d)
+        val wide = right - left >= BOX_W * d
+        val high = gapBottom - gapTop >= (MINI_H + BOX_CLIMB_H + 2 * BOX_CUSHION_MIN) * d
+        return if (wide && high) CarOverlayMode.ONE_BOX else CarOverlayMode.SPLIT
+    }
+
+    /**
+     * Where the pieces go. [visible] is the area the host says is free of its own parts (it changes as the host shows and
+     * hides its buttons); [stable] is the area the camera places the vehicle in. Each falls back to the other, then to the
+     * whole surface, as CarMapRenderer.follow does. Every piece is inside the surface and clear of [keepClear].
+     *
+     * One box: on the host cards' left edge, centred in the gap between the turn card and the arrival card, on whole pixels.
+     * All of that is estimated ([column], [columnGap]): a turn card taller than the tallest seen (three lines, lanes, a
+     * junction picture) uses up the cushion above the box and then lies over its top, since the host draws above the app.
+     *
+     * Split: the climb is a one-line card across the host cards' width, centred in the same gap, when the gap holds it with
+     * [LINE_CUSHION_MIN] above and below. The mini map is a tile in the visible area, its bottom [MARGIN] above the area's
+     * bottom and its right edge on the area's right edge (beside the host's map buttons while they show). It is full size
+     * where that clears the vehicle and the road ahead, [MINI_SMALL] of it where only that does, and not drawn otherwise.
+     * Its size is settled where the buttons show (against the stable area's right edge), so it does not change size when
+     * they hide; it only slides to the wider area's edge.
+     */
     fun layout(width: Int, height: Int, visible: Rect?, density: Float, showClimb: Boolean, showMini: Boolean, stable: Rect? = null): Layout {
         val full = Rect(0, 0, width, height)
         val area = Rect(visible ?: stable ?: full).also { it.intersect(0, 0, width, height) }
-        if (area.isEmpty) return Layout(null, null)
+        val cam = stable ?: visible ?: full
         val d = density
-        val keep = keepClear(stable ?: visible ?: full, d)
-        var mini: RectF? = null
-        if (showMini) {
-            val w = MINI_W * d
-            val h = MINI_H * d
-            val right = area.right - (MARGIN + MINI_RIGHT_CLEARANCE) * d
-            val r = RectF(right - w, area.bottom - MARGIN * d - h, right, area.bottom - MARGIN * d)
-            if (r.left >= area.left && r.top >= area.top && !RectF.intersects(r, keep)) mini = r
+        val mode = modeFor(cam, d)
+        val keep = keepClear(cam, d)
+        fun fits(r: RectF) = r.left >= 0f && r.top >= 0f && r.right <= width && r.bottom <= height && !RectF.intersects(r, keep)
+        val (gapTop, gapBottom) = columnGap(cam, d)
+        val (colLeft, colRight) = column(cam, d)
+        val left = colLeft.roundToInt().toFloat()
+
+        if (mode == CarOverlayMode.ONE_BOX) {
+            val miniH = if (showMini) MINI_H * d else 0f
+            val h = miniH + if (showClimb) BOX_CLIMB_H * d else 0f
+            val top = ((gapTop + gapBottom - h) / 2f).roundToInt().toFloat()
+            val r = RectF(left, top, left + BOX_W * d, top + h)
+            if (h <= 0f || !fits(r)) return Layout(mode, null, null)
+            return Layout(
+                mode,
+                mini = if (showMini) RectF(r.left, r.top, r.right, r.top + miniH) else null,
+                climb = if (showClimb) RectF(r.left, r.top + miniH, r.right, r.bottom) else null,
+            )
         }
+
         var climb: RectF? = null
         if (showClimb) {
-            val left = area.left + MARGIN * d
-            var w = CLIMB_W * d
-            // Narrow screens: give way to the mini map, down to a card that still holds its text and shape.
-            if (mini != null) w = min(w, mini.left - left - MARGIN * d)
-            w = min(w, area.right - MARGIN * d - left)
-            val h = CLIMB_H * d
-            val bottom = area.bottom - (MARGIN + ETA_CLEARANCE) * d
-            // The vehicle or the road ahead would be under the card: the card ends short of them.
-            if (RectF.intersects(RectF(left, bottom - h, left + w, bottom), keep)) w = keep.left - left
-            if (w >= (CLIMB_PAD_X * 2 + CLIMB_TEXT_W + CLIMB_GAP + SHAPE_MIN_W) * d && bottom - h >= area.top) climb = RectF(left, bottom - h, left + w, bottom)
+            val h = LINE_H * d
+            if (colRight - left >= LINE_MIN_W * d && gapBottom - gapTop >= h + 2 * LINE_CUSHION_MIN * d) {
+                val top = ((gapTop + gapBottom - h) / 2f).roundToInt().toFloat()
+                climb = RectF(left, top, colRight, top + h).takeIf { fits(it) }
+            }
         }
-        return Layout(climb, mini)
+        var mini: RectF? = null
+        if (showMini && !area.isEmpty) {
+            val bottom = area.bottom - MARGIN * d
+            val tight = min(area.right, cam.right).toFloat()
+            for (scale in listOf(1f, MINI_SMALL)) {
+                val w = (MINI_W * d * scale).roundToInt().toFloat()
+                val h = (MINI_H * d * scale).roundToInt().toFloat()
+                val r = RectF(area.right - w, bottom - h, area.right.toFloat(), bottom)
+                if (r.left >= area.left && r.top >= area.top && fits(RectF(tight - w, bottom - h, tight, bottom)) && fits(r)) {
+                    mini = r
+                    break
+                }
+            }
+        }
+        return Layout(mode, mini, climb)
     }
 
-    /** Both pieces for [trip] (the switches are the trip's), in the car's day or night colors. Nothing is drawn unless the
-     * trip is guiding, and nothing while the route overview screen is up ([overview]): the mini map would repeat what that
-     * screen's map already shows, and both pieces would sit on the route and the vehicle there. The climb card is never drawn
-     * on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
-    fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false) {
-        val pal = trip.palette?.forMode(dark) ?: return
+    /** The pieces for [trip] (the switches are the trip's). Nothing is drawn unless the trip is guiding, and nothing while
+     * the route overview screen is up ([overview]): the mini map would repeat what that screen's map already shows. The
+     * climb is never drawn on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
+    fun draw(canvas: Canvas, trip: CarTrip, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false) {
         if (!trip.guiding || overview) return
-        val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null && !trip.arrived, showMini = trip.overlay.miniMap && trip.overview != null, stable = stable)
-        val climb = trip.climb
-        if (l.climb != null && climb != null && !trip.arrived) drawClimbCard(canvas, l.climb, climb, trip.imperial, pal, density)
-        val ov = trip.overview
-        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, pal, density)
+        val climb = if (trip.overlay.climb && !trip.arrived) trip.climb else null
+        val ov = if (trip.overlay.miniMap) trip.overview else null
+        val l = layout(width, height, visible, density, showClimb = climb != null, showMini = ov != null, stable = stable)
+        val d = density
+        val box = l.box
+        if (box != null) {
+            // One box: one card, the mini map in its upper part, a thin divider, the climb in its lower part.
+            drawCard(canvas, box, d)
+            canvas.save()
+            canvas.clipPath(Path().apply { addRoundRect(box, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, Path.Direction.CW) })
+            if (l.mini != null && ov != null) {
+                canvas.save()
+                canvas.clipRect(l.mini)
+                drawMiniContent(canvas, l.mini, ov, HOST_STYLE, d)
+                canvas.restore()
+            }
+            if (l.climb != null && climb != null) {
+                drawClimbPart(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d)
+                if (l.mini != null) canvas.drawRect(l.climb.left, l.climb.top, l.climb.right, l.climb.top + max(1f, d), fill(HOST_CARD_EDGE))
+            }
+            canvas.restore()
+            drawCardEdge(canvas, box, d)
+            return
+        }
+        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d)
+        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, HOST_STYLE, d, scale = l.mini.height() / (MINI_H * d))
     }
 
-    // ---- the climb card ----------------------------------------------------------------------------------------------
+    /** A card like the host's: the fill, and over the content the outline. */
+    private fun drawCard(canvas: Canvas, r: RectF, d: Float) {
+        canvas.drawRoundRect(r, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, fill(HOST_CARD_FILL))
+    }
+
+    private fun drawCardEdge(canvas: Canvas, r: RectF, d: Float) {
+        val w = HOST_CARD_EDGE_W * d
+        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, HOST_CARD_RADIUS * d - w / 2, HOST_CARD_RADIUS * d - w / 2, stroke(HOST_CARD_EDGE, w))
+    }
+
+    // ---- the climb part -----------------------------------------------------------------------------------------------
 
     fun climbText(meters: Double, imperial: Boolean): String {
         val v = if (imperial) meters * 3.28084 else meters
@@ -208,34 +391,80 @@ object CarOverlayPainter {
 
     private fun withAlpha(c: Int, a: Float): Int = (c and 0x00FFFFFF) or ((a.coerceIn(0f, 1f) * 255).roundToInt() shl 24)
 
-    fun drawClimbCard(canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float) {
-        canvas.drawRoundRect(r, 16f * d, 16f * d, fill(pal.card))
-        val x0 = r.left + CLIMB_PAD_X * d
-        // Text column: the label, the figure in bold, the grade line in semibold, one under the other as in the mock.
+    /** The climb inside the box's lower part [r] (no background of its own): the label, the figure in bold and the grade line
+     * in semibold one under the other, and the shape right of the label and the figure. The shape takes what those two leave
+     * (a long figure makes it narrower) and is left out when that is under half of [SHAPE_MIN_W]. */
+    fun drawClimbPart(canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float) {
+        val x0 = r.left + BOX_PAD_X * d
         val labelPaint = text(pal.cardSecondary, CLIMB_LABEL_SIZE * d, 400)
         val figurePaint = text(pal.cardText, CLIMB_FIGURE_SIZE * d, 700)
         val gradePaint = text(pal.cardText, CLIMB_GRADE_SIZE * d, 600)
         val label = "Climb ahead"
         val figure = climbText(c.climbAheadM, imperial)
-        var y = r.top + (CLIMB_PAD_Y + CLIMB_LABEL_SIZE) * d
-        canvas.drawText(label, x0, y, labelPaint)
-        y += CLIMB_FIGURE_DROP * d
-        canvas.drawText(figure, x0, y, figurePaint)
-        var textW = max(labelPaint.measureText(label), figurePaint.measureText(figure))
+        val labelY = r.top + (BOX_PAD_TOP + CLIMB_LABEL_SIZE) * d
+        val figureY = labelY + CLIMB_FIGURE_DROP * d
+        canvas.drawText(label, x0, labelY, labelPaint)
+        canvas.drawText(figure, x0, figureY, figurePaint)
         val g = c.gradePct
         val into = c.steepestInM
         if (g != null && into != null) {
-            val grade = "${gradeText(g)} in ${aheadText(into, imperial)}"
-            y += CLIMB_GRADE_DROP * d
-            canvas.drawText(grade, x0, y, gradePaint)
-            textW = max(textW, gradePaint.measureText(grade))
+            canvas.drawText("${gradeText(g)} in ${aheadText(into, imperial)}", x0, figureY + CLIMB_GRADE_DROP * d, gradePaint)
         }
-        // The shape takes what the text leaves (a long figure pushes it right), and is left out when that is too little.
-        val shapeRight = r.right - CLIMB_PAD_X * d
-        val shapeW = min(SHAPE_W * d, shapeRight - (x0 + max(CLIMB_TEXT_W * d, textW) + CLIMB_GAP * d))
-        if (shapeW < SHAPE_MIN_W * d * 0.5f) return
-        val shape = RectF(shapeRight - shapeW, r.centerY() - SHAPE_H * d / 2, shapeRight, r.centerY() + SHAPE_H * d / 2)
-        drawShape(canvas, shape, c, pal, d)
+        val shapeRight = r.right - BOX_PAD_X * d
+        val shapeLeft = x0 + max(labelPaint.measureText(label), figurePaint.measureText(figure)) + CLIMB_GAP * d
+        if (shapeRight - shapeLeft < SHAPE_MIN_W * d * 0.5f) return
+        // Level with the label and the figure: from the label's top to the figure's baseline, the shape in the middle.
+        val mid = (r.top + BOX_PAD_TOP * d + figureY) / 2f
+        drawShape(canvas, RectF(shapeLeft, mid - SHAPE_H * d / 2, shapeRight, mid + SHAPE_H * d / 2), c, pal, d)
+    }
+
+    /** What the one-line card holds, most first. */
+    enum class LineForm { SHAPE_FIGURE_GRADE_DISTANCE, FIGURE_GRADE_DISTANCE, FIGURE_GRADE, FIGURE }
+
+    /** What a line [avail] wide holds at the fixed text sizes: the figure always; then the grade; then the distance; the
+     * shape (at least [SHAPE_MIN_W]) only when all three fit beside it. So the shape is the first to go and the distance
+     * the next. The widths are the texts as measured; [gradeDistanceW] and [gradeW] are null with no grade to show. */
+    fun lineForm(avail: Float, figureW: Float, gradeDistanceW: Float?, gradeW: Float?, d: Float): LineForm {
+        val gap = LINE_GAP * d
+        if (gradeDistanceW != null) {
+            if (SHAPE_MIN_W * d + gap + figureW + gap + gradeDistanceW <= avail) return LineForm.SHAPE_FIGURE_GRADE_DISTANCE
+            if (figureW + gap + gradeDistanceW <= avail) return LineForm.FIGURE_GRADE_DISTANCE
+        }
+        if (gradeW != null && figureW + gap + gradeW <= avail) return LineForm.FIGURE_GRADE
+        return LineForm.FIGURE
+    }
+
+    /** The climb as a one-line card [r] in the host's style: the shape, the figure in bold, then the grade and how far, in
+     * the same words and number formats as the box ("2,130 ft", "11% in 23.0 mi", or "11%" alone). See [lineForm]. */
+    fun drawClimbLine(canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float) {
+        drawCard(canvas, r, d)
+        val figurePaint = text(pal.cardText, LINE_FIGURE_SIZE * d, 700)
+        val textPaint = text(pal.cardSecondary, LINE_TEXT_SIZE * d, 400)
+        val figure = climbText(c.climbAheadM, imperial)
+        val g = c.gradePct
+        val into = c.steepestInM
+        val grade = if (g != null) gradeText(g) else null
+        val gradeDistance = if (g != null && into != null) "${gradeText(g)} in ${aheadText(into, imperial)}" else null
+        val figureW = figurePaint.measureText(figure)
+        val avail = r.width() - 2 * LINE_PAD_X * d
+        val form = lineForm(avail, figureW, gradeDistance?.let { textPaint.measureText(it) }, grade?.let { textPaint.measureText(it) }, d)
+        val second = when (form) {
+            LineForm.SHAPE_FIGURE_GRADE_DISTANCE, LineForm.FIGURE_GRADE_DISTANCE -> gradeDistance
+            LineForm.FIGURE_GRADE -> grade
+            LineForm.FIGURE -> null
+        }
+        var x = r.left + LINE_PAD_X * d
+        val gap = LINE_GAP * d
+        if (form == LineForm.SHAPE_FIGURE_GRADE_DISTANCE && second != null) {
+            val w = min(LINE_SHAPE_W * d, avail - figureW - textPaint.measureText(second) - 2 * gap)
+            drawShape(canvas, RectF(x, r.centerY() - SHAPE_H * d / 2, x + w, r.centerY() + SHAPE_H * d / 2), c, pal, d)
+            x += w + gap
+        }
+        // Both texts on one baseline: half the figure's digit height (about 0.71 of its size) under the middle.
+        val baseline = r.centerY() + LINE_FIGURE_SIZE * 0.355f * d
+        canvas.drawText(figure, x, baseline, figurePaint)
+        if (second != null) canvas.drawText(second, x + figureW + gap, baseline, textPaint)
+        drawCardEdge(canvas, r, d)
     }
 
     /** Where a height is drawn in the shape, between [top] (high) and [bottom] (low), for a stretch whose heights run from
@@ -432,11 +661,22 @@ object CarOverlayPainter {
         return abs(steep[0] - dest[0]) >= (14f + MINI_DEST_R + gap) * d || abs(steep[1] - dest[1]) >= (10f + MINI_DEST_R + gap) * d
     }
 
-    fun drawMiniMap(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float) {
-        val radius = 14f * d
+    /** The mini map as a tile of its own, in the host's card style: the card, the content, the outline. [scale] is the
+     * tile's size against the full one (the lines, the dots and the padding shrink with it; the card's outline and corner do
+     * not). */
+    fun drawMiniMap(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float, scale: Float = 1f) {
+        val radius = HOST_CARD_RADIUS * d
         canvas.drawRoundRect(r, radius, radius, fill(pal.miniBg))
         canvas.save()
         canvas.clipPath(Path().apply { addRoundRect(r, radius, radius, Path.Direction.CW) })
+        drawMiniContent(canvas, r, ov, pal, d * scale)
+        canvas.restore()
+        val w = HOST_CARD_EDGE_W * d
+        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, radius - w / 2, radius - w / 2, stroke(pal.miniBorder, w))
+    }
+
+    /** The route, the driven part, the grade pill and the three dots in [r]; the caller clips. */
+    fun drawMiniContent(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float) {
         // The steep point and destination are projected with the route so they share its frame.
         val extra = mutableListOf<DoubleArray>()
         if (ov.steepLat != null && ov.steepLon != null) extra.add(doubleArrayOf(ov.steepLat, ov.steepLon))
@@ -458,7 +698,5 @@ object CarOverlayPainter {
         val here = driven.last()
         canvas.drawCircle(here[0], here[1], 8f * d, fill(pal.posFill))
         canvas.drawCircle(here[0], here[1], 8f * d, stroke(pal.posRing, 3f * d))
-        canvas.restore()
-        canvas.drawRoundRect(RectF(r).apply { inset(d, d) }, radius, radius, stroke(pal.miniBorder, 2f * d))
     }
 }

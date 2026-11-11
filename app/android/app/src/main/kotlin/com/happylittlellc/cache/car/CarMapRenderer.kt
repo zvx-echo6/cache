@@ -53,8 +53,9 @@ import kotlin.math.max
  *
  * Quality rule NF-2 says only map content is drawn on the surface: the base map, the route, the destination and the position,
  * with the turn, distances and arrival time left to the templates. Two things here are deliberately drawn on the surface anyway:
- * the climb-ahead card (bottom left) and the route mini map (bottom right), plus a grade badge at the steepest point and the
- * driven part of the route in faded grey on the map. This is in tension with NF-2. The owner chose to try it in review. Both
+ * the route mini map and the climb ahead, in the look of the host's own cards (one box in the host's left column on a tall
+ * screen, a one-line climb card there and a mini map tile in the bottom right corner on a short one; see CarOverlayPainter),
+ * plus a grade badge at the steepest point and the driven part of the route in faded grey on the map. This is in tension with NF-2. The owner chose to try it in review. Both
  * pieces are on by default, and the defaults are single constants in lib/car/car_overlay.dart (kCarClimbAheadDefault,
  * kCarRouteMiniMapDefault), so flipping them is a one-line change.
  *
@@ -287,7 +288,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun setOverview(on: Boolean) {
         if (overview == on) return
         overview = on
-        // The climb card and the mini map are not drawn over the overview (CarOverlayPainter.draw).
+        // The mini map and the climb are not drawn over the overview (CarOverlayPainter.draw).
         overlayView?.setOverview(on)
         following = true
         lastCameraPhase = null

@@ -9,7 +9,7 @@ import android.os.SystemClock
 import android.view.View
 
 /**
- * The View that lays the climb card and the route mini map over the car map (see CarMapRenderer's header). It paints
+ * The View that lays Cache's pieces (the route mini map and the climb) over the car map (see CarMapRenderer's header). It paints
  * [CarOverlayPainter] and does nothing else: no touch, no animation. New figures are shown in steps, at most once every
  * [MIN_STEP_MS], so the pieces never flicker or tween while the car moves. The route overview screen hides them, and they
  * are there only while the trip is guiding: when it stops they go at once, without waiting for the next step.
@@ -43,7 +43,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         height = h
     }
 
-    /** The host's two areas: the pieces go in [visible], the camera places the vehicle in [stable] (CarOverlayPainter.layout). */
+    /** The host's two areas: [visible] is free of the host's parts, the camera places the vehicle in [stable] (CarOverlayPainter.layout). */
     fun setAreas(visible: Rect?, stable: Rect?) {
         this.visible = visible?.let { Rect(it) }
         this.stable = stable?.let { Rect(it) }
@@ -92,7 +92,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     fun paint(canvas: Canvas) {
         val w = if (width > 0) width else getWidth()
         val h = if (height > 0) height else getHeight()
-        CarOverlayPainter.draw(canvas, shown, dark, w, h, visible, density, stable, overview)
+        CarOverlayPainter.draw(canvas, shown, w, h, visible, density, stable, overview)
     }
 
     companion object {

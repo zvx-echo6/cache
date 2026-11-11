@@ -129,3 +129,12 @@ data class CarOverlaySwitches(val climb: Boolean, val miniMap: Boolean) {
         }
     }
 }
+
+/** How the car's two pieces (the route mini map and the climb) are laid out. [CarOverlayPainter.modeFor] chooses. */
+enum class CarOverlayMode {
+    /** One box in the host's left column: the mini map on top, the climb under it. */
+    ONE_BOX,
+
+    /** The climb as a one-line card in the host's left column, the mini map as a tile in the bottom right corner. */
+    SPLIT,
+}
