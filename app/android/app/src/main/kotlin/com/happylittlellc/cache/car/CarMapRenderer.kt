@@ -72,7 +72,7 @@ import kotlin.math.max
  * The vehicle is the one thing on the map that is animated. Positions come about once a second; between one and the next the
  * marker and the camera glide together at a steady rate (one ValueAnimator drives both: see moveMarker and onGlideFrame), and
  * where a glide would show movement that did not happen the marker jumps (CarMarkerMotion.snaps). The animator runs only
- * between two different positions: a parked car draws nothing.
+ * between two different positions: a parked car draws nothing. Its frames reach the map about 30 times a second at most.
  *
  * Threads: everything here runs on the main thread, which is the thread MapLibre must be called on. The host's surface
  * callbacks, the phone's pushes (CarLink) and the screens' buttons all arrive there, and the animator is started there, so the
@@ -142,10 +142,17 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     /** The one animator, made when first needed and used again for every glide. */
     private var glide: ValueAnimator? = null
 
+    /** When the last frame of a glide was sent to the map (SystemClock.elapsedRealtime). */
+    private var lastFrameAt = 0L
+
     /** A frame of the glide: the marker, and with it the camera, at the animator's share of the way. Linear, so the share is
-     * the share of the time. Nothing is sent to the map when the frame is where the marker already is. */
+     * the share of the time. Frames are sent to the map about 30 times a second at most (CarMarkerMotion.appliesFrame), the
+     * last one always; a frame the animator gives sooner costs a clock reading and nothing else. Nothing is sent either when
+     * the frame is where the marker already is. */
     private val onGlideFrame = ValueAnimator.AnimatorUpdateListener { a ->
         val f = a.animatedFraction.toDouble()
+        val now = SystemClock.elapsedRealtime()
+        if (!CarMarkerMotion.appliesFrame(f, now, lastFrameAt)) return@AnimatorUpdateListener
         val lat = CarMarkerMotion.lerp(fromLat, toLat, f)
         val lon = CarMarkerMotion.lerp(fromLon, toLon, f)
         val heading = when {
@@ -154,6 +161,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             else -> CarMarkerMotion.lerpHeading(fromHeading, toHeading, f)
         }
         if (lat != drawnLat || lon != drawnLon || !sameHeading(heading, drawnHeading)) {
+            lastFrameAt = now
             drawMarker(lat, lon, heading)
             glideCamera()
         }

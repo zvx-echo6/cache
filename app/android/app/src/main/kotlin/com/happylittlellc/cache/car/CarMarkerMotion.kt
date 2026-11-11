@@ -18,6 +18,18 @@ object CarMarkerMotion {
     /** Positions further apart than this are not joined by a glide either (a new GPS lock, a test drive starting elsewhere). */
     const val SNAP_JUMP_M = 150.0
 
+    /** The least time between two frames of a glide that are sent to the map: about 30 a second. A car's screen draws about
+     * that many, each frame is a position for MapLibre's worker and a camera move, and the phone is also running an AI model,
+     * so the frames the animator gives in between (60 or 120 a second) are let go. It is 30 and not 33 so that, on a phone that
+     * gives a frame every 16 or 17 ms, every second frame passes whichever way the milliseconds round. */
+    const val MIN_FRAME_MS = 30L
+
+    /** Whether a frame of a glide is sent to the map: when at least [MIN_FRAME_MS] have passed since the last one that was
+     * ([nowMs] and [lastAppliedMs] on one clock that only goes forward), and always for the last frame ([fraction] 1), so the
+     * marker ends exactly on the position. A jump is not a frame and is never asked about here. */
+    fun appliesFrame(fraction: Double, nowMs: Long, lastAppliedMs: Long): Boolean =
+        fraction >= 1.0 || nowMs - lastAppliedMs >= MIN_FRAME_MS
+
     /** A heading as 0 up to (not including) 360 degrees. */
     fun norm(deg: Double): Double {
         val m = deg % 360.0

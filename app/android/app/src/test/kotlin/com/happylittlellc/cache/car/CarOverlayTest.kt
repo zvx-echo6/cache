@@ -701,6 +701,45 @@ class CarOverlayTest {
     }
 
     @Test
+    fun aGlidesFramesReachTheMapAboutThirtyTimesASecondAndTheLastOneAlways() {
+        assertEquals(30L, CarMarkerMotion.MIN_FRAME_MS)
+        // A one second glide on a phone that gives a frame every 8 ms: which frames are sent to the map.
+        fun applied(stepMs: Long): List<Long> {
+            val out = mutableListOf<Long>()
+            var last = 5_000L - 1_000L
+            var t = 5_000L
+            while (t <= 6_000L) {
+                val f = (t - 5_000L) / 1000.0
+                if (CarMarkerMotion.appliesFrame(f, t, last)) {
+                    out += t
+                    last = t
+                }
+                t += stepMs
+            }
+            return out
+        }
+        val fast = applied(8L)
+        // 126 frames given, about 32 sent: one every 32 ms.
+        assertTrue("${fast.size}", fast.size in 30..34)
+        for (i in 1 until fast.size - 1) assertEquals(32L, fast[i] - fast[i - 1])
+        // The last frame (the whole way) is sent though it comes 8 ms after the one before: the marker ends on the position.
+        assertEquals(6_000L, fast.last())
+        assertTrue(fast.last() - fast[fast.size - 2] < CarMarkerMotion.MIN_FRAME_MS)
+        // A frame every 16 or 17 ms: every second one, 30 a second.
+        val sixty = applied(17L)
+        for (i in 1 until sixty.size - 1) assertEquals(34L, sixty[i] - sixty[i - 1])
+        // A frame every 40 ms (a slow phone): all of them.
+        assertEquals(26, applied(40L).size)
+        // The rule itself: too soon is let go, soon enough is sent, the last frame and a frame after a long pause always.
+        assertFalse(CarMarkerMotion.appliesFrame(0.5, 1_029L, 1_000L))
+        assertTrue(CarMarkerMotion.appliesFrame(0.5, 1_030L, 1_000L))
+        assertFalse(CarMarkerMotion.appliesFrame(0.999, 1_008L, 1_000L))
+        assertTrue(CarMarkerMotion.appliesFrame(1.0, 1_008L, 1_000L))
+        assertTrue(CarMarkerMotion.appliesFrame(1.0, 1_000L, 1_000L))
+        assertTrue(CarMarkerMotion.appliesFrame(0.1, 60_000L, 1_000L))
+    }
+
+    @Test
     fun theJumpIsMeasuredInMetersOnTheGround() {
         // A thousandth of a degree of latitude is about 111 m; of longitude at 60 north, half that.
         assertEquals(111.2, CarMarkerMotion.distanceM(42.5, -113.77, 42.501, -113.77), 0.1)
