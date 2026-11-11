@@ -368,6 +368,33 @@ void main() {
     });
   });
 
+  group('what rel-1.1 added to entries and notebooks', () {
+    test('an entry\'s colour, icon and on-map flag travel in the .cnote, and so do a notebook\'s icon and colour', () async {
+      final a = await started('a');
+      final b = await started('b');
+      await a.nb.saveNotebook(id: 'p-1', template: 'places', def: const NotebookDef(name: 'Camps', fields: [], sort: NotebookSort.recent, icon: 'trailhead', color: 'teal'));
+      await a.nb.saveEntry(
+        id: 'ep1',
+        notebookId: 'p-1',
+        occurredAt: '2026-11-01T09:00:00-07:00',
+        title: 'North camp',
+        place: const NbPlace(lat: 43.6, lon: -116.2),
+        props: {'color': 'orange', 'icon': 'tent', 'on_map': false},
+      );
+      final link = ShareLink(a.folder, b.folder);
+      await rounds([a, b], [link]);
+      final file = a.folder.text.entries.firstWhere((e) => e.key.startsWith('p-1/') && e.key.endsWith(kNoteExt)).value;
+      expect(file, contains('cache_color: orange'));
+      expect(file, contains('cache_icon: tent'));
+      expect(file, contains('cache_on_map: false'));
+      final e = (await b.nb.entry('ep1'))!;
+      expect(e.props, {'color': 'orange', 'icon': 'tent', 'on_map': false});
+      final nb = b.nb.notebook('p-1')!;
+      expect((nb.def.icon, nb.def.color), ('trailhead', 'teal'));
+      expect(jsonDecode(a.folder.text['p-1/notebook.json']!)['def'], containsPair('icon', 'trailhead'));
+    });
+  });
+
   group('private notebooks', () {
     test('one that is not included writes nothing, is never matched by name, and is never filled by a note of another device', () async {
       final a = await started('a');

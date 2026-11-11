@@ -717,7 +717,7 @@ class NotebookSync {
 
   EntryDoc _inBook(EntryDoc d, String name) => d.notebook == name
       ? d
-      : EntryDoc(id: d.id, notebook: name, when: d.when, title: d.title, body: d.body, place: d.place, photos: d.photos, fields: d.fields, private: d.private, extra: d.extra);
+      : EntryDoc(id: d.id, notebook: name, when: d.when, title: d.title, body: d.body, place: d.place, photos: d.photos, fields: d.fields, private: d.private, extra: d.extra, props: d.props);
 
   bool _inShare(Notebook n) => includePrivate || !n.private || privateBooks.contains(n.id);
 
@@ -960,7 +960,7 @@ class NotebookSync {
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
         final other = identical(keep, prev) ? u : prev;
         out[u.doc.id] = keep;
-        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra)));
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props)));
       }
     }
 

@@ -258,11 +258,12 @@ void main() {
       );
       final plain = await one.nb.saveEntry(notebookId: book.id, occurredAt: '2026-11-10T11:00:00-07:00', title: 'Lucky Peak trailhead', place: const NbPlace(lat: 43.53, lon: -116.06));
       await one.sync();
-      final file = folder.text.entries.firstWhere((e) => e.key.endsWith('Boise River ford.md')).value;
+      final file = folder.text.entries.firstWhere((e) => e.key.endsWith('Boise River ford.cnote')).value;
       expect(file, allOf(contains('cache_color: blue'), contains('cache_icon: river_crossing'), contains('cache_on_map: false')));
       // a place with no app properties writes none
-      expect(folder.text.entries.firstWhere((e) => e.key.endsWith('Lucky Peak trailhead.md')).value, isNot(contains('cache_icon')));
-      expect(folder.text['.cache/notebooks.json'], allOf(contains('"icon": "trailhead"'), contains('"color": "teal"')));
+      expect(folder.text.entries.firstWhere((e) => e.key.endsWith('Lucky Peak trailhead.cnote')).value, isNot(contains('cache_icon')));
+      // the notebook's own record in the share (the id layout) carries them
+      expect(folder.text['${book.id}/notebook.json'], allOf(contains('"icon": "trailhead"'), contains('"color": "teal"')));
 
       final two = _Device(folder);
       await two.nb.start();
@@ -287,7 +288,7 @@ void main() {
       expect((await one.nb.entry(ford.id))!.props, {'color': 'blue', 'on_map': true});
 
       // a file written before these travelled (none of the three): the entry keeps what it has
-      final path = folder.text.keys.firstWhere((k) => k.endsWith('Boise River ford.md'));
+      final path = folder.text.keys.firstWhere((k) => k.endsWith('Boise River ford.cnote'));
       folder.text[path] = folder.text[path]!.split('\n').where((l) => !l.startsWith('cache_color') && !l.startsWith('cache_icon') && !l.startsWith('cache_on_map')).join('\n').replaceFirst('Boise River ford', 'Boise River ford, shallow');
       await one.sync();
       final kept = (await one.nb.entry(ford.id))!;
