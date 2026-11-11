@@ -752,6 +752,7 @@ class _ShellState extends State<Shell> {
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
