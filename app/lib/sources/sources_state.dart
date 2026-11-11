@@ -508,6 +508,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
         serverIndexPaused = r.paused;
         serverIndexBusy = r.busy;
+        // Work that began, or a Pause from another tab: the watcher must run to see it change again.
+        _keepServerWatch();
         notifyListeners();
       }
     } on CacheSearchException {
@@ -535,7 +537,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
     unawaited(_readServerPause());
-    if (!_serverWorkLeft) {
+    _keepServerWatch();
+  }
+
+  /// The 2-second watcher runs while a ZIM waits for its keyword index, and also while the server says it has index work or that
+  /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
+  /// must follow them (each round reads `index.pause` again).
+  void _keepServerWatch() {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;
