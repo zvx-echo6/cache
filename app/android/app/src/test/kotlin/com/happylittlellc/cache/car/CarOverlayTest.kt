@@ -444,6 +444,28 @@ class CarOverlayTest {
         assertTrue(contrast(t.cardSecondary, t.card) >= 6.0 && contrast(t.cardText, t.card) >= 6.0)
     }
 
+    // ---- the main map's grade badge -------------------------------------------------------------------------------------
+
+    @Test
+    fun theGradeOnTheMapBadgeIsNoSmallerThanTheHostsSmallestLineAndThePillHoldsIt() {
+        assertTrue(CarOverlayPainter.BADGE_TEXT_SIZE >= CarOverlayPainter.HOST_MIN_TEXT)
+        val pal = trip("light").palette!!.night
+        // The pill is as high as before (36) and as wide as its text needs: wider than the mock's 68, wider again for two digits.
+        val one = CarOverlayPainter.badgeBitmap(9.0, pal, 1f)
+        val two = CarOverlayPainter.badgeBitmap(12.0, pal, 1f)
+        assertEquals(40, one.height)
+        assertTrue("${one.width}", one.width > 72)
+        assertTrue(two.width > one.width)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
+        assertEquals(34f + p.measureText("12%") + 12f, CarOverlayPainter.badgeWidth("12%", 1f), 0.01f)
+        assertEquals(2 * CarOverlayPainter.badgeWidth("9%", 1f), CarOverlayPainter.badgeWidth("9%", 2f), 0.5f)
+        // The text is inside the pill: the columns of the last 6 px before the right edge's round end hold no glyph color,
+        // and the pill is painted at its middle.
+        val w = two.width
+        assertEquals(pal.badge, two.getPixel(w / 2, 4))
+        for (x in w - 2 - 8 until w - 2 - 4) for (y in 0 until two.height) assertFalse(two.getPixel(x, y) == pal.badgeGlyph)
+    }
+
     // ---- the mini map's destination ---------------------------------------------------------------------------------------
 
     @Test

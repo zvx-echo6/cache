@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -263,11 +264,25 @@ object CarOverlayPainter {
 
     // ---- the grade badge (the main map's and the mini map's) --------------------------------------------------------------
 
+    /** The grade on the main map's badge: the host's smallest text size, like the climb card's lines (the mock had 18). */
+    const val BADGE_TEXT_SIZE = HOST_MIN_TEXT
+
+    /** The pill's height with the percent, and where the percent starts from its left edge (after the slope triangle). */
+    const val BADGE_H = 36f
+    const val BADGE_TEXT_X = 34f
+    const val BADGE_PAD_RIGHT = 12f
+
+    private fun badgeText(color: Int, d: Float) = text(color, BADGE_TEXT_SIZE * d, 700)
+
+    /** The pill's width with [percent] on it: the triangle, the text as it measures, and the padding. (The mock's pill was a
+     * fixed 68 for 18 px text; at 24 the text is wider, and a two-digit grade wider again, so the pill follows the text.) */
+    fun badgeWidth(percent: String, d: Float): Float = (BADGE_TEXT_X + BADGE_PAD_RIGHT) * d + badgeText(0, d).measureText(percent)
+
     /** A pill with the slope triangle and, when [percent] is set, the grade. Centered on (cx, cy); the pill is 36 high with the
-     * percent (68 wide), 20 high without (28 wide), at density 1. */
+     * percent ([badgeWidth] wide), 20 high without (28 wide), at density 1. */
     fun drawBadge(canvas: Canvas, cx: Float, cy: Float, percent: String?, pal: CarOverlayColors, d: Float) {
-        val h = (if (percent != null) 36f else 20f) * d
-        val w = (if (percent != null) 68f else 28f) * d
+        val h = (if (percent != null) BADGE_H else 20f) * d
+        val w = if (percent != null) badgeWidth(percent, d) else 28f * d
         val box = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
         canvas.drawRoundRect(box, h / 2, h / 2, fill(pal.badge))
         canvas.drawRoundRect(box, h / 2, h / 2, stroke(pal.badgeEdge, max(1f, 1.5f * d)))
@@ -276,8 +291,8 @@ object CarOverlayPainter {
             val tx = box.left + 12f * d
             tri.moveTo(tx, cy + 8f * d); tri.lineTo(tx + 16f * d, cy - 8f * d); tri.lineTo(tx + 16f * d, cy + 8f * d); tri.close()
             canvas.drawPath(tri, fill(pal.badgeGlyph))
-            val tp = text(pal.badgeGlyph, 18f * d, 700)
-            canvas.drawText(percent, box.left + 34f * d, cy + 6.5f * d, tp)
+            // The baseline is half the digits' height (about 0.71 of the size) under the middle.
+            canvas.drawText(percent, box.left + BADGE_TEXT_X * d, cy + BADGE_TEXT_SIZE * 0.355f * d, badgeText(pal.badgeGlyph, d))
         } else {
             val tx = cx - 7f * d
             tri.moveTo(tx, cy + 5f * d); tri.lineTo(tx + 10f * d, cy - 5f * d); tri.lineTo(tx + 10f * d, cy + 5f * d); tri.close()
@@ -287,8 +302,8 @@ object CarOverlayPainter {
 
     /** The main map's badge as a picture (a MapLibre symbol image). */
     fun badgeBitmap(gradePct: Double, pal: CarOverlayColors, d: Float): Bitmap {
-        val w = (68f * d).toInt() + 4
-        val h = (36f * d).toInt() + 4
+        val w = ceil(badgeWidth(gradeText(gradePct), d)).toInt() + 4
+        val h = (BADGE_H * d).toInt() + 4
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         drawBadge(Canvas(bmp), w / 2f, h / 2f, gradeText(gradePct), pal, d)
         return bmp
