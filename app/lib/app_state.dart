@@ -220,7 +220,7 @@ class AppState extends ChangeNotifier {
           // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
-          final need = r == null ? null : await _needOf(e);
+          final need = r == null ? null : await needOf(e);
           if (r != null && need != null && need.total > r.room) {
             logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
             resting = e;
@@ -471,7 +471,13 @@ class AppState extends ChangeNotifier {
     _lastModelFile = null;
     modelGeneration++;
     notifyListeners();
-    await session.unload();
+    final u = session.unload();
+    _unloading = u; // a load that follows waits for it, as after release()
+    try {
+      await u;
+    } finally {
+      if (identical(_unloading, u)) _unloading = null;
+    }
     logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
   }
@@ -498,13 +504,33 @@ class AppState extends ChangeNotifier {
 
   /// What [e] needs in memory while it answers ([memoryNeedForFile]: the header's tensors with the lazy per-layer table left out,
   /// the f16 KV cache at the model's context size, and the compute reserve).
-  Future<MemoryNeed?> _needOf(ModelEntry e) async {
+  ///
+  /// Read once per run for a file: the result is kept by (path, length, modified time, nCtx), so the start and every wake after it do
+  /// not read the header (about 16 MB and a 262,144-entry skip, on this isolate) again; a file that changed is read again.
+  Future<MemoryNeed?> needOf(ModelEntry e) async {
+    final nCtx = settingsFor?.call(e)?.nCtx ?? kContextTokens;
+    String? key;
     try {
-      return await memoryNeedForFile(e.path, nCtx: settingsFor?.call(e)?.nCtx ?? kContextTokens, fallbackBytes: e.size);
+      final st = File(e.path).statSync();
+      if (st.type != FileSystemEntityType.notFound) key = '${e.path}|${st.size}|${st.modified.microsecondsSinceEpoch}|$nCtx';
+    } catch (_) {}
+    if (key != null && _needCache.containsKey(key)) return _needCache[key];
+    try {
+      final sw = Stopwatch()..start();
+      final need = await memoryNeedReader(e.path, nCtx: nCtx, fallbackBytes: e.size);
+      logInfo('Model memory need: header read in ${sw.elapsedMilliseconds} ms (cached after)');
+      if (key != null) _needCache[key] = need;
+      return need;
     } catch (_) {
       return null;
     }
   }
+
+  final Map<String, MemoryNeed?> _needCache = {};
+
+  /// Reads a model's memory need from its file (a test hook: a counter stands in for the file read).
+  @visibleForTesting
+  Future<MemoryNeed?> Function(String path, {int nCtx, int? fallbackBytes}) memoryNeedReader = memoryNeedForFile;
 
   /// Loads the [resting] model again (Ask opened, or its question was sent). Gated as the load at start is: when the model needs
   /// more than the memory free now ([memory]), it stays resting (Ask shows "No model is loaded" with its Load button), and the log
@@ -517,7 +543,7 @@ class AppState extends ChangeNotifier {
     if (resting != r || active != null || loading != null) return;
     if (!force) {
       final room = await memory();
-      final need = room == null ? null : await _needOf(r);
+      final need = room == null ? null : await needOf(r);
       if (room != null && need != null && need.total > room.room) {
         logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
         heldForMemory = true;
