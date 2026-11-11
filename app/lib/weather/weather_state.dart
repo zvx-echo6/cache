@@ -1409,8 +1409,10 @@ class WeatherState extends ChangeNotifier {
       place: p,
       // A kept answer's items are as the core gave them then: an alert whose own "Expires" has passed since is left out (the
       // core would leave it out now; nothing else in a kept item says when it ends).
+      // What was taken back is not something happening: a cancel message and the alert it references are left out of the
+      // app's lists and pop-ups (see [withoutCancelled]).
       items: [
-        for (final i in [for (final j in (g['items'] as List? ?? const [])) if (j is Map) LiveItem.fromJson(j.cast<String, dynamic>())])
+        for (final i in withoutCancelled([for (final j in (g['items'] as List? ?? const [])) if (j is Map) LiveItem.fromJson(j.cast<String, dynamic>())]))
           if (!(kept && _pastItsExpires(i))) i,
       ],
       // A kept answer's age is worked out again: it is older now than when the core said it.

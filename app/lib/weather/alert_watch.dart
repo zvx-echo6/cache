@@ -125,10 +125,7 @@ String placeWords(List<String> names) {
 
 /// An alert's CAP identifier: the item's key, without the ".IPAWS" IPAWS adds to the identifiers of the NWS messages it relays
 /// (NWS gives `urn:oid:2.49.0.1.840.0.<id>.001.1`, IPAWS `urn:oid:2.49.0.1.840.0.<id>.001.1.IPAWS`: one message).
-String capId(LiveItem i) {
-  final k = i.key.trim();
-  return k.endsWith('.IPAWS') ? k.substring(0, k.length - '.IPAWS'.length) : k;
-}
+String capId(LiveItem i) => _bareId(i.key);
 
 /// What kind of alert it is: its "Event" field when the source gives one (IPAWS: the label is the headline), else its label
 /// (NWS: the label is the event). Compared as written, ignoring case.
@@ -150,14 +147,122 @@ String alertEvent(LiveItem i) => (i.fields['Event'] ?? i.label).trim().toLowerCa
   return (from: t.toUtc(), to: to ?? t.toUtc().add(const Duration(hours: 6)));
 }
 
+String _bareId(String id) {
+  final k = id.trim();
+  return k.endsWith('.IPAWS') ? k.substring(0, k.length - '.IPAWS'.length) : k;
+}
+
+/// The alert's message type as the service gives it ("Alert", "Update", "Cancel"), or null when the source's definition does
+/// not pass it on. A source that passes it on also passes on references and VTEC where a message has them, so an alert with a
+/// message type is one whose identity can be told from those ([ToldAlert.matches]).
+String? alertMessageType(LiveItem i) {
+  final t = i.app['message_type'];
+  return t is String && t.trim().isNotEmpty ? t.trim() : null;
+}
+
+/// A message that takes an alert back.
+bool isCancel(LiveItem i) => alertMessageType(i)?.toLowerCase() == 'cancel';
+
+/// The identifiers of the earlier messages [i] replaces (CAP references), as [capId] writes identifiers. NWS gives a list of
+/// `{identifier, sender, sent}`; a CAP document gives one text of `sender,identifier,sent` groups with spaces between.
+List<String> alertRefs(LiveItem i) {
+  final out = <String>[];
+  void one(Object? r) {
+    if (r is Map && r['identifier'] is String) {
+      out.add(_bareId(r['identifier'] as String));
+    } else if (r is String) {
+      for (final group in r.trim().split(RegExp(r'\s+'))) {
+        if (group.isEmpty) continue;
+        final parts = group.split(',');
+        out.add(_bareId(parts.length >= 3 ? parts.sublist(1, parts.length - 1).join(',') : group));
+      }
+    }
+  }
+
+  final refs = i.app['references'];
+  if (refs is List) {
+    refs.forEach(one);
+  } else {
+    one(refs);
+  }
+  return out;
+}
+
+final RegExp _vtecLine = RegExp(r'/[A-Z]\.([A-Z]{3})\.([A-Z0-9]{4})\.([A-Z]{2})\.([A-Z])\.(\d{4})\.');
+
+/// The NWS events a message belongs to, from its VTEC lines: office, phenomenon, significance and event number
+/// ("KABQ.FF.W.0239"). An update of a warning keeps them; another warning of the same kind has another number. A line that
+/// says the event was upgraded to another (action UPG) names the event that ended, not this message's, and is left out.
+/// The definition gives the lines as `vtec`, or (a CAP document) among its `parameters` (`{valueName: "VTEC", value}`).
+Set<String> alertVtec(LiveItem i) {
+  final lines = <String>[];
+  void take(Object? v) {
+    if (v is String) {
+      lines.add(v);
+    } else if (v is List) {
+      v.forEach(take);
+    }
+  }
+
+  take(i.app['vtec']);
+  final params = i.app['parameters'];
+  for (final p in params is List ? params : [params]) {
+    if (p is Map && '${p['valueName']}'.toUpperCase() == 'VTEC') take(p['value']);
+  }
+  return {
+    for (final l in lines)
+      for (final m in _vtecLine.allMatches(l))
+        if (m.group(1) != 'UPG') '${m.group(2)}.${m.group(3)}.${m.group(4)}.${m.group(5)}',
+  };
+}
+
+/// How grave an alert is, from its "Severity" field: extreme 4, severe 3, moderate 2, minor 1, anything else 0.
+int severityRank(String? severity) => switch (severity?.trim().toLowerCase()) {
+  'extreme' => 4,
+  'severe' => 3,
+  'moderate' => 2,
+  'minor' => 1,
+  _ => 0,
+};
+
+String? _severityOf(LiveItem i) => i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
+
+/// Whether one of two messages names the other among its references, or both name the same earlier one, or they share an NWS
+/// event ([alertVtec]): two messages of one alert.
+bool _sameChain(LiveItem a, LiveItem b) {
+  final ra = alertRefs(a), rb = alertRefs(b);
+  return ra.contains(capId(b)) || rb.contains(capId(a)) || ra.any(rb.contains) || alertVtec(a).any(alertVtec(b).contains);
+}
+
+/// [items] without what was taken back: a cancel message is not something happening, and neither is the alert it references.
+/// For the app's lists and pop-ups only (the assistant reads the source's own list).
+List<LiveItem> withoutCancelled(List<LiveItem> items) {
+  if (!items.any(isCancel)) return items;
+  final gone = {for (final i in items) if (isCancel(i)) ...alertRefs(i)};
+  return [for (final i in items) if (!isCancel(i) && !gone.contains(capId(i))) i];
+}
+
 bool _spansMeet(({DateTime from, DateTime to})? a, ({DateTime from, DateTime to})? b) =>
     a == null || b == null || (!a.from.isAfter(b.to) && !b.from.isAfter(a.to));
 
-/// What is remembered of an alert that was told about: its CAP identifier, its event, its box, when it was in force and the
-/// places it was near. A copy that comes later is the same alert when it has the same identifier, or the same event over the same
-/// ground at the same time (an NWS update has a new identifier; IPAWS carries the same message as NWS).
+/// What is remembered of an alert that was told about: its CAP identifier, its event, its area, when it was in force, the places
+/// it was near, how grave it was, and (where the source gives them) the messages it replaced and its NWS event ([alertVtec]).
+/// A message that comes later is the same alert when [matches] says so. The first told lists kept the identifier, event, box,
+/// times and places only: they read as before.
 class ToldAlert {
-  const ToldAlert({required this.id, required this.event, this.box, this.from, this.to, this.places = const []});
+  const ToldAlert({
+    required this.id,
+    required this.event,
+    this.box,
+    this.from,
+    this.to,
+    this.places = const [],
+    this.area,
+    this.severity,
+    this.messageType,
+    this.refs = const [],
+    this.vtec = const [],
+  });
 
   final String id;
   final String event;
@@ -168,9 +273,40 @@ class ToldAlert {
   final DateTime? to;
   final List<String> places;
 
+  /// The alert's own area (GeoJSON), kept when it is small enough ([maxAreaChars]); else [box] stands in.
+  final Map<String, dynamic>? area;
+
+  /// "extreme", "severe", ... as it was told; null in a list from before it was kept.
+  final String? severity;
+
+  /// The message type, when the source gives one ([alertMessageType]): this alert's identity is known from [refs] and [vtec].
+  final String? messageType;
+
+  /// The identifiers of the messages this one replaced.
+  final List<String> refs;
+
+  /// Its NWS events ([alertVtec]).
+  final List<String> vtec;
+
+  /// The most an area may take in the told list, as JSON.
+  static const int maxAreaChars = 2000;
+
   static ToldAlert of(LiveItem i, Iterable<String> places) {
     final span = alertSpan(i);
-    return ToldAlert(id: capId(i), event: alertEvent(i), box: boxOf(i.area), from: span?.from, to: span?.to, places: [...places]);
+    final area = i.area != null && hasArea(i.area) && jsonEncode(i.area).length <= maxAreaChars ? i.area : null;
+    return ToldAlert(
+      id: capId(i),
+      event: alertEvent(i),
+      box: boxOf(i.area),
+      from: span?.from,
+      to: span?.to,
+      places: [...places],
+      area: area,
+      severity: _severityOf(i),
+      messageType: alertMessageType(i),
+      refs: alertRefs(i),
+      vtec: [...alertVtec(i)],
+    );
   }
 
   Map<String, Object?> toJson() => {
@@ -180,11 +316,17 @@ class ToldAlert {
     if (from != null) 'from': from!.toUtc().toIso8601String(),
     if (to != null) 'to': to!.toUtc().toIso8601String(),
     'places': places,
+    if (area != null) 'area': area,
+    if (severity != null) 'severity': severity,
+    if (messageType != null) 'message_type': messageType,
+    if (refs.isNotEmpty) 'refs': refs,
+    if (vtec.isNotEmpty) 'vtec': vtec,
   };
 
   static ToldAlert? fromJson(Object? j) {
     if (j is! Map || j['id'] is! String || j['event'] is! String) return null;
     final b = j['box'];
+    List<String> texts(Object? v) => [if (v is List) for (final x in v) if (x is String) x];
     return ToldAlert(
       id: j['id'] as String,
       event: j['event'] as String,
@@ -192,18 +334,37 @@ class ToldAlert {
       from: j['from'] is String ? DateTime.tryParse(j['from'] as String) : null,
       to: j['to'] is String ? DateTime.tryParse(j['to'] as String) : null,
       places: [if (j['places'] is List) for (final p in j['places'] as List) '$p'],
+      area: j['area'] is Map ? (j['area'] as Map).cast<String, dynamic>() : null,
+      severity: j['severity'] is String ? j['severity'] as String : null,
+      messageType: j['message_type'] is String ? j['message_type'] as String : null,
+      refs: texts(j['refs']),
+      vtec: texts(j['vtec']),
     );
   }
 
-  /// Whether [i], seen at [place], is this alert again.
+  /// Whether [i], seen at [place], is this alert again: the same message, an update of it, or an earlier message of it.
+  ///
+  /// The same identifier always is. Where both this record and [i] come with a message type, the service says what belongs
+  /// together and nothing is guessed: [i] is this alert when it has the same event name and one of the two references the other
+  /// (or both reference the same earlier message), or they share an NWS event; a message with neither is another alert, even
+  /// with the same event name, at the same time, on touching ground. Without a message type on either side (a source that
+  /// passes none on, or a list from before) it is the comparison there was: the same event, at the same time, over the same
+  /// ground, now by the areas themselves and not the boxes around them (a list from before has only the box).
   bool matches(LiveItem i, String place) {
-    if (capId(i) == id) return true;
+    final other = capId(i);
+    if (other == id) return true;
     if (alertEvent(i) != event) return false;
-    final mine = (from: from, to: to);
     final span = alertSpan(i);
-    if (mine.from != null && mine.to != null && span != null && !_spansMeet((from: mine.from!, to: mine.to!), span)) return false;
-    final b = boxOf(i.area);
-    if (box != null && b != null) return areasMeet(boxPolygon(box!), boxPolygon(b));
+    if (messageType != null && alertMessageType(i) != null) {
+      final theirs = alertRefs(i);
+      if (theirs.contains(id) || refs.contains(other) || refs.any(theirs.contains)) return true;
+      // event numbers start again each year: an event that ended long before this message began is not it
+      final longAgo = to != null && span != null && span.from.difference(to!) > const Duration(days: 10);
+      return !longAgo && vtec.any(alertVtec(i).contains);
+    }
+    if (from != null && to != null && span != null && !_spansMeet((from: from!, to: to!), span)) return false;
+    final mine = area ?? (box == null ? null : boxPolygon(box!));
+    if (mine != null && hasArea(i.area)) return areasMeet(mine, i.area);
     return places.contains(place);
   }
 }
@@ -243,6 +404,8 @@ class _Seen {
 bool sameAlert(LiveItem a, WatchPlace pa, bool alertA, LiveItem b, WatchPlace pb, bool alertB, {String? sourceA, String? sourceB}) {
   if (!alertA || !alertB) return !alertA && !alertB && sourceA == sourceB && a.key == b.key;
   if (capId(a) == capId(b)) return true;
+  // an update listed beside the message it replaces, or two messages of one NWS event: one alert, whichever source lists them
+  if (alertEvent(a) == alertEvent(b) && _sameChain(a, b)) return true;
   // a source lists an alert once per place: two identifiers of one source are two alerts
   if (sourceA != null && sourceA == sourceB) return false;
   if (alertEvent(a) != alertEvent(b)) return false;
@@ -304,25 +467,43 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
     return !s.serious || told.contains(seriousMark(mark));
   }
 
+  // A warning at one place: told when this very copy was (its address), or when the told list has this alert ([ToldAlert.matches])
+  // for this place and as grave as it is now. An alert told for another place is news here (it reaches a watched place it did
+  // not reach), and one that has become graver is news again; a later end or other words are not.
+  bool warningTold(_Seen s) {
+    if (told.contains(s.item.address)) return true;
+    final here = [for (final t in toldAlerts) if (t.matches(s.item, s.place.id) && t.places.contains(s.place.id)) t];
+    if (here.isEmpty) return false;
+    // a list from before kept no severity: nothing to compare, so not graver
+    final known = [for (final t in here) if (t.severity != null) severityRank(t.severity)];
+    return known.isEmpty || severityRank(_severityOf(s.item)) <= known.reduce((a, b) => a > b ? a : b);
+  }
+
   final out = <NewAlert>[];
   for (final g in groups) {
-    final isTold = g.any((s) => told.contains(s.item.address) || (s.alert && toldAlerts.any((t) => t.matches(s.item, s.place.id))) || toldAtAnotherPosition(s));
-    if (isTold) continue;
-    final first = g.first;
+    // the copies that are news: of a warning, those at the places it was not told for; of a fire or another event, all of
+    // them or none (as before)
+    final news = g.first.alert
+        ? [for (final s in g) if (!warningTold(s)) s]
+        : (g.any((s) => told.contains(s.item.address) || toldAtAnotherPosition(s)) ? const <_Seen>[] : g);
+    if (news.isEmpty) continue;
+    final first = news.first;
     final places = <WatchPlace>[];
-    for (final s in g) {
+    for (final s in news) {
       if (!places.any((p) => p.id == s.place.id)) places.add(s.place);
     }
+    // remembered for every place it is near now, the ones told before too
+    final near = {for (final s in g) s.place.id};
     out.add(NewAlert(
       item: first.item,
       source: first.view.source.id,
       place: first.place,
       places: places,
       addresses: [for (final s in g) s.item.address],
-      extreme: g.any((s) => s.extreme),
-      serious: g.any((s) => s.serious),
-      custom: g.any((s) => s.custom),
-      told: [for (final s in g) if (s.alert) ToldAlert.of(s.item, [for (final p in places) p.id])],
+      extreme: news.any((s) => s.extreme),
+      serious: news.any((s) => s.serious),
+      custom: news.any((s) => s.custom),
+      told: [for (final s in g) if (s.alert) ToldAlert.of(s.item, near)],
       marks: [
         for (final s in g)
           if (!s.alert && s.serious)

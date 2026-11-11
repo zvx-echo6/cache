@@ -79,6 +79,213 @@ void main() {
     });
   });
 
+  // 1.1 audit, finding 3: an alert told about was "the same" as any later one with the same event name, at an overlapping time,
+  // whose box met its box, so a second warning of the same kind never popped up. Where the source gives the message type,
+  // references and VTEC (the built-in alerts source does), those decide; elsewhere the areas themselves are compared.
+  group('an update of an alert, or another alert', () {
+    const sender = 'w-nws.webmaster@noaa.gov';
+    const a1 = 'urn:oid:2.49.0.1.840.0.aaaa.001.1', a2 = 'urn:oid:2.49.0.1.840.0.bbbb.001.1', a3 = 'urn:oid:2.49.0.1.840.0.cccc.001.1';
+    String vtec(String action, String number) => '/O.$action.KABQ.FF.W.$number.261029T1936Z-261029T2230Z/';
+    // ground east of the recorded warning's polygon, touching it along its east edge
+    const east = {
+      'type': 'Polygon',
+      'coordinates': [
+        [[-105.43, 33.36], [-105.30, 33.36], [-105.30, 33.45], [-105.43, 33.45], [-105.43, 33.36]],
+      ],
+    };
+
+    /// A warning as the built-in alerts source maps it, with what it gives the app alone (message type, references, VTEC).
+    LiveItem msg(String placeKey, String id, {String type = 'Alert', List<String> refs = const [], String? line, String severity = 'severe', String expires = '2026-10-29 16:30', Object? area = ffwPolygon, bool identity = true}) =>
+        LiveItem.fromJson({
+          'address': 'live:nws-alerts-point/$placeKey/$id',
+          'label': 'Flash Flood Warning',
+          'time': '2026-10-29T13:36:00-06:00',
+          'fields': {'Severity': severity, 'Expires': expires},
+          'area': area,
+          if (identity)
+            'app': {
+              'message_type': type,
+              'references': [for (final r in refs) {'identifier': r, 'sender': sender, 'sent': '2026-10-29T13:36:00-06:00'}],
+              'vtec': ?(line == null ? null : [line]),
+            },
+        });
+
+    final ridge = place('place:ridge', 'Ridge Farm'), mill = place('place:mill', 'Mill Camp');
+
+    /// One alert check against [list], the told list as its file holds it: what pops up, which is then remembered.
+    List<NewAlert> check(Map<WatchPlace, List<LiveItem>> seen, List<Object?> list) {
+      final kept = jsonDecode(jsonEncode(list)) as List;
+      final out = pickNewAlerts(
+        {for (final e in seen.entries) e.key: [view(e.key, nwsSrc, e.value)]},
+        {for (final x in kept) if (x is String) x},
+        toldAlerts: [for (final x in kept) ?ToldAlert.fromJson(x)],
+      );
+      list.addAll([for (final a in out) ...a.allAddresses, for (final a in out) ...a.marks, for (final a in out) for (final t in a.told) t.toJson()]);
+      return out;
+    }
+
+    /// A told list in which the first warning (event number 0239) was told at Ridge Farm.
+    List<Object?> toldAtRidge() {
+      final list = <Object?>[];
+      expect(check({ridge: [msg('ridge', a1, line: vtec('NEW', '0239'))]}, list).single.title, 'Flash Flood Warning near Ridge Farm');
+      return list;
+    }
+
+    test('an update of a told alert does not pop up: by its references, or by its NWS event number', () {
+      final byRefs = toldAtRidge();
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1])]}, byRefs), isEmpty);
+      final byEvent = toldAtRidge();
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', line: vtec('CON', '0239'))]}, byEvent), isEmpty);
+      // the older message arriving after its update (another source is behind): still the same alert
+      final late = <Object?>[];
+      check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1], line: vtec('CON', '0239'))]}, late);
+      expect(check({ridge: [msg('ridge', a1, line: vtec('NEW', '0239'))]}, late), isEmpty);
+      // two updates of the same first message
+      expect(check({ridge: [msg('ridge', a3, type: 'Update', refs: [a1])]}, late), isEmpty);
+    });
+
+    test('the recorded IPAWS update (Idaho, 2026-07-15) is its original again, by the reference the CAP document carries', () {
+      final cap = File('../packages/cache_search/native/cache_live/tests/fixtures/ipaws/cap_idaho_cem.xml').readAsStringSync();
+      String tag(String name) => RegExp('<$name>([^<]*)</$name>').firstMatch(cap)!.group(1)!;
+      expect(tag('msgType'), 'Update');
+      LiveItem civil(String id, String type, String? references, String sent) => LiveItem.fromJson({
+        'address': 'live:ipaws-alerts-near/ridge/$id',
+        'label': 'Civil Emergency Message',
+        'time': sent,
+        'fields': {'Event': tag('event'), 'Severity': 'extreme', 'Expires': '2026-07-16 02:54'},
+        'app': {'message_type': type, 'references': ?references},
+      });
+      final update = civil(tag('identifier'), tag('msgType'), tag('references'), tag('sent'));
+      final original = alertRefs(update).single;
+      expect(original, 'AS-ID-f99c29ec-6485-4946-bad1-f4c679204f91');
+      final list = <Object?>[];
+      List<NewAlert> seen(LiveItem i) {
+        final kept = jsonDecode(jsonEncode(list)) as List;
+        final out = pickNewAlerts({ridge: [view(ridge, ipawsSrc, [i])]}, {for (final x in kept) if (x is String) x}, toldAlerts: [for (final x in kept) ?ToldAlert.fromJson(x)]);
+        list.addAll([for (final a in out) ...a.allAddresses, for (final a in out) for (final t in a.told) t.toJson()]);
+        return out;
+      }
+
+      expect(seen(civil(original, 'Alert', null, '2026-07-15T22:18:49-06:00')), hasLength(1));
+      expect(seen(update), isEmpty, reason: 'the update names the message told about');
+      // another civil emergency message with no reference to it is another alert
+      expect(seen(civil('AS-ID-00000000-made-up', 'Alert', null, '2026-07-15T23:10:00-06:00')), hasLength(1));
+    });
+
+    test('a second warning of the same kind with a new event number pops up, at the same place and at a second one', () {
+      final list = toldAtRidge();
+      // the same event name, an overlapping time, ground that touches the first one's: it reaches Mill Camp only
+      final second = check({mill: [msg('mill', a2, line: vtec('NEW', '0240'), area: east)]}, list);
+      expect(second.single.title, 'Flash Flood Warning near Mill Camp');
+      expect(check({mill: [msg('mill', a2, line: vtec('NEW', '0240'), area: east)]}, list), isEmpty, reason: 'once');
+      // and a separate warning for the same place while the first is in force
+      final again = toldAtRidge();
+      expect(check({ridge: [msg('ridge', a2, line: vtec('NEW', '0240'))]}, again).single.title, 'Flash Flood Warning near Ridge Farm');
+      // with no VTEC at all (a statement): a new identifier that references nothing told is another alert
+      final plain = <Object?>[];
+      check({ridge: [msg('ridge', a1)]}, plain);
+      expect(check({ridge: [msg('ridge', a2)]}, plain), hasLength(1));
+    });
+
+    test('an update that raises the severity pops up again; a later end or the same severity does not', () {
+      final list = toldAtRidge();
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1], expires: '2026-10-29 18:00')]}, list), isEmpty, reason: 'only the end moved');
+      final graver = check({ridge: [msg('ridge', a3, type: 'Update', refs: [a1, a2], severity: 'extreme')]}, list);
+      expect(graver.single.title, 'Flash Flood Warning near Ridge Farm');
+      expect(graver.single.extreme, isTrue);
+      expect(check({ridge: [msg('ridge', a3, type: 'Update', refs: [a1, a2], severity: 'extreme')]}, list), isEmpty, reason: 'told as extreme now');
+      expect(check({ridge: [msg('ridge', 'urn:oid:later', type: 'Update', refs: [a3], severity: 'severe')]}, list), isEmpty, reason: 'less grave is not news');
+    });
+
+    test('an update whose area now reaches another watched place pops up for that place only', () {
+      final list = toldAtRidge();
+      final wider = {
+        'type': 'GeometryCollection',
+        'geometries': [ffwPolygon, east],
+      };
+      final out = check({
+        ridge: [msg('ridge', a2, type: 'Update', refs: [a1], line: vtec('EXA', '0239'), area: wider)],
+        mill: [msg('mill', a2, type: 'Update', refs: [a1], line: vtec('EXA', '0239'), area: wider)],
+      }, list);
+      expect(out.single.title, 'Flash Flood Warning near Mill Camp');
+      expect([for (final p in out.single.places) p.name], ['Mill Camp']);
+      expect(out.single.payload, contains('place:mill'));
+      expect(check({
+        ridge: [msg('ridge', a2, type: 'Update', refs: [a1], area: wider)],
+        mill: [msg('mill', a2, type: 'Update', refs: [a1], area: wider)],
+      }, list), isEmpty, reason: 'both places know now');
+    });
+
+    test('an alert for zones, with no polygon: its updates are known by reference and event number, and another one pops up', () {
+      final list = <Object?>[];
+      expect(check({ridge: [msg('ridge', a1, line: vtec('NEW', '0239'), area: null)]}, list), hasLength(1));
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1], area: null)]}, list), isEmpty);
+      expect(check({ridge: [msg('ridge', a3, type: 'Update', line: vtec('EXT', '0239'), area: null)]}, list), isEmpty);
+      expect(check({ridge: [msg('ridge', 'urn:oid:other', line: vtec('NEW', '0240'), area: null)]}, list), hasLength(1));
+      expect(check({mill: [msg('mill', a3, type: 'Update', line: vtec('EXT', '0239'), area: null)]}, list).single.title, 'Flash Flood Warning near Mill Camp');
+    });
+
+    test('a told list from before the update still counts: nothing in it pops up again', () {
+      // what the list held: addresses, and alerts with the identifier, event, box, times and places only
+      final before = <Object?>[
+        'live:nws-alerts-point/ridge/$a1',
+        {'id': a1, 'event': 'flash flood warning', 'box': boxOf(ffwPolygon), 'from': '2026-10-29T19:36:00.000Z', 'to': '2026-10-29T22:30:00.000Z', 'places': ['place:ridge']},
+      ];
+      expect(ToldAlert.fromJson(before[1])!.messageType, isNull);
+      expect(check({ridge: [msg('ridge', a1, line: vtec('NEW', '0239'))]}, [...before]), isEmpty, reason: 'the alert itself');
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1], line: vtec('CON', '0239'), expires: '2026-10-29 18:00')]}, [...before]), isEmpty, reason: 'its update');
+      expect(check({ridge: [msg('ridge', a2, type: 'Update', refs: [a1], severity: 'extreme')]}, [...before]), isEmpty,
+          reason: 'the old list has no severity to compare: not taken as graver');
+      // a source that gives no message type, against the old record: the comparison there was (same event, time and ground)
+      expect(check({ridge: [msg('ridge', a2, identity: false)]}, [...before]), isEmpty);
+    });
+
+    test('where a source gives neither references nor VTEC, the areas themselves are compared, not their boxes', () {
+      // two triangles in one square: the boxes are the same box, the areas only share nothing
+      const lower = {'type': 'Polygon', 'coordinates': [[[0.0, 0.0], [4.0, 0.0], [0.0, 4.0], [0.0, 0.0]]]};
+      const upper = {'type': 'Polygon', 'coordinates': [[[4.0, 1.0], [4.0, 4.0], [1.0, 4.0], [4.0, 1.0]]]};
+      expect(areasMeet(lower, upper), isFalse);
+      expect(areasMeet(boxPolygon(boxOf(lower)!), boxPolygon(boxOf(upper)!)), isTrue);
+      final list = <Object?>[];
+      expect(check({ridge: [msg('ridge', a1, identity: false, area: lower)]}, list), hasLength(1));
+      expect(check({ridge: [msg('ridge', a2, identity: false, area: upper)]}, list), hasLength(1), reason: 'other ground: another alert');
+      expect(check({ridge: [msg('ridge', a3, identity: false, area: lower)]}, list), isEmpty, reason: 'the same ground: an update');
+      // and such an update still pops up at a place the alert was not told for
+      expect(check({mill: [msg('mill', a3, identity: false, area: lower)]}, list).single.title, 'Flash Flood Warning near Mill Camp');
+    });
+
+    test('what the app reads from a message: references in both shapes, VTEC event numbers, a cancel', () {
+      final nwsShape = msg('ridge', a2, type: 'Update', refs: [a1, '$a3.IPAWS'], line: vtec('CON', '0239'));
+      expect(alertRefs(nwsShape), [a1, a3]);
+      expect(alertVtec(nwsShape), {'KABQ.FF.W.0239'});
+      // a CAP document: one text of sender,identifier,sent groups; VTEC among its parameters (the recorded NWS warning's)
+      final capShape = LiveItem.fromJson({
+        'address': 'live:ipaws-alerts-near/ridge/x',
+        'label': 'x',
+        'app': {
+          'message_type': 'Update',
+          'references': '$sender,$a1,2026-10-29T13:36:00-06:00 $sender,$a2.IPAWS,2026-10-29T14:00:00-06:00',
+          'parameters': [
+            {'valueName': 'AWIPSidentifier', 'value': 'FFWABQ'},
+            {'valueName': 'VTEC', 'value': '/O.NEW.KABQ.FF.W.0239.261029T1936Z-261029T2230Z/'},
+          ],
+        },
+      });
+      expect(alertRefs(capShape), [a1, a2]);
+      expect(alertVtec(capShape), {'KABQ.FF.W.0239'});
+      // a watch upgraded to a warning: the line for the watch names the event that ended, not this message's
+      final upgrade = LiveItem.fromJson({'address': 'a/b/c', 'label': 'x', 'app': {'message_type': 'Alert', 'vtec': ['/O.UPG.KABQ.FF.A.0012.000000T0000Z-261029T2230Z/', '/O.NEW.KABQ.FF.W.0240.261029T1936Z-261029T2230Z/']}});
+      expect(alertVtec(upgrade), {'KABQ.FF.W.0240'});
+      expect(alertVtec(msg('ridge', a1, identity: false)), isEmpty);
+      // a cancel: the message and the alert it takes back are not listed and so never pop up
+      final cancel = msg('ridge', a2, type: 'Cancel', refs: [a1], line: vtec('CAN', '0239'));
+      final other = msg('ridge', a3, line: vtec('NEW', '0240'));
+      expect(isCancel(cancel), isTrue);
+      expect([for (final i in withoutCancelled([msg('ridge', a1, line: vtec('NEW', '0239')), cancel, other])) capId(i)], [a3]);
+      expect(withoutCancelled([other]), [other]);
+    });
+  });
+
   group('one pop-up per alert', () {
     test('the NWS and IPAWS copies of one warning pop up once, as the first source shows it', () {
       final home = place('place:home', 'Home');
