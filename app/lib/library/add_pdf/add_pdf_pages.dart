@@ -136,8 +136,9 @@ String _titleFromName(String name) => name.replaceFirst(RegExp(r'\.pdf$', caseSe
 // ---- small pieces in the mockups' style
 
 /// A file's tile: the PDF icon on a tinted square.
-class _FileTile extends StatelessWidget {
-  const _FileTile({this.icon = Icons.description_outlined});
+/// The tiled icon of the rows in Add to Library's Your own group.
+class FileTile extends StatelessWidget {
+  const FileTile({super.key, this.icon = Icons.description_outlined});
 
   final IconData icon;
 
@@ -516,7 +517,7 @@ class _AddPdfConfirmPageState extends State<AddPdfConfirmPage> {
             _Card(
               child: Row(
                 children: [
-                  c.folder != null ? const _FileTile(icon: Icons.folder_outlined) : const _FileTile(),
+                  c.folder != null ? const FileTile(icon: Icons.folder_outlined) : const FileTile(),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1270,7 +1271,7 @@ class AddPdfRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                const _FileTile(),
+                const FileTile(),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -1315,7 +1316,7 @@ class AddPdfFolderRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                const _FileTile(icon: Icons.folder_outlined),
+                const FileTile(icon: Icons.folder_outlined),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(

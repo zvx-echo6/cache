@@ -306,4 +306,19 @@ void main() {
     expect(find.text('It finished first'), findsNothing);
     expect(w.pdf.state.jobs, contains(job), reason: 'nothing was cancelled behind the person\'s back');
   });
+
+  testWidgets("9. Your own (Add to Library and Discover's Your own) has Watch a folder after Add a PDF and Add a folder", (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await WatchWorld.make());
+    await tester.pumpWidget(app(Scaffold(body: SingleChildScrollView(child: YourOwnGroup(libraries: w.pdf.libs, pdf: true, sectionHeading: true)))));
+    await settle(tester);
+    expect(find.text('Add a PDF'), findsOneWidget);
+    expect(find.text('Add a folder'), findsOneWidget);
+    expect(find.text('Watch a folder'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Watch a folder')).dy, greaterThan(tester.getTopLeft(find.text('Add a folder')).dy));
+    w.two();
+    await settle(tester);
+    expect(find.text('Watched folders'), findsOneWidget);
+    expect(find.text('2 folders · checked 2 hours ago'), findsOneWidget);
+  });
 }

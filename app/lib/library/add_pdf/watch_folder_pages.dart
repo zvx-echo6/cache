@@ -300,7 +300,7 @@ class _WatchFolderConfirmPageState extends State<WatchFolderConfirmPage> {
             _Card(
               child: Row(
                 children: [
-                  const _FileTile(icon: Icons.folder_outlined),
+                  const FileTile(icon: Icons.folder_outlined),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -461,7 +461,7 @@ class WatchedFolderCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const _FileTile(icon: Icons.folder_outlined),
+              const FileTile(icon: Icons.folder_outlined),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -575,7 +575,7 @@ class _WatchChooseAgainPageState extends State<WatchChooseAgainPage> {
             _Card(
               child: Row(
                 children: [
-                  const _FileTile(icon: Icons.folder_outlined),
+                  const FileTile(icon: Icons.folder_outlined),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(

@@ -22,9 +22,19 @@ dest="$base/ios-arm64-$ver"
 hash256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 hash5() { if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi; }
 ok() { [ -f "$tgz" ] && [ "$(hash5 "$tgz")" = "$md5" ] && [ "$(hash256 "$tgz")" = "$sha256" ]; }
+# Kiwix's own mirrors carry the same file (download.kiwix.org redirects to them); the official server can crawl (2026-11-10:
+# about 7 KB/s, which ran the iOS release past its 3-hour limit). Each mirror gets a short, speed-checked try; the file is resumed
+# across them (it is the same file), and the checksums below are checked before anything is used, whichever server sent it.
+mirrors="https://ftp.fau.de/kiwix https://mirrors.dotsrc.org/kiwix https://mirror.accum.se/mirror/kiwix.org"
 if ! ok; then
-  # Retry interrupted transfers from the official release server. Checksums
-  # below remain mandatory before any archive can be used.
+  for m in $mirrors; do
+    curl -fsSL --http1.1 -C - --retry 3 --retry-all-errors --retry-delay 5 \
+      --connect-timeout 20 --speed-limit 102400 --speed-time 30 -o "$tgz" "$m/release/libkiwix/$name" || true
+    ok && break
+  done
+fi
+if ! ok; then
+  # Last resort: the official release server, resuming patiently.
   curl -fsSL --http1.1 -C - --retry 40 --retry-all-errors --retry-delay 5 \
     --connect-timeout 30 --speed-limit 1024 --speed-time 120 -o "$tgz" "$url"
   ok || { rm -f "$tgz"; echo "checksum mismatch for $name (want md5 $md5, sha256 $sha256)" >&2; exit 1; }
