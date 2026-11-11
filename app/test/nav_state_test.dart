@@ -621,5 +621,29 @@ void main() {
       expect(nav.arrived, isFalse);
       expect(nav.selected, isNull);
     });
+
+    test('directions asked for while guiding end guidance first: no position service is left running', () async {
+      await guideTo('Juniper Depot');
+      expect(gps.starts, 1);
+      expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-second', name: 'Quartz Landing'));
+      await nav.openDirections(spot('place:21', 'Quartz Landing', 42.6, -113.6));
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.selected!.name, 'Quartz Landing');
+      expect(nav.route!.routeId, 'r-second');
+      expect(gps.stops, 1, reason: 'the position service was stopped');
+      expect(speaker.stops, 1);
+      expect(location.streamHealthy, isTrue, reason: 'the hold on the map\'s position stream was released');
+      expect(follows.last, FollowMode.follow);
+      // No fix reaches guidance any more.
+      final before = backend.calls.where((c) => c.startsWith('progress')).length;
+      gps.controller.add(fixAt(42.5, -113.7));
+      await settle();
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, before);
+      // Backing out of the preview leaves nothing to stop.
+      nav.cancelDirections();
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1);
+    });
   });
 }

@@ -68,8 +68,9 @@ class PlaceNotebookDeps {
   /// The map of the full-screen "Choose on map" picker.
   final SpotMapBuilder? pickerMap;
 
-  /// Directions on the map to a place.
-  final void Function(NbPlace place, String name)? directions;
+  /// Directions on the map to a place. False when they were not opened because a route is being followed: the place's screen
+  /// then says so, as the rest of the app does.
+  final bool Function(NbPlace place, String name)? directions;
 
   /// The downloaded regions weather can be kept for (watched-place id `region:<name>`). No longer listed in the Places notebook
   /// (1.0.29); kept for the Weather and alerts screen that lists the watched areas.
@@ -588,7 +589,12 @@ class PlaceView extends StatelessWidget {
                     alignment: Alignment.centerLeft,
                     child: FilledButton.icon(
                       key: const ValueKey('place-directions'),
-                      onPressed: () => pd!.directions!(p, name),
+                      onPressed: () {
+                        if (pd!.directions!(p, name)) return;
+                        final m = ScaffoldMessenger.of(context);
+                        m.hideCurrentSnackBar();
+                        m.showSnackBar(const SnackBar(content: Text('Finish or end the route first')));
+                      },
                       icon: const Icon(Icons.directions),
                       label: const Text('Directions'),
                     ),

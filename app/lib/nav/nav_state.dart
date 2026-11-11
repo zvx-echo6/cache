@@ -477,8 +477,11 @@ class NavState extends ChangeNotifier {
     return true;
   }
 
-  /// Directions from the phone's position to [to].
+  /// Directions from the phone's position to [to]. The app's own screens do not ask while guiding (they say to finish or end
+  /// the route first); if this is reached while guiding all the same, guidance is ended first, so its position service is
+  /// never left running behind a preview.
   Future<void> openDirections(MapPlace to) async {
+    if (guiding) await end();
     selected = to;
     phase = NavPhase.previewing;
     searchOpen = false;
