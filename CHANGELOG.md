@@ -12,6 +12,8 @@ release notes).
 
 ### Fixed
 - Places: the map when adding a place always opens close in on where you are
+- Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
+- Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers

@@ -8,15 +8,25 @@ import 'package:flutter/services.dart';
 /// (MainActivity, BuildConfig.TEST_APK); every other build answers nothing, so the app's default applies.
 @immutable
 class BenchOptions {
-  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps});
+  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0, this.ubatch = 0, this.embedThreads = 0});
 
   /// The native gentle pre-read's rate in MB/s: [kDefaultPrereadMbps] unless the extra was given; 0 turns it off.
   final int prereadMbps;
 
+  /// `--ei cache_date_offset_days N`: shifts the date line of the chat's system prompt by N days (so a phone check sees a new
+  /// day's prompt start). Nothing else changes. 0: no shift.
+  final int dateOffsetDays;
+
+  /// `--ei cache_ubatch N`: the chat context's n_ubatch for a measurement; 0: llama.cpp's default.
+  final int ubatch;
+
+  /// `--ei cache_embed_threads N`: the search model's thread count for a measurement; 0: the default (4).
+  final int embedThreads;
+
   static const BenchOptions off = BenchOptions();
 
   @override
-  String toString() => 'preread_mbps=$prereadMbps';
+  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}${ubatch != 0 ? ', cache_ubatch=$ubatch' : ''}${embedThreads != 0 ? ', embed_threads=$embedThreads' : ''}';
 }
 
 const MethodChannel kBenchChannel = MethodChannel('cache/bench');
@@ -29,8 +39,25 @@ Future<BenchOptions> readBenchOptions({MethodChannel channel = kBenchChannel, bo
     final m = await channel.invokeMethod<Object?>('get');
     if (m is! Map) return BenchOptions.off;
     final mbps = m['preread_mbps'];
-    return mbps is int && mbps >= 0 ? BenchOptions(prereadMbps: mbps) : BenchOptions.off;
+    // The two measurement extras count only when the build says it is the test APK (the release build never sends them).
+    final test = m['testApk'] == true;
+    final days = m['date_offset_days'];
+    final ub = m['cache_ubatch'];
+    final et = m['cache_embed_threads'];
+    return BenchOptions(
+      prereadMbps: mbps is int && mbps >= 0 ? mbps : kDefaultPrereadMbps,
+      dateOffsetDays: test && days is int ? days : 0,
+      ubatch: test && ub is int && ub > 0 ? ub : 0,
+      embedThreads: test && et is int && et > 0 ? et : 0,
+    );
   } catch (_) {
     return BenchOptions.off;
   }
 }
+
+/// The date shift of the chat's system prompt now (see [BenchOptions.dateOffsetDays]), set when the bench options are read at a model
+/// load. Always 0 outside the test APK.
+int benchDateOffsetDays = 0;
+
+/// The search model's thread count from the bench ([BenchOptions.embedThreads]); 0: the default. Always 0 outside the test APK.
+int benchEmbedThreads = 0;

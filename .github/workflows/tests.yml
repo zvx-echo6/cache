@@ -277,3 +277,10 @@ jobs:
           CACHE_ADD_PDF_CORE=1 CACHE_EMBED_LIB="$LLAMA_LIB" CACHE_EMBED_MODEL="$RUNNER_TEMP/models/bge-m3-Q8_0.gguf" \
           LD_LIBRARY_PATH="$CS_DIR:$LLAMA_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             flutter test --no-pub test/add_pdf/add_pdf_core_test.dart --reporter expanded
+      # PDFium's one font mapper: two isolates of one process use PDFium without an abort, and the text and pages the core reads
+      # from the font fixtures are what they were before the mapper became native (goldens)
+      - name: PDFium font mapper
+        working-directory: app
+        run: |
+          CACHE_PDF_FONTS=1 LD_LIBRARY_PATH="$CS_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test --no-pub test/pdf/pdfium_font_mapper_test.dart test/pdf/pdfium_lock_test.dart --reporter expanded

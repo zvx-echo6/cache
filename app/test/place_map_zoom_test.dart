@@ -178,7 +178,9 @@ void main() {
       await tester.pump();
       expect(cam.initial!.target.latitude, closeTo(42.55, 1e-9));
       expect(cam.initial!.target.longitude, closeTo(-113.73, 1e-9));
-      expect(cam.initial!.zoom, kPlaceZoom);
+      // A region of about 15 km fits at about zoom 11; a tiny one would open at the place zoom.
+      expect(cam.initial!.zoom, closeTo(11.3, 0.1));
+      expect(cam.initial!.zoom, greaterThanOrEqualTo(kPrecisePlaceZoom));
     });
 
     test('a big region fits at a lower zoom, the largest one is used', () {
@@ -267,7 +269,6 @@ void main() {
         await tester.pump(const Duration(seconds: 8));
         await tester.pump();
         expect(cam.initial, isNotNull, reason: 'style $style fix $fixMs');
-        expect(cam.initial!.zoom, isNot(3));
         _expectClose(cam);
       }
     });

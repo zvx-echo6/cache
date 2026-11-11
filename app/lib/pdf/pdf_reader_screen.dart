@@ -16,6 +16,7 @@ import '../theme.dart';
 import '../video/format.dart';
 import 'index/pdf_pages.dart' show cleanPdfTitle, readPdfMeta;
 import 'pdf_find.dart';
+import 'pdfium_init.dart';
 import 'pdf_settings.dart';
 import 'pdf_source.dart';
 import 'pdf_text_match.dart';
@@ -268,7 +269,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() => _phase = _Phase.opening);
     try {
       if (!await File(path).exists()) throw const PdfGone();
-      await pdfrxFlutterInitialize();
+      await initPdfium();
       final doc = await PdfDocument.openFile(
         path,
         passwordProvider: password == null ? null : createSimplePasswordProvider(password),
