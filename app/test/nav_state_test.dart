@@ -542,5 +542,168 @@ void main() {
       expect(speaker.said.any((s) => s.toLowerCase().contains('leave the road and head east')), isTrue, reason: speaker.said.join(' | '));
       expect(speaker.said.any((s) => s.contains('climbing')), isTrue);
     });
+
+    group('stops while guiding', () {
+      List<String> names(List<Map<String, dynamic>> v) => [for (final m in v) m['name'] as String];
+
+      Future<void> guideWith(Map<String, dynamic> json) async {
+        await startOn(json);
+        backend.onProgress = (r, lat, lon) async => p(json, 0.1);
+      }
+
+      test('adding a stop reroutes at once from the phone, even inside the cooldown, and says so', () async {
+        await guideWith(routeJson);
+        gps.controller.add(fixAt(42.5, -113.78));
+        await settle();
+        final routesBefore = backend.calls.where((c) => c.startsWith('route:')).length;
+        // an automatic reroute just happened: the cooldown is running
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.12, offset: 200, off: true, count: 3);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-auto'));
+        gps.controller.add(fixAt(42.51, -113.77));
+        await settle(60);
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.1);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routesBefore + 1);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-stop'));
+        expect(await nav.addStop(place('place:9', 'Store')), isTrue);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routesBefore + 2, reason: 'no waiting for the cooldown');
+        expect(names(backend.vias.last), ['Store']);
+        expect(backend.froms.last!['lat'], 42.51, reason: 'from the last fix');
+        expect(nav.route!.routeId, 'r-stop');
+        expect(speaker.said, contains('Adding a stop'));
+        expect(nav.rerouting, isFalse);
+      });
+
+      test('adding while a reroute is under way is queued and runs when that one is done', () async {
+        await guideWith(routeJson);
+        gps.controller.add(fixAt(42.5, -113.78));
+        await settle();
+        final gate = Completer<void>();
+        var n = 0;
+        backend.onRoute = (to, mode, from) async {
+          n++;
+          if (n == 1) await gate.future;
+          return MapRoute.fromJson(fakeRouteJson(id: 'r$n'));
+        };
+        final first = nav.addStop(place('place:9', 'Store'));
+        await settle();
+        expect(nav.rerouting, isTrue);
+        final second = nav.addStop(place('place:10', 'Gas'));
+        await settle();
+        expect(await second, isTrue);
+        expect(n, 1, reason: 'the second waits for the first');
+        gate.complete();
+        await first;
+        await settle();
+        expect(n, 2);
+        expect(names(backend.vias.last), ['Store', 'Gas'], reason: 'the queued one has both stops');
+        expect(nav.rerouting, isFalse);
+      });
+
+      test('a route has at most maxStops: the extra one is refused with a notice and no reroute', () async {
+        await guideWith(routeJson);
+        gps.controller.add(fixAt(42.5, -113.78));
+        await settle();
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+        for (var i = 0; i < NavState.maxStops; i++) {
+          expect(await nav.addStop(place('place:$i', 'S$i', lat: 42.9, lon: -113.0 + i / 10)), isTrue);
+        }
+        final routes = backend.calls.where((c) => c.startsWith('route:')).length;
+        expect(await nav.addStop(place('place:x', 'One too many')), isFalse);
+        expect(nav.stops.length, NavState.maxStops);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routes);
+        await settle();
+        expect(events.whereType<NavNotice>().last.text, 'A route has at most 10 stops');
+      });
+
+      test('with no position yet the stop is kept and the reroute happens on the next fix', () async {
+        // A route from a chosen start, so guidance can begin before the phone has any position
+        expect(location.fix, isNull);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+        await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
+        nav.setFrom(place('place:5', 'Start', lat: 42.5, lon: -113.8));
+        await settle();
+        await nav.start();
+        expect(nav.guiding, isTrue);
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.1);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-stop'));
+        final routes = backend.calls.where((c) => c.startsWith('route:')).length;
+        expect(await nav.addStop(place('place:9', 'Store')), isTrue);
+        expect(nav.stops.length, 1);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routes);
+        gps.controller.add(fixAt(42.5, -113.78));
+        await settle(60);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routes + 1);
+        expect(names(backend.vias.last), ['Store']);
+        expect(speaker.said, contains('Adding a stop'));
+      });
+
+      test('a stop added after passing stop 0 is not treated as passed', () async {
+        await startOn(routeJson);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-a'));
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.1);
+        await nav.addStop(place('place:1', 'First', lat: 42.5, lon: -113.5));
+        gps.controller.add(fixAt(42.5, -113.5));
+        await settle();
+        await nav.addStop(place('place:2', 'Second', lat: 42.6, lon: -113.4));
+        expect(names(backend.vias.last), ['Second'], reason: 'First is passed, Second is not');
+      });
+
+      test('after removeStop the passed stops still point at the same stops', () async {
+        await startOn(routeJson);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-a'));
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.1);
+        await nav.addStop(place('place:1', 'A', lat: 42.7, lon: -113.2));
+        await nav.addStop(place('place:2', 'B', lat: 42.5, lon: -113.5));
+        await nav.addStop(place('place:3', 'C', lat: 42.8, lon: -113.1));
+        gps.controller.add(fixAt(42.5, -113.5));
+        await settle();
+        // B (index 1) is passed; removing A moves B to index 0
+        await nav.removeStop(0);
+        expect(names(backend.vias.last), ['C'], reason: 'B is still passed');
+        expect(speaker.said.where((s) => s == 'Rerouting.').length, 1);
+        await nav.removeStop(1);
+        expect(names(backend.vias.last), isEmpty);
+      });
+
+      test('removing a passed stop only drops it: no new route', () async {
+        await startOn(routeJson);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-a'));
+        backend.onProgress = (r, lat, lon) async => p(routeJson, 0.1);
+        await nav.addStop(place('place:1', 'A', lat: 42.5, lon: -113.5));
+        await nav.addStop(place('place:2', 'B', lat: 42.8, lon: -113.1));
+        gps.controller.add(fixAt(42.5, -113.5));
+        await settle();
+        final routes = backend.calls.where((c) => c.startsWith('route:')).length;
+        await nav.removeStop(0);
+        expect([for (final s in nav.stops) s.name], ['B']);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routes);
+      });
+
+      test('removing a stop that is still ahead reroutes at once', () async {
+        await guideWith(routeJson);
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-a'));
+        await nav.addStop(place('place:1', 'A', lat: 42.7, lon: -113.2));
+        final routes = backend.calls.where((c) => c.startsWith('route:')).length;
+        await nav.removeStop(0);
+        expect(backend.calls.where((c) => c.startsWith('route:')).length, routes + 1);
+        expect(names(backend.vias.last), isEmpty);
+      });
+    });
+  });
+
+  group('stops in the preview', () {
+    test('adding and removing a stop before Start fetches the routes again, with no guidance reroute', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      expect(await nav.addStop(place('place:9', 'Store')), isFalse, reason: 'no route yet');
+      await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
+      expect(await nav.addStop(place('place:9', 'Store')), isTrue);
+      expect([for (final m in backend.vias.last) m['name']], ['Store']);
+      expect(nav.phase, NavPhase.previewing);
+      expect(speaker.said, isEmpty);
+      await nav.removeStop(0);
+      expect(backend.vias.last, isEmpty);
+      expect(nav.phase, NavPhase.previewing);
+    });
   });
 }

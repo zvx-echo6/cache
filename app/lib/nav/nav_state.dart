@@ -199,24 +199,51 @@ class NavState extends ChangeNotifier {
     if (phase == NavPhase.previewing) unawaited(_fetchRoutes());
   }
 
-  /// Add stop: [p] joins the route shown, after the stops it has. False when no route is shown or it has [maxStops].
+  /// Add stop: [p] joins the route shown, after the stops it has. While guiding the route is worked out again at once from
+  /// the phone. False when no route is shown or it has [maxStops].
   Future<bool> addStop(MapPlace p) async {
-    if (phase != NavPhase.previewing || selected == null) return false;
+    final guide = phase == NavPhase.guiding;
+    if ((phase != NavPhase.previewing && !guide) || selected == null) return false;
     if (stops.length >= maxStops) {
       _events.add(const NavNotice('A route has at most 10 stops'));
       return false;
     }
     stops = [...stops, p];
     notifyListeners();
+    if (guide) {
+      await _rerouteNow('Adding a stop');
+      return true;
+    }
     await _fetchRoutes();
     return true;
   }
 
   Future<void> removeStop(int i) async {
     if (i < 0 || i >= stops.length) return;
+    final wasPassed = _passedStops.contains(i);
     stops = [...stops]..removeAt(i);
+    // The stops after it move up one place: the passed ones keep pointing at the same stops.
+    final kept = [for (final j in _passedStops) if (j != i) j > i ? j - 1 : j];
+    _passedStops
+      ..clear()
+      ..addAll(kept);
     notifyListeners();
-    if (phase == NavPhase.previewing) await _fetchRoutes();
+    if (phase == NavPhase.previewing) {
+      await _fetchRoutes();
+    } else if (guiding && !wasPassed) {
+      // A passed stop is already left out of the route, so dropping it changes nothing to work out again.
+      await _rerouteNow('Rerouting.');
+    }
+  }
+
+  /// A change the person made while guiding: a new route from the phone at once. Without a position yet it waits for the next fix.
+  Future<void> _rerouteNow(String say) async {
+    final f = lastFix ?? location.fix;
+    if (f == null) {
+      _rerouteOnFix = say;
+      return;
+    }
+    await _reroute(f, force: true, say: say);
   }
 
   List<Map<String, dynamic>> _via({bool skipPassed = false}) => [
@@ -237,6 +264,8 @@ class NavState extends ChangeNotifier {
   Fix? _pendingFix;
   bool _sendRoute = true;
   DateTime? _lastReroute;
+  String? _rerouteOnFix;
+  String? _queuedReroute;
   bool _routeStarted = false;
 
   bool get available => backend.available;
@@ -585,6 +614,8 @@ class NavState extends ChangeNotifier {
     _sendRoute = true;
     _routeStarted = false;
     _lastReroute = null;
+    _rerouteOnFix = null;
+    _queuedReroute = null;
     _passedStops.clear();
     _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
     onFollow?.call(FollowMode.headingUp);
@@ -625,6 +656,11 @@ class NavState extends ChangeNotifier {
       Fix? cur = f;
       while (cur != null && guiding) {
         _pendingFix = null;
+        final owed = _rerouteOnFix;
+        if (owed != null) {
+          _rerouteOnFix = null;
+          await _reroute(cur, force: true, say: owed);
+        }
         await _progressFor(cur);
         cur = _pendingFix;
       }
@@ -661,16 +697,22 @@ class NavState extends ChangeNotifier {
     }
   }
 
-  Future<void> _reroute(Fix f) async {
+  /// [force] (a change the person asked for) skips the cooldown only; one that comes while another reroute is under way waits and
+  /// runs when that one finishes. [say] is what is spoken.
+  Future<void> _reroute(Fix f, {bool force = false, String say = 'Rerouting.'}) async {
     final now = _clock();
-    if (rerouting || (_lastReroute != null && now.difference(_lastReroute!) < rerouteCooldown)) return;
+    if (rerouting) {
+      if (force) _queuedReroute = say;
+      return;
+    }
+    if (!force && _lastReroute != null && now.difference(_lastReroute!) < rerouteCooldown) return;
     final old = route;
     final to = selected;
     if (old == null || to == null) return;
     rerouting = true;
     _lastReroute = now;
     notifyListeners();
-    _say('Rerouting.');
+    _say(say);
     try {
       final r = await backend.route(
           from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
@@ -692,6 +734,10 @@ class NavState extends ChangeNotifier {
       rerouting = false;
       notifyListeners();
     }
+    final queued = _queuedReroute;
+    _queuedReroute = null;
+    final latest = lastFix ?? location.fix;
+    if (queued != null && guiding && latest != null) await _reroute(latest, force: true, say: queued);
   }
 
   void _say(String text) {
@@ -719,6 +765,8 @@ class NavState extends ChangeNotifier {
     progress = null;
     arrived = false;
     rerouting = false;
+    _rerouteOnFix = null;
+    _queuedReroute = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
   }
