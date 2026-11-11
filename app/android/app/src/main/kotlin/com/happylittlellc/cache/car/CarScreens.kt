@@ -81,8 +81,8 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
         NavigationTemplate.Builder()
             .setActionStrip(
                 ActionStrip.Builder()
-                    .addAction(Action.Builder().setIcon(CarIcons.search).setOnClickListener { openSearch() }.build())
-                    .addAction(Action.Builder().setIcon(CarIcons.saved).setOnClickListener { openSaved() }.build())
+                    .addAction(Action.Builder().setIcon(CarIcons.search).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { openSearch() }.build())
+                    .addAction(Action.Builder().setIcon(CarIcons.saved).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { openSaved() }.build())
                     .build(),
             )
             .setMapActionStrip(map.mapActionStrip())
@@ -144,7 +144,7 @@ class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScree
         }
         return MapWithContentTemplate.Builder()
             .setContentTemplate(content.build())
-            .setActionStrip(ActionStrip.Builder().addAction(Action.Builder().setIcon(CarIcons.search).setOnClickListener { search() }.build()).build())
+            .setActionStrip(ActionStrip.Builder().addAction(Action.Builder().setIcon(CarIcons.search).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { search() }.build()).build())
             .setMapController(map.mapController())
             .build()
     }
@@ -296,7 +296,7 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
         val strip = ActionStrip.Builder()
         if (ready) {
             strip.addAction(
-                Action.Builder().setTitle("Start").setFlags(Action.FLAG_PRIMARY).setBackgroundColor(CarColor.GREEN).setOnClickListener {
+                Action.Builder().setTitle("Start").setFlags(Action.FLAG_PRIMARY or Action.FLAG_IS_PERSISTENT).setBackgroundColor(CarColor.GREEN).setOnClickListener {
                     started = true
                     CarLink.call("start")
                 }.build(),

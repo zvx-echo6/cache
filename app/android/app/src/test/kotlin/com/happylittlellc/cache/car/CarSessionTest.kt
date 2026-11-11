@@ -142,6 +142,32 @@ class CarSessionTest {
     }
 
     @Test
+    fun theButtonsThatMustStayDoNotFadeOut() {
+        val persistent = androidx.car.app.model.Action.FLAG_IS_PERSISTENT
+        val primary = androidx.car.app.model.Action.FLAG_PRIMARY
+        CarLink.dartForTests = { method, _, done -> done(if (method == "saved") (1..2).map { place(it) } else null) }
+        start()
+        // Home: Search and Saved places both stay on the map.
+        val home = screens.top as HomeScreen
+        val homeActions = (templateOf(home) as NavigationTemplate).actionStrip!!.actions
+        assertEquals(2, homeActions.size)
+        for (a in homeActions) assertEquals(persistent, a.flags and persistent)
+        // Saved places: its Search button stays.
+        home.openSaved()
+        val saved = screens.top as SavedPlacesScreen
+        shadowOf(Looper.getMainLooper()).idle()
+        val savedActions = (templateOf(saved) as MapWithContentTemplate).actionStrip!!.actions
+        assertEquals(1, savedActions.size)
+        assertEquals(persistent, savedActions[0].flags and persistent)
+        // Route preview: Start is the primary action and stays.
+        val preview = RoutePreviewScreen(car, CarMapRenderer(car), CarPlace("place:1", "Cassia Regional Hospital", null, 42.5, -113.5, null))
+        push("trip", trip("previewing"))
+        val startAction = (templateOf(preview) as MapWithContentTemplate).actionStrip!!.actions[0]
+        assertEquals("Start", startAction.title.toString())
+        assertEquals(primary or persistent, startAction.flags and (primary or persistent))
+    }
+
+    @Test
     fun savedPlacesIsAListOverTheMapThatBackCloses() {
         CarLink.dartForTests = { method, _, done -> done(if (method == "saved") (1..8).map { place(it) } else null) }
         start()
