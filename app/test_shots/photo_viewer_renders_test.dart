@@ -58,6 +58,14 @@ Uint8List _photo(int seed, {int w = 1600, int h = 1200}) {
   for (var i = 0; i < 40; i++) {
     img.drawCircle(im, x: (w * ((i * 37) % 100) / 100).round(), y: (h * (0.58 + ((i * 17) % 20) / 100)).round(), radius: 6 + i % 5, color: img.ColorRgb8(30, 70, 40));
   }
+  // Fine detail, to show a zoom to the photo's own pixels: one-pixel lines near the sun.
+  if (w >= 2400) {
+    for (var y = (h * 0.30).round(); y < (h * 0.30).round() + 160; y++) {
+      for (var x = (w * 0.30).round(); x < (w * 0.30).round() + 240; x++) {
+        if ((x + y) % 4 == 0) im.setPixelRgb(x, y, 20, 40, 70);
+      }
+    }
+  }
   return img.encodeJpg(im, quality: 88);
 }
 
@@ -66,9 +74,10 @@ late List<String> _ids;
 
 /// Decodes the pictures on the real clock before the screen is built (a load that starts inside a test's own clock is never
 /// finished by the engine), so the screen finds them in the image cache.
-Future<void> _warm(WidgetTester tester) async {
+Future<void> _warm(WidgetTester tester, [List<String>? ids]) async {
+  ids ??= _ids;
   await tester.runAsync(() async {
-    final files = [for (final id in _ids) await _nb.thumbFile(id), for (final id in _ids) await _nb.photoFile(id)];
+    final files = [for (final id in ids!) await _nb.thumbFile(id), for (final id in ids) await _nb.photoFile(id)];
     for (final f in files) {
       final c = Completer<void>();
       final stream = FileImage(f).resolve(ImageConfiguration.empty);
@@ -101,6 +110,9 @@ void main() {
     await Directory('${dir.path}/photos').create(recursive: true);
     await Directory('${dir.path}/thumbs').create(recursive: true);
     _ids = ['p-sample-1', 'p-sample-2', 'p-sample-3'];
+    final wide = _photo(1, w: 2400, h: 1200);
+    File('${dir.path}/photos/p-wide.jpg').writeAsBytesSync(wide);
+    File('${dir.path}/thumbs/p-wide.jpg').writeAsBytesSync(img.encodeJpg(img.copyResize(img.decodeJpg(wide)!, width: 256), quality: 80));
     for (var i = 0; i < 3; i++) {
       final full = _photo(i);
       File('${dir.path}/photos/${_ids[i]}.jpg').writeAsBytesSync(full);
@@ -180,6 +192,39 @@ void main() {
         ));
         await _settle(tester);
         await snap(tester, _out, '$tag-entry-thumbnails');
+      });
+    }
+  }
+
+  // The viewer turned sideways (a wide photo fills the screen) and zoomed to the photo's own pixels. Light and Tactical.
+  for (final theme in [CacheThemeId.light, CacheThemeId.tactical]) {
+    for (final (label, size) in [('390', const Size(390, 844)), ('844x390', const Size(844, 390))]) {
+      final tag = '$label-${theme.name}';
+      Widget wideViewer() => shotApp(PhotoViewer(ids: const ['p-wide'], fileFor: _nb.photoFile), theme: theme, insets: label == '390' ? const EdgeInsets.only(top: 54, bottom: 34) : EdgeInsets.zero);
+
+      testWidgets('wide photo, $tag', (tester) async {
+        phone(tester, size: size, ratio: 2);
+        await _warm(tester, ['p-wide']);
+        await tester.pumpWidget(wideViewer());
+        await _settle(tester);
+        await snap(tester, _out, '$tag-viewer-wide');
+      });
+
+      testWidgets('zoomed to the photo\'s own pixels, $tag', (tester) async {
+        phone(tester, size: size, ratio: 2);
+        await _warm(tester, ['p-wide']);
+        await tester.pumpWidget(wideViewer());
+        await _settle(tester);
+        final lim = photoZoomLimits(const Size(2400, 1200), size);
+        final c = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer).first).transformationController!;
+        // The fine lines near the sun in the middle of the screen, at the largest zoom.
+        final p = Offset(lim.fit.left + lim.fit.width * 0.35, lim.fit.top + lim.fit.height * 0.38);
+        final s = lim.max;
+        c.value = Matrix4.identity()
+          ..translateByDouble(size.width / 2 - s * p.dx, size.height / 2 - s * p.dy, 0, 1)
+          ..scaleByDouble(s, s, 1, 1);
+        await _settle(tester);
+        await snap(tester, _out, '$tag-viewer-actual-pixels');
       });
     }
   }
