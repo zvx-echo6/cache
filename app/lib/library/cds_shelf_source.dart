@@ -793,17 +793,24 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// A ONE-TIME return to Unsorted for the books an earlier build of this page shelved with no confidence: it shelved every new
   /// book that had any suggestion (`place ... by: auto` with a `loc`; the app's own add-time place has no `loc`).
   ///
-  /// Only a book of a library built on a device (the library's settings say `"own": true`, as Add PDF makes them; a published or
-  /// server-built library has no such key) whose latest shelf event is that auto place, whose pack does not say `filed`, and which
-  /// was placed before this device first ran the fix, is returned: `unsort` (by auto) at one millisecond after the place, so a
-  /// later move by a person, here or on another device, always outranks it, then a `retire` of the number it held, so the number
-  /// is never given out again. A book whose latest event is by a person is never touched.
+  /// A book is returned only when all of these hold:
+  /// - its library was built on a device (the library's settings say `"own": true`, as Add PDF makes them; a published or
+  ///   server-built library has no such key);
+  /// - its latest shelf event is an `auto` place with a `loc`, written by THIS device (so each place is returned by its writer,
+  ///   once), dated before this device first ran the fix;
+  /// - no copy of the book has ever been placed or unsorted by a person, and no copy has an auto place without a `loc` (that is the
+  ///   add-time place: the sorter was confident, or another device's build placed it later);
+  /// - its pack does not say `filed`.
+  ///
+  /// It writes `unsort` (by auto) and a `retire` of the number the book held, through the core's `unconfident-return` append: the
+  /// ONLY write that keeps the `at` it is given instead of holding this device's clock. They are stamped one millisecond after the
+  /// place they replace, so a person's move made on another device and not yet synced, whenever this device last wrote, always
+  /// outranks them (the resolver orders by `at`, `dev`, position).
   ///
   /// Once: `.local/unconfident-return.json` (device-local, survives restarts) holds the time of this device's first run, written
   /// before anything else, and `done` when the events are written. Nothing runs again after `done`, so a device that syncs in later
-  /// with old events is not acted on. Two devices that both run it agree: each writes the same unsort and retire for the same
-  /// books (the `at` comes from the place, not from the clock), the resolver takes the latest event, and a book either device
-  /// already returned has an unsort as its latest event, so the other finds nothing to do.
+  /// with old events is not acted on. Two devices that both run it agree: each returns only its own places, and a book either has
+  /// already returned has an unsort as its latest event. Devices that stay on build 49 keep shelving guesses; those are not returned.
   Future<bool> _returnUnconfident(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
     final own = {for (final lb in libs) if (lb.item.settings?['own'] == true) lb.id};
     if (own.isEmpty) return false; // nothing built on a device is here yet: the one run is kept for when it is
@@ -823,6 +830,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       if (!_writeJson(marker, {'format': 1, 'first_run_at': cutoff, 'done': false})) return false;
     }
     final events = _readEvents(dir);
+    // the ids this device has written its log under (the shared one, and this install's own before sharing was set up)
+    final mine = <String>{dev};
+    try {
+      mine.addAll(await _ownIds?.call() ?? const <String>[]);
+      if (_ownIds == null) {
+        final local = await libraryLocalDeviceId();
+        if (local != null) mine.add(local);
+      }
+    } catch (_) {}
     final books = (view['books'] as Map? ?? const {}).cast<String, dynamic>();
     final write = <Map<String, dynamic>>[];
     final said = <String>[];
@@ -830,11 +846,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       final vb = _ViewBook(key, (books[key] as Map).cast<String, dynamic>());
       if (!vb.shelved || vb.shelf == null || vb.j['by'] != 'auto' || _confident(vb, libs)) continue;
       final copies = {for (final c in vb.copies) c['copy'] as String};
-      ({int at, String dev, int line, Map<String, dynamic> e})? last;
-      for (final x in events) {
-        if ((x.e['ev'] == 'place' || x.e['ev'] == 'unsort') && copies.contains(x.e['copy'])) last = x;
-      }
-      if (last == null || last.e['ev'] != 'place' || last.e['by'] != 'auto' || last.at >= cutoff) continue;
+      final shelf = [for (final x in events) if ((x.e['ev'] == 'place' || x.e['ev'] == 'unsort') && copies.contains(x.e['copy'])) x];
+      if (shelf.isEmpty) continue;
+      // never a book a person has placed or unsorted on any of its copies, nor one with an add-time place (an auto place with no loc)
+      if (shelf.any((x) => x.e['by'] == 'user')) continue;
+      if (shelf.any((x) => x.e['ev'] == 'place' && x.e['by'] == 'auto' && !(x.e['loc'] is String && (x.e['loc'] as String).isNotEmpty))) continue;
+      final last = shelf.last;
+      if (last.e['ev'] != 'place' || last.e['by'] != 'auto' || last.at >= cutoff || !mine.contains(last.dev)) continue;
       final loc = last.e['loc'];
       if (loc is! String || !loc.contains('/') || !own.contains(loc.substring(0, loc.indexOf('/')))) continue;
       final copy = last.e['copy'] as String;
@@ -847,7 +865,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     }
     if (write.isNotEmpty) {
       try {
-        await calls.append({'dir': dir.path, 'dev': dev, 'events': write});
+        await calls.append({'dir': dir.path, 'dev': dev, 'events': write, 'migration': 'unconfident-return'});
       } catch (e) {
         _log('Bookshelves: the return to Unsorted could not be written, it will be tried again: $e');
         return false;

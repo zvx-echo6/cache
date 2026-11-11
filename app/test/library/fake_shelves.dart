@@ -67,8 +67,26 @@ class FakeShelvesCalls implements ShelvesCalls {
   Future<Map<String, dynamic>> append(Map<String, dynamic> args) async {
     final dev = args['dev'] as String;
     final lines = <Map<String, dynamic>>[];
+    // as the core does: a clock set back is held (no event gets an `at` earlier than this device's own last one), except for the one
+    // migration that may keep the `at` it is given, which may write only unsort (by auto) and retire
+    final migration = args['migration'];
+    if (migration != null) {
+      if (migration != 'unconfident-return') throw StateError('not a migration: $migration');
+      for (final e in (args['events'] as List).cast<Map>()) {
+        if (!(e['ev'] == 'unsort' && e['by'] == 'auto') && e['ev'] != 'retire') throw StateError('the migration writes only unsort and retire: $e');
+      }
+    }
+    var last = 0;
+    final own = File('${args['dir']}/log/$dev.jsonl');
+    if (own.existsSync()) {
+      for (final l in _lines(own)) {
+        if (l['dev'] == dev && l['at'] is num && (l['at'] as num).toInt() > last) last = (l['at'] as num).toInt();
+      }
+    }
     for (final e in (args['events'] as List).cast<Map>()) {
       final m = <String, dynamic>{'v': 1, 'at': e['at'] ?? now, 'dev': dev, ...e.cast<String, dynamic>()};
+      if (migration == null) m['at'] = ((m['at'] as num).toInt() > last ? m['at'] as num : last).toInt();
+      last = (m['at'] as num).toInt();
       if (!_known.contains(m['ev']) || m['copy'] is! String || (m['ev'] == 'same' || m['ev'] == 'notsame') && m['copy'] == m['with']) {
         throw StateError('not a Bookshelves event: $m');
       }

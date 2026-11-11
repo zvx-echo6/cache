@@ -457,6 +457,69 @@ fn a_header_with_filed_and_suggestions_is_read_from_the_pack() {
     assert_eq!((f.suggestions[1].score, f.suggestions[2].label.as_str()), (None, ""));
 }
 
+/// The one-time return to Unsorted writes its unsort and retire at the `at` it is given (just after the place it replaces), not at
+/// the device's last `at`, so a person's move made on another device before it stays on top.
+#[test]
+fn the_return_to_unsorted_is_stamped_after_its_place_so_a_persons_unsynced_move_wins() {
+    let libs = vec![lib("L", vec![pf("X", "x", "Book X", 10), pf("Y", "y", "Book Y", 10)])];
+    let tmp = Tmp::new("migration");
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    // device A: an auto place of X with a loc at t=100 (and its number), then a later event of its own at t=500
+    let a = LogWriter::open(&a_dir.join("log"), "dev-a").unwrap();
+    a.append(&[ev(100, "dev-a", place("X", "210")).with_loc("L/x"), ev(100, "dev-a", assign("X", "210", 1)), ev(500, "dev-a", title("Y", "Later"))]).unwrap();
+    // device B, not yet synced: a person moved X to 220 at t=200
+    LogWriter::open(&b_dir.join("log"), "dev-b").unwrap().append(&[ev(200, "dev-b", Kind::Place { copy: s("X"), div: s("220"), by: By::User })]).unwrap();
+    let request = |migration: Option<&str>, events: Value| {
+        let mut r = json!({"dir": a_dir.to_str().unwrap(), "dev": "dev-a", "events": events});
+        if let Some(m) = migration {
+            r["migration"] = json!(m);
+        }
+        r.to_string()
+    };
+    let ret = json!([{"ev": "unsort", "copy": "X", "by": "auto", "at": 101}, {"ev": "retire", "copy": "X", "div": "210", "seq": 1, "at": 101}]);
+
+    // an ordinary append holds the clock: the unsort lands at t=500, after the person's move, and would win (the bug)
+    let held: Value = serde_json::from_str(&ops::append(&request(None, ret.clone())).unwrap()).unwrap();
+    assert_eq!(held["written"], json!(2));
+    let held_at: Vec<u64> = parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0.iter().skip(3).map(|e| e.at).collect();
+    assert_eq!(held_at, [500, 500]);
+    // put A's log back to its first three lines for the migration below
+    let log_a = a_dir.join("log/dev-a.jsonl");
+    let first_three: String = std::fs::read_to_string(&log_a).unwrap().lines().take(3).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&log_a, first_three).unwrap();
+
+    // the migration keeps the `at` it was given
+    ops::append(&request(Some("unconfident-return"), ret.clone())).unwrap();
+    let mine = parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0;
+    assert_eq!(mine.iter().skip(3).map(|e| (e.kind.name(), e.at)).collect::<Vec<_>>(), [("unsort", 101), ("retire", 101)]);
+
+    // sync, either way round: both devices resolve the same, and the person's move is on top
+    for (from, to) in [(&a_dir, &b_dir), (&b_dir, &a_dir)] {
+        for f in std::fs::read_dir(from.join("log")).unwrap() {
+            let f = f.unwrap().path();
+            std::fs::copy(&f, to.join("log").join(f.file_name().unwrap())).unwrap();
+        }
+    }
+    let on_a = resolve(&read_logs(&a_dir.join("log")).unwrap().events, &libs);
+    let on_b = resolve(&read_logs(&b_dir.join("log")).unwrap().events, &libs);
+    for r in [&on_a, &on_b] {
+        let x = r.book_of("X").unwrap();
+        assert_eq!((x.shelf.as_deref(), x.by), (Some("220"), Some(By::User)), "the person's move wins");
+        assert_eq!(r.next_seq("210"), 2, "the returned number is retired");
+    }
+    // with no person's move the unsort is what is left
+    let only_a = resolve(&read_logs(&a_dir.join("log")).unwrap().events.into_iter().filter(|e| e.dev == "dev-a").collect::<Vec<_>>(), &libs);
+    assert_eq!(only_a.book_of("X").unwrap().shelf, None);
+    assert!(only_a.book_of("X").unwrap().shelved);
+
+    // only the return's own events may be written this way
+    for bad in [json!([{"ev": "place", "copy": "X", "div": "210", "by": "auto", "at": 1}]), json!([{"ev": "unsort", "copy": "X", "by": "user", "at": 1}]), json!([{"ev": "title", "copy": "X", "title": "T", "at": 1}])] {
+        assert!(ops::append(&request(Some("unconfident-return"), bad)).is_err());
+    }
+    assert!(ops::append(&request(Some("anything-else"), ret)).is_err());
+    assert_eq!(parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0.len(), 5, "a refused request writes nothing");
+}
+
 #[test]
 fn linked_folder_locations_and_folders_resolve_by_stamp() {
     let libs = abc();
