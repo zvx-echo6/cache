@@ -134,4 +134,5 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
 }
 
 // Scanned pages for the OCR tests come from the library's own self-test writer (also used by `cache-build selftest-pdfs`).
+#[allow(unused_imports)]
 pub use cache_builder::selftest::{make_mixed_pdf, sample_lines, Mixed};

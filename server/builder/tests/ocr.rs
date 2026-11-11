@@ -19,6 +19,7 @@ use std::time::Instant;
 const STAMP: &str = "2026-11-10T00:00:00Z";
 
 fn settings() -> Option<OcrSettings> {
+    std::env::set_var("CACHE_OCR_DEBUG", "1");
     let s = OcrSettings::discover();
     if s.is_none() {
         assert!(std::env::var_os("CACHE_REQUIRE_OCR_TESTS").is_none(), "CACHE_REQUIRE_OCR_TESTS is set but there is no eng.traineddata (CACHE_TESSDATA_DIR)");
@@ -136,4 +137,18 @@ fn ocr_speed_per_page() {
     assert_eq!(ext.ocr_pages.len(), 10);
     eprintln!("OCR-MEASURE pages=10 total={secs:.2}s per_page={:.2}s (300 dpi, eng fast model, one child per 5 pages, includes reading the PDF)", secs / 10.0);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The same OCR without the child: shows the error, if there is one, instead of a page with no text.
+#[test]
+fn ocr_in_this_process_reads_a_scanned_page() {
+    let Some(s) = settings() else { return };
+    let tmp = std::env::temp_dir().join(format!("cache-ocr-inproc-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let pdf = make_mixed_pdf(&[Mixed::Scan(lines(0))]);
+    let read = cache_builder::ocr::ocr_pages(&pdf, &[0], &s, &tmp).unwrap_or_else(|e| panic!("OCR failed: {e}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(read.len(), 1);
+    let text: String = read[0].blocks.iter().flat_map(|b| b.lines.iter().map(|l| l.text.clone())).collect::<Vec<_>>().join(" ");
+    assert!(text.to_lowercase().contains("reservoir"), "OCR text: {text:?}");
 }

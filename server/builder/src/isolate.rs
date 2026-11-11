@@ -120,7 +120,15 @@ impl ChildExtractor {
             let _ = std::fs::remove_file(work.0.join("out.err"));
             let timeout = self.timeout.unwrap_or_else(|| Duration::from_secs(30 + self.ocr_page_secs.saturating_mul(batch.len() as u64)));
             let memory = self.memory_for(pdf.len()).saturating_add(1 << 30).min(9u64 << 30);
-            let read = match self.run_in(&work.0, "ocr", &settings.to_arg(batch), timeout, memory) {
+            let ran = self.run_in(&work.0, "ocr", &settings.to_arg(batch), timeout, memory);
+            if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
+                match &ran {
+                    Ok(JobOutput::Complete(b)) => eprintln!("OCR batch {batch:?}: child answered {} bytes", b.len()),
+                    Ok(JobOutput::TimedOut) => eprintln!("OCR batch {batch:?}: timed out"),
+                    Err(e) => eprintln!("OCR batch {batch:?}: failed: {e}"),
+                }
+            }
+            let read = match ran {
                 Ok(JobOutput::Complete(bytes)) => Extracted::from_wire(&bytes).ok(),
                 _ => None,
             };
@@ -165,7 +173,9 @@ impl ChildExtractor {
             Some(f) => cmd.env(ENV_FAULT, f),
             None => cmd.env_remove(ENV_FAULT),
         };
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        // CACHE_OCR_DEBUG (set by hand, or by the OCR tests) lets the child's own messages through, to see why OCR read nothing.
+        let debug = job == "ocr" && std::env::var_os("CACHE_OCR_DEBUG").is_some();
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(if debug { Stdio::inherit() } else { Stdio::null() });
         let mut child = cmd.spawn().map_err(|e| Error::ctx("starting the PDF reader", e))?;
         let deadline = Instant::now() + timeout;
         let status = loop {

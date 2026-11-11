@@ -134,6 +134,9 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
     }
     let scratch = Document::from_bytes(&std::fs::read(&out).map_err(|e| Error::ctx("reading the OCR result", e))?, "application/pdf").map_err(|e| Error::ctx("opening the OCR result", e))?;
     let scratch = PdfDocument::try_from(scratch).map_err(|e| Error::ctx("reading the OCR result", e))?;
+    if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
+        eprintln!("OCR scratch PDF: {} pages drawn, {} pages in it", drawn.len(), scratch.page_count().unwrap_or(-1));
+    }
     let mut result = Vec::with_capacity(drawn.len());
     for (k, (index, w, h)) in drawn.into_iter().enumerate() {
         if w <= 0.0 || h <= 0.0 {
@@ -157,6 +160,9 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
                     l.size *= sy;
                 }
             }
+        }
+        if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
+            eprintln!("OCR page {index}: {} blocks, {} chars, scratch page {}x{}", p.blocks.len(), p.text_chars(), p.width, p.height);
         }
         p.index = index;
         p.width = w;
