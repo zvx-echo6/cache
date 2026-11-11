@@ -330,12 +330,15 @@ object CarOverlayPainter {
         }
     }
 
-    /** The main map's badge as a picture (a MapLibre symbol image). */
+    /** The main map's badge as a picture (a MapLibre symbol image). The picture says it is drawn at [d], as the arrow's does:
+     * MapLibre scales a picture by the density it carries, and a new bitmap carries the phone's own, so without this the
+     * badge came out smaller than these sizes wherever the phone's screen is denser than the car's. */
     fun badgeBitmap(gradePct: Double, pal: CarOverlayColors, d: Float): Bitmap {
         val w = ceil(badgeWidth(gradeText(gradePct), d)).toInt() + 4
         val h = (BADGE_H * d).toInt() + 4
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         drawBadge(Canvas(bmp), w / 2f, h / 2f, gradeText(gradePct), pal, d)
+        bmp.density = (160f * d).roundToInt()
         return bmp
     }
 

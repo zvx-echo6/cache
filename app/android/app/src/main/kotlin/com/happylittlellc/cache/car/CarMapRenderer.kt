@@ -532,7 +532,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             val key = "${pal!!.theme}|${dark}|${CarOverlayPainter.gradeText(g!!)}"
             if (key != badgeKey) {
                 badgeKey = key
-                val bmp: Bitmap = CarOverlayPainter.badgeBitmap(g, pal, carContext.resources.displayMetrics.density)
+                val bmp: Bitmap = CarOverlayPainter.badgeBitmap(g, pal, density)
                 st.addImage(BADGE_IMAGE, bmp)
             }
             st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(point(ov.steepLat, ov.steepLon))

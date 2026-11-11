@@ -534,6 +534,12 @@ class CarOverlayTest {
         val two = CarOverlayPainter.badgeBitmap(12.0, pal, 1f)
         assertEquals(40, one.height)
         assertTrue("${one.width}", one.width > 72)
+        // The picture carries the density it was drawn at (not the phone's), so the map shows it at these sizes on any phone
+        // and car: 160 for density 1, and at density 2 twice the pixels marked 320.
+        assertEquals(160, one.density)
+        val dense = CarOverlayPainter.badgeBitmap(9.0, pal, 2f)
+        assertEquals(320, dense.density)
+        assertEquals(76, dense.height)
         assertTrue(two.width > one.width)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
         assertEquals(34f + p.measureText("12%") + 12f, CarOverlayPainter.badgeWidth("12%", 1f), 0.01f)
