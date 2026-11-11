@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../browse/web/device_api.dart' show DeviceException;
 import '../layout/adaptive.dart' show isShort, kDesktopMinWidth;
+import '../platform/app_log.dart' show logError;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
@@ -40,7 +42,7 @@ const double kPdfMaxPagePixels = 16384;
 /// The states of the reader before the pages show, for the review renders and tests (the real ones come from opening).
 enum PdfDebugPhase { opening, slow, copying, noSpace, locked, wrongPassword, damaged, gone }
 
-enum _Phase { preparing, copying, opening, open, locked, damaged, gone, noSpace }
+enum _Phase { preparing, copying, opening, open, locked, damaged, gone, noSpace, unreachable, signedOut }
 
 enum _Fit { width, page }
 
@@ -214,7 +216,20 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     try {
       if (widget.openFromBytes) {
         // The browser: the bytes are fetched (the core's zim_get, or the server's book route) and nothing is written anywhere.
-        final data = await loadPdfBytes(widget.source, cancelled: () => _cancelled || !mounted);
+        final Uint8List data;
+        try {
+          data = await loadPdfBytes(widget.source, cancelled: () => _cancelled || !mounted);
+        } on PdfGone {
+          rethrow;
+        } on PdfCancelled {
+          rethrow;
+        } catch (e) {
+          // The bytes never came (no connection, signed out, the server failed, it took too long): that says nothing about the
+          // file. Only this device's own answer is logged in full; another error is named by its type (its text can hold an address).
+          logError('PDF could not be fetched', error: e is DeviceException ? e : e.runtimeType);
+          _setPhase(e is DeviceException && e.code == 'unauthorized' ? _Phase.signedOut : _Phase.unreachable);
+          return;
+        }
         if (!mounted) return;
         _data = data;
         _fileBytes = data.length;
@@ -249,7 +264,8 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
       _setPhase(_Phase.gone);
     } on PdfCancelled {
       // The reader is closing.
-    } catch (_) {
+    } catch (e) {
+      logError('PDF could not be made ready', error: e);
       _setPhase(_Phase.damaged);
     }
   }
@@ -336,7 +352,8 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
       _setPhase(_Phase.locked, () => _wrongPassword = password != null);
     } on PdfGone {
       _setPhase(_Phase.gone);
-    } catch (_) {
+    } catch (e) {
+      logError('PDF did not open', error: e);
       _setPhase(_Phase.damaged);
     }
   }
@@ -1070,6 +1087,18 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
           k,
           'This file is no longer on this device.',
           actions: [if (go != null) FilledButton(onPressed: () => go(context), child: Text(library ? 'Open Library' : 'Open Storage'))],
+        );
+      case _Phase.unreachable:
+        return _message(
+          k,
+          'This device could not be reached. Try again.',
+          actions: [FilledButton(key: const ValueKey('pdf-retry'), onPressed: _start, child: const Text('Try again'))],
+        );
+      case _Phase.signedOut:
+        return _message(
+          k,
+          'Sign in again to read this.',
+          actions: [FilledButton(key: const ValueKey('pdf-retry'), onPressed: _start, child: const Text('Try again'))],
         );
       case _Phase.open:
         return _viewer(k);

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../browse/web/device_api.dart' show DeviceException, kDeviceCallTimeout;
+import '../platform/app_log.dart' show logError;
 
 /// What Bookshelves in a browser asks of Cache Server (`/api/build/bookshelves...`, server/BUILD-API.md "Bookshelves in the browser").
 /// The browser has no files and no log of its own: the server reads the person's Bookshelves log, resolves it and writes every change
@@ -89,7 +90,9 @@ class HttpShelfServer implements ShelfServer {
     http.Response r;
     try {
       r = await _client.get(Uri.parse(path)).timeout(kBookPdfTimeout);
-    } catch (_) {
+    } catch (e) {
+      // the address is this page's own book route (a library and a book id): no key is in it
+      logError('Book PDF could not be fetched', error: e);
       throw const DeviceException('unreachable', 'This device could not be reached.');
     }
     if (r.statusCode == 401) throw const DeviceException('unauthorized', 'Sign in again.', status: 401);

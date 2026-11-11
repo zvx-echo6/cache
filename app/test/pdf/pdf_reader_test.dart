@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/browse/web/device_api.dart' show DeviceException;
 import 'package:cache/pdf/pdf_reader_screen.dart';
 import 'package:cache/pdf/pdf_source.dart';
 import 'package:cache/theme.dart';
@@ -123,6 +124,51 @@ void main() {
       );
       await settleUntil(tester, () => _has(find.text('This file is no longer on this device.')));
       expect(find.text('This file is no longer on this device.'), findsOneWidget);
+    });
+
+    readerTest('a PDF that could not be fetched says so, and is not called damaged; Try again fetches it again', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      var down = true;
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(
+            id: 'f/x',
+            title: 'x',
+            fetch: () async => down ? throw const DeviceException('unreachable', 'This device could not be reached.') : bytes,
+          ),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('This device could not be reached. Try again.')));
+      expect(find.text('This device could not be reached. Try again.'), findsOneWidget);
+      expect(find.text("This PDF can't be opened. The file may be damaged."), findsNothing);
+      down = false;
+      await tester.tap(find.byKey(const ValueKey('pdf-retry')));
+      await settleUntil(tester, () => _has(find.text('1 of 6')));
+      expect(find.text('1 of 6'), findsOneWidget);
+    });
+
+    readerTest('a failing server reads as not reached, and an ended session asks to sign in again', (tester) async {
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const DeviceException('failed', 'This device answered 500.', status: 500)),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('This device could not be reached. Try again.')));
+      expect(find.text('This device could not be reached. Try again.'), findsOneWidget);
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const DeviceException('unauthorized', 'Sign in again.', status: 401)),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('Sign in again to read this.')));
+      expect(find.text('Sign in again to read this.'), findsOneWidget);
+      expect(find.text("This PDF can't be opened. The file may be damaged."), findsNothing);
     });
   });
 
