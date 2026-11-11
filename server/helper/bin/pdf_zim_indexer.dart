@@ -18,9 +18,13 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 
 /// What reading one PDF gave (the child's answer): its pages, or why it could not be read.
 class PdfTextResult {
-  const PdfTextResult({required this.status, this.size, this.sha256, this.title, this.labels = const [], this.pages = const []});
+  const PdfTextResult({required this.status, this.size, this.sha256, this.title, this.labels = const [], this.pages = const [], this.why});
 
-  const PdfTextResult.damaged({this.size, this.sha256}) : status = 'damaged', title = null, labels = const [], pages = const [];
+  const PdfTextResult.damaged({this.size, this.sha256}) : status = 'damaged', title = null, labels = const [], pages = const [], why = null;
+
+  /// The reader itself did not get through this PDF (it crashed, was stopped at its time limit, was killed, or gave no answer
+  /// that can be read); [why] says which. Nothing is known about the file.
+  const PdfTextResult.failed(String this.why) : status = 'failed', size = null, sha256 = null, title = null, labels = const [], pages = const [];
 
   factory PdfTextResult.fromJson(Map<String, dynamic> j) => PdfTextResult(
         status: (j['status'] as String?) ?? 'damaged',
@@ -31,7 +35,7 @@ class PdfTextResult {
         pages: [for (final p in (j['pages'] as List? ?? const [])) '$p'],
       );
 
-  /// "ok", "locked" or "damaged".
+  /// "ok", "locked" or "damaged" (the reader's own answers), or "failed" (the reader did not get through it).
   final String status;
   final int? size;
   final String? sha256;
@@ -39,15 +43,21 @@ class PdfTextResult {
   final List<String> labels;
   final List<String> pages;
 
+  /// For "failed": the exit code, the signal or the time limit.
+  final String? why;
+
   bool get locked => status == 'locked';
-  bool get damaged => status != 'ok' && status != 'locked';
+  bool get failed => status == 'failed';
+
+  /// The reader read the file and rejected it.
+  bool get damaged => status != 'ok' && status != 'locked' && status != 'failed';
 }
 
 /// Reads a PDF's bytes: its pages, or (with [hashOnly]) only its size and sha256.
 typedef PdfTextRead = Future<PdfTextResult> Function(Uint8List bytes, {required bool hashOnly});
 
 /// [PdfTextRead] over the server program run as `pdf-text` (one process for each PDF: a PDF that crashes MuPDF, runs past its
-/// time or wants more memory than it may have is damaged, and the server goes on). The time is 2 minutes and 15 seconds for each
+/// time or is killed for its memory is "failed" with the exit code, signal or time limit, and the server goes on). The time is 2 minutes and 15 seconds for each
 /// MB, at most an hour; the address space is 2 GiB and 64 times the PDF, at most 8 GiB (the library builder's limits).
 class PdfTextProcess {
   PdfTextProcess(this.exe, this.tmp);
@@ -66,15 +76,22 @@ class PdfTextProcess {
       unawaited(p.stdout.drain<void>());
       unawaited(p.stderr.drain<void>());
       final limit = Duration(seconds: math.min(3600, 120 + 15 * (bytes.length >> 20)));
+      var timedOut = false;
       final code = await p.exitCode.timeout(limit, onTimeout: () {
+        timedOut = true;
         p.kill(ProcessSignal.sigkill);
         return -1;
       });
+      if (timedOut) return PdfTextResult.failed('stopped at its time limit (${limit.inSeconds} s)');
+      // A negative exit code is the signal that ended the process (9 is a kill, as the kernel does when memory runs out; 6 is an
+      // abort, as when an allocation fails under the address-space limit; 11 is a crash).
+      if (code < 0) return PdfTextResult.failed('ended by signal ${-code}');
+      if (code != 0) return PdfTextResult.failed('exit code $code');
       final out = File(output);
-      if (code != 0 || !out.existsSync()) return const PdfTextResult.damaged();
+      if (!out.existsSync()) return const PdfTextResult.failed('exit code 0 with no answer');
       return PdfTextResult.fromJson((jsonDecode(await out.readAsString()) as Map).cast<String, dynamic>());
-    } catch (_) {
-      return const PdfTextResult.damaged();
+    } catch (e) {
+      return PdfTextResult.failed('$e');
     } finally {
       try {
         dir.deleteSync(recursive: true);
@@ -268,7 +285,8 @@ class ZimPdfIndexer {
 
   bool _cancelled = false;
 
-  /// PDFs made searchable (this run and earlier ones), skipped (no text, locked, damaged) and all of the ZIM's.
+  /// PDFs made searchable (this run and earlier ones), skipped (no text, locked, damaged, or not read because the reader failed)
+  /// and all of the ZIM's.
   int done = 0;
   int skipped = 0;
   int total = 0;
@@ -392,6 +410,13 @@ class ZimPdfIndexer {
 
   Future<void> _one(int session, ZimPdf pdf, Uint8List bytes) async {
     final r = await read(bytes, hashOnly: false);
+    if (r.failed) {
+      // The reader crashed, ran out of time or was killed: nothing says the file is damaged, so the core is not told that it is.
+      // It is counted as skipped in this run and is read again by a later run of this ZIM.
+      log?.call('PDF not read (${pdf.path}): the reader failed: ${r.why ?? 'no reason given'}');
+      skipped++;
+      return;
+    }
     final size = r.size ?? bytes.length;
     final reason = r.locked
         ? PdfSkipReason.locked
