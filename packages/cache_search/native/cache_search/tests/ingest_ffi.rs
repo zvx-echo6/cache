@@ -787,3 +787,50 @@ fn a_linked_extension_writes_only_new_files_and_a_replaced_point_is_deleted_by_a
     assert!(keyword_hits(&old, "zeppelin", 5).unwrap().0.is_empty(), "the old folder does not have the new document");
     assert!(keyword_hits(&old, "quasar", 20).unwrap().0.iter().any(|h| h.point_id == first_id), "and still has the old text");
 }
+
+/// Edits the manifest of the (only) first-generation snapshot in place (the manifest is not one of the hashed files).
+fn edit_manifest(indexes: &Path, edit: impl Fn(&mut Value)) {
+    let dir = &snap_dirs(indexes)[0];
+    let mut m: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    edit(&mut m);
+    std::fs::write(dir.join("manifest.json"), m.to_string()).unwrap();
+}
+
+/// A base manifest the core still reads but would not write now (here a different token length cap) is not extended: the library is
+/// built whole, as the next generation, so old and new segments are never tokenized differently.
+#[test]
+fn a_base_snapshot_not_exactly_what_this_core_writes_is_not_extended_but_built_whole() {
+    let tmp = TempDir::new("sealed-guard");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    edit_manifest(&indexes, |m| m["tokenizer"]["remove_long"] = json!(20));
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["result"]["built"], true, "a whole build, not an extension: {r}");
+    assert!(r["result"].get("extended").is_none());
+    assert_eq!(r["result"]["generation"], 1);
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    assert!(sealed::found(h, "nebula") > 0 && sealed::found(h, "quasar") > 0);
+    sealed::close(h);
+}
+
+/// A base manifest with another analyzer name is not usable at all: there is nothing to extend, and the library is built whole.
+#[test]
+fn a_base_snapshot_with_another_analyzer_is_built_whole() {
+    let tmp = TempDir::new("sealed-analyzer");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    edit_manifest(&indexes, |m| m["tokenizer"]["analyzer"] = json!("some_other_analyzer"));
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["state"], "done", "{r}");
+    assert!(r["result"].get("extended").is_none(), "{r}");
+    let h = sealed::open(&lib, &indexes);
+    let t0 = std::time::Instant::now();
+    while sealed::found(h, "nebula") == 0 {
+        assert!(t0.elapsed().as_secs() < 60, "the whole build's words were not found");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(sealed::found(h, "quasar") > 0);
+    sealed::close(h);
+}

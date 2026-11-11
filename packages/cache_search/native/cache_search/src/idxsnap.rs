@@ -1028,6 +1028,19 @@ fn stat_of(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     Some((m.len(), m.modified().ok()))
 }
 
+/// The old manifest is exactly what this core would write for a library index now: the same format, Tantivy version, tokenizer, analyzer and
+/// token length cap. Only then are its segments extended; else the library is built whole (see `LIB_INDEX_FORMAT`).
+fn written_by_this_core(m: &Manifest) -> std::result::Result<(), String> {
+    let now = manifest_for(KIND_LIBRARY, &m.source_id, crate::libindex::TOKENIZER, Map::new());
+    if m.format != now.format || m.tantivy != now.tantivy || m.tokenizer != now.tokenizer || m.chunker != now.chunker {
+        return Err(format!(
+            "the snapshot was written with format {} / tantivy {} / tokenizer {:?}, this core writes format {} / tantivy {} / tokenizer {:?}",
+            m.format, m.tantivy, m.tokenizer, now.format, now.tantivy, now.tokenizer
+        ));
+    }
+    Ok(())
+}
+
 /// Bring the library's newest snapshot up to date with its shard: the new snapshot is the old one's files (HARD-LINKED, so nothing is
 /// copied) plus ONE new segment holding the points the snapshot lacks, with a new `meta.json`, manifest and hashes, as generation
 /// g+1 of the same source. Only the new files are hashed (a linked file that is unchanged keeps the hash the old manifest gave it).
@@ -1092,6 +1105,7 @@ pub fn extend_library(r: &ExtendRequest, h: &Hooks) -> Result<Outcome> {
 }
 
 fn extend_from(r: &ExtendRequest, h: &Hooks, base: &snapshot::Picked, generation: u64) -> Result<Outcome> {
+    written_by_this_core(&base.manifest).map_err(Error::unsupported)?;
     let sd = r.sd;
     let build = snapshot::build_dir(sd);
     let tokenizer = base.manifest.tokenizer.as_ref().map(|t| t.name.clone()).unwrap_or_else(|| crate::libindex::TOKENIZER.into());
