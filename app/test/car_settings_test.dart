@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cache/app_state.dart';
 import 'package:cache/car/car_support.dart';
+import 'package:cache/car/route_pushes.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
@@ -35,6 +36,24 @@ void main() {
       });
       expect(await readCarScreenSupport(android: false), isFalse);
       expect(asked, isFalse);
+    });
+  });
+
+  // Bug: a navigation request's "geo:" address reached Flutter as a route to push, and the app threw on the unknown route.
+  group('an address pushed by the platform as a route', () {
+    Future<void> pushRoute(WidgetTester t, String location) => t.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/navigation', const JSONMethodCodec().encodeMethodCall(MethodCall('pushRouteInformation', {'location': location, 'state': null})), (_) {});
+
+    testWidgets('is taken and nothing opens or throws', (t) async {
+      final guard = IgnoreRoutePushes();
+      WidgetsBinding.instance.addObserver(guard);
+      addTearDown(() => WidgetsBinding.instance.removeObserver(guard));
+      await t.pumpWidget(const MaterialApp(home: Text('home')));
+      await pushRoute(t, 'geo:0,0?q=Made+Up+Clinic');
+      await pushRoute(t, 'geo:42.5,-113.5');
+      await t.pump();
+      expect(t.takeException(), isNull);
+      expect(find.text('home'), findsOneWidget);
     });
   });
 

@@ -299,6 +299,43 @@ class CarSessionTest {
         assertFalse(screens.top is NavigationScreen)
     }
 
+    // Bug: a navigation request delivered to the phone's activity threw in Flutter and went nowhere.
+    @Test
+    fun aNavigationRequestThatReachedThePhoneGoesToTheCarSession() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic&intent=directions"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("Made Up Clinic", a["query"])
+        assertEquals(false, a["start"])
+        assertNull(a["lat"])
+    }
+
+    // Android Auto's own path: the request comes with the session's first screen, or to a session that is already up.
+    @Test
+    fun aNavigationRequestFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        val session = CarSession(startEngine = {})
+        start(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:42.5,-113.5")), session)
+        shadowOf(Looper.getMainLooper()).idle()
+        val first = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals(42.5, first["lat"])
+        assertEquals(true, first["start"])
+        asked.clear()
+        session.onNewIntent(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic")))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Made Up Clinic", (asked.single { it.first == "navigateTo" }.second as Map<*, *>)["query"])
+    }
+
     // Bug: place rows showed the distance and never the address.
     @Test
     fun aPlaceRowShowsTheDistanceAndTheAddress() {

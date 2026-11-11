@@ -21,6 +21,9 @@ object CarLink {
         fun onNotice(text: String) {}
         fun onDartReady() {}
         fun onSavedChanged() {}
+
+        /** A navigation request that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
+        fun onNavRequest(req: NavRequest) {}
     }
 
     private var channel: MethodChannel? = null
@@ -75,6 +78,13 @@ object CarLink {
             routeBounds = null
         }
         if (dartReady) channel?.invokeMethod("connected", mapOf("on" to on))
+    }
+
+    /** A navigation request for the car session that is attached; false when there is none to take it. */
+    fun navRequest(req: NavRequest): Boolean {
+        if (!carConnected) return false
+        each { it.onNavRequest(req) }
+        return true
     }
 
     /** For the tests: answers in place of Dart (a car session with no Flutter engine). */

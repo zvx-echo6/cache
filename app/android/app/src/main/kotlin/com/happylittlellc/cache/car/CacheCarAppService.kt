@@ -120,6 +120,9 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         NavIntent.parse(intent)?.let { handle(it) }
     }
 
+    // A navigation request that reached the phone's activity while this car is connected: handled as the car's own are.
+    override fun onNavRequest(req: NavRequest) = handle(req)
+
     override fun onCarConfigurationChanged(newConfiguration: Configuration) {
         if (ready) renderer.setDark(carContext.isDarkMode)
     }
