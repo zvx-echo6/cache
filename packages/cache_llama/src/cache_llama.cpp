@@ -292,6 +292,9 @@ std::string file_identity(const char * path) {
 // file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used for as many of
 // its tokens as the prompt shares (the cache after that is dropped), so a file saved with a part that later changed still
 // gives the part before it. At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
+// On the first prompt shape since a load the whole probed start is saved when no file holds all of it (a file from an earlier day
+// holds the part before the date: that part is restored, the rest decoded, and today's whole start saved); within a load a changed
+// shape saves only what it shares with the shape before it.
 constexpr size_t kPrefixFiles  = 2;
 constexpr size_t kPrefixMinLen = 32;  // shorter prefixes are not worth a file
 
@@ -465,8 +468,9 @@ PrefixHit best_prefix_file(const Handle * h, const std::vector<llama_token> & to
 // Lines the KV cache up with tokens: keeps what it already holds for the start (the longest common token prefix, at most
 // `limit_tokens`: cl_start always decodes the last prompt token, because the first generated token needs its logits), drops the
 // cache after it, and when the cache does not hold the stable start (`want`: the first question after a load, or a different
-// start before) takes what a saved file shares with the prompt. Returns the tokens now in the cache. `want` may be lowered (the
-// first shape since the load takes the part a saved file shows to be stable). `covered`: a saved file already holds the stable start.
+// start before) takes what a saved file shares with the prompt. Returns the tokens now in the cache. `want` is not changed: on the
+// first shape since the load the whole probed start is stable even when a saved file covers only part of it (the part is restored
+// and the whole start is saved). `covered`: a saved file already holds the whole stable start.
 size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t limit_tokens, size_t & want, bool & covered) {
     llama_memory_t mem = llama_get_memory(h->ctx);
     size_t keep = cache_overlap(h, tokens, limit_tokens);
@@ -485,9 +489,12 @@ size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t l
         const PrefixHit hit = best_prefix_file(h, tokens, limit_tokens);
         const size_t best = hit.best;
         if (!h->stable_known) {
-            // The first shape since the load: a saved file of this model tells how much of it stayed the same before. With
-            // none, all of it is taken as stable (and saved once).
-            if (!hit.path.empty()) want = std::min(want, best);
+            // The first shape since the load: all of its probed start is taken as stable, whatever a saved file shares with it.
+            // A file that covers only the start of it (yesterday's, which shares the text up to the date) is restored for that
+            // part (below), and the rest is decoded and the whole start saved (covered stays false), so a later load finds it
+            // whole. Cutting `want` to what the file shares would count the start as covered and save nothing, and every fresh
+            // load on a later day would read the tool schemas again. Within one load a shape change still shrinks `stable` to
+            // what the two shapes share (update_probe), so a start that flips does not write a file per question.
             h->stable       = want;
             h->stable_known = true;
         }

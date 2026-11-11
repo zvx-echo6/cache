@@ -113,6 +113,64 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
     return r;
   }
 
+  // ---- the stable start of a shape, as the native layer keeps it (cl_start's and cl_warm's rules)
+
+  /// Prefixes shorter than this are not saved (the native one is 32 tokens; the fake's prompts are shorter).
+  static const int minLen = 8;
+
+  /// At most this many saved files stay, the most recently used first (kPrefixFiles).
+  static const int maxFiles = 2;
+
+  String _probeKey = '';
+  List<String> _probe = [];
+  int _stable = 0;
+  bool _stableKnown = false;
+
+  /// Prompt tokens a question reused (cache or file) in its last request.
+  int lastReused = 0;
+
+  /// An app restart or a model unload and load: the KV cache and the shape the load has seen are gone; saved files stay.
+  void reload() {
+    cached = [];
+    _probeKey = '';
+    _probe = [];
+    _stable = 0;
+    _stableKnown = false;
+  }
+
+  /// update_probe: the first shape since the load has no stable part known yet; a changed shape shares what the two shapes share;
+  /// the same shape again is all stable.
+  void _updateProbe(Map<String, dynamic> request, List<String> ta) {
+    final msgs = request['messages'] as List;
+    final key = jsonEncode([(msgs.first as Map)['content'], request['tools']]);
+    if (key != _probeKey) {
+      if (_probe.isNotEmpty) {
+        _stable = _common(_probe, ta);
+        _stableKnown = true;
+      } else {
+        _stableKnown = false;
+      }
+      _probeKey = key;
+      _probe = ta;
+    } else {
+      _stable = _probe.length;
+      _stableKnown = true;
+    }
+  }
+
+  void _saveFile(List<String> tokens) {
+    files.removeWhere((f) => f.length == tokens.length && _common(f, tokens) == tokens.length);
+    files.insert(0, tokens);
+    while (files.length > maxFiles) {
+      files.removeLast();
+    }
+  }
+
+  void _touchFile(List<String> tokens) {
+    final i = files.indexWhere((f) => _common(f, tokens) == _fileBest(tokens));
+    if (i > 0) files.insert(0, files.removeAt(i));
+  }
+
   int _fileBest(List<String> tokens) => files.fold(0, (m, f) {
         final c = _common(f, tokens);
         return c > m ? c : m;
@@ -145,6 +203,10 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
         if (!checkOnly) _warming = false;
         return const WarmResult(WarmOutcome.skipped);
       }
+      // cl_warm counts the whole start as stable (also in a check: it records it for the next question of the shape)
+      _updateProbe(request, tokens);
+      _stable = tokens.length;
+      _stableKnown = true;
       final inMem = _common(cached, tokens);
       final best = _fileBest(tokens);
       if (inMem >= tokens.length || best >= tokens.length) {
@@ -178,7 +240,7 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
         i += n;
         await afterBatch?.call(i);
       }
-      files.add(tokens);
+      _saveFile(tokens);
       final joined = _joined;
       _warming = false;
       return WarmResult(WarmOutcome.read, tokens: i - from, joined: joined);
@@ -212,14 +274,38 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       _stop = false;
       final tokens = render(request);
       questions.add(tokens);
+      // cl_start: the stable start of the shape, the cache, a saved file, then decode the rest and save the start when no file has it.
+      var want = 0;
+      final probe = stableStart(request);
+      if (probe != null) {
+        _updateProbe(request, probe);
+        want = _common(_probe, tokens, tokens.length - 1);
+        if (_stableKnown && want > _stable) want = _stable;
+      }
       var keep = _common(cached, tokens, tokens.length - 1);
-      final best = _fileBest(tokens);
-      if (best > keep) keep = best;
-      cached = tokens.sublist(0, keep);
+      cached = cached.sublist(0, keep);
+      var covered = true;
+      if (want >= minLen && keep < want) {
+        final best = _fileBest(tokens.sublist(0, tokens.length - 1));
+        if (!_stableKnown) {
+          // The first shape since the load: the whole probed start is stable, whatever a file shares with it.
+          _stable = want;
+          _stableKnown = true;
+        }
+        covered = best >= want;
+        if (best > keep && best >= minLen) {
+          _touchFile(tokens);
+          keep = best;
+          cached = tokens.sublist(0, best);
+        }
+      }
+      lastReused = keep;
+      final save = want >= minLen && keep < want && !covered;
       for (var k = keep; k < tokens.length; k++) {
         decodedAt[k] = (decodedAt[k] ?? 0) + 1;
       }
       decoded += tokens.length - keep;
+      if (save) _saveFile(tokens.sublist(0, want));
       cached = [...tokens, 'ok'];
       await holdGenerate;
       final stopped = _stop;

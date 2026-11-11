@@ -65,7 +65,8 @@ CL_API int cl_start_e(void * h, const char * request_json, unsigned long long ep
 // batches apply, as when cl_start reads a prompt): batches decoded whole stay in the cache, a batch aborted midway clears it, and
 // no prefix file is written unless the whole start was decoded.
 // [epoch]: cl_stop_epoch as of when the call was queued.
-// [check_only] non-zero: renders and tokenizes but decodes nothing and changes no cache. [n_tokens] (may be null): the tokens
+// [check_only] non-zero: renders and tokenizes but decodes nothing and changes no cache. It does record the probed start as this
+// load's stable start (the whole of it), so the next cl_start of the same shape saves it whole when no file holds it. [n_tokens] (may be null): the tokens
 // still to read (check_only), read (done) or read before the stop.
 // Returns 0 when the stable start is covered already (the KV cache holds it, or a saved prefix file does: nothing to do),
 // 1 when it needs reading (check_only) or was read, 2 when stopped before it was whole, 3 when there is nothing to read (no
