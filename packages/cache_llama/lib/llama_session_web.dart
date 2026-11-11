@@ -86,9 +86,9 @@ class LlamaSession {
             _queue.add(null);
             c.add(message);
             ended = true;
-          case LlmError(:final message):
+          case LlmError():
             _queue.add(null);
-            fail(StateError(message));
+            fail(e.toException());
             ended = true;
         }
         if (ended) break;
