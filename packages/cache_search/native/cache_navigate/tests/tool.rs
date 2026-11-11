@@ -2,7 +2,7 @@
 //! The real routes (Idaho tiles, off-road pack) are tested through cs_tool in the cache_search_cli crate.
 
 use cache_navigate::{NavigateCfg, NavigateTool, PlaceSlot, ValhallaCfg};
-use cache_offroad::valhalla::{LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
+use cache_offroad::valhalla::{Lane, LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
 use cache_tool::places::{GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceDetails, PlaceMatch, PlaceSource};
 use cache_tool::{Location, SavedPlace, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
@@ -18,6 +18,8 @@ struct Fake {
     per_deg_s: f64,
     /// The first this many `route` calls fail (the later ones succeed).
     fail_first: std::sync::atomic::AtomicUsize,
+    /// Every maneuver after the first carries turn lanes.
+    lanes: bool,
 }
 
 impl Valhalla for Fake {
@@ -52,6 +54,7 @@ impl Valhalla for Fake {
                 end_shape_index: i as i64 + 1,
                 bearing_after: Some(90.0),
                 bearing_before: None,
+                lanes: if self.lanes && i > 0 { vec![Lane { directions: 8, active: Some(8), valid: None }, Lane { directions: 2, active: None, valid: None }] } else { vec![] },
             })
             .collect();
         Ok(Trip { shape_encoded: cache_offroad::valhalla::encode_polyline6(&shape), shape, maneuvers, length_km: 1.5 * n as f64, time_s: 90.0 * n as f64 + (b.0 - a.0).abs() * self.per_deg_s })
@@ -149,7 +152,7 @@ fn tool(fake: Fake, places: Option<Arc<dyn PlaceSource>>) -> NavigateTool {
 }
 
 fn fake() -> Fake {
-    Fake { maneuvers: 5, snap: 0.0, fail: None, no_edges: false, per_deg_s: 0.0, fail_first: std::sync::atomic::AtomicUsize::new(0) }
+    Fake { maneuvers: 5, snap: 0.0, fail: None, no_edges: false, per_deg_s: 0.0, fail_first: std::sync::atomic::AtomicUsize::new(0), lanes: false }
 }
 
 const NOW: &str = "2026-10-25T12:00:00-06:00";
@@ -166,7 +169,7 @@ fn run_at(t: &NavigateTool, loc: Option<&Location>, args: Value, now: &str) -> R
     let ctx = ToolCtx { location: loc, places: &Saved, now, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args)? {
         ToolOutput::Json(v) => Ok(v),
-        ToolOutput::Text(_) => panic!("navigate gives JSON"),
+        ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("navigate gives JSON"),
     }
 }
 
@@ -601,4 +604,41 @@ fn an_error_with_a_wiki_destination_carries_about_and_wikipedia_on_to_matched() 
         ["place_name", "kind", "street", "locality", "county", "state", "phone", "website", "hours", "open_status", "about", "wikipedia", "distance_km"]
     );
     assert_eq!(keys(&j["from_matched"]), PLACE_KEYS);
+}
+
+fn without(mut v: Value, key: &str) -> Value {
+    fn walk(v: &mut Value, key: &str) {
+        match v {
+            Value::Object(o) => {
+                o.remove(key);
+                o.values_mut().for_each(|x| walk(x, key));
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, key)),
+            _ => {}
+        }
+    }
+    walk(&mut v, key);
+    v
+}
+
+/// Turn lanes travel with the route snapshot the phone's guidance reads; the tool result the language model gets stays the
+/// same bytes it was without them.
+#[test]
+fn turn_lanes_reach_the_guidance_snapshot_and_never_the_tool_result() {
+    let args = || json!({"to": "42.60,-113.70", "mode": "drive"});
+    let plain = tool(fake(), None);
+    let laned = tool(Fake { lanes: true, ..fake() }, None);
+    let a = run(&plain, Some(&here()), args()).unwrap();
+    let b = run(&laned, Some(&here()), args()).unwrap();
+    // byte for byte the same result, and no lanes key anywhere in it
+    assert_eq!(serde_json::to_vec(&a).unwrap(), serde_json::to_vec(&b).unwrap());
+    assert!(!serde_json::to_string(&b).unwrap().contains("lanes"));
+    // the snapshot of the laned route has them; the plain one has no key at all
+    let snap_b = laned.core().tool_route(b["route_id"].as_str().unwrap()).unwrap();
+    let snap_a = plain.core().tool_route(a["route_id"].as_str().unwrap()).unwrap();
+    assert!(snap_b["maneuvers"][0].get("lanes").is_none());
+    assert_eq!(snap_b["maneuvers"][1]["lanes"], json!([{"directions": 8, "active": 8}, {"directions": 2}]));
+    assert!(!serde_json::to_string(&snap_a).unwrap().contains("lanes"));
+    // and nothing else in the snapshot differs
+    assert_eq!(without(snap_b, "lanes"), snap_a);
 }

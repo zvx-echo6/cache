@@ -10,6 +10,7 @@ import 'package:web/web.dart' as web;
 
 import 'llm_remote_events.dart';
 import 'partial_message.dart';
+import 'warm_result.dart';
 
 class LlamaSession {
   LlamaSession();
@@ -26,7 +27,7 @@ class LlamaSession {
   /// Loads the model with this id on the server (replacing the one loaded before; the server has one for all browsers).
   /// Throws a [StateError] with the reason on failure.
   /// [repackWeights], [prefixDir] and [prereadMbps] are the phone's (the server decides for its own model): not used here.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps}) async {
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps, int nUbatch = 0}) async {
     _modelId = null;
     final r = await _post('/api/llm/load', {'v': 1, 'model': path, 'n_ctx': nCtx});
     final body = await _text(r);
@@ -53,6 +54,12 @@ class LlamaSession {
     unawaited(_pump(run, id, request, c));
     return c.stream;
   }
+
+  /// Reads the prompt start ahead on the phone (cl_warm). The server keeps its own prompt start, so here there is nothing to do.
+  Future<WarmResult> warm(Map<String, dynamic> request, {bool checkOnly = false}) async => const WarmResult(WarmOutcome.skipped);
+
+  /// Stops a read ahead (none here).
+  void cancelWarm() {}
 
   Future<void> _pump(_Run run, String id, Map<String, dynamic> request, StreamController<PartialMessage> c) async {
     void fail(Object e) {

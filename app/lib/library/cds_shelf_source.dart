@@ -32,6 +32,7 @@ Future<String?> Function()? libraryDeviceIdShared;
 class PackFacts {
   const PackFacts({
     this.suggested = const [],
+    this.filed,
     this.compression,
     this.sourceBytes,
     this.pages,
@@ -52,8 +53,13 @@ class PackFacts {
   final String? edition;
   final String? year;
 
-  /// The suggested division, then the second best, when known.
+  /// The sorter's top divisions, best first (up to three): the pack's `book.suggested.suggestions`, else (an older pack) its `div`
+  /// then `second_div`.
   final List<String> suggested;
+
+  /// `book.suggested.filed`: the sorter was confident, so the book was filed in `suggested.first`. Null when the pack does not say
+  /// (a pack written before the flag): that is "not confident", and a book is never shelved from a suggestion alone.
+  final bool? filed;
   final Map<String, dynamic>? compression;
   final int? sourceBytes;
   final int? pages;
@@ -74,13 +80,18 @@ class PackFacts {
     final old = h['division'] is Map ? (h['division'] as Map).cast<String, dynamic>() : null;
     final first = (s?['div'] ?? old?['division']) as String?;
     final second = (s?['second_div'] ?? old?['second_division']) as String?;
+    final listed = [
+      for (final x in (s?['suggestions'] is List ? s!['suggestions'] as List : const []))
+        if (x is Map && x['div'] is String) x['div'] as String,
+    ];
     final source = h['source'] is Map ? (h['source'] as Map).cast<String, dynamic>() : null;
     final original = _text(book?['original_blake3']);
     return PackFacts(
-      suggested: [
-        for (final d in [first, second])
+      suggested: {
+        for (final d in (listed.isNotEmpty ? listed : [first, second]).take(3))
           if (d != null && cdsDivision(d) != null) d,
-      ],
+      }.toList(),
+      filed: s?['filed'] is bool ? s!['filed'] as bool : null,
       compression: book?['compression'] is Map ? (book!['compression'] as Map).cast<String, dynamic>() : null,
       sourceBytes: (source?['size'] as num?)?.toInt(),
       pages: (h['page_count'] as num?)?.toInt(),
@@ -181,6 +192,20 @@ class _ViewBook {
   Map<String, dynamic>? get call => (j['call'] as Map?)?.cast<String, dynamic>();
   Map<String, dynamic>? get suggested => (j['suggested'] as Map?)?.cast<String, dynamic>();
 
+  /// The sorter's top divisions the view stores (`suggested.suggestions`, best first); just `suggested.div` when it has no list
+  /// (a pack from before the list, or a publisher's seed place).
+  List<String> get suggestedDivs {
+    final s = suggested;
+    if (s == null) return const [];
+    final listed = [
+      for (final x in (s['suggestions'] is List ? s['suggestions'] as List : const []))
+        if (x is Map && x['div'] is String && cdsDivision(x['div'] as String) != null) x['div'] as String,
+    ];
+    if (listed.isNotEmpty) return {...listed}.take(3).toList();
+    final d = s['div'];
+    return d is String && cdsDivision(d) != null ? [d] : const [];
+  }
+
   /// The copy that holds the book's number (its own number is the book's), else the book's id.
   String get numbered {
     final c = call;
@@ -219,7 +244,9 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     int Function()? clock,
     ShelfServer? server,
     DeviceFiles? deviceFiles,
-  })  : _calls = calls ?? (libraries == null ? null : CoreShelvesCalls(libraries.sources.whenCoreReady)),
+    void Function(String)? log,
+  })  : _log = log ?? debugPrint,
+        _calls = calls ?? (libraries == null ? null : CoreShelvesCalls(libraries.sources.whenCoreReady)),
         _server = server,
         _files = server == null ? null : (deviceFiles ?? DeviceFiles(createAppFs())),
         // ignore: prefer_initializing_formals
@@ -244,6 +271,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   final Future<List<String>> Function()? _ownIds;
   final Future<Directory?> Function() _dirOf;
   final int Function() _clock;
+  final void Function(String) _log;
   Timer? _poll;
 
   static Future<Directory?> _defaultDir() async {
@@ -666,6 +694,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
         }
       }
       var view = await calls.resolve({'dir': dir.path, 'libraries': refs});
+      // the one-time return to Unsorted of what an earlier build shelved with no confidence, then the new copies
+      if (dev != null && await _returnUnconfident(calls, dir, dev, libs, view)) {
+        view = await calls.resolve({'dir': dir.path, 'libraries': refs});
+      }
       if (dev != null && await _firstSeen(calls, dir, dev, libs, view)) {
         view = await calls.resolve({'dir': dir.path, 'libraries': refs});
       }
@@ -699,9 +731,154 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     } catch (_) {}
   }
 
+  /// Whether the sorter was confident about [b]: a publisher's seed `place` (the publisher filed it) or a pack that says `filed`
+  /// (`book.suggested.filed`, which the view carries). Anything else, a pack from before the flag included, is not confident: the
+  /// book stays in Unsorted with its suggestions offered.
+  static bool _confident(_ViewBook b, List<_LibraryBooks> libs) {
+    final s = b.suggested;
+    if (s == null) return false;
+    if (s['filed'] is bool) return s['filed'] == true;
+    // a view that does not say: the pack's own flag, when its pack is on this device
+    for (final c in b.copies) {
+      for (final loc in (c['locs'] as List? ?? const [])) {
+        final t = '$loc';
+        final i = t.indexOf('/');
+        if (i < 0) continue;
+        for (final lb in libs) {
+          if (lb.id == t.substring(0, i) && lb.facts[t.substring(i + 1)]?.filed == true) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static const String _returnFile = 'unconfident-return.json';
+
+  File _returnMarker(Directory dir) => File('${dir.path}${Platform.pathSeparator}.local${Platform.pathSeparator}$_returnFile');
+
+  static bool _writeJson(File f, Map<String, dynamic> j) {
+    try {
+      f.parent.createSync(recursive: true);
+      final tmp = File('${f.path}.tmp')..writeAsStringSync(jsonEncode(j), flush: true);
+      tmp.renameSync(f.path);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Every event of every device's file in the Bookshelves log, with its (at, dev, line) stamp, as the resolver orders them.
+  static List<({int at, String dev, int line, Map<String, dynamic> e})> _readEvents(Directory dir) {
+    final out = <({int at, String dev, int line, Map<String, dynamic> e})>[];
+    final logs = Directory('${dir.path}${Platform.pathSeparator}$kLogDir');
+    if (!logs.existsSync()) return out;
+    for (final f in logs.listSync().whereType<File>()) {
+      if (!f.path.endsWith('.jsonl')) continue;
+      var n = 0;
+      try {
+        for (final l in f.readAsLinesSync()) {
+          final line = n++;
+          if (l.trim().isEmpty) continue;
+          try {
+            final j = jsonDecode(l);
+            if (j is Map && j['at'] is num && j['dev'] is String && j['ev'] is String) out.add((at: (j['at'] as num).toInt(), dev: j['dev'] as String, line: line, e: j.cast<String, dynamic>()));
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    out.sort((a, b) => a.at != b.at ? a.at.compareTo(b.at) : (a.dev != b.dev ? a.dev.compareTo(b.dev) : a.line.compareTo(b.line)));
+    return out;
+  }
+
+  /// A ONE-TIME return to Unsorted for the books an earlier build of this page shelved with no confidence: it shelved every new
+  /// book that had any suggestion (`place ... by: auto` with a `loc`; the app's own add-time place has no `loc`).
+  ///
+  /// A book is returned only when all of these hold:
+  /// - its library was built on a device (the library's settings say `"own": true`, as Add PDF makes them; a published or
+  ///   server-built library has no such key);
+  /// - its latest shelf event is an `auto` place with a `loc`, written by THIS device (so each place is returned by its writer,
+  ///   once), dated before this device first ran the fix;
+  /// - no copy of the book has ever been placed or unsorted by a person, and no copy has an auto place without a `loc` (that is the
+  ///   add-time place: the sorter was confident, or another device's build placed it later);
+  /// - its pack does not say `filed`.
+  ///
+  /// It writes `unsort` (by auto) and a `retire` of the number the book held, through the core's `unconfident-return` append: the
+  /// ONLY write that keeps the `at` it is given instead of holding this device's clock. They are stamped one millisecond after the
+  /// place they replace, so a person's move made on another device and not yet synced, whenever this device last wrote, always
+  /// outranks them (the resolver orders by `at`, `dev`, position).
+  ///
+  /// Once: `.local/unconfident-return.json` (device-local, survives restarts) holds the time of this device's first run, written
+  /// before anything else, and `done` when the events are written. Nothing runs again after `done`, so a device that syncs in later
+  /// with old events is not acted on. Two devices that both run it agree: each returns only its own places, and a book either has
+  /// already returned has an unsort as its latest event. Devices that stay on build 49 keep shelving guesses; those are not returned.
+  Future<bool> _returnUnconfident(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
+    final own = {for (final lb in libs) if (lb.item.settings?['own'] == true) lb.id};
+    if (own.isEmpty) return false; // nothing built on a device is here yet: the one run is kept for when it is
+    final marker = _returnMarker(dir);
+    int? cutoff;
+    if (marker.existsSync()) {
+      try {
+        final j = jsonDecode(marker.readAsStringSync());
+        if (j is! Map || j['done'] == true) return false;
+        cutoff = (j['first_run_at'] as num?)?.toInt();
+      } catch (_) {
+        return false; // a marker that cannot be read is never an invitation to run again
+      }
+    }
+    if (cutoff == null) {
+      cutoff = _clock();
+      if (!_writeJson(marker, {'format': 1, 'first_run_at': cutoff, 'done': false})) return false;
+    }
+    final events = _readEvents(dir);
+    // the ids this device has written its log under (the shared one, and this install's own before sharing was set up)
+    final mine = <String>{dev};
+    try {
+      mine.addAll(await _ownIds?.call() ?? const <String>[]);
+      if (_ownIds == null) {
+        final local = await libraryLocalDeviceId();
+        if (local != null) mine.add(local);
+      }
+    } catch (_) {}
+    final books = (view['books'] as Map? ?? const {}).cast<String, dynamic>();
+    final write = <Map<String, dynamic>>[];
+    final said = <String>[];
+    for (final key in books.keys.toList()..sort()) {
+      final vb = _ViewBook(key, (books[key] as Map).cast<String, dynamic>());
+      if (!vb.shelved || vb.shelf == null || vb.j['by'] != 'auto' || _confident(vb, libs)) continue;
+      final copies = {for (final c in vb.copies) c['copy'] as String};
+      final shelf = [for (final x in events) if ((x.e['ev'] == 'place' || x.e['ev'] == 'unsort') && copies.contains(x.e['copy'])) x];
+      if (shelf.isEmpty) continue;
+      // never a book a person has placed or unsorted on any of its copies, nor one with an add-time place (an auto place with no loc)
+      if (shelf.any((x) => x.e['by'] == 'user')) continue;
+      if (shelf.any((x) => x.e['ev'] == 'place' && x.e['by'] == 'auto' && !(x.e['loc'] is String && (x.e['loc'] as String).isNotEmpty))) continue;
+      final last = shelf.last;
+      if (last.e['ev'] != 'place' || last.e['by'] != 'auto' || last.at >= cutoff || !mine.contains(last.dev)) continue;
+      final loc = last.e['loc'];
+      if (loc is! String || !loc.contains('/') || !own.contains(loc.substring(0, loc.indexOf('/')))) continue;
+      final copy = last.e['copy'] as String;
+      write.add({'ev': 'unsort', 'copy': copy, 'by': 'auto', 'at': last.at + 1});
+      final call = vb.call;
+      if (call != null && call['div'] is String && call['seq'] is num) {
+        write.add({'ev': 'retire', 'copy': vb.numbered, 'div': call['div'], 'seq': (call['seq'] as num).toInt(), 'at': last.at + 1});
+      }
+      said.add('Bookshelves: returned "${vb.title}" ($copy, $loc) from ${vb.shelf} to Unsorted: Cache shelved it with no confidence');
+    }
+    if (write.isNotEmpty) {
+      try {
+        await calls.append({'dir': dir.path, 'dev': dev, 'events': write, 'migration': 'unconfident-return'});
+      } catch (e) {
+        _log('Bookshelves: the return to Unsorted could not be written, it will be tried again: $e');
+        return false;
+      }
+      said.forEach(_log);
+    }
+    _writeJson(marker, {'format': 1, 'first_run_at': cutoff, 'done': true, 'returned': said.length});
+    return write.isNotEmpty;
+  }
+
   /// Copies seen for the first time (in the view, on this device): the core checks them once, against each other and every other
-  /// copy here (`same ... by: auto` for each match), then a new book that matches nothing is shelved in its suggested division
-  /// with the next free number, in (title, copy) order. The copies checked are remembered in `.local/detected.json`. True when
+  /// copy here (`same ... by: auto` for each match), then a new book that matches nothing and that the sorter was confident about
+  /// (`filed`) is shelved in its suggested division with the next free number, in (title, copy) order; the rest stay in Unsorted. The copies checked are remembered in `.local/detected.json`. True when
   /// anything was written.
   Future<bool> _firstSeen(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
     final checked = _readChecked(dir);
@@ -730,7 +907,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     final toShelve = <_ViewBook>[
       for (final e in books.entries)
         if (_ViewBook(e.key, (e.value as Map).cast<String, dynamic>()) case final b
-            when !b.shelved && !b.removed && b.suggested?['div'] is String &&
+            when !b.shelved && !b.removed && b.suggested?['div'] is String && _confident(b, libs) &&
                 b.copies.where((c) => c['available'] == true).every((c) => freshSet.contains(c['copy'])))
           b,
     ]..sort((a, b) {
@@ -835,7 +1012,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
           },
           author: vb.j['author'] as String?,
           edition: [?vb.j['edition'] as String?, if (vb.j['year'] != null) '${vb.j['year']}'].join(', '),
-          suggested: vb.suggested?['div'] as String?,
+          suggested: vb.suggestedDivs,
           spares: spares,
           aka: [for (final a in (vb.j['aka'] as List? ?? const [])) '$a'],
           reading: reading?['copy'] as String? ?? vb.id,
@@ -883,7 +1060,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     ShelvedBy? shelvedBy,
     String? author,
     String? edition,
-    String? suggested,
+    List<String> suggested = const [],
     List<SpareCopy> spares = const [],
     List<String> aka = const [],
     String? reading,
@@ -901,9 +1078,8 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       shelf: shelf,
       callNumber: callNumber,
       shelvedBy: shelvedBy,
-      suggestions: facts?.suggested.isNotEmpty == true
-          ? facts!.suggested
-          : [if (suggested != null && cdsDivision(suggested) != null) suggested],
+      // the pack's three when it is on this device; else what the synced view stored (its top three when the pack had them, else the one)
+      suggestions: facts?.suggested.isNotEmpty == true ? facts!.suggested : suggested,
       pages: facts?.pages ?? d?.pages,
       bytes: lb == null || doc == null ? null : _bytesOf(lb, doc),
       stored: stored,

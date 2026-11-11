@@ -13,6 +13,7 @@ import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../chat/prompt_read_ahead.dart';
 import '../chat/navigation_action.dart';
 import '../discover/discover_device.dart';
 import '../discover/discover_state.dart';
@@ -92,6 +93,7 @@ class Shell extends StatefulWidget {
     required this.sources,
     required this.location,
     this.chatLocation,
+    this.readAhead,
     required this.maps,
     required this.video,
     required this.browse,
@@ -118,6 +120,9 @@ class Shell extends StatefulWidget {
   final SourcesState sources;
   final LocationService location;
   final ChatLocation? chatLocation;
+
+  /// Reads the chat prompt's start ahead once Ask is shown with the model loaded; null in tests that do not need it.
+  final PromptReadAhead? readAhead;
   final MapsState maps;
   final VideoState video;
   final BrowseState browse;
@@ -139,6 +144,37 @@ class _ShellState extends State<Shell> {
   final Set<ModuleId> _built = {};
   StreamSubscription<NavEvent>? _navEvents;
   StreamSubscription<AlertFocus>? _alertTaps;
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: _onResume);
+
+  /// Back in front with Ask shown: the chosen model, let go while Cache was in the back, loads again, under the same memory gate
+  /// as opening Ask (not forced). Nothing else loads on resume.
+  void _onResume() {
+    if (_module == ModuleId.ask) unawaited(_wakeAsk());
+  }
+
+  /// Ask is shown: the chosen model loads if it was let go ([AppState.wake], under the memory gate), and with the model loaded
+  /// the chat prompt's start is read ahead. The read never loads the model: after a wake that did not load it (no room) there is
+  /// none. Not when Ask was left while the model loaded; leaving Ask later, with Cache in front, does not stop a read.
+  Future<void> _wakeAsk() async {
+    _openingRead = false; // a new opening of Ask: it may have its read ahead
+    await widget.app.wake();
+    _readAhead();
+  }
+
+  /// This opening of Ask has had its read ahead (or has none to have).
+  bool _openingRead = false;
+  int _seenGeneration = 0;
+
+  /// Reads the prompt start ahead, once per opening of Ask, when Ask is shown and the model is loaded. When the model is still loading
+  /// as Ask opens (the app start's load, which [AppState.wake] does not wait for) nothing is read yet, and [_onApp] asks again when
+  /// the load completes, so a cold start with Ask open still gets its read.
+  void _readAhead() {
+    if (_openingRead || !mounted || _module != ModuleId.ask) return;
+    final app = widget.app;
+    if (app.active == null || app.loading != null) return;
+    _openingRead = true;
+    unawaited(widget.readAhead?.start());
+  }
 
   /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
   /// and the rail (its pin is kept and it takes its old place when a model comes), and every way into Ask is closed or explained.
@@ -150,6 +186,11 @@ class _ShellState extends State<Shell> {
 
   void _onApp() {
     final app = widget.app;
+    if (app.modelGeneration != _seenGeneration) {
+      _seenGeneration = app.modelGeneration;
+      _openingRead = false; // another model is loaded while Ask stays open: it gets its read ahead
+    }
+    _readAhead(); // Ask was opened while the model loaded: its read starts when the load is done
     final arrived = _noModelSeen && app.started && app.models.isNotEmpty;
     if (app.started) _noModelSeen = app.models.isEmpty;
     final on = app.askAvailable;
@@ -189,7 +230,9 @@ class _ShellState extends State<Shell> {
     // PDF indexing's messages ("Another device finished this. Using its index.").
     pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
+    _seenGeneration = widget.app.modelGeneration;
     widget.app.addListener(_onApp);
+    _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
       if (e is MapRequested && mounted) _goModule(ModuleId.maps);
@@ -336,6 +379,7 @@ class _ShellState extends State<Shell> {
     if (DiscoverState.shared == _discover) DiscoverState.shared = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
+    _lifecycle.dispose();
     super.dispose();
   }
 
@@ -354,7 +398,7 @@ class _ShellState extends State<Shell> {
 
   void _goModule(ModuleId m) {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
-    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
     if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
     setState(() {

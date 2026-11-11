@@ -18,6 +18,7 @@ import '../theme.dart';
 import '../video/format.dart';
 import 'index/pdf_pages.dart' show cleanPdfTitle, readPdfMeta;
 import 'pdf_find.dart';
+import 'pdfium_init.dart';
 import 'pdf_settings.dart';
 import 'pdf_source.dart';
 import 'pdf_text_match.dart';
@@ -300,7 +301,9 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() => _phase = _Phase.opening);
     try {
       if (data == null && !await File(path!).exists()) throw const PdfGone();
-      await pdfrxFlutterInitialize();
+      // A phone or desktop app starts PDFium with the core's one font mapper and lock (pdfium_init.dart); a browser has neither (no
+      // process PDFium, and Platform is not there), so it only starts pdfrx.
+      await (kIsWeb ? pdfrxFlutterInitialize() : initPdfium());
       final passwords = password == null ? null : createSimplePasswordProvider(password);
       final doc = data != null
           ? await PdfDocument.openData(

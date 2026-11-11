@@ -70,6 +70,7 @@ fn call(a: &ActState, st: &mut ConvState, args: Value) -> String {
     with_ctx(true, true, |ctx| match a.call(ctx, &args, st) {
         Ok(ToolOutput::Json(v)) => v.to_string(),
         Ok(ToolOutput::Text(t)) => t,
+        Ok(ToolOutput::Pieces(_)) => unreachable!("act gives JSON"),
         Err(e) => e.to_json().to_string(),
     })
 }
