@@ -438,6 +438,37 @@ void main() {
       expect({'orange', 'blue'}, contains(a.nb.notebook('p-1')!.def.color));
     });
 
+    test('a property a newer build added (a key with its _at) and a plain key survive a merge and a rewrite, whichever record wins on the name', () {
+      final fields = [{'label': 'Distance', 'type': 'number'}];
+      // an older build's record: no fields; its name is the later one
+      NbRecord older({int nameAt = 500}) => NbRecord.live('x', nameAt: nameAt, body: {'name': 'Camps', 'def': {'name': 'Camps', 'future': 1}});
+      NbRecord newer({int nameAt = 10, int fieldsAt = 100, Object? list}) =>
+          NbRecord.live('x', nameAt: nameAt, body: {'name': 'Old name', 'fields': list ?? fields, 'fields_at': fieldsAt, 'note': 'kept'});
+      for (final (a, b) in [(older(), newer()), (older(nameAt: 5), newer(nameAt: 50))]) {
+        for (final order in [[a, b], [b, a]]) {
+          final m = NbRecord.merge(order)!;
+          expect(m.body['fields'], fields, reason: 'the list is not wiped by a record that has none');
+          expect(m.body['fields_at'], 100);
+          expect(m.body['note'], 'kept', reason: 'a key with no _at is kept');
+          expect((m.body['def'] as Map)['future'], 1, reason: 'a def key this build does not know stays');
+          // and a rewrite: written, read again, merged again, the same
+          final again = NbRecord.merge([NbRecord.parse(m.text)!, a])!;
+          expect(again.text, m.text);
+          expect(again.body['fields'], fields);
+        }
+      }
+      // two records with the pair: the later _at wins, a tie goes to the greater value
+      final x = newer(fieldsAt: 200, list: [{'label': 'Miles'}]);
+      expect(NbRecord.merge([older(), newer(), x])!.body['fields'], [{'label': 'Miles'}]);
+      expect(NbRecord.merge([x, newer(), older()])!.body['fields_at'], 200);
+      final t1 = newer(list: [{'label': 'A'}]), t2 = newer(list: [{'label': 'B'}]);
+      expect(NbRecord.merge([t1, t2])!.body['fields'], NbRecord.merge([t2, t1])!.body['fields']);
+      // a plain key the best record has wins over another's
+      final p1 = NbRecord.live('x', nameAt: 9, body: {'name': 'N', 'extra': 'best'}), p2 = NbRecord.live('x', nameAt: 1, body: {'name': 'N', 'extra': 'other', 'more': 2});
+      final pm = NbRecord.merge([p2, p1])!;
+      expect((pm.body['extra'], pm.body['more']), ('best', 2));
+    });
+
     test('equal times resolve the same way whichever order the records are met in', () {
       NbRecord rec(String? color, int at) => NbRecord.live('x', nameAt: 5, body: {'name': 'N', 'color': ?color, 'color_at': at});
       final a = rec('orange', 100), b = rec('blue', 100), c = rec('teal', 90);

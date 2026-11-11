@@ -108,23 +108,36 @@ class NbRecord {
   }
 
   /// The one record that two devices' writes of one notebook's file come to: a tombstone beats everything (a delete is on purpose),
-  /// an alias beats a live record (a merge is not undone), and among live records each property is the later writer's: the name, the
-  /// icon and the colour independently (a rename on one device and a colour on another both stay). A tie on the time goes to the
-  /// greater value (null least), so every device picks the same.
+  /// an alias beats a live record (a merge is not undone), and among live records each property is the later writer's.
+  ///
+  /// Newer builds add properties as `<key>`/`<key>_at` pairs; this keeps them, so older builds never drop them. Every such pair that
+  /// any live record has (the icon and the colour among them) goes the way of the later `_at`, each on its own (a rename on one device
+  /// and a colour on another both stay). A tie on the time goes to the greater value (null least), so every device picks the same. A
+  /// key with no `_at` that the best record lacks is taken from the record with the latest name.
   static NbRecord? merge(Iterable<NbRecord> all) {
     final best = _mergeKinds(all);
     if (best == null || best.kind != RecordKind.live) return best;
     final lives = [for (final r in all) if (r.kind == RecordKind.live) r];
     if (lives.length < 2) return best;
     final body = {...best.body};
-    for (final (key, at, val) in <(String, int Function(NbRecord), String? Function(NbRecord))>[
-      ('icon', (r) => r.iconAt, (r) => r.icon),
-      ('color', (r) => r.colorAt, (r) => r.color),
-    ]) {
+    final pairs = <String>{
+      'icon',
+      'color',
+      for (final r in lives)
+        for (final k in r.body.keys)
+          if (k.endsWith('_at') && k.length > 3) k.substring(0, k.length - 3),
+    };
+    String val(NbRecord r, String k) {
+      final v = r.body[k];
+      return v == null ? '' : (v is String ? v : jsonEncode(_sorted(v)));
+    }
+
+    int at(NbRecord r, String k) => (r.body['${k}_at'] as num?)?.toInt() ?? 0;
+    for (final key in pairs) {
       var w = lives.first;
       for (final r in lives.skip(1)) {
-        final c = at(r).compareTo(at(w));
-        if (c > 0 || (c == 0 && (val(r) ?? '').compareTo(val(w) ?? '') > 0)) w = r;
+        final c = at(r, key).compareTo(at(w, key));
+        if (c > 0 || (c == 0 && val(r, key).compareTo(val(w, key)) > 0)) w = r;
       }
       if (w.body.containsKey(key)) {
         body[key] = w.body[key];
@@ -135,6 +148,14 @@ class NbRecord {
         body['${key}_at'] = w.body['${key}_at'];
       } else {
         body.remove('${key}_at');
+      }
+    }
+    // What no pair decides: whatever a record has and the best one lacks, from the latest name first.
+    final taken = {for (final k in pairs) ...[k, '${k}_at']};
+    final byName = [...lives]..sort((a, b) => b.at != a.at ? b.at.compareTo(a.at) : b.text.compareTo(a.text));
+    for (final r in byName) {
+      for (final e in r.body.entries) {
+        if (!taken.contains(e.key) && !body.containsKey(e.key)) body[e.key] = e.value;
       }
     }
     return NbRecord.live(best.id, nameAt: best.at, body: body);
