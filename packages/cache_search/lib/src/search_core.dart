@@ -87,6 +87,9 @@ class SearchCore {
 
   Future<String> zimMainPage(String zimId) async => (await _call('zimMainPage', {'zimId': zimId})) as String;
 
+  /// The ZIM's own icon (PNG bytes), or null when it has none.
+  Future<Uint8List?> zimIllustration(String zimId) async => (await _call('zimIllustration', {'zimId': zimId})) as Uint8List?;
+
   Future<List<Suggestion>> suggest(String prefix, {int k = 10, List<String>? sources}) async => [
         for (final s in await _call('suggest', {'prefix': prefix, 'k': k, 'sources': sources}) as List)
           Suggestion.fromJson((s as Map).cast<String, dynamic>()),

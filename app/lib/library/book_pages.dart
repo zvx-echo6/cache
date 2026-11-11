@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart';
 import '../pdf/open_pdf.dart' show openPdfReader;
 import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom;
 
@@ -490,9 +491,12 @@ class BookPage extends StatelessWidget {
             SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );
+        final desktop = DesktopMetrics.of(context);
         return Scaffold(
           appBar: libraryAppBar(context, title: b.title, titleWidget: LibraryCrumbs(crumbs: crumbsWithLast)),
-          body: LayoutBuilder(
+          body: desktop != null
+              ? _desktopBody(context, d, b, desktop, card)
+              : LayoutBuilder(
             builder: (context, c) {
               final wide = c.maxWidth >= 860;
               final body = wide
@@ -521,6 +525,124 @@ class BookPage extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// The Linux desktop's book pane: the catalogue card on top, the actions in one row of ordinary buttons under it, the facts as a
+  /// label and value list, then the quiet group (Rename, Hide from Bookshelves, Delete book). Left-aligned, 760 wide at most.
+  static Widget _desktopBody(BuildContext context, LibraryDeps d, ShelfBook b, DesktopMetrics m, Widget card) {
+    final k = context.t;
+    final f = d.files;
+    final path = b.pdfPath;
+    final here = path != null && _pdfBytes(b) != null;
+    final original = d.originals?.available(b) ?? false;
+    final placer = d.shelves.placer;
+    final facts = _bookFacts(context, d, b);
+    final line = k.secondary.withValues(alpha: 0.2);
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(m.gutter, 24, m.gutter, 24),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: DesktopMetrics.formMaxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              card,
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  // in a browser the PDF is on the server: nothing to open or download here
+                  if (!b.onServer && here)
+                    FilledButton(
+                      key: const ValueKey('book-open'),
+                      onPressed: () => openPdfReader(context, PdfFileSource(path, title: b.title, from: PdfFrom.library), page: 1),
+                      child: const Text('Open'),
+                    ),
+                  if (!b.onServer && here && f.canRemove)
+                    OutlinedButton(key: const ValueKey('book-remove-pdf'), onPressed: () => _removeHere(context, d, [b]), child: const Text('Remove PDF from this device'))
+                  else if (!b.onServer && !here)
+                    OutlinedButton(key: const ValueKey('book-download'), onPressed: f.download(b), child: const Text('Download to this device')),
+                  if (d.shelves.copies != null)
+                    OutlinedButton(key: const ValueKey('book-same-as'), onPressed: () => openSameBook(context, d, b), child: const Text('Same book as…')),
+                  if (placer != null)
+                    OutlinedButton(
+                      key: const ValueKey('book-move'),
+                      onPressed: () => openPlace(context, d, b, replace: true),
+                      child: Text(b.shelf == null ? 'Place it' : 'Move'),
+                    ),
+                  if (original)
+                    OutlinedButton.icon(
+                      key: const ValueKey('book-open-original'),
+                      onPressed: () => d.originals!.open(b),
+                      icon: const Icon(Icons.folder_open_outlined, size: 18),
+                      label: const Text('Open original'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Container(
+                decoration: BoxDecoration(border: Border(top: BorderSide(color: line))),
+                child: Column(
+                  children: [
+                    for (final fact in facts)
+                      Container(
+                        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: line))),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(width: 140, child: Text(fact.label, style: TextStyle(fontSize: 13, color: k.secondary))),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    fact.value,
+                                    key: fact.valueKey == null ? null : ValueKey(fact.valueKey),
+                                    style: TextStyle(fontSize: 15, color: fact.tone == Tone.normal ? k.text : toneColor(k, fact.tone)),
+                                  ),
+                                  if (fact.line != null) Text(fact.line!, style: TextStyle(fontSize: 13, color: k.secondary)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (b.spares.isNotEmpty) ...[const SizedBox(height: 16), _spares(context, d, b)],
+              const SizedBox(height: 24),
+              Material(
+                color: k.surface,
+                borderRadius: BorderRadius.circular(14),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    if (d.shelves.copies != null) ...[
+                      SettingsRow(key: const ValueKey('book-rename'), compact: true, title: 'Rename', onTap: () => openRename(context, d, b)),
+                      Divider(height: 1, color: line),
+                      SettingsRow(
+                        key: const ValueKey('book-hide'),
+                        compact: true,
+                        title: 'Hide from Bookshelves',
+                        status: const [Part('On all your devices. No file is deleted.')],
+                        chevron: false,
+                        onTap: () => hideBook(context, d, b),
+                      ),
+                      Divider(height: 1, color: line),
+                    ],
+                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

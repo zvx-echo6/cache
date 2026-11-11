@@ -107,6 +107,17 @@ pub fn check_url(url: &str) -> Result<()> {
     Err(Error::bad_json("a source must use https (http is allowed only to this machine)"))
 }
 
+/// The client of one request: `timeout` seconds in all. It carries the public-address guard when the Linux server's helper
+/// installed it (cache_netguard), so a source or a redirect cannot reach a LAN or metadata address there; on a phone it is the
+/// plain client it always was.
+pub fn agent(timeout: u64) -> ureq::Agent {
+    cache_netguard::guarded(ureq::AgentBuilder::new())
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(timeout))
+        .user_agent(&user_agent())
+        .build()
+}
+
 fn host_of(url: &str) -> String {
     let r = url.split_once("://").map(|x| x.1).unwrap_or(url);
     let r = r.split(['/', '?', '#']).next().unwrap_or("");
@@ -675,11 +686,7 @@ impl<'a, 'g> Runner<'a, 'g> {
         let method = r.method.as_deref().unwrap_or("GET");
         let timeout = r.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_S) as u64;
         let max = r.max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(timeout))
-            .user_agent(&user_agent())
-            .build();
+        let agent = agent(timeout);
         let has = |n: &str| headers.keys().any(|k| k.eq_ignore_ascii_case(n));
         let mut attempt = 0;
         loop {

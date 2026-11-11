@@ -150,7 +150,24 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
         }
         "/icon.png" => small(&mut s, "200 OK", "Content-Type: image/png\r\n", b"\x89PNG-icon"),
         "/cat.xml" => small(&mut s, "200 OK", "Content-Type: application/atom+xml\r\n", b"<feed/>"),
+        "/api/v1/videos/abc/captions" => small(&mut s, "200 OK", "Content-Type: application/json; charset=utf-8\r\n", br#"{"data":[]}"#),
+        "/lazy-static/c.vtt" | "/bucket/c.vtt" => small(&mut s, "200 OK", "Content-Type: text/vtt\r\n", b"WEBVTT\n"),
+        "/static/to-bucket" => small(&mut s, "302 Found", "Location: /bucket/c.vtt\r\n", b""),
+        "/static/x.bin" => small(&mut s, "200 OK", "Content-Type: application/octet-stream\r\n", b"\x00\x01"),
+        "/api/v1/page" => small(&mut s, "200 OK", "Content-Type: text/html\r\n", b"<script>1</script>"),
         "/redir-ok" => small(&mut s, "302 Found", "Location: /cat.xml\r\n", b""),
+        "/trickle" => {
+            // a byte every 50 ms for five seconds: a slow upstream that would hold a slot
+            let _ = s.write_all(head("200 OK", "Content-Type: text/plain\r\n", None).as_bytes());
+            for _ in 0..100 {
+                if s.write_all(b"x").is_err() || s.flush().is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        "/redir-private" => small(&mut s, "302 Found", &format!("Location: http://localhost:{port}/pub.zim\r\n"), b""),
+        "/redir-meta" => small(&mut s, "302 Found", "Location: https://169.254.169.254/latest/meta-data\r\n", b""),
         "/redir-evil" => small(&mut s, "302 Found", &format!("Location: http://evil.invalid:{port}/x\r\n"), b""),
         "/huge-len" => {
             let _ = s.write_all(head("200 OK", "", Some(100_000_000)).as_bytes());
@@ -256,7 +273,8 @@ struct Setup {
 
 impl Setup {
     fn new() -> Setup {
-        Setup { options: LibraryOptions::default(), status: None, seed: None }
+        // The test origin is on this machine; the tests of the public-address rule switch this off.
+        Setup { options: LibraryOptions { fetch_allow_private: true, ..LibraryOptions::default() }, status: None, seed: None }
     }
 }
 
@@ -670,6 +688,137 @@ async fn fetch_reads_allow_listed_hosts_only_and_holds_the_size_cap() {
     // an error from the host
     let r = get(rig.origin.url("/nothing")).await;
     assert_eq!((r.status, code(&r)), (502, json!("upstream_status")));
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn fetch_scopes_read_other_servers_by_path_and_type_and_never_a_private_address() {
+    let _g = LOCK.lock().await;
+    let mut setup = Setup::new();
+    setup.options.fetch_allow_private = true; // the test origin is on this machine
+    setup.options.fetch_deadline = Some(Duration::from_secs(1));
+    let rig = rig("fetch-scopes", setup).await;
+    let get = |scope: &str, url: String| {
+        let (app, cookie, scope) = (&rig.app, rig.cookie.clone(), scope.to_string());
+        async move { route(app, "GET", &format!("/api/fetch?scope={scope}&url={}", enc(&url)), Some(&cookie), b"").await }
+    };
+    let code = |r: &cache_server::http::Reply| serde_json::from_slice::<Value>(&r.body).unwrap()["error"]["code"].clone();
+
+    // video: a PeerTube site's API and caption files, and a redirect off those paths (its object storage)
+    for (path, want) in [("/api/v1/videos/abc/captions", r#"{"data":[]}"#), ("/lazy-static/c.vtt", "WEBVTT\n"), ("/static/to-bucket", "WEBVTT\n")] {
+        let r = get("video", rig.origin.url(path)).await;
+        assert_eq!(r.status, 200, "{path}");
+        assert!(r.headers.iter().any(|(k, v)| *k == "X-Content-Type-Options" && v == "nosniff"));
+        assert_eq!(read_all(r.stream.unwrap()).await, (want.as_bytes().to_vec(), false), "{path}");
+    }
+    // not on those paths, or not a kind of thing a video scope hands on
+    let r = get("video", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    for path in ["/static/x.bin", "/api/v1/page"] {
+        let r = get("video", rig.origin.url(path)).await;
+        assert_eq!((r.status, code(&r)), (415, json!("unsupported_type")), "{path}");
+    }
+    // user: any path on a public address (here this machine, by the test switch), still only readable types and a small size
+    let r = get("user", rig.origin.url("/cat.xml")).await;
+    assert_eq!(read_all(r.stream.unwrap()).await.0, b"<feed/>");
+    let r = get("user", rig.origin.url("/huge-len")).await;
+    assert_eq!((r.status, code(&r)), (413, json!("too_large")));
+    // one deadline for a whole read: a trickle is cut off when it passes (here 1 s, not the 90 s of the real server)
+    let r = get("user", rig.origin.url("/trickle")).await;
+    assert_eq!(r.status, 200);
+    let t0 = std::time::Instant::now();
+    let (got, cut) = read_all(r.stream.unwrap()).await;
+    assert!(cut && got.len() < 90 && t0.elapsed() < Duration::from_secs(4), "{} bytes, cut {cut}, {:?}", got.len(), t0.elapsed());
+    // models: Hugging Face and the catalog hosts only
+    let r = get("models", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    // a name for a scope that does not exist
+    let r = get("everything", rig.origin.url("/cat.xml")).await;
+    assert_eq!((r.status, code(&r)), (400, json!("invalid")));
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn fetch_scopes_refuse_this_machine_and_the_user_scope_can_be_switched_off() {
+    let _g = LOCK.lock().await;
+    let mut setup1 = Setup::new();
+    setup1.options.fetch_allow_private = false;
+    let rig1 = rig("fetch-private", setup1).await;
+    let code = |r: &cache_server::http::Reply| serde_json::from_slice::<Value>(&r.body).unwrap()["error"]["code"].clone();
+    // without the test switch an address on this machine is refused in every scope but catalog, by name and by number
+    for scope in ["video", "user", "models"] {
+        for u in [rig1.origin.url("/api/v1/videos/abc/captions"), format!("http://localhost:{}/api/v1/x", rig1.origin.port), "https://192.168.1.240/api/v1/x".into(), "https://169.254.169.254/latest".into()] {
+            let r = route(&rig1.app, "GET", &format!("/api/fetch?scope={scope}&plain=1&url={}", enc(&u)), Some(&rig1.cookie), b"").await;
+            assert!(r.status == 403 || r.status == 400, "{scope} {u}: {}", r.status);
+            assert_ne!(r.status, 200);
+        }
+    }
+    let r = route(&rig1.app, "GET", &format!("/api/fetch?scope=user&url={}", enc(&rig1.origin.url("/cat.xml"))), Some(&rig1.cookie), b"").await;
+    assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")));
+    // a number written in hex passes the name check; the connect-time check sees 127.0.0.1 and refuses it, with no connection made
+    for scope in ["user", "video"] {
+        let u = "https://0x7f.0x0.0x0.0x1/api/v1/x";
+        let r = route(&rig1.app, "GET", &format!("/api/fetch?scope={scope}&url={}", enc(u)), Some(&rig1.cookie), b"").await;
+        assert_eq!((r.status, code(&r)), (403, json!("host_not_allowed")), "{scope}");
+    }
+    stop(&rig1).await;
+
+    let mut setup = Setup::new();
+    setup.options.fetch_allow_private = true;
+    setup.options.fetch_user = Some(false);
+    let rig2 = rig("fetch-user-off", setup).await;
+    let r = route(&rig2.app, "GET", &format!("/api/fetch?scope=user&url={}", enc(&rig2.origin.url("/cat.xml"))), Some(&rig2.cookie), b"").await;
+    assert_eq!((r.status, code(&r)), (403, json!("scope_off")));
+    // the other scopes do not depend on it
+    let r = route(&rig2.app, "GET", &format!("/api/fetch?scope=video&url={}", enc(&rig2.origin.url("/lazy-static/c.vtt"))), Some(&rig2.cookie), b"").await;
+    assert_eq!(r.status, 200);
+    stop(&rig2).await;
+}
+
+#[tokio::test]
+async fn downloads_never_connect_to_a_private_address_even_after_a_redirect() {
+    let _g = LOCK.lock().await;
+    let mut setup = Setup::new();
+    setup.options.fetch_allow_private = false;
+    // the test origin stands in for a catalog host: the one exception to the rule
+    setup.options.fetch_hosts = Some(vec!["127.0.0.1".to_string()]);
+    let rig = rig("dl-public", setup).await;
+    let post = |body: Value| {
+        let rig = &rig;
+        async move { rig.call("POST", "/api/library/download", &body.to_string()).await }
+    };
+    // an address a tab names: LAN, loopback (by number and by name), metadata, Tailscale, an address in another spelling
+    for u in [
+        "https://192.168.1.240/x.zim",
+        "https://10.0.0.5/x.zim",
+        "https://127.0.0.2/x.zim",
+        &format!("http://localhost:{}/pub.zim", rig.origin.port),
+        "https://169.254.169.254/latest/meta-data",
+        "https://100.64.0.4/x.zim",
+        "https://2130706433/x.zim",
+        "https://nas.local/x.zim",
+    ] {
+        let (s, v) = post(json!({"url": u, "kind": "zim", "name": "a.zim"})).await;
+        assert_eq!((s, v["error"]["code"].clone()), (400, json!("invalid")), "{u}");
+    }
+    // an icon address that is private
+    let (s, v) = post(json!({"url": rig.origin.url("/pub.zim"), "kind": "zim", "name": "a.zim", "icon_url": "https://192.168.1.1/i.png"})).await;
+    assert_eq!((s, v["error"]["code"].clone()), (400, json!("invalid")));
+    // a redirect from an allowed address to a private one is refused when the connection is made
+    for (path, name) in [("/redir-private", "r1.zim"), ("/redir-meta", "r2.zim")] {
+        let job = rig.download(json!({"url": rig.origin.url(path), "kind": "zim", "name": name})).await;
+        let j = rig.wait_state(job["id"].as_str().unwrap(), &["failed", "done"]).await;
+        assert_eq!(j["state"], json!("failed"), "{path}: {j}");
+        assert!(j["error"].as_str().unwrap().contains("not on the public internet") || j["error"].as_str().unwrap().contains("not an address"), "{path}: {j}");
+    }
+    assert!(!rig.zims().join("r1.zim").exists() && !rig.zims().join("r2.zim").exists());
+    assert_eq!(rig.origin.requests("/pub.zim").len(), 0);
+    // an allowed address and a public one still pass
+    let job = rig.download(json!({"url": rig.origin.url("/pub.zim"), "kind": "library", "name": "ok.cache-library"})).await;
+    rig.wait_state(job["id"].as_str().unwrap(), &["done"]).await;
+    let (s, v) = post(json!({"url": "https://download.kiwix.org/zim/x.zim", "kind": "zim", "name": "pub.zim"})).await;
+    assert_eq!((s, v["ok"].clone()), (200, json!(true)));
+    rig.call("DELETE", &format!("/api/library/jobs/{}", v["result"]["id"].as_str().unwrap()), "").await;
     stop(&rig).await;
 }
 

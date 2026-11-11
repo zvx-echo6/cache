@@ -370,6 +370,7 @@ mod step_tests {
             end: (0.0, 0.0),
             instruction: None,
             follow: None,
+            lanes: Vec::new(),
         }
     }
 

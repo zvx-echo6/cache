@@ -19,6 +19,7 @@ class DataKind {
     this.items,
     this.itemDepth = const {},
     this.remoteItem,
+    this.alongside,
     this.setPrivate,
   });
 
@@ -61,6 +62,10 @@ class DataKind {
   /// The item a path listed by a linked device is ([itemDepth] segments of it), or null when it is not one (a file every item
   /// of the kind needs, which travels with the kind). Null: every listed path is an item, named after its file.
   final ShareItem? Function(String share, String path, int bytes)? remoteItem;
+
+  /// The other paths that go with an item, as sync patterns in the same shared folder (a ZIM's saved icon beside it): switched off
+  /// and synced with the item, but never an item of their own. Null: the item's path covers all of it.
+  final List<String> Function(String share, String path)? alongside;
 
   /// Switches a private item on or off (a private notebook's "Include in sync and sharing"); its state is [ShareItem.on].
   final Future<void> Function(ShareItem item, bool on)? setPrivate;

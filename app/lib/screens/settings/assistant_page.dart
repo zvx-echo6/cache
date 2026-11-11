@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../chat/answer_reports.dart';
+import '../../linux_ui.dart';
 import '../../location/location_service.dart';
+import '../../location/location_web_ui.dart';
 import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
@@ -214,9 +216,12 @@ class AssistantPage extends StatelessWidget {
 /// "Use my location": Cache's own switch, the same one as the + menu in Ask. Cache uses the location whenever the phone allows it and
 /// never asks; when the phone blocks it, the row says so and opens the phone's settings.
 class UseMyLocationRow extends StatelessWidget {
-  const UseMyLocationRow({super.key, required this.location});
+  const UseMyLocationRow({super.key, required this.location, this.insecure = false});
 
   final LocationService location;
+
+  /// Cache on Linux: the page is not on a secure address, so the browser refuses location.
+  final bool insecure;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -224,6 +229,43 @@ class UseMyLocationRow extends StatelessWidget {
     builder: (context, _) {
       final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
       final serviceOff = location.problem == LocationProblem.serviceOff;
+      if (linuxUi) {
+        if (insecure || blocked || serviceOff) {
+          return SettingsRow(
+            key: const ValueKey('use-my-location-row'),
+            title: 'Use my location',
+            status: [
+              Part(
+                insecure
+                    ? 'Needs a secure address'
+                    : blocked
+                    ? 'Blocked in this browser'
+                    : 'This computer cannot find its location',
+                Tone.warn,
+              ),
+            ],
+            trailing: RowButton(
+              label: insecure
+                  ? 'Why?'
+                  : blocked
+                  ? 'How to allow'
+                  : 'Try again',
+              onPressed: insecure
+                  ? () => showNeedsSecureAddress(context)
+                  : blocked
+                  ? () => showHowToAllow(context)
+                  : () => location.setEnabled(true),
+            ),
+          );
+        }
+        return SwitchRow(
+          key: const ValueKey('use-my-location-row'),
+          title: 'Use my location',
+          status: const [Part("Uses this browser's location")],
+          value: location.enabled,
+          onChanged: location.setEnabled,
+        );
+      }
       if (blocked || serviceOff) {
         return SettingsRow(
           key: const ValueKey('use-my-location-row'),

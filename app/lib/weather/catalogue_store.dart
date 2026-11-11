@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 
 import '../net/fetch.dart' as net;
+import '../platform.dart' as plat;
 import 'catalogue.dart';
 import 'connector.dart';
 import 'weather_files.dart';
@@ -23,7 +24,14 @@ class NetworkProblem extends CatalogueException {
 /// The real fetch (net/fetch.dart: HTTPS or this phone, timeouts, a size cap, no key or cookie), its failures said as weather says them.
 Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024}) async {
   try {
-    return await net.fetchBytes(url, maxBytes: maxBytes);
+    try {
+      return await net.fetchBytes(url, maxBytes: maxBytes);
+    } on net.FetchException catch (e) {
+      // In a browser Cache Server reads only the published catalogue hosts for this call. A list, or a definition in it, that the
+      // person pointed at another https address is an address they typed: read it as that kind (the phone reads any https itself).
+      if (!plat.isWeb || e.failure != net.FetchFailure.notAllowed) rethrow;
+      return await net.fetchBytes(url, maxBytes: maxBytes, scope: net.FetchScope.user);
+    }
   } on net.FetchException catch (e) {
     throw NetworkProblem(switch (e.failure) {
       net.FetchFailure.notAllowed => 'Cache only reads https addresses.',
