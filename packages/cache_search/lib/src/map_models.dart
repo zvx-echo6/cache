@@ -171,6 +171,10 @@ class MapPlace {
 
   bool get isCategory => type == 'category';
   bool get isCoordinates => type == 'coordinates';
+
+  /// A place the app made from an entry of a Places notebook (the pin's sheet on the map): it is in that notebook already, so it
+  /// is not offered for saving.
+  bool get isNotebookPlace => id.startsWith('notebook:');
   GeoPoint get point => GeoPoint(lat, lon);
 
   /// The end object cs_map_route takes.
