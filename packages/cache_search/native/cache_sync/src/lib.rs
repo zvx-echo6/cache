@@ -61,6 +61,12 @@ const STALL: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// How long a link made by showing a code may wait for the other device to show that it holds the link too, before it is
+/// removed here ([`Peer::unconfirmed`]). A slow clean-up, not a time limit: removing a real link is worse than keeping a
+/// dead entry, and the other device may be put away for days right after linking. Counted from the time saved with the
+/// link, so a restart does not start the wait again. A clock that is behind never removes anything; a clock wrongly far
+/// ahead could remove such a link early, which is accepted because only links never confirmed are ever touched.
+const CONFIRM_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
 
@@ -205,6 +211,11 @@ struct Peer {
     /// the device announces a different one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     announced: Option<String>,
+    /// Set on the device that showed the link code, until the other device has shown that it holds the link too: its answer to
+    /// the code may never have reached it, and then it does not know it is linked. Absent once confirmed, on the device that
+    /// read the code, and in files saved by older versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unconfirmed: bool,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -1239,6 +1250,57 @@ impl Inner {
         modes.contains(&mode)
     }
 
+    /// The linked device `peer` has shown that it holds the link too: the link is no longer waiting ([`Peer::unconfirmed`]).
+    fn confirm_peer(&self, peer: &str) {
+        let changed = {
+            let mut sv = self.saved.lock().unwrap();
+            sv.peers.iter_mut().find(|p| p.id == peer).map(|p| std::mem::take(&mut p.unconfirmed)).unwrap_or(false)
+        };
+        if changed {
+            let _ = self.save();
+        }
+    }
+
+    /// How long a link may stay unconfirmed ([`CONFIRM_WINDOW`]).
+    fn confirm_window(&self) -> Duration {
+        #[cfg(feature = "test-hooks")]
+        if let Some(ms) = std::fs::read_to_string(self.dir.join("confirm-window-ms")).ok().and_then(|v| v.trim().parse().ok()) {
+            // A test's own, shorter wait: the milliseconds in `<dir>/confirm-window-ms`.
+            return Duration::from_millis(ms);
+        }
+        CONFIRM_WINDOW
+    }
+
+    /// Removes the links made here by showing a code that the other device still has not confirmed [`CONFIRM_WINDOW`] after
+    /// they were made: it never learned it was linked, so the entry here would stay for ever as a device that never answers.
+    /// A confirmed link is never touched.
+    fn drop_unconfirmed(&self) {
+        let window = self.confirm_window().as_millis() as u64;
+        let now = now_ms();
+        let mut gone: Vec<Peer> = Vec::new();
+        // Saturating: a link dated after now (the clock went back) has waited no time at all.
+        self.saved.lock().unwrap().peers.retain(|p| {
+            if !p.unconfirmed || now.saturating_sub(p.linked) < window {
+                return true;
+            }
+            gone.push(p.clone());
+            false
+        });
+        if gone.is_empty() {
+            return;
+        }
+        for p in &gone {
+            if let Ok(k) = p.id.parse::<EndpointId>() {
+                self.allowed.write().unwrap().remove(&k);
+            }
+            self.run.lock().unwrap().peers.remove(&p.id);
+            self.secrets.lock().unwrap().remove(&p.id);
+            self.received.lock().unwrap().remove(&p.id);
+            self.note(format!("{} did not finish linking with this device, so the link was removed. Link the two again to connect them.", p.name));
+        }
+        let _ = self.save();
+    }
+
     /// The link as `peer` last set it, when it should replace the copy here (see [`link_replaces`]).
     fn adopt_link(&self, peer: &str, theirs: Link) {
         let changed = {
@@ -1342,6 +1404,7 @@ impl Inner {
             self.run.lock().unwrap().paused = Some("Sync is paused: no network it may use".into());
             return;
         }
+        self.drop_unconfirmed();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
@@ -1351,6 +1414,11 @@ impl Inner {
             let res = self.fetch_index(&p.id).await;
             let mut asks = None;
             let mut learned = None;
+            // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
+            // enough: a device still waiting for the answer to a code already lets this one in.)
+            if p.unconfirmed && res.as_ref().map(|(idx, _)| idx.link.is_some()).unwrap_or(false) {
+                self.confirm_peer(&p.id);
+            }
             {
                 let mut run = self.run.lock().unwrap();
                 let st = run.peers.entry(p.id.clone()).or_default();
@@ -1458,13 +1526,20 @@ impl Inner {
         found.into_iter().filter(|id| self.shares_with(share, id)).filter_map(|id| id.parse().ok()).collect()
     }
 
+    /// Takes from `from` what is newer there. A file that cannot be fetched or deleted is noted and the rest goes on, so one
+    /// bad file does not hold up its share; only losing the network stops it. A file with no room for it is passed over and
+    /// comes back as the error at the end, so the status still says sync is paused.
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
         let remote = &self.remote_view(&sh.id, remote);
         let mut actions = index::merge(&self.load_index(&sh.id), remote);
         // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
-        if let Some(last) = self.last.get(&sh.id) {
+        let last: &[String] = self.last.get(&sh.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        if !last.is_empty() {
             actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
         }
+        // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
+        let mut held = false;
+        let mut no_room: Option<anyhow::Error> = None;
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -1490,40 +1565,83 @@ impl Inner {
                 }
                 Action::Delete { path, entry } => {
                     let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
-                    let mut idx = self.load_index(&sh.id);
-                    let mut seen = self.load_seen(&sh.id);
-                    // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
-                    if let Ok(m) = std::fs::metadata(&full) {
-                        if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
-                            continue;
+                    let done: Result<()> = async {
+                        let mut idx = self.load_index(&sh.id);
+                        let mut seen = self.load_seen(&sh.id);
+                        // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
+                        if let Ok(m) = std::fs::metadata(&full) {
+                            if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
+                                return Ok(());
+                            }
+                            std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
+                            prune_empty(&sh.path, &full, self.skip(&sh.id));
                         }
-                        std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
-                        prune_empty(&sh.path, &full, self.skip(&sh.id));
+                        let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
+                        seen.remove(&path);
+                        idx.files.insert(path.clone(), entry);
+                        self.store_index(&sh.id, &idx, &seen)?;
+                        self.unmark_writing(&sh.id, &path)?;
+                        self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        Ok(())
                     }
-                    let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
-                    seen.remove(&path);
-                    idx.files.insert(path.clone(), entry);
-                    self.store_index(&sh.id, &idx, &seen)?;
-                    self.unmark_writing(&sh.id, &path)?;
-                    self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                    .await;
+                    if let Err(e) = done {
+                        held = true;
+                        self.note(format!("{} from {}: {e:#}", sh.name, self.peer_name(from)));
+                    }
                 }
-                Action::Fetch { path, entry, conflict } => self.fetch(sh, &path, entry, conflict, from).await?,
+                Action::Fetch { path, entry, conflict } => {
+                    // Not while anything before it is missing: it stays for a later round.
+                    if held && excluded(last, &path) {
+                        continue;
+                    }
+                    match self.fetch(sh, &path, entry, conflict, from).await {
+                        Ok(true) => {}
+                        Ok(false) => held = true,
+                        Err(e) => {
+                            held = true;
+                            let msg = format!("{e:#}");
+                            // With no network it may use nothing else can come either: the round says sync is paused.
+                            if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
+                                return Err(e);
+                            }
+                            if msg.starts_with("Paused:") {
+                                // No room for this one; a smaller file after it may still fit.
+                                if no_room.is_none() {
+                                    no_room = Some(e);
+                                }
+                            } else {
+                                self.note(format!("{} from {}: {msg}", sh.name, self.peer_name(from)));
+                            }
+                        }
+                    }
+                }
             }
         }
-        Ok(())
+        match no_room {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<()> {
+    /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
+    /// the caller knows it has not come yet.
+    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<bool> {
+        #[cfg(feature = "test-hooks")]
+        if std::fs::read_to_string(self.dir.join("fail-fetch")).map(|v| v.trim() == path).unwrap_or(false) {
+            // A file that cannot be fetched: the one `<dir>/fail-fetch` names, for as long as it names it.
+            bail!("test: could not fetch {path}");
+        }
         let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
             self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
-            return Ok(());
+            return Ok(true);
         };
         // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
         // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
         if let Ok(m) = std::fs::metadata(&full) {
             if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
                 self.settle_again.store(true, Ordering::Relaxed);
-                return Ok(());
+                return Ok(false);
             }
         }
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
@@ -1661,7 +1779,7 @@ impl Inner {
         } else if let Some(h) = old_hash.filter(|h| *h != entry_hash) {
             self.repoint(&h, Some(&full)).await;
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -1808,7 +1926,8 @@ impl ProtocolHandler for PairProto {
         };
         let reply = if let (true, Some(h)) = (ok, hello) {
             let id = conn.remote_id();
-            add_peer(inner, &id.to_string(), &h.name);
+            // Not confirmed until the other device comes back: this answer may never reach it.
+            add_peer(inner, &id.to_string(), &h.name, true);
             inner.note(format!("Linked with {}", h.name));
             inner.wake.notify_one();
             json!({"ok": true, "name": inner.saved.lock().unwrap().name})
@@ -1822,11 +1941,11 @@ impl ProtocolHandler for PairProto {
     }
 }
 
-fn add_peer(inner: &Inner, id: &str, name: &str) {
+fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()) });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -1849,6 +1968,8 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
+        // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
+        self.0.confirm_peer(&peer);
         if ask == b"secrets" {
             // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
             let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
@@ -2078,7 +2199,7 @@ impl SyncEngine {
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
-                add_peer(inner, &peer.to_string(), &pname);
+                add_peer(inner, &peer.to_string(), &pname, false);
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
@@ -2444,6 +2565,7 @@ impl SyncEngine {
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
+                    "unconfirmed": p.unconfirmed,
                 })
             })
             .collect();
@@ -2616,7 +2738,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()) }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
     }
 
     #[test]
