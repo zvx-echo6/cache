@@ -487,7 +487,7 @@ class _AskScreenState extends State<AskScreen> {
       if (resting != null) {
         // the chosen model, let go to leave memory free: it loads again
         button = 'Load ${app.displayName(resting)}';
-        onPressed = app.wake;
+        onPressed = () => app.wake(force: true);
       } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;

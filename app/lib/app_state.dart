@@ -14,6 +14,7 @@ import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/bench_options.dart';
 import 'platform/memory.dart';
+import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
@@ -201,8 +202,9 @@ class AppState extends ChangeNotifier {
           // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
-          if (r != null && modelMemoryNeed(e.size) > r.room) {
-            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+          final need = r == null ? null : await _needOf(e);
+          if (r != null && need != null && need.total > r.room) {
+            logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
             resting = e;
             notifyListeners();
           } else {
@@ -457,10 +459,32 @@ class AppState extends ChangeNotifier {
     await session.unload();
   }
 
-  /// Loads the [resting] model again (Ask opened, or its question was sent).
-  Future<void> wake() async {
+  /// What [e] needs in memory while it answers ([memoryNeedForFile]: the header's tensors with the lazy per-layer table left out,
+  /// the f16 KV cache at the model's context size, and the compute reserve).
+  Future<MemoryNeed?> _needOf(ModelEntry e) async {
+    try {
+      return await memoryNeedForFile(e.path, nCtx: settingsFor?.call(e)?.nCtx ?? kContextTokens, fallbackBytes: e.size);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Loads the [resting] model again (Ask opened, or its question was sent). Gated as the load at start is: when the model needs
+  /// more than the memory free now ([memory]), it stays resting (Ask shows "No model is loaded" with its Load button), and the log
+  /// says why. [force] is the person's own tap on that button: it loads whatever the room.
+  Future<void> wake({bool force = false}) async {
     final r = resting;
     if (r == null || active != null || loading != null) return;
+    if (!force) {
+      final room = await memory();
+      final need = room == null ? null : await _needOf(r);
+      if (room != null && need != null && need.total > room.room) {
+        logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        return;
+      }
+      // the answer to the read above may have come after another load began
+      if (resting != r || active != null || loading != null) return;
+    }
     await activate(r);
   }
 
