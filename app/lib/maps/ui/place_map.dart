@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show Factory;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
+import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
+import '../../notebook/pin_image.dart';
 import '../../theme.dart';
 import '../maps_state.dart';
 import '../palette/map_palette.dart';
@@ -17,7 +19,7 @@ import 'map_assets.dart';
 /// Without [onPick] it is a view: the page's scroll keeps the gestures. [onCentre] is told where the middle of the map is when the
 /// camera comes to rest (the full-screen picker's crosshair); [showPin] false leaves the pin out (the picker draws its own).
 class PlaceMap extends StatefulWidget {
-  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick, this.onCentre, this.onMoving, this.showPin = true});
+  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick, this.onCentre, this.onMoving, this.showPin = true, this.look});
 
   final MapsState maps;
   final CacheThemeId themeId;
@@ -29,6 +31,10 @@ class PlaceMap extends StatefulWidget {
   final ValueChanged<NbPlace>? onMoving;
   final bool showPin;
 
+  /// The pin's icon and colour (the place's current ones); drawn in the person's Pin style with the same images as the Maps screen.
+  /// Null draws the plain dot.
+  final PinLook? look;
+
   @override
   State<PlaceMap> createState() => _PlaceMapState();
 }
@@ -37,6 +43,7 @@ class _PlaceMapState extends State<PlaceMap> {
   String? _style;
   MapLibreMapController? _c;
   bool _ready = false;
+  PinImages? _images;
 
   @override
   void initState() {
@@ -55,24 +62,37 @@ class _PlaceMapState extends State<PlaceMap> {
   @override
   void didUpdateWidget(PlaceMap old) {
     super.didUpdateWidget(old);
-    if (old.pin != widget.pin) _showPin(move: true);
+    if (old.pin != widget.pin) {
+      _showPin(move: true);
+    } else if (old.look?.icon.id != widget.look?.icon.id || old.look?.tint != widget.look?.tint) {
+      _showPin();
+    }
   }
 
   Future<void> _showPin({bool move = false}) async {
     final c = _c, p = widget.pin;
     if (c == null || !_ready) return;
     try {
-      await c.setGeoJsonSource(kPinSource, {
-        'type': 'FeatureCollection',
-        'features': [
-          if (p != null && widget.showPin)
-            {
-              'type': 'Feature',
-              'geometry': {'type': 'Point', 'coordinates': [p.lon, p.lat]},
-              'properties': {'role': 'selected', 'id': 'place'},
-            },
-        ],
-      });
+      final look = widget.look;
+      String? image;
+      if (look != null && widget.showPin) {
+        final images = _images ??= PinImages((name, png) => c.addImage(name, png), widget.maps.pinStyle, tactical: widget.themeId == CacheThemeId.tactical);
+        image = await images.ensure(look.icon.id, look.glyph, look.tint);
+      }
+      Map<String, dynamic> one(bool on, Map<String, dynamic> props) => {
+            'type': 'FeatureCollection',
+            'features': [
+              if (on && p != null && widget.showPin)
+                {
+                  'type': 'Feature',
+                  'geometry': {'type': 'Point', 'coordinates': [p.lon, p.lat]},
+                  'properties': props,
+                },
+            ],
+          };
+      // With a look the pin is the notebook pins' symbol layer drawing the image; without one, the plain dot.
+      await c.setGeoJsonSource(kPinSource, one(image == null, {'role': 'selected', 'id': 'place'}));
+      await c.setGeoJsonSource(kNotebookSource, one(image != null, {'pin': image, 'title': 'place'}));
       if (move && p != null) await c.animateCamera(CameraUpdate.newLatLng(LatLng(p.lat, p.lon)));
     } catch (_) {}
   }
@@ -91,6 +111,7 @@ class _PlaceMapState extends State<PlaceMap> {
       },
       onStyleLoadedCallback: () {
         _ready = true;
+        _images = null;
         _showPin();
       },
       gestureRecognizers: widget.onPick == null ? null : {Factory<EagerGestureRecognizer>(EagerGestureRecognizer.new)},

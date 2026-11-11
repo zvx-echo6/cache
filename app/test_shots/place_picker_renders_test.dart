@@ -1,6 +1,7 @@
 // The new-place map picker for review (fix/place-picker): the Add place form with its map (it now takes drag and pinch) and the
 // "Choose on map" button, and the full-screen picker (crosshair with the pin in the Pin style, live coordinates, search, Where I
-// am, Use this spot, Cancel). 390 wide, light, dark and Tactical (Pin style: Teardrop in light, Badge in dark, Icon in Tactical).
+// am, Use this spot, Cancel). 390 wide, light, dark and Tactical, in the default Pin style (Icon). The pin is the place's current icon
+// and colour (here the Places notebook's own).
 // The live map is a platform view and is not drawn in a test, so the map is a stand-in painted from the map palette (the same
 // stand-in the map-icons renders use); the pin on the form's map is drawn by paintMapPin. The picker's crosshair and pin are the
 // real widgets.
@@ -13,12 +14,12 @@ import 'dart:typed_data';
 
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/notebook/map_icons.dart';
+import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/pin_image.dart';
 import 'package:cache/notebook/places.dart';
-import 'package:cache/notebook/place_style.dart' show markerColor;
+import 'package:cache/notebook/place_style.dart' show defaultMarkerColor;
 import 'package:cache/screens/notebooks/icon_picker.dart';
-import 'package:cache/screens/notebooks/map_spot_picker.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/theme.dart';
@@ -63,9 +64,10 @@ void _paintBase(Canvas canvas, Size size, MapPalette p) {
 
 
 class _StandIn extends CustomPainter {
-  _StandIn(this.theme, this.pin);
+  _StandIn(this.theme, this.pin, [this.look]);
   final CacheThemeId theme;
   final PinStyle? pin;
+  final PinLook? look;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -73,8 +75,7 @@ class _StandIn extends CustomPainter {
     final s = pin;
     if (s != null) {
       final tactical = theme == CacheThemeId.tactical;
-      final tint = tactical ? cacheTokens[CacheThemeId.tactical]!.accent : markerColor('teal').color;
-      paintMapPin(canvas, Offset(size.width / 2, s == PinStyle.teardrop ? size.height / 2 + 18 : size.height / 2), 36, mapIcon('camp').icon, tint, s, tactical: tactical);
+      paintMapPin(canvas, Offset(size.width / 2, s == PinStyle.teardrop ? size.height / 2 + 18 : size.height / 2), 36, look!.glyph, look!.tint, s, tactical: tactical);
     }
   }
 
@@ -82,11 +83,8 @@ class _StandIn extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter old) => true;
 }
 
-PinStyle _styleFor(CacheThemeId t) => switch (t) {
-      CacheThemeId.light => PinStyle.teardrop,
-      CacheThemeId.dark => PinStyle.badge,
-      _ => PinStyle.icon,
-    };
+// The default Pin style (Icon) everywhere; the teardrop and badge are not what this review is about.
+PinStyle _styleFor(CacheThemeId t) => PinStyle.icon;
 
 const _boise = NbPlace(lat: 43.61500, lon: -116.20230);
 
@@ -118,7 +116,7 @@ void main() {
     final style = _styleFor(theme);
     final choices = PlaceChoices(here: _here, saved: _noSaved, search: _search);
 
-    Widget standIn(PinStyle? s) => CustomPaint(painter: _StandIn(theme, s), size: Size.infinite);
+    Widget standIn(PinStyle? s, [PinLook? look]) => CustomPaint(painter: _StandIn(theme, s, look), size: Size.infinite);
 
     testWidgets('Add place form, ${theme.name}', (tester) async {
       phone(tester, size: const Size(390, 844), ratio: 2);
@@ -136,7 +134,7 @@ void main() {
           watched: (_) => false,
           setWatched: (_, _) {},
           alerts: PlaceAlerts.memory(),
-          map: (context, pin, onPick) => standIn(style),
+          map: (context, pin, onPick, look) => standIn(style, look),
           pickerMap: (context, target, onMoving, onCentre, onTap) => standIn(null),
         ),
       );
@@ -149,18 +147,30 @@ void main() {
     for (final withSearch in [false, true]) {
       testWidgets('full-screen picker${withSearch ? ' with search results' : ''}, ${theme.name}', (tester) async {
         phone(tester, size: const Size(390, 844), ratio: 2);
-        await tester.pumpWidget(shotApp(
-          MapSpotPicker(
-            map: (context, target, onMoving, onCentre, onTap) => standIn(null),
-            places: choices,
-            start: _boise,
-            icon: mapIcon('camp').icon,
-            tint: theme == CacheThemeId.tactical ? cacheTokens[CacheThemeId.tactical]!.accent : markerColor('teal').color,
-            pinStyle: style,
+        final nb = fakeNotebook(FakeNotebookBackend());
+        late Notebook book;
+        await tester.runAsync(() async {
+          await nb.start();
+          book = await nb.ensureSavedPlaces();
+        });
+        final deps = NotebookDeps(
+          notebook: nb,
+          places: choices,
+          icons: MapIconSetup.fixed(pinStyle: style),
+          placesDeps: PlaceNotebookDeps(
+            watched: (_) => false,
+            setWatched: (_, _) {},
+            alerts: PlaceAlerts.memory(),
+            map: (context, pin, onPick, look) => standIn(style, look),
+            pickerMap: (context, target, onMoving, onCentre, onTap) => standIn(null),
           ),
-          theme: theme,
-        ));
+        );
+        // Through the form, so the pin is the icon and colour the form resolves for the place.
+        await tester.pumpWidget(shotApp(PlaceForm(deps: deps, book: book, at: _boise), theme: theme));
         await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('place-choose-on-map')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
         if (withSearch) {
           await tester.enterText(find.byKey(const ValueKey('picker-search')), 'table rock');
           await tester.testTextInput.receiveAction(TextInputAction.search);
