@@ -215,12 +215,13 @@ class CarOverlayTest {
 
     // ---- the vehicle stays clear (areas as measured on the car simulator, density 1) ------------------------------------
 
-    /** The marker as the map draws it (radius and ring) and the road ahead of it (the route's 12 px casing, up to the top of
-     * the area): worked out here from the camera's rule, not from the painter's keep-clear zone. */
+    /** The marker as the map draws it (the arrow pointing up the screen: 30 wide, its tip 19 above the position and its tails
+     * 15 below) and the road ahead of it (the route's 12 px casing, up to the top of the area): worked out here from the
+     * camera's rule, not from the painter's keep-clear zone. */
     private fun assertVehicleClear(l: CarOverlayPainter.Layout, stable: Rect) {
         val vx = (stable.left + stable.right) / 2f
         val vy = stable.top + stable.height() * 0.675f
-        val marker = RectF(vx - 14f, vy - 14f, vx + 14f, vy + 14f)
+        val marker = RectF(vx - 15f, vy - 19f, vx + 15f, vy + 15f)
         val ahead = RectF(vx - 6f, stable.top.toFloat(), vx + 6f, vy)
         for (r in listOfNotNull(l.climb, l.mini)) {
             assertFalse("$r is over the vehicle $marker", RectF.intersects(r, marker))
@@ -249,7 +250,27 @@ class CarOverlayTest {
         assertEquals(0.35 * 606, inset, 1e-6)
         assertEquals((91 + inset + 697) / 2.0, v.y.toDouble(), 0.01)
         val keep = CarOverlayPainter.keepClear(mainStable, 1f)
-        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 14f && keep.left <= v.x - 14f && keep.right >= v.x + 14f)
+        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 15f && keep.left <= v.x - 15f && keep.right >= v.x + 15f)
+    }
+
+    @Test
+    fun theKeepClearZoneIsTheArrowsSizeAndNoSmallerThanTheDot() {
+        // The arrow, pointing up the screen as it does while guiding: half its 30 px width to each side of the position, its
+        // tails 15 px below it. The dot (drawn while no heading is known) is 14 px each way, so the zone covers it too.
+        assertEquals(15f, CarOverlayPainter.MARKER_SIDE, 0f)
+        assertEquals(15f, CarOverlayPainter.MARKER_BELOW, 0f)
+        val dot = CarOverlayPainter.POS_RADIUS + CarOverlayPainter.POS_RING
+        assertTrue(CarOverlayPainter.MARKER_SIDE >= dot && CarOverlayPainter.MARKER_BELOW >= dot)
+        val v = CarOverlayPainter.vehiclePoint(mainStable)
+        val keep = CarOverlayPainter.keepClear(mainStable, 1f)
+        // 16 px of free map beside the arrow on each side; under its tails a piece may begin.
+        assertEquals(v.x - 31f, keep.left, 0.01f)
+        assertEquals(v.x + 31f, keep.right, 0.01f)
+        assertEquals(v.y + 15f, keep.bottom, 0.01f)
+        // Twice the density: twice the zone.
+        val keep2 = CarOverlayPainter.keepClear(mainStable, 2f)
+        assertEquals(v.x - 62f, keep2.left, 0.01f)
+        assertEquals(v.y + 30f, keep2.bottom, 0.01f)
     }
 
     @Test
@@ -295,7 +316,9 @@ class CarOverlayTest {
         assertEquals(306f, c.top, 0.51f)
         assertEquals(427f, c.bottom, 0.51f)
         assertTrue(c.bottom <= stable.bottom - 16f)
-        assertTrue(c.right < 843f - 14f)
+        // It ends 16 px short of the arrow's left edge: at 811.5 (812.5 when the marker was the 14 px dot).
+        assertEquals(811.5f, c.right, 0.01f)
+        assertTrue(c.right < 843f - 15f)
         assertVehicleClear(shown, stable)
         // The buttons hidden: the mini map has room right of the vehicle, the climb card still ends short of it.
         val hidden = CarOverlayPainter.layout(1280, 500, Rect(504, 91, 1258, 477), 1f, showClimb = true, showMini = true, stable = stable)
@@ -311,7 +334,7 @@ class CarOverlayTest {
         val n = CarOverlayPainter.layout(410, 700, narrow, 1f, showClimb = true, showMini = true, stable = narrow)
         assertNull(n.climb)
         assertRect(78f, 457f, 298f, 597f, n.mini)
-        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 14f)
+        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 15f)
         assertVehicleClear(n, narrow)
         // Split view, 770 px.
         val split = Rect(344, 81, 683, 687)
@@ -396,6 +419,16 @@ class CarOverlayTest {
         assertEquals(Pair(false, false), painted(x))
     }
 
+    @Test
+    fun theClimbCardIsNotDrawnOnArrival() {
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        // Arrived, and the trip still carries a climb: the card goes, the mini map stays.
+        v.setTrip(trip("dark").copy(arrived = true), dark = true, now = true)
+        assertEquals(Pair(false, true), painted(v))
+    }
+
     // ---- the climb card's text: size and contrast -----------------------------------------------------------------------
 
     @Test
@@ -444,6 +477,52 @@ class CarOverlayTest {
         assertTrue(contrast(t.cardSecondary, t.card) >= 6.0 && contrast(t.cardText, t.card) >= 6.0)
     }
 
+    // ---- the climb card's shape is to scale ------------------------------------------------------------------------------
+
+    @Test
+    fun theShapesFullHeightStandsForAtLeastAHundredMetersOfRise() {
+        assertEquals(100.0, CarOverlayPainter.SHAPE_MIN_RISE_M, 0.0)
+        // The shape's line runs between y 5 (high) and y 48 (low); the middle is 26.5.
+        fun y(h: Double, lo: Double, hi: Double) = CarOverlayPainter.shapeY(h, lo, hi, 5f, 48f)
+        // A flat road: a level line at the middle, where it was.
+        assertEquals(26.5f, y(1200.0, 1200.0, 1200.0), 0.001f)
+        // A 2 m bump: under half a pixel either side of the middle, not the whole box.
+        assertEquals(26.5f - 0.43f, y(1002.0, 1000.0, 1002.0), 0.01f)
+        assertEquals(26.5f + 0.43f, y(1000.0, 1000.0, 1002.0), 0.01f)
+        // 50 m of rise: half the height.
+        assertEquals(26.5f - 10.75f, y(1050.0, 1000.0, 1050.0), 0.01f)
+        assertEquals(26.5f + 10.75f, y(1000.0, 1000.0, 1050.0), 0.01f)
+        // 100 m and more: the whole height, scaled to the real range as before.
+        assertEquals(5f, y(1100.0, 1000.0, 1100.0), 0.01f)
+        assertEquals(48f, y(1000.0, 1000.0, 1100.0), 0.01f)
+        assertEquals(5f, y(1600.0, 1000.0, 1600.0), 0.01f)
+        assertEquals(48f, y(1000.0, 1000.0, 1600.0), 0.01f)
+        assertEquals(26.5f, y(1300.0, 1000.0, 1600.0), 0.01f)
+    }
+
+    /** The rows of the shape's line (the route color at full strength), right of the start dot, for [heights] in a 196 x 52 box. */
+    private fun shapeLineRows(heights: List<Double>): IntRange {
+        val pal = trip("dark").palette!!.night
+        val bmp = Bitmap.createBitmap(196, 52, Bitmap.Config.ARGB_8888)
+        val c = CarClimb(climbAheadM = 0.0, gradePct = null, steepestInM = null, heightsM = heights, steepFrom = null, steepTo = null, windowM = 8000.0)
+        CarOverlayPainter.drawShape(Canvas(bmp), RectF(0f, 0f, 196f, 52f), c, pal, 1f)
+        val rows = (0 until 52).filter { y -> (20 until 190).any { x -> bmp.getPixel(x, y) == pal.route } }
+        return rows.first()..rows.last()
+    }
+
+    @Test
+    fun aSmallRiseIsDrawnLowAndOnlyARealClimbFillsTheShape() {
+        // 2 m of rise over the stretch: a line at the middle (it filled the box from bottom to top before).
+        val bump = shapeLineRows((0 until 56).map { 1000.0 + 2.0 * it / 55 })
+        assertTrue("$bump", bump.first >= 24 && bump.last <= 29)
+        // 50 m: about half the box.
+        val half = shapeLineRows((0 until 56).map { 1000.0 + 50.0 * it / 55 })
+        assertTrue("$half", half.first in 13..17 && half.last in 33..37)
+        // 600 m: all of it, as before.
+        val full = shapeLineRows((0 until 56).map { 1000.0 + 600.0 * it / 55 })
+        assertTrue("$full", full.first <= 8 && full.last >= 42)
+    }
+
     // ---- the main map's grade badge -------------------------------------------------------------------------------------
 
     @Test
@@ -455,6 +534,12 @@ class CarOverlayTest {
         val two = CarOverlayPainter.badgeBitmap(12.0, pal, 1f)
         assertEquals(40, one.height)
         assertTrue("${one.width}", one.width > 72)
+        // The picture carries the density it was drawn at (not the phone's), so the map shows it at these sizes on any phone
+        // and car: 160 for density 1, and at density 2 twice the pixels marked 320.
+        assertEquals(160, one.density)
+        val dense = CarOverlayPainter.badgeBitmap(9.0, pal, 2f)
+        assertEquals(320, dense.density)
+        assertEquals(76, dense.height)
         assertTrue(two.width > one.width)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
         assertEquals(34f + p.measureText("12%") + 12f, CarOverlayPainter.badgeWidth("12%", 1f), 0.01f)
@@ -468,6 +553,166 @@ class CarOverlayTest {
         val w = two.width
         assertEquals(pal.badge, two.getPixel(w / 2, 4))
         for (x in w - 2 - 8 until w - 2 - 4) for (y in 0 until two.height) assertFalse(two.getPixel(x, y) == pal.badgeGlyph)
+    }
+
+    // ---- the vehicle's arrow (the main map's position marker) --------------------------------------------------------------
+
+    /** The first and last row, and in a row the first and last column, that hold any paint. */
+    private fun paintedRows(b: Bitmap): IntRange {
+        val rows = (0 until b.height).filter { y -> (0 until b.width).any { x -> b.getPixel(x, y) != 0 } }
+        return rows.first()..rows.last()
+    }
+
+    private fun paintedColumns(b: Bitmap, y: Int): List<Int> = (0 until b.width).filter { x -> b.getPixel(x, y) != 0 }
+
+    @Test
+    fun theArrowIsAPointedChevronInTheTwoColorsWithItsTipAtTheTop() {
+        val fill = 0xFF2F7DF6.toInt()
+        val ring = 0xFFFFFFFF.toInt()
+        val b = CarOverlayPainter.arrowBitmap(fill, ring, 1f)
+        // Not empty, and both colors are there: the fill at the position (the picture's middle), the outline round it.
+        val px = IntArray(b.width * b.height)
+        b.getPixels(px, 0, b.width, 0, 0, b.width, b.height)
+        assertTrue(px.any { it == fill })
+        assertTrue(px.any { it == ring })
+        assertEquals(fill, b.getPixel(b.width / 2, b.height / 2))
+        // 34 px from the tip to the tails: clearly bigger than the 28 px dot, smaller than a host button (52 px in this
+        // file's stand-in for the host).
+        val rows = paintedRows(b)
+        val tall = rows.last - rows.first + 1
+        assertTrue("$tall", tall in 33..35)
+        assertTrue(CarOverlayPainter.ARROW_H > 2 * (CarOverlayPainter.POS_RADIUS + CarOverlayPainter.POS_RING))
+        assertTrue(CarOverlayPainter.ARROW_H < 52f)
+        // The tip is at the top, on the middle line: the first painted row holds only a few pixels, all at the middle.
+        val top = paintedColumns(b, rows.first)
+        assertTrue("$top", top.isNotEmpty() && top.size <= 4 && top.all { it >= b.width / 2 - 2 && it <= b.width / 2 + 1 })
+        // It widens downwards to two tails with the notch between them: near the last row the middle is empty and there is
+        // paint on both sides of it, as far out as the arrow is wide.
+        val y = rows.last - 2
+        val tail = paintedColumns(b, y)
+        assertEquals(0, b.getPixel(b.width / 2, y))
+        assertEquals(0, b.getPixel(b.width / 2 - 1, y))
+        assertTrue("$tail", tail.any { it < b.width / 2 - 8 } && tail.any { it > b.width / 2 + 8 })
+        assertTrue("$tail", tail.last() - tail.first() + 1 in 27..30)
+        // The position is the picture's middle (the map turns the picture about it): 19 px under the tip, 15 above the tails.
+        assertEquals(19f, b.height / 2f - rows.first, 1f)
+        assertEquals(15f, rows.last + 1 - b.height / 2f, 1f)
+        // Twice the density: twice the picture, and it says so (the map then shows it pixel for pixel).
+        val b2 = CarOverlayPainter.arrowBitmap(fill, ring, 2f)
+        val rows2 = paintedRows(b2)
+        assertTrue(rows2.last - rows2.first + 1 in 67..69)
+        assertEquals(160, b.density)
+        assertEquals(320, b2.density)
+        // Each theme's own colors: another fill, another picture.
+        val other = CarOverlayPainter.arrowBitmap(0xFFC0392B.toInt(), 0xFF000000.toInt(), 1f)
+        assertEquals(0xFFC0392B.toInt(), other.getPixel(other.width / 2, other.height / 2))
+        assertFalse(other.sameAs(b))
+    }
+
+    @Test
+    fun theArrowKeepsTheLastHeadingAndThereIsNoneUntilOneIsKnown() {
+        // The phone's heading when it gives one.
+        assertEquals(45.0, CarMarkerMotion.heading(45.0, 90.0)!!, 0.0)
+        assertEquals(45.0, CarMarkerMotion.heading(45.0, null)!!, 0.0)
+        // None with this position: the last one known.
+        assertEquals(90.0, CarMarkerMotion.heading(null, 90.0)!!, 0.0)
+        // None ever: no heading, so no arrow (the dot is drawn), never a made-up direction.
+        assertNull(CarMarkerMotion.heading(null, null))
+        // Not a number is no heading.
+        assertEquals(90.0, CarMarkerMotion.heading(Double.NaN, 90.0)!!, 0.0)
+        assertNull(CarMarkerMotion.heading(Double.POSITIVE_INFINITY, null))
+        // Headings are kept as 0 up to 360.
+        assertEquals(350.0, CarMarkerMotion.heading(-10.0, null)!!, 1e-9)
+        assertEquals(0.0, CarMarkerMotion.heading(360.0, null)!!, 1e-9)
+        assertEquals(5.0, CarMarkerMotion.heading(725.0, null)!!, 1e-9)
+    }
+
+    // ---- the vehicle's movement between positions ------------------------------------------------------------------------
+
+    @Test
+    fun theMarkerIsPartOfTheWayBetweenTwoPositionsAndExactlyOnThemAtTheEnds() {
+        assertEquals(42.5, CarMarkerMotion.lerp(42.5, 42.6, 0.0), 0.0)
+        assertEquals(42.6, CarMarkerMotion.lerp(42.5, 42.6, 1.0), 0.0)
+        assertEquals(42.55, CarMarkerMotion.lerp(42.5, 42.6, 0.5), 1e-12)
+        assertEquals(-113.775, CarMarkerMotion.lerp(-113.8, -113.7, 0.25), 1e-12)
+        // A steady rate: equal shares of the time are equal steps on the ground.
+        val steps = (0..10).map { CarMarkerMotion.lerp(10.0, 20.0, it / 10.0) }
+        for (i in 1..10) assertEquals(1.0, steps[i] - steps[i - 1], 1e-9)
+        // Never past either end.
+        assertEquals(42.5, CarMarkerMotion.lerp(42.5, 42.6, -0.2), 0.0)
+        assertEquals(42.6, CarMarkerMotion.lerp(42.5, 42.6, 1.2), 0.0)
+    }
+
+    @Test
+    fun theHeadingTurnsTheShorterWayRound() {
+        // 359 to 1 goes through north (2 degrees), not back round through south (358).
+        assertEquals(0.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.5), 1e-9)
+        assertEquals(359.5, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.25), 1e-9)
+        assertEquals(0.5, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.75), 1e-9)
+        assertEquals(1.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 1.0), 0.0)
+        assertEquals(359.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.0), 0.0)
+        // And the other way: 1 to 359.
+        assertEquals(0.0, CarMarkerMotion.lerpHeading(1.0, 359.0, 0.5), 1e-9)
+        assertEquals(359.5, CarMarkerMotion.lerpHeading(1.0, 359.0, 0.75), 1e-9)
+        // An ordinary turn, right and left.
+        assertEquals(45.0, CarMarkerMotion.lerpHeading(0.0, 90.0, 0.5), 1e-9)
+        assertEquals(225.0, CarMarkerMotion.lerpHeading(270.0, 180.0, 0.5), 1e-9)
+        assertEquals(350.0, CarMarkerMotion.lerpHeading(10.0, 330.0, 0.5), 1e-9)
+        // Always 0 up to 360.
+        for (i in 0..20) {
+            val h = CarMarkerMotion.lerpHeading(350.0, 20.0, i / 20.0)
+            assertTrue("$h", h >= 0.0 && h < 360.0)
+        }
+    }
+
+    @Test
+    fun theGlideLastsAsLongAsTheTimeSinceThePositionBeforeUpToTheCap() {
+        assertEquals(1200L, CarMarkerMotion.MAX_GLIDE_MS)
+        // One position a second: a one second glide, so the marker arrives as the next position does.
+        assertEquals(1000L, CarMarkerMotion.durationMs(1000L))
+        assertEquals(400L, CarMarkerMotion.durationMs(400L))
+        assertEquals(1200L, CarMarkerMotion.durationMs(1200L))
+        // A late position: no longer than the cap.
+        assertEquals(1200L, CarMarkerMotion.durationMs(2500L))
+        assertEquals(0L, CarMarkerMotion.durationMs(-5L))
+    }
+
+    @Test
+    fun theMarkerJumpsInsteadOfGlidingWhenAGlideWouldLie() {
+        fun snaps(first: Boolean = false, gapMs: Long = 1000L, jumpM: Double = 15.0, phaseChanged: Boolean = false, force: Boolean = false) =
+            CarMarkerMotion.snaps(first, gapMs, jumpM, phaseChanged, force)
+        // The ordinary case, a second and a few meters after the position before: a glide.
+        assertFalse(snaps())
+        // The first position: there is nowhere to glide from.
+        assertTrue(snaps(first = true))
+        // More than about three seconds since the position before.
+        assertEquals(3000L, CarMarkerMotion.SNAP_GAP_MS)
+        assertFalse(snaps(gapMs = 3000L))
+        assertTrue(snaps(gapMs = 3001L))
+        // No time since the position before: nothing to glide over.
+        assertTrue(snaps(gapMs = 0L))
+        // More than about 150 m from the position before.
+        assertEquals(150.0, CarMarkerMotion.SNAP_JUMP_M, 0.0)
+        assertFalse(snaps(jumpM = 150.0))
+        assertTrue(snaps(jumpM = 150.1))
+        // The trip's phase changed, or the caller says so.
+        assertTrue(snaps(phaseChanged = true))
+        assertTrue(snaps(force = true))
+    }
+
+    @Test
+    fun theJumpIsMeasuredInMetersOnTheGround() {
+        // A thousandth of a degree of latitude is about 111 m; of longitude at 60 north, half that.
+        assertEquals(111.2, CarMarkerMotion.distanceM(42.5, -113.77, 42.501, -113.77), 0.1)
+        assertEquals(55.6, CarMarkerMotion.distanceM(60.0, 10.0, 60.0, 10.001), 0.1)
+        assertEquals(0.0, CarMarkerMotion.distanceM(42.5, -113.77, 42.5, -113.77), 0.0)
+        // A second at highway speed (about 30 m) glides; a new place does not.
+        val highway = CarMarkerMotion.distanceM(42.5, -113.77, 42.50027, -113.77)
+        assertFalse(CarMarkerMotion.snaps(first = false, gapMs = 1000L, jumpM = highway, phaseChanged = false, force = false))
+        val elsewhere = CarMarkerMotion.distanceM(42.5, -113.77, 42.52, -113.77)
+        assertTrue(CarMarkerMotion.snaps(first = false, gapMs = 1000L, jumpM = elsewhere, phaseChanged = false, force = false))
+        // Either side of the 180 degree line reads as far apart: no glide the long way round the world.
+        assertTrue(CarMarkerMotion.distanceM(0.0, 179.9999, 0.0, -179.9999) > CarMarkerMotion.SNAP_JUMP_M)
     }
 
     // ---- the mini map's destination ---------------------------------------------------------------------------------------

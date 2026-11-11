@@ -227,6 +227,48 @@ class CarSessionTest {
     }
 
     @Test
+    fun backFromARouteTheSearchBoxStillHoldsTheTextItsResultsAreFor() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, args, done ->
+            when (method) {
+                "search" -> {
+                    asked += (args as Map<*, *>)["query"] as String
+                    done(listOf(place(20, "Found 20")))
+                }
+                else -> done(null)
+            }
+        }
+        start()
+        (screens.top as HomeScreen).openSearch()
+        val search = screens.top as SearchScreen
+        // Nothing typed: no text is put in the box.
+        assertNull((templateOf(search) as SearchTemplate).initialSearchText)
+        search.textChanged("found")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertEquals(listOf("Found 20"), searchRows(search))
+        // A route screen opened from a result, then Back: the template the host is given again has the results and, in the
+        // box, the text they are for (it had the results over an empty box).
+        screens.push(RoutePreviewScreen(car, CarMapRenderer(car), CarPlace("place:20", "Found 20", null, 62.0, -113.0, null)))
+        screens.pop()
+        assertTrue(screens.top === search)
+        val back = templateOf(search) as SearchTemplate
+        assertEquals("found", back.initialSearchText)
+        assertEquals(listOf("Found 20"), searchRows(search))
+        // The host reporting that same text again does not search again.
+        search.textChanged("found")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertEquals(listOf("found"), asked)
+        // Submitted text is kept the same way, and new text still searches.
+        search.submitted("other")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("other", (templateOf(search) as SearchTemplate).initialSearchText)
+        assertEquals(listOf("found", "other"), asked)
+        // The box cleared: no text is put back.
+        search.submitted("")
+        assertNull((templateOf(search) as SearchTemplate).initialSearchText)
+    }
+
+    @Test
     fun aLateSavedAnswerDoesNotReplaceWhatWasFound() {
         CarLink.dartForTests = { method, _, done ->
             when (method) {

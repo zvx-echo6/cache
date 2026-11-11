@@ -43,6 +43,11 @@ object CarOverlayPainter {
     const val SHAPE_W = 196f
     const val SHAPE_H = 52f
 
+    /** The owner's number (2026-11-11): the shape's full height stands for at least this much rise, in meters (about 330 ft),
+     * within the stretch shown. A stretch that rises less is drawn as if it rose this much, so a small rise draws low and a
+     * flat road draws flat; a stretch that rises more is drawn to its own range. Change it here and nowhere else. */
+    const val SHAPE_MIN_RISE_M = 100.0
+
     /** The narrowest shape still worth drawing beside the text. */
     const val SHAPE_MIN_W = 60f
 
@@ -74,9 +79,27 @@ object CarOverlayPainter {
     /** While guiding the camera leaves this share of the area's height free above the position, so more of the road ahead shows. */
     const val GUIDANCE_TOP_SHARE = 0.35
 
-    /** The main map's position marker (the car-pos layer): its radius and its ring, which is drawn outside the radius. */
+    /** The main map's position marker while no heading was ever known (the car-pos-dot layer): its radius and its ring, which
+     * is drawn outside the radius. */
     const val POS_RADIUS = 10f
     const val POS_RING = 4f
+
+    /** The main map's position marker once a heading is known (the car-pos layer): an arrowhead, [ARROW_W] wide and [ARROW_H]
+     * from its tip to its two tails, outline included. The position is the point [ARROW_AHEAD] behind the tip, on the middle
+     * line: the arrow turns about it. */
+    const val ARROW_W = 30f
+    const val ARROW_H = 34f
+    const val ARROW_AHEAD = 19f
+    const val ARROW_OUTLINE = 3f
+
+    /** How deep the notch at the back is cut, from the tails towards the tip. */
+    const val ARROW_NOTCH = 8.5f
+
+    /** How far the marker reaches from the position, sideways and downwards on the screen. While guiding the map is turned to
+     * the heading, so the arrow points up the screen: half its width to each side, and its tails below. Neither is smaller than
+     * the dot, which is drawn instead of the arrow while no heading is known. */
+    const val MARKER_SIDE = ARROW_W / 2f
+    const val MARKER_BELOW = ARROW_H - ARROW_AHEAD
 
     /** Free map kept on each side of the marker and of the road ahead of it. */
     const val VEHICLE_SIDE = 16f
@@ -93,9 +116,8 @@ object CarOverlayPainter {
      * ahead) up to the top of [area]. Under the marker is road already driven, so a piece may begin right below it. */
     fun keepClear(area: Rect, density: Float): RectF {
         val v = vehiclePoint(area)
-        val r = (POS_RADIUS + POS_RING) * density
-        val half = r + VEHICLE_SIDE * density
-        return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + r)
+        val half = (MARKER_SIDE + VEHICLE_SIDE) * density
+        return RectF(v.x - half, area.top.toFloat(), v.x + half, v.y + MARKER_BELOW * density)
     }
 
     /** Where the two pieces go, in surface pixels; null when a piece is off or does not fit. */
@@ -135,13 +157,14 @@ object CarOverlayPainter {
 
     /** Both pieces for [trip] (the switches are the trip's), in the car's day or night colors. Nothing is drawn unless the
      * trip is guiding, and nothing while the route overview screen is up ([overview]): the mini map would repeat what that
-     * screen's map already shows, and both pieces would sit on the route and the vehicle there. */
+     * screen's map already shows, and both pieces would sit on the route and the vehicle there. The climb card is never drawn
+     * on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
     fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false) {
         val pal = trip.palette?.forMode(dark) ?: return
         if (!trip.guiding || overview) return
-        val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null, showMini = trip.overlay.miniMap && trip.overview != null, stable = stable)
+        val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null && !trip.arrived, showMini = trip.overlay.miniMap && trip.overview != null, stable = stable)
         val climb = trip.climb
-        if (l.climb != null && climb != null) drawClimbCard(canvas, l.climb, climb, trip.imperial, pal, density)
+        if (l.climb != null && climb != null && !trip.arrived) drawClimbCard(canvas, l.climb, climb, trip.imperial, pal, density)
         val ov = trip.overview
         if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, pal, density)
     }
@@ -215,17 +238,24 @@ object CarOverlayPainter {
         drawShape(canvas, shape, c, pal, d)
     }
 
+    /** Where a height is drawn in the shape, between [top] (high) and [bottom] (low), for a stretch whose heights run from
+     * [lo] to [hi]. The whole height stands for the stretch's own range, or for [SHAPE_MIN_RISE_M] when the range is less; the
+     * middle of the range is drawn at the middle, so a flat road is a level line there and a small rise stays close to it. */
+    fun shapeY(heightM: Double, lo: Double, hi: Double, top: Float, bottom: Float): Float {
+        val span = max(hi - lo, SHAPE_MIN_RISE_M)
+        return (top + bottom) / 2f - (((heightM - (lo + hi) / 2.0) / span) * (bottom - top)).toFloat()
+    }
+
     /** The shape of the road ahead, no axes: lightly filled under a line, a dot at the start, the steepest stretch hatched. */
     fun drawShape(canvas: Canvas, box: RectF, c: CarClimb, pal: CarOverlayColors, d: Float) {
         val n = c.heightsM.size
         val lo = c.heightsM.min()
         val hi = c.heightsM.max()
-        val span = max(hi - lo, 1.0)
         // The mock's shape runs from y 48 (low) to y 5 (high) in a 52 high box; a flat road sits in the lower middle.
         val top = box.top + 5f * d
         val bottomY = box.top + 48f * d
         fun xAt(i: Int) = box.left + box.width() * i / (n - 1)
-        fun yAt(i: Int): Float = if (hi - lo < 1.0) (top + bottomY) / 2f else (bottomY - ((c.heightsM[i] - lo) / span).toFloat() * (bottomY - top))
+        fun yAt(i: Int): Float = shapeY(c.heightsM[i], lo, hi, top, bottomY)
         val line = Path().apply {
             moveTo(xAt(0), yAt(0))
             for (i in 1 until n) lineTo(xAt(i), yAt(i))
@@ -300,14 +330,52 @@ object CarOverlayPainter {
         }
     }
 
-    /** The main map's badge as a picture (a MapLibre symbol image). */
+    /** The main map's badge as a picture (a MapLibre symbol image). The picture says it is drawn at [d], as the arrow's does:
+     * MapLibre scales a picture by the density it carries, and a new bitmap carries the phone's own, so without this the
+     * badge came out smaller than these sizes wherever the phone's screen is denser than the car's. */
     fun badgeBitmap(gradePct: Double, pal: CarOverlayColors, d: Float): Bitmap {
         val w = ceil(badgeWidth(gradeText(gradePct), d)).toInt() + 4
         val h = (BADGE_H * d).toInt() + 4
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         drawBadge(Canvas(bmp), w / 2f, h / 2f, gradeText(gradePct), pal, d)
+        bmp.density = (160f * d).roundToInt()
         return bmp
     }
+
+    // ---- the vehicle's arrow (the main map's position marker) ------------------------------------------------------------
+
+    /** The arrowhead pointing up, with the position at (cx, cy): a pointed chevron with a notch at the back, filled with
+     * [fill] and outlined with [outline]. The outline is drawn on the shape's edge with round corners, so the shape's own
+     * corners sit half an outline inside the sizes above. */
+    fun drawArrow(canvas: Canvas, cx: Float, cy: Float, fill: Int, outline: Int, d: Float) {
+        val o = ARROW_OUTLINE / 2f
+        val tipY = cy - (ARROW_AHEAD - o) * d
+        val tailY = cy + (MARKER_BELOW - o) * d
+        val wing = (MARKER_SIDE - o) * d
+        val p = Path()
+        p.moveTo(cx, tipY)
+        p.lineTo(cx + wing, tailY)
+        p.lineTo(cx, tailY - ARROW_NOTCH * d)
+        p.lineTo(cx - wing, tailY)
+        p.close()
+        canvas.drawPath(p, fill(fill))
+        canvas.drawPath(p, stroke(outline, ARROW_OUTLINE * d))
+    }
+
+    /** The arrow as a picture (a MapLibre symbol image), unrotated: the tip at the top. The position is the picture's middle,
+     * which is what the map puts on the position and turns the picture about; that is why there is empty room under the tails.
+     * The picture says it is drawn at [d], so the map shows it pixel for pixel on a map of that density. */
+    fun arrowBitmap(fill: Int, outline: Int, d: Float): Bitmap {
+        val w = ceil(ARROW_W * d).toInt() + 2 * ARROW_BITMAP_PAD
+        val h = ceil(2 * ARROW_AHEAD * d).toInt() + 2 * ARROW_BITMAP_PAD
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        drawArrow(Canvas(bmp), w / 2f, h / 2f, fill, outline, d)
+        bmp.density = (160f * d).roundToInt()
+        return bmp
+    }
+
+    /** Empty pixels around the arrow in its picture. */
+    const val ARROW_BITMAP_PAD = 2
 
     // ---- the route mini map --------------------------------------------------------------------------------------------
 

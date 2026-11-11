@@ -15,6 +15,19 @@ import '../theme.dart';
 const bool kCarClimbAheadDefault = true;
 const bool kCarRouteMiniMapDefault = true;
 
+/// The owner's number (2026-11-11): the least grade (rise over run, 0.03 is 3%) a climb ahead must have for the car to show it.
+/// With no such climb ahead there is no climb card, no grade badge on the car's map and no grade pill on its mini map. The
+/// climb finder's own floors still apply first (a climb is at least 10 m high and 200 m long, elevation_profile.dart). This is
+/// the car's rule only: the phone's elevation panel is not changed by it. Change it here and nowhere else.
+const double kCarClimbMinGrade = 0.03;
+
+/// The steepest climb still ahead of [posM] metres along the profile, when it is at least [kCarClimbMinGrade] steep; else null.
+/// (The steepest is the one with the highest grade, so when it is under the floor no climb ahead reaches it.)
+Climb? carClimbAhead(ElevationProfile profile, double posM) {
+  final c = profile.steepestClimbAhead(posM);
+  return c == null || c.grade < kCarClimbMinGrade ? null : c;
+}
+
 /// How many heights the climb card's shape is drawn from.
 const int kClimbSamples = 56;
 
@@ -33,14 +46,16 @@ CacheThemeId carNightTheme(CacheThemeId chosen) => chosen == CacheThemeId.dark |
 CacheThemeId carMapTheme({required bool dark, required CacheThemeId chosen}) =>
     !dark ? CacheThemeId.light : (chosen == CacheThemeId.tactical ? CacheThemeId.tactical : CacheThemeId.dark);
 
-/// The `climb` block, or null with no elevation data (the card is then not drawn).
+/// The `climb` block, or null (the card is then not drawn): with no elevation data, and with no climb ahead that is at least
+/// [kCarClimbMinGrade] steep ([carClimbAhead]). A flat road, a gentle rise and a route whose climbs are all behind get no card.
 ///
 /// [distanceAlongM] is the core's metres along the route; [routeM] the route's length (the profile measures the same line a
 /// little differently, so the position is scaled to the profile, as [RouteElevation.positionOnProfile] does).
 Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? distanceAlongM, required double routeM}) {
   if (profile == null || !profile.hasData || profile.distM.isEmpty) return null;
   final posM = _positionOnProfile(profile, distanceAlongM, routeM);
-  final steep = profile.steepestClimbAhead(posM);
+  final steep = carClimbAhead(profile, posM);
+  if (steep == null) return null;
 
   // The climb still to come: the dead-band climb over the heights from the position on.
   final ahead = <double>[];
@@ -51,7 +66,7 @@ Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? dist
   final climbAheadM = climbAndDescent(ahead).climb;
 
   final remaining = math.max(0.0, profile.totalM - posM);
-  final window = math.min(remaining, math.max(8000.0, steep == null ? 0.0 : steep.endM - posM + 1500));
+  final window = math.min(remaining, math.max(8000.0, steep.endM - posM + 1500));
   if (window < 1) return null;
   final heights = <double>[];
   double? last;
@@ -67,16 +82,14 @@ Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? dist
     heights[i] = firstReal;
   }
 
-  int? from, to;
-  if (steep != null) {
-    from = (((steep.startM - posM) / window) * (kClimbSamples - 1)).round().clamp(0, kClimbSamples - 1);
-    to = (((steep.endM - posM) / window) * (kClimbSamples - 1)).round().clamp(0, kClimbSamples - 1);
-    if (to <= from) from = to = null;
-  }
+  // The steep stretch among the heights; none when it falls between two of them.
+  final int a = (((steep.startM - posM) / window) * (kClimbSamples - 1)).round().clamp(0, kClimbSamples - 1);
+  final int b = (((steep.endM - posM) / window) * (kClimbSamples - 1)).round().clamp(0, kClimbSamples - 1);
+  final int? from = b <= a ? null : a, to = b <= a ? null : b;
   return {
     'climbAheadM': climbAheadM,
-    'gradePct': steep == null ? null : steep.grade * 100,
-    'steepestInM': steep == null ? null : math.max(0.0, steep.startM - posM),
+    'gradePct': steep.grade * 100,
+    'steepestInM': math.max(0.0, steep.startM - posM),
     'heightsM': heights,
     'steepFrom': from,
     'steepTo': to,
@@ -90,7 +103,8 @@ double _positionOnProfile(ElevationProfile p, double? alongM, double routeM) {
 }
 
 /// The `overview` block: the whole route simplified, how much of it is driven, the steepest point's place and grade, and the
-/// destination. Null with no route.
+/// destination. Null with no route. The steepest point follows the climb card's rule ([carClimbAhead]): it is there only for a
+/// climb ahead of at least [kCarClimbMinGrade], so the car's badge and pill never mark a gentle rise.
 Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlongM, ElevationProfile? profile, GeoPoint? destination}) {
   if (route == null || route.points.length < 2) return null;
   final pts = simplifyRoute(route.points, kOverviewMaxPoints);
@@ -100,7 +114,7 @@ Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlo
   Map<String, dynamic>? steepPoint;
   if (profile != null && profile.hasData) {
     final posM = _positionOnProfile(profile, distanceAlongM, route.distanceM);
-    final c = profile.steepestClimbAhead(posM);
+    final c = carClimbAhead(profile, posM);
     if (c != null && profile.totalM > 0) {
       final at = pointAtFraction(route.points, ((c.startM + c.endM) / 2 / profile.totalM).clamp(0.0, 1.0));
       steepPoint = {'lat': at.lat, 'lon': at.lon, 'gradePct': c.grade * 100};

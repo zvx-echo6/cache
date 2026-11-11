@@ -50,7 +50,8 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
       'overlay': overlay ?? carOverlaySwitches(),
       'palette': carOverlayPalette(theme),
       if (r != null) ...{
-        'climb': ?carClimb(elevation, distanceAlongM: p.distanceAlongM, routeM: r.distanceM),
+        // Never on arrival: there is no climb ahead of a vehicle that is there.
+        'climb': ?(nav.arrived ? null : carClimb(elevation, distanceAlongM: p.distanceAlongM, routeM: r.distanceM)),
         'overview': ?carOverview(r, distanceAlongM: p.distanceAlongM, profile: elevation, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon)),
       },
     },
