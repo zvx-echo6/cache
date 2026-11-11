@@ -605,10 +605,14 @@ class NavState extends ChangeNotifier {
       return;
     }
     _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
+    _simulated = simulatedDrive?.call() ?? false;
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
     if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
   }
+
+  /// True while the guidance that is running is a simulated drive (asked once, when it starts).
+  bool _simulated = false;
 
   void _onFix(Fix f) {
     location.publish(f);
@@ -718,6 +722,14 @@ class NavState extends ChangeNotifier {
     _fixSub = null;
     await positionSource.stop();
     location.holdStream(false);
+    if (_simulated) {
+      // A simulated drive's fixes went to the location service as guidance fixes do ([_onFix]), so its last point was left
+      // there as the phone's position: the map, "here" and the car's home map all showed it until something read a real
+      // position. It is forgotten, and the phone's real position is read again (no prompt: only a permission already given).
+      _simulated = false;
+      location.forgetPublished();
+      unawaited(location.request(explain: () async => false));
+    }
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
