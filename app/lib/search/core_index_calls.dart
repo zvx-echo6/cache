@@ -7,6 +7,7 @@ import '../maps/ui/format.dart' show formatCount;
 import 'index_scheduler.dart';
 import 'index_throttle.dart';
 import '../platform/app_log.dart';
+import '../platform/proc_diag.dart';
 
 /// The app's core index work, set at start; null in tests that do not need it (the Library then shows no EPUB progress).
 AppIndexCoreCalls? coreIndexShared;
@@ -186,6 +187,9 @@ class CoreIndexRun implements IndexRun {
     unawaited(_check());
   }
 
+  /// Diagnostic only: wall and CPU time of this job (logged when it ends).
+  final StepClock _clock = StepClock();
+
   final IndexJob job;
   final String key;
   final ValueNotifier<Map<String, (int, int)>> progress;
@@ -228,8 +232,8 @@ class CoreIndexRun implements IndexRun {
       }
       if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
       if (p.state == JobState.done) onDone?.call();
-      // The core's own words for a failure (they can name folders, so the log shows them from Detailed).
-      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}', detail: p.errorMessage, job: key);
+      // The core's own words for a failure (they can name folders, so the log shows them from Detailed), and what the job cost.
+      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}; ${_clock.took()}', detail: p.errorMessage, job: key);
       _end(p.state == JobState.done);
     } catch (e) {
       logError('Index job $key', error: e, job: key);
