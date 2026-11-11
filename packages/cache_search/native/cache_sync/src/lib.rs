@@ -688,7 +688,8 @@ impl Inner {
         self.dir.join("index").join(format!("{share}.seen.json"))
     }
 
-    /// Set (holding the new path) while a share re-pointed to a new folder has not yet had its first, reconciling scan.
+    /// Set (holding the new path) while a share re-pointed to a new folder has not yet had its first, reconciling scan. A mark
+    /// naming a folder the share does not have (the app stopped between writing it and changing the path) is ignored.
     fn moved_path(&self, share: &str) -> PathBuf {
         self.dir.join("index").join(format!("{share}.moved"))
     }
@@ -712,6 +713,14 @@ impl Inner {
             if let Some(x) = sv.shares.iter_mut().find(|x| x.id == id) {
                 existed = true;
                 moved = x.path != path;
+                if moved {
+                    // The mark is on disk before the path changes, and both happen under the lock a round copies the shares
+                    // under: no round can scan the new folder as an ordinary one and record what it lacks as deleted, and
+                    // two re-points of one share at once cannot leave the mark naming one folder and the share the other.
+                    // If it cannot be written the re-point fails with nothing changed.
+                    std::fs::create_dir_all(self.dir.join("index"))?;
+                    std::fs::write(self.moved_path(id), path.to_string_lossy().as_bytes())?;
+                }
                 x.path = path.clone();
                 share_name = x.name.clone();
             } else {
@@ -722,8 +731,6 @@ impl Inner {
             }
         }
         if moved {
-            std::fs::create_dir_all(self.dir.join("index"))?;
-            std::fs::write(self.moved_path(id), path.to_string_lossy().as_bytes())?;
             self.save()?;
             self.note(format!("{share_name}: folder moved after an update; checking files"));
         } else if !existed {
