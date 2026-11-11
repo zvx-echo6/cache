@@ -648,7 +648,7 @@ fn turn_lanes_reach_the_guidance_snapshot_and_never_the_tool_result() {
 /// A tile stream whose fetch crashes: the route goes ahead on the tiles there are.
 struct CrashingStream;
 impl cache_navigate::TileStream for CrashingStream {
-    fn prepare(&self, _points: &[(f64, f64)]) {
+    fn prepare(&self, _points: &[(f64, f64)]) -> cache_navigate::TilePrep {
         panic!("the fetch failed");
     }
 }

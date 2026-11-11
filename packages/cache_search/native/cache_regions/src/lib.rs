@@ -25,6 +25,31 @@ pub mod index;
 mod snap;
 mod places;
 
+/// How a route's tile fetch ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrepareOutcome {
+    /// Everything the route is likely to need is on the device.
+    #[default]
+    Done,
+    /// The network may not be used: only what was on the device.
+    Offline,
+    /// The fetch could not run or some tiles did not arrive (no index, no space, a failed download).
+    Failed,
+    /// The time ran out before the tiles arrived.
+    TimedOut,
+}
+
+/// What [`Regions::prepare`] came to.
+#[derive(Debug, Clone, Default)]
+pub struct Prepared {
+    pub fetched: usize,
+    /// Tiles the route is likely to need that are still not on the device.
+    pub missing: usize,
+    pub outcome: PrepareOutcome,
+    /// The points (by position in the list given) whose level 2 tile is not on the device afterwards.
+    pub lacking: Vec<usize>,
+}
+
 pub use places::{StreamAnswer, DEFAULT_PLACES_STREAM_TIMEOUT_MS, PLACES_STREAM_DEG};
 use places::{PState, PlacesPart};
 
@@ -1241,8 +1266,33 @@ impl Inner {
     fn stream(&self, args: &Value) -> Value {
         let points = points_of(args.get("points"));
         let timeout = Duration::from_millis(args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_STREAM_TIMEOUT_MS));
+        self.stream_points(&points, timeout).0
+    }
+
+    /// `stream` on a list of points, with what it came to: whether the fetch ran, failed or timed out, and which points
+    /// (by position) still have no level 2 tile on the device afterwards.
+    fn stream_points(&self, points: &[(f64, f64)], timeout: Duration) -> (Value, Prepared) {
         let deadline = Instant::now() + timeout;
+        let (v, outcome) = self.stream_core(points, deadline);
+        let lacking = {
+            let st = self.st();
+            let build = st.build.clone();
+            points
+                .iter()
+                .enumerate()
+                .filter(|(_, (lat, lon))| !build.as_ref().map(|b| st.has(b, &geo::tile_path(2, geo::tile_id(2, *lon, *lat)))).unwrap_or(false))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+        let prepared = Prepared { fetched: n("fetched"), missing: n("missing"), outcome, lacking };
+        (v, prepared)
+    }
+
+    fn stream_core(&self, points: &[(f64, f64)], deadline: Instant) -> (Value, PrepareOutcome) {
+        let points = points.to_vec();
         let answer = |fetched: usize, missing: usize, ok: bool| json!({"fetched": fetched, "missing": missing, "ok": ok});
+        let failed = || if Instant::now() >= deadline { PrepareOutcome::TimedOut } else { PrepareOutcome::Failed };
         let device = self.st().build.clone();
         // Offline: only what is on the device. How much is missing is known when the index is.
         if !self.may_use_network() {
@@ -1254,7 +1304,7 @@ impl Inner {
                     idx.tiles_near(&points, STREAM_BOX_DEG, STREAM_NEAR_DEG).iter().filter(|t| !st.has(b, &t.path)).count()
                 })
                 .unwrap_or(0);
-            return answer(0, missing, false);
+            return (answer(0, missing, false), PrepareOutcome::Offline);
         }
         let left = || deadline.saturating_duration_since(Instant::now());
         let chosen = match &device {
@@ -1278,7 +1328,7 @@ impl Inner {
                 }
             }),
         };
-        let Ok((build, idx)) = chosen else { return answer(0, 0, false) };
+        let Ok((build, idx)) = chosen else { return (answer(0, 0, false), failed()) };
         let need = idx.tiles_near(&points, STREAM_BOX_DEG, STREAM_NEAR_DEG);
         let missing: Vec<TileRef> = {
             let st = self.st();
@@ -1287,7 +1337,7 @@ impl Inner {
         let reserve = self.reserve.load(Ordering::Relaxed);
         let need_bytes: u64 = missing.iter().map(|t| t.bytes).sum();
         if free_bytes(&self.dir).map(|f| f < need_bytes.saturating_add(reserve)).unwrap_or(false) {
-            return answer(0, missing.len(), false);
+            return (answer(0, missing.len(), false), PrepareOutcome::Failed);
         }
         let fetched = AtomicU64::new(0);
         let queue = Mutex::new(missing.into_iter());
@@ -1326,7 +1376,8 @@ impl Inner {
             let st = self.st();
             need.iter().filter(|t| !st.has(&build, &t.path)).count()
         };
-        answer(fetched.load(Ordering::Relaxed) as usize, still, still == 0)
+        let outcome = if still == 0 { PrepareOutcome::Done } else { failed() };
+        (answer(fetched.load(Ordering::Relaxed) as usize, still, still == 0), outcome)
     }
 
     /// Least recently used first, the stream cache's tiles that no region uses go until the rest is within the cap (`keep`: the
@@ -1758,10 +1809,9 @@ impl Regions {
     }
 
     /// Before a route is computed: fetch the tiles near its points ([lat, lon]) that are not here yet, within the default
-    /// timeout. Whatever happens, the route goes ahead on the tiles there are.
-    pub fn prepare(&self, points: &[(f64, f64)]) {
-        let pts: Vec<Value> = points.iter().map(|(a, o)| json!([a, o])).collect();
-        let _ = self.inner.stream(&json!({"points": pts, "timeout_ms": DEFAULT_STREAM_TIMEOUT_MS}));
+    /// timeout. Whatever happens, the route goes ahead on the tiles there are; what it came to is returned.
+    pub fn prepare(&self, points: &[(f64, f64)]) -> Prepared {
+        self.inner.stream_points(points, Duration::from_millis(DEFAULT_STREAM_TIMEOUT_MS)).1
     }
 
     /// Stops the download thread (after the tiles in flight) and waits for it.

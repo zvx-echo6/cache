@@ -432,6 +432,28 @@ fn stream_fetches_near_the_route_and_keeps_within_the_cap() {
 }
 
 #[test]
+fn prepare_says_how_the_fetch_ended_and_which_points_still_have_no_tile() {
+    use cache_regions::PrepareOutcome;
+    let srv = Server::start();
+    srv.publish("b1");
+    let t = Tmp::new("prepare");
+    let e = engine(&t.0, &srv, json!({}));
+    // online: the tiles near the point come, nothing is lacking
+    let p = e.prepare(&[(42.6, -113.9)]);
+    assert_eq!((p.outcome, p.lacking.clone(), p.missing), (PrepareOutcome::Done, vec![], 0));
+    // offline: only what is on the device; the second point (far away) has no tile
+    call(&e, "set_policy", json!({"network": false}));
+    let p = e.prepare(&[(42.6, -113.9), (40.1, -100.15)]);
+    assert_eq!(p.outcome, PrepareOutcome::Offline);
+    assert_eq!(p.lacking, vec![1]);
+    assert!(p.missing > 0);
+    // back online, the far point's tile comes
+    call(&e, "set_policy", json!({"network": true}));
+    let p = e.prepare(&[(42.6, -113.9), (40.1, -100.15)]);
+    assert_eq!((p.outcome, p.lacking), (PrepareOutcome::Done, vec![]));
+}
+
+#[test]
 fn an_update_downloads_the_new_build_and_switches_only_when_complete() {
     let srv = Server::start();
     srv.publish("b1");

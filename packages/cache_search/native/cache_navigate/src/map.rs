@@ -291,16 +291,41 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
     Value::Object(o)
 }
 
-/// A failed route is a result, not a crash: `{"ok": false, "errors": [{code, message}]}` (no_route, too_far, out_of_coverage,
-/// route_too_long, upstream_timeout, internal), with the ends that were asked for.
-fn failure(d: &Directions, req: &MapRouteReq) -> Value {
+/// What the app is told about a failed leg, as `(code, end)`. The router's own codes (the model reads those, from `build::route_error`,
+/// unchanged) are re-read here for the people: 154 stays `too_far`; 170, 171, 442 and 443 never are. They are `no_road_data` (with
+/// the end, `from`, `via` or `to`) when a stop of the leg still has no road tile on the device after the fetch, else `no_route`
+/// (or `out_of_coverage` when the router said so, outside the maps' area). `leg` is the leg's stops' positions, `last` the end's.
+pub fn app_error(e: &cache_offroad::directions::DirectionsError, prep: &crate::TilePrep, leg: (usize, usize), last: usize) -> (String, Option<&'static str>) {
+    match e.valhalla_code {
+        Some(170) | Some(171) | Some(442) | Some(443) => {
+            if let Some(i) = [leg.0, leg.1].into_iter().find(|i| prep.lacking.contains(i)) {
+                let end = if i == 0 { "from" } else if i == last { "to" } else { "via" };
+                return ("no_road_data".into(), Some(end));
+            }
+            let code = if e.code == "out_of_coverage" { "out_of_coverage" } else { "no_route" };
+            (code.into(), None)
+        }
+        _ => (e.code.clone(), None),
+    }
+}
+
+/// A failed route is a result, not a crash: `{"ok": false, "errors": [{code, message}]}` (no_route, no_road_data with its `end`,
+/// too_far, out_of_coverage, route_too_long, upstream_timeout, internal), with the ends that were asked for.
+fn failure(d: &Directions, req: &MapRouteReq, prep: &crate::TilePrep, leg: (usize, usize), last: usize) -> Value {
     json!({
         "ok": false,
         "route_id": d.route_id,
         "mode": req.mode.name(),
         "from": req.from.json(None),
         "to": req.to.json(None),
-        "errors": d.errors.iter().map(|e| json!({"code": e.code, "message": e.message})).collect::<Vec<_>>(),
+        "errors": d.errors.iter().map(|e| {
+            let (code, end) = app_error(e, prep, leg, last);
+            let mut o = json!({"code": code, "message": e.message});
+            if let Some(end) = end {
+                o["end"] = json!(end);
+            }
+            o
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -310,15 +335,15 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut stops: Vec<&MapEnd> = vec![&req.from];
     stops.extend(req.via.iter());
     stops.push(&req.to);
-    core.prepare_tiles(&stops.iter().map(|e| (e.lat, e.lon)).collect::<Vec<_>>());
+    let prep = core.prepare_tiles(&stops.iter().map(|e| (e.lat, e.lon)).collect::<Vec<_>>());
     let mut legs: Vec<Directions> = Vec::new();
     let mut have_offroad = false;
-    for pair in stops.windows(2) {
+    for (i, pair) in stops.windows(2).enumerate() {
         let nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
         let (d, h) = core.navigate(nr)?;
         have_offroad = h;
         if !d.ok {
-            return Ok((failure(&d, req), vec![]));
+            return Ok((failure(&d, req, &prep, (i, i + 1), stops.len() - 1), vec![]));
         }
         legs.push(d);
     }

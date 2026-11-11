@@ -553,6 +553,7 @@ class NavState extends ChangeNotifier {
       'no_route' => 'No way found between these places',
       'too_far' => 'These places are too far apart for one trip',
       'out_of_coverage' => 'One of these places is outside the downloaded maps',
+      'no_road_data' => "Road data for this trip isn't on this device yet. Connect and try again.",
       'route_too_long' => 'The off-road part of this trip is too long to work out',
       'upstream_timeout' => 'Working out the route took too long. Try again',
       'not_set_up' => 'Off-road needs off-road data for this area',
