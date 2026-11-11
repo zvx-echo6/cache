@@ -448,6 +448,41 @@ class CarOverlayTest {
         }
     }
 
+    // ---- the mini map's destination ---------------------------------------------------------------------------------------
+
+    @Test
+    fun theMiniMapsDestinationIsAPlainDotEvenWhenTheSteepestClimbIsAtTheEnd() {
+        val pal = trip("parchment").palette!!.night
+        val box = RectF(0f, 0f, 220f, 140f)
+        fun paint(ov: CarOverview): Bitmap {
+            val bmp = Bitmap.createBitmap(220, 140, Bitmap.Config.ARGB_8888)
+            CarOverlayPainter.drawMiniMap(Canvas(bmp), box, ov, pal, 1f)
+            return bmp
+        }
+        // The steepest climb ends at the destination (as on the simulator's route): its pill is left out, so 11 px right of
+        // the dot's middle (inside where the pill would be, outside the dot) is the card, and the middle is the dot.
+        val base = sampleOverview()
+        val mid = CarOverview.from(base)!!
+        val atEnd = CarOverview.from(base + ("steep" to mapOf("lat" to mid.destLat, "lon" to mid.destLon, "gradePct" to 9.0)))!!
+        val end = CarOverlayPainter.project(atEnd.points + listOf(doubleArrayOf(atEnd.steepLat!!, atEnd.steepLon!!)), box, 24f)[atEnd.points.size - 1]
+        val a = paint(atEnd)
+        assertEquals(pal.destDot, a.getPixel(end[0].toInt(), end[1].toInt()))
+        assertEquals(pal.miniBg, a.getPixel(end[0].toInt() + 11, end[1].toInt()))
+        assertEquals(pal.miniBg, a.getPixel(end[0].toInt(), end[1].toInt() - 9))
+        // A steep point away from the destination keeps its pill.
+        val px = CarOverlayPainter.project(mid.points + listOf(doubleArrayOf(mid.steepLat!!, mid.steepLon!!)), box, 24f)
+        val b = paint(mid)
+        assertEquals(pal.badge, b.getPixel(px.last()[0].toInt() + 11, px.last()[1].toInt()))
+        assertEquals(pal.destDot, b.getPixel(px[mid.points.size - 1][0].toInt(), px[mid.points.size - 1][1].toInt()))
+
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(100f, 100f), 1f))
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(118f, 110f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(123f, 100f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(100f, 119f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(200f, 200f), floatArrayOf(246f, 200f), 2f))
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(200f, 200f), floatArrayOf(240f, 200f), 2f))
+    }
+
     // ---- texts and geometry ---------------------------------------------------------------------------------------------
 
     @Test

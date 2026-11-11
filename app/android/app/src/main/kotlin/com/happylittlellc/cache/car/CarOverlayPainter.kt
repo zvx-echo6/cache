@@ -8,6 +8,7 @@ import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -331,6 +332,18 @@ object CarOverlayPainter {
         pts.forEachIndexed { i, p -> if (i == 0) moveTo(p[0], p[1]) else lineTo(p[0], p[1]) }
     }
 
+    /** The destination dot's radius on the mini map. */
+    const val MINI_DEST_R = 6f
+
+    /** Whether the mini map's grade pill (28 x 20, see [drawBadge]) at [steep] stays off the destination dot at [dest]. When
+     * the steepest climb is at the end of the route the pill would lie under the dot, and the two together read as a pale
+     * oval with a dot in it instead of a destination; the pill is then left out (the main map's badge and the climb card
+     * still show the grade). */
+    fun miniBadgeFits(steep: FloatArray, dest: FloatArray, d: Float): Boolean {
+        val gap = 2f
+        return abs(steep[0] - dest[0]) >= (14f + MINI_DEST_R + gap) * d || abs(steep[1] - dest[1]) >= (10f + MINI_DEST_R + gap) * d
+    }
+
     fun drawMiniMap(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float) {
         val radius = 14f * d
         canvas.drawRoundRect(r, radius, radius, fill(pal.miniBg))
@@ -345,14 +358,15 @@ object CarOverlayPainter {
         canvas.drawPath(poly(route), stroke(pal.route, 5f * d))
         val driven = cut(route, ov.drivenFraction)
         if (driven.size >= 2) canvas.drawPath(poly(driven), stroke(pal.routeDriven, 5f * d))
+        val end = route.last()
         if (extra.isNotEmpty() && ov.steepGradePct != null) {
             val s = px.last()
-            drawBadge(canvas, s[0], s[1], null, pal, d)
+            if (miniBadgeFits(s, end, d)) drawBadge(canvas, s[0], s[1], null, pal, d)
         }
         val start = route.first()
         canvas.drawCircle(start[0], start[1], 5f * d, fill(pal.startDot))
-        val end = route.last()
-        canvas.drawCircle(end[0], end[1], 6f * d, fill(pal.destDot))
+        // The destination: a plain dot at the end of the line.
+        canvas.drawCircle(end[0], end[1], MINI_DEST_R * d, fill(pal.destDot))
         val here = driven.last()
         canvas.drawCircle(here[0], here[1], 8f * d, fill(pal.posFill))
         canvas.drawCircle(here[0], here[1], 8f * d, stroke(pal.posRing, 3f * d))
