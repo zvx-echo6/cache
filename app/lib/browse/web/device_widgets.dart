@@ -99,7 +99,7 @@ class DeviceLibraryTop extends StatelessWidget {
       listenable: device,
       builder: (context, _) {
         final up = device.upload;
-        final shown = [for (final j in device.jobs) if (j.active || j.failed) j];
+        final shown = [for (final j in device.jobs) if (j.active || j.paused || j.failed) j];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -176,6 +176,20 @@ class DeviceLibraryTop extends StatelessWidget {
         actions: [
           TextButton(key: ValueKey('retry-${j.id}'), onPressed: () => device.retry(j), child: const Text('Try again')),
           _cancel(ValueKey('dismiss-${j.id}'), 'Dismiss', () => device.cancelJob(j)),
+        ],
+      );
+    }
+    if (j.paused) {
+      // Paused keeps its part file on the device: it stays on screen with a way on (Resume) and a way out (Remove, which cancels it
+      // on the device, where the part file is then deleted).
+      return TransferCard(
+        cardKey: ValueKey('job-${j.id}'),
+        title: title,
+        line: j.total > 0 ? 'Paused · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}' : 'Paused · ${formatBytes(j.bytes)}',
+        fraction: j.fraction,
+        actions: [
+          TextButton(key: ValueKey('resume-${j.id}'), onPressed: () => device.resumeJob(j), child: const Text('Resume')),
+          TextButton(key: ValueKey('remove-${j.id}'), onPressed: () => device.cancelJob(j), child: const Text('Remove')),
         ],
       );
     }
