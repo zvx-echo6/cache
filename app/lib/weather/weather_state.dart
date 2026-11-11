@@ -1409,6 +1409,8 @@ class WeatherState extends ChangeNotifier {
   SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
     final le = g['last_error'];
     final fetched = DateTime.tryParse('${g['fetched_at']}');
+    // A kept answer's "expired" is as of when the core gave it: it is worked out again from the time the data runs to.
+    final until = DateTime.tryParse('${g['valid_until']}');
     return SourceView(
       source: c,
       place: p,
@@ -1423,7 +1425,7 @@ class WeatherState extends ChangeNotifier {
       // A kept answer's age is worked out again: it is older now than when the core said it.
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
-      expired: g['expired'] == true,
+      expired: g['expired'] == true || (kept && until != null && _now().isAfter(until)),
       error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
     );
   }

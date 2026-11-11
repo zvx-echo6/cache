@@ -1109,6 +1109,27 @@ void main() {
       expect((after.missing, after.error), (true, null));
     });
 
+    // Design read: a kept copy said "expired" as of when it was kept, so at a later start data past its time showed as current
+    // until the core answered.
+    test('what is kept says whether it has expired as of now, not as of when it was kept', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 17)); // 11:00 at the place
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['openmeteo-forecast'] = {...forecast(), 'valid_until': '2026-10-27T00:00:00-06:00'};
+      h.core.stored['nws-alerts-point'] = {'fetched_at': '2026-10-26T10:50:00-06:00', 'valid_until': '2026-10-26T16:50:00-06:00', 'age': '10 minutes old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      final card = await h.weather.homeCard();
+      expect((card.expired, card.alertsExpired), (false, false));
+      expect(h.weather.homeCardNow()?.expired, isFalse, reason: 'kept, and still inside its time');
+      // the next start is two days later; the core has not answered yet
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 28, 17));
+      h.core.busy = Completer<void>();
+      final now = h.weather.homeCardNow()!;
+      expect((now.expired, now.alertsExpired), (true, true));
+      expect([for (final v in h.weather.keptViewFor(h.weather.homePlaceNow()!)!) v.expired], [true, true]);
+      h.core.busy!.complete();
+    });
+
     // 1.1 audit: the core answers with an empty list when nothing is active (it leaves out what has ended). That answer did
     // not replace a kept one that had items, so a warning that ended came back at every start until the core answered.
     test('a warning that has ended does not come back from what is kept: an answer with none replaces it', () async {
