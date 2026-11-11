@@ -108,11 +108,10 @@ jobs:
         uses: ./.github/actions/pinned-downloads
         with:
           names: >-
-            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz pdfium-chromium-7811-android-arm.tgz
-            pdfium-chromium-7811-android-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
-            sqlite3-3.5.2-libsqlite3.arm.android.so sqlite3-3.5.2-libsqlite3.x64.android.so
+            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz
+            sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
       - name: Seed the build hooks
-        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64 android-arm android-x64
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -190,7 +189,7 @@ jobs:
           flutter pub get
           # Test builds never edit pubspec.yaml: the build number comes from the run number, so it rises with each run and is
           # above every number already installed.
-          flutter build apk --release --build-number=$((100000 + GITHUB_RUN_NUMBER))
+          flutter build apk --release --target-platform android-arm64 --build-number=$((100000 + GITHUB_RUN_NUMBER))
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
       - name: Verify the APK

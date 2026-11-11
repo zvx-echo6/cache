@@ -10,7 +10,7 @@
 # Native parts:
 #   routing  Valhalla 3.7.0 + the C shim, libvalhalla_shim.so for arm64-v8a (cached; the app finds it in its native library folder)
 #   app      flutter build appbundle: Gradle builds the Rust search core with cargo-ndk (arm64-v8a, with libzim) and llama.cpp
-#            with the NDK (arm64-v8a, x86_64); Rust, libzim and Gradle are cached
+#            with the NDK (arm64-v8a); Rust, libzim and Gradle are cached
 #   play     upload to Play, only the new release on each track (anything halted, staged or drafted cleared), with the chosen
 #            status and the release notes, commit, then read every track back and fail unless each shows the new release
 name: Android Play
@@ -189,11 +189,10 @@ jobs:
         uses: ./.github/actions/pinned-downloads
         with:
           names: >-
-            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz pdfium-chromium-7811-android-arm.tgz
-            pdfium-chromium-7811-android-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
-            sqlite3-3.5.2-libsqlite3.arm.android.so sqlite3-3.5.2-libsqlite3.x64.android.so
+            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz
+            sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
       - name: Seed the build hooks
-        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64 android-arm android-x64
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -268,7 +267,7 @@ jobs:
           flutter --version
           flutter pub get
           flutter test --no-pub
-          flutter build appbundle --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
+          flutter build appbundle --release --target-platform android-arm64 --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.aab"
       - name: Verify the signed bundle
