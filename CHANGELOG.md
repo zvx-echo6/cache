@@ -9,6 +9,7 @@ release notes).
 ### Changed
 - Notebooks: notebook sync keeps each notebook in its own folder under one id, so a notebook has the same id on every linked device and a rename on one device is a rename on the others; on update the share is converted once (the old folders go), and a device that has not updated Cache does not sync notebooks until it does
 - Sharing: a linked device on an older or newer Cache shows Version mismatch and nothing syncs until both match; Check again re-checks.
+
 ### New
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
@@ -26,6 +27,7 @@ release notes).
 - Home: a phone that is already set up no longer shows the Set up Cache card for a moment when Cache opens
 - Ask: Stop now works while Ask is searching or reading, not only while the answer is being written
 - Sharing and sync: a file dated in the future now syncs; a damaged links file no longer loses your linked devices; and syncing starts again by itself after an internal error
+
 
 ### New
 - Sharing: after linking, one answer sets how settings sync on both devices, and you can take the other device's settings.
@@ -48,6 +50,7 @@ release notes).
 - Sharing and sync: after Cache updates on an iPhone, syncing works again (it kept looking in the app's old folders); while it rechecks a moved folder, nothing is deleted
 - Storage: free space is shown correctly on iPhone, and downloads and sync keep space in reserve and clean up if storage runs out
 
+
 ### New
 - Sharing and sync: each linked device shows when it was last seen, and Unlink asks once to confirm
 - Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
@@ -55,6 +58,7 @@ release notes).
 ## 1.1.0 (build 47, test) - 2026-11-09
 
 This build covers everything new since the public release 1.0.29.
+
 
 ### New
 - Library: the new Library has ZIM Collections, Bookshelves, the Catalog and the Cache guide (with What's new and Credits)
@@ -75,6 +79,7 @@ This build covers everything new since the public release 1.0.29.
 - Known: Ask sometimes offers to search instead of searching
 
 ## 1.0.30 (unreleased, test)
+
 
 ### New
 - Library: search reaches inside the PDFs, EPUBs and video captions in your ZIMs, and an answer cites the exact PDF page, EPUB chapter or moment in the video
@@ -99,6 +104,7 @@ This build covers everything new since the public release 1.0.29.
 ## 1.0.29 - 2026-11-01
 
 The changes of 1.0.1 to 1.0.28 are listed here too; they had no sections of their own.
+
 
 ### New
 - Emergency alerts: official FEMA IPAWS alerts for your area, along with the weather alerts
@@ -250,6 +256,7 @@ The changes of 1.0.1 to 1.0.28 are listed here too; they had no sections of thei
 
 ## 1.0.0 (iOS build 21, Android 3) - 2026-10-28
 
+
 ### New
 - Find and download models from Hugging Face
 - Weather module with forecast, alerts and wildfires for your places
@@ -272,6 +279,7 @@ The changes of 1.0.1 to 1.0.28 are listed here too; they had no sections of thei
 - Settings are always saved whole
 
 ## 1.0.0 (iOS build 18, Android 2) - 2026-10-28
+
 
 ### New
 - New Cache look, icons and themes
