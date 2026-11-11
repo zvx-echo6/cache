@@ -409,6 +409,8 @@ class AppState extends ChangeNotifier {
     // The bench's options come before the load: the pre-read rate is a load option (0 when the bench set nothing).
     benchOptions = await _bench();
     logInfo('Bench options: $benchOptions');
+    benchDateOffsetDays = benchOptions.dateOffsetDays;
+    if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
     return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps);
   }
 

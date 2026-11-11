@@ -27,10 +27,12 @@ class MainActivity : FlutterActivity() {
     // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
     // build nothing is read and the channel answers zeros.
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+    private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+        if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -156,6 +158,8 @@ class MainActivity : FlutterActivity() {
                         val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
                         val mbps = benchPrereadMbps
                         if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        val days = benchDateOffsetDays
+                        if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
                         result.success(out)
                     }
                     else -> result.notImplemented()

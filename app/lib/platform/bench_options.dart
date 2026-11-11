@@ -8,15 +8,19 @@ import 'package:flutter/services.dart';
 /// (MainActivity, BuildConfig.TEST_APK); every other build answers nothing, so the app's default applies.
 @immutable
 class BenchOptions {
-  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps});
+  const BenchOptions({this.prereadMbps = kDefaultPrereadMbps, this.dateOffsetDays = 0});
 
   /// The native gentle pre-read's rate in MB/s: [kDefaultPrereadMbps] unless the extra was given; 0 turns it off.
   final int prereadMbps;
 
+  /// `--ei cache_date_offset_days N`: shifts the date line of the chat's system prompt by N days (so a phone check sees a new
+  /// day's prompt start). Nothing else changes. 0: no shift.
+  final int dateOffsetDays;
+
   static const BenchOptions off = BenchOptions();
 
   @override
-  String toString() => 'preread_mbps=$prereadMbps';
+  String toString() => 'preread_mbps=$prereadMbps${dateOffsetDays != 0 ? ', date_offset_days=$dateOffsetDays' : ''}';
 }
 
 const MethodChannel kBenchChannel = MethodChannel('cache/bench');
@@ -29,8 +33,17 @@ Future<BenchOptions> readBenchOptions({MethodChannel channel = kBenchChannel, bo
     final m = await channel.invokeMethod<Object?>('get');
     if (m is! Map) return BenchOptions.off;
     final mbps = m['preread_mbps'];
-    return mbps is int && mbps >= 0 ? BenchOptions(prereadMbps: mbps) : BenchOptions.off;
+    // The date extra counts only when the build says it is the test APK (the release build never sends it).
+    final days = m['date_offset_days'];
+    return BenchOptions(
+      prereadMbps: mbps is int && mbps >= 0 ? mbps : kDefaultPrereadMbps,
+      dateOffsetDays: m['testApk'] == true && days is int ? days : 0,
+    );
   } catch (_) {
     return BenchOptions.off;
   }
 }
+
+/// The date shift of the chat's system prompt now (see [BenchOptions.dateOffsetDays]), set when the bench options are read at a model
+/// load. Always 0 outside the test APK.
+int benchDateOffsetDays = 0;

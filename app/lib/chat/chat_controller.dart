@@ -18,6 +18,7 @@ import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
 import '../platform/app_log.dart';
+import '../platform/bench_options.dart' show benchDateOffsetDays;
 
 /// One message in the Ask screen.
 class ChatMessage {
@@ -334,7 +335,7 @@ class ChatController extends ChangeNotifier {
       tools: tools,
       numbering: numbering,
       host: newHost?.call(numbering),
-      systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false, voice: _voice),
+      systemPrompt: () => buildSystemPrompt(now: DateTime.now().add(Duration(days: benchDateOffsetDays)), locationKnown: locationKnown?.call() ?? false, voice: _voice),
       timeLine: () => buildTimeLine(DateTime.now()),
       history: history,
       knownResults: cited.values,
