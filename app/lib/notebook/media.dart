@@ -147,6 +147,8 @@ Future<T> withStagedFiles<T>(List<({String name, Uint8List bytes})> files, Futur
       // Only the file's own name (the core goes by its extension); the folder keeps files of one pick apart.
       final base = files[i].name.split(RegExp(r'[\\/]')).last.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
       final rel = '$dir/$i/${base.isEmpty ? 'file' : base}';
+      // Writing does not make the folders it writes into.
+      await fs.mkdir(AppRoot.support, '$dir/$i');
       await fs.writeBytesAtomic(AppRoot.support, rel, files[i].bytes);
       paths.add('$root/$rel');
     }
