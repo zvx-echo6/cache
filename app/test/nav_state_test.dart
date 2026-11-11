@@ -543,4 +543,40 @@ void main() {
       expect(speaker.said.any((s) => s.contains('climbing')), isTrue);
     });
   });
+
+  group('when guidance is over', () {
+    MapPlace spot(String id, String name, double lat, double lon) =>
+        MapPlace(id: id, type: 'place', name: name, kind: '', lat: lat, lon: lon, matched: 'name');
+
+    /// Guidance running on a route to a made-up place, from the stand-in route's own start.
+    Future<Map<String, dynamic>> guideTo(String name) async {
+      final json = fakeRouteJson(name: name);
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(json);
+      await nav.openDirections(spot('place:20', name, 42.5, -113.5));
+      await nav.start();
+      return json;
+    }
+
+    test('a second request after guidance uses the phone\'s current position, not the last fix of the trip', () async {
+      final json = await guideTo('Juniper Depot');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(json, 0.5)));
+      gps.controller.add(fixAt(42.5, -113.65, heading: 90));
+      await settle();
+      expect(nav.here!.lon, -113.65, reason: 'while guiding, directions start at the guidance fix');
+      await nav.end();
+      expect(nav.lastFix, isNull);
+      // The phone goes somewhere else with no guidance running.
+      location.publish(fixAt(42.7, -113.9));
+      expect(nav.here!.lat, 42.7);
+      expect(nav.here!.lon, -113.9);
+      final next = spot('place:21', 'Quartz Landing', 42.7, -113.9);
+      expect(nav.distanceFromHere(next), closeTo(0, 0.01), reason: 'a place card measures from the phone too');
+      await nav.openDirections(next);
+      expect(backend.froms.last!['lat'], 42.7);
+      expect(backend.froms.last!['lon'], -113.9);
+      expect(nav.routeStart!.lat, 42.7);
+      expect(nav.routeStart!.lon, -113.9);
+    });
+  });
 }
