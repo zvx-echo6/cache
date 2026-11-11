@@ -435,6 +435,12 @@ class ModelDownloads extends ChangeNotifier {
   /// The server has the search model.
   bool get searchModelReady => _searchReady;
 
+  /// The download whose failure [error] tells, when the server's list said it (null: nothing, or a request the server refused).
+  String? _errorOf;
+
+  /// Downloads this page asked for whose failure it has not told yet: a failure is told once, by the download that failed.
+  final Set<String> _asked = {};
+
   /// The search model is on this device (a browser: on the server).
   bool get hasSearchModel => _server != null ? _searchReady : app.searchModel != null;
 
@@ -516,12 +522,20 @@ class ModelDownloads extends ChangeNotifier {
           failed[d.name] = why;
           if (search) {
             searchModelError = why;
-          } else {
+          } else if (_asked.remove(d.name) || (before[d.name]?.active ?? false)) {
+            // The message is told when this download stops: not again at every look, over a later download, or in a page opened
+            // afterwards (the server keeps a failed download listed). Its row says "Stopped" for as long as it is listed.
             error = why;
+            _errorOf = d.name;
           }
       }
       if (d.state != 'paused') paused.remove(d.name);
       if (d.state != 'failed' && d.state != 'done') failed.remove(d.name);
+    }
+    // the failed download was tried again or removed (here or in another page): its message goes with it
+    if (_errorOf != null && _remote[_errorOf!]?.state != 'failed') {
+      error = null;
+      _errorOf = null;
     }
     current = now;
     if (_pausing != null && _remote[_pausing!]?.state != 'running' && _remote[_pausing!]?.state != 'verifying') _pausing = null;
@@ -536,6 +550,7 @@ class ModelDownloads extends ChangeNotifier {
     paused.remove(name);
     failed.remove(name);
     _known[name] = f;
+    _asked.add(name);
     // The row changes on the frame of the tap, before the mobile-data check and the server's answer.
     _starting.add(name);
     notifyListeners();
@@ -543,6 +558,7 @@ class ModelDownloads extends ChangeNotifier {
       searchModelError = null;
     } else {
       error = null;
+      _errorOf = null;
       blocked = null;
       finished = null;
     }
@@ -550,6 +566,7 @@ class ModelDownloads extends ChangeNotifier {
       await policy?.checkDownload(anyway: anyway);
     } on MobileDataBlocked catch (b) {
       _starting.remove(name);
+      _asked.remove(name);
       if (search) {
         searchModelError = b.message;
       } else {
@@ -569,6 +586,7 @@ class ModelDownloads extends ChangeNotifier {
         await server.add(f, search: withSearch);
       }
     } on ServerModelsException catch (e) {
+      _asked.remove(name);
       failed[name] = e.message;
       if (search) {
         searchModelError = e.message;
@@ -603,6 +621,11 @@ class ModelDownloads extends ChangeNotifier {
     final name = f.fileName;
     paused.remove(name);
     failed.remove(name);
+    _asked.remove(name);
+    if (_errorOf == name) {
+      error = null;
+      _errorOf = null;
+    }
     if (waiting?.fileName == name) {
       waiting = null;
       blocked = null;

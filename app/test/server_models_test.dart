@@ -191,6 +191,35 @@ void main() {
     expect(d.error, contains('Hugging Face account'));
   });
 
+  test('a failure is told by the download that failed: not over a later download, not after a reload, and it goes when that download is removed', () async {
+    await d.start(_hf);
+    fake.jobs['tiny-Q4.gguf'] = {'name': 'tiny-Q4.gguf', 'state': 'failed', 'done': 5, 'total': 1000, 'error': 'The connection failed: reset'};
+    await d.refreshRemote();
+    expect(d.error, 'The connection failed: reset');
+    // a second download starts: the server still lists the first as failed
+    await d.start(_direct);
+    expect(d.error, isNull);
+    await d.refreshRemote();
+    await d.refreshRemote();
+    expect(d.error, isNull, reason: 'the first download\'s failure is not told over the second');
+    expect(d.stateOf(_hf).phase, DlPhase.failed, reason: 'its own row still says it stopped');
+    expect(d.stateOf(_direct).phase, DlPhase.waiting);
+    // the page is loaded again
+    final again = ModelDownloads(app: app, server: server, searchModel: _search);
+    addTearDown(again.dispose);
+    await again.refreshRemote();
+    expect(again.error, isNull, reason: 'an old failure is not told again');
+    // tried again and failed again: told again, and removed with the download
+    await d.resume(_hf);
+    expect(d.error, isNull);
+    fake.jobs['tiny-Q4.gguf'] = {'name': 'tiny-Q4.gguf', 'state': 'failed', 'done': 5, 'total': 1000, 'error': 'The download site answered 503.'};
+    await d.refreshRemote();
+    expect(d.error, 'The download site answered 503.');
+    await d.remove(_hf);
+    expect(d.error, isNull);
+    expect(d.stateOf(_hf).phase, DlPhase.idle);
+  });
+
   test('a refused request ends in a failed row, not a thrown error', () async {
     fake.failWith = 403;
     await d.start(_hf);
