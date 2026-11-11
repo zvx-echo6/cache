@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Notebooks and Maps: a notebook has a map icon and a color, and each place can have its own icon and color; pick them from a searchable icon set, and choose how pins look in Settings > Maps > Pin style (Icon, Teardrop or Badge). A place's icon, color and Show on map now sync between your devices
 - Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
 - Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
 - Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are

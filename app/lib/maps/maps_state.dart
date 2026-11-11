@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../app_fs.dart';
+import '../notebook/map_icons.dart' show RecentIcons;
+import '../notebook/pin_image.dart' show PinStyle;
 import 'geo.dart';
 import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
@@ -71,6 +73,25 @@ class MapsState extends ChangeNotifier {
   SavedCamera? savedCamera;
   FollowMode follow = FollowMode.free;
 
+  /// How pins draw (Maps settings > Pin style). Per device, not synced.
+  PinStyle pinStyle = PinStyle.icon;
+
+  /// The map icons last chosen, newest first (the icon picker's Recent). Per device, not synced.
+  RecentIcons recentIcons = const RecentIcons();
+
+  void setPinStyle(PinStyle s) {
+    if (s == pinStyle) return;
+    pinStyle = s;
+    _save();
+    notifyListeners();
+  }
+
+  /// A map icon was chosen: it goes to the top of Recent.
+  void iconUsed(String id) {
+    recentIcons = recentIcons.used(id);
+    _save();
+  }
+
   /// What the map shows right now (set by the map screen), for "This region" downloads.
   GeoBounds? viewBounds;
 
@@ -115,6 +136,9 @@ class MapsState extends ChangeNotifier {
         if (seen is List) _seen.addAll(seen.cast<String>());
         final defs = j['definitions'];
         if (defs is Map) _definitions..clear()..addAll({for (final e in defs.entries) e.key as String: e.value == true});
+        pinStyle = PinStyle.byName(j['pin_style']);
+        final ri = j['recent_icons'];
+        if (ri is List) recentIcons = RecentIcons([for (final x in ri) if (x is String) x].take(12).toList());
         final c = j['camera'];
         if (c is Map) {
           savedCamera = SavedCamera((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble(), (c['zoom'] as num).toDouble());
@@ -298,6 +322,7 @@ class MapsState extends ChangeNotifier {
   String get styleKey => [
         for (final u in uses) '${u.def.id}:${u.opacity.toStringAsFixed(2)}',
         engine.ready ? 'ready' : 'wait',
+        'pins-${pinStyle.name}',
         // The connection came back: the style is applied again with new source addresses, so blank tiles are asked for again.
         'net${engine.sourcesGeneration}',
         for (final l in engine.layers) l.styleSignature,
@@ -315,6 +340,7 @@ class MapsState extends ChangeNotifier {
       layers: uses,
       tilesUrl: (d) => engine.tilesUrl(d.id),
       glyphsUrl: glyphsUrl,
+      pinStyle: pinStyle,
     );
     return jsonEncode(style);
   }
@@ -403,6 +429,8 @@ class MapsState extends ChangeNotifier {
         'opacity': _opacity,
         'definitions': _definitions,
         'seen': _seen.toList(),
+        'pin_style': pinStyle.name,
+        'recent_icons': recentIcons.ids,
         if (savedCamera != null)
           'camera': {'lat': savedCamera!.lat, 'lon': savedCamera!.lon, 'zoom': savedCamera!.zoom},
       }));

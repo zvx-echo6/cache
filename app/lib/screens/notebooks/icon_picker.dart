@@ -2,26 +2,31 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../maps/maps_state.dart';
 import '../../notebook/map_icons.dart';
-import '../../notebook/notebook_model.dart' show NbEntry;
 import '../../notebook/place_style.dart';
-import '../../notebook/pin_image.dart' show glyphOn;
+import '../../notebook/pin_image.dart';
 import '../../theme.dart';
 
-/// What the screens need to offer map icons (null leaves the icon controls out, as before): the icons chosen lately, and what to do
-/// when the icon of a place that is only being viewed changes (the view saves it at once; the edit screens save with Save).
+/// What the screens need to offer map icons: the icons chosen lately and the pin style, both kept per device (MapsState).
 class MapIconSetup {
-  const MapIconSetup({required this.recent, this.onPlaceIcon});
+  const MapIconSetup({required this.recent, required this.pinStyle, this.used});
 
-  final RecentIcons recent;
-  final void Function(NbEntry place, String? icon)? onPlaceIcon;
+  /// Reads the current values when asked, so a change in Settings shows the next time a screen builds.
+  final RecentIcons Function() recent;
+  final PinStyle Function() pinStyle;
+
+  /// An icon was chosen: it goes to the top of Recent.
+  final void Function(String id)? used;
+
+  factory MapIconSetup.of(MapsState maps) => MapIconSetup(recent: () => maps.recentIcons, pinStyle: () => maps.pinStyle, used: maps.iconUsed);
+
+  /// Fixed values (tests and renders).
+  factory MapIconSetup.fixed({RecentIcons recent = const RecentIcons(), PinStyle pinStyle = PinStyle.icon}) => MapIconSetup(recent: () => recent, pinStyle: () => pinStyle);
 }
 
-/// [own] on the light and dark themes; the red of the theme in Tactical (red only).
-Color iconTint(BuildContext context, Color own) {
-  final k = context.t;
-  return k.accent == cacheTokens[CacheThemeId.tactical]!.accent ? k.accent : own;
-}
+/// [own] on the light and dark themes; the red of the theme in Tactical.
+Color iconTint(BuildContext context, Color own) => pinTint(context, own);
 
 /// What the icon picker answers: an icon, or (id null) the reset: "Use notebook icon" on a place, "Use default icon" on a
 /// notebook. Null from the sheet means nothing changed.
@@ -186,15 +191,17 @@ class _Disc extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    // Tactical has no white: a chosen icon is a dark disc with a red ring and a red icon.
+    final tactical = isTactical(context);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: filled ? tint : Colors.transparent,
-        border: filled ? null : Border.all(color: k.text.withValues(alpha: 0.6), width: 1.2),
+        color: filled ? (tactical ? const Color(0xFF160505) : tint) : Colors.transparent,
+        border: filled ? (tactical ? Border.all(color: tint, width: 2) : null) : Border.all(color: k.text.withValues(alpha: 0.6), width: 1.2),
       ),
-      child: Icon(icon, size: size * 0.6, fill: filled ? 1 : 0, weight: filled ? 500 : 400, color: filled ? glyphOn(tint) : k.text),
+      child: Icon(icon, size: size * 0.6, fill: filled ? 1 : 0, weight: filled ? 500 : 400, color: filled ? (tactical ? tint : glyphOn(tint)) : k.text),
     );
   }
 }
@@ -210,8 +217,11 @@ class PlaceIconButton extends StatelessWidget {
     required this.notebookName,
     required this.tint,
     required this.recent,
+    required this.pinStyle,
     required this.onChanged,
   });
+
+  final PinStyle pinStyle;
 
   /// The place's own icon, or null.
   final String? overrideId;
@@ -254,7 +264,7 @@ class PlaceIconButton extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              _Disc(icon: shown.icon, tint: tint, filled: overrideId != null, size: 38),
+              PinGlyph(icon: shown.icon, tint: tint, style: pinStyle, size: 40),
               Positioned(
                 right: 3,
                 bottom: 3,
@@ -276,7 +286,9 @@ class PlaceIconButton extends StatelessWidget {
 /// The notebook settings' "Map icon" row: the icon in the notebook's colour, its name, and the picker on a tap ("Use default
 /// icon" there sends [onChanged] null).
 class MapIconRow extends StatelessWidget {
-  const MapIconRow({super.key, required this.iconId, required this.defaultId, required this.tint, required this.recent, required this.onChanged});
+  const MapIconRow({super.key, required this.iconId, required this.defaultId, required this.tint, required this.recent, required this.pinStyle, required this.onChanged});
+
+  final PinStyle pinStyle;
 
   final String? iconId;
   final String defaultId;
@@ -292,7 +304,7 @@ class MapIconRow extends StatelessWidget {
       key: const ValueKey('notebook-icon'),
       contentPadding: EdgeInsets.zero,
       minTileHeight: 56,
-      leading: _Disc(icon: shown.icon, tint: tint, filled: true, size: 40),
+      leading: SizedBox(width: 44, height: 44, child: Center(child: PinGlyph(icon: shown.icon, tint: tint, style: pinStyle, size: 40))),
       title: const Text('Map icon'),
       subtitle: Text(iconId == null ? '${shown.label} (default)' : shown.label, style: TextStyle(fontSize: 14, color: k.secondary)),
       trailing: const Icon(Icons.chevron_right),
