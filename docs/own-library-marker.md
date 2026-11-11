@@ -12,7 +12,7 @@ ship it.
 | Writer | Where | Can it set `own`? |
 |---|---|---|
 | The app makes a library on the device | `app/lib/sources/libraries_state.dart` `makeBlankLibrary` (writes the file at its end), its only caller `_makeOwn`, with `ownLibrarySettings` | Yes, on purpose: the only writer of `own: true` (`ownLibrarySettings`) |
-| The app adds a library from an archive or a chosen file | `libraries_state.dart` `addFile` writes `settings` (the archive's own settings file, or the file the person picked) | It could have copied an `own` that the archive or file carried. Fixed: `settingsWithoutOwn` removes `own` and `own_default` before the write (test: `libraries_test.dart`) |
+| The app adds a library from an archive or a chosen file | `libraries_state.dart` `addFile` writes `settings` (the archive's own settings file, or the file the person picked) through `settingsForImport` | It PRESERVES `own` from the person's chosen file or archive: restoring or moving an exported own library must leave it theirs to write to (a deliberate act, and prior behaviour). `own_default` is dropped when the device already has another own library, and kept when it has none (tests: `libraries_test.dart`) |
 | The core unpacks an archive | `packages/cache_search/native/cache_search/src/libadd.rs` `unpack`: reads the archive's settings file and removes it from the folder; it writes none | No |
 | The core's blank-library template | `libadd.rs` `template_settings` (written into the template tar) | No (test: `the_template_settings_never_say_own`) |
 | The core's other settings code | `library.rs`, `ingest.rs`, `idxsnap.rs`, `cs_*` calls: read the file or take settings JSON from the caller; none writes the file | No |

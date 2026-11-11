@@ -987,9 +987,13 @@ class LibrariesState extends ChangeNotifier {
         if (p == null) return false;
       }
       if (settings != null) {
-        // `own` says the person made this library on the device (Add PDF writes to it, its keyword snapshot grows by generations): only
-        // the app's own creation (ownLibrarySettings) writes it, so a settings file that came with a downloaded or chosen library never carries it
-        await _writeText('$stagePath$_pathSep$kLibrarySettingsFile', const JsonEncoder.withIndent('  ').convert(settingsWithoutOwn(settings)));
+        // A library that was exported from the person's own one keeps `own` (restoring or moving it must leave it writable: Add PDF
+        // targets it and its keyword snapshot grows by generations). `own_default` (My books) is kept only when this device has no other
+        // own library, as creating one would; otherwise two libraries would both claim to be the default.
+        await _writeText(
+          '$stagePath$_pathSep$kLibrarySettingsFile',
+          const JsonEncoder.withIndent('  ').convert(settingsForImport(settings, deviceHasOtherOwn: ownLibraries.any((l) => l != existing))),
+        );
       }
       t
         ..step = AddStep.swapping
@@ -1401,9 +1405,14 @@ Future<void> extractTarMember(File tarFile, String name, File out, {bool gzipped
   if (!found) throw FileSystemException('$name is not in the archive', tarFile.path);
 }
 
-/// [settings] as they may be written for a library that came from elsewhere (a downloaded or chosen archive, a settings file the
-/// person picked): without `own` and `own_default`, which only [ownLibrarySettings] sets.
-Map<String, dynamic> settingsWithoutOwn(Map<String, dynamic> settings) => {...settings}..remove('own')..remove('own_default');
+/// [settings] as they are written for a library that came from elsewhere (an archive, a settings file the person picked): `own` is kept,
+/// so an exported own library stays theirs to write to; `own_default` is removed when the device already has [deviceHasOtherOwn]
+/// another own library. Only [ownLibrarySettings] makes a new one.
+Map<String, dynamic> settingsForImport(Map<String, dynamic> settings, {required bool deviceHasOtherOwn}) {
+  final s = {...settings};
+  if (deviceHasOtherOwn) s.remove('own_default');
+  return s;
+}
 
 /// The settings of a library the person makes on the device (Add PDF's My books): the blank template's (bge-m3, the usual
 /// fields) with its own id and title, and `"own": true` (`"own_default"` for My books) so it is listed as theirs.
