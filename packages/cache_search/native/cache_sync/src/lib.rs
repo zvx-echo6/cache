@@ -460,6 +460,10 @@ struct Inner {
     stop: AtomicBool,
     /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
     settle_again: Arc<AtomicBool>,
+    /// Files dated in the future (a device with a wrong clock), by share then path: the size and modification time each was
+    /// last seen with, and since when. Their date cannot say whether they are still being written, so they count as settled
+    /// once they have stayed the same for [`SETTLE`]. In memory only; an entry goes when its file settles, changes or goes.
+    settling: Mutex<HashMap<String, HashMap<String, Settling>>>,
     /// The first round has put right what an interrupted write left (see [`Writes`]).
     recovered: AtomicBool,
     /// What never syncs, by share id ([`Config::exclude`]).
@@ -488,6 +492,9 @@ struct Inner {
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
     received: Mutex<HashMap<String, Received>>,
 }
+
+/// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
+type Settling = ((u64, i64), Instant);
 
 pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
@@ -1092,6 +1099,9 @@ impl Inner {
             changed = true;
         }
         let mut unsettled = false;
+        // The files dated in the future that the last rescan held back, and the ones this rescan holds back ([`Inner::settling`]).
+        let watched = self.settling.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
+        let mut watching: HashMap<String, Settling> = HashMap::new();
         let mut writes = self.load_writes(&share.id);
         let writes_before = writes.len();
         // Content whose file here moved, changed or went: if it lives on at another path, the store must read it from there.
@@ -1106,9 +1116,21 @@ impl Inner {
                 continue;
             }
             // Still being written (a copy or a download in progress): left for a later round, so half a file never goes out.
-            if (now_ms() as i64).saturating_sub(key.1) < SETTLE.as_millis() as i64 {
-                unsettled = true;
-                continue;
+            let age = (now_ms() as i64).saturating_sub(key.1);
+            if age < SETTLE.as_millis() as i64 {
+                // A date in the future says nothing about when the file was last written (a wrong clock on the device that
+                // made it): such a file waits until it has been seen unchanged for as long, and no longer.
+                let since = match watched.get(&rel) {
+                    Some(&(k, since)) if k == key => since,
+                    _ => Instant::now(),
+                };
+                if age >= 0 || since.elapsed() < SETTLE {
+                    if age < 0 {
+                        watching.insert(rel.clone(), (key, since));
+                    }
+                    unsettled = true;
+                    continue;
+                }
             }
             let tag = Self::tag_name(&share.id, &rel);
             let added = self
@@ -1133,6 +1155,12 @@ impl Inner {
                 changed = true;
             }
             seen.insert(rel, key);
+        }
+        // Only what is still held back stays watched: a file that settled, changed or went is dropped.
+        if watching.is_empty() {
+            self.settling.lock().unwrap().remove(&share.id);
+        } else {
+            self.settling.lock().unwrap().insert(share.id.clone(), watching);
         }
         // A file still waiting to be written (cut off, to come again) has not gone.
         let gone: Vec<String> = if complete {
@@ -1870,6 +1898,7 @@ impl SyncEngine {
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
+            settling: Mutex::new(HashMap::new()),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
             local_deletes: cfg.local_deletes.clone(),
