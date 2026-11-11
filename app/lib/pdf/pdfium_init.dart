@@ -8,17 +8,26 @@ import 'package:pdfrx/pdfrx.dart';
 /// core finds it in the process).
 String? pdfiumLibraryPath() => Pdfrx.pdfiumModulePath ?? (Platform.isAndroid || Platform.isLinux ? 'libpdfium.so' : null);
 
+Map<String, dynamic> _installFonts(String? lib) => SearchEngine.ingestCall(FfiCsNative.open(), 'probe', {
+      'engines': {'pdfium_lib': ?lib},
+      'fonts': true,
+      'fonts_only': true,
+    });
+
 /// Makes sure the core has given PDFium the process's one font mapper (native, never replaced, usable from any isolate; see
 /// packages/cache_ingest/src/pdfium.rs). Idempotent and quick; the core also does it by itself the first time it uses PDFium. A
 /// failure is not an error here (PDFium then uses its own default fonts).
-Future<void> installNativePdfFonts() async {
+///
+/// [onPdfrxWorker]: where pdfrx is in use the call runs on pdfrx's PDFium worker isolate, so it never overlaps with pdfrx's own PDFium
+/// calls (PDFium is not thread-safe); in the background run, where pdfrx is not started, it runs on a short-lived isolate.
+Future<void> installNativePdfFonts({bool onPdfrxWorker = false}) async {
   final lib = pdfiumLibraryPath();
   try {
-    await Isolate.run(() => SearchEngine.ingestCall(FfiCsNative.open(), 'probe', {
-          'engines': {'pdfium_lib': ?lib},
-          'fonts': true,
-          'fonts_only': true,
-        }));
+    if (onPdfrxWorker) {
+      await PdfrxEntryFunctions.instance.compute(_installFonts, lib);
+    } else {
+      await Isolate.run(() => _installFonts(lib));
+    }
   } catch (_) {
     // the core of an older build has no such call, or PDFium is not there yet
   }
@@ -29,5 +38,5 @@ Future<void> installNativePdfFonts() async {
 /// second engine's (the background run's) replaced the first's.
 Future<void> initPdfium() async {
   await pdfrxFlutterInitialize();
-  await installNativePdfFonts();
+  await installNativePdfFonts(onPdfrxWorker: true);
 }
