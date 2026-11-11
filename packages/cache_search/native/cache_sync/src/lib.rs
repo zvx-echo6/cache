@@ -1451,13 +1451,20 @@ impl Inner {
         found.into_iter().filter(|id| self.shares_with(share, id)).filter_map(|id| id.parse().ok()).collect()
     }
 
+    /// Takes from `from` what is newer there. A file that cannot be fetched or deleted is noted and the rest goes on, so one
+    /// bad file does not hold up its share; only losing the network stops it. A file with no room for it is passed over and
+    /// comes back as the error at the end, so the status still says sync is paused.
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
         let remote = &self.remote_view(&sh.id, remote);
         let mut actions = index::merge(&self.load_index(&sh.id), remote);
         // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
-        if let Some(last) = self.last.get(&sh.id) {
+        let last: &[String] = self.last.get(&sh.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        if !last.is_empty() {
             actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
         }
+        // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
+        let mut held = false;
+        let mut no_room: Option<anyhow::Error> = None;
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -1483,40 +1490,83 @@ impl Inner {
                 }
                 Action::Delete { path, entry } => {
                     let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
-                    let mut idx = self.load_index(&sh.id);
-                    let mut seen = self.load_seen(&sh.id);
-                    // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
-                    if let Ok(m) = std::fs::metadata(&full) {
-                        if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
-                            continue;
+                    let done: Result<()> = async {
+                        let mut idx = self.load_index(&sh.id);
+                        let mut seen = self.load_seen(&sh.id);
+                        // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
+                        if let Ok(m) = std::fs::metadata(&full) {
+                            if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
+                                return Ok(());
+                            }
+                            std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
+                            prune_empty(&sh.path, &full, self.skip(&sh.id));
                         }
-                        std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
-                        prune_empty(&sh.path, &full, self.skip(&sh.id));
+                        let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
+                        seen.remove(&path);
+                        idx.files.insert(path.clone(), entry);
+                        self.store_index(&sh.id, &idx, &seen)?;
+                        self.unmark_writing(&sh.id, &path)?;
+                        self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        Ok(())
                     }
-                    let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
-                    seen.remove(&path);
-                    idx.files.insert(path.clone(), entry);
-                    self.store_index(&sh.id, &idx, &seen)?;
-                    self.unmark_writing(&sh.id, &path)?;
-                    self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                    .await;
+                    if let Err(e) = done {
+                        held = true;
+                        self.note(format!("{} from {}: {e:#}", sh.name, self.peer_name(from)));
+                    }
                 }
-                Action::Fetch { path, entry, conflict } => self.fetch(sh, &path, entry, conflict, from).await?,
+                Action::Fetch { path, entry, conflict } => {
+                    // Not while anything before it is missing: it stays for a later round.
+                    if held && excluded(last, &path) {
+                        continue;
+                    }
+                    match self.fetch(sh, &path, entry, conflict, from).await {
+                        Ok(true) => {}
+                        Ok(false) => held = true,
+                        Err(e) => {
+                            held = true;
+                            let msg = format!("{e:#}");
+                            // With no network it may use nothing else can come either: the round says sync is paused.
+                            if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
+                                return Err(e);
+                            }
+                            if msg.starts_with("Paused:") {
+                                // No room for this one; a smaller file after it may still fit.
+                                if no_room.is_none() {
+                                    no_room = Some(e);
+                                }
+                            } else {
+                                self.note(format!("{} from {}: {msg}", sh.name, self.peer_name(from)));
+                            }
+                        }
+                    }
+                }
             }
         }
-        Ok(())
+        match no_room {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<()> {
+    /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
+    /// the caller knows it has not come yet.
+    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<bool> {
+        #[cfg(feature = "test-hooks")]
+        if std::fs::read_to_string(self.dir.join("fail-fetch")).map(|v| v.trim() == path).unwrap_or(false) {
+            // A file that cannot be fetched: the one `<dir>/fail-fetch` names, for as long as it names it.
+            bail!("test: could not fetch {path}");
+        }
         let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
             self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
-            return Ok(());
+            return Ok(true);
         };
         // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
         // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
         if let Ok(m) = std::fs::metadata(&full) {
             if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
                 self.settle_again.store(true, Ordering::Relaxed);
-                return Ok(());
+                return Ok(false);
             }
         }
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
@@ -1654,7 +1704,7 @@ impl Inner {
         } else if let Some(h) = old_hash.filter(|h| *h != entry_hash) {
             self.repoint(&h, Some(&full)).await;
         }
-        Ok(())
+        Ok(true)
     }
 }
 
