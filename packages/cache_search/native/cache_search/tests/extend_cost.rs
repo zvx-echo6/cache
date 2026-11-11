@@ -53,16 +53,24 @@ fn add_book(svc: &Service, root: &Path, lib: &Path, name: &str, topic: &str, pag
     let pdf = root.join("Inbox").join(format!("{name}.pdf"));
     std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
     std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, &book(topic, pages))).unwrap();
-    let s: Value = serde_json::from_str(&svc.start(&json!({"library_dir": lib, "pdf_path": pdf, "job_dir": root.join("ingest").join(name)}).to_string()).unwrap()).unwrap();
-    let job = s["job"].as_u64().unwrap();
-    loop {
-        let r: Value = serde_json::from_str(&svc.step(&json!({"job": job, "budget_ms": 60_000}).to_string()).unwrap()).unwrap();
-        match r["state"].as_str().unwrap() {
-            "done" => return r["result"]["pieces"].as_u64().unwrap() as usize,
-            "failed" => panic!("failed: {r}"),
-            _ => {}
+    // Windows may refuse a rename for a moment while something else (a virus scan, the search indexer) holds a new file: try again
+    for attempt in 0..6 {
+        let s: Value = serde_json::from_str(&svc.start(&json!({"library_dir": lib, "pdf_path": pdf, "job_dir": root.join("ingest").join(format!("{name}-{attempt}"))}).to_string()).unwrap()).unwrap();
+        let job = s["job"].as_u64().unwrap();
+        loop {
+            let r: Value = serde_json::from_str(&svc.step(&json!({"job": job, "budget_ms": 60_000}).to_string()).unwrap()).unwrap();
+            match r["state"].as_str().unwrap() {
+                "done" => return r["result"]["pieces"].as_u64().unwrap() as usize,
+                "failed" if attempt < 5 && r.to_string().contains("denied") => {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    break;
+                }
+                "failed" => panic!("failed: {r}"),
+                _ => {}
+            }
         }
     }
+    unreachable!()
 }
 
 /// Process CPU seconds (user + system, every thread).
