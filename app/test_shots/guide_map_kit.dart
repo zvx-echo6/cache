@@ -246,8 +246,11 @@ class GuideMaps {
 
   /// The camera the map has: the one it was built with, then every move the screen has asked for since, in order.
   GuideCamera cameraOf(MapLibreMap map, Size size) {
-    final first = map.initialCameraPosition;
-    var cam = _camera ?? GuideCamera(lat: first.target.latitude, lon: first.target.longitude, zoom: first.zoom, bearing: first.bearing);
+    var cam = _camera;
+    if (cam == null) {
+      final first = map.initialCameraPosition!;
+      cam = GuideCamera(lat: first.target.latitude, lon: first.target.longitude, zoom: first.zoom, bearing: first.bearing);
+    }
     for (final u in controller.cameras.skip(_camerasSeen)) {
       cam = cam.after(u as List<dynamic>, size);
     }
