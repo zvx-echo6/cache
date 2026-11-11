@@ -17,7 +17,7 @@ void main() {
     expect(BenchOptions.off.ubatch, 0);
     answer((_) => {'testApk': true});
     expect((await readBenchOptions(android: true)).ubatch, 0);
-    expect(jsonDecode(llamaLoadOptions())['n_ubatch'], 0);
+    expect(jsonDecode(llamaLoadOptions()).containsKey('n_ubatch'), isFalse, reason: 'a normal build\'s options carry no n_ubatch');
   });
 
   test('0 in a non-test build and off Android', () async {
@@ -33,6 +33,6 @@ void main() {
     expect(o.ubatch, 256);
     expect('$o', contains('cache_ubatch=256'));
     expect(jsonDecode(llamaLoadOptions(nUbatch: o.ubatch))['n_ubatch'], 256);
-    expect(jsonDecode(llamaLoadOptions(nUbatch: -5))['n_ubatch'], 0);
+    expect(jsonDecode(llamaLoadOptions(nUbatch: -5)).containsKey('n_ubatch'), isFalse);
   });
 }
