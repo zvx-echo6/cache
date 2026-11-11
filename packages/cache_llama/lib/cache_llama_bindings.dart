@@ -10,6 +10,8 @@ typedef _BufC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int32);
 typedef LlamaBufferCall = int Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _StartC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Int32);
 typedef LlamaStartCall = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef _WarmC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int32, Pointer<Int32>, Pointer<Utf8>, Int32);
+typedef LlamaWarmCall = int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Int32>, Pointer<Utf8>, int);
 typedef _IntHC = Int32 Function(Pointer<Void>);
 typedef LlamaHandleIntCall = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
@@ -25,6 +27,7 @@ class CacheLlamaBindings {
       : clLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_load'),
         clInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_info'),
         clStart = lib.lookupFunction<_StartC, LlamaStartCall>('cl_start'),
+        clWarm = lib.providesSymbol('cl_warm') ? lib.lookupFunction<_WarmC, LlamaWarmCall>('cl_warm') : null,
         clNext = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_next'),
         clPartial = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_partial'),
         clFinish = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_finish'),
@@ -65,6 +68,8 @@ class CacheLlamaBindings {
   final LlamaLoadCall clLoad;
   final LlamaBufferCall clInfo;
   final LlamaStartCall clStart;
+  /// Reads the prompt start ahead (cl_warm); null in an older library.
+  final LlamaWarmCall? clWarm;
   final LlamaBufferCall clNext;
   final LlamaBufferCall clPartial;
   final LlamaBufferCall clFinish;

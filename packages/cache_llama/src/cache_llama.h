@@ -51,6 +51,25 @@ CL_API int cl_info(void * h, char * out_json, int len);
 // caller must not show it: the chat is full).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
 
+// Reads the prompt start ahead, before any question: [request_json] is a request as cl_start takes it but with no user message
+// (the system message, the tools, enable_thinking). It is rendered by the same code as cl_start's, the stable prompt start is
+// found the same way (the tokens the template renders for it with two different one-word questions share), and that start is
+// decoded into the KV cache and saved as a prefix file exactly as cl_start does when it passes the prefix. Unlike cl_start it
+// counts the whole start as stable (this shape is about to be used). It never loads a model and the caller serializes it with
+// cl_start (one handle, one call at a time); cl_stop may end it from any thread (llama.cpp's abort hook and the check between
+// batches apply, as when cl_start reads a prompt): batches decoded whole stay in the cache, a batch aborted midway clears it, and
+// no prefix file is written unless the whole start was decoded.
+// [check_only] non-zero: renders and tokenizes but decodes nothing and changes no cache. [n_tokens] (may be null): the tokens
+// still to read (check_only), read (done) or read before the stop.
+// Returns 0 when the stable start is covered already (the KV cache holds it, or a saved prefix file does: nothing to do),
+// 1 when it needs reading (check_only) or was read, 2 when stopped before it was whole, 3 when there is nothing to read (no
+// prefix folder, no tools, no system message, or a start too short or too long), -1 on error (reason in err).
+CL_API int cl_warm(void * h, const char * request_json, int check_only, int * n_tokens, char * err, int err_len);
+
+// Prompt tokens decoded since the load by cl_start and cl_warm together (tokens taken from the cache or a file are not counted).
+// For tests: a start read ahead and then reused is decoded once.
+CL_API int cl_prompt_decoded(void * h);
+
 // Generate the next token. Writes its UTF-8 text to buf and returns the byte count (may be 0 while an
 // incomplete multi-byte character is held back). Returns -1 when finished, -2 on error.
 CL_API int cl_next(void * h, char * buf, int buf_len);

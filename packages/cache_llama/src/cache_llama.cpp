@@ -63,6 +63,7 @@ struct Handle {
     std::vector<llama_token>  cached;
     int                       n_reused = 0;  // prompt tokens of the last cl_start taken from the cache
     int                       first_token = -1;  // first token of the last cl_start's prompt
+    long long                 prompt_decoded = 0;  // prompt tokens decoded since the load (cl_start and cl_warm), for tests
 
     // Sampling defaults: llama.cpp's own, replaced by what the GGUF recommends (general.sampling.*) at load.
     common_params_sampling    sampling;
@@ -363,6 +364,218 @@ void prune_prefix_files(const std::string & dir) {
     if (files.size() <= kPrefixFiles) return;
     std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
     for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
+}
+
+// ---------------- the prompt start, shared by cl_start and cl_warm ----------------
+// cl_start (a question) and cl_warm (the prompt read ahead, no question yet) render a request through the same code below: the
+// request parsed into template inputs, the stable prompt start found from them (update_probe), the KV cache and the saved
+// prefix files lined up with it (align_cache), and the tokens decoded and the prefix file saved (decode_tokens).
+
+using sclock = std::chrono::steady_clock;
+long long ms_since(sclock::time_point t0) {
+    return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count();
+}
+
+// A request's messages, thinking switch, tools and tool_choice as the chat template takes them.
+common_chat_templates_inputs parse_chat_inputs(const common_json & req) {
+    common_chat_templates_inputs in;
+    in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
+    in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    // Optional top-level "enable_thinking": true|false. Passed to the template as the
+    // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
+    if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
+        in.enable_thinking = req.at("enable_thinking").get<bool>();
+    }
+    if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
+        in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
+    }
+    // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
+    // tool-call grammar off; the tool-call opening tokens then end the generation (below).
+    if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
+        in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
+    }
+    return in;
+}
+
+// The stable prompt start exists only with a prefix folder, tools and a system message.
+bool probe_applies(const Handle * h, const common_chat_templates_inputs & in) {
+    return !h->prefix_dir.empty() && !in.tools.empty() && !in.messages.empty() && in.messages[0].role == "system";
+}
+
+// Finds the prompt start of the request's shape (system prompt + tools + thinking switch), once per shape: the tokens the template
+// renders for the system message and the tools with two different one-word questions, as far as both renderings agree. Sets
+// probe_key, probe_tokens, stable and stable_known. Call only when probe_applies.
+void update_probe(Handle * h, const common_chat_templates_inputs & in, const common_json & req) {
+    const std::string key = in.messages[0].content + '\x1f' + req.at("tools").dump() + '\x1f' + (in.enable_thinking ? "1" : "0");
+    if (key != h->probe_key) {
+        common_chat_templates_inputs pa = in;
+        pa.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+        common_chat_msg u;
+        u.role    = "user";
+        u.content = "a";
+        pa.messages = { in.messages[0], u };
+        auto ta = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+        pa.messages[1].content = "b";
+        auto tb = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+        ta.resize(common_prefix(ta, tb, ta.size()));
+        if (!h->probe_tokens.empty()) {
+            h->stable       = common_prefix(h->probe_tokens, ta, ta.size());
+            h->stable_known = true;
+        } else {
+            h->stable_known = false;  // the first shape since the load: see the saved files (align_cache)
+        }
+        h->probe_key    = key;
+        h->probe_tokens = std::move(ta);
+    } else {
+        h->stable       = h->probe_tokens.size();
+        h->stable_known = true;
+    }
+}
+
+// How many of tokens' first `limit` the KV cache already holds, in order. Changes nothing.
+size_t cache_overlap(const Handle * h, const std::vector<llama_token> & tokens, size_t limit) {
+    const size_t lim = std::min(h->cached.size(), limit);
+    size_t keep = 0;
+    while (keep < lim && h->cached[keep] == tokens[keep]) keep++;
+    return keep;
+}
+
+// The saved prefix file that shares the most tokens with the first `limit` of tokens (best = 0: none).
+struct PrefixHit {
+    size_t      best     = 0;
+    size_t      file_len = 0;
+    std::string path;
+};
+
+PrefixHit best_prefix_file(const Handle * h, const std::vector<llama_token> & tokens, size_t limit) {
+    PrefixHit hit;
+    for (auto & f : prefix_files(h)) {
+        const size_t l = common_prefix(f.second, tokens, limit);
+        if (l > hit.best) {
+            hit.best     = l;
+            hit.path     = f.first;
+            hit.file_len = f.second.size();
+        }
+    }
+    return hit;
+}
+
+// Lines the KV cache up with tokens: keeps what it already holds for the start (the longest common token prefix, at most
+// `limit_tokens`: cl_start always decodes the last prompt token, because the first generated token needs its logits), drops the
+// cache after it, and when the cache does not hold the stable start (`want`: the first question after a load, or a different
+// start before) takes what a saved file shares with the prompt. Returns the tokens now in the cache. `want` may be lowered (the
+// first shape since the load takes the part a saved file shows to be stable). `covered`: a saved file already holds the stable start.
+size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t limit_tokens, size_t & want, bool & covered) {
+    llama_memory_t mem = llama_get_memory(h->ctx);
+    size_t keep = cache_overlap(h, tokens, limit_tokens);
+    if (keep == 0) {
+        llama_memory_clear(mem, true);
+    } else if (keep < h->cached.size() && !llama_memory_seq_rm(mem, 0, (llama_pos) keep, -1)) {
+        // Some caches (sliding-window attention) cannot drop just a tail: start over, correct but slower.
+        llama_memory_clear(mem, true);
+        keep = 0;
+    }
+    h->cached.resize(keep);
+
+    std::error_code fec;
+    covered = true;
+    if (want >= kPrefixMinLen && keep < want) {
+        const PrefixHit hit = best_prefix_file(h, tokens, limit_tokens);
+        const size_t best = hit.best;
+        if (!h->stable_known) {
+            // The first shape since the load: a saved file of this model tells how much of it stayed the same before. With
+            // none, all of it is taken as stable (and saved once).
+            if (!hit.path.empty()) want = std::min(want, best);
+            h->stable       = want;
+            h->stable_known = true;
+        }
+        covered = best >= want;
+        if (best > keep && best >= kPrefixMinLen) {
+            const auto t0 = sclock::now();
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            keep = 0;
+            std::vector<llama_token> got(hit.file_len);
+            size_t n_got = 0;
+            const size_t rd = llama_state_seq_load_file(h->ctx, hit.path.c_str(), 0, got.data(), got.size(), &n_got);
+            const bool loaded = rd > 0 && n_got == hit.file_len && std::equal(got.begin(), got.begin() + (long) best, tokens.begin());
+            if (loaded && (n_got == best || llama_memory_seq_rm(mem, 0, (llama_pos) best, -1))) {
+                h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
+                keep = best;
+                std::filesystem::last_write_time(hit.path, std::filesystem::file_time_type::clock::now(), fec);
+                h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+            } else {
+                llama_memory_clear(mem, true);
+                if (!loaded) std::filesystem::remove(hit.path, fec);
+                covered = false;
+                h->prefix_note = loaded ? "Prompt prefix file could not be trimmed; the prompt is read as usual"
+                                        : "Prompt prefix file did not load and was removed; the prompt is read as usual";
+            }
+            cl_logi("%s", h->prefix_note.c_str());
+        }
+    }
+    return keep;
+}
+
+// Decodes tokens[from, to) into the KV cache, in batches of 512 (with in_prefill set, so llama.cpp's abort hook obeys `stop`), and
+// saves the prefix file (tokens[0, prefix)) when `save` and the decode passes `prefix`. Returns 0 when done, 1 when stopped
+// between batches (every batch so far was decoded whole and is in `cached`), 2 when aborted inside a batch (its state in the cache
+// is not known, so the cache is cleared and nothing is saved as a prefix), -1 when a decode failed (cache cleared). `reached`: the
+// tokens decoded up to.
+int decode_tokens(Handle * h, const std::vector<llama_token> & tokens, size_t from, size_t to, bool save, size_t prefix,
+                  const std::string & prefix_file, size_t & reached) {
+    llama_memory_t mem = llama_get_memory(h->ctx);
+    std::error_code fec;
+    const int n_batch = 512;
+    struct PrefillGuard {
+        std::atomic<bool> & f;
+        explicit PrefillGuard(std::atomic<bool> & x) : f(x) { f = true; }
+        ~PrefillGuard() { f = false; }
+    } prefill_guard(h->in_prefill);
+    reached = from;
+    for (int i = (int) from; i < (int) to;) {
+        int n = std::min(n_batch, (int) to - i);
+        if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
+        // Stop between batches: every batch so far was decoded whole and is in `cached`, so the cache stays consistent.
+        if (h->stop.load()) {
+            cl_logi("prefill stopped after %d of %d tokens", i, (int) to);
+            return 1;
+        }
+        const int rc = llama_decode(h->ctx, llama_batch_get_one(const_cast<llama_token *>(tokens.data()) + i, n));
+        if (rc == 2) {
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            cl_logi("prefill stopped after %d of %d tokens", i, (int) to);
+            return 2;
+        }
+        if (rc != 0) {
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            return -1;
+        }
+        h->prompt_decoded += n;
+        h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
+        i += n;
+        reached = (size_t) i;
+        if (save && (size_t) i == prefix) {
+            const auto t0 = sclock::now();
+            std::filesystem::create_directories(h->prefix_dir, fec);
+            const std::string part = prefix_file + ".part";
+            const size_t wr = llama_state_seq_save_file(h->ctx, part.c_str(), 0, tokens.data(), prefix);
+            std::error_code rec;
+            if (wr > 0) std::filesystem::rename(part, prefix_file, rec);
+            if (wr > 0 && !rec) {
+                prune_prefix_files(h->prefix_dir);
+                h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix saved (") + std::to_string(prefix) +
+                                  " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+            } else {
+                std::filesystem::remove(part, fec);
+                h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix could not be saved");
+            }
+            cl_logi("%s", h->prefix_note.c_str());
+        }
+    }
+    return 0;
 }
 
 // ---------------- lookup-only tensors stay on flash ----------------
@@ -918,22 +1131,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->prefix_note.clear();
 
         auto req = common_json::parse(request_json);
-        common_chat_templates_inputs in;
-        in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
-        in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        // Optional top-level "enable_thinking": true|false. Passed to the template as the
-        // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
-        if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
-            in.enable_thinking = req.at("enable_thinking").get<bool>();
-        }
-        if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
-            in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
-        }
-        // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
-        // tool-call grammar off; the tool-call opening tokens then end the generation (below).
-        if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
-            in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
-        }
+        common_chat_templates_inputs in = parse_chat_inputs(req);
         if (in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !in.tools.empty()) {
             for (const char * open : { "<|tool_call>", "<tool_call>" }) {
                 auto t = common_tokenize(h->vocab, open, /*add_special*/ false, /*parse_special*/ true);
@@ -981,159 +1179,37 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         // the shape before it (a clock in the system prompt makes that the text before the clock), or all of it once the same
         // shape comes again. Only with a prefix folder, tools and a system message.
         size_t want = 0;  // the stable start of this prompt, in tokens
-        if (!h->prefix_dir.empty() && !in.tools.empty() && !in.messages.empty() && in.messages[0].role == "system") {
-            const std::string key = in.messages[0].content + '\x1f' + req.at("tools").dump() + '\x1f' + (in.enable_thinking ? "1" : "0");
-            if (key != h->probe_key) {
-                common_chat_templates_inputs pa = in;
-                pa.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
-                common_chat_msg u;
-                u.role    = "user";
-                u.content = "a";
-                pa.messages = { in.messages[0], u };
-                auto ta = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
-                pa.messages[1].content = "b";
-                auto tb = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
-                ta.resize(common_prefix(ta, tb, ta.size()));
-                if (!h->probe_tokens.empty()) {
-                    h->stable       = common_prefix(h->probe_tokens, ta, ta.size());
-                    h->stable_known = true;
-                } else {
-                    h->stable_known = false;  // the first shape since the load: see the saved files below
-                }
-                h->probe_key    = key;
-                h->probe_tokens = std::move(ta);
-            } else {
-                h->stable       = h->probe_tokens.size();
-                h->stable_known = true;
-            }
+        if (probe_applies(h, in)) {
+            update_probe(h, in, req);
             // The request's own tokens must agree (a merge across the boundary could differ), and the last prompt token is
             // always decoded.
             want = common_prefix(h->probe_tokens, tokens, tokens.size() - 1);
             if (h->stable_known) want = std::min(want, h->stable);
         }
 
-        // Keep what the KV cache already holds for the start of this prompt: find the longest common
-        // token prefix, drop the cache after it and decode only the rest. At least the last prompt
-        // token is always decoded, because the first generated token needs its logits.
-        llama_memory_t mem = llama_get_memory(h->ctx);
-        size_t keep = 0;
-        {
-            const size_t limit = std::min(h->cached.size(), tokens.size() - 1);
-            while (keep < limit && h->cached[keep] == tokens[keep]) keep++;
-        }
-        if (keep == 0) {
-            llama_memory_clear(mem, true);
-        } else if (keep < h->cached.size() && !llama_memory_seq_rm(mem, 0, (llama_pos) keep, -1)) {
-            // Some caches (sliding-window attention) cannot drop just a tail: start over, correct but slower.
-            llama_memory_clear(mem, true);
-            keep = 0;
-        }
-        h->cached.resize(keep);
-
-        // The cache does not hold the stable start (the first question after a load, or a different start before): take what a
-        // saved file shares with this prompt.
-        using sclock = std::chrono::steady_clock;
-        auto ms_since = [](sclock::time_point t0) { return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count(); };
-        std::error_code fec;
         bool covered = true;  // a saved file already holds the stable start
-        if (want >= kPrefixMinLen && keep < want) {
-            auto files = prefix_files(h);
-            size_t best = 0, best_file_len = 0;
-            std::string best_path;
-            for (auto & f : files) {
-                const size_t l = common_prefix(f.second, tokens, tokens.size() - 1);
-                if (l > best) { best = l; best_path = f.first; best_file_len = f.second.size(); }
-            }
-            if (!h->stable_known) {
-                // The first shape since the load: a saved file of this model tells how much of it stayed the same before. With
-                // none, all of it is taken as stable (and saved once).
-                if (!best_path.empty()) want = std::min(want, best);
-                h->stable       = want;
-                h->stable_known = true;
-            }
-            covered = best >= want;
-            if (best > keep && best >= kPrefixMinLen) {
-                const auto t0 = sclock::now();
-                llama_memory_clear(mem, true);
-                h->cached.clear();
-                keep = 0;
-                std::vector<llama_token> got(best_file_len);
-                size_t n_got = 0;
-                const size_t rd = llama_state_seq_load_file(h->ctx, best_path.c_str(), 0, got.data(), got.size(), &n_got);
-                const bool loaded = rd > 0 && n_got == best_file_len && std::equal(got.begin(), got.begin() + (long) best, tokens.begin());
-                if (loaded && (n_got == best || llama_memory_seq_rm(mem, 0, (llama_pos) best, -1))) {
-                    h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
-                    keep = best;
-                    std::filesystem::last_write_time(best_path, std::filesystem::file_time_type::clock::now(), fec);
-                    h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
-                } else {
-                    llama_memory_clear(mem, true);
-                    if (!loaded) std::filesystem::remove(best_path, fec);
-                    covered = false;
-                    h->prefix_note = loaded ? "Prompt prefix file could not be trimmed; the prompt is read as usual"
-                                            : "Prompt prefix file did not load and was removed; the prompt is read as usual";
-                }
-                cl_logi("%s", h->prefix_note.c_str());
-            }
-        }
+        const size_t keep = align_cache(h, tokens, tokens.size() - 1, want, covered);
         h->n_reused = (int) keep;
         // Saved when no file holds the stable start yet and this start decodes it itself.
         const size_t prefix = want;
         const bool   save   = want >= kPrefixMinLen && keep < want && !covered;
         const std::string prefix_file = save ? prefix_path(h, tokens.data(), prefix) : std::string();
 
-        const int n_batch = 512;
-        struct PrefillGuard {
-            std::atomic<bool> & f;
-            explicit PrefillGuard(std::atomic<bool> & x) : f(x) { f = true; }
-            ~PrefillGuard() { f = false; }
-        } prefill_guard(h->in_prefill);
-        for (int i = (int) keep; i < h->n_prompt;) {
-            int n = std::min(n_batch, h->n_prompt - i);
-            if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
-            // Stop between batches: every batch so far was decoded whole and is in `cached`, so the cache stays consistent.
-            if (h->stop.load()) {
-                cl_logi("prefill stopped after %d of %d tokens", i, h->n_prompt);
-                h->finished = true;  // as after a stop while generating: cl_next returns -1, cl_finish gives an empty answer
-                return 0;
-            }
-            const int rc = llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n));
-            if (rc == 2) {
-                // Aborted inside a batch: its state in the cache is not known, so the cache is cleared (the next prompt is read
-                // again) and nothing is saved as a prefix.
-                llama_memory_clear(mem, true);
-                h->cached.clear();
-                h->n_reused = 0;
-                cl_logi("prefill stopped after %d of %d tokens", i, h->n_prompt);
-                h->finished = true;
-                return 0;
-            }
-            if (rc != 0) {
-                llama_memory_clear(mem, true);
-                h->cached.clear();
-                h->n_reused = 0;
-                set_err(err, err_len, "decode failed while reading the prompt");
-                return -1;
-            }
-            h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
-            i += n;
-            if (save && (size_t) i == prefix) {
-                const auto t0 = sclock::now();
-                std::filesystem::create_directories(h->prefix_dir, fec);
-                const std::string part = prefix_file + ".part";
-                const size_t wr = llama_state_seq_save_file(h->ctx, part.c_str(), 0, tokens.data(), prefix);
-                std::error_code rec;
-                if (wr > 0) std::filesystem::rename(part, prefix_file, rec);
-                if (wr > 0 && !rec) {
-                    prune_prefix_files(h->prefix_dir);
-                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix saved (") + std::to_string(prefix) +
-                                      " tokens, " + std::to_string(ms_since(t0)) + " ms)";
-                } else {
-                    std::filesystem::remove(part, fec);
-                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix could not be saved");
-                }
-                cl_logi("%s", h->prefix_note.c_str());
-            }
+        size_t reached = keep;
+        const int rc = decode_tokens(h, tokens, keep, tokens.size(), save, prefix, prefix_file, reached);
+        if (rc == 1) {  // stopped between batches: what was decoded is in the cache
+            h->finished = true;  // as after a stop while generating: cl_next returns -1, cl_finish gives an empty answer
+            return 0;
+        }
+        if (rc == 2) {
+            h->n_reused = 0;
+            h->finished = true;
+            return 0;
+        }
+        if (rc != 0) {
+            h->n_reused = 0;
+            set_err(err, err_len, "decode failed while reading the prompt");
+            return -1;
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
@@ -1143,6 +1219,59 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         return -1;
     }
 }
+
+// cl_warm results.
+enum { kWarmCovered = 0, kWarmRead = 1, kWarmStopped = 2, kWarmSkipped = 3 };
+
+int cl_warm(void * hp, const char * request_json, int check_only, int * n_tokens, char * err, int err_len) {
+    auto * h = (Handle *) hp;
+    if (n_tokens) *n_tokens = 0;
+    try {
+        auto req = common_json::parse(request_json);
+        const common_chat_templates_inputs in = parse_chat_inputs(req);
+        if (!probe_applies(h, in)) return kWarmSkipped;
+        update_probe(h, in, req);
+        // This shape is about to be used: its whole prompt start counts as stable (as when cl_start sees the same shape twice),
+        // not only what it shares with the shape before it (a new day's date would leave that at the text before the date).
+        h->stable       = h->probe_tokens.size();
+        h->stable_known = true;
+        const std::vector<llama_token> tokens = h->probe_tokens;
+        const size_t want = tokens.size();
+        if (want < kPrefixMinLen || want >= (size_t) h->n_ctx) return kWarmSkipped;
+
+        // Covered: the KV cache holds the stable start, or a saved file does (cl_start restores it). Nothing is changed.
+        const size_t in_mem = cache_overlap(h, tokens, want);
+        if (in_mem >= want) return kWarmCovered;
+        const PrefixHit hit = best_prefix_file(h, tokens, want);
+        if (hit.best >= want) return kWarmCovered;
+        const size_t have = std::max(in_mem, hit.best >= kPrefixMinLen ? hit.best : (size_t) 0);
+        if (n_tokens) *n_tokens = (int) (want - have);
+        if (check_only) return kWarmRead;
+
+        h->stop = false;
+        h->prefix_note.clear();
+        size_t want_now = want;
+        bool covered = true;
+        const size_t keep = align_cache(h, tokens, want, want_now, covered);
+        if (covered && keep >= want) return kWarmCovered;
+        const bool save = want >= kPrefixMinLen && keep < want && !covered;
+        const std::string prefix_file = save ? prefix_path(h, tokens.data(), want) : std::string();
+        size_t reached = keep;
+        const int rc = decode_tokens(h, tokens, keep, want, save, want, prefix_file, reached);
+        if (n_tokens) *n_tokens = (int) (reached - keep);
+        if (rc == 1 || rc == 2) return kWarmStopped;
+        if (rc != 0) {
+            set_err(err, err_len, "decode failed while reading the prompt start");
+            return -1;
+        }
+        return kWarmRead;
+    } catch (const std::exception & e) {
+        set_err(err, err_len, e.what());
+        return -1;
+    }
+}
+
+int cl_prompt_decoded(void * hp) { return (int) ((Handle *) hp)->prompt_decoded; }
 
 int cl_next(void * hp, char * buf, int buf_len) {
     auto * h = (Handle *) hp;

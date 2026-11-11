@@ -8,6 +8,7 @@ import 'package:ffi/ffi.dart';
 import 'cache_llama_bindings.dart';
 import 'load_options.dart';
 import 'partial_message.dart';
+import 'warm_result.dart';
 
 /// Owns one loaded model. All native calls that can take time (load, start, token loop, parse) run
 /// in a long-lived background isolate; [stop] calls cl_stop directly (it is thread-safe).
@@ -21,6 +22,9 @@ class LlamaSession {
   int _nextId = 1;
   final Map<int, Completer<Map<String, dynamic>>> _loads = {};
   final Map<int, StreamController<PartialMessage>> _gens = {};
+  final Map<int, Completer<WarmResult>> _warms = {};
+  int? _warmId; // the read ahead in flight (not a check)
+  bool _warmJoined = false; // a generation was sent behind it
   CacheLlamaBindings? _mainBindings; // only used for cl_stop
   int _handleAddress = 0;
 
@@ -66,6 +70,25 @@ class LlamaSession {
             totalMs: msg['totalMs'] as int?,
             prefixNote: msg['prefixNote'] as String?));
         c?.close();
+      case 'warmed':
+        final c = _warms.remove(id);
+        var joined = false;
+        if (id == _warmId) {
+          joined = _warmJoined;
+          _warmId = null;
+        }
+        c?.complete(WarmResult(
+          switch (msg['rc'] as int) {
+            0 => WarmOutcome.covered,
+            1 => WarmOutcome.read,
+            2 => WarmOutcome.stopped,
+            3 => WarmOutcome.skipped,
+            _ => WarmOutcome.failed,
+          },
+          tokens: msg['tokens'] as int,
+          joined: joined,
+          error: msg['error'] as String?,
+        ));
       case 'error':
         final c = _gens.remove(id);
         c?.addError(msg['contextFull'] == true
@@ -85,6 +108,7 @@ class LlamaSession {
       c.close();
     }
     _gens.clear();
+    _endWarms(why);
     _handleAddress = 0;
   }
 
@@ -120,6 +144,7 @@ class LlamaSession {
       return Stream.error(StateError('No model is loaded'));
     }
     final id = _nextId++;
+    if (_warmId != null) _warmJoined = true; // it waits behind the read ahead and reuses it
     late StreamController<PartialMessage> c;
     c = StreamController<PartialMessage>(onCancel: () {
       if (_gens.containsKey(id)) stop();
@@ -129,6 +154,40 @@ class LlamaSession {
     final max = request['max_tokens'];
     _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null});
     return c.stream;
+  }
+
+  /// Reads the prompt start of [request] (a request with no user message, as the app's tool loop builds it for the read ahead) into
+  /// the model's cache ahead of the first question, and saves it as a prefix file (cl_warm). [checkOnly]: renders and tokenizes but
+  /// decodes nothing, and says whether a read is needed ([WarmOutcome.covered] or [WarmOutcome.read] with the tokens to read).
+  /// It runs in the worker isolate in order with the generations: a question sent while it reads waits behind it and then reuses
+  /// what it read. It never loads the model: with none, or an older library, it is [WarmOutcome.skipped].
+  Future<WarmResult> warm(Map<String, dynamic> request, {bool checkOnly = false}) {
+    if (!isLoaded || _toWorker == null) return Future.value(const WarmResult(WarmOutcome.skipped, error: 'no model is loaded'));
+    final id = _nextId++;
+    final c = Completer<WarmResult>();
+    _warms[id] = c;
+    if (!checkOnly) {
+      _warmId = id;
+      _warmJoined = false;
+    }
+    _toWorker!.send({'type': 'warm', 'id': id, 'request': jsonEncode(request), 'checkOnly': checkOnly});
+    return c.future;
+  }
+
+  /// Aborts a read ahead in flight (cl_stop: llama.cpp's abort hook and the check between batches). Not when a question was sent
+  /// behind it: the question needs what the read gives, and cl_stop would reach it too. Thread-safe.
+  void cancelWarm() {
+    if (_warmId != null && !_warmJoined && _handleAddress != 0) {
+      _mainBindings?.clStop(Pointer<Void>.fromAddress(_handleAddress));
+    }
+  }
+
+  void _endWarms(String why) {
+    for (final c in _warms.values) {
+      c.complete(WarmResult(WarmOutcome.skipped, error: why));
+    }
+    _warms.clear();
+    _warmId = null;
   }
 
   /// Ends the running generation early (the final message still arrives). Thread-safe.
@@ -147,6 +206,7 @@ class LlamaSession {
       c.close();
     }
     _gens.clear();
+    _endWarms('the model was unloaded');
     // The worker frees the handle once the stopped generation has ended.
     _toWorker!.send({'type': 'free'});
   }
@@ -160,6 +220,7 @@ class LlamaSession {
       c.close();
     }
     _gens.clear();
+    _endWarms('the model was unloaded');
     // Let the worker free the handle before it is killed.
     await Future<void>.delayed(const Duration(milliseconds: 300));
     _isolate?.kill(priority: Isolate.beforeNextEvent);
@@ -266,6 +327,20 @@ void _workerMain(SendPort toMain) {
           'totalMs': clock.elapsedMilliseconds,
           'prefixNote': prefixNote,
         });
+      case 'warm':
+        final checkOnly = msg['checkOnly'] == true;
+        if (handle == nullptr || b.clWarm == null) {
+          toMain.send({'type': 'warmed', 'id': id, 'rc': 3, 'tokens': 0, 'checkOnly': checkOnly});
+          break;
+        }
+        final req = (msg['request'] as String).toNativeUtf8();
+        final n = malloc<Int32>();
+        n.value = 0;
+        final rc = b.clWarm!(handle, req, checkOnly ? 1 : 0, n, err, _kErrLen);
+        final tokens = n.value;
+        malloc.free(req);
+        malloc.free(n);
+        toMain.send({'type': 'warmed', 'id': id, 'rc': rc, 'tokens': tokens, 'checkOnly': checkOnly, 'error': rc < 0 ? err.toDartString() : null});
       case 'free':
         if (handle != nullptr) {
           b.clFree(handle);
