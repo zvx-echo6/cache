@@ -46,7 +46,7 @@ fi
 
 # 3. with OCR it is searchable: the pack's text has the words that were drawn into the pictures
 t0=$(now)
-"$CB" pdf /tmp/pdf-scan/scan.pdf --out /tmp/packs-scan --fake-embedder --ocr
+CACHE_OCR_DEBUG=1 "$CB" pdf /tmp/pdf-scan/scan.pdf --out /tmp/packs-scan --fake-embedder --ocr
 t1=$(now)
 scan_s=$(since "$t0" "$t1")
 pack=$(find /tmp/packs-scan -type f | head -n 1)
