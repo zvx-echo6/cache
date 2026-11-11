@@ -24,7 +24,7 @@ class ForegroundUpdates {
   final bool Function() on;
 
   /// The update: the weather part's own, with its own limits (the connection, each source's refresh time and quota, one at a time).
-  final Future<Object?> Function() update;
+  final Future<void> Function() update;
 
   /// False where a scheduled job already updates while the app is in front ([foregroundUpdatesWanted]): then nothing ever starts.
   final bool wanted;
