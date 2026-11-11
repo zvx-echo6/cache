@@ -1322,6 +1322,17 @@ impl BuildService {
             classifier_version: place.classifier_version,
             source: "classifier".into(),
             second_div: place.suggestions.get(1).map(|s| s.division.clone()),
+            // confident: the book was filed (in a division), otherwise it waits in Unsorted with the top three offered
+            filed: Some(place.division.is_some()),
+            suggestions: place
+                .suggestions
+                .iter()
+                .map(|s| cache_builder::pack::ShelfSuggestion {
+                    div: s.division.clone(),
+                    label: self.classes().find(&s.division).map(|(_, d)| d.name.clone()).unwrap_or_else(|| s.division.clone()),
+                    score: Some(s.score),
+                })
+                .collect(),
         })
     }
 
