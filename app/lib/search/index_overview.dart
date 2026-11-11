@@ -152,7 +152,8 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
                           borderRadius: BorderRadius.circular(3),
                           child: LinearProgressIndicator(
                             key: const ValueKey('index-overview-bar'),
-                            value: line == null || added != null ? 1 : (s.busy ? s.fraction : 0),
+                            // full when it is all done (a book added whose words are in); empty while the book's words are still being added
+                            value: line == null || (added != null && !addPdfShared!.wordsPendingFor(added)) ? 1 : (s.busy ? s.fraction : 0),
                             minHeight: 6,
                             color: held ? k.secondary : k.accent,
                             backgroundColor: k.secondary.withValues(alpha: 0.15),
