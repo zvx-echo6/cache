@@ -21,9 +21,11 @@ import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'desktop/desktop_theme.dart';
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
+import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -505,6 +507,7 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
+    focus: askFocus,
     supportDir: () async => Directory(await appSupportPath()),
     catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
@@ -555,7 +558,10 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final LayoutState layout = LayoutState();
+  /// Held while Ask generates an answer: background work (sync, downloads, indexing) starts nothing new meanwhile (chat/ask_focus.dart).
+  late final AskFocus askFocus = AskFocus();
   late final ChatController chat = ChatController(
+    focus: askFocus,
     // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
     tools: const [],
     // Try again (or the next question) after the core could not start starts it again.
@@ -567,7 +573,7 @@ class _CacheAppState extends State<CacheApp> {
         ? null
         : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector, runAction: actionRegistry.run),
     numberingState: CoreNumberingState(() => sources.core),
-    locationKnown: () => chatLocation.known,
+    locationKnown: () => chatLocation.turnKnown,
     prepareTurn: chatLocation.prepare,
     actions: actionRegistry,
     actCore: actCore,
@@ -744,6 +750,8 @@ class _CacheAppState extends State<CacheApp> {
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) indexing.setOpen(true);
       },
+      // The search model is held warm while Cache is in front, and let go when it goes to the back; back in front loads it again.
+      onStateChange: searchModel.onLifecycle,
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         if (!plat.isWeb) indexing.setOpen(false);
@@ -751,6 +759,11 @@ class _CacheAppState extends State<CacheApp> {
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    askFocusShared = askFocus;
+    // The workers that hold off while Ask answers (named in the log). Indexing follows the throttle (chat.busy, _onChatForIndexing).
+    for (final name in ['Indexing', 'Notebook sync', 'Settings sync', 'Downloads', 'Region downloads']) {
+      askFocus.register(name);
+    }
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
@@ -776,11 +789,14 @@ class _CacheAppState extends State<CacheApp> {
     });
     // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      if (!releaseModelOn(level, reading)) return;
+      searchModel.onTrim(level);
+      if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    });
+    }, onWarning: searchModel.onMemoryWarning);
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -789,6 +805,11 @@ class _CacheAppState extends State<CacheApp> {
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();
+    // The search model loads in the background once the first frame is up and the start-up work (the chat model at start) is
+    // done; the start never waits for it.
+    if (!plat.isWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_appRead.then((_) => searchModel.warmLoad())));
+    }
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
@@ -1028,6 +1049,8 @@ class _CacheAppState extends State<CacheApp> {
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
     indexThrottle.dispose();
+    if (identical(askFocusShared, askFocus)) askFocusShared = null;
+    askFocus.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
@@ -1077,7 +1100,7 @@ class _CacheAppState extends State<CacheApp> {
                   children: [
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
-                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
                   ],
                 ),
               ),

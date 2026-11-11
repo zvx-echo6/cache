@@ -103,7 +103,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
   xcrun nm -gU "$BIN" > "$CHECK_DIR/app-symbols.txt"
   for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress \
     _cs_conversation_export _cs_conversation_import _cl_load _cl_next \
-    _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk; do
+    _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk _cache_free_now_bytes_on_disk; do
     grep -Eq " ${symbol}$" "$CHECK_DIR/app-symbols.txt" || exit 1
   done
   codesign --verify --deep --strict "$APP"

@@ -336,8 +336,8 @@ fn volume_free(p: &Path) -> Option<u64> {
     fs4::available_space(p).ok()
 }
 
-/// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts the space iOS can purge as iPhone Storage in
-/// Settings does; statvfs leaves it out.
+/// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts free space now plus half of the space iOS can
+/// purge (the allowance for pre-checks; screens show free now).
 #[cfg(target_os = "ios")]
 fn volume_free(p: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;

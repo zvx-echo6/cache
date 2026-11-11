@@ -40,6 +40,43 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   bool _serviceAvailable = true;
   int _resumeGeneration = 0;
 
+  // Stream health, for telling a phone standing still (the stream sends nothing under its distance filter) from a lost signal.
+  // The fix counts as held while the stream has been subscribed without error since before the fix arrived.
+  bool _streamOk = false;
+  DateTime? _streamSince;
+  DateTime? _fixAt;
+  static const Duration _defaultMaxAge = Duration(minutes: 2);
+
+  /// True while the position stream is subscribed and healthy: no error, not cancelled (pause, hold), and the permission,
+  /// the location switch and the setting still on.
+  bool get streamHealthy =>
+      _sub != null && _streamOk && !_disposed && enabled && _foreground && !_held &&
+      _serviceAvailable && permission == LocationPermissionState.granted;
+
+  static bool _plausible(Fix? f) =>
+      f != null && f.lat.isFinite && f.lon.isFinite && f.lat.abs() <= 90 && f.lon.abs() <= 180 &&
+      f.accuracyM.isFinite && f.accuracyM >= 0;
+
+  /// Whether [fix] may be used as the phone's position now: younger than [maxAge], or the stream has been healthy since it
+  /// arrived (a phone standing still sends nothing new).
+  bool fixIsCurrent({Duration maxAge = _defaultMaxAge}) {
+    final f = fix;
+    if (!_plausible(f)) return false;
+    final age = DateTime.now().difference(f!.time);
+    if (!age.isNegative && age <= maxAge) return true;
+    final since = _streamSince, at = _fixAt;
+    return streamHealthy && since != null && at != null && !at.isBefore(since) && !age.isNegative;
+  }
+
+  /// Why there is no usable position now (for the log).
+  String get unknownReason {
+    if (!enabled) return 'location off';
+    if (permission != LocationPermissionState.granted) return 'permission off';
+    if (!_serviceAvailable) return 'service off';
+    if (fix == null) return 'no fix';
+    return 'stale and stream down';
+  }
+
   void _invalidateResume() {
     _resumeGeneration++;
     _resuming = false;
@@ -91,7 +128,10 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// The one place a fix goes to the rest of the app: [fix], and the search core through [onFix].
   void _publish(Fix f) {
     if (_disposed || !enabled) return;
+    final held = fix;
+    if (held != null && f.time.isBefore(held.time)) return; // out of order: an older reading never replaces a newer one
     fix = f;
+    _fixAt = DateTime.now();
     problem = null;
     onFix?.call(f);
     notifyListeners();
@@ -159,9 +199,21 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
         _resuming || _sub != null || !_foreground || _held) {
       return;
     }
+    final now = DateTime.now();
+    final held = fix, at = _fixAt;
+    // A fix read just before the stream started (request, resume) is held from its own arrival on.
+    _streamSince = held != null && at != null && now.difference(held.time) <= _defaultMaxAge ? at : now;
+    _streamOk = true;
     _sub = _source.stream().listen((f) {
-      if (!_disposed && enabled && _foreground && !_held) _publish(f);
+      if (!_disposed && enabled && _foreground && !_held) {
+        if (!_streamOk) {
+          _streamOk = true;
+          _streamSince = DateTime.now();
+        }
+        _publish(f);
+      }
     }, onError: (Object _) {
+      _streamOk = false;
       if (_disposed || !enabled || !_foreground || _held) return;
       problem = LocationProblem.noFix;
       notifyListeners();
@@ -180,6 +232,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       // a cancel that waits on the platform would hold guidance up (and a widget test with it).
       final s = _sub;
       _sub = null;
+      _streamOk = false;
       unawaited(s?.cancel());
     } else if (enabled && permission == LocationPermissionState.granted) {
       _listen();
@@ -189,6 +242,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   void _unlisten() {
     _sub?.cancel();
     _sub = null;
+    _streamOk = false;
   }
 
   /// The setting: off stops reading the position and forgets the last fix.
@@ -221,15 +275,13 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     if (_disposed || !enabled || !_foreground || isCancelled()) return null;
     bool recent(Fix? f) {
-      if (f == null || !f.lat.isFinite || !f.lon.isFinite ||
-          f.lat.abs() > 90 || f.lon.abs() > 180 ||
-          !f.accuracyM.isFinite || f.accuracyM < 0) {
-        return false;
-      }
-      final age = DateTime.now().difference(f.time);
+      if (!_plausible(f)) return false;
+      final age = DateTime.now().difference(f!.time);
       return !age.isNegative && age <= maxAge;
     }
-    if (busy) return recent(fix) ? fix : null;
+    // A failed or timed-out refresh never throws the fix away: it is used while it is current, and kept (for the map) when not.
+    Fix? held() => fixIsCurrent(maxAge: maxAge) ? fix : null;
+    if (busy) return held();
     final generation = _resumeGeneration;
     var expired = false;
     bool valid() => !expired && !isCancelled() && _resumeIsCurrent(generation);
@@ -252,23 +304,24 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
         _clearFix(LocationProblem.serviceOff);
         return null;
       }
-      if (recent(fix)) return fix;
+      if (fixIsCurrent(maxAge: maxAge)) return fix;
       if (_held) return null;
       final current = await _source.current();
       if (!valid() || _held) return null;
       // A newer stream fix may have arrived during the one-shot request.
-      if (recent(fix) && !fix!.time.isBefore(current.time)) return fix;
+      if (fixIsCurrent(maxAge: maxAge) && !fix!.time.isBefore(current.time)) return fix;
       if (!recent(current)) return null;
       _publish(current);
       return current;
     }
     try {
-      return await read().timeout(timeout, onTimeout: () {
+      final read0 = await read().timeout(timeout, onTimeout: () {
         expired = true;
         return null;
       });
+      return read0 ?? held();
     } catch (_) {
-      return null; // Location failure must never prevent an ordinary chat.
+      return held(); // Location failure must never prevent an ordinary chat.
     }
   }
 

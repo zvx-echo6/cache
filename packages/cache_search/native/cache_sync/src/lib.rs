@@ -195,6 +195,47 @@ struct Peer {
     /// What the two devices agreed about this link, as last set on either ([`Link`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     link: Option<Link>,
+    /// When the device last answered (ms since 1970) and how (`direct` or `relay`), so a start does not forget it. Written at most
+    /// about once a minute ([`Peer::seen`]). Absent in files saved by older versions, and until the device has answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_seen: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<String>,
+    /// The name the device last called itself. `name` follows it when it changes, and stays as the person set it ("Rename") until
+    /// the device announces a different one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    announced: Option<String>,
+}
+
+/// The least time between two writes of a device's last seen time.
+const SEEN_SAVE_EVERY_MS: u64 = 60_000;
+
+impl Peer {
+    /// Notes that the device answered at `now` through `via`. True when that changed what is saved (the first time, and then at
+    /// most once in [`SEEN_SAVE_EVERY_MS`]), so the caller writes the file.
+    fn seen(&mut self, now: u64, via: &str) -> bool {
+        let due = match self.last_seen {
+            None => true,
+            Some(t) => now < t || now - t >= SEEN_SAVE_EVERY_MS,
+        };
+        if due {
+            self.last_seen = Some(now);
+            self.via = Some(via.to_string());
+        }
+        due
+    }
+
+    /// Takes the name the device now calls itself. True when it was new (the caller writes the file). A name the person gave this
+    /// device here stays until the device announces a different one.
+    fn adopt_name(&mut self, announced: &str) -> bool {
+        let announced = announced.trim();
+        if announced.is_empty() || self.announced.as_deref() == Some(announced) {
+            return false;
+        }
+        self.announced = Some(announced.to_string());
+        self.name = announced.to_string();
+        true
+    }
 }
 
 /// What two linked devices keep about their link, the same on both: the app's value (for Cache, how settings go between them:
@@ -498,11 +539,24 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
+///
+/// `complete` is cleared when anything could not be read (a folder that cannot be listed, a file whose details cannot be
+/// read): what is missing from `out` then may only be unreadable, so a scan must not take it as gone.
+fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>, complete: &mut bool) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        *complete = false;
+        return;
+    };
+    for e in rd {
+        let Ok(e) = e else {
+            *complete = false;
+            continue;
+        };
         let p = e.path();
-        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        let Ok(m) = std::fs::symlink_metadata(&p) else {
+            *complete = false;
+            continue;
+        };
         if m.file_type().is_symlink() {
             continue;
         }
@@ -511,7 +565,7 @@ fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut V
             continue;
         }
         if m.is_dir() {
-            walk(root, &p, skip, hidden, out);
+            walk(root, &p, skip, hidden, out, complete);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -605,6 +659,50 @@ impl Inner {
 
     fn seen_path(&self, share: &str) -> PathBuf {
         self.dir.join("index").join(format!("{share}.seen.json"))
+    }
+
+    /// Set (holding the new path) while a share re-pointed to a new folder has not yet had its first, reconciling scan.
+    fn moved_path(&self, share: &str) -> PathBuf {
+        self.dir.join("index").join(format!("{share}.moved"))
+    }
+
+    fn moved_marker(&self, share: &str) -> Option<PathBuf> {
+        std::fs::read_to_string(self.moved_path(share)).ok().map(PathBuf::from)
+    }
+
+    /// Adds a share, or re-points one this device already has (same id) at `path`: the folder's absolute path changes when the
+    /// app's container moves (an iOS update). The name stays; the share is marked so its first scan never records deletes.
+    /// The same folder under another id is refused. Returns whether the share was already there.
+    fn upsert_share(&self, id: &str, name: String, path: PathBuf) -> Result<bool> {
+        let existed;
+        let moved;
+        let share_name;
+        {
+            let mut sv = self.saved.lock().unwrap();
+            if sv.shares.iter().any(|x| x.id != id && x.path == path) {
+                bail!("that folder is already shared");
+            }
+            if let Some(x) = sv.shares.iter_mut().find(|x| x.id == id) {
+                existed = true;
+                moved = x.path != path;
+                x.path = path.clone();
+                share_name = x.name.clone();
+            } else {
+                existed = false;
+                moved = false;
+                share_name = name.clone();
+                sv.shares.push(Share { id: id.to_string(), name, path: path.clone() });
+            }
+        }
+        if moved {
+            std::fs::create_dir_all(self.dir.join("index"))?;
+            std::fs::write(self.moved_path(id), path.to_string_lossy().as_bytes())?;
+            self.save()?;
+            self.note(format!("{share_name}: folder moved after an update; checking files"));
+        } else if !existed {
+            self.save()?;
+        }
+        Ok(existed)
     }
 
     fn save(&self) -> Result<()> {
@@ -939,12 +1037,17 @@ impl Inner {
         let root = share.path.clone();
         let skip = self.skip(&share.id).to_vec();
         let hidden = self.hidden_ok(&share.id).to_vec();
-        let files = tokio::task::spawn_blocking(move || {
+        let (files, complete) = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &skip, &hidden, &mut v);
-            v
+            let mut complete = true;
+            walk(&root, &root, &skip, &hidden, &mut v, &mut complete);
+            (v, complete)
         })
         .await?;
+        // The first scan after the folder was re-pointed ([`Inner::repoint_share`]) only reconciles: what the index lists and the
+        // folder lacks is forgotten (the other devices bring it back if they have it), never recorded as a delete. A scan that
+        // could not read everything records no deletes either.
+        let moved = self.moved_marker(&share.id).as_deref() == Some(share.path.as_path());
         #[cfg(feature = "test-hooks")]
         {
             // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
@@ -1012,9 +1115,20 @@ impl Inner {
             seen.insert(rel, key);
         }
         // A file still waiting to be written (cut off, to come again) has not gone.
-        let gone: Vec<String> =
-            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect();
+        let gone: Vec<String> = if complete {
+            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect()
+        } else {
+            Vec::new()
+        };
         for p in gone {
+            if moved {
+                stale.push(idx.files[&p].hash.clone());
+                idx.files.remove(&p);
+                seen.remove(&p);
+                let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+                changed = true;
+                continue;
+            }
             let old = idx.files[&p].clone();
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
@@ -1023,6 +1137,10 @@ impl Inner {
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        // Reconciled: normal delete detection resumes (unless the scan was cut short, then the next scan reconciles too).
+        if moved && complete && self.moved_marker(&share.id).as_deref() == Some(share.path.as_path()) {
+            let _ = std::fs::remove_file(self.moved_path(&share.id));
+        }
         if writes.len() != writes_before {
             self.store_writes(&share.id, &writes)?;
         }
@@ -1102,33 +1220,46 @@ impl Inner {
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
+    /// Free bytes now on the volume holding `path` (or its nearest existing parent): the figure shown on screen.
     fn free_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, false)
+    }
+
+    /// What a transfer may count on before the reserve: [`Inner::free_bytes`] everywhere except iPhone, where it also counts half
+    /// of the space iOS can purge. Every space check uses this, so the reserve is the only margin.
+    fn allowed_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, true)
+    }
+
+    fn existing(path: &Path) -> Option<PathBuf> {
         let mut p = path.to_path_buf();
         while !p.exists() {
             if !p.pop() {
                 return None;
             }
         }
-        Self::volume_free(&p)
+        Some(p)
     }
 
-    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix).
+    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix); `allowance` makes no difference here.
     #[cfg(not(target_os = "ios"))]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, _allowance: bool) -> Option<u64> {
         fs4::available_space(p).ok()
     }
 
-    /// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts the space iOS can purge as iPhone Storage in
-    /// Settings does; statvfs leaves it out.
+    /// iPhone: the app's `cache_free_now_bytes_on_disk` (statvfs, same binary) for the figure shown, and its
+    /// `cache_free_bytes_on_disk` (free now plus half of what iOS can purge) for the checks.
     #[cfg(target_os = "ios")]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, allowance: bool) -> Option<u64> {
         use std::os::unix::ffi::OsStrExt;
         extern "C" {
             fn cache_free_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
+            fn cache_free_now_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
         }
         let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
-        // SAFETY: `c` is a valid NUL-terminated path; the helper only reads it.
-        u64::try_from(unsafe { cache_free_bytes_on_disk(c.as_ptr()) }).ok()
+        // SAFETY: `c` is a valid NUL-terminated path; the helpers only read it.
+        let n = unsafe { if allowance { cache_free_bytes_on_disk(c.as_ptr()) } else { cache_free_now_bytes_on_disk(c.as_ptr()) } };
+        u64::try_from(n).ok()
     }
 
     /// One round: rescan every shared folder, then for every linked device fetch its index and apply what is newer there.
@@ -1163,12 +1294,14 @@ impl Inner {
             }
             let res = self.fetch_index(&p.id).await;
             let mut asks = None;
+            let mut learned = None;
             {
                 let mut run = self.run.lock().unwrap();
                 let st = run.peers.entry(p.id.clone()).or_default();
                 match res {
                     Ok((idx, via)) => {
                         st.last_seen = Some(now_ms());
+                        learned = Some((idx.name.clone(), via.clone()));
                         st.via = Some(via);
                         st.error = None;
                         asks = Some((idx.link.clone(), idx.secrets.clone()));
@@ -1178,6 +1311,16 @@ impl Inner {
                         st.via = None;
                         st.error = Some(format!("{e:#}"));
                     }
+                }
+            }
+            if let Some((name, via)) = learned {
+                // Saved with the time and the name the device gave itself, so "last seen" survives a restart and a rename shows.
+                let changed = {
+                    let mut sv = self.saved.lock().unwrap();
+                    sv.peers.iter_mut().find(|x| x.id == p.id).map(|sp| sp.seen(now_ms(), &via) | sp.adopt_name(&name)).unwrap_or(false)
+                };
+                if changed {
+                    let _ = self.save();
                 }
             }
             let Some((link, secrets)) = asks else { continue };
@@ -1338,13 +1481,13 @@ impl Inner {
             // The store takes it first; where the shared folder is on another file system (a phone's internal and shared
             // storage) the copy into place needs the room there too.
             for at in [&self.dir, &full] {
-                if let Some(free) = Self::free_bytes(at) {
+                if let Some(free) = Self::allowed_bytes(at) {
                     if free < need.saturating_add(reserve) {
                         bail!(
                             "Paused: {} needs {}, {} is free and {} is kept free",
                             path,
                             human(need),
-                            human(free),
+                            human(Self::free_bytes(at).unwrap_or(free)),
                             human(reserve)
                         );
                     }
@@ -1382,7 +1525,7 @@ impl Inner {
                                 t.done = n;
                             }
                         }
-                        DownloadProgressItem::Error(e) => failed = Some(format!("{e}")),
+                        DownloadProgressItem::Error(e) => failed = Some(if is_no_space(&e) { NO_SPACE.to_string() } else { format!("{e}") }),
                         DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
                         _ => {}
                     },
@@ -1401,6 +1544,9 @@ impl Inner {
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
+                if f == NO_SPACE {
+                    bail!("Paused: no room to keep {path} ({} needed). Free up space and it carries on.", human(need));
+                }
                 bail!("{path}: {f} (will resume)");
             }
         }
@@ -1432,11 +1578,15 @@ impl Inner {
             self.stop.store(true, Ordering::Relaxed);
             bail!("test: cut off writing {path}");
         }
+        let size_of_entry = entry.size;
         if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await {
             // Whatever part got written goes; the content stays in the store and the next round writes it again.
             if std::fs::remove_file(&full).is_err() && full.exists() {
                 // Left for the recovery a start does, before the next scan could take it for an edit.
                 self.recovered.store(false, Ordering::Relaxed);
+            }
+            if is_no_space(&e) {
+                bail!("Paused: no room to write {path} ({} needed). Free up space and it carries on.", human(size_of_entry));
             }
             bail!("could not write {path}: {e}");
         }
@@ -1457,6 +1607,23 @@ impl Inner {
         }
         Ok(())
     }
+}
+
+/// The failure text that stands for a full disk while a transfer is fetched (so it is not shown as a raw error).
+const NO_SPACE: &str = "no space left on the device";
+
+/// True when `e` (or an error it wraps) is the operating system's "disk full" (ENOSPC, 28 on iOS, Android and Linux).
+fn is_no_space(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = cur {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            if io.raw_os_error() == Some(28) {
+                return true;
+            }
+        }
+        cur = err.source();
+    }
+    false
 }
 
 fn chrono_stamp() -> String {
@@ -1542,7 +1709,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()) });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()) });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -1867,14 +2034,7 @@ impl SyncEngine {
                 }
                 let name = s("name").unwrap_or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Shared".into()));
                 let id = s("id").unwrap_or_else(|| token()[..13].to_lowercase());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id || x.path == path) {
-                        bail!("that folder is already shared");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "id": id}))
             }
@@ -1889,14 +2049,7 @@ impl SyncEngine {
                         run.peers.values().filter_map(|p| p.index.as_ref()).flat_map(|i| i.shares.iter()).find(|x| x.id == id).map(|x| x.name.clone())
                     })
                     .unwrap_or_else(|| "Shared".into());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id) {
-                        bail!("already joined");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
@@ -2143,7 +2296,7 @@ impl SyncEngine {
                 }
                 let free = st.index.as_ref().and_then(|i| i.free_bytes);
                 json!({
-                    "id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error,
+                    "id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen.or(p.last_seen), "via": st.via.clone().or(p.via.clone()), "live": st.last_seen.is_some(), "error": st.error,
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
@@ -2225,3 +2378,104 @@ impl SyncEngine {
     }
 }
 
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("could not export")
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn a_full_disk_is_told_from_other_errors() {
+        assert!(is_no_space(&std::io::Error::from_raw_os_error(28)));
+        assert!(is_no_space(&Wrapped(std::io::Error::from_raw_os_error(28))));
+        assert!(!is_no_space(&std::io::Error::from_raw_os_error(13)));
+        assert!(!is_no_space(&std::io::Error::new(std::io::ErrorKind::NotFound, "gone")));
+    }
+
+    #[test]
+    fn checks_use_the_allowance_and_screens_the_free_figure() {
+        // Off iPhone the two are the same statvfs figure; on iPhone the allowance can be larger, never smaller.
+        let d = std::env::temp_dir();
+        let (now, allowed) = (Inner::free_bytes(&d).unwrap(), Inner::allowed_bytes(&d).unwrap());
+        assert!(allowed >= now.saturating_sub(1 << 20));
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+
+    fn peer() -> Peer {
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()) }
+    }
+
+    #[test]
+    fn last_seen_and_via_survive_a_save() {
+        let mut p = peer();
+        assert!(p.seen(1_000_000, "relay"));
+        let back: Peer = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
+        assert_eq!((back.last_seen, back.via.as_deref()), (Some(1_000_000), Some("relay")));
+    }
+
+    #[test]
+    fn a_file_saved_before_last_seen_existed_loads_with_none() {
+        let old = r#"{"name":"Me","peers":[{"id":"p","name":"Desk","linked":5}],"shares":[]}"#;
+        let saved: Saved = serde_json::from_str(old).unwrap();
+        let p = &saved.peers[0];
+        assert_eq!((p.last_seen, p.via.clone(), p.announced.clone()), (None, None, None));
+        // Nothing new is written for a device that never answered.
+        assert!(!serde_json::to_string(p).unwrap().contains("last_seen"));
+    }
+
+    #[test]
+    fn the_time_is_written_at_most_about_once_a_minute() {
+        let mut p = peer();
+        assert!(p.seen(1_000_000, "direct"), "the first time is written");
+        assert!(!p.seen(1_000_000 + 59_999, "relay"), "not again within the minute");
+        assert_eq!((p.last_seen, p.via.as_deref()), (Some(1_000_000), Some("direct")));
+        assert!(p.seen(1_000_000 + 60_000, "relay"), "after the minute it is");
+        assert_eq!((p.last_seen, p.via.as_deref()), (Some(1_060_000), Some("relay")));
+        assert!(p.seen(500_000, "direct"), "a clock that went back does not stop it");
+    }
+
+    #[test]
+    fn a_rename_on_the_other_device_is_taken() {
+        let mut p = peer();
+        assert!(!p.adopt_name("Android device"), "same name: nothing to write");
+        assert!(p.adopt_name("Pixel nine"));
+        assert_eq!(p.name, "Pixel nine");
+        assert!(!p.adopt_name("Pixel nine"));
+        assert!(!p.adopt_name("  "), "an empty name is ignored");
+        assert_eq!(p.name, "Pixel nine");
+    }
+
+    #[test]
+    fn a_name_set_here_stays_until_the_device_renames_itself() {
+        let mut p = peer();
+        p.name = "Kitchen tablet".into(); // Rename on this device
+        assert!(!p.adopt_name("Android device"), "the device still calls itself what it did");
+        assert_eq!(p.name, "Kitchen tablet");
+        assert!(p.adopt_name("Pixel 9"));
+        assert_eq!(p.name, "Pixel 9");
+    }
+
+    #[test]
+    fn an_old_file_takes_the_name_the_device_announces() {
+        let old = r#"{"id":"p","name":"Android device","linked":5}"#;
+        let mut p: Peer = serde_json::from_str(old).unwrap();
+        assert!(p.adopt_name("Pixel nine"));
+        assert_eq!(p.name, "Pixel nine");
+    }
+}

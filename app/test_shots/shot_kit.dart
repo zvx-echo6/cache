@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/desktop/desktop_theme.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -77,8 +78,8 @@ ThemeData shotTheme([CacheThemeId id = CacheThemeId.light]) {
 }
 
 /// [page] in the app's light theme, as the phone shows it (a status bar's room at the top). Each call is a new app (a dialog left
-/// open by the last picture is gone).
-Widget shotApp(Widget page, {GlobalKey<ScaffoldMessengerState>? messenger, CacheThemeId theme = CacheThemeId.light, EdgeInsets? insets}) => MaterialApp(
+/// open by the last picture is gone). [desktop] puts the desktop theme over it, as the app does in a Linux desktop window.
+Widget shotApp(Widget page, {GlobalKey<ScaffoldMessengerState>? messenger, CacheThemeId theme = CacheThemeId.light, EdgeInsets? insets, bool desktop = false}) => MaterialApp(
   key: UniqueKey(),
   debugShowCheckedModeBanner: false,
   scaffoldMessengerKey: messenger,
@@ -88,7 +89,11 @@ Widget shotApp(Widget page, {GlobalKey<ScaffoldMessengerState>? messenger, Cache
       padding: insets ?? const EdgeInsets.only(top: 54, bottom: 34),
       viewPadding: insets ?? const EdgeInsets.only(top: 54, bottom: 34),
     ),
-    child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: child!),
+    child: DefaultTextStyle.merge(
+      style: const TextStyle(fontFamily: 'Roboto'),
+      // The Linux desktop's theme over the pages and the dialogs they open (the app's own builder does the same).
+      child: desktop ? DesktopThemeScope(child: child!) : child!,
+    ),
   ),
   home: page,
 );
