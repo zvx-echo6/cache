@@ -125,12 +125,15 @@ class ShareLink {
 /// updated) or the connections that run notebook sync now. [updateCache] is the update: the same notebooks and folder, the app
 /// started again as the new version.
 class Dev {
-  Dev(this.label, {this.old = false, this.autoUpgrade = true, this.clock}) {
+  Dev(this.label, {this.old = false, this.autoUpgrade = true, this.clock, this.gateFn}) {
     _wire();
   }
 
   final String label;
   final DateTime Function()? clock;
+
+  /// The gate seam from the real wiring (a SharingState's linkGateActive); null: the stub (gateOn, gateUnset).
+  bool Function()? gateFn;
 
   /// Still on v1.0.30.
   bool old;
@@ -159,7 +162,7 @@ class Dev {
       shareFolder: () => Directory('${stateDir.path}/share'),
       shareOn: () => on,
       folderFor: (_) => folder,
-      gateActive: gateUnset ? null : () => gateOn,
+      gateActive: gateFn ?? (gateUnset ? null : () => gateOn),
       storePhoto: (id, bytes) async {
         final f = await nb.photoFile(id);
         await f.parent.create(recursive: true);

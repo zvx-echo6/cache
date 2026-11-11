@@ -35,7 +35,6 @@ String _ago(int? ms) {
 class _SharingPageState extends State<SharingPage> {
   SharingState get s => widget.sharing;
   bool _busy = false;
-
   Future<void> _run(Future<void> Function() f) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -237,7 +236,7 @@ class _SharingPageState extends State<SharingPage> {
                     icon: Icons.devices_other,
                     title: p['name'] as String? ?? '',
                     status: peerStatus(p),
-                    statusLines: 2,
+                    statusLines: versionMismatch(p) == null ? 2 : null,
                     onTap: () => _peer(p),
                   ),
                 SettingsRow(key: const ValueKey('show-code'), icon: Icons.qr_code_2, title: 'Show my link code', onTap: _busy ? null : _showCode),
@@ -313,6 +312,18 @@ class _SharingPageState extends State<SharingPage> {
 /// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
 /// via a relay"), not as a connection.
 List<Part> peerStatus(Map<String, dynamic> p) {
+  final mismatch = versionMismatch(p);
+  if (mismatch != null) {
+    final name = p['name'] as String? ?? 'This device';
+    return [
+      Part(
+        mismatch == 'peer_older' ? 'Version mismatch: $name needs to update Cache' : 'Version mismatch: update Cache on this device to sync with $name',
+        Tone.warn,
+        Icons.warning_amber_rounded,
+      ),
+      Part(' · ${versionPair(p)}'),
+    ];
+  }
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
   final relay = p['via'] == 'relay';
@@ -346,6 +357,16 @@ bool neverReached(Map<String, dynamic> p, [DateTime? now]) {
   if (linked == null) return false;
   return (now ?? DateTime.now()).difference(DateTime.fromMillisecondsSinceEpoch(linked)) > kNeverReachedAfter;
 }
+
+/// The link's `compat` when the two devices cannot sync: `peer_older` (the other device needs to update) or `peer_newer` (this one does);
+/// null for a link that works or one whose status does not say (the engine does not send `compat` yet).
+String? versionMismatch(Map<String, dynamic> p) {
+  final c = p['compat'];
+  return c == 'peer_older' || c == 'peer_newer' ? c as String : null;
+}
+
+/// "1.2.0 · this device 1.1.0" (the other device's version, then this one's). Cache 1.0 sends no version, so it reads "1.0 or earlier".
+String versionPair(Map<String, dynamic> p) => '${p['peer_version'] ?? '1.0 or earlier'} · this device ${p['our_version'] ?? ''}'.trim();
 
 /// A kind's line: "4 of 6 shared · 11.3 GB", "Not shared".
 List<Part> kindSummary(SharingState s, DataKind k) {
@@ -559,6 +580,21 @@ class SharingDevicePage extends StatefulWidget {
 class _SharingDevicePageState extends State<SharingDevicePage> {
   SharingState get s => widget.sharing;
   bool _busy = false;
+  bool _checking = false;
+
+  /// Check again: asks the device for its version now, shows Checking… and then what it found.
+  Future<void> _check(String name) async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    try {
+      final c = await s.checkVersion(widget.peer);
+      if (mounted) say(context, c == 'ok' ? 'Versions match. Syncing with $name starts again.' : (c == 'unknown' ? 'Could not reach $name.' : 'Still a different version.'));
+    } catch (e) {
+      if (mounted) say(context, '$e');
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
 
   Future<void> _run(Future<void> Function() f) async {
     if (_busy) return;
@@ -606,6 +642,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
         if (p == null) return const SettingsPage(title: 'Linked device', children: [NoteText('This device is no longer linked.')]);
         final name = p['name'] as String? ?? '';
         final free = p['free_bytes'];
+        final mismatch = versionMismatch(p);
         final k = context.t;
         return SettingsPage(
           title: name,
@@ -619,7 +656,23 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    statusText(context, peerStatus(p), size: 14, maxLines: null),
+                    statusText(context, _checking ? const [Part('Checking…')] : peerStatus(p), size: 14, maxLines: null),
+                    if (mismatch != null) ...[
+                      const SizedBox(height: 8),
+                      statusText(
+                        context,
+                        [
+                          Part(
+                            mismatch == 'peer_older'
+                                ? 'Nothing syncs with $name until $name is updated. The link stays, and syncing starts again by itself once both devices run matching versions.'
+                                : 'Nothing syncs with $name until this device is updated. The link stays, and syncing starts again by itself once both devices run matching versions.',
+                            Tone.quiet,
+                          ),
+                        ],
+                        size: 14,
+                        maxLines: null,
+                      ),
+                    ],
                     if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
                     if (neverReached(p)) ...[
                       const SizedBox(height: 10),
@@ -636,7 +689,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 ),
               ),
             ),
-            if (widget.settingsSync != null)
+            if (widget.settingsSync != null && mismatch == null)
               DeviceSettingsSection(
                 key: const ValueKey('device-settings'),
                 sync: widget.settingsSync!,
@@ -649,11 +702,18 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                if (mismatch != null)
+                  TextButton.icon(
+                    key: const ValueKey('device-check'),
+                    icon: const Icon(Icons.refresh),
+                    label: Text(_checking ? 'Checking…' : 'Check again'),
+                    onPressed: _checking ? null : () => _check(name),
+                  ),
                 TextButton.icon(
                   key: const ValueKey('device-sync'),
                   icon: const Icon(Icons.sync),
                   label: const Text('Sync now'),
-                  onPressed: _busy
+                  onPressed: _busy || mismatch != null
                       ? null
                       : () => _run(() async {
                           await s.syncPeer(widget.peer);

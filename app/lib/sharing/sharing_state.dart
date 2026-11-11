@@ -7,6 +7,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../files.dart';
+import '../version.dart';
 import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
@@ -146,6 +147,8 @@ class SharingState extends ChangeNotifier {
         'name': deviceName,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': _reserveBytes((await supportDir()).path),
+        // Shown to linked devices, and compared by the sync gate (a different sync version stops the whole link).
+        'app_version': kAppVersion,
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
         'local_deletes': {for (final a in always) a.id: a.localDeletes},
         'last': {for (final a in always) a.id: a.last},
@@ -249,9 +252,15 @@ class SharingState extends ChangeNotifier {
   /// in either direction. Notebook sync converts its share (and removes the old folders) only once it is. The gate itself is in
   /// cache_sync (design/link-version-gate).
   ///
-  /// TODO(link-version-gate): fail-SAFE placeholder. It returns false until the real gate exists, so the conversion never removes the
-  /// old name folders (that would reach a 1.0.x peer as deletes). Replace with the gate's own "active" answer.
-  bool get linkGateActive => false;
+  /// True only when the engine is running, its status has been read, and EVERY linked device is known compatible (`compat == "ok"`
+  /// in its status). A device not heard from yet (`unknown`), or on another sync version, keeps it false: the old notebook folders
+  /// are removed only when no linked device could receive that as deletes. No linked device at all counts as all compatible.
+  bool get linkGateActive {
+    if (_core == null) return false;
+    final raw = status['peers'];
+    if (raw is! List) return false;
+    return peers.every((p) => p['compat'] == 'ok');
+  }
 
   /// What Sharing says under a kind besides its summary when something stops it (notebook sync: "Update Cache on this device ..."),
   /// set by the app.
@@ -573,6 +582,9 @@ class SharingState extends ChangeNotifier {
 
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+
+  /// Asks one linked device for its version now (Check again on a device that differs): its `compat` afterwards ("ok" syncs at once).
+  Future<String> checkVersion(String peer) async => ((await _call('check_version', {'peer': peer}))['compat'] as String?) ?? 'unknown';
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
   /// stops sharing it, and the files stay.
