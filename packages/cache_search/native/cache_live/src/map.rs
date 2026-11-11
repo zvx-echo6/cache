@@ -80,6 +80,9 @@ pub struct Item {
     pub fields: Fields,
     pub point: Option<Point>,
     pub area: Option<Value>,
+    /// The definition's `app` values that the response had: for the app alone (`cs_live_get`), never in the tool's result.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub app: BTreeMap<String, Value>,
 }
 
 pub struct Mapped {
@@ -652,6 +655,14 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
             Some(c) => follow(ctx, &c.path).and_then(|a| cap::read(a).geometry),
             None => def.area.as_ref().and_then(|p| follow(ctx, p)).filter(|v| v.is_object()).cloned(),
         },
+        app: def
+            .app
+            .iter()
+            .filter_map(|(name, path)| {
+                let v = follow(ctx, path).filter(|v| !v.is_null())?;
+                (v.to_string().len() <= crate::def::MAX_APP_BYTES).then(|| (name.clone(), v.clone()))
+            })
+            .collect(),
     })
 }
 
@@ -1206,7 +1217,7 @@ mod tests {
         assert!(m.items.iter().any(|i| i.key == "c"));
         // exists / missing
         let c = |v: Value| -> Cond { serde_json::from_value(v).unwrap() };
-        let it = Item { key: "k".into(), label: "l".into(), time: None, ends: None, fields: Fields(vec![("N".into(), "12 mph".into())]), point: None, area: None };
+        let it = Item { key: "k".into(), label: "l".into(), time: None, ends: None, fields: Fields(vec![("N".into(), "12 mph".into())]), point: None, area: None, app: BTreeMap::new() };
         let r = json!({"x": 5, "s": "Hello World"});
         let cx = ctx(&r, &r, 0);
         assert!(cond_ok(&c(json!({"value":{"path":"x"},"exists":true})), &it, &cx));

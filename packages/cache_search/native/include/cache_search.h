@@ -824,7 +824,9 @@ cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
  *  "last_error":null|{"code","message","at"},"truncated"?:true (a paged result was cut at the definition's page cap),
  *  "missing_requests"?:n (repeated requests that failed and are missing),"params"?:{...} (the values it was fetched with),
  *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
- *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
+ *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>,"app"?:{"<name>":<value>}}]}
+ * ("app": the values the definition names for the app alone, as the response has them: an alert's message type, references and
+ * VTEC. The live_data tool never includes them.)
  * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */

@@ -345,6 +345,9 @@ struct GetItem {
     point: Option<map::Point>,
     #[serde(skip_serializing_if = "Option::is_none")]
     area: Option<Value>,
+    /// The definition's `app` values: for the app alone (the `live_data` tool builds its own items and has no such member).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    app: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Serialize)]
@@ -530,6 +533,7 @@ impl Live {
                     fields: i.fields.clone(),
                     point: i.point.clone(),
                     area: i.area.clone(),
+                    app: i.app.clone(),
                 })
                 .collect(),
         };

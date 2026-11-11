@@ -1285,8 +1285,10 @@ Item group: `{ "each": "<path>", "key": V, "label": V, "time": V?, "ends": V?, "
 `each`, an array, or an **object** (one item per member; `@key` is the member name, so `{"0": {...}, "1": {...}}` maps with
 `"each": "scales", "key": {"path": "@key"}`); without `each`, one item from the response root. `key` is the item's stable id (it ends
 up in its address); `ends` is when the item stops being true (ended items are left out); `fields` are the labelled values, in order,
-a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). Order of
-processing: map, `where`, `near`, `sort`, `limit`.
+a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). `"app":
+{"<name>": "<path>"}?` gives the app more values with the item, as the response has them (an alert's message type, references
+and VTEC, which tell an update of an alert from another alert); they are in `cs_live_get` only, never in what the model reads.
+Order of processing: map, `where`, `near`, `sort`, `limit`.
 
 A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that has a
 value), `distance`, `param` (a user parameter) or `calc`, then formatted by these steps, in this order: `after_last` (keep the text after the last `"/"`, for the last part of a URL); `time` or `scale`,
