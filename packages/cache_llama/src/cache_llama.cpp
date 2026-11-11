@@ -79,6 +79,7 @@ struct Handle {
     bool                                 finished    = true;
     bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
+    std::atomic<bool>                    in_prefill{false};  // cl_start is decoding the prompt: llama.cpp's abort hook obeys `stop`
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
 
     // Gentle pre-read of the model file into the page cache (cl_configure preread_mbps): one thread, stopped and joined in free_handle.
@@ -802,6 +803,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         cp.n_batch         = 512;
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
+        // llama.cpp's own abort hook: a stop ends an in-flight prompt decode (llama_decode returns 2). Only while the prompt is
+        // read (in_prefill); a single-token decode while generating is never aborted.
+        cp.abort_callback      = [](void * d) -> bool { auto * hh = (Handle *) d; return hh->in_prefill.load() && hh->stop.load(); };
+        cp.abort_callback_data = h.get();
         h->ctx = llama_init_from_model(h->model, cp);
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
@@ -1078,10 +1083,32 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         const std::string prefix_file = save ? prefix_path(h, tokens.data(), prefix) : std::string();
 
         const int n_batch = 512;
+        struct PrefillGuard {
+            std::atomic<bool> & f;
+            explicit PrefillGuard(std::atomic<bool> & x) : f(x) { f = true; }
+            ~PrefillGuard() { f = false; }
+        } prefill_guard(h->in_prefill);
         for (int i = (int) keep; i < h->n_prompt;) {
             int n = std::min(n_batch, h->n_prompt - i);
             if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
-            if (llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n)) != 0) {
+            // Stop between batches: every batch so far was decoded whole and is in `cached`, so the cache stays consistent.
+            if (h->stop.load()) {
+                cl_logi("prefill stopped after %d of %d tokens", i, h->n_prompt);
+                h->finished = true;  // as after a stop while generating: cl_next returns -1, cl_finish gives an empty answer
+                return 0;
+            }
+            const int rc = llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n));
+            if (rc == 2) {
+                // Aborted inside a batch: its state in the cache is not known, so the cache is cleared (the next prompt is read
+                // again) and nothing is saved as a prefix.
+                llama_memory_clear(mem, true);
+                h->cached.clear();
+                h->n_reused = 0;
+                cl_logi("prefill stopped after %d of %d tokens", i, h->n_prompt);
+                h->finished = true;
+                return 0;
+            }
+            if (rc != 0) {
                 llama_memory_clear(mem, true);
                 h->cached.clear();
                 h->n_reused = 0;
