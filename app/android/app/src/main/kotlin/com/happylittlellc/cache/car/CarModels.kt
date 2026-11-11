@@ -104,12 +104,20 @@ object CarModels {
         return CarColor.createCustom(p.day.hostCard, p.night.hostCard)
     }
 
+    /**
+     * The time left as the host is given it. The host shows whole minutes, so under a minute read "0 min" for the last part of
+     * the drive: until the phone says arrived it is never less than one minute.
+     */
+    fun remainingSeconds(t: CarTrip, s: Long): Long = if (t.arrived) max(0L, s) else max(MIN_LEFT_S, s)
+
+    private const val MIN_LEFT_S = 60L
+
     /** "18 min · 21.6 mi" left, the host formatting the time and distance (the route overview's summary). */
     fun leftText(t: CarTrip): CharSequence? {
         val s = t.remainingS ?: return null
         val m = t.remainingM ?: return null
         val text = SpannableString("  ·  ")
-        text.setSpan(DurationSpan.create(max(0L, s)), 0, 1, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+        text.setSpan(DurationSpan.create(remainingSeconds(t, s)), 0, 1, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         text.setSpan(DistanceSpan.create(distance(m, t.imperial)), 4, 5, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         return text
     }
@@ -120,7 +128,7 @@ object CarModels {
         val s = t.remainingS ?: return null
         val eta = t.etaMs ?: (nowMs + s * 1000)
         return TravelEstimate.Builder(distance(m, t.imperial), DateTimeWithZone.create(eta, TimeZone.getDefault()))
-            .setRemainingTimeSeconds(max(0L, s))
+            .setRemainingTimeSeconds(remainingSeconds(t, s))
             .build()
     }
 
