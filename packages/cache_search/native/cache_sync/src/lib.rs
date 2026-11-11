@@ -62,9 +62,11 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// How long a link made by showing a code may wait for the other device to show that it holds the link too, before it is
-/// removed here ([`Peer::unconfirmed`]). Four times the life of a code: the other device normally asks for the file list
-/// within seconds of linking, and an hour leaves room for one that is busy or briefly out of reach.
-const CONFIRM_WINDOW: Duration = Duration::from_secs(4 * LINK_WINDOW.as_secs());
+/// removed here ([`Peer::unconfirmed`]). A slow clean-up, not a time limit: removing a real link is worse than keeping a
+/// dead entry, and the other device may be put away for days right after linking. Counted from the time saved with the
+/// link, so a restart does not start the wait again. A clock that is behind never removes anything; a clock wrongly far
+/// ahead could remove such a link early, which is accepted because only links never confirmed are ever touched.
+const CONFIRM_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
 
@@ -469,9 +471,6 @@ struct Inner {
     stop: AtomicBool,
     /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
     settle_again: Arc<AtomicBool>,
-    /// Since when this run has seen each link that is not yet confirmed ([`Peer::unconfirmed`]), by device. Counted by this
-    /// run's own clock, so a wrong or changing date on the device cannot remove a link early; a restart starts the wait again.
-    unconfirmed_since: Mutex<HashMap<String, Instant>>,
     /// Files dated in the future (a device with a wrong clock), by share then path: the size and modification time each was
     /// last seen with, and since when. Their date cannot say whether they are still being written, so they count as settled
     /// once they have stayed the same for [`SETTLE`]. In memory only; an entry goes when its file settles, changes or goes.
@@ -1251,7 +1250,6 @@ impl Inner {
             sv.peers.iter_mut().find(|p| p.id == peer).map(|p| std::mem::take(&mut p.unconfirmed)).unwrap_or(false)
         };
         if changed {
-            self.unconfirmed_since.lock().unwrap().remove(peer);
             let _ = self.save();
         }
     }
@@ -1266,24 +1264,21 @@ impl Inner {
         CONFIRM_WINDOW
     }
 
-    /// Removes the links made here by showing a code that the other device has not confirmed in time: it never learned it was
-    /// linked, so the entry here would stay for ever as a device that never answers. A confirmed link is never touched.
+    /// Removes the links made here by showing a code that the other device still has not confirmed [`CONFIRM_WINDOW`] after
+    /// they were made: it never learned it was linked, so the entry here would stay for ever as a device that never answers.
+    /// A confirmed link is never touched.
     fn drop_unconfirmed(&self) {
-        let window = self.confirm_window();
+        let window = self.confirm_window().as_millis() as u64;
+        let now = now_ms();
         let mut gone: Vec<Peer> = Vec::new();
-        {
-            let mut sv = self.saved.lock().unwrap();
-            let mut since = self.unconfirmed_since.lock().unwrap();
-            since.retain(|id, _| sv.peers.iter().any(|p| p.unconfirmed && p.id == *id));
-            let now = Instant::now();
-            sv.peers.retain(|p| {
-                if !p.unconfirmed || now.duration_since(*since.entry(p.id.clone()).or_insert(now)) < window {
-                    return true;
-                }
-                gone.push(p.clone());
-                false
-            });
-        }
+        // Saturating: a link dated after now (the clock went back) has waited no time at all.
+        self.saved.lock().unwrap().peers.retain(|p| {
+            if !p.unconfirmed || now.saturating_sub(p.linked) < window {
+                return true;
+            }
+            gone.push(p.clone());
+            false
+        });
         if gone.is_empty() {
             return;
         }
@@ -1945,8 +1940,6 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
         s.peers.retain(|p| p.id != id);
         s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
-    // A link made again waits afresh, whatever an earlier one with the same device left.
-    inner.unconfirmed_since.lock().unwrap().remove(id);
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
     }
@@ -2112,7 +2105,6 @@ impl SyncEngine {
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
-            unconfirmed_since: Mutex::new(HashMap::new()),
             settling: Mutex::new(HashMap::new()),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),

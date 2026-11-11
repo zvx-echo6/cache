@@ -65,7 +65,7 @@ fn a_link_the_other_device_never_confirms_is_removed() {
     std::fs::write(folder.join("note.txt"), "note").unwrap();
     let a = engine(&da, "Desk");
     let b = engine(&db, "Phone");
-    // The wait for a confirmation is two seconds here.
+    // The wait for a confirmation is two seconds here (counted from when the link is made).
     std::fs::write(da.join("confirm-window-ms"), "2000").unwrap();
     // A's round is held in its rescan, so A asks B for nothing; B may not use the network, so its rounds ask A for nothing.
     std::fs::write(da.join("hold-rescan"), b"").unwrap();
@@ -90,22 +90,39 @@ fn a_link_the_other_device_never_confirms_is_removed() {
 }
 
 #[test]
-fn a_link_saved_by_an_older_version_counts_as_confirmed() {
+fn only_an_old_unconfirmed_link_is_removed_whatever_else_is_saved() {
     let tmp = tempfile::tempdir().unwrap();
     let da = tmp.path().join("a");
     std::fs::create_dir_all(&da).unwrap();
-    // As older versions wrote it: no mark on the device. Even with no wait at all it is never removed.
-    std::fs::write(da.join("sync.json"), r#"{"name":"Desk","peers":[{"id":"p1","name":"Phone","linked":5}],"shares":[]}"#).unwrap();
-    std::fs::write(da.join("confirm-window-ms"), "0").unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    // As saved before this start, with the real wait (seven days): a link an older version wrote long ago (no mark), one made
+    // long ago by a code and never confirmed, and one made just now by a code and not confirmed yet.
+    let saved = json!({
+        "name": "Desk",
+        "peers": [
+            {"id": "old", "name": "Phone", "linked": 5},
+            {"id": "stale", "name": "Tablet", "linked": 5, "unconfirmed": true},
+            {"id": "fresh", "name": "Laptop", "linked": now, "unconfirmed": true},
+        ],
+        "shares": [],
+    });
+    std::fs::write(da.join("sync.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
     let a = engine(&da, "Desk");
-    assert_eq!(peers(&a)[0]["unconfirmed"], false);
+    let ids = |e: &SyncEngine| peers(e).iter().map(|p| p["id"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    // The wait is counted from the saved time, so the stale one goes in the first rounds after the start.
+    wait("the stale unconfirmed link removed", 60, || {
+        call(&a, "sync_now", json!({}));
+        !ids(&a).contains(&"stale".to_string()) && log(&a).contains("Tablet did not finish linking with this device")
+    });
     let rounds = |e: &SyncEngine| call(e, "status", json!({}))["rounds"].as_u64().unwrap_or(0);
     let before = rounds(&a);
     wait("three more rounds on A", 60, || {
         call(&a, "sync_now", json!({}));
         rounds(&a) >= before + 3
     });
-    assert_eq!(peers(&a).len(), 1, "{}", log(&a));
+    // The link with no mark is confirmed and stays however old it is; the fresh one is still waiting.
+    assert_eq!(ids(&a), vec!["old".to_string(), "fresh".to_string()], "{}", log(&a));
     assert_eq!(peers(&a)[0]["unconfirmed"], false);
+    assert_eq!(peers(&a)[1]["unconfirmed"], true);
     a.close();
 }
