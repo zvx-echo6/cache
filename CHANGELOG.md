@@ -11,6 +11,7 @@ release notes).
 - Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
 - Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
 - Library: Add to Library now shows Your own (Your own library, Add a PDF, Add a folder) at the top
+- Ask: when a chat is full, it says so plainly with a New chat button, and marks an answer cut short
 
 ## 1.1.0 (build 48, test) - 2026-11-10
 

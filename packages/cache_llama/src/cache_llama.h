@@ -47,7 +47,8 @@ CL_API int cl_info(void * h, char * out_json, int len);
 // the same as the previous prompt plus its answer is not decoded again (KV cache reuse). With a prefix_dir (cl_configure),
 // the stable start of the system prompt and tools (the part that stays the same from one request to the next) is restored
 // from disk when the cache does not hold it, and saved once.
-// Returns 0 or -1 (reason in err).
+// Returns 0, -1 (reason in err) or -3 when the prompt does not fit the context (err holds the engine text for the log; the
+// caller must not show it: the chat is full).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
 
 // Generate the next token. Writes its UTF-8 text to buf and returns the byte count (may be 0 while an
@@ -62,6 +63,7 @@ CL_API int cl_partial(void * h, char * out_json, int len);
 // Parse everything generated so far into an OpenAI style assistant message:
 // {"role","content","tool_calls":[{"id","type":"function","function":{"name","arguments"}}]}.
 // If the output does not parse, content is the raw text and "parse_error" is set.
+// "stop":"context" is added when the generation ended because the context filled up (the answer is cut off).
 // Returns the length, or -1 if out is too small.
 CL_API int cl_finish(void * h, char * out_json, int len);
 
