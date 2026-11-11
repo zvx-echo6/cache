@@ -130,7 +130,8 @@ impl crate::handle::Handle {
             self.ext.map_data = Some(store);
         }
         if let Some(l) = live {
-            self.ext.live = Some(Live::new(l.clone()));
+            // the handle's own engine reads the keys the host pushed (cs_live_set_key) for a fetch whose request has none
+            self.ext.live = Some(Live::with_keys(l.clone(), self.fetcher.clone()));
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
         }
         if let Some(p) = places {
@@ -355,7 +356,8 @@ impl Ext {
     /// search, a read or the Weather screen's stored data are answered meanwhile, and several sources download at once.
     /// `not_configured` (no job) without a "live" section.
     pub fn live_fetch_job(&self, req: &str) -> Result<crate::job::Job> {
-        let live = Live::new(self.live()?.cfg.clone());
+        // a copy of the handle's engine, with the same keys
+        let live = self.live()?.clone();
         let (user_db, slot, req) = (self.user_db.clone(), self.places.clone(), req.to_string());
         crate::job::Job::spawn_result("cs-live-fetch", move |_cancelled| {
             let user = user_db.as_deref().map(UserStore::new);

@@ -15,6 +15,7 @@ release notes).
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
 - Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+- Weather and alerts: a source that needs a key (satellite fire hotspots, or a source of your own with a key) now updates from Update now, in the background and when you move, not only when Ask looks it up
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 

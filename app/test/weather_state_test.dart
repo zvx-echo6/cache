@@ -527,6 +527,31 @@ void main() {
       expect(h.weather.hasKey('firms'), isTrue);
     });
 
+    // 1.1 audit: the app's own fetches (Update now, the background run, "Where I am") send no key; the core uses the one it was
+    // handed. Before, the core read that key only for the assistant, and every one of these failed with "needs a key".
+    test('a source with a saved key updates from Update now, after a restart and for "Where I am", with no key in the request', () async {
+      h = await Harness.create();
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, secret);
+      final r = await h.weather.updateNow();
+      expect(r.failures, isEmpty);
+      expect(r.fetched, 1);
+      expect(h.core.fetches.single['source'], 'firms-viirs-near');
+      expect(h.core.fetches.single.containsKey('api_key'), isFalse, reason: 'the core uses the key it was handed');
+      expect(h.weather.sourceErrors, isEmpty);
+      // a new start (as a background run is): the key is handed over again before anything is fetched
+      h = await h.restart();
+      expect((await h.weather.updateNow()).failures, isEmpty);
+      // "Where I am" moved
+      h.here = (lat: 42.70, lon: -113.79);
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect((h.core.fetches.last['place'] as Map)['key'], 'at:42.70,-113.79');
+      expect(h.core.everythingSeen(), isNot(contains(secret)));
+      // the fake core refuses as the real one does when it holds no key
+      h.core.keys.remove('firms-viirs-near');
+      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Where I am failed: needs a key');
+    });
+
     test('one key serves every source that uses it', () async {
       h = await Harness.create();
       await h.weather.saveKey(h.weather.sourceById('idaho511-events')!, secret);

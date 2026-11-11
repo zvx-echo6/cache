@@ -372,13 +372,28 @@ struct GetOut<'a> {
 }
 
 /// The live data engine of one `cs_open` handle.
+#[derive(Clone)]
 pub struct Live {
     pub cfg: LiveCfg,
+    /// The keys the host handed over (`cs_live_set_key`), which a fetch uses for a request that carries none. `None` for an engine
+    /// that is given every key in its request (the `live_data` tool's own, the CLI, tests).
+    keys: Option<std::sync::Arc<dyn cache_tool::LiveFetcher>>,
 }
 
 impl Live {
     pub fn new(cfg: LiveCfg) -> Live {
-        Live { cfg }
+        Live { cfg, keys: None }
+    }
+
+    /// `new`, for the handle's own engine (`cs_live_fetch`, `cs_live_fetch_start`): a fetch whose request has no `api_key` uses
+    /// the key `keys` holds for the source. Only `key_for` is asked; whether a fetch is allowed stays the caller's business.
+    pub fn with_keys(cfg: LiveCfg, keys: std::sync::Arc<dyn cache_tool::LiveFetcher>) -> Live {
+        Live { cfg, keys: Some(keys) }
+    }
+
+    /// The key the host holds for `source_id`, when this engine was given the host's keys.
+    pub(crate) fn held_key(&self, source_id: &str) -> Option<String> {
+        self.keys.as_ref().and_then(|k| k.key_for(source_id)).filter(|k| !k.is_empty())
     }
 
     pub(crate) fn db(&self) -> Result<Connection> {
