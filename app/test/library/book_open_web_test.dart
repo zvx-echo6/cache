@@ -6,6 +6,7 @@ import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/web/device_files.dart';
 import 'package:cache/library/book_pages.dart';
 import 'package:cache/library/cds_shelf_source.dart';
+import 'package:cache/linux_ui.dart';
 import 'package:cache/pdf/pdf_reader_screen.dart';
 import 'package:cache/pdf/pdf_source.dart';
 import 'package:cache/theme.dart';
@@ -44,11 +45,16 @@ Map<String, dynamic> _view() => {
       'folders': <Map<String, dynamic>>[],
     };
 
-void main() {
-  testWidgets('in a browser a book on the server has Open, which opens its PDF in the reader from the server\'s bytes', (tester) async {
+/// Opens the server's book from its page in a window of [size]; [desktop] turns on Cache on Linux's desktop layout (the book pane
+/// a browser shows at 1024 wide and up), which a widget test has to ask for.
+Future<void> _opensFromServer(WidgetTester tester, Size size, {bool desktop = false}) async {
+    if (desktop) {
+      debugLinuxUi = true;
+      addTearDown(() => debugLinuxUi = null);
+    }
     final tmp = Directory.systemTemp.createTempSync('book-open-web');
     addTearDown(() => tmp.deleteSync(recursive: true));
-    tester.view.physicalSize = const Size(390, 1000);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final server = FakeShelfServer()..viewJson = _view();
@@ -85,5 +91,14 @@ void main() {
     expect(await tester.runAsync(source.fetch), bytes);
     expect(server.pdfAsked, ['field/aid']);
     await tester.pumpWidget(const SizedBox());
+}
+
+void main() {
+  testWidgets('in a browser a book on the server has Open, which opens its PDF in the reader from the server\'s bytes', (tester) async {
+    await _opensFromServer(tester, const Size(390, 1000));
+  });
+
+  testWidgets('at a desktop width the book pane has the same Open for a book on the server', (tester) async {
+    await _opensFromServer(tester, const Size(1280, 900), desktop: true);
   });
 }

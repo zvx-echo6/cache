@@ -529,12 +529,34 @@ class BookPage extends StatelessWidget {
     );
   }
 
+  /// Opens a book the server holds in the PDF reader, from its bytes. A PDF the server no longer has (404) is the reader's "gone"
+  /// page; any other failure goes to the reader as it is, which tells signed out from not reached.
+  static void _openServerPdf(BuildContext context, ShelfBook b, Future<List<int>> Function() fetch) {
+    openPdfReader(
+      context,
+      PdfServerSource(
+        id: '${b.libraryId}/${b.docId}',
+        title: b.title,
+        fetch: () async {
+          try {
+            return await fetch();
+          } on DeviceException catch (e) {
+            if (e.status == 404) throw const PdfGone();
+            rethrow;
+          }
+        },
+      ),
+      page: 1,
+    );
+  }
+
   /// The Linux desktop's book pane: the catalogue card on top, the actions in one row of ordinary buttons under it, the facts as a
   /// label and value list, then the quiet group (Rename, Hide from Bookshelves, Delete book). Left-aligned, 760 wide at most.
   static Widget _desktopBody(BuildContext context, LibraryDeps d, ShelfBook b, DesktopMetrics m, Widget card) {
     final k = context.t;
     final f = d.files;
     final path = b.pdfPath;
+    final fetch = d.shelves.pdfFetcher(b);
     final here = path != null && _pdfBytes(b) != null;
     final original = d.originals?.available(b) ?? false;
     final placer = d.shelves.placer;
@@ -555,7 +577,9 @@ class BookPage extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  // in a browser the PDF is on the server: nothing to open or download here
+                  // in a browser the PDF is on the server: Open reads it from there, in the reader (nothing to download here)
+                  if (b.onServer && fetch != null)
+                    FilledButton(key: const ValueKey('book-open'), onPressed: () => _openServerPdf(context, b, fetch), child: const Text('Open')),
                   if (!b.onServer && here)
                     FilledButton(
                       key: const ValueKey('book-open'),
@@ -796,22 +820,7 @@ class BookPage extends StatelessWidget {
           child: FilledButton(
             key: const ValueKey('book-open'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-            onPressed: () => openPdfReader(
-              context,
-              PdfServerSource(
-                id: '${b.libraryId}/${b.docId}',
-                title: b.title,
-                fetch: () async {
-                  try {
-                    return await fetch();
-                  } on DeviceException catch (e) {
-                    if (e.status == 404) throw const PdfGone();
-                    rethrow;
-                  }
-                },
-              ),
-              page: 1,
-            ),
+            onPressed: () => _openServerPdf(context, b, fetch),
             child: const Text('Open'),
           ),
         ),
