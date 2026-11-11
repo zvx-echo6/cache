@@ -560,6 +560,28 @@ mod tests {
     }
 
     #[test]
+    fn quoted_spans_the_model_sends_find_their_passages() {
+        // shapes taken from real model queries: a quoted multi-word span next to plain words, and several one-word quotes
+        let (d, oi) = index_of(
+            "model-quotes",
+            &[
+                ("film-title", "The 11th Hour", "A documentary about the environment."),
+                ("film-body", "Film notes", "The 11th hour is a film about the climate. It was released in 2007."),
+                ("fennel", "Garden notes", "Common fennel and Florence fennel are the two main varieties grown for the kitchen."),
+                ("other", "Tomatoes", "Tomatoes want sun and water."),
+            ],
+        );
+        let r = ranked(&oi, "\"The 11th Hour\" film");
+        assert!(r.iter().any(|p| p == "film-title"), "{r:?}");
+        assert!(r.iter().any(|p| p == "film-body"), "{r:?}");
+        assert!(!r.iter().any(|p| p == "other"), "{r:?}");
+        let r = ranked(&oi, "fennel varieties \"Common\" \"Florence\"");
+        assert_eq!(r.first().map(String::as_str), Some("fennel"), "{r:?}");
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn a_query_with_nothing_to_search_finds_nothing_and_does_not_fail() {
         let (d, oi) = two_point_index("empty");
         for q in ["", "   ", "---", "\"\"", "\" "] {
