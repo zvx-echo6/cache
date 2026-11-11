@@ -119,7 +119,7 @@ impl ChatModel {
         // SAFETY: req and err are valid for the lengths given.
         let rc = unsafe { (self.start)(self.handle, req.as_ptr(), b.err.as_mut_ptr(), ERR_LEN as c_int) };
         if rc != 0 {
-            return Err(StartFailure { code: rc as i32, message: text(&b.err) });
+            return Err(StartFailure { code: rc, message: text(&b.err) });
         }
         Ok(())
     }
