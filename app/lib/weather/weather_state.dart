@@ -1492,16 +1492,15 @@ class WeatherState extends ChangeNotifier {
     }
     await placeAlerts?.load();
     final before = await t.load();
+    // The told list and the copy beside it are both there and neither can be read (rare, with the copy): nothing is known of
+    // what was told. These are safety alerts, and missing a new warning is worse than repeating one: it is taken as nothing
+    // told, so what is in force pops up once, the log says so, and the list is written again below.
+    if (!before.known) logError('Alerts: the told list and its copy could not be read; what is in force is told again');
     final fresh = pickNewAlerts(byPlace, before.addresses, rules: placeAlerts?.ruleFor, toldAlerts: before.alerts);
     if (fresh.isEmpty) return 0;
     var shown = 0;
-    // The told list is there but cannot be read, and no earlier copy of it is left: what was told is not known, which is not
-    // "nothing was told". What is in force now is remembered without popping up (it stays listed on Home and in Weather), so
-    // one bad file does not bring every alert back; what comes after it pops up as usual.
-    if (before.known) {
-      for (final a in fresh) {
-        if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
-      }
+    for (final a in fresh) {
+      if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
     }
     await t.add([for (final a in fresh) ...a.allAddresses, for (final a in fresh) ...a.marks], alerts: [for (final a in fresh) ...a.told]);
     return shown;

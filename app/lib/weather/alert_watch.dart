@@ -334,14 +334,14 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
 }
 
 /// What a [ToldStore] holds: the addresses told about and what is remembered of each alert. [known] is false when the list
-/// is there but cannot be read and no earlier copy of it is left: then nothing is known of what was told, which is not the
-/// same as nothing having been told.
+/// is there but cannot be read and no earlier copy of it is left: then nothing is known of what was told, and the list is
+/// empty (the alert check then tells what is in force once more, and logs it: repeating an alert is better than missing one).
 typedef ToldList = ({Set<String> addresses, List<ToldAlert> alerts, bool known});
 
 /// What has been told about, kept in a small file so restarts and background runs never repeat a pop-up: the addresses of the
 /// items told about (the file's strings, as before) and what is remembered of each alert ([ToldAlert], the file's objects).
 /// A second copy is kept beside it (`<file>.bak`), and the store remembers the last list it read or wrote: a file that cannot
-/// be read is not taken as "nothing was ever told" (every alert in force would pop up again).
+/// be read falls back to those, and only when none is left is it an empty list (see [ToldList]).
 class ToldStore {
   ToldStore(File file) : _where = (() async => file);
 

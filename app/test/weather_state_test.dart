@@ -1450,8 +1450,9 @@ void main() {
       expect(n.shown.map((a) => a.item.label), ['East Fork fire']);
     });
 
-    // 1.1 audit: a told list that could not be read was taken as an empty one, so everything in force popped up again.
-    test('a told list that cannot be read is not "nothing was told"', () async {
+    // 1.1 audit: a told list that could not be read was taken as an empty one, so everything in force popped up again. A copy is
+    // kept beside it now. Only when neither can be read is it "nothing told": a repeated alert is better than a missed one.
+    test('a told list that cannot be read falls back to its copy; with both unreadable what is in force is told once more', () async {
       final n = FakeNotifier();
       h = await withNotifier(n);
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
@@ -1469,17 +1470,20 @@ void main() {
       list.writeAsStringSync('["live:wfigs-inc');
       await startAgain();
       await h.weather.updateNow();
-      expect(n.shown.length, 1, reason: 'told before');
-      // the copy is damaged too: what was told is not known, and nothing in force pops up again
+      expect(n.shown.length, 1, reason: 'told before: no repeat');
+      // the copy is damaged too: nothing is known of what was told, so what is in force is told again, once
       copy.writeAsStringSync('not a list');
       await startAgain();
       await h.weather.updateNow();
-      expect(n.shown.length, 1);
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire']);
       expect(jsonDecode(list.readAsStringSync()), contains('live:wfigs-incidents-near/x/East Fork fire'), reason: 'the list is whole again');
+      expect(jsonDecode(copy.readAsStringSync()), jsonDecode(list.readAsStringSync()), reason: 'and so is its copy');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'not a third time');
       // what comes after pops up as usual
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire', 'Forleen fire']);
     });
 
     test('alerts already in fresh copies pop up too, once; earthquakes do not', () async {
