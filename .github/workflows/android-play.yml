@@ -1,6 +1,8 @@
 # Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to Google Play's internal, closed (alpha)
 # and open (beta) testing tracks, fully rolled out with nothing left to click in Play Console (or as a draft with status: draft).
 # Manual trigger only. It builds the branch it is started on.
+# android_auto: builds with Android Auto switched on (off in every normal build), to start Google's car review. Such a build may
+# only go to closed testing (tracks: alpha), where the car review blocks nothing; the run fails at the start on any other tracks.
 #
 # Signing: the upload key (PKCS12 keystore, alias "upload") lives only in the Actions secrets ANDROID_UPLOAD_KEYSTORE_B64,
 # ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_PASSWORD and ANDROID_UPLOAD_KEY_ALIAS. It is decoded into the runner's temp
@@ -10,7 +12,7 @@
 # Native parts:
 #   routing  Valhalla 3.7.0 + the C shim, libvalhalla_shim.so for arm64-v8a (cached; the app finds it in its native library folder)
 #   app      flutter build appbundle: Gradle builds the Rust search core with cargo-ndk (arm64-v8a, with libzim) and llama.cpp
-#            with the NDK (arm64-v8a, x86_64); Rust, libzim and Gradle are cached
+#            with the NDK (arm64-v8a); Rust, libzim and Gradle are cached
 #   play     upload to Play, only the new release on each track (anything halted, staged or drafted cleared), with the chosen
 #            status and the release notes, commit, then read every track back and fail unless each shows the new release
 name: Android Play
@@ -31,6 +33,10 @@ on:
         type: choice
         options: [completed, draft]
         default: completed
+      android_auto:
+        description: Build with Android Auto switched on, for Google's car review (closed testing only, tracks must be alpha)
+        type: boolean
+        default: false
   # Only so GitHub lists this workflow while it is not on the default branch (a manual run needs that): a push builds nothing.
   push:
     branches: [android-play]
@@ -58,6 +64,7 @@ jobs:
           sparse-checkout: |
             .github
             app/pubspec.yaml
+            app/lib/version.dart
             app/android/play_release.py
             app/android/play_release_test.py
       - name: The upload script's tests (a fake Play)
@@ -88,21 +95,26 @@ jobs:
           if not re.fullmatch(r"[A-Za-z0-9:_-]+(,[A-Za-z0-9:_-]+)*", tracks): sys.exit(f"::error::Not a list of track names: {tracks}")
           print(f"tracks {tracks}, release notes {len(notes)} characters")
           PY
+      # Google reviews a car build without blocking anything only on closed testing; on open testing it would block releases.
+      - name: An Android Auto build goes to closed testing only
+        if: inputs.android_auto
+        env:
+          TRACKS: ${{ inputs.tracks }}
+        run: |
+          tracks=$(printf '%s' "$TRACKS" | tr -d '[:space:]')
+          if [[ "$tracks" != "alpha" ]]; then
+            echo "::error::An Android Auto build may only go to closed testing (alpha) for now; tracks is '$tracks'. Run it again with tracks: alpha"
+            exit 1
+          fi
+          echo "Android Auto build, closed testing (alpha) only"
       # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and versionCode 31, the same build number on iPhone and
       # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
       # version are two builds), so it is not tied to the version's last number. It is the versionCode Play gets (not the run
       # number), and the next step checks it is higher than every one already on Play.
       - name: Version and versionCode from pubspec.yaml
         id: v
-        run: |
-          line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
-          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\ *$ ]]; then
-            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<patch>+<build number>, as in 1.0.30+31, found: $line"; exit 1
-          fi
-          name=${BASH_REMATCH[1]} build=${BASH_REMATCH[2]}
-          echo "build_name=$name" >> "$GITHUB_OUTPUT"
-          echo "build_number=$build" >> "$GITHUB_OUTPUT"
-          echo "version $name, versionCode $build"
+        # Also fails when app/lib/version.dart has a different version or build number, or the build number is 1000 or more.
+        run: bash .github/scripts/app-version.sh --store
       - name: The versionCode is higher than every one on Play
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -195,11 +207,10 @@ jobs:
         uses: ./.github/actions/pinned-downloads
         with:
           names: >-
-            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz pdfium-chromium-7811-android-arm.tgz
-            pdfium-chromium-7811-android-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
-            sqlite3-3.5.2-libsqlite3.arm.android.so sqlite3-3.5.2-libsqlite3.x64.android.so
+            pdfium-chromium-7811-linux-x64.tgz pdfium-chromium-7811-android-arm64.tgz
+            sqlite3-3.5.2-libsqlite3.x64.linux.so sqlite3-3.5.2-libsqlite3.arm64.android.so
       - name: Seed the build hooks
-        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64 android-arm android-x64
+        run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64 android-arm64
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -270,14 +281,19 @@ jobs:
         working-directory: app
         env:
           CACHE_LLAMA_GEMMA4_PREFILL_OPT: 'ON'
+          # Android Auto is off unless this is exactly 'true' (app/android/app/build.gradle.kts); 'true' only with the
+          # android_auto input.
+          ORG_GRADLE_PROJECT_cacheAndroidAuto: ${{ inputs.android_auto && 'true' || 'false' }}
         run: |
           flutter --version
           flutter pub get
           flutter test --no-pub
-          flutter build appbundle --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
+          flutter build appbundle --release --target-platform android-arm64 --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.aab"
       - name: Verify the signed bundle
+        env:
+          ANDROID_AUTO: ${{ inputs.android_auto && 'true' || 'false' }}
         run: |
           aab="out/Cache-${{ needs.plan.outputs.build_name }}.aab"
           ls -l "$aab"; sha256sum "$aab"
@@ -291,6 +307,15 @@ jobs:
           unzip -p "$aab" base/lib/arm64-v8a/libcache_search.so > "$RUNNER_TEMP/cache-core-check.so"
           LC_ALL=C grep -aFq '.cache-search-index.guard' "$RUNNER_TEMP/cache-core-check.so" || { echo "::error::Crash-safe indexing core is missing"; exit 1; }
           rm -f "$RUNNER_TEMP/cache-core-check.so"
+          # A car build must never reach a track it should not, and a normal build must never carry Android Auto by accident:
+          # the bundle's manifest (protobuf, names as plain text) must declare the car service exactly when android_auto is on.
+          unzip -p "$aab" base/manifest/AndroidManifest.xml > "$RUNNER_TEMP/manifest-check.pb"
+          test -s "$RUNNER_TEMP/manifest-check.pb" || { echo "::error::The bundle has no base/manifest/AndroidManifest.xml"; exit 1; }
+          car=$(LC_ALL=C grep -a -c CacheCarAppService "$RUNNER_TEMP/manifest-check.pb" || true)
+          rm -f "$RUNNER_TEMP/manifest-check.pb"
+          if [[ "$ANDROID_AUTO" == "true" && "$car" -eq 0 ]]; then echo "::error::android_auto is on but the bundle's manifest has no CacheCarAppService"; exit 1; fi
+          if [[ "$ANDROID_AUTO" != "true" && "$car" -ne 0 ]]; then echo "::error::android_auto is off but the bundle's manifest declares CacheCarAppService"; exit 1; fi
+          echo "Android Auto in the bundle: $([[ "$car" -ne 0 ]] && echo on || echo off) (android_auto input: $ANDROID_AUTO)"
           signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
           if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
             echo "::error::The bundle is not signed with the upload key (signer $signer)"; exit 1

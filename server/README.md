@@ -32,6 +32,20 @@ op `server.features` says what is there:
      "places":  {"available": <the merged places database is there>, "merged_dir": "<path>"},
      "extras":  {<the config sections the core was opened with; "routing" only when routing is available>}}
 
+### Regions
+
+The browser downloads regions the way the phone does, and the server runs the download, so it goes on with no tab open. The helper
+answers three ops through `/api/core` (`server/helper/bin/regions_ops.dart`): `regions.open` (the engine is open; `unavailable` when the
+core has none), `regions.call {method, args}` and `regions.close` (nothing: the engine is the server's). The methods are the region
+engine's (`status`, `plan`, `add`, `remove`, `stream`, `set_policy`, `check_update`, `update`; docs/REGIONS.md) on the same engine the
+search core opened (one per folder, `<data>/app/support/regions`), plus the off-road packs, which the phone downloads in Dart and the
+helper downloads here (`offroad_packs.dart`): `offroad_fetch {path,url,bytes,sha256}`, `offroad_status {paths}`, `offroad_cancel {path}`
+and `offroad_remove {path}`. A pack is `<build>/<id>/offroad.sqlite` under `regions/offroad`, fetched only from the data host
+(`data.cached.info`, `cache.echo6.co`), resumed from its `.part` file and checked against its SHA-256. When the core opens, the helper
+reads `<support>/regions-app.json` (written by the app), gives the engine the person's Pause (the engine does not keep it) and
+carries on the packs the kept regions still miss. The region and off-road catalogues are fetched through `/api/fetch` and kept in
+`<support>/region-catalogue`.
+
 ### Map tiles
 
 The core's layer engine serves map tiles from a tile server inside the helper process, on 127.0.0.1 and a random port, which a browser cannot
@@ -47,6 +61,29 @@ requests are same-origin, so they carry it and there is no separate token. The p
 (after a helper restart); 503 `core_unavailable` while the helper is down, 502 `tile_server_unreachable` when the port does not answer.
 Only `layers/...` paths of letters, digits, `.`, `_`, `-` are forwarded (404 otherwise), only GET and HEAD, and the query is dropped.
 The map fonts are not here: they are Flutter assets under `/assets/assets/map/fonts/`.
+
+### Videos
+
+The browser's Videos run on the same engine as the phone's. The helper opens a video core handle on `<data>/app/docs/videos` (the phone's folder
+under the files root, so a video that arrives by sync lands there too) and answers the `video.*` ops through `/api/core`: `video.info`,
+`video.call {op, request}` (any `cs_video_*` call), `video.jobStart|jobProgress|jobCancel|jobFree` and `video.jobs`. A download is a core job
+in the helper, so it goes on with no tab open; pausing cancels it and keeps the partial file, resuming starts it again (the core continues the
+file), and a tab opened later lists the running and finished downloads with `video.jobs`. A server restart ends running downloads; their partial
+files stay. The helper handles one request at a time, so a slow video-site call holds up other ops until it answers.
+
+Playing goes through three GET routes. A same-origin `<video>` sends the session cookie, so none needs a token:
+
+    GET|HEAD /api/video/media/<path under the videos folder>   a saved video, sound, caption or picture, with Range (206, 416)
+    GET|HEAD /api/video/zim/<zim id>/<entry path>              a video or caption entry of a ZIM, with Range (the last entry read is kept in memory)
+    GET      /api/video/stream?u=<address>                     a video site's file, caption or picture, read by the server, with Range
+
+`media` takes plain file names only (no `..`, hidden or empty names, backslashes) and the real file must be inside the videos folder (404
+otherwise). `stream` reaches `http`/`https` hosts whose every address is public: the client's name lookup refuses loopback, private,
+link-local, shared (100.64/10), multicast and reserved addresses, so a redirect or a DNS answer cannot reach this machine or the home
+network (502); up to four redirects; `Range` is passed on; an upstream error status is passed on with no body. What it sends back has a
+media, caption or picture type only (anything else is `application/octet-stream`) and `Content-Security-Policy: sandbox`, so a page from a
+video site cannot run on this origin. An HLS playlist (`.m3u8`) is rewritten so its parts, keys and sub-playlists come back through this
+route; a private video's `videoFileToken` is kept on addresses of the site it came with. 401 without a session; only GET and HEAD.
 
 ### The text embedder
 

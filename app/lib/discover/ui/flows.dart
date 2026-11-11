@@ -54,7 +54,7 @@ Future<void> getItems(BuildContext context, DiscoverState d, {required String ti
 
 /// Get on a map tile.
 Future<void> getMap(BuildContext context, DiscoverState d, MapOffer o) async {
-  final data = GetSheetData(icon: discoverIcon('map'), title: 'Add ${o.title}', bytes: o.bytes ?? 0, free: d.device.freeBytes(), downloads: ['${o.title} map, routes and places']);
+  final data = GetSheetData(icon: discoverIcon('map'), title: 'Add ${o.title}', bytes: o.bytes ?? 0, free: d.device.freeBytes(), usable: d.device.usableBytes(), downloads: ['${o.title} map, routes and places']);
   if (!await showGetSheet(context, data) || !context.mounted) return;
   await d.device.getMap(o);
 }

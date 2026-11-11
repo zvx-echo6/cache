@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
+import '../../desktop/hover_row.dart';
+import '../../desktop/notebook_chips.dart';
 import '../../layout/adaptive.dart';
 
 import '../../notebook/notebook_model.dart';
@@ -8,6 +11,7 @@ import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
 import '../pin_screen.dart';
+import '../settings/widgets.dart' show Part, SettingsRow;
 import 'connections_screen.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart';
@@ -134,7 +138,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     id: 'notebooks',
     listName: 'Notebooks',
     // A tablet shows the shelf across the page until a notebook is opened beside it (no empty pane).
-    listAloneUntilChosen: true,
+    // (On the Linux desktop the detail pane is always beside the 300-wide shelf, with "Choose an item" until one is opened.)
+    listAloneUntilChosen: !isLinuxDesktop(context),
     list: Builder(
       builder: (c) {
         _pane = c;
@@ -145,28 +150,41 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   Widget _shelf(BuildContext context) {
     final k = context.t;
+    final hasMenu = widget.deps.connections != null || widget.deps.pin != null;
+    // The Linux desktop: from 1280 the 300-wide shelf is permanent, so it has no hide button. At 1024 to 1279 the button stays and
+    // Search moves into the overflow menu when there is one; with no menu it stays in the header beside add, and the
+    // smaller title still fits.
+    final wide = isLinuxWide(context);
+    final narrow = isLinuxDesktop(context) && !wide;
+    final searchInMenu = narrow && hasMenu;
+    void openSearch() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps)));
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Notebooks'),
+        // At 1024 to 1279 the shelf is 280 wide and holds three buttons, so the title sits at 16 and is 18 pixels (the bar leaves a
+        // title only 88 at the usual 24).
+        titleSpacing: narrow ? 16 : null,
+        title: Text('Notebooks', style: narrow ? const TextStyle(fontSize: 18) : null),
         actions: [
-          ?paneHideButton(context),
+          if (!wide) ?paneHideButton(context),
           IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
-          IconButton(
+          if (!searchInMenu) IconButton(
             key: const ValueKey('notebooks-search'),
             tooltip: 'Search',
             icon: const Icon(Icons.search),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps))),
+            onPressed: openSearch,
           ),
-          if (widget.deps.connections != null || widget.deps.pin != null)
+          if (hasMenu)
             PopupMenuButton<String>(
               key: const ValueKey('notebooks-menu'),
               onSelected: (c) {
+                if (c == 'search') return openSearch();
                 final d = widget.deps;
                 Navigator.of(context).push(MaterialPageRoute<void>(
                   builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
                 ));
               },
               itemBuilder: (_) => [
+                if (searchInMenu) const PopupMenuItem(value: 'search', child: Text('Search')),
                 if (widget.deps.connections != null) const PopupMenuItem(value: 'connections', child: Text('Connections')),
                 if (widget.deps.pin != null) const PopupMenuItem(value: 'pin', child: Text('App PIN')),
               ],
@@ -194,22 +212,57 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           }
           final now = widget.deps.now();
           final again = [for (final n in nb.logs) if (n.entryCount > 0) n].take(3).toList();
+          // The Linux desktop: flat rows across the whole shelf (so the hairline and the chosen row's bar reach its edges); the
+          // "Log again" block and the empty note keep the 16-pixel side margin.
+          final desk = isLinuxDesktop(context);
+          Widget inset(Widget w) => desk ? Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: w) : w;
           return LayoutBuilder(builder: (context, cts) => ListView(
-            padding: ContentWidth.padFor(cts.maxWidth).copyWith(top: 8, bottom: 96),
+            padding: (desk ? EdgeInsets.zero : ContentWidth.padFor(cts.maxWidth)).copyWith(top: 8, bottom: 96),
             children: [
               if (again.isNotEmpty) ...[
-                Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
+                inset(Text('Log again', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary))),
                 const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
+                // The Linux desktop shows them as one row that scrolls sideways; anywhere else they wrap.
+                inset(LogAgainChips(
+                  chips: [
                     for (final n in again)
                       ActionChip(key: ValueKey('again-${n.id}'), avatar: const Icon(Icons.add, size: 18), label: Text(n.name), onPressed: () => _quickAdd(n)),
                   ],
-                ),
+                )),
                 const SizedBox(height: 12),
               ],
+              if (desk)
+                for (final n in nb.notebooks)
+                  HoverRow(
+                    key: ValueKey('notebook-${n.id}'),
+                    builder: (context, active) => SettingsRow(
+                      leading: Icon(templateIcon(_templates?.byId(n.template)?.icon ?? ''), color: k.accent),
+                      title: n.name,
+                      status: [Part(_line(n, now))],
+                      statusLines: 2,
+                      selected: isPaneSelected(context, 'notebook-${n.id}'),
+                      onTap: () => _open(n),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (n.map && n.placeCount > 0) Text('on map', style: TextStyle(fontSize: 13, color: k.secondary)),
+                          if (n.isLog)
+                            RevealAction(
+                              shown: active,
+                              child: IconButton(
+                                key: ValueKey('quick-${n.id}'),
+                                tooltip: 'Add entry',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+                                icon: const Icon(Icons.add_circle_outline),
+                                onPressed: () => _quickAdd(n),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  )
+              else
               for (final n in nb.notebooks)
                 Card(
                   key: ValueKey('notebook-${n.id}'),
@@ -231,6 +284,19 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                     onTap: () => _open(n),
                   ),
                 ),
+              if (desk)
+                for (final l in widget.deps.userLayers?.repeaterLists ?? const <UserLayer>[])
+                  SettingsRow(
+                    key: ValueKey('repeaters-${l.id}'),
+                    leading: Icon(Icons.cell_tower, color: k.accent),
+                    title: 'Repeaters: ${l.name}',
+                    status: [Part(l.count == 1 ? '1 repeater' : '${l.count} repeaters')],
+                    statusLines: 2,
+                    selected: isPaneSelected(context, 'repeaters-${l.id}'),
+                    trailing: l.visible ? Text('on map', style: TextStyle(fontSize: 13, color: k.secondary)) : null,
+                    onTap: () => _openRepeaters(l.id),
+                  )
+              else
               for (final l in widget.deps.userLayers?.repeaterLists ?? const <UserLayer>[])
                 Card(
                   key: ValueKey('repeaters-${l.id}'),
@@ -246,10 +312,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                   ),
                 ),
               if (nb.notebooks.isEmpty && (widget.deps.userLayers?.repeaterLists.isEmpty ?? true))
-                Padding(
+                inset(Padding(
                   padding: const EdgeInsets.only(top: 40),
                   child: Text('No notebooks yet. Make one with New notebook.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.secondary)),
-                ),
+                )),
             ],
           ));
         },
@@ -277,7 +343,7 @@ class _NewNotebookScreenState extends State<NewNotebookScreen> {
   NotebookState get nb => widget.deps.notebook;
 
   Future<void> _fromTemplate(NotebookTemplate t) async {
-    final made = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => NotebookEditor(notebook: nb, template: t)));
+    final made = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => NotebookEditor(notebook: nb, template: t, icons: widget.deps.icons)));
     if (made == true && mounted) Navigator.of(context).pop();
   }
 

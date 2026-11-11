@@ -77,7 +77,7 @@ impl Classifier for Confident {
 
 fn filing(filed: bool) -> Arc<dyn Classifier> {
     Arc::new(Confident(Filing {
-        suggested: cache_pack::pack::Suggested { div: "610".into(), label: "Medicine".into(), score: Some(if filed { 0.9 } else { 0.4 }), classifier_version: Some(3), source: "classifier".into(), second_div: Some("620".into()) },
+        suggested: cache_pack::pack::Suggested { div: "610".into(), label: "Medicine".into(), score: Some(if filed { 0.9 } else { 0.4 }), classifier_version: Some(3), source: "classifier".into(), second_div: Some("620".into()), filed: None, suggestions: vec![cache_pack::pack::ShelfSuggestion { div: "610".into(), label: "Medicine".into(), score: Some(0.4) }, cache_pack::pack::ShelfSuggestion { div: "620".into(), label: "Engineering".into(), score: Some(0.3) }, cache_pack::pack::ShelfSuggestion { div: "570".into(), label: "Life sciences".into(), score: Some(0.2) }] },
         filed,
     }))
 }
@@ -1017,8 +1017,27 @@ fn a_book_the_sorter_is_not_sure_of_stays_in_unsorted_with_its_guess_kept() {
     let pack = read_pack(&lib, d["result"]["copy"].as_str().unwrap());
     let sug = pack.header.book.as_ref().unwrap().suggested.clone().unwrap();
     assert_eq!((sug.div.as_str(), sug.second_div.as_deref(), sug.source.as_str()), ("610", Some("620"), "classifier"));
-    // the line of copies.jsonl carries the suggestion too
-    assert!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().contains("\"suggested\":{\"div\":\"610\""));
+    // the pack says the sorter was not confident, and keeps its top three
+    assert_eq!(sug.filed, Some(false));
+    assert_eq!(sug.suggestions.iter().map(|x| x.div.as_str()).collect::<Vec<_>>(), ["610", "620", "570"]);
+    // the line of copies.jsonl carries the suggestion, the flag and the three too
+    let copies = std::fs::read_to_string(lib.join("copies.jsonl")).unwrap();
+    assert!(copies.contains("\"suggested\":{\"div\":\"610\""));
+    assert!(copies.contains("\"filed\":false") && copies.contains("\"suggestions\":[{"), "{copies}");
+}
+
+#[test]
+fn a_book_the_sorter_is_sure_of_is_filed_and_its_pack_says_so() {
+    let mut rig = Rig::new();
+    rig.classifier = Some(filing(true));
+    let lib = rig.lib("mine");
+    let svc = rig.service();
+    let a = rig.pdf_file("a.pdf", None, Kind::Ok, &book("first", 5));
+    let ja = ok(svc.start(&with_shelves(&lib, &a, &rig.job_dir("a"), &rig)))["job"].as_u64().unwrap();
+    let (d, _) = run(&svc, ja, &[]);
+    assert_eq!(d["result"]["shelf"], json!({"div": "610", "by": "auto"}));
+    let sug = read_pack(&lib, d["result"]["copy"].as_str().unwrap()).header.book.as_ref().unwrap().suggested.clone().unwrap();
+    assert_eq!((sug.filed, sug.suggestions.len()), (Some(true), 3));
 }
 
 // ---------------------------------------------------------------------------------------------------------

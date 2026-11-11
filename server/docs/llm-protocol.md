@@ -72,14 +72,14 @@ Before the stream starts: 400 (`bad_json`, `unsupported_version`), 409 `no_model
 | `error` | something failed | `code`, `message` |
 
 `error` codes: `busy` (8 generations are already waiting; the limit is checked under the queue lock, so it is exact),
-`model_changed` (see `model` above), `no_model` (no model was loaded when its turn came), `start_failed` (`cl_start` refused; `message` is the native reason),
+`model_changed` (see `model` above), `no_model` (no model was loaded when its turn came), `context_full` (`cl_start` returned -3: the prompt does not fit the context), `start_failed` (`cl_start` refused for any other reason; `message` is the native reason),
 `generation_failed` (`cl_next` returned -2; `message` is "The model stopped with an error while answering"), `internal` (the engine
 crashed). After `done` or `error` the stream ends. A stream that ends without either was cut off and is an error to the client.
 A generation that is stopped, or reaches `max_tokens`, still ends with `done`.
 
 How the native layer is driven (the worker in `llama_session_io.dart`, call for call):
 
-1. `cl_start(h, jsonEncode(request), err, 512)`; non-zero is `start_failed`.
+1. `cl_start(h, jsonEncode(request), err, 512)`; -3 is `context_full`, any other non-zero is `start_failed`.
 2. Loop `n = cl_next(h, tok, 1024)` while `n >= 0`. After each call, `capped = max_tokens != null && cl_generated_tokens(h) >= max_tokens`.
    If `n > 0`, `cl_partial(h, buf, 4 MiB)` (if it is not negative) is sent as a `partial`. If `capped`, break.
    `max_tokens` counts only when it is a whole number above 0 (the native layer ignores the key).

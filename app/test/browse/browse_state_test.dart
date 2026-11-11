@@ -7,6 +7,7 @@ import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/opds.dart';
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/settings/data_policy.dart';
+import 'package:cache/sources/sources_state.dart' show ZimFile;
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -72,6 +73,86 @@ void main() {
     expect(b.catalogError, contains('Cannot reach'));
     expect(b.entries, isEmpty);
     expect(b.loading, isFalse);
+  });
+
+  group('get icon from source', () {
+    final catalogue = Uint8List.fromList([9, 9, 9]);
+    final own = Uint8List.fromList([7, 7]);
+    late ZimFile z;
+
+    Future<void> install({bool origin = true}) async {
+      final f = File('${sources.zimsDir!.path}/${origin ? 'wikivoyage_en_europe_maxi_2026-09' : 'my-own-file'}.zim')..writeAsBytesSync([0]);
+      if (origin) {
+        final e = (await catalogWith((u) async => fixture('kiwix_entries_wikivoyage.xml')).entries()).entries.first;
+        File('${f.path}.origin.json').writeAsStringSync(jsonEncode(ZimOrigin.fromEntry(e).toJson()));
+      }
+      await sources.refresh();
+      z = sources.zims.single;
+    }
+
+    BrowseState build({Future<Uint8List?> Function(Uri)? fetch, KiwixCatalog? catalog}) => BrowseState(
+          sources: sources,
+          catalog: catalog ?? catalogWith((u) async => fixture('kiwix_entries_wikivoyage.xml')),
+          policy: testPolicy(),
+          settingsDirOverride: settings,
+          iconFetch: fetch ?? (u) async => catalogue,
+          phoneLanguage: 'en',
+        );
+
+    test('the catalogue icon is fetched again and saved as the ZIM icon', () async {
+      await install();
+      Uri? asked;
+      final b = build(fetch: (u) async {
+        asked = u;
+        return catalogue;
+      });
+      expect(await b.getIconFromSource(z), isTrue);
+      expect(asked.toString(), contains('cb7785ec-5255-6f7b-c560-822e9c8cf340'));
+      expect(File('${z.path}.icon.png').readAsBytesSync(), catalogue);
+      expect(sources.illustrationAsked, 0, reason: 'the catalogue answered');
+    });
+
+    test('no catalogue record falls back to the ZIM\'s own icon, cached beside it', () async {
+      await install(origin: false);
+      sources.illustration = own;
+      final b = build(fetch: (u) async => fail('nothing to fetch'));
+      expect(await b.getIconFromSource(z), isTrue);
+      expect(File('${z.path}.illustration.png').readAsBytesSync(), own);
+      expect(File('${z.path}.icon.png').existsSync(), isFalse);
+    });
+
+    test('a failed fetch or an unreachable catalogue falls back to the ZIM\'s own icon', () async {
+      await install();
+      sources.illustration = own;
+      expect(await build(fetch: (u) async => null).getIconFromSource(z), isTrue);
+      expect(File('${z.path}.illustration.png').readAsBytesSync(), own);
+      File('${z.path}.illustration.png').deleteSync();
+      final down = build(catalog: catalogWith((u) async => throw const CatalogException('Cannot reach')));
+      expect(await down.getIconFromSource(z), isTrue);
+      expect(File('${z.path}.illustration.png').existsSync(), isTrue);
+    });
+
+    test('with neither, nothing is written and the tile stays a letter', () async {
+      await install();
+      final b = build(fetch: (u) async => null);
+      expect(await b.getIconFromSource(z), isFalse);
+      expect(File('${z.path}.icon.png').existsSync(), isFalse);
+      expect(File('${z.path}.illustration.png').existsSync(), isFalse);
+      expect(sources.iconOf(z), isNull);
+      final down = build(catalog: catalogWith((u) async => throw const CatalogException('Cannot reach')));
+      expect(await down.getIconFromSource(z), isFalse);
+    });
+
+    test('a picture the person chose is not replaced by the ZIM\'s own icon', () async {
+      await install();
+      sources.illustration = own;
+      final chosen = Uint8List.fromList([1, 1, 1, 1]);
+      File('${z.path}.icon.png').writeAsBytesSync(chosen);
+      final b = build(fetch: (u) async => null);
+      expect(await b.getIconFromSource(z), isFalse, reason: 'nothing new shows');
+      expect(File('${z.path}.icon.png').readAsBytesSync(), chosen);
+      expect(sources.iconOf(z)!.path, '${z.path}.icon.png');
+    });
   });
 
   group('updates', () {
@@ -195,7 +276,10 @@ void main() {
       expect(b.transfers, isEmpty);
       expect(File(sources.zims.single.path).readAsBytesSync(), bytes);
       // finished: the record is gone, so the next start brings nothing back
-      await Future<void>.delayed(const Duration(milliseconds: 100)); // the record is written without waiting
+      final record = File('${settings.path}/browse.json'); // the record is written without waiting: wait for it to be rewritten without this download
+      for (var i = 0; i < 250 && record.existsSync() && record.readAsStringSync().contains(e.id); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       final again = make(downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
       await again.init();
       expect(again.transfers, isEmpty);
@@ -218,8 +302,11 @@ void main() {
       expect(b.resumableParts, contains(part.path), reason: 'not offered as a leftover');
       expect(b.resumableParts, isNot(contains(gone.path)), reason: 'nothing to carry on: a leftover');
       // now it has a record: the next start brings it back as any other
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(File('${settings.path}/browse.json').readAsStringSync(), contains(e.id));
+      final record = File('${settings.path}/browse.json'); // written without waiting: wait up to 5 s for it
+      for (var i = 0; i < 250 && !(record.existsSync() && record.readAsStringSync().contains(e.id)); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(record.readAsStringSync(), contains(e.id));
     });
 
     test('while the catalogue cannot be reached, a partial file with no record is kept (not a leftover), not adopted', () async {

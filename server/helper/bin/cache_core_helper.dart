@@ -7,6 +7,8 @@ import 'core_open.dart';
 import 'fs_ops.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
+import 'regions_ops.dart';
+import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
 /// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
@@ -36,6 +38,13 @@ Future<void> main() async {
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
   final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
+  // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
+  final regionsOps = RegionsOps(
+    dirs.support,
+    config: (serverCoreExtras(dirs)['regions'] as Map).cast<String, Object?>(),
+    open: (c) => FfiRegionsEngine.open(lib, c),
+    log: log,
+  );
   await serveLines(
     stdin,
     (line) async {
@@ -45,11 +54,13 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer),
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, onOpened: regionsOps.afterOpen),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
+      regionsOps,
+      VideoOps(dirs, () => FfiCsNative(lib), log: log),
     ],
   );
   indexer.stop();

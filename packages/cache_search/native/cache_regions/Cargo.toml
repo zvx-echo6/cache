@@ -8,6 +8,8 @@ description = "Cache's regions: the Valhalla tiles and the places of downloaded 
 [dependencies]
 # Same HTTP stack as cache_layers and cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# The public-address guard on the client (installed only by the Linux server's helper; a phone never has it).
+cache_netguard = { path = "../cache_netguard" }
 # regions.sqlite (regions, their tile lists, the stream cache); bundled like the other crates'.
 rusqlite = { version = "0.32", features = ["bundled"] }
 # The published tiles and index are gzip files; each tile's SHA-256 is in the index.
@@ -24,6 +26,8 @@ cache_places = { path = "../cache_places" }
 cache_snapshot = { path = "../cache_snapshot" }
 
 [dev-dependencies]
+# Loopback hooks for the guard tests; a dev-dependency only, so a release build never has them.
+cache_netguard = { path = "../cache_netguard", features = ["test-hooks"] }
 # The tests' routing server.
 tiny_http = "0.12"
 # Two devices: a tile index snapshot travels from one to the other (tests/peer_index.rs).

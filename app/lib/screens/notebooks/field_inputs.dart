@@ -10,6 +10,7 @@ import '../../notebook/notebook_text.dart';
 import '../../notebook/places.dart';
 import '../../platform.dart' as plat;
 import '../../theme.dart';
+import 'photo_viewer.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// One control for a field (UX 3.3): text input, number keypad with its unit, Yes/No segments, choice chips, a place with
@@ -163,7 +164,7 @@ class PlaceRow extends StatelessWidget {
   }
 }
 
-/// The photos of an entry or a photo field: thumbnails (tap and hold to take one out) and "Add photo" (Take photo / Choose
+/// The photos of an entry or a photo field: thumbnails (tap to view full screen, tap and hold to take one out) and "Add photo" (Take photo / Choose
 /// from phone). Photos added here and taken out again before the entry is saved are deleted by the caller.
 class PhotoStrip extends StatelessWidget {
   const PhotoStrip({super.key, required this.notebook, required this.ids, required this.onChanged, this.onAdded});
@@ -181,10 +182,12 @@ class PhotoStrip extends StatelessWidget {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          for (final id in ids)
+          for (var i = 0; i < ids.length; i++)
             GestureDetector(
-              onLongPress: () => onChanged([for (final x in ids) if (x != id) x]),
-              child: NbThumb(notebook: notebook, id: id),
+              key: ValueKey('photo-${ids[i]}'),
+              onTap: () => openPhotoViewer(context, notebook, ids, i),
+              onLongPress: () => onChanged([for (final x in ids) if (x != ids[i]) x]),
+              child: NbThumb(notebook: notebook, id: ids[i]),
             ),
           OutlinedButton.icon(
             key: const ValueKey('add-photo'),

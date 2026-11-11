@@ -13,6 +13,26 @@ void main() {
   MapProgress at(Map<String, dynamic> r, double f, {bool arrived = false, double offset = 0, bool offRoute = false}) =>
       MapProgress.fromJson(fakeProgressJson(r, f, arrived: arrived, offset: offset, offRoute: offRoute));
 
+  group('lanes', () {
+    test('lanes on the next maneuver change no prompt and are readable on it', () {
+      final total = (route['distance_m'] as num).toDouble();
+      final fractions = [0.0, 13 / 40 - 700 / total, 13 / 40 - 250 / total, 13 / 40 - 60 / total];
+      final plain = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      final laned = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      for (final f in fractions) {
+        final j = fakeProgressJson(route, f);
+        final withLanes = {
+          ...j,
+          'next': {...(j['next'] as Map<String, dynamic>), 'lanes': [{'directions': 8, 'active': 8}, {'directions': 2}]},
+        };
+        final p = MapProgress.fromJson(withLanes);
+        expect(p.next!.lanes, hasLength(2));
+        expect(MapProgress.fromJson(j).next!.lanes, isEmpty);
+        expect(laned.update(p), plain.update(MapProgress.fromJson(j)));
+      }
+    });
+  });
+
   group('prompts', () {
     test('a turn is announced at three stages, each once, nearest last', () {
       final g = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'Cassia Regional Hospital');

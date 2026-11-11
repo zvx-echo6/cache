@@ -148,6 +148,15 @@ void main() {
     expect((configs.last['only'] as Map)['indexes'], ['zim/A']);
     expect(r.sync.argsOf['share_add'], hasLength(1));
     again.dispose();
+
+    // An update moved the app's container: the share still holds the old path, and the start points it at the new one.
+    r.sync.shares.single['path'] = '/var/mobile/Containers/Data/Application/OLD/Library/Application Support/search-indexes';
+    final moved = make();
+    await tester.runAsync(moved.init);
+    expect(r.sync.argsOf['share_add'], hasLength(2));
+    expect(r.sync.argsOf['share_add']!.last, {'id': 'indexes', 'name': 'Search indexes', 'path': '${r.dir.path}/search-indexes'});
+    expect(r.sync.shares.single['path'], '${r.dir.path}/search-indexes');
+    moved.dispose();
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });

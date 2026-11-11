@@ -282,7 +282,7 @@ void main() {
       await tester.tap(find.textContaining('Delete · frees'));
       await tester.pumpAndSettle();
       expect(find.text('You uploaded this file. To get it back, upload it again.'), findsOneWidget);
-      expect(find.textContaining('80.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
+      expect(find.textContaining('100.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.longPress(find.text('Downloaded one'));
