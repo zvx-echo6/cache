@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
+
 ### Fixed
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers

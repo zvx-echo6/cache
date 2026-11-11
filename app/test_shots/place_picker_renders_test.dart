@@ -13,12 +13,10 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cache/maps/palette/map_palette.dart';
-import 'package:cache/notebook/map_icons.dart';
 import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/pin_image.dart';
 import 'package:cache/notebook/places.dart';
-import 'package:cache/notebook/place_style.dart' show defaultMarkerColor;
 import 'package:cache/screens/notebooks/icon_picker.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart';
