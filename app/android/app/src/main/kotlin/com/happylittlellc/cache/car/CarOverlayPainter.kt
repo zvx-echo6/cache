@@ -43,6 +43,11 @@ object CarOverlayPainter {
     const val SHAPE_W = 196f
     const val SHAPE_H = 52f
 
+    /** The owner's number (2026-11-11): the shape's full height stands for at least this much rise, in meters (about 330 ft),
+     * within the stretch shown. A stretch that rises less is drawn as if it rose this much, so a small rise draws low and a
+     * flat road draws flat; a stretch that rises more is drawn to its own range. Change it here and nowhere else. */
+    const val SHAPE_MIN_RISE_M = 100.0
+
     /** The narrowest shape still worth drawing beside the text. */
     const val SHAPE_MIN_W = 60f
 
@@ -232,17 +237,24 @@ object CarOverlayPainter {
         drawShape(canvas, shape, c, pal, d)
     }
 
+    /** Where a height is drawn in the shape, between [top] (high) and [bottom] (low), for a stretch whose heights run from
+     * [lo] to [hi]. The whole height stands for the stretch's own range, or for [SHAPE_MIN_RISE_M] when the range is less; the
+     * middle of the range is drawn at the middle, so a flat road is a level line there and a small rise stays close to it. */
+    fun shapeY(heightM: Double, lo: Double, hi: Double, top: Float, bottom: Float): Float {
+        val span = max(hi - lo, SHAPE_MIN_RISE_M)
+        return (top + bottom) / 2f - (((heightM - (lo + hi) / 2.0) / span) * (bottom - top)).toFloat()
+    }
+
     /** The shape of the road ahead, no axes: lightly filled under a line, a dot at the start, the steepest stretch hatched. */
     fun drawShape(canvas: Canvas, box: RectF, c: CarClimb, pal: CarOverlayColors, d: Float) {
         val n = c.heightsM.size
         val lo = c.heightsM.min()
         val hi = c.heightsM.max()
-        val span = max(hi - lo, 1.0)
         // The mock's shape runs from y 48 (low) to y 5 (high) in a 52 high box; a flat road sits in the lower middle.
         val top = box.top + 5f * d
         val bottomY = box.top + 48f * d
         fun xAt(i: Int) = box.left + box.width() * i / (n - 1)
-        fun yAt(i: Int): Float = if (hi - lo < 1.0) (top + bottomY) / 2f else (bottomY - ((c.heightsM[i] - lo) / span).toFloat() * (bottomY - top))
+        fun yAt(i: Int): Float = shapeY(c.heightsM[i], lo, hi, top, bottomY)
         val line = Path().apply {
             moveTo(xAt(0), yAt(0))
             for (i in 1 until n) lineTo(xAt(i), yAt(i))

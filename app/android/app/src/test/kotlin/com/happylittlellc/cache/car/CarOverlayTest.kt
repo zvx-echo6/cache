@@ -467,6 +467,52 @@ class CarOverlayTest {
         assertTrue(contrast(t.cardSecondary, t.card) >= 6.0 && contrast(t.cardText, t.card) >= 6.0)
     }
 
+    // ---- the climb card's shape is to scale ------------------------------------------------------------------------------
+
+    @Test
+    fun theShapesFullHeightStandsForAtLeastAHundredMetersOfRise() {
+        assertEquals(100.0, CarOverlayPainter.SHAPE_MIN_RISE_M, 0.0)
+        // The shape's line runs between y 5 (high) and y 48 (low); the middle is 26.5.
+        fun y(h: Double, lo: Double, hi: Double) = CarOverlayPainter.shapeY(h, lo, hi, 5f, 48f)
+        // A flat road: a level line at the middle, where it was.
+        assertEquals(26.5f, y(1200.0, 1200.0, 1200.0), 0.001f)
+        // A 2 m bump: under half a pixel either side of the middle, not the whole box.
+        assertEquals(26.5f - 0.43f, y(1002.0, 1000.0, 1002.0), 0.01f)
+        assertEquals(26.5f + 0.43f, y(1000.0, 1000.0, 1002.0), 0.01f)
+        // 50 m of rise: half the height.
+        assertEquals(26.5f - 10.75f, y(1050.0, 1000.0, 1050.0), 0.01f)
+        assertEquals(26.5f + 10.75f, y(1000.0, 1000.0, 1050.0), 0.01f)
+        // 100 m and more: the whole height, scaled to the real range as before.
+        assertEquals(5f, y(1100.0, 1000.0, 1100.0), 0.01f)
+        assertEquals(48f, y(1000.0, 1000.0, 1100.0), 0.01f)
+        assertEquals(5f, y(1600.0, 1000.0, 1600.0), 0.01f)
+        assertEquals(48f, y(1000.0, 1000.0, 1600.0), 0.01f)
+        assertEquals(26.5f, y(1300.0, 1000.0, 1600.0), 0.01f)
+    }
+
+    /** The rows of the shape's line (the route color at full strength), right of the start dot, for [heights] in a 196 x 52 box. */
+    private fun shapeLineRows(heights: List<Double>): IntRange {
+        val pal = trip("dark").palette!!.night
+        val bmp = Bitmap.createBitmap(196, 52, Bitmap.Config.ARGB_8888)
+        val c = CarClimb(climbAheadM = 0.0, gradePct = null, steepestInM = null, heightsM = heights, steepFrom = null, steepTo = null, windowM = 8000.0)
+        CarOverlayPainter.drawShape(Canvas(bmp), RectF(0f, 0f, 196f, 52f), c, pal, 1f)
+        val rows = (0 until 52).filter { y -> (20 until 190).any { x -> bmp.getPixel(x, y) == pal.route } }
+        return rows.first()..rows.last()
+    }
+
+    @Test
+    fun aSmallRiseIsDrawnLowAndOnlyARealClimbFillsTheShape() {
+        // 2 m of rise over the stretch: a line at the middle (it filled the box from bottom to top before).
+        val bump = shapeLineRows((0 until 56).map { 1000.0 + 2.0 * it / 55 })
+        assertTrue("$bump", bump.first >= 24 && bump.last <= 29)
+        // 50 m: about half the box.
+        val half = shapeLineRows((0 until 56).map { 1000.0 + 50.0 * it / 55 })
+        assertTrue("$half", half.first in 13..17 && half.last in 33..37)
+        // 600 m: all of it, as before.
+        val full = shapeLineRows((0 until 56).map { 1000.0 + 600.0 * it / 55 })
+        assertTrue("$full", full.first <= 8 && full.last >= 42)
+    }
+
     // ---- the main map's grade badge -------------------------------------------------------------------------------------
 
     @Test
