@@ -2,8 +2,8 @@
 //!
 //! - A page needs OCR when it has pictures and fewer than [`MIN_PAGE_CHARS`] characters of text (the rule `layout` uses to list
 //!   `ocr_pages`). Only those pages are read; pages that have text keep their own.
-//! - MuPDF's PDF-OCR writer draws the page at [`OCR_DPI`] (300 pixels per inch, what the phones' OCR is fed too), hands the bitmap to
-//!   Tesseract, and writes the result as a one-off PDF in a work folder. That PDF is read back with the same page reader as any other
+//! - The page is drawn at [`OCR_DPI`] (300 pixels per inch, what the phones' OCR is fed too) to a gray bitmap, and MuPDF's PDF-OCR writer
+//!   hands the bitmap to Tesseract and writes the result as a one-off PDF in a work folder. That PDF is read back with the same page reader as any other
 //!   PDF (`extract::extract_page`), so OCR text gets the same lines, boxes and layout step as a text layer. The scratch PDF is a build
 //!   intermediate: it is deleted with its work folder and never stored, hashed or shown. The book's own file, and so its BLAKE3
 //!   identity, are never touched.
@@ -16,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::extract::{extract_page, Extracted, RawPage};
 use mupdf::document_writer::DocumentWriter;
 use mupdf::pdf::PdfDocument;
-use mupdf::{Document, Matrix};
+use mupdf::{Colorspace, ColorParams, Document, Image, Matrix, Rect};
 use std::path::{Path, PathBuf};
 
 pub use cache_pack::pagewriter::MIN_PAGE_CHARS;
@@ -113,23 +113,26 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
     let out = work.join("ocr-pages.pdf");
     let out_str = out.to_str().ok_or_else(|| Error::new("the OCR work folder has an unusable name"))?;
     let datadir = s.datadir.to_str().ok_or_else(|| Error::new("the OCR data folder has an unusable name"))?;
-    let options = format!("resolution={},colorspace=gray,compression=flate,ocr-language={},ocr-datadir={}", s.dpi, s.lang, datadir);
-    // Pages that were drawn, in the order they went into the scratch PDF, with the size they have in the source.
+    // The page is drawn to a gray bitmap here, at `dpi`, and that bitmap is what MuPDF's OCR writer gets as a one-page image (the way
+    // the mupdf crate's own OCR test feeds it); the writer draws it 1:1 (resolution 72 on a page as many points as the bitmap has
+    // pixels) and hands the pixels to Tesseract. The scratch page is therefore in pixels, and is scaled back to points below.
+    let options = format!("resolution=72,colorspace=gray,compression=flate,ocr-language={},ocr-datadir={}", s.lang, datadir);
+    let scale = s.dpi as f32 / 72.0;
+    // Pages that were drawn, in the order they went into the scratch PDF, with the size they have in the source (points).
     let mut drawn: Vec<(usize, f32, f32)> = Vec::new();
     {
         let mut writer = DocumentWriter::with_ocr(out_str, &options).map_err(|e| Error::ctx("starting OCR", e))?;
         for &i in pages {
             let Ok(page) = src.load_page(i as i32) else { continue };
             let Ok(bounds) = page.bounds() else { continue };
-            let Ok(dev) = writer.begin_page(bounds) else { continue };
-            let ran = page.run(&dev, &Matrix::IDENTITY);
+            let Ok(pix) = page.to_pixmap(&Matrix::new_scale(scale, scale), &Colorspace::device_gray(), false, true) else { continue };
+            let Ok(image) = Image::from_pixmap(&pix) else { continue };
+            let (pw, ph) = (pix.width() as f32, pix.height() as f32);
+            let Ok(dev) = writer.begin_page(Rect { x0: 0.0, y0: 0.0, x1: pw, y1: ph }) else { continue };
+            let filled = dev.fill_image(&image, &Matrix::new_scale(pw, ph), 1.0, ColorParams::default());
             writer.end_page(dev).map_err(|e| Error::ctx("reading a scanned page", e))?;
-            if ran.is_ok() {
-                drawn.push((i, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0));
-            } else {
-                // The device already took the (blank) page into the scratch PDF; keep the numbering by recording it as empty.
-                drawn.push((i, 0.0, 0.0));
-            }
+            // A page whose bitmap could not be drawn went into the scratch PDF blank; it keeps its place, recorded as empty.
+            drawn.push((i, if filled.is_ok() { bounds.x1 - bounds.x0 } else { 0.0 }, if filled.is_ok() { bounds.y1 - bounds.y0 } else { 0.0 }));
         }
     }
     let scratch = Document::from_bytes(&std::fs::read(&out).map_err(|e| Error::ctx("reading the OCR result", e))?, "application/pdf").map_err(|e| Error::ctx("opening the OCR result", e))?;
@@ -163,6 +166,10 @@ pub fn ocr_pages(pdf: &[u8], pages: &[usize], s: &OcrSettings, work: &Path) -> R
         }
         if std::env::var_os("CACHE_OCR_DEBUG").is_some() {
             eprintln!("OCR page {index}: {} blocks, {} chars, scratch page {}x{}", p.blocks.len(), p.text_chars(), p.width, p.height);
+            if let Ok(page) = scratch.load_page(k as i32) {
+                let n = page.to_text_page(mupdf::TextPageFlags::empty()).map(|t| t.blocks().count()).unwrap_or(0);
+                eprintln!("OCR page {index}: {n} blocks with no flags; scratch file {} bytes", std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0));
+            }
         }
         p.index = index;
         p.width = w;
