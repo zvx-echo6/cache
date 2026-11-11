@@ -6,6 +6,11 @@ release notes).
 
 ## Unreleased
 
+### Fixed
+- Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
+- Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
+- Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+
 ## 1.1.0 (build 49, test) - 2026-11-11
 
 ### Fixed
