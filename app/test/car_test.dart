@@ -370,10 +370,13 @@ void main() {
         expect(contrast(c['cardText']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} figures on the card');
         expect(contrast(c['cardSecondary']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} label on the card');
       }
-      // Tactical: the label is the theme's text red, the figures its brightest red; nothing else on the card changed.
+      // Tactical: the label and the figures are the theme's brightest red, well clear of the limit (6.5:1), so a measurement
+      // on real, anti-aliased pixels stays above it; nothing else on the card changed.
       final t = carOverlayColors(CacheThemeId.tactical);
-      expect(t['cardSecondary'], '#e0473c');
+      expect(t['cardSecondary'], '#ff5a4a');
       expect(t['cardText'], '#ff5a4a');
+      expect(contrast(t['cardSecondary']!, t['card']!), greaterThanOrEqualTo(6.0));
+      expect(contrast(t['cardText']!, t['card']!), greaterThanOrEqualTo(6.0));
       expect(t['card'], '#120404');
       // The other three keep their theme's text and secondary.
       expect(carOverlayColors(CacheThemeId.dark)['cardText'], '#dcc9a3');

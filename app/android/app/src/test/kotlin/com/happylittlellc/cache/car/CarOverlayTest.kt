@@ -439,6 +439,9 @@ class CarOverlayTest {
             assertTrue("$theme figures ${contrast(p.cardText, p.card)}", contrast(p.cardText, p.card) >= 4.5)
             assertTrue("$theme label ${contrast(p.cardSecondary, p.card)}", contrast(p.cardSecondary, p.card) >= 4.5)
         }
+        // Tactical is not left near the limit: both reds are at 6:1 or better on its card.
+        val t = trip("tactical").palette!!.night
+        assertTrue(contrast(t.cardSecondary, t.card) >= 6.0 && contrast(t.cardText, t.card) >= 6.0)
     }
 
     // ---- the mini map's destination ---------------------------------------------------------------------------------------
