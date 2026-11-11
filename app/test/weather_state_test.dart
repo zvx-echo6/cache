@@ -1079,6 +1079,56 @@ void main() {
       expect(h.weather.homeCardNow()?.temperature, '45 °F');
     });
 
+    // 1.1 audit: the core answers with an empty list when nothing is active (it leaves out what has ended). That answer did
+    // not replace a kept one that had items, so a warning that ended came back at every start until the core answered.
+    test('a warning that has ended does not come back from what is kept: an answer with none replaces it', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 16, 30)); // 10:30 at the place
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      Map<String, dynamic> alerts(List<Map<String, dynamic>> items) => {'fetched_at': '2026-10-26T10:20:00-06:00', 'age': '10 minutes old', 'expired': false, 'items': items};
+      final warning = {
+        'address': 'live:nws-alerts-point/x/urn:oid:1',
+        'label': 'Tornado Warning',
+        'time': '2026-10-26T10:00:00-06:00',
+        'fields': {'Severity': 'extreme', 'Expires': '2026-10-26 11:00'},
+      };
+      h.core.stored['nws-alerts-point'] = alerts([warning]);
+      expect((await h.weather.homeCard()).alerts.single.label, 'Tornado Warning');
+      expect(h.weather.homeCardNow()?.alerts.single.label, 'Tornado Warning', reason: 'kept, and still in force');
+      // it ends: the core's answer has no items
+      h.clock = DateTime.utc(2026, 10, 26, 17, 30);
+      h.core.stored['nws-alerts-point'] = alerts([]);
+      expect((await h.weather.homeCard()).alerts, isEmpty);
+      expect(h.weather.homeCardNow()?.alerts, isEmpty, reason: 'the answer with none replaced the kept warning');
+      expect(h.weather.homeCardNow()?.alertsKnown, isTrue);
+      // and at the next start, before the core answers
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: h.clock);
+      h.core.busy = Completer<void>();
+      expect(h.weather.homeCardNow()?.alerts, isEmpty);
+      h.core.busy!.complete();
+    });
+
+    test('a kept warning whose own Expires has passed is not shown at the next start', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 16, 30)); // 10:30 at the place
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['nws-alerts-point'] = {
+        'fetched_at': '2026-10-26T10:20:00-06:00',
+        'age': '10 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-alerts-point/x/urn:oid:1', 'label': 'Tornado Warning', 'time': '2026-10-26T10:00:00-06:00', 'fields': {'Severity': 'extreme', 'Expires': '2026-10-26 11:00'}},
+          {'address': 'live:nws-alerts-point/x/urn:oid:2', 'label': 'Flood Watch', 'time': '2026-10-26T09:00:00-06:00', 'fields': {'Severity': 'moderate', 'Expires': '2026-10-27 09:00'}},
+        ],
+      };
+      expect([for (final a in (await h.weather.homeCard()).alerts) a.label], ['Tornado Warning', 'Flood Watch']);
+      // the app is closed over the warning's end and opened at 12:00; the core has not answered yet
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 26, 18));
+      h.core.busy = Completer<void>();
+      expect([for (final a in h.weather.homeCardNow()!.alerts) a.label], ['Flood Watch'], reason: 'the one still in force stays');
+      h.core.busy!.complete();
+    });
+
     test('"Where I am" moving to a new key fetches for it once it settles, at most every 15 minutes', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);

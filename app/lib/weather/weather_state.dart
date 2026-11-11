@@ -1364,11 +1364,13 @@ class WeatherState extends ChangeNotifier {
         () async {
           try {
             final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-            // An answer with no items (a fetch that failed, a place not downloaded yet) must not wipe the last good one kept for
-            // Home at start (a source with nothing to say gives a "none active" item, never an empty list).
+            // A forecast's answer with no items must not wipe the last good one kept for Home at start. For everything that is
+            // happening (warnings, fires and the rest) no items is the answer: the core leaves out what has ended and gives an
+            // empty list when nothing is active (the "none active" entry is the assistant's tool's, not this call's), so it
+            // replaces what was kept; else a warning that ended came back at every start until the core answered.
             final key = '${c.id} ${p.id}';
             final had = (_shown[key]?['items'] as List?)?.isNotEmpty ?? false;
-            if (!had || (g['items'] as List?)?.isNotEmpty == true) {
+            if (!had || (g['items'] as List?)?.isNotEmpty == true || groupOf(c) == LiveGroup.alerts) {
               _shown[key] = g;
               kept = true;
             }
@@ -1390,13 +1392,25 @@ class WeatherState extends ChangeNotifier {
     return SourceView(
       source: c,
       place: p,
-      items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
+      // A kept answer's items are as the core gave them then: an alert whose own "Expires" has passed since is left out (the
+      // core would leave it out now; nothing else in a kept item says when it ends).
+      items: [
+        for (final i in [for (final j in (g['items'] as List? ?? const [])) if (j is Map) LiveItem.fromJson(j.cast<String, dynamic>())])
+          if (!(kept && _pastItsExpires(i))) i,
+      ],
       // A kept answer's age is worked out again: it is older now than when the core said it.
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
       expired: g['expired'] == true,
       error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
     );
+  }
+
+  /// Whether [i] says when it expires ("Expires", as alerts do) and that time has passed.
+  bool _pastItsExpires(LiveItem i) {
+    if (!RegExp(r'^\d{4}-\d\d-\d\d[ T]\d\d:\d\d').hasMatch(i.fields['Expires'] ?? '')) return false;
+    final span = alertSpan(i);
+    return span != null && _now().isAfter(span.to);
   }
 
   /// The last answer the core gave for each source and place, also kept in a file: the core answers one call at a time, and while
