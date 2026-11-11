@@ -1,10 +1,10 @@
 {
- "updated": "9 Nov 2026",
+ "updated": "11 Nov 2026",
  "lede": "Cache 1.1 is in testing on phones. It becomes stable when every must-have below works on each kind of device and Ask is fast enough.",
  "cards": [
   {
    "id": "st-test",
-   "title": "Testing now: Cache 1.1.0 (47)",
+   "title": "Testing now: Cache 1.1.0 (49)",
    "wide": false,
    "goals": null,
    "table": null,
@@ -15,7 +15,7 @@
       {
        "chip": "Checked",
        "tone": "ok",
-       "text": "Launch check on a Pixel 8: the new Library, Bookshelves, adding a PDF with OCR, search inside it, Ask with a cited page, Discover, a route with guidance."
+       "text": "Launch check on a Pixel 8, updating from the build before: libraries and linked devices are kept; watched folders, map icons and pin styles, the question that sets how settings sync, and Stop while Ask is searching."
       },
       {
        "chip": "Live",
@@ -23,14 +23,14 @@
        "text": "On Google Play testing (internal, closed and open)."
       },
       {
-       "chip": "In review",
-       "tone": "info",
-       "text": "On TestFlight, waiting for Apple's beta review before public testers get it."
+       "chip": "Live",
+       "tone": "ok",
+       "text": "On TestFlight for public testers."
       },
       {
        "chip": "Waiting",
        "tone": "warn",
-       "text": "Google Play for everyone, until Ask meets its speed and accuracy goals."
+       "text": "Google Play for everyone, until 1.1 is finished."
       }
      ]
     }
@@ -62,19 +62,19 @@
        "text": "New Library and Bookshelves, adding PDFs with OCR, search inside your books."
       },
       {
-       "chip": "Building",
+       "chip": "Testing",
        "tone": "info",
-       "text": "Watched folders: new PDFs you drop in a folder are added on their own."
+       "text": "Watched folders (new PDFs you drop in a folder are added on their own), map icons and colors for notebooks and places, and one question that sets how settings sync between two devices."
       },
       {
        "chip": "Building",
        "tone": "info",
-       "text": "A clearer log for problem reports."
+       "text": "Notebooks that sync cleanly between devices, full-size photos, and a clearer log for problem reports."
       },
       {
-       "chip": "Later",
-       "tone": "warn",
-       "text": "Android Auto, released together with CarPlay."
+       "chip": "Building",
+       "tone": "info",
+       "text": "Android Auto, being readied for Google's car review. CarPlay follows."
       }
      ]
     }
