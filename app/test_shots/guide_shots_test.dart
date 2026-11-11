@@ -1,8 +1,11 @@
 // The Cache guide's screenshots: one picture per id in tools/guide/shots.txt, drawn by the app's own widgets with sample data (Twin
 // Falls, Idaho), in the light theme, on a 430 x 932 phone at 2x. Where a map is behind a panel the map is not drawn (MapLibre is a
-// platform view); the panels and sheets are drawn over the empty map area, as the Maps tests do.
-// flutter test test_shots/guide_shots_test.dart --update-goldens  (pictures and crops.json in test_shots/guide/)
-// tools/guide/make_shots.py then resizes them into app/assets/guide/shots.
+// platform view) by the test itself. The Maps pictures that have a scene (their sample place is Arches National Park,
+// guide_sample.dart) show the real map behind the screen, rendered from the scene this test writes (guide_map_kit.dart); the
+// others keep the empty map area, as the Maps tests do.
+// Made by the Renders workflow with guide=true (tools/guide/README.md, "Making the pictures"): it runs this test once with
+// GUIDE_MAPS=export to write the scenes, renders them, and runs it again to draw the pictures (pictures and crops.json in
+// test_shots/guide/). tools/guide/make_shots.py then resizes them into app/assets/guide/shots.
 
 import 'dart:convert';
 import 'dart:io';
@@ -19,7 +22,11 @@ import 'package:cache/maps/ui/ring_menu.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
-import 'package:maplibre_gl/maplibre_gl.dart' show LatLng, MapLibreMap, MapLibrePlatform;
+import 'package:maplibre_gl/maplibre_gl.dart' show CameraPosition, LatLng, MapLibreMap, MapLibrePlatform;
+import 'package:cache/maps/maps_state.dart' show FollowMode;
+import 'package:cache/maps/palette/map_palette.dart' show mapPaletteFor;
+import 'package:cache/maps/style/style_generator.dart' show kMeasureSource;
+import 'package:cache/nav/guidance_camera.dart' show guidanceAnchor;
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_model.dart';
@@ -60,7 +67,7 @@ import 'package:cache/screens/ask_off.dart';
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/screens/model_search_screen.dart';
 import 'package:cache/screens/models_screen.dart';
-import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapProgress, MapRoute, MapSearchResponse, SearchResponse, VideoTarget;
+import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapRoute, MapSearchResponse, SearchResponse, VideoTarget;
 import 'package:cache/layout/edit_home_screen.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
@@ -107,8 +114,7 @@ import 'package:image/image.dart' as img;
 
 import '../test/browse/fakes.dart' show FakeSources, catalogWith, fixture;
 import '../test/chat_fakes.dart' show ScriptedBackend, say;
-import '../test/nav_fakes.dart' show FakeBackend, FakeNavPosition, FakeSpeaker, fakeProgressJson, fakeRouteJson, fixAt;
-import '../test/navigation_camera_test.dart' show NoSurface;
+import '../test/nav_fakes.dart' show FakeBackend, FakeNavPosition, FakeSpeaker, fakeRouteJson, fixAt;
 import '../test/video_fake.dart' show VideoFakeNative, savedManifest, seededVideoNative;
 import '../test/video_player_fakes.dart' show RecordingController, kKnotCues, kKnotCuesEs, writeCaption;
 import '../test/support/pdf_test_kit.dart' show readerDone;
@@ -120,6 +126,8 @@ import '../test/support/regions_fake.dart';
 import '../test/support/sync_fake.dart' show FakeSync;
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
+import 'guide_map_kit.dart';
+import 'guide_sample.dart';
 import 'shot_kit.dart';
 
 const _out = 'guide';
@@ -134,8 +142,9 @@ Future<SettingsRig> _rig(
   ConnectionKind connection = ConnectionKind.wifi,
   LocationAccess locationAccess = LocationAccess.always,
   LocationPermissionState permission = LocationPermissionState.granted,
+  List<Map<String, dynamic>> publishedLayers = const [],
 }) async {
-  final r = await SettingsRig.create(tester, connection: connection, locationAccess: locationAccess, permission: permission);
+  final r = await SettingsRig.create(tester, connection: connection, locationAccess: locationAccess, permission: permission, publishedLayers: publishedLayers);
   await tester.runAsync(() => r.app.setTheme(CacheThemeId.light));
   return r;
 }
@@ -1277,16 +1286,23 @@ void main() {
     await h.r.dispose(tester);
   });
 
-  // ---- Maps (the map itself is a platform view and is not drawn) -------------------------------------------
+  // ---- Maps: the screens over the real map of the sample park (guide_sample.dart, guide_map_kit.dart) -----------------
 
   Future<_MapRig> mapRig(WidgetTester tester, {bool notebooks = false}) async {
-    final before = MapLibrePlatform.createInstance;
-    MapLibrePlatform.createInstance = () => NoSurface();
-    addTearDown(() => MapLibrePlatform.createInstance = before);
     final m = _MapRig();
-    m.r = await _rig(tester);
+    final before = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => GuideMapSurface(m.kit.picture, mapPaletteFor(CacheThemeId.light)['land']);
+    addTearDown(() => MapLibrePlatform.createInstance = before);
+    await m.kit.load(tester);
+    m.sample = GuideSample.load();
+    // The public lands layer comes from the published catalogue on a phone; here its definition is handed to the test engine.
+    m.r = await _rig(tester, publishedLayers: [m.sample.publicLands]);
+    // Hillshade is on in the guide's map views (a new install draws only the base map until it is switched on).
+    m.r.maps.setOn('hillshade', true);
     m.backend = FakeBackend()
-      ..onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-$mode', mode: mode.startsWith('offroad') ? 'walk' : mode, offroad: mode.startsWith('offroad'), name: 'Shoshone Falls Park'));
+      // The drive is the park's. The off-road picture has no map yet and keeps the made-up line.
+      ..onRoute = (to, mode, from) async =>
+          MapRoute.fromJson(mode.startsWith('offroad') ? fakeRouteJson(id: 'r-$mode', mode: 'walk', offroad: true, name: GuideSample.trailhead.name) : m.sample.driveRoute);
     m.gps = FakeNavPosition();
     m.nav = NavState(
       backend: m.backend,
@@ -1294,10 +1310,12 @@ void main() {
       speaker: FakeSpeaker(),
       positionSource: m.gps,
       fmt: const Fmt(UnitSystem.imperial),
+      // As the app wires it: guidance turns the map to the heading.
+      onFollow: m.r.maps.setFollow,
       searchDebounce: const Duration(milliseconds: 1),
       meaningDebounce: const Duration(milliseconds: 2),
     );
-    m.r.location.publish(fixAt(42.5629, -114.4609, heading: 90));
+    m.r.location.publish(fixAt(GuideSample.here.lat, GuideSample.here.lon, heading: GuideSample.hereHeading));
     m.regions = _Regions(m.r);
     if (notebooks) {
       m.store = FakeNotebookBackend();
@@ -1312,6 +1330,34 @@ void main() {
     return m;
   }
 
+  // Where the style reads its fonts in a test; the renderer puts the app's own font files there.
+  const mapGlyphs = 'file:///test/fonts/{fontstack}/{range}.pbf';
+
+  MapLibreMap mapOf(WidgetTester tester) => tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+
+  /// Tells the screen its style has loaded, as the map does after the first style and after each new one, and waits until the
+  /// screen has added its images and put its data on the map (the measure line is the last it sets).
+  Future<void> styleLoaded(WidgetTester tester, _MapRig m) async {
+    mapOf(tester).onStyleLoadedCallback!();
+    for (var i = 0; i < 300 && !m.kit.controller.sources.containsKey(kMeasureSource); i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    expect(m.kit.controller.sources.containsKey(kMeasureSource), isTrue, reason: 'the Maps screen did not put its data on the map');
+    await settle(tester);
+  }
+
+  /// A change of layers: the screen builds its style again after a short wait and sets it on the map, which then loads it.
+  Future<void> restyled(WidgetTester tester, _MapRig m) async {
+    final before = m.kit.controller.styleSets;
+    for (var i = 0; i < 300 && m.kit.controller.styleSets == before; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(m.kit.controller.styleSets, before + 1, reason: 'the Maps screen did not set a new style');
+    await styleLoaded(tester, m);
+  }
+
   Future<void> showMap(WidgetTester tester, _MapRig m) async {
     await show(tester, MapsScreen(
       location: m.r.location,
@@ -1321,21 +1367,52 @@ void main() {
       regions: m.regions,
       notebooks: m.notebooks,
       onNewEntryAt: m.notebooks == null ? null : (_, _) {},
-      glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf',
+      glyphsLoader: () async => mapGlyphs,
+      snapshotter: m.kit.inset,
     ));
     for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump(const Duration(milliseconds: 20));
     }
     await settle(tester);
+    // The style the screen built its map with: the same call, with the same layers on.
+    m.kit.firstStyle = await tester.runAsync(() => m.r.maps.styleJson(mapPaletteFor(CacheThemeId.light), mapGlyphs));
+    // The map is there: the screen gets its controller and is told the style has loaded, as on a phone. From here it moves the
+    // camera and puts the position, the route and the pins on the map, and the controller keeps what it asked for.
+    mapOf(tester).onMapCreated!(m.kit.controller);
+    await styleLoaded(tester, m);
+  }
+
+  /// A Maps picture with the real map behind it: writes the scene (what the map shows now), puts the scene's rendered picture
+  /// where the map is, tells the screen the camera the map has (the scale bar and the compass follow it), and takes the picture.
+  Future<void> mapShot(WidgetTester tester, _MapRig m, String id, String scene) async {
+    final map = mapOf(tester);
+    final size = tester.getSize(find.byType(MapLibreMap));
+    final cam = m.kit.cameraOf(map, size);
+    m.kit.writeScene(
+      scene,
+      style: m.kit.style,
+      camera: cam,
+      size: size,
+      ratio: tester.view.devicePixelRatio,
+      sources: m.kit.controller.sources,
+      images: m.kit.controller.images,
+    );
+    m.kit.show(scene);
+    map.onCameraMove!(CameraPosition(target: LatLng(cam.lat, cam.lon), zoom: cam.zoom, bearing: cam.bearing));
+    await tester.pump();
+    await shot(tester, id);
   }
 
   Future<void> endMap(WidgetTester tester, _MapRig m) async {
+    m.kit.writeIndex();
     await tester.pumpWidget(const SizedBox());
     m.nav.dispose();
     await m.r.dispose(tester);
+    m.kit.dispose();
   }
 
+  // The search picture has no map yet and keeps its old sample.
   const park = MapPlace(
     id: 'place:osm:w7',
     type: 'place',
@@ -1354,16 +1431,37 @@ void main() {
   );
 
   // One test for every Maps picture: the map screen is built once (a second one in the same run waits for its style for good).
+  // Five pictures have the real map behind them (mapShot); the others are still drawn over the empty map area.
   testWidgets('the Maps pictures', (tester) async {
     final m = await mapRig(tester, notebooks: true);
     await showMap(tester, m);
-    await shot(tester, 'maps-find-me');
+    await mapShot(tester, m, 'maps-find-me', 'find-me');
 
-    m.nav.select(park);
+    // The same view with hillshade off, to choose between the two (not a guide picture: its id starts with "compare-", and
+    // make_shots.py keeps such pictures out of the guide's assets). To be taken out once the choice is made.
+    m.r.maps.setOn('hillshade', false);
+    await restyled(tester, m);
+    await mapShot(tester, m, 'compare-maps-find-me-no-hillshade', 'find-me-flat');
+    m.r.maps.setOn('hillshade', true);
+    await restyled(tester, m);
+
+    // The layers sheet over the map, with public lands on as well: the whole screen, so the map shows above the sheet.
+    m.r.maps.setOn(m.sample.publicLandsId, true);
+    await restyled(tester, m);
+    await tester.tap(find.byTooltip('Layers'));
     await settle(tester);
-    await shot(tester, 'place-card');
+    await mapShot(tester, m, 'layers-sheet', 'layers');
+    await tester.tapAt(const Offset(10, 60));
+    await settle(tester);
+    m.r.maps.setOn(m.sample.publicLandsId, false);
+    await restyled(tester, m);
+
+    m.nav.select(GuideSample.arch);
+    await settle(tester);
+    await mapShot(tester, m, 'place-card', 'place-card');
     m.nav.clearSelection();
 
+    m.kit.show(null);
     m.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [
       park,
       const MapPlace(id: 'place:osm:n8', type: 'place', name: 'Shoshone Falls Overlook', kind: 'Viewpoint', address: 'Twin Falls, ID', lat: 42.5951, lon: -114.4012, distanceM: 6500, direction: 'E', matched: 'name'),
@@ -1378,38 +1476,48 @@ void main() {
     m.nav.closeSearch();
     await settle(tester);
 
-    await tester.tap(find.byTooltip('Layers'));
+    // Directions start where the phone is: it has moved up the road to where the drive begins.
+    final start = m.sample.routeStart;
+    m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
+    await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
-    await shot(tester, 'layers-sheet', crop: _sheet);
-    await tester.tapAt(const Offset(10, 60));
-    await settle(tester);
+    await mapShot(tester, m, 'directions-panel', 'directions');
 
-    await tester.runAsync(() => m.nav.openDirections(park));
-    await settle(tester);
-    await shot(tester, 'directions-panel');
-
+    m.kit.show(null);
     await tester.runAsync(() => m.nav.setMode('offroad_foot'));
     await settle(tester);
     await shot(tester, 'directions-offroad');
 
     await tester.runAsync(() => m.nav.setMode('drive'));
     await settle(tester);
-    final route = m.nav.route!;
-    m.backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(route.raw, 0.3));
+    final fix = m.sample.guidanceFix;
+    m.backend.onProgress = (r, lat, lon) async => m.sample.progress();
     await tester.runAsync(() async {
       await m.nav.start();
-      m.gps.controller.add(fixAt(42.5, -113.69, heading: 90));
+      m.gps.controller.add(fixAt(fix.lat, fix.lon, heading: m.sample.guidanceHeading));
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await settle(tester);
-    await shot(tester, 'guidance');
+    // The camera the screen asked for puts the phone low on the map, where the screen means it to be: the picture and the
+    // screen then agree.
+    final mapSize = tester.getSize(find.byType(MapLibreMap));
+    final at = m.kit.cameraOf(mapOf(tester), mapSize).project(fix.lat, fix.lon, mapSize);
+    expect((at - guidanceAnchor(mapSize, side: false)).distance, lessThan(3), reason: 'the guidance camera does not put the position at its anchor');
+    m.kit.inset.write();
+    await mapShot(tester, m, 'guidance', 'guidance');
     await tester.runAsync(() async => m.nav.end());
+    // The pictures below have no map yet: as before, the map is north up, at the phone, and does not follow it.
+    m.kit.show(null);
+    m.r.maps.setFollow(FollowMode.free);
+    final map = mapOf(tester);
+    final camera = GuideCamera(lat: fix.lat, lon: fix.lon, zoom: 14);
+    m.kit.movedTo(camera);
+    map.onCameraMove!(CameraPosition(target: LatLng(camera.lat, camera.lon), zoom: camera.zoom));
     await settle(tester);
 
     // The ring, with a route shown (so it offers Add stop), then the notebook ring after Save, then Measure.
-    await tester.runAsync(() => m.nav.openDirections(park));
+    await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
-    final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
     map.onMapLongClick!(const Point(215.0, 466.0), const LatLng(42.57, -114.45));
     await settle(tester);
     await shot(tester, 'map-ring');
@@ -1891,6 +1999,9 @@ class _GuideVideoNative extends VideoFakeNative {
 CsNative _guideVideoNative() => _GuideVideoNative();
 
 class _MapRig {
+  /// The map pictures (guide_map_kit.dart) and the sample park (guide_sample.dart).
+  final GuideMaps kit = GuideMaps();
+  late GuideSample sample;
   late SettingsRig r;
   late FakeBackend backend;
   late FakeNavPosition gps;

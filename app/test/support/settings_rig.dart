@@ -145,6 +145,8 @@ class SettingsRig {
     ConnectionKind connection = ConnectionKind.wifi,
     LocationAccess locationAccess = LocationAccess.always,
     LocationPermissionState permission = LocationPermissionState.granted,
+    // Layer definitions as the published catalogue brings them, on top of the test catalogue (see TestLayerEngine.published).
+    List<Map<String, dynamic>> publishedLayers = const [],
   }) async {
     tester.view.physicalSize = const Size(1080, 5400);
     tester.view.devicePixelRatio = 3;
@@ -195,7 +197,7 @@ class SettingsRig {
     r.app = AppState(settingsDirOverride: r.dir, modelsDirOverride: r.modelsDir);
     r.store = ConversationStore.memory();
     r.chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(r.store);
-    r.engine = TestLayerEngine(policy: r.policy);
+    r.engine = TestLayerEngine(policy: r.policy, published: publishedLayers);
     r.browse = BrowseState(sources: r.sources, policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     r.video = VideoState(
       dirOverride: r.videosDir,

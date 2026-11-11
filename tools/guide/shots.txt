@@ -1,7 +1,7 @@
 # Guide screenshots: one id per line, then " | " and the screen state it shows. In a chapter: ![caption](shot:<id>), on a line of
 # its own. The reader shows app/assets/guide/shots/<id>.png with the caption under it (the caption is also its screen-reader
-# text). split.py takes the whole markup out, so the assistant never sees it. The pictures are made by the golden tests in
-# app/test/guide_shots/ (sample data, light theme): flutter test --update-goldens test/guide_shots, then tool/guide_shots.dart.
+# text). split.py takes the whole markup out, so the assistant never sees it. The pictures are made by
+# app/test_shots/guide_shots_test.dart (sample data, light theme) and tools/guide/make_shots.py: see README.md, "Making the pictures".
 # Ask for a new id here; ci_check.py fails on an id a chapter uses that has no line here or no picture.
 home-setup-card | Home with the "Set up Cache" card: a model chosen, the area downloading, weather on, no library yet
 regions-sheet | The Regions sheet for a place in Idaho: counties, a city, a valley and the state, with sizes; "Draw your own area instead"
@@ -40,13 +40,13 @@ home | Home: search box, Weather and alerts card (50 degrees, a red warning tria
 home-search | Home with "water" typed: first row "Ask Cache: water", then results from Library, Notebooks, Places and Maps
 home-shortcut-menu | Home with a shortcut held: "Move earlier", "Move later", "Remove from Home"
 key-sheet | The key sheet opened from "Get key" on "Satellite fire hotspots": the provider link, the Key field and "Check and save"
-layers-sheet | Maps layers sheet: layer switches with their state lines, "Opacity", "Show my position", "Download a region", "Get more layers"
+layers-sheet | Maps with the layers sheet open over the map: layer switches with their state lines, "Opacity", "Show my position", "Download a region", "Get more layers"
 library-own | Library > Add to Library > Your own library: "From a file on this phone", "From a download link" and "Get a blank library template"
 log-editor | New Log notebook: name, "Add field" with a number field "Run time" (unit min) and a yes/no field, "Due again" and "Create"
 log-quick-add | The quick add form of the Generator test log with last values filled and "Save"
 map-measure | The map measuring: dashed line with three points, the running total bar, "Undo" and "Done"
 map-notebook-ring | The map ring after Save: the notebook ring with Places, Journal and log wedges and "More"
-maps-find-me | Maps with the user's position shown and the locate ("Find me") button, a base map downloaded for Idaho
+maps-find-me | Maps with the user's position shown on the map of a national park, and the locate ("Find me") button
 maps-search | Maps: "Search places or coordinates" with a few results
 markdown-cheatsheet | The Markdown cheat sheet opened from "?" in an entry
 models-screen | Models: the Recommended cards (one "Fits this phone", one "Too big for this phone"), then "On this phone" with one model Active; "Search Hugging Face" and "Choose a file" below
