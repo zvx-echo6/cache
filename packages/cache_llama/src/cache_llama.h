@@ -22,6 +22,8 @@ extern "C" {
 //   "repack_weights": Android only, for measurement: true repacks the CPU weights (an anonymous copy that can be swapped).
 //                     false (the default) keeps them file-backed through mmap, as every Android load does unless this is set.
 //                     It is never set automatically. Other platforms ignore it.
+//   "preread_mbps":   after a successful cl_load, a background thread reads the model file (all tensors except per_layer_token_embd*)
+//                     into the page cache at this many MB/s (steps already in the page cache are skipped), so the first prompt does not fault it in all at once. 0, the default, is off. The thread is stopped when the handle is freed.
 // Returns 0, or -1 when the JSON does not parse.
 CL_API int cl_configure(const char * options_json);
 

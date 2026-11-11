@@ -11,7 +11,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # HTTPS: blocking, rustls with bundled root certificates (no platform certificate store, so it works the same on
 # Android), no async runtime.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
-# The public-address guard on the client (installed only by the Linux server's helper; the web read always has it).
+# The public-address guard on the client (installed only by the Linux server's helper; a phone never has it).
 cache_netguard = { path = "../cache_netguard" }
 # Dates and UTC offsets for the field mapping (no clock feature: "now" is always passed in).
 chrono = { version = "0.4", default-features = false, features = ["std"] }
