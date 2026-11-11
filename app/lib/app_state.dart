@@ -111,6 +111,19 @@ class AppState extends ChangeNotifier {
   /// The chosen model, not in memory now so the phone has room: at start there was not enough free memory for it, or it was
   /// let go when Android said memory was short. It loads again when Ask opens ([wake]); it stays the chosen model.
   ModelEntry? resting;
+
+  /// True while the start or wake memory gate holds the chosen model back (it needs more than the memory free then); false once a
+  /// model loads (or is tried), is unloaded, or another is chosen. [heldNeedMb] and [heldFreeMb] are the gate's two numbers.
+  bool heldForMemory = false;
+  int? heldNeedMb;
+  int? heldFreeMb;
+
+  void _clearHeld() {
+    heldForMemory = false;
+    heldNeedMb = null;
+    heldFreeMb = null;
+  }
+
   String? loadError;
 
   /// The model whose last load failed, and why; null once a model loads, is unloaded or that file is deleted.
@@ -211,6 +224,9 @@ class AppState extends ChangeNotifier {
           if (r != null && need != null && need.total > r.room) {
             logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
             resting = e;
+            heldForMemory = true;
+            heldNeedMb = need.total >> 20;
+            heldFreeMb = r.room >> 20;
             notifyListeners();
           } else {
             await activate(e);
@@ -346,6 +362,7 @@ class AppState extends ChangeNotifier {
     if (loading != null || isUnsupported(entry)) return;
     final previous = active;
     resting = null;
+    _clearHeld();
     loading = entry;
     loadError = null;
     notifyListeners();
@@ -434,6 +451,7 @@ class AppState extends ChangeNotifier {
     }
     _lastModelFile = fileName;
     resting = e;
+    _clearHeld();
     notifyListeners();
     await _writeSettings();
     return true;
@@ -444,6 +462,7 @@ class AppState extends ChangeNotifier {
   Future<void> unload() async {
     if (loading != null || active == null) return;
     resting = null;
+    _clearHeld();
     active = null;
     activeInfo = null;
     loadError = null;
@@ -463,6 +482,7 @@ class AppState extends ChangeNotifier {
     final a = active;
     if (loading != null || a == null) return;
     resting = a;
+    _clearHeld();
     active = null;
     activeInfo = null;
     modelGeneration++;
@@ -500,6 +520,10 @@ class AppState extends ChangeNotifier {
       final need = room == null ? null : await _needOf(r);
       if (room != null && need != null && need.total > room.room) {
         logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        heldForMemory = true;
+        heldNeedMb = need.total >> 20;
+        heldFreeMb = room.room >> 20;
+        notifyListeners();
         return;
       }
       // the answer to the read above may have come after another load began

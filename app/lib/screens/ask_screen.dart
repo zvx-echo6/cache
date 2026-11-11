@@ -24,6 +24,12 @@ import 'history_drawer.dart';
 import 'model_search_screen.dart' show downloadModel;
 import 'models_screen.dart';
 
+/// How the "not loaded" card looks when the memory gate held the model back ([AppState.heldForMemory]). Render-only: nothing chooses
+/// it at run time, and [today] is the shipped card. Other not-loaded cases always show the shipped card.
+enum GateCardStyle { today, optionA, optionB }
+
+GateCardStyle gateCardStyle = GateCardStyle.today;
+
 class AskScreen extends StatefulWidget {
   const AskScreen({
     super.key,
@@ -496,6 +502,8 @@ class _AskScreenState extends State<AskScreen> {
         onPressed = () => app.activate(usable.first);
       }
     }
+    final held = gateCardStyle != GateCardStyle.today && app.heldForMemory && app.resting != null && app.failed == null;
+    if (held) return _gateCard(k, app.displayName(app.resting!), onPressed);
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,
@@ -508,6 +516,34 @@ class _AskScreenState extends State<AskScreen> {
           Text(line, key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.emergency)),
           const SizedBox(height: 6),
           FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
+        ],
+      ),
+    );
+  }
+
+  /// The memory-gate card, calm (nothing is broken): theme surface and secondary text, no emergency colour. Render options only.
+  Widget _gateCard(CacheTokens k, String name, VoidCallback onLoad) {
+    final b = gateCardStyle == GateCardStyle.optionB;
+    final line = b ? 'Not loaded yet: other apps are using the memory it needs.' : '$name is waiting for free memory.';
+    // Nothing retries while Cache stays in front (the model loads again only when Ask opens or Cache returns to the front), so
+    // option B does not say it loads by itself.
+    final second = b
+        ? 'Close apps you are not using, then come back to Ask, or load it now. Loading now may close apps in the background.'
+        : 'Other apps are using it right now. Loading anyway may close some of them.';
+    return Container(
+      key: const ValueKey('ask-fix'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: k.secondary.withValues(alpha: 0.25))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(line, key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+          const SizedBox(height: 4),
+          Text(second, key: const ValueKey('ask-fix-note'), style: TextStyle(fontSize: 13, color: k.secondary)),
+          const SizedBox(height: 8),
+          FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onLoad, child: Text(b ? 'Load now' : 'Load anyway')),
         ],
       ),
     );
