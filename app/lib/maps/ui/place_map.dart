@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show Factory;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../../notebook/notebook_model.dart';
@@ -11,14 +13,21 @@ import '../style/style_generator.dart';
 import 'map_assets.dart';
 
 /// A small map with one pin, the place screen's: the same style as Maps (its layers, its theme), centred on [pin]. With
-/// [onPick], a tap moves the pin there.
+/// [onPick], a tap moves the pin there, and the map takes drag and pinch itself (inside the place form's scrolling list too).
+/// Without [onPick] it is a view: the page's scroll keeps the gestures. [onCentre] is told where the middle of the map is when the
+/// camera comes to rest (the full-screen picker's crosshair); [showPin] false leaves the pin out (the picker draws its own).
 class PlaceMap extends StatefulWidget {
-  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick});
+  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick, this.onCentre, this.onMoving, this.showPin = true});
 
   final MapsState maps;
   final CacheThemeId themeId;
   final NbPlace? pin;
   final ValueChanged<NbPlace>? onPick;
+  final ValueChanged<NbPlace>? onCentre;
+
+  /// The middle of the map while the camera moves (live coordinates).
+  final ValueChanged<NbPlace>? onMoving;
+  final bool showPin;
 
   @override
   State<PlaceMap> createState() => _PlaceMapState();
@@ -56,7 +65,7 @@ class _PlaceMapState extends State<PlaceMap> {
       await c.setGeoJsonSource(kPinSource, {
         'type': 'FeatureCollection',
         'features': [
-          if (p != null)
+          if (p != null && widget.showPin)
             {
               'type': 'Feature',
               'geometry': {'type': 'Point', 'coordinates': [p.lon, p.lat]},
@@ -84,6 +93,14 @@ class _PlaceMapState extends State<PlaceMap> {
         _ready = true;
         _showPin();
       },
+      gestureRecognizers: widget.onPick == null ? null : {Factory<EagerGestureRecognizer>(EagerGestureRecognizer.new)},
+      onCameraMove: widget.onMoving == null ? null : (c) => widget.onMoving!(NbPlace(lat: c.target.latitude, lon: c.target.longitude)),
+      onCameraIdle: widget.onCentre == null
+          ? null
+          : () {
+              final t = _c?.cameraPosition?.target;
+              if (t != null) widget.onCentre!(NbPlace(lat: t.latitude, lon: t.longitude));
+            },
       onMapClick: widget.onPick == null ? null : (math.Point<double> _, LatLng at) => widget.onPick!(NbPlace(lat: at.latitude, lon: at.longitude)),
       compassEnabled: false,
       tiltGesturesEnabled: false,

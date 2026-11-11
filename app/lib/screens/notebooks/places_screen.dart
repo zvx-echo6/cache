@@ -14,12 +14,14 @@ import '../../notebook/media.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
+import '../../notebook/pin_image.dart' show PinStyle;
 import '../../notebook/place_style.dart';
 import '../../notebook/places.dart';
 import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
+import 'map_spot_picker.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart' show NotebookDeps;
 import 'place_alert_sheet.dart';
@@ -39,6 +41,7 @@ class PlaceNotebookDeps {
     this.alertSetting,
     this.alertKinds,
     this.map,
+    this.pickerMap,
     this.directions,
     this.regions,
     this.hereOnMap,
@@ -59,6 +62,9 @@ class PlaceNotebookDeps {
   /// The kinds of alerts the sources that are on give (catalogue categories).
   final List<String> Function()? alertKinds;
   final PlaceMapBuilder? map;
+
+  /// The map of the full-screen "Choose on map" picker.
+  final SpotMapBuilder? pickerMap;
 
   /// Directions on the map to a place.
   final void Function(NbPlace place, String name)? directions;
@@ -691,6 +697,25 @@ class _PlaceFormState extends State<PlaceForm> {
     });
   }
 
+  /// "Choose on map": the full-screen picker; Cancel (null) keeps the pin the place has.
+  Future<void> _chooseOnMap() async {
+    final pm = pd?.pickerMap;
+    if (pm == null) return;
+    final iconId = _icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book);
+    final got = await Navigator.of(context).push<NbPlace>(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (ctx) => MapSpotPicker(
+        map: pm,
+        places: widget.deps.places,
+        start: _pin,
+        icon: mapIconOrTemplate(iconId).icon,
+        tint: pinTint(ctx, _color.color),
+        pinStyle: _icons?.pinStyle() ?? PinStyle.icon,
+      ),
+    ));
+    if (got != null && mounted) setState(() => _pin = got);
+  }
+
   Future<void> _save() async {
     final pin = _pin;
     final name = _name.text.trim();
@@ -804,13 +829,18 @@ class _PlaceFormState extends State<PlaceForm> {
                 borderRadius: BorderRadius.circular(16),
                 child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p))),
               ),
+              if (pd?.pickerMap != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+                ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text(
                 pin == null
                     ? 'No position yet. Search for the place${pd?.map != null ? ' or tap the map' : ''}.'
-                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'tap the map to move the pin'].join(' · '),
+                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'drag the map or tap it to move the pin'].join(' · '),
                 key: const ValueKey('place-where'),
                 style: TextStyle(fontSize: 13, color: k.secondary),
               ),
