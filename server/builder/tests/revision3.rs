@@ -82,7 +82,7 @@ fn half_precision_rounds_like_ieee() {
 }
 
 fn suggestion(div: &str, label: &str, source: &str) -> Suggested {
-    Suggested { div: div.into(), label: label.into(), score: Some(0.875), classifier_version: Some(3), source: source.into(), second_div: Some("450".into()) }
+    Suggested { div: div.into(), label: label.into(), score: Some(0.875), classifier_version: Some(3), source: source.into(), second_div: Some("450".into()), filed: None, suggestions: vec![] }
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn library_opts() -> LibraryOptions {
 
 fn two_packs(dir: &Path) -> (Pack, Pack) {
     let mut a = build(&doc_pdf("Water", "water", 2), "water.pdf");
-    a.header.book.as_mut().unwrap().suggested = Some(Suggested { div: "440".into(), label: "Water".into(), score: Some(0.5), classifier_version: Some(2), source: "classifier".into(), second_div: None });
+    a.header.book.as_mut().unwrap().suggested = Some(Suggested { div: "440".into(), label: "Water".into(), score: Some(0.5), classifier_version: Some(2), source: "classifier".into(), second_div: None, filed: None, suggestions: vec![] });
     let b = build(&doc_pdf("Stone", "stone", 2), "stone.pdf");
     write_pack(&a, dir).unwrap();
     write_pack(&b, dir).unwrap();
@@ -446,7 +446,7 @@ fn the_library_writes_copies_jsonl_that_reads_like_its_packs_and_travels_in_the_
 
 #[test]
 fn seed_numbers_run_from_1_in_title_then_doc_id_order_within_a_division() {
-    let sug = |d: &str| Some(Suggested { div: d.into(), label: "x".into(), score: None, classifier_version: None, source: "label".into(), second_div: None });
+    let sug = |d: &str| Some(Suggested { div: d.into(), label: "x".into(), score: None, classifier_version: None, source: "label".into(), second_div: None, filed: None, suggestions: vec![] });
     let mut facts = BTreeMap::new();
     facts.insert("id9".to_string(), BookFacts::new("Zinc", sug("440")));
     facts.insert("id2".to_string(), BookFacts::new("Alpha", sug("440")));

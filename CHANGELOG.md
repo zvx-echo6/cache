@@ -23,6 +23,7 @@ release notes).
 - Weather and alerts: with Cache left open on the screen, weather and alerts now keep updating every 30 minutes on iPhone and on Linux (before, only when Cache was opened or brought back to the front)
 - Weather alerts: with Where I am watched, the same fire no longer pops up again each time you move about a kilometre; it pops up once more only if it comes close enough to be serious
 - Weather alerts: a warning that reaches another of your places now pops up for that place even if you were told about it elsewhere, and an update pops up again when it becomes more severe; an update that only changes the end time or the wording stays quiet
+- Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 
