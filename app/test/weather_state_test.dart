@@ -687,6 +687,18 @@ void main() {
       expect(h.weather.lastOkAt, h.clock);
     });
 
+    // 1.1 audit: "already updating" was only set after the places and the connection were read, so two calls in the same moment
+    // (back on the screen and a tap on Update now) both ran: every download twice, and two alert checks.
+    test('two updates asked for in the same moment run as one', () async {
+      h = await Harness.create();
+      await setUp3(h);
+      final both = await Future.wait([h.weather.updateNow(), h.weather.updateNow(force: true)]);
+      expect([for (final r in both) r.nothingToDo], [null, 'Already updating']);
+      expect(h.core.fetches.length, 4, reason: 'every source and place once');
+      expect(h.weather.updating, isFalse);
+      expect((await h.weather.updateNow()).fetched, 4, reason: 'and the next one runs');
+    });
+
     test('a copy that is still fresh is not downloaded again, and says so', () async {
       h = await Harness.create();
       await setUp3(h);
@@ -1386,6 +1398,47 @@ void main() {
       expect(n.deliveries.single, AlertDelivery.normal);
       await h.weather.updateNow();
       expect(n.shown.length, 1, reason: 'already told');
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
+    });
+
+    // 1.1 audit: a check reads what was told, shows, then writes. Two at once both saw a new alert before either had written.
+    test('two alert checks at once tell a new fire once', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await Future.wait([h.weather.checkAlerts(), h.weather.checkAlerts()]);
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire']);
+    });
+
+    // 1.1 audit: a told list that could not be read was taken as an empty one, so everything in force popped up again.
+    test('a told list that cannot be read is not "nothing was told"', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await h.weather.updateNow();
+      expect(n.shown.length, 1);
+      final list = File('${h.dir.path}/told.json'), copy = File('${h.dir.path}/told.json.bak');
+      Future<void> startAgain() async {
+        h.weather.dispose();
+        h = await Harness.create(again: h, serve: false, notifier: n);
+        h.settings.setPopUpFor(PopUpFor.all);
+        h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      }
+
+      // the list is damaged while the app is closed: the copy kept beside it says what was told
+      list.writeAsStringSync('["live:wfigs-inc');
+      await startAgain();
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'told before');
+      // the copy is damaged too: what was told is not known, and nothing in force pops up again
+      copy.writeAsStringSync('not a list');
+      await startAgain();
+      await h.weather.updateNow();
+      expect(n.shown.length, 1);
+      expect(jsonDecode(list.readAsStringSync()), contains('live:wfigs-incidents-near/x/East Fork fire'), reason: 'the list is whole again');
+      // what comes after pops up as usual
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
       await h.weather.updateNow();
       expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);

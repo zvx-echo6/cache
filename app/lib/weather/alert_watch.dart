@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../files.dart';
 import 'alert_area.dart';
 import 'live_view.dart';
 import 'place_alerts.dart';
@@ -297,8 +298,15 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
   return out;
 }
 
+/// What a [ToldStore] holds: the addresses told about and what is remembered of each alert. [known] is false when the list
+/// is there but cannot be read and no earlier copy of it is left: then nothing is known of what was told, which is not the
+/// same as nothing having been told.
+typedef ToldList = ({Set<String> addresses, List<ToldAlert> alerts, bool known});
+
 /// What has been told about, kept in a small file so restarts and background runs never repeat a pop-up: the addresses of the
 /// items told about (the file's strings, as before) and what is remembered of each alert ([ToldAlert], the file's objects).
+/// A second copy is kept beside it (`<file>.bak`), and the store remembers the last list it read or wrote: a file that cannot
+/// be read is not taken as "nothing was ever told" (every alert in force would pop up again).
 class ToldStore {
   ToldStore(File file) : _where = (() async => file);
 
@@ -310,30 +318,78 @@ class ToldStore {
   /// The most kept; older ones drop off (an alert that old has long ended).
   static const int keep = 500;
 
-  Future<List<Object?>> _all() async {
+  /// The last list read from the file or written to it by this store.
+  List<Object?>? _last;
+
+  /// The list in [f]; null when it cannot be read as one.
+  static Future<List<Object?>?> _listIn(File f) async {
     try {
-      final file = await _where();
-      if (!await file.exists()) return [];
-      final j = jsonDecode(await file.readAsString());
-      return j is List ? j : [];
+      final j = jsonDecode(await f.readAsString());
+      return j is List ? j : null;
     } catch (_) {
-      return [];
+      return null;
     }
   }
 
+  /// The list, and whether it is known: from the file; when that cannot be read, from the copy beside it, then from what this
+  /// store last had. No file at all is a list that is known to be empty (nothing was told yet).
+  Future<({List<Object?> list, bool known})> _all() async {
+    final File file;
+    try {
+      file = await _where();
+    } catch (_) {
+      return (list: _last ?? const <Object?>[], known: _last != null);
+    }
+    var there = true;
+    try {
+      there = await file.exists();
+    } catch (_) {}
+    if (there) {
+      final list = await _listIn(file);
+      if (list != null) {
+        _last = list;
+        return (list: list, known: true);
+      }
+    }
+    final copy = await _listIn(File('${file.path}.bak'));
+    if (copy != null) {
+      _last = copy;
+      return (list: copy, known: true);
+    }
+    final last = _last;
+    if (last != null) return (list: last, known: true);
+    return (list: const <Object?>[], known: !there);
+  }
+
+  /// Everything told about, read once.
+  Future<ToldList> load() async {
+    final all = await _all();
+    return (
+      addresses: {for (final a in all.list) if (a is String) a},
+      alerts: [for (final a in all.list) ?ToldAlert.fromJson(a)],
+      known: all.known,
+    );
+  }
+
   /// The addresses told about.
-  Future<Set<String>> read() async => {for (final a in await _all()) if (a is String) a};
+  Future<Set<String>> read() async => (await load()).addresses;
 
   /// What is remembered of the alerts told about.
-  Future<List<ToldAlert>> readAlerts() async => [for (final a in await _all()) ?ToldAlert.fromJson(a)];
+  Future<List<ToldAlert>> readAlerts() async => (await load()).alerts;
 
+  /// Adds to the list. Each file is written whole under a name of its own and renamed into place, so a reader never sees half
+  /// a list and two writers (the app and a background run) never share a temporary file. When it cannot be saved, this store
+  /// still remembers it for as long as it lives.
   Future<void> add(Iterable<String> addresses, {Iterable<ToldAlert> alerts = const []}) async {
-    final list = [...(await _all()), ...addresses, for (final a in alerts) a.toJson()];
+    final list = [...(await _all()).list, ...addresses, for (final a in alerts) a.toJson()];
     final kept = list.length > keep ? list.sublist(list.length - keep) : list;
-    final file = await _where();
-    await file.parent.create(recursive: true);
-    final tmp = File('${file.path}.tmp');
-    await tmp.writeAsString(jsonEncode(kept), flush: true);
-    await tmp.rename(file.path);
+    _last = kept;
+    try {
+      final file = await _where();
+      await file.parent.create(recursive: true);
+      final text = jsonEncode(kept);
+      await writeStringAtomic(file, text);
+      await writeStringAtomic(File('${file.path}.bak'), text);
+    } catch (_) {}
   }
 }

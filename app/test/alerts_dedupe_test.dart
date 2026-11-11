@@ -152,6 +152,35 @@ void main() {
       expect(pickNewAlerts({home: [view(home, nwsSrc, [old])]}, told, toldAlerts: alerts), isEmpty);
     });
 
+    // 1.1 audit: two writers (the app and a background run) shared one temporary file, and a list that could not be read was
+    // taken as an empty one.
+    test('the told list: two writers at once leave a whole list; a damaged one falls back to its copy, then to what was read', () async {
+      final dir = Directory.systemTemp.createTempSync('cache-told-');
+      final file = File('${dir.path}/alerts_told.json'), copy = File('${dir.path}/alerts_told.json.bak');
+      final none = await ToldStore(file).load();
+      expect(none.known, isTrue, reason: 'no file: nothing was told, and that is known');
+      expect(none.addresses, isEmpty);
+      await Future.wait([ToldStore(file).add(['live:a/home/1']), ToldStore(file).add(['live:a/home/2'])]);
+      expect(jsonDecode(file.readAsStringSync()), isList);
+      expect(dir.listSync().where((f) => f.path.endsWith('.tmp')), isEmpty, reason: 'each write finished its own file');
+      await ToldStore(file).add(['live:a/home/3']);
+      final whole = await ToldStore(file).load();
+      expect(whole.addresses, contains('live:a/home/3'));
+      // the list is damaged: the copy beside it
+      file.writeAsStringSync('["live:a/ho');
+      final reader = ToldStore(file);
+      final fromCopy = await reader.load();
+      expect(fromCopy.known, isTrue);
+      expect(fromCopy.addresses, whole.addresses);
+      // the copy too: a store that read it before still knows; a new one does not, and says so
+      copy.writeAsStringSync('{}');
+      expect((await reader.load()).addresses, whole.addresses);
+      final lost = await ToldStore(file).load();
+      expect(lost.known, isFalse);
+      expect(lost.addresses, isEmpty);
+      dir.deleteSync(recursive: true);
+    });
+
     test('fires are joined only with the same fire of the same source', () {
       final home = place('place:home', 'Home'), cabin = place('place:cabin', 'Cabin');
       LiveItem fire(String p, String k) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$p/$k', 'label': 'East Fork fire', 'fields': {'Distance': '4 mi N'}});

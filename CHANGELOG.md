@@ -18,6 +18,7 @@ release notes).
 - Weather and alerts: a source that needs a key (satellite fire hotspots, or a source of your own with a key) now updates from Update now, in the background and when you move, not only when Ask looks it up
 - Home: the weather card no longer says "no forecast yet" while a forecast is stored; when the current reading is too old to show, it shows today's forecast under the day's name, with its age
 - Home and Weather: a warning that has ended no longer shows again for a moment each time Cache opens
+- Weather alerts: an alert no longer pops up twice when two updates or two checks run in the same moment, and a damaged record of what you were already told no longer brings every alert back
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 

@@ -1080,7 +1080,7 @@ class WeatherState extends ChangeNotifier {
   }
 
   Future<void> _fetchHere() async {
-    if (_disposed || _updating) return;
+    if (_disposed || _updating || _updateRunning) return;
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
     if (srcs.isEmpty || here.isEmpty) return;
@@ -1195,7 +1195,22 @@ class WeatherState extends ChangeNotifier {
   /// too. [force] is a person's refresh: every source is downloaded again even when its copy is younger than its refresh interval (a
   /// forecast is kept for 3 hours), still within the core's quotas.
   Future<UpdateReport> updateNow({bool force = false}) async {
-    if (_updating) return const UpdateReport(nothingToDo: 'Already updating');
+    // One update at a time, from its first step to its alert check. [_updating] alone did not do it: it is set only once the
+    // places and the connection are known, so two calls in the same moment (back on the screen and a tap on Update now) both
+    // passed, downloaded everything twice and checked for alerts twice.
+    if (_updating || _updateRunning) return const UpdateReport(nothingToDo: 'Already updating');
+    _updateRunning = true;
+    try {
+      return await _update(force);
+    } finally {
+      _updateRunning = false;
+    }
+  }
+
+  /// An [updateNow] is under way, from before its first wait.
+  bool _updateRunning = false;
+
+  Future<UpdateReport> _update(bool force) async {
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
     final places = await watchedPlaces();
@@ -1273,7 +1288,7 @@ class WeatherState extends ChangeNotifier {
   /// may not run it for hours), so an update that is due ([every] since the last run) runs now. What a background run wrote is
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
   Future<UpdateReport?> updateIfDue(Duration every) async {
-    if (!_started || _updating || enabledSources.isEmpty) return null;
+    if (!_started || _updating || _updateRunning || enabledSources.isEmpty) return null;
     _readStatus();
     notifyListeners();
     final last = _lastRunAt;
@@ -1455,7 +1470,20 @@ class WeatherState extends ChangeNotifier {
   /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's "Pop up for" says, silent in
   /// quiet hours unless it is serious. Everything checked is remembered as told, shown or not, so choosing more pop-ups later does not
   /// bring back old alerts. Returns how many were shown.
-  Future<int> checkAlerts() async {
+  ///
+  /// One check at a time: a check reads what was told, shows, then writes, so two at once (the update's and the one after
+  /// "Where I am" moved) both saw the same alert as new and it sounded twice. A second check waits for the first, then sees what
+  /// the first told.
+  Future<int> checkAlerts() {
+    final run = _alertChecks.then((_) => _checkAlerts());
+    _alertChecks = run.then<void>((_) {}, onError: (_) {});
+    return run;
+  }
+
+  /// The alert check under way, or the last one.
+  Future<void> _alertChecks = Future<void>.value();
+
+  Future<int> _checkAlerts() async {
     final n = notifier, t = told;
     if (n == null || t == null) return 0;
     final byPlace = <WatchPlace, List<SourceView>>{};
@@ -1463,11 +1491,17 @@ class WeatherState extends ChangeNotifier {
       byPlace[p] = await viewFor(p);
     }
     await placeAlerts?.load();
-    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor, toldAlerts: await t.readAlerts());
+    final before = await t.load();
+    final fresh = pickNewAlerts(byPlace, before.addresses, rules: placeAlerts?.ruleFor, toldAlerts: before.alerts);
     if (fresh.isEmpty) return 0;
     var shown = 0;
-    for (final a in fresh) {
-      if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
+    // The told list is there but cannot be read, and no earlier copy of it is left: what was told is not known, which is not
+    // "nothing was told". What is in force now is remembered without popping up (it stays listed on Home and in Weather), so
+    // one bad file does not bring every alert back; what comes after it pops up as usual.
+    if (before.known) {
+      for (final a in fresh) {
+        if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
+      }
     }
     await t.add([for (final a in fresh) ...a.allAddresses], alerts: [for (final a in fresh) ...a.told]);
     return shown;
