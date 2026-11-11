@@ -44,7 +44,9 @@ void main() {
       await _settle(tester);
       w.pdf.state.jobs.single
         ..status = AddPdfStatus.done
-        ..state = 'done';
+        ..state = 'done'
+        // its book is on the shelves (the sample world's Water purification manual), so Delete it is offered
+        ..result = {'copy': 'water', 'pieces': 254, 'same': const [], 'shelf': {'div': '530', 'by': 'auto'}};
       await tester.tap(find.byKey(const ValueKey('add-pdf-stop')));
       await _settle(tester);
       await snap(tester, 'watch_folder', '390-8-finished-first-${theme.name}');
