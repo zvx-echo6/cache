@@ -13,6 +13,7 @@ import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../chat/prompt_read_ahead.dart';
 import '../chat/navigation_action.dart';
 import '../discover/discover_device.dart';
 import '../discover/discover_state.dart';
@@ -92,6 +93,7 @@ class Shell extends StatefulWidget {
     required this.sources,
     required this.location,
     this.chatLocation,
+    this.readAhead,
     required this.maps,
     required this.video,
     required this.browse,
@@ -118,6 +120,9 @@ class Shell extends StatefulWidget {
   final SourcesState sources;
   final LocationService location;
   final ChatLocation? chatLocation;
+
+  /// Reads the chat prompt's start ahead once Ask is shown with the model loaded; null in tests that do not need it.
+  final PromptReadAhead? readAhead;
   final MapsState maps;
   final VideoState video;
   final BrowseState browse;
@@ -144,7 +149,16 @@ class _ShellState extends State<Shell> {
   /// Back in front with Ask shown: the chosen model, let go while Cache was in the back, loads again, under the same memory gate
   /// as opening Ask (not forced). Nothing else loads on resume.
   void _onResume() {
-    if (_module == ModuleId.ask) unawaited(widget.app.wake());
+    if (_module == ModuleId.ask) unawaited(_wakeAsk());
+  }
+
+  /// Ask is shown: the chosen model loads if it was let go ([AppState.wake], under the memory gate), and with the model loaded
+  /// the chat prompt's start is read ahead. The read never loads the model: after a wake that did not load it (no room) there is
+  /// none. Not when Ask was left while the model loaded; leaving Ask later, with Cache in front, does not stop a read.
+  Future<void> _wakeAsk() async {
+    await widget.app.wake();
+    if (!mounted || _module != ModuleId.ask) return;
+    unawaited(widget.readAhead?.start());
   }
 
   /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
@@ -363,7 +377,7 @@ class _ShellState extends State<Shell> {
 
   void _goModule(ModuleId m) {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
-    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
     if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
     setState(() {

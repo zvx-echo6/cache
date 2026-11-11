@@ -29,6 +29,7 @@ import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
+import 'chat/prompt_read_ahead.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
@@ -685,6 +686,17 @@ class _CacheAppState extends State<CacheApp> {
     actions: actionRegistry,
     actCore: actCore,
   );
+  /// Reads the chat prompt's start into the model's cache while Ask is shown (chat/prompt_read_ahead.dart). It reads what the chat
+  /// would send, never loads the model, and sits out a hot device by the same heat signal as the index work.
+  late final PromptReadAhead promptReadAhead = PromptReadAhead(
+    engine: LocalReadAhead(app.session, extras: () => app.activeSettings.requestExtras, busy: () => chat.busy),
+    request: (cancelled) => chat.warmRequest(isCancelled: cancelled),
+    isHot: () async {
+      await indexThrottle.read();
+      return indexThrottle.hot;
+    },
+    waitForFix: chatLocation.waitForFix,
+  );
   // What the assistant can do through the act tool: each module's actions, handed back by the core for read and open (host_run) and
   // run by a tap on a confirm card for change. The chat installs a conversation's definitions in the core when it starts.
   final ActionRegistry actionRegistry = ActionRegistry();
@@ -865,6 +877,7 @@ class _CacheAppState extends State<CacheApp> {
         switch (state) {
           case AppLifecycleState.hidden:
           case AppLifecycleState.paused:
+            promptReadAhead.toBackground();
             _modelRelease.toBackground();
           case AppLifecycleState.resumed:
             _modelRelease.toFront();
@@ -1276,6 +1289,7 @@ class _CacheAppState extends State<CacheApp> {
           sources: sources,
           location: location,
           chatLocation: chatLocation,
+          readAhead: promptReadAhead,
           maps: maps,
           video: video,
           browse: browse,

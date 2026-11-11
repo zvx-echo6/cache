@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/chat/prompt_read_ahead.dart';
 import 'package:cache/layout/adaptive.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -23,6 +24,26 @@ import 'support/settings_rig.dart';
 const _file = 'gemma-4-E2B-it-Q4_K_M.gguf';
 const _gb = 1 << 30;
 const _info = ModelInfo(description: 'Gemma 4 E2B', nCtx: 8192, chatFormat: 'gemma', supportsTools: true);
+
+/// The read ahead's engine, by hand: it counts the checks it is asked for and says everything is covered.
+class _CountingEngine implements ReadAheadEngine {
+  _CountingEngine(this.app);
+  final AppState app;
+  final checks = <bool>[];
+
+  @override
+  bool get isLoaded => app.active != null;
+  @override
+  bool get questionRunning => false;
+  @override
+  Future<WarmResult> warm(Map<String, dynamic> request, {bool checkOnly = false}) async {
+    checks.add(checkOnly);
+    return const WarmResult(WarmOutcome.covered);
+  }
+
+  @override
+  void cancelWarm() {}
+}
 
 /// The native session, by hand: a load or an unload waits until the test lets it finish, and every call is kept in order.
 class FakeSession implements LlamaSession {
@@ -67,10 +88,19 @@ void main() {
     late SettingsRig r;
     late LayoutState layout;
     late NavState nav;
+    late _CountingEngine engine;
 
     Future<void> settle(WidgetTester tester) async {
       for (var i = 0; i < 5; i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    /// Real time passes (file reads in the memory gate) until [done] holds, at most about two seconds.
+    Future<void> until(WidgetTester tester, bool Function() done) async {
+      for (var i = 0; i < 40 && !done(); i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
         await tester.pump(const Duration(milliseconds: 50));
       }
     }
@@ -89,12 +119,13 @@ void main() {
       });
       // the chosen model, let go while Cache was in the back
       r.app.resting = r.app.models.first;
+      engine = _CountingEngine(r.app);
       tester.view.physicalSize = const Size(430, 932) * 2;
       tester.view.devicePixelRatio = 2;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
+        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
       ));
       await settle(tester);
     }
@@ -158,6 +189,38 @@ void main() {
       expect(r.app.active, isNull);
       expect(r.app.resting, isNotNull);
       expect(find.byKey(const ValueKey('ask-fix')), findsOneWidget);
+      await tearDownShell(tester);
+    });
+
+    testWidgets('Ask opened with room: the model loads, then the prompt start is checked for a read ahead', (tester) async {
+      await setUpShell(tester);
+      await openAsk(tester);
+      await until(tester, () => engine.checks.isNotEmpty);
+      expect(r.app.active, isNotNull);
+      expect(engine.checks, [true], reason: 'one check, after the load');
+      await tearDownShell(tester);
+    });
+
+    testWidgets('Ask opened with no room: the model stays out and nothing is read ahead', (tester) async {
+      avail = 1 * _gb;
+      await setUpShell(tester);
+      await openAsk(tester);
+      expect(r.app.active, isNull);
+      expect(engine.checks, isEmpty);
+      await tearDownShell(tester);
+    });
+
+    testWidgets('back in front with Ask shown: the model loads and the prompt start is checked again', (tester) async {
+      await setUpShell(tester);
+      await openAsk(tester);
+      await until(tester, () => engine.checks.isNotEmpty);
+      engine.checks.clear();
+      await tester.runAsync(r.app.release);
+      await background(tester);
+      await resume(tester);
+      await until(tester, () => engine.checks.isNotEmpty);
+      expect(r.app.active, isNotNull);
+      expect(engine.checks, [true]);
       await tearDownShell(tester);
     });
 

@@ -343,6 +343,38 @@ class ChatController extends ChangeNotifier {
     return loop;
   }
 
+  /// The request for reading the prompt start ahead (Ask shown, the model loaded, no question yet), or null when there is nothing to
+  /// read it with: no model, a turn already running, or the search core did not start. It is prepared as a question is: the same
+  /// preparation before inference (location), the same wait for the core, the same act definitions, and the loop's own request
+  /// builder ([ToolLoop.warmRequest]) with a new chat's loop when none is open; so what the model reads is what the first question
+  /// of the chat will send before its own messages. [isCancelled]: the read was given up (Cache went to the back).
+  Future<Map<String, dynamic>?> warmRequest({bool Function()? isCancelled}) async {
+    final backend = _backend;
+    if (backend == null || busy) return null;
+    bool gone() => (isCancelled?.call() ?? false) || !identical(backend, _backend) || busy;
+    try {
+      await prepareTurn?.call(gone);
+    } catch (_) {
+      // Optional device context never blocks a request.
+    }
+    if (gone()) return null;
+    if (waitForCore != null && _loop == null) {
+      final ok = await waitForCore!();
+      if (!ok || gone()) return null;
+    }
+    await _installActions();
+    if (gone()) return null;
+    final open = _loop;
+    // A new chat has no loop yet: one is made as the first question makes it, for its tool list only, and let go again.
+    final loop = open ?? await _loopFor(null, backend);
+    try {
+      if (gone()) return null;
+      return await loop.warmRequest();
+    } finally {
+      if (open == null) await loop.dispose();
+    }
+  }
+
   /// Asks the last question again in place of its failed answer (Try again).
   Future<void> retryLast() async {
     if (busy || messages.length < 2 || messages.last.isUser || messages.last.error == null) return;
