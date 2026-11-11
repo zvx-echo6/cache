@@ -565,6 +565,94 @@ class CarOverlayTest {
         assertEquals(5.0, CarMarkerMotion.heading(725.0, null)!!, 1e-9)
     }
 
+    // ---- the vehicle's movement between positions ------------------------------------------------------------------------
+
+    @Test
+    fun theMarkerIsPartOfTheWayBetweenTwoPositionsAndExactlyOnThemAtTheEnds() {
+        assertEquals(42.5, CarMarkerMotion.lerp(42.5, 42.6, 0.0), 0.0)
+        assertEquals(42.6, CarMarkerMotion.lerp(42.5, 42.6, 1.0), 0.0)
+        assertEquals(42.55, CarMarkerMotion.lerp(42.5, 42.6, 0.5), 1e-12)
+        assertEquals(-113.775, CarMarkerMotion.lerp(-113.8, -113.7, 0.25), 1e-12)
+        // A steady rate: equal shares of the time are equal steps on the ground.
+        val steps = (0..10).map { CarMarkerMotion.lerp(10.0, 20.0, it / 10.0) }
+        for (i in 1..10) assertEquals(1.0, steps[i] - steps[i - 1], 1e-9)
+        // Never past either end.
+        assertEquals(42.5, CarMarkerMotion.lerp(42.5, 42.6, -0.2), 0.0)
+        assertEquals(42.6, CarMarkerMotion.lerp(42.5, 42.6, 1.2), 0.0)
+    }
+
+    @Test
+    fun theHeadingTurnsTheShorterWayRound() {
+        // 359 to 1 goes through north (2 degrees), not back round through south (358).
+        assertEquals(0.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.5), 1e-9)
+        assertEquals(359.5, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.25), 1e-9)
+        assertEquals(0.5, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.75), 1e-9)
+        assertEquals(1.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 1.0), 0.0)
+        assertEquals(359.0, CarMarkerMotion.lerpHeading(359.0, 1.0, 0.0), 0.0)
+        // And the other way: 1 to 359.
+        assertEquals(0.0, CarMarkerMotion.lerpHeading(1.0, 359.0, 0.5), 1e-9)
+        assertEquals(359.5, CarMarkerMotion.lerpHeading(1.0, 359.0, 0.75), 1e-9)
+        // An ordinary turn, right and left.
+        assertEquals(45.0, CarMarkerMotion.lerpHeading(0.0, 90.0, 0.5), 1e-9)
+        assertEquals(225.0, CarMarkerMotion.lerpHeading(270.0, 180.0, 0.5), 1e-9)
+        assertEquals(350.0, CarMarkerMotion.lerpHeading(10.0, 330.0, 0.5), 1e-9)
+        // Always 0 up to 360.
+        for (i in 0..20) {
+            val h = CarMarkerMotion.lerpHeading(350.0, 20.0, i / 20.0)
+            assertTrue("$h", h >= 0.0 && h < 360.0)
+        }
+    }
+
+    @Test
+    fun theGlideLastsAsLongAsTheTimeSinceThePositionBeforeUpToTheCap() {
+        assertEquals(1200L, CarMarkerMotion.MAX_GLIDE_MS)
+        // One position a second: a one second glide, so the marker arrives as the next position does.
+        assertEquals(1000L, CarMarkerMotion.durationMs(1000L))
+        assertEquals(400L, CarMarkerMotion.durationMs(400L))
+        assertEquals(1200L, CarMarkerMotion.durationMs(1200L))
+        // A late position: no longer than the cap.
+        assertEquals(1200L, CarMarkerMotion.durationMs(2500L))
+        assertEquals(0L, CarMarkerMotion.durationMs(-5L))
+    }
+
+    @Test
+    fun theMarkerJumpsInsteadOfGlidingWhenAGlideWouldLie() {
+        fun snaps(first: Boolean = false, gapMs: Long = 1000L, jumpM: Double = 15.0, phaseChanged: Boolean = false, force: Boolean = false) =
+            CarMarkerMotion.snaps(first, gapMs, jumpM, phaseChanged, force)
+        // The ordinary case, a second and a few meters after the position before: a glide.
+        assertFalse(snaps())
+        // The first position: there is nowhere to glide from.
+        assertTrue(snaps(first = true))
+        // More than about three seconds since the position before.
+        assertEquals(3000L, CarMarkerMotion.SNAP_GAP_MS)
+        assertFalse(snaps(gapMs = 3000L))
+        assertTrue(snaps(gapMs = 3001L))
+        // No time since the position before: nothing to glide over.
+        assertTrue(snaps(gapMs = 0L))
+        // More than about 150 m from the position before.
+        assertEquals(150.0, CarMarkerMotion.SNAP_JUMP_M, 0.0)
+        assertFalse(snaps(jumpM = 150.0))
+        assertTrue(snaps(jumpM = 150.1))
+        // The trip's phase changed, or the caller says so.
+        assertTrue(snaps(phaseChanged = true))
+        assertTrue(snaps(force = true))
+    }
+
+    @Test
+    fun theJumpIsMeasuredInMetersOnTheGround() {
+        // A thousandth of a degree of latitude is about 111 m; of longitude at 60 north, half that.
+        assertEquals(111.2, CarMarkerMotion.distanceM(42.5, -113.77, 42.501, -113.77), 0.1)
+        assertEquals(55.6, CarMarkerMotion.distanceM(60.0, 10.0, 60.0, 10.001), 0.1)
+        assertEquals(0.0, CarMarkerMotion.distanceM(42.5, -113.77, 42.5, -113.77), 0.0)
+        // A second at highway speed (about 30 m) glides; a new place does not.
+        val highway = CarMarkerMotion.distanceM(42.5, -113.77, 42.50027, -113.77)
+        assertFalse(CarMarkerMotion.snaps(first = false, gapMs = 1000L, jumpM = highway, phaseChanged = false, force = false))
+        val elsewhere = CarMarkerMotion.distanceM(42.5, -113.77, 42.52, -113.77)
+        assertTrue(CarMarkerMotion.snaps(first = false, gapMs = 1000L, jumpM = elsewhere, phaseChanged = false, force = false))
+        // Either side of the 180 degree line reads as far apart: no glide the long way round the world.
+        assertTrue(CarMarkerMotion.distanceM(0.0, 179.9999, 0.0, -179.9999) > CarMarkerMotion.SNAP_JUMP_M)
+    }
+
     // ---- the mini map's destination ---------------------------------------------------------------------------------------
 
     @Test

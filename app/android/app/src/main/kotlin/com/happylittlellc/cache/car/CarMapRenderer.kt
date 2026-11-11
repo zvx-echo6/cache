@@ -1,13 +1,16 @@
 package com.happylittlellc.cache.car
 
+import android.animation.ValueAnimator
 import android.app.Presentation
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.ViewGroup
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -33,6 +36,7 @@ import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Point
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -64,6 +68,15 @@ import kotlin.math.max
  * The vehicle is an arrow (CarOverlayPainter.arrowBitmap, a symbol layer above the route and the badge) turned to the heading,
  * with its turn tied to the map, so it points the right way whether the map is turned to the heading or north is up. While no
  * heading was ever known it is the plain dot instead.
+ *
+ * The vehicle is the one thing on the map that is animated. Positions come about once a second; between one and the next the
+ * marker and the camera glide together at a steady rate (one ValueAnimator drives both: see moveMarker and onGlideFrame), and
+ * where a glide would show movement that did not happen the marker jumps (CarMarkerMotion.snaps). The animator runs only
+ * between two different positions: a parked car draws nothing.
+ *
+ * Threads: everything here runs on the main thread, which is the thread MapLibre must be called on. The host's surface
+ * callbacks, the phone's pushes (CarLink) and the screens' buttons all arrive there, and the animator is started there, so the
+ * frames it gives are on the main thread too.
  */
 class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
@@ -102,6 +115,49 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     /** The last heading the phone gave: the arrow keeps it while a position comes without one. */
     private var lastHeading: Double? = null
+
+    /** The position's source in the present style, kept so that a frame does not look it up. */
+    private var posSource: GeoJsonSource? = null
+
+    // The vehicle's marker. Plain numbers (a heading that is not known is NaN) so that a frame makes no objects for them.
+
+    /** A position was drawn; drawnLat, drawnLon and drawnHeading are where the marker is on the map right now. */
+    private var hasMarker = false
+    private var drawnLat = 0.0
+    private var drawnLon = 0.0
+    private var drawnHeading = Double.NaN
+
+    /** The glide in hand: from where the marker was when the newest position came, to that position. */
+    private var fromLat = 0.0
+    private var fromLon = 0.0
+    private var fromHeading = Double.NaN
+    private var toLat = 0.0
+    private var toLon = 0.0
+    private var toHeading = Double.NaN
+
+    /** When the newest position came (SystemClock.elapsedRealtime), and the trip's phase it came in. */
+    private var lastFixAt = 0L
+    private var markerPhase: String? = null
+
+    /** The one animator, made when first needed and used again for every glide. */
+    private var glide: ValueAnimator? = null
+
+    /** A frame of the glide: the marker, and with it the camera, at the animator's share of the way. Linear, so the share is
+     * the share of the time. Nothing is sent to the map when the frame is where the marker already is. */
+    private val onGlideFrame = ValueAnimator.AnimatorUpdateListener { a ->
+        val f = a.animatedFraction.toDouble()
+        val lat = CarMarkerMotion.lerp(fromLat, toLat, f)
+        val lon = CarMarkerMotion.lerp(fromLon, toLon, f)
+        val heading = when {
+            toHeading.isNaN() -> Double.NaN
+            fromHeading.isNaN() -> toHeading
+            else -> CarMarkerMotion.lerpHeading(fromHeading, toHeading, f)
+        }
+        if (lat != drawnLat || lon != drawnLon || !sameHeading(heading, drawnHeading)) {
+            drawMarker(lat, lon, heading)
+            glideCamera()
+        }
+    }
 
     /** The camera keeps the position in view (the Recenter button turns it back on after panning). */
     var following = true
@@ -302,6 +358,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 addOverlays(st)
                 applyRoute(CarLink.routeGeoJson ?: CarLink.EMPTY_GEOJSON)
                 applyTrip(CarLink.trip)
+                // The new style's position source is empty: the marker is drawn into it at once.
+                moveMarker(CarLink.trip, force = true)
                 lastCameraPhase = null
                 follow(force = true)
             }
@@ -380,6 +438,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE),
         )
         st.addLayer(arrow)
+        posSource = st.getSourceAs<GeoJsonSource>(SRC_POS)
         dotLayer = dot
         arrowLayer = arrow
         arrowShown = null
@@ -413,6 +472,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     /** The present style is going (a new one is loading, or the map is released): nothing of it is used again. */
     private fun dropStyle() {
         style = null
+        posSource = null
         arrowLayer = null
         dotLayer = null
     }
@@ -420,7 +480,11 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     override fun onTrip(trip: CarTrip) {
         overlayView?.setTrip(trip, dark, now = false)
         applyTrip(trip)
-        follow(force = (if (overview) "overview" else trip.phase) != lastCameraPhase)
+        val force = (if (overview) "overview" else trip.phase) != lastCameraPhase
+        // While the driver has panned away the camera does not move, so its phase is not kept up: that must not make the
+        // marker jump each second.
+        val snapped = moveMarker(trip, force = force && following)
+        follow(force, snapped)
     }
 
     override fun onRoute(geojson: String, bounds: DoubleArray?) {
@@ -479,18 +543,113 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     private fun applyTrip(t: CarTrip) {
         val st = style ?: return
-        st.getSourceAs<GeoJsonSource>(SRC_POS)?.setGeoJson(point(t.lat, t.lon))
-        val heading = CarMarkerMotion.heading(t.heading, lastHeading)
-        lastHeading = heading
-        showHeading(heading ?: Double.NaN)
         val showDest = t.phase != "browsing"
         st.getSourceAs<GeoJsonSource>(SRC_DEST)?.setGeoJson(if (showDest) point(t.destinationLat, t.destinationLon) else CarLink.EMPTY_GEOJSON)
         applyDriven(t)
     }
 
+    // ---- the vehicle's marker and the camera that follows it ----------------------------------------------------------------
+
+    private fun sameHeading(a: Double, b: Double): Boolean = a == b || (a.isNaN() && b.isNaN())
+
+    /**
+     * The trip's position for the marker. A new position starts a glide to it from wherever the marker is drawn at this
+     * moment (also in the middle of the glide before), lasting as long as the time since the position before, capped; or the
+     * marker jumps there, when CarMarkerMotion.snaps says a glide would lie. The same position again starts nothing. Returns
+     * whether the marker jumped: then the camera is to be put there at once (follow); in a glide the frames carry it.
+     */
+    private fun moveMarker(t: CarTrip, force: Boolean): Boolean {
+        val lat = t.lat
+        val lon = t.lon
+        if (lat == null || lon == null) {
+            glide?.cancel()
+            if (hasMarker) posSource?.setGeoJson(CarLink.EMPTY_GEOJSON)
+            hasMarker = false
+            return false
+        }
+        val known = CarMarkerMotion.heading(t.heading, lastHeading)
+        lastHeading = known
+        val heading = known ?: Double.NaN
+        val now = SystemClock.elapsedRealtime()
+        val phaseChanged = t.phase != markerPhase
+        markerPhase = t.phase
+        if (hasMarker && !force && !phaseChanged && lat == toLat && lon == toLon && sameHeading(heading, toHeading)) {
+            // The same position again (the trip changed in some other way, or the vehicle stands still). While it stands the
+            // clock is kept up, so that pulling away is a glide of the last second and not of the whole wait. During a glide
+            // it is not: the next position's glide is to last from the position before it, not from this push.
+            if (glide?.isRunning != true) lastFixAt = now
+            return false
+        }
+        val gap = now - lastFixAt
+        val jump = if (hasMarker) CarMarkerMotion.distanceM(toLat, toLon, lat, lon) else 0.0
+        val snap = CarMarkerMotion.snaps(first = !hasMarker, gapMs = gap, jumpM = jump, phaseChanged = phaseChanged, force = force)
+        lastFixAt = now
+        toLat = lat
+        toLon = lon
+        toHeading = heading
+        if (snap) {
+            glide?.cancel()
+            hasMarker = true
+            drawMarker(lat, lon, heading)
+            return true
+        }
+        fromLat = drawnLat
+        fromLon = drawnLon
+        fromHeading = drawnHeading
+        val a = glide ?: ValueAnimator.ofFloat(0f, 1f).also {
+            it.interpolator = LinearInterpolator()
+            it.addUpdateListener(onGlideFrame)
+            glide = it
+        }
+        a.cancel()
+        a.duration = CarMarkerMotion.durationMs(gap)
+        a.start()
+        return false
+    }
+
+    /** The marker at a place: the position as one point (handed to MapLibre as a point, not as GeoJSON text to read), and the
+     * arrow's turn or the dot (showHeading). */
+    private fun drawMarker(lat: Double, lon: Double, heading: Double) {
+        drawnLat = lat
+        drawnLon = lon
+        drawnHeading = heading
+        val src = posSource ?: return
+        showHeading(heading)
+        src.setGeoJson(Point.fromLngLat(lon, lat))
+    }
+
+    /** A frame's camera: on the marker, where the camera follows the position. Not while the driver has panned away, and not
+     * in the route overview or while choosing a route (the camera shows the whole route there, and only the marker glides). */
+    private fun glideCamera() {
+        val m = map ?: return
+        if (!following) return
+        val phase = if (overview) "overview" else CarLink.trip.phase
+        if (phase == "previewing" || phase == "overview") return
+        placeCamera(m, drawnLat, drawnLon, drawnHeading, phase == "guiding", resetZoom = false)
+    }
+
+    /** The camera on a position, at once (one camera move; a glide calls this each frame). Close behind the position, turned
+     * to the heading and tilted while guiding; north up otherwise, at the zoom the map has (resetZoom: at the starting zoom). */
+    private fun placeCamera(m: MapLibreMap, lat: Double, lon: Double, heading: Double, guiding: Boolean, resetZoom: Boolean) {
+        val area = stable ?: visible ?: Rect(0, 0, width, height)
+        // While guiding the position sits low in the area, so more of the road ahead shows. The overlay's pieces keep clear of
+        // that spot (CarOverlayPainter.vehiclePoint works it out from the same area and the same share).
+        val extraTop = if (guiding) CarOverlayPainter.guidanceTopInset(area) else 0.0
+        val cam = CameraPosition.Builder()
+            .target(LatLng(lat, lon))
+            .zoom(if (guiding) 16.0 else if (resetZoom) 14.0 else m.cameraPosition.zoom)
+            .bearing(if (guiding) (if (heading.isNaN()) m.cameraPosition.bearing else heading) else 0.0)
+            .tilt(if (guiding) 45.0 else 0.0)
+            .padding(area.left.toDouble(), area.top + extraTop, max(0, width - area.right).toDouble(), max(0, height - area.bottom).toDouble())
+            .build()
+        m.moveCamera(CameraUpdateFactory.newCameraPosition(cam))
+    }
+
     /** The camera for the phase: the whole route while choosing one, close behind the position and turned to the heading while
-     * guiding, the position while looking at the map. Nothing moves while the driver has panned away. */
-    private fun follow(force: Boolean) {
+     * guiding, the position while looking at the map. Nothing moves while the driver has panned away. While following the
+     * position the camera is put on the marker here only when it has to be there at once ([force], or the marker [snapped]):
+     * otherwise the glide's frames move it with the marker. */
+    private fun follow(force: Boolean, snapped: Boolean = false) {
         val m = map ?: return
         if (!following) return
         val t = CarLink.trip
@@ -510,21 +669,13 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             }
             return
         }
-        val lat = t.lat ?: return
-        val lon = t.lon ?: return
+        // Where the marker is drawn (in a glide: where it is at this moment); before any marker, the trip's position.
+        val lat = if (hasMarker) drawnLat else t.lat ?: return
+        val lon = if (hasMarker) drawnLon else t.lon ?: return
+        val heading = if (hasMarker) drawnHeading else CarMarkerMotion.heading(t.heading, lastHeading) ?: Double.NaN
         lastCameraPhase = phase
-        val guiding = phase == "guiding"
-        // While guiding the position sits low in the area, so more of the road ahead shows. The overlay's pieces keep clear of
-        // that spot (CarOverlayPainter.vehiclePoint works it out from the same area and the same share).
-        val extraTop = if (guiding) CarOverlayPainter.guidanceTopInset(area) else 0.0
-        val cam = CameraPosition.Builder()
-            .target(LatLng(lat, lon))
-            .zoom(if (guiding) 16.0 else (m.cameraPosition.zoom.takeIf { !force } ?: 14.0))
-            .bearing(if (guiding) (t.heading ?: m.cameraPosition.bearing) else 0.0)
-            .tilt(if (guiding) 45.0 else 0.0)
-            .padding(pad[0], pad[1] + extraTop, pad[2], pad[3])
-            .build()
-        m.easeCamera(CameraUpdateFactory.newCameraPosition(cam), if (force) 1 else 900)
+        if (!force && !snapped) return
+        placeCamera(m, lat, lon, heading, phase == "guiding", resetZoom = force)
     }
 
     private fun point(lat: Double?, lon: Double?): String =
@@ -534,6 +685,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private fun releaseMap() {
         styleAttempt++
         main.removeCallbacks(reload)
+        // No surface, no map or no session: no glide either.
+        glide?.cancel()
         dropStyle()
         map = null
         mapView?.let {
