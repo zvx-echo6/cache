@@ -228,3 +228,32 @@ fn a_library_index_never_travels() {
     a.close();
     b.close();
 }
+
+/// A library's settings file arrives on the other device byte for byte: sync copies files by hash and never reads or rewrites them,
+/// so a library whose settings say `"own": true` (made on the person's other device) is `own` there too, and one that does not say it
+/// never becomes so.
+#[test]
+fn a_librarys_settings_file_arrives_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (la, lb) = (tmp.path().join("libs-a"), tmp.path().join("libs-b"));
+    let mine = "{\n  \"format\": 1,\n  \"library_id\": \"my-books-x\",\n  \"own\": true,\n  \"own_default\": true\n}\n";
+    let built = "{\"format\":1,\"library_id\":\"field\",\"version\":\"7\"}";
+    write(&la.join("my-books-x/cache-library.json"), mine);
+    write(&la.join("field/cache-library.json"), built);
+    write(&la.join("my-books-x/copies.jsonl"), "{}\n");
+    std::fs::create_dir_all(&lb).unwrap();
+    let a = engine(&da, "Desk", None, true);
+    let b = engine(&db, "Phone", None, true);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    call(&a, "share_add", json!({"id": "libraries", "name": "Libraries", "path": la}));
+    call(&b, "share_add", json!({"id": "libraries", "name": "Libraries", "path": lb}));
+    std::thread::sleep(Duration::from_secs(6));
+    until("both settings files on B", 90, &a, &b, || lb.join("my-books-x/cache-library.json").exists() && lb.join("field/cache-library.json").exists());
+    rounds(&a, &b);
+    assert_eq!(std::fs::read(lb.join("my-books-x/cache-library.json")).unwrap(), mine.as_bytes(), "byte for byte");
+    assert_eq!(std::fs::read(lb.join("field/cache-library.json")).unwrap(), built.as_bytes());
+    a.close();
+    b.close();
+}

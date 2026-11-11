@@ -305,6 +305,24 @@ void main() {
       expect((c['settings'] as Map)['library_id'], 'manuals');
     });
 
+    test('a library that comes with settings saying own is written without it: only the app\'s own creation says own', () async {
+      await setUpLibs();
+      final body = (jsonDecode(_lib()) as Map).cast<String, dynamic>();
+      (body['settings'] as Map)['own'] = true;
+      (body['settings'] as Map)['own_default'] = true;
+      await libs.addFile(libFile('manuals.cache-library', jsonEncode(body)), confirmUpdate: never, askSettings: noSettings);
+      final l = libs.libraries.single;
+      final written = (jsonDecode(File('${l.dir.path}/cache-library.json').readAsStringSync()) as Map).cast<String, dynamic>();
+      expect(written.containsKey('own'), isFalse);
+      expect(written.containsKey('own_default'), isFalse);
+      expect(written['library_id'], 'manuals', reason: 'the rest of the settings are as they came');
+      expect(libs.ownLibraries, isEmpty, reason: 'Add PDF never offers it');
+      // the app's own creation still says own
+      final mine = ownLibrarySettings(title: 'My books', id: 'my-books-x', isDefault: true);
+      expect(mine['own'], isTrue);
+      expect(settingsWithoutOwn(mine).containsKey('own'), isFalse);
+    });
+
     test('archive catalog, original identities and copies are installed beside settings', () async {
       await setUpLibs();
       const catalog = 'doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n';

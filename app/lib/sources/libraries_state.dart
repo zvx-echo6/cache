@@ -987,7 +987,9 @@ class LibrariesState extends ChangeNotifier {
         if (p == null) return false;
       }
       if (settings != null) {
-        await _writeText('$stagePath$_pathSep$kLibrarySettingsFile', const JsonEncoder.withIndent('  ').convert(settings));
+        // `own` says the person made this library on the device (Add PDF writes to it, its keyword snapshot grows by generations): only
+        // the app's own creation (ownLibrarySettings) writes it, so a settings file that came with a downloaded or chosen library never carries it
+        await _writeText('$stagePath$_pathSep$kLibrarySettingsFile', const JsonEncoder.withIndent('  ').convert(settingsWithoutOwn(settings)));
       }
       t
         ..step = AddStep.swapping
@@ -1398,6 +1400,10 @@ Future<void> extractTarMember(File tarFile, String name, File out, {bool gzipped
   await sink?.close();
   if (!found) throw FileSystemException('$name is not in the archive', tarFile.path);
 }
+
+/// [settings] as they may be written for a library that came from elsewhere (a downloaded or chosen archive, a settings file the
+/// person picked): without `own` and `own_default`, which only [ownLibrarySettings] sets.
+Map<String, dynamic> settingsWithoutOwn(Map<String, dynamic> settings) => {...settings}..remove('own')..remove('own_default');
 
 /// The settings of a library the person makes on the device (Add PDF's My books): the blank template's (bge-m3, the usual
 /// fields) with its own id and title, and `"own": true` (`"own_default"` for My books) so it is listed as theirs.
