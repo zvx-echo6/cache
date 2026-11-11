@@ -156,8 +156,22 @@ class _ShellState extends State<Shell> {
   /// the chat prompt's start is read ahead. The read never loads the model: after a wake that did not load it (no room) there is
   /// none. Not when Ask was left while the model loaded; leaving Ask later, with Cache in front, does not stop a read.
   Future<void> _wakeAsk() async {
+    _openingRead = false; // a new opening of Ask: it may have its read ahead
     await widget.app.wake();
-    if (!mounted || _module != ModuleId.ask) return;
+    _readAhead();
+  }
+
+  /// This opening of Ask has had its read ahead (or has none to have).
+  bool _openingRead = false;
+
+  /// Reads the prompt start ahead, once per opening of Ask, when Ask is shown and the model is loaded. When the model is still loading
+  /// as Ask opens (the app start's load, which [AppState.wake] does not wait for) nothing is read yet, and [_onApp] asks again when
+  /// the load completes, so a cold start with Ask open still gets its read.
+  void _readAhead() {
+    if (_openingRead || !mounted || _module != ModuleId.ask) return;
+    final app = widget.app;
+    if (app.active == null || app.loading != null) return;
+    _openingRead = true;
     unawaited(widget.readAhead?.start());
   }
 
@@ -171,6 +185,7 @@ class _ShellState extends State<Shell> {
 
   void _onApp() {
     final app = widget.app;
+    _readAhead(); // Ask was opened while the model loaded: its read starts when the load is done
     final arrived = _noModelSeen && app.started && app.models.isNotEmpty;
     if (app.started) _noModelSeen = app.models.isEmpty;
     final on = app.askAvailable;

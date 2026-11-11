@@ -89,6 +89,8 @@ void main() {
     late LayoutState layout;
     late NavState nav;
     late _CountingEngine engine;
+    var hot = false;
+    setUp(() => hot = false);
 
     Future<void> settle(WidgetTester tester) async {
       for (var i = 0; i < 5; i++) {
@@ -125,7 +127,7 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
+        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}, isHot: () async => hot), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
       ));
       await settle(tester);
     }
@@ -221,6 +223,41 @@ void main() {
       await until(tester, () => engine.checks.isNotEmpty);
       expect(r.app.active, isNotNull);
       expect(engine.checks, [true]);
+      await tearDownShell(tester);
+    });
+
+    testWidgets('Ask opened while the model is still loading (the app start\'s load): the read ahead starts when the load completes, once', (tester) async {
+      await setUpShell(tester);
+      r.app.resting = null;
+      session.loadGate = Completer<void>();
+      unawaited(r.app.activate(r.app.models.first));
+      await settle(tester);
+      expect(r.app.loading, isNotNull);
+      await openAsk(tester);
+      expect(engine.checks, isEmpty, reason: 'no model yet: no read');
+      session.loadGate!.complete();
+      await until(tester, () => engine.checks.isNotEmpty);
+      expect(r.app.active, isNotNull);
+      expect(engine.checks, [true], reason: 'the read starts on load completion');
+      r.app.notifyListeners();
+      await settle(tester);
+      expect(engine.checks, [true], reason: 'one read per opening');
+      await tearDownShell(tester);
+    });
+
+    testWidgets('Ask opened while the model loads and the device is hot: no read when the load completes', (tester) async {
+      hot = true;
+      await setUpShell(tester);
+      r.app.resting = null;
+      session.loadGate = Completer<void>();
+      unawaited(r.app.activate(r.app.models.first));
+      await settle(tester);
+      await openAsk(tester);
+      session.loadGate!.complete();
+      await settle(tester);
+      await until(tester, () => r.app.active != null);
+      await settle(tester);
+      expect(engine.checks, isEmpty);
       await tearDownShell(tester);
     });
 
