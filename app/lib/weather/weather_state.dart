@@ -1332,6 +1332,21 @@ class WeatherState extends ChangeNotifier {
     return WeatherStatus(headline: why == null ? head : '$head · $why', tone: StatusTone.warn);
   }
 
+  /// The Weather screen's own freshness line: the age and, as its only reason, the connection. A source that failed is named by
+  /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour.
+  WeatherStatus freshness() {
+    if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
+    final now = _now();
+    final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
+    final ok = _lastOkAt;
+    if (ok == null) return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', tone: StatusTone.warn);
+    final head = 'Updated ${agoWords(now.difference(ok))}';
+    return reason == null ? WeatherStatus(headline: head, tone: StatusTone.ok) : WeatherStatus(headline: '$head · $reason', tone: StatusTone.warn);
+  }
+
+  /// The time the weather part goes by (tests set it): the Weather screen works out ages and "today" from it.
+  DateTime get clockNow => _now();
+
   /// "3 on · Updated 12 min ago": the line under the Weather and alerts row of Settings.
   String settingsLine() {
     final on = enabledSources.length;

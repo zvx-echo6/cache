@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 

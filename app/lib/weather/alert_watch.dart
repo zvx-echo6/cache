@@ -92,6 +92,10 @@ bool raisesAlerts(SourceView v) => v.source.category == 'alerts' || v.source.cat
 /// How far out a fire near a place counts as serious, in miles, when nothing else is set for the place.
 const double kFireReachMiles = 10;
 
+/// How far out a fire counts as serious at a place with [rule]: a custom rule's own distance, else [kFireReachMiles]. The alert
+/// check and the Weather screen both ask here, so they cannot disagree.
+double fireReachOf(PlaceAlertRule rule) => rule.mode == PlaceAlertMode.custom ? rule.miles.toDouble() : kFireReachMiles;
+
 /// An item's distance in miles, or null when it gives none: the number the core gives beside its distance field (0 when the
 /// place is inside the item's area: a fire you are standing in is as near as a fire gets). The words of the field ("12 mi SE",
 /// "8.5 km N") are read only for an item stored before the core gave the number; "inside the area" has no number in it, which
@@ -231,6 +235,10 @@ int severityRank(String? severity) => switch (severity?.trim().toLowerCase()) {
 };
 
 String? _severityOf(LiveItem i) => i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
+
+/// An item's "Severity" in small letters ("extreme", "severe", ...), as [isSerious] and [severityRank] take it; null when it
+/// gives none.
+String? severityOf(LiveItem i) => _severityOf(i);
 
 /// Whether one of two messages names the other among its references, or both name the same earlier one, or they share an NWS
 /// event ([alertVtec]): two messages of one alert.
@@ -497,7 +505,7 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
           if (mi != null && mi > rule.miles) continue;
         }
         final severity = i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
-        final serious = isSerious(i, fire: v.source.category == 'fire', severity: severity, fireReachMiles: fireReach?.call(place) ?? (custom ? rule.miles.toDouble() : kFireReachMiles));
+        final serious = isSerious(i, fire: v.source.category == 'fire', severity: severity, fireReachMiles: fireReach?.call(place) ?? fireReachOf(rule));
         seen.add(_Seen(i, v, place, custom, serious, severity == 'extreme', fireNamed: ownNames.contains(fireName(i))));
       }
     }

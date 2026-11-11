@@ -149,6 +149,10 @@ class FakeLiveCore implements LiveCore {
   final Set<String> invalid = {};
   final Map<String, CacheSearchException> fetchErrors = {};
   final Map<String, Map<String, dynamic>> stored = {};
+
+  /// What is stored for one place alone, by "source place-key" (a saved place's key; "at:42.54,-113.79" for where the phone
+  /// is). A place without an entry here gets what [stored] has for the source.
+  final Map<String, Map<String, dynamic>> storedAt = {};
   CacheSearchException? previewError;
   Map<String, dynamic> previewResult = {'valid': true, 'item_count': 1};
   List<SavedPlaceRecord> saved = [];
@@ -205,7 +209,8 @@ class FakeLiveCore implements LiveCore {
   @override
   Future<Map<String, dynamic>> get(Map<String, dynamic> request) async {
     await busy?.future;
-    final s = stored['${request['source']}'];
+    final place = request['place'];
+    final s = (place is Map ? storedAt['${request['source']} ${place['key']}'] : null) ?? stored['${request['source']}'];
     if (s == null) throw const CacheSearchException('not_found', 'nothing downloaded');
     return s;
   }
