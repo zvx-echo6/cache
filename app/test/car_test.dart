@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
@@ -355,6 +356,42 @@ void main() {
       // Inverted badge: a dark red glyph on a light red pill.
       expect(t['badge'], isNot(t['badgeGlyph']));
       expect(t['routeDriven'], isNot(t['route']));
+    });
+
+    test('text on the climb card reads at 4.5:1 or better in all four themes, and Tactical stays red', () {
+      double contrast(String a, String b) {
+        double lum(String h) => Color(int.parse('FF${h.substring(1)}', radix: 16)).computeLuminance();
+        final x = lum(a), y = lum(b);
+        return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+      }
+
+      for (final id in CacheThemeId.values) {
+        final c = carOverlayColors(id);
+        expect(contrast(c['cardText']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} figures on the card');
+        expect(contrast(c['cardSecondary']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} label on the card');
+      }
+      // Tactical: the label and the figures are the theme's brightest red, well clear of the limit (6.5:1), so a measurement
+      // on real, anti-aliased pixels stays above it; nothing else on the card changed.
+      final t = carOverlayColors(CacheThemeId.tactical);
+      expect(t['cardSecondary'], '#ff5a4a');
+      expect(t['cardText'], '#ff5a4a');
+      expect(contrast(t['cardSecondary']!, t['card']!), greaterThanOrEqualTo(6.0));
+      expect(contrast(t['cardText']!, t['card']!), greaterThanOrEqualTo(6.0));
+      expect(t['card'], '#120404');
+      // The other three keep their theme's text and secondary.
+      expect(carOverlayColors(CacheThemeId.dark)['cardText'], '#dcc9a3');
+      expect(carOverlayColors(CacheThemeId.light)['cardSecondary'], '#55594f');
+      expect(carOverlayColors(CacheThemeId.parchment)['cardSecondary'], '#4a4638');
+    });
+
+    test('the mini map keeps the page background of its theme, which is not the card color (the approved look)', () {
+      expect(carOverlayColors(CacheThemeId.light)['miniBg'], '#f3ebd9');
+      expect(carOverlayColors(CacheThemeId.parchment)['miniBg'], '#dcc9a3');
+      expect(carOverlayColors(CacheThemeId.dark)['miniBg'], '#1a1d1f');
+      expect(carOverlayColors(CacheThemeId.tactical)['miniBg'], '#000000');
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayColors(id)['miniBg'], isNot(carOverlayColors(id)['card']), reason: id.name);
+      }
     });
 
     test('the Kotlin tests read the same palette: the fixture is these colors', () {

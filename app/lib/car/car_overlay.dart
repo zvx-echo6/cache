@@ -261,10 +261,13 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
   // The host's own guidance card (NavigationTemplate background): the theme surface; Tactical a dark red.
   c['hostCard'] = id == CacheThemeId.tactical ? const Color(0xFF3A0B07) : k.surface;
   c['card'] = k.surface;
-  c['cardText'] = k.text;
-  c['cardSecondary'] = k.secondary;
+  // Text on the card reads at 4.5:1 or better in every theme. Tactical's own text and secondary reds are too faint on its card
+  // for the car (4.9:1 and 2.4:1 by color, less on real pixels), so there the figures and the label both take its brightest
+  // red (6.5:1): still red on black, and the label is told from the figure by size and weight.
+  c['cardText'] = id == CacheThemeId.tactical ? k.accent : k.text;
+  c['cardSecondary'] = id == CacheThemeId.tactical ? k.accent : k.secondary;
   c['hatch'] = k.text;
-  c['miniBg'] = k.background;
+  c['miniBg'] = k.background; // Deliberate: the mini map sits on the theme's page background, not the card color (the approved look).
   c['miniBorder'] = _mix(k.background, k.secondary, 0.45);
   return {for (final e in c.entries) e.key: _hex(e.value)};
 }

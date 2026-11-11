@@ -123,7 +123,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             frame.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
             ov.setSurfaceSize(width, height)
-            ov.setVisibleArea(visible ?: stable)
+            ov.setAreas(visible, stable)
+            ov.setOverview(overview)
             ov.setTrip(CarLink.trip, dark, now = true)
             frame.addView(ov, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             overlayView = ov
@@ -146,13 +147,13 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     override fun onVisibleAreaChanged(visibleArea: Rect) {
         visible = Rect(visibleArea)
-        overlayView?.setVisibleArea(visible)
+        overlayView?.setAreas(visible, stable)
         follow(force = true)
     }
 
     override fun onStableAreaChanged(stableArea: Rect) {
         stable = Rect(stableArea)
-        if (visible == null) overlayView?.setVisibleArea(stable)
+        overlayView?.setAreas(visible, stable)
         follow(force = true)
     }
 
@@ -200,6 +201,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun setOverview(on: Boolean) {
         if (overview == on) return
         overview = on
+        // The climb card and the mini map are not drawn over the overview (CarOverlayPainter.draw).
+        overlayView?.setOverview(on)
         following = true
         lastCameraPhase = null
         onFollowingChanged?.invoke()
@@ -338,8 +341,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         )
         st.addLayer(
             CircleLayer("car-pos", SRC_POS).withProperties(
-                PropertyFactory.circleColor(colors.getValue("position")), PropertyFactory.circleRadius(10f),
-                PropertyFactory.circleStrokeColor(colors.getValue("positionRing")), PropertyFactory.circleStrokeWidth(4f),
+                PropertyFactory.circleColor(colors.getValue("position")), PropertyFactory.circleRadius(CarOverlayPainter.POS_RADIUS),
+                PropertyFactory.circleStrokeColor(colors.getValue("positionRing")), PropertyFactory.circleStrokeWidth(CarOverlayPainter.POS_RING),
             ),
         )
     }
@@ -438,8 +441,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         val lon = t.lon ?: return
         lastCameraPhase = phase
         val guiding = phase == "guiding"
-        // While guiding the position sits low in the visible area, so more of the road ahead shows.
-        val extraTop = if (guiding) (area.height() * 0.35).toDouble() else 0.0
+        // While guiding the position sits low in the area, so more of the road ahead shows. The overlay's pieces keep clear of
+        // that spot (CarOverlayPainter.vehiclePoint works it out from the same area and the same share).
+        val extraTop = if (guiding) CarOverlayPainter.guidanceTopInset(area) else 0.0
         val cam = CameraPosition.Builder()
             .target(LatLng(lat, lon))
             .zoom(if (guiding) 16.0 else (m.cameraPosition.zoom.takeIf { !force } ?: 14.0))

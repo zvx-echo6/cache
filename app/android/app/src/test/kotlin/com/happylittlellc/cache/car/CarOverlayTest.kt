@@ -7,6 +7,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.Looper
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +17,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -170,7 +173,9 @@ class CarOverlayTest {
         val m = l.mini!!
         assertEquals(88f + 16f, c.left, 0.01f)
         assertEquals(380f, c.width(), 0.01f)
-        assertEquals(560f - 16f - 58f, c.bottom, 0.01f)
+        // The card's top is where the mock's 97 high card had it; the larger text made it 121 high, downwards.
+        assertEquals(560f - 16f - 58f - 97f, c.top, 0.01f)
+        assertEquals(121f, c.height(), 0.01f)
         assertEquals(220f, m.width(), 0.01f)
         assertEquals(140f, m.height(), 0.01f)
         assertEquals(1280f - 16f - 84f, m.right, 0.01f)
@@ -206,6 +211,294 @@ class CarOverlayTest {
         val tiny = CarOverlayPainter.layout(1280, 560, Rect(0, 0, 200, 100), 1f, showClimb = true, showMini = true)
         assertNull(tiny.climb)
         assertNull(tiny.mini)
+    }
+
+    // ---- the vehicle stays clear (areas as measured on the car simulator, density 1) ------------------------------------
+
+    /** The marker as the map draws it (radius and ring) and the road ahead of it (the route's 12 px casing, up to the top of
+     * the area): worked out here from the camera's rule, not from the painter's keep-clear zone. */
+    private fun assertVehicleClear(l: CarOverlayPainter.Layout, stable: Rect) {
+        val vx = (stable.left + stable.right) / 2f
+        val vy = stable.top + stable.height() * 0.675f
+        val marker = RectF(vx - 14f, vy - 14f, vx + 14f, vy + 14f)
+        val ahead = RectF(vx - 6f, stable.top.toFloat(), vx + 6f, vy)
+        for (r in listOfNotNull(l.climb, l.mini)) {
+            assertFalse("$r is over the vehicle $marker", RectF.intersects(r, marker))
+            assertFalse("$r is over the road ahead $ahead", RectF.intersects(r, ahead))
+        }
+    }
+
+    private fun assertRect(left: Float, top: Float, right: Float, bottom: Float, r: RectF?) {
+        assertNotNull(r)
+        assertEquals(left, r!!.left, 0.51f)
+        assertEquals(top, r.top, 0.51f)
+        assertEquals(right, r.right, 0.51f)
+        assertEquals(bottom, r.bottom, 0.51f)
+    }
+
+    private val mainStable = Rect(504, 91, 1181, 697)
+
+    @Test
+    fun theCameraPutsTheVehicleWhereTheLayoutExpectsIt() {
+        // 1280 x 720: the marker was measured at (843, 500).
+        val v = CarOverlayPainter.vehiclePoint(mainStable)
+        assertEquals(843f, v.x, 1f)
+        assertEquals(500f, v.y, 1f)
+        // The same share the camera pads the top with: the point is the middle of what is left under it.
+        val inset = CarOverlayPainter.guidanceTopInset(mainStable)
+        assertEquals(0.35 * 606, inset, 1e-6)
+        assertEquals((91 + inset + 697) / 2.0, v.y.toDouble(), 0.01)
+        val keep = CarOverlayPainter.keepClear(mainStable, 1f)
+        assertTrue(keep.contains(v.x, v.y) && keep.top == 91f && keep.bottom >= v.y + 14f && keep.left <= v.x - 14f && keep.right >= v.x + 14f)
+    }
+
+    @Test
+    fun at1280x720TheApprovedLayoutDoesNotMove() {
+        // The host's buttons showing: the visible area is the stable area.
+        val shown = CarOverlayPainter.layout(1280, 720, mainStable, 1f, showClimb = true, showMini = true, stable = mainStable)
+        // The climb card's top left corner and its right end are the approved ones; its bottom was 623 before its text grew.
+        assertRect(520f, 526f, 845f, 647f, shown.climb)
+        assertRect(861f, 541f, 1081f, 681f, shown.mini)
+        assertVehicleClear(shown, mainStable)
+        // The buttons hidden: the visible area reaches 77 px further right, the vehicle stays.
+        val hidden = CarOverlayPainter.layout(1280, 720, Rect(504, 91, 1258, 697), 1f, showClimb = true, showMini = true, stable = mainStable)
+        assertRect(520f, 526f, 900f, 647f, hidden.climb)
+        assertRect(938f, 541f, 1158f, 681f, hidden.mini)
+        assertVehicleClear(hidden, mainStable)
+    }
+
+    @Test
+    fun at800x480NeitherPieceIsDrawnBecauseBothWouldCoverTheVehicle() {
+        val stable = Rect(344, 80, 711, 387)
+        val l = CarOverlayPainter.layout(800, 480, stable, 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(l.mini)
+        assertNull(l.climb)
+        // The climb card alone has no room either.
+        assertNull(CarOverlayPainter.layout(800, 480, stable, 1f, showClimb = true, showMini = false, stable = stable).climb)
+        // The buttons hidden (more room on the right): still on the vehicle, still not drawn.
+        val hidden = CarOverlayPainter.layout(800, 480, Rect(344, 80, 788, 387), 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(hidden.mini)
+        assertVehicleClear(hidden, stable)
+    }
+
+    @Test
+    fun onTheWideScreenTheClimbCardEndsShortOfTheVehicleAndTheMiniMapGoesFirst() {
+        // 1280 x 500: the vehicle is level with the cards.
+        val stable = Rect(504, 91, 1181, 477)
+        val keep = CarOverlayPainter.keepClear(stable, 1f)
+        val shown = CarOverlayPainter.layout(1280, 500, stable, 1f, showClimb = true, showMini = true, stable = stable)
+        assertNull(shown.mini)
+        val c = shown.climb!!
+        assertEquals(520f, c.left, 0.51f)
+        assertEquals(keep.left, c.right, 0.01f)
+        // Its top is where the 97 high card had it, and the taller card still ends inside the area.
+        assertEquals(306f, c.top, 0.51f)
+        assertEquals(427f, c.bottom, 0.51f)
+        assertTrue(c.bottom <= stable.bottom - 16f)
+        assertTrue(c.right < 843f - 14f)
+        assertVehicleClear(shown, stable)
+        // The buttons hidden: the mini map has room right of the vehicle, the climb card still ends short of it.
+        val hidden = CarOverlayPainter.layout(1280, 500, Rect(504, 91, 1258, 477), 1f, showClimb = true, showMini = true, stable = stable)
+        assertRect(938f, 321f, 1158f, 461f, hidden.mini)
+        assertEquals(keep.left, hidden.climb!!.right, 0.01f)
+        assertVehicleClear(hidden, stable)
+    }
+
+    @Test
+    fun inTheNarrowPaneAndInSplitViewOnlyTheMiniMapIsDrawnBelowTheVehicle() {
+        // The 410 px pane.
+        val narrow = Rect(12, 84, 398, 613)
+        val n = CarOverlayPainter.layout(410, 700, narrow, 1f, showClimb = true, showMini = true, stable = narrow)
+        assertNull(n.climb)
+        assertRect(78f, 457f, 298f, 597f, n.mini)
+        assertTrue(n.mini!!.top >= CarOverlayPainter.vehiclePoint(narrow).y + 14f)
+        assertVehicleClear(n, narrow)
+        // Split view, 770 px.
+        val split = Rect(344, 81, 683, 687)
+        val s = CarOverlayPainter.layout(770, 700, split, 1f, showClimb = true, showMini = true, stable = split)
+        assertNull(s.climb)
+        assertRect(363f, 531f, 583f, 671f, s.mini)
+        assertVehicleClear(s, split)
+    }
+
+    @Test
+    fun aPieceThatWouldCoverTheVehicleIsNeverReturnedWhateverTheAreas() {
+        for (w in 300..1300 step 50) for (h in 250..750 step 50) for (inset in listOf(0, 40, 120)) {
+            val stable = Rect(inset, inset / 2, w - inset / 3, h - inset / 4)
+            for (extra in listOf(0, 77)) {
+                val visible = Rect(stable.left, stable.top, minOf(w, stable.right + extra), stable.bottom)
+                assertVehicleClear(CarOverlayPainter.layout(w, h, visible, 1f, showClimb = true, showMini = true, stable = stable), stable)
+                assertVehicleClear(CarOverlayPainter.layout(w, h, visible, 1f, showClimb = true, showMini = false, stable = stable), stable)
+            }
+        }
+    }
+
+    // ---- when the pieces are drawn at all -------------------------------------------------------------------------------
+
+    /** Whether the View paints the climb card and the mini map right now (1280 x 560, the mock's visible area). */
+    private fun painted(v: CarOverlayView): Pair<Boolean, Boolean> {
+        val bmp = Bitmap.createBitmap(1280, 560, Bitmap.Config.ARGB_8888)
+        v.paint(Canvas(bmp))
+        val l = CarOverlayPainter.layout(1280, 560, visible, 1f, showClimb = true, showMini = true)
+        return Pair(
+            bmp.getPixel((l.climb!!.left + 100).toInt(), (l.climb!!.top + 3).toInt()) != 0,
+            bmp.getPixel((l.mini!!.left + 100).toInt(), (l.mini!!.top + 3).toInt()) != 0,
+        )
+    }
+
+    private fun overlayView() = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+        setSurfaceSize(1280, 560)
+        setAreas(visible, null)
+    }
+
+    @Test
+    fun neitherPieceIsDrawnWhileTheRouteOverviewIsShown() {
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        v.setOverview(true)
+        assertEquals(Pair(false, false), painted(v))
+        // Figures that arrive while the overview is up do not bring them back.
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(false, false), painted(v))
+        v.setOverview(false)
+        assertEquals(Pair(true, true), painted(v))
+        // The painter itself: the overview flag alone stops both pieces.
+        val bmp = Bitmap.createBitmap(1280, 560, Bitmap.Config.ARGB_8888)
+        CarOverlayPainter.draw(Canvas(bmp), trip("dark"), dark = true, width = 1280, height = 560, visible = visible, density = 1f, overview = true)
+        val px = IntArray(1280 * 560)
+        bmp.getPixels(px, 0, 1280, 0, 0, 1280, 560)
+        assertTrue(px.all { it == 0 })
+    }
+
+    @Test
+    fun thePiecesGoInTheSameFrameGuidanceStops() {
+        val ended = CarTrip.from(mapOf("phase" to "browsing", "palette" to palette("dark")))
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        // Guidance ends within the step time of the last figures: not held back for the next step.
+        v.setTrip(ended, dark = true, now = false)
+        assertEquals(Pair(false, false), painted(v))
+
+        // New figures were waiting for their step when guidance ended: the step does not bring the pieces back.
+        val w = overlayView()
+        w.setTrip(trip("dark"), dark = true, now = true)
+        w.setTrip(trip("dark"), dark = true, now = false)
+        w.setTrip(ended, dark = true, now = false)
+        assertEquals(Pair(false, false), painted(w))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2 * CarOverlayView.MIN_STEP_MS))
+        assertEquals(Pair(false, false), painted(w))
+
+        // Guiding with the route preview's phase or any other: nothing either (only the guiding phase draws).
+        val x = overlayView()
+        x.setTrip(CarTrip.from(mapOf("phase" to "previewing", "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"))), dark = true, now = true)
+        assertEquals(Pair(false, false), painted(x))
+    }
+
+    // ---- the climb card's text: size and contrast -----------------------------------------------------------------------
+
+    @Test
+    fun noTextOnTheClimbCardIsSmallerThanTheHostsSmallestLine() {
+        // The host's smallest line on the guidance screen is 24 px at density 1 (measured on the car simulator).
+        assertEquals(24f, CarOverlayPainter.HOST_MIN_TEXT, 0f)
+        for (size in listOf(CarOverlayPainter.CLIMB_LABEL_SIZE, CarOverlayPainter.CLIMB_FIGURE_SIZE, CarOverlayPainter.CLIMB_GRADE_SIZE)) {
+            assertTrue("$size", size >= CarOverlayPainter.HOST_MIN_TEXT)
+        }
+        // The figure is the main thing: 34, well above the two 24 lines (the mock had it at twice its label).
+        assertEquals(34f, CarOverlayPainter.CLIMB_FIGURE_SIZE, 0f)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= 1.4f * CarOverlayPainter.CLIMB_LABEL_SIZE)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_SIZE >= 1.4f * CarOverlayPainter.CLIMB_GRADE_SIZE)
+        // The card holds the three lines: it is 121 high, as wide as before, and the figure clears the label above it.
+        assertEquals(121f, CarOverlayPainter.CLIMB_H, 0f)
+        assertEquals(380f, CarOverlayPainter.CLIMB_W, 0f)
+        assertTrue(CarOverlayPainter.CLIMB_FIGURE_DROP >= CarOverlayPainter.CLIMB_FIGURE_SIZE)
+        assertTrue(CarOverlayPainter.CLIMB_GRADE_DROP >= CarOverlayPainter.CLIMB_GRADE_SIZE)
+        val lines = CarOverlayPainter.CLIMB_LABEL_SIZE + CarOverlayPainter.CLIMB_FIGURE_DROP + CarOverlayPainter.CLIMB_GRADE_DROP
+        assertTrue(CarOverlayPainter.CLIMB_PAD_Y * 2 + lines <= CarOverlayPainter.CLIMB_H)
+    }
+
+    private fun luminance(c: Int): Double {
+        fun ch(v: Int): Double {
+            val s = v / 255.0
+            return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * ch((c shr 16) and 0xFF) + 0.7152 * ch((c shr 8) and 0xFF) + 0.0722 * ch(c and 0xFF)
+    }
+
+    private fun contrast(a: Int, b: Int): Double {
+        val x = luminance(a)
+        val y = luminance(b)
+        return (maxOf(x, y) + 0.05) / (minOf(x, y) + 0.05)
+    }
+
+    @Test
+    fun textOnTheClimbCardReadsAtFourAndAHalfToOneInAllFourThemes() {
+        for (theme in listOf("light", "parchment", "dark", "tactical")) {
+            val p = trip(theme).palette!!.night
+            assertTrue("$theme figures ${contrast(p.cardText, p.card)}", contrast(p.cardText, p.card) >= 4.5)
+            assertTrue("$theme label ${contrast(p.cardSecondary, p.card)}", contrast(p.cardSecondary, p.card) >= 4.5)
+        }
+        // Tactical is not left near the limit: both reds are at 6:1 or better on its card.
+        val t = trip("tactical").palette!!.night
+        assertTrue(contrast(t.cardSecondary, t.card) >= 6.0 && contrast(t.cardText, t.card) >= 6.0)
+    }
+
+    // ---- the main map's grade badge -------------------------------------------------------------------------------------
+
+    @Test
+    fun theGradeOnTheMapBadgeIsNoSmallerThanTheHostsSmallestLineAndThePillHoldsIt() {
+        assertTrue(CarOverlayPainter.BADGE_TEXT_SIZE >= CarOverlayPainter.HOST_MIN_TEXT)
+        val pal = trip("light").palette!!.night
+        // The pill is as high as before (36) and as wide as its text needs: wider than the mock's 68, wider again for two digits.
+        val one = CarOverlayPainter.badgeBitmap(9.0, pal, 1f)
+        val two = CarOverlayPainter.badgeBitmap(12.0, pal, 1f)
+        assertEquals(40, one.height)
+        assertTrue("${one.width}", one.width > 72)
+        assertTrue(two.width > one.width)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
+        assertEquals(34f + p.measureText("12%") + 12f, CarOverlayPainter.badgeWidth("12%", 1f), 0.01f)
+        assertEquals(2 * CarOverlayPainter.badgeWidth("9%", 1f), CarOverlayPainter.badgeWidth("9%", 2f), 0.5f)
+        // The text is inside the pill: the columns of the last 6 px before the right edge's round end hold no glyph color,
+        // and the pill is painted at its middle.
+        val w = two.width
+        assertEquals(pal.badge, two.getPixel(w / 2, 4))
+        for (x in w - 2 - 8 until w - 2 - 4) for (y in 0 until two.height) assertFalse(two.getPixel(x, y) == pal.badgeGlyph)
+    }
+
+    // ---- the mini map's destination ---------------------------------------------------------------------------------------
+
+    @Test
+    fun theMiniMapsDestinationIsAPlainDotEvenWhenTheSteepestClimbIsAtTheEnd() {
+        val pal = trip("parchment").palette!!.night
+        val box = RectF(0f, 0f, 220f, 140f)
+        fun paint(ov: CarOverview): Bitmap {
+            val bmp = Bitmap.createBitmap(220, 140, Bitmap.Config.ARGB_8888)
+            CarOverlayPainter.drawMiniMap(Canvas(bmp), box, ov, pal, 1f)
+            return bmp
+        }
+        // The steepest climb ends at the destination (as on the simulator's route): its pill is left out, so 11 px right of
+        // the dot's middle (inside where the pill would be, outside the dot) is the card, and the middle is the dot.
+        val base = sampleOverview()
+        val mid = CarOverview.from(base)!!
+        val atEnd = CarOverview.from(base + ("steep" to mapOf("lat" to mid.destLat, "lon" to mid.destLon, "gradePct" to 9.0)))!!
+        val end = CarOverlayPainter.project(atEnd.points + listOf(doubleArrayOf(atEnd.steepLat!!, atEnd.steepLon!!)), box, 24f)[atEnd.points.size - 1]
+        val a = paint(atEnd)
+        assertEquals(pal.destDot, a.getPixel(end[0].toInt(), end[1].toInt()))
+        assertEquals(pal.miniBg, a.getPixel(end[0].toInt() + 11, end[1].toInt()))
+        assertEquals(pal.miniBg, a.getPixel(end[0].toInt(), end[1].toInt() - 9))
+        // A steep point away from the destination keeps its pill.
+        val px = CarOverlayPainter.project(mid.points + listOf(doubleArrayOf(mid.steepLat!!, mid.steepLon!!)), box, 24f)
+        val b = paint(mid)
+        assertEquals(pal.badge, b.getPixel(px.last()[0].toInt() + 11, px.last()[1].toInt()))
+        assertEquals(pal.destDot, b.getPixel(px[mid.points.size - 1][0].toInt(), px[mid.points.size - 1][1].toInt()))
+
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(100f, 100f), 1f))
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(118f, 110f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(123f, 100f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(100f, 100f), floatArrayOf(100f, 119f), 1f))
+        assertTrue(CarOverlayPainter.miniBadgeFits(floatArrayOf(200f, 200f), floatArrayOf(246f, 200f), 2f))
+        assertFalse(CarOverlayPainter.miniBadgeFits(floatArrayOf(200f, 200f), floatArrayOf(240f, 200f), 2f))
     }
 
     // ---- texts and geometry ---------------------------------------------------------------------------------------------
