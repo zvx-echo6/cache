@@ -734,7 +734,7 @@ impl Inner {
 
     fn save(&self) -> Result<()> {
         let s = self.saved.lock().unwrap().clone();
-        write_json(&self.saved_path(), &s)
+        write_saved(&self.saved_path(), &s)
     }
 
     /// Hidden paths that do sync in `share` ([`Config::hidden`]).
@@ -1704,6 +1704,67 @@ fn write_json<T: Serialize>(p: &Path, v: &T) -> Result<()> {
     Ok(())
 }
 
+/// Reads the links and shares (`sync.json`), and what to say in the activity if they were not simply read. A missing file is a
+/// fresh start. A file that is there but cannot be read is an error, so nothing is saved over it and the app can try again. A
+/// file that does not parse is moved aside (never deleted) and the last good copy (`sync.json.bak`) is used; with no good copy
+/// the device starts with no links.
+fn load_saved(p: &Path) -> Result<(Saved, Option<String>)> {
+    let bytes = match std::fs::read(p) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Saved::default(), None)),
+        Err(e) => bail!("could not read {}: {e}", p.display()),
+    };
+    if let Ok(saved) = serde_json::from_slice::<Saved>(&bytes) {
+        return Ok((saved, None));
+    }
+    // An earlier damaged file is kept too.
+    let mut aside = p.with_extension("json.damaged");
+    if aside.exists() {
+        aside = p.with_extension(format!("json.damaged.{}", now_ms()));
+    }
+    std::fs::rename(p, &aside).with_context(|| format!("could not move the damaged {} aside", p.display()))?;
+    let bak = p.with_extension("json.bak");
+    match read_json::<Saved>(&bak) {
+        Some(saved) => {
+            // Put back at once, so a start that fails further on does not leave the next one with no links file at all.
+            std::fs::copy(&bak, p).with_context(|| format!("could not restore {}", p.display()))?;
+            Ok((saved, Some("The saved links could not be read; they were restored from the last good copy".into())))
+        }
+        None => Ok((
+            Saved::default(),
+            Some(format!(
+                "The saved links could not be read and there was no good copy: this device starts with no links (the damaged file is kept as {})",
+                aside.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            )),
+        )),
+    }
+}
+
+/// Writes the links and shares (`sync.json`): flushed to disk before it replaces the file, and the file it replaces is kept as
+/// `sync.json.bak` when it is a good one, so a damaged file can be put right at the next start ([`load_saved`]).
+fn write_saved(p: &Path, v: &Saved) -> Result<()> {
+    use std::io::Write as _;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = p.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(&serde_json::to_vec(v)?)?;
+    f.sync_all()?;
+    drop(f);
+    // Only a file that still parses is worth keeping; failing to keep it does not stop the save.
+    if let Ok(old) = std::fs::read(p) {
+        if serde_json::from_slice::<Saved>(&old).is_ok() {
+            let bak_tmp = p.with_extension("bak.tmp");
+            if std::fs::write(&bak_tmp, &old).is_ok() {
+                let _ = std::fs::rename(&bak_tmp, p.with_extension("json.bak"));
+            }
+        }
+    }
+    std::fs::rename(&tmp, p)?;
+    Ok(())
+}
+
 /// Answers linking requests that carry the code being shown.
 #[derive(Clone)]
 struct PairProto(Arc<Inner>);
@@ -1844,13 +1905,14 @@ impl SyncEngine {
 
     async fn start(cfg: Config) -> Result<(Arc<Inner>, Router)> {
         std::fs::create_dir_all(&cfg.dir)?;
+        // Read before anything is written: if the links cannot be read now, nothing here may be changed.
+        let (mut saved, saved_note) = load_saved(&cfg.dir.join("sync.json"))?;
         let (secret, _) = identity::load_or_create(&cfg.dir)?;
-        let mut saved: Saved = read_json(&cfg.dir.join("sync.json")).unwrap_or_default();
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
         }
         if migrate_links(&mut saved) {
-            write_json(&cfg.dir.join("sync.json"), &saved)?;
+            write_saved(&cfg.dir.join("sync.json"), &saved)?;
         }
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
@@ -1942,6 +2004,9 @@ impl SyncEngine {
             .accept(SYNC_ALPN, SyncProto(inner.clone()))
             .spawn();
         inner.note("Started");
+        if let Some(n) = saved_note {
+            inner.note(n);
+        }
         Ok((inner, router))
     }
 
