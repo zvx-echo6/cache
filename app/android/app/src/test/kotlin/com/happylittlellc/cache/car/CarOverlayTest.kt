@@ -7,6 +7,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.Looper
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -364,6 +366,31 @@ class CarOverlayTest {
         val px = IntArray(1280 * 560)
         bmp.getPixels(px, 0, 1280, 0, 0, 1280, 560)
         assertTrue(px.all { it == 0 })
+    }
+
+    @Test
+    fun thePiecesGoInTheSameFrameGuidanceStops() {
+        val ended = CarTrip.from(mapOf("phase" to "browsing", "palette" to palette("dark")))
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        // Guidance ends within the step time of the last figures: not held back for the next step.
+        v.setTrip(ended, dark = true, now = false)
+        assertEquals(Pair(false, false), painted(v))
+
+        // New figures were waiting for their step when guidance ended: the step does not bring the pieces back.
+        val w = overlayView()
+        w.setTrip(trip("dark"), dark = true, now = true)
+        w.setTrip(trip("dark"), dark = true, now = false)
+        w.setTrip(ended, dark = true, now = false)
+        assertEquals(Pair(false, false), painted(w))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2 * CarOverlayView.MIN_STEP_MS))
+        assertEquals(Pair(false, false), painted(w))
+
+        // Guiding with the route preview's phase or any other: nothing either (only the guiding phase draws).
+        val x = overlayView()
+        x.setTrip(CarTrip.from(mapOf("phase" to "previewing", "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"))), dark = true, now = true)
+        assertEquals(Pair(false, false), painted(x))
     }
 
     // ---- texts and geometry ---------------------------------------------------------------------------------------------
