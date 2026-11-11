@@ -253,7 +253,9 @@ class NotebookSync {
       fields: {for (final f in n.def.fields) if (f.fid != null && e.values.containsKey(f.fid) && m[f.fid] != null) m[f.fid]!: e.values[f.fid]},
       private: e.private,
       extra: _items[e.id]?.extra ?? const [],
-      props: e.props.isEmpty ? null : {for (final k in const ['color', 'icon', 'on_map']) if (e.props[k] != null) k: e.props[k]},
+      // Only the Cache-to-Cache share carries them: a person's own Obsidian vault or Logseq graph gets no Cache properties it
+      // did not have.
+      props: kind != SyncKind.share || e.props.isEmpty ? null : {for (final k in const ['color', 'icon', 'on_map']) if (e.props[k] != null) k: e.props[k]},
     );
   }
 
@@ -631,7 +633,7 @@ class NotebookSync {
             ],
       files: existing?.files ?? const [],
       private: kind == SyncKind.share ? d.private : (existing?.private ?? d.private),
-      props: d.props ?? existing?.props ?? const {},
+      props: (kind == SyncKind.share ? d.props : null) ?? existing?.props ?? const {},
     );
     _rec(id, _items[id]?.path ?? '', '', saved.rev, extra: extra);
     return saved;

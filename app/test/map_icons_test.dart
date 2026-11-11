@@ -200,6 +200,27 @@ void main() {
   });
 
   group('syncing the icon, the colour and Show on map', () {
+    test('a person\'s own Obsidian vault or Logseq graph gets none of them, and reading it changes none', () async {
+      for (final kind in [SyncKind.obsidian, SyncKind.logseq]) {
+        final folder = MemFolder();
+        final d = _Device(folder);
+        await d.nb.start();
+        final book = await d.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Trail places', fields: [], sort: NotebookSort.distance, icon: 'trailhead', color: 'teal'));
+        final e = await d.nb.saveEntry(
+          notebookId: book.id,
+          occurredAt: '2026-11-10T10:00:00-07:00',
+          title: 'Boise River ford',
+          place: const NbPlace(lat: 43.601, lon: -116.145),
+          props: {'color': 'blue', 'icon': 'river_crossing', 'on_map': false},
+        );
+        await NotebookSync(notebook: d.nb, kind: kind, folder: folder, stateFile: d.state, includePrivate: true, clock: () => DateTime(2026, 11, 10, 12, 0)).run();
+        final all = folder.text.values.join('\n');
+        expect(all, contains('Boise River ford'));
+        expect(all, isNot(anyOf(contains('cache_color'), contains('cache_icon'), contains('cache_on_map'), contains('cache-color'), contains('cache-icon'))));
+        expect((await d.nb.entry(e.id))!.props, {'color': 'blue', 'icon': 'river_crossing', 'on_map': false});
+      }
+    });
+
     test('Obsidian and Logseq files hold all three; an old file with none says nothing', () {
       final doc = EntryDoc(id: 'abc', notebook: 'Trail places', when: '2026-11-10T10:00:00', title: 'Boise River ford', props: {'color': 'blue', 'icon': 'river_crossing', 'on_map': false});
       final obs = renderObsidian(doc);
