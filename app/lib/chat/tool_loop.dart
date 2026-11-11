@@ -252,6 +252,14 @@ class ToolLoop {
         yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
       }
       while (true) {
+        // Stop came while no generation was running (the tool schemas were being read, or a tool was running): the step has
+        // finished and its result is kept, but no further generation starts. The turn ends as one stopped before the model's
+        // first word does: an empty answer in the conversation and the done update.
+        if (_stopped) {
+          _messages.add({'role': 'assistant', 'content': ''});
+          yield TurnUpdate(phase: TurnPhase.done, promptTokens: promptTokens, generatedTokens: generatedTokens);
+          return;
+        }
         // After kMaxToolRounds rounds the same tool schemas are still sent (a request without them renders a different prompt,
         // which the engine would read again from the tool schemas on), with tool calls switched off and the nudge.
         final capped = rounds >= kMaxToolRounds || finalAnswer;
