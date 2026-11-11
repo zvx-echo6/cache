@@ -141,14 +141,78 @@ void main() {
   group('the screen-reader label', () {
     Lane l({LaneDirection? active, LaneDirection? valid}) => Lane(directions: const {D.through}, active: active, valid: valid);
 
-    test('names the lanes to use, from the data', () {
-      expect(laneLabel([l(), l(), l(valid: D.through), l(active: D.right)]), 'Lanes: use the 2 right lanes');
-      expect(laneLabel([l(active: D.left), l(valid: D.left), l()]), 'Lanes: use the 2 left lanes');
-      expect(laneLabel([l(), l(), l(active: D.right)]), 'Lanes: use the right lane');
-      expect(laneLabel([l(active: D.left), l(), l()]), 'Lanes: use the left lane');
-      expect(laneLabel([l(), l(active: D.through), l()]), 'Lanes: use lane 2');
-      expect(laneLabel([l(active: D.through), l(), l(active: D.through), l(active: D.through)]), 'Lanes: use lanes 1, 3 and 4');
-      expect(laneLabel([l(), l()]), 'Lanes: use any lane');
+    /// [n] lanes with the lanes at [use] (counted from 0, left to right) marked.
+    String say(int n, Iterable<int> use) => laneLabel([for (var i = 0; i < n; i++) use.contains(i) ? l(active: D.through) : l()]);
+
+    test('one lane at an edge: keep left or right', () {
+      expect(say(4, [0]), 'Lanes: keep left');
+      expect(say(4, [3]), 'Lanes: keep right');
+      expect(say(2, [0]), 'Lanes: keep left');
+      expect(say(2, [1]), 'Lanes: keep right');
+    });
+
+    test('a group touching an edge: use the N left or right lanes', () {
+      expect(say(4, [2, 3]), 'Lanes: use the 2 right lanes');
+      expect(say(3, [0, 1]), 'Lanes: use the 2 left lanes');
+      expect(say(8, [5, 6, 7]), 'Lanes: use the 3 right lanes');
+      expect(say(8, [0, 1, 2, 3, 4, 5, 6]), 'Lanes: use the 7 left lanes');
+    });
+
+    test('every lane works, or none is marked: use any lane', () {
+      expect(say(2, [0, 1]), 'Lanes: use any lane');
+      expect(say(5, [0, 1, 2, 3, 4]), 'Lanes: use any lane');
+      expect(say(4, []), 'Lanes: use any lane');
+      expect(say(1, [0]), 'Lanes: use any lane');
+    });
+
+    test('one lane not at an edge is counted from the nearer edge, and the exact middle of an odd count is the middle lane', () {
+      expect(say(4, [1]), 'Lanes: use the 2nd lane from the left');
+      expect(say(4, [2]), 'Lanes: use the 2nd lane from the right');
+      expect(say(8, [2]), 'Lanes: use the 3rd lane from the left');
+      expect(say(8, [5]), 'Lanes: use the 3rd lane from the right');
+      expect(say(3, [1]), 'Lanes: use the middle lane');
+      expect(say(5, [2]), 'Lanes: use the middle lane');
+      expect(say(5, [1]), 'Lanes: use the 2nd lane from the left');
+      expect(say(5, [3]), 'Lanes: use the 2nd lane from the right');
+    });
+
+    test('a tie between the edges is the left', () {
+      expect(say(4, [1, 2]), 'Lanes: use the 2nd or 3rd lane from the left');
+      expect(say(6, [1, 4]), 'Lanes: use the 2nd or 5th lane from the left');
+      expect(say(4, [0, 3]), 'Lanes: use the 1st or 4th lane from the left');
+    });
+
+    test('a group not touching an edge, and scattered lanes, are listed from the nearer edge of the set', () {
+      expect(say(6, [1, 2]), 'Lanes: use the 2nd or 3rd lane from the left');
+      expect(say(8, [1, 2, 3]), 'Lanes: use the 2nd, 3rd or 4th lane from the left');
+      expect(say(6, [3, 4]), 'Lanes: use the 2nd or 3rd lane from the right');
+      expect(say(8, [4, 5, 6]), 'Lanes: use the 2nd, 3rd or 4th lane from the right');
+      expect(say(4, [0, 2, 3]), 'Lanes: use the 1st, 3rd or 4th lane from the left');
+      expect(say(5, [0, 2]), 'Lanes: use the 1st or 3rd lane from the left');
+      expect(say(5, [2, 4]), 'Lanes: use the 1st or 3rd lane from the right');
+      expect(say(8, [4, 6]), 'Lanes: use the 2nd or 4th lane from the right');
+    });
+
+    test('ordinals end correctly, including 11th, 12th, 13th, 21st, 22nd and 23rd', () {
+      expect([for (final n in [1, 2, 3, 4, 10, 11, 12, 13, 14, 21, 22, 23, 24, 101, 111]) laneOrdinal(n)],
+          ['1st', '2nd', '3rd', '4th', '10th', '11th', '12th', '13th', '14th', '21st', '22nd', '23rd', '24th', '101st', '111th']);
+      expect(say(50, [10]), 'Lanes: use the 11th lane from the left');
+      expect(say(50, [11]), 'Lanes: use the 12th lane from the left');
+      expect(say(50, [12]), 'Lanes: use the 13th lane from the left');
+      expect(say(50, [20]), 'Lanes: use the 21st lane from the left');
+      expect(say(50, [21, 22]), 'Lanes: use the 22nd or 23rd lane from the left');
+      expect(say(50, [8]), 'Lanes: use the 9th lane from the left');
+    });
+
+    test('never says "stay in"', () {
+      for (var n = 2; n <= 9; n++) {
+        for (var m = 1; m < (1 << n) - 1; m++) {
+          final s = say(n, [for (var i = 0; i < n; i++) if (m & (1 << i) != 0) i]);
+          expect(s, startsWith('Lanes: '));
+          expect(s.contains('stay'), isFalse);
+          expect(RegExp(r'^Lanes: (keep (left|right)|use (the (\d+ (left|right) lanes|middle lane|\d+(st|nd|rd|th)(, \d+(st|nd|rd|th))*( or \d+(st|nd|rd|th))? lane from the (left|right))|any lane))$').hasMatch(s), isTrue, reason: s);
+        }
+      }
     });
 
     testWidgets('is on the strip', (tester) async {

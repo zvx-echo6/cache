@@ -41,17 +41,30 @@ LaneRole laneRole(Lane lane, {required bool anyMarked}) {
   return anyMarked ? LaneRole.dim : LaneRole.plain;
 }
 
-/// The lanes to use, as words for a screen reader: "Lanes: use the 2 right lanes", "Lanes: use lane 2", "Lanes: use any lane".
-/// Built from the lanes that work (the one to be in and any other that also works), counted from the left.
+/// 1 -> "1st", 2 -> "2nd", 3 -> "3rd", 4 -> "4th", 11 -> "11th", 21 -> "21st".
+String laneOrdinal(int n) {
+  final r = n % 100;
+  if (r >= 11 && r <= 13) return '${n}th';
+  return switch (n % 10) { 1 => '${n}st', 2 => '${n}nd', 3 => '${n}rd', _ => '${n}th' };
+}
+
+/// The lanes to use, as words for a screen reader, built from the lanes that work (the one to be in and any other that also
+/// works). A group touching an edge is "keep left" (one lane) or "use the 2 left lanes"; one lane in the exact middle of an odd
+/// count is "use the middle lane"; any other lane or group is counted from the nearer edge, left on a tie ("use the 2nd or 3rd
+/// lane from the left"); every lane, or none marked, is "use any lane".
 String laneLabel(List<Lane> lanes) {
-  final use = [for (var i = 0; i < lanes.length; i++) if (lanes[i].active != null || lanes[i].valid != null) i];
-  if (use.isEmpty || use.length == lanes.length) return 'Lanes: use any lane';
-  final n = use.length;
-  if (use.first == 0 && use.last == n - 1) return n == 1 ? 'Lanes: use the left lane' : 'Lanes: use the $n left lanes';
-  if (use.last == lanes.length - 1 && use.first == lanes.length - n) return n == 1 ? 'Lanes: use the right lane' : 'Lanes: use the $n right lanes';
-  final nums = [for (final i in use) '${i + 1}'];
-  if (n == 1) return 'Lanes: use lane ${nums.first}';
-  return 'Lanes: use lanes ${nums.sublist(0, n - 1).join(', ')} and ${nums.last}';
+  final n = lanes.length;
+  final use = [for (var i = 0; i < n; i++) if (lanes[i].active != null || lanes[i].valid != null) i];
+  final c = use.length;
+  if (c == 0 || c == n) return 'Lanes: use any lane';
+  final together = use.last - use.first == c - 1;
+  if (together && use.first == 0) return c == 1 ? 'Lanes: keep left' : 'Lanes: use the $c left lanes';
+  if (together && use.last == n - 1) return c == 1 ? 'Lanes: keep right' : 'Lanes: use the $c right lanes';
+  if (c == 1 && n.isOdd && use.first == n ~/ 2) return 'Lanes: use the middle lane';
+  final fromLeft = use.first <= n - 1 - use.last;
+  final nums = [for (final i in fromLeft ? use : use.reversed) laneOrdinal(fromLeft ? i + 1 : n - i)];
+  final list = nums.length == 1 ? nums.first : '${nums.sublist(0, nums.length - 1).join(', ')} or ${nums.last}';
+  return 'Lanes: use the $list lane from the ${fromLeft ? 'left' : 'right'}';
 }
 
 /// The row of lane arrows under the turn banner: one glyph per lane, the lane to be in lit, the others that work in the
