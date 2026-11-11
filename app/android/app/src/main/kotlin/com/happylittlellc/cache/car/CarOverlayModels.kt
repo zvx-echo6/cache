@@ -86,6 +86,7 @@ data class CarOverlayColors(
     val hatch: Int,
     val miniBg: Int,
     val miniBorder: Int,
+    val hostCard: Int,
 ) {
     companion object {
         fun from(v: Any?): CarOverlayColors? {
@@ -99,6 +100,7 @@ data class CarOverlayColors(
                 posFill = c("posFill") ?: return null, posRing = c("posRing") ?: return null,
                 card = c("card") ?: return null, cardText = c("cardText") ?: return null, cardSecondary = c("cardSecondary") ?: return null,
                 hatch = c("hatch") ?: return null, miniBg = c("miniBg") ?: return null, miniBorder = c("miniBorder") ?: return null,
+                hostCard = c("hostCard") ?: return null,
             )
         }
     }

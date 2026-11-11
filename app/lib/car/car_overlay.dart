@@ -251,6 +251,8 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
         'posRing': r,
       };
   }
+  // The host's own guidance card (NavigationTemplate background): the theme surface; Tactical a dark red.
+  c['hostCard'] = id == CacheThemeId.tactical ? const Color(0xFF3A0B07) : k.surface;
   c['card'] = k.surface;
   c['cardText'] = k.text;
   c['cardSecondary'] = k.secondary;

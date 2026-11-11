@@ -75,6 +75,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var height = 0
     private var lastCameraPhase: String? = null
     private var overlayView: CarOverlayView? = null
+
+    /** The route overview screen is up: the camera shows the whole route instead of following the position. */
+    private var overview = false
     private var routeCoords: List<DoubleArray> = emptyList()
     private var badgeKey: String? = null
     private var routeColorKey: String? = null
@@ -190,6 +193,16 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun recenter() {
         setFollowing(true)
         lastCameraPhase = null
+        follow(force = true)
+    }
+
+    /** The whole route in view (the route overview screen), and back to following the position when it goes. */
+    fun setOverview(on: Boolean) {
+        if (overview == on) return
+        overview = on
+        following = true
+        lastCameraPhase = null
+        onFollowingChanged?.invoke()
         follow(force = true)
     }
 
@@ -334,7 +347,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     override fun onTrip(trip: CarTrip) {
         overlayView?.setTrip(trip, dark, now = false)
         applyTrip(trip)
-        follow(force = trip.phase != lastCameraPhase)
+        follow(force = (if (overview) "overview" else trip.phase) != lastCameraPhase)
     }
 
     override fun onRoute(geojson: String, bounds: DoubleArray?) {
@@ -407,8 +420,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         val t = CarLink.trip
         val area = stable ?: visible ?: Rect(0, 0, width, height)
         val pad = doubleArrayOf(area.left.toDouble(), area.top.toDouble(), max(0, width - area.right).toDouble(), max(0, height - area.bottom).toDouble())
-        val phase = t.phase
-        if (phase == "previewing") {
+        val phase = if (overview) "overview" else t.phase
+        if (phase == "previewing" || phase == "overview") {
             val b = CarLink.routeBounds
             if (!force && lastCameraPhase == phase) return
             lastCameraPhase = phase

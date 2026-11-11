@@ -320,6 +320,9 @@ void main() {
         expect(r >= g && r >= b, isTrue, reason: 'tactical ${e.key} ${e.value} is on the red ramp');
         expect(g < 0xC0 && b < 0xC0, isTrue, reason: 'tactical ${e.key} is not white');
       }
+      // The host's guidance card: the theme surface, and a dark red in Tactical.
+      expect(carOverlayColors(CacheThemeId.dark)['hostCard'], carOverlayColors(CacheThemeId.dark)['card']);
+      expect(t['hostCard'], '#3a0b07');
       // Inverted badge: a dark red glyph on a light red pill.
       expect(t['badge'], isNot(t['badgeGlyph']));
       expect(t['routeDriven'], isNot(t['route']));

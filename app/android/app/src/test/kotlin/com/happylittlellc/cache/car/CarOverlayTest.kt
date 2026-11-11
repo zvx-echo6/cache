@@ -143,6 +143,16 @@ class CarOverlayTest {
     }
 
     @Test
+    fun theHostCardColorComesFromThePaletteAsLightAndDarkVariants() {
+        val t = CarTrip.from(mapOf("phase" to "guiding", "palette" to mapOf("day" to colorsMap("light"), "night" to colorsMap("tactical"))))
+        val c = CarModels.hostBackground(t)!!
+        assertEquals(androidx.car.app.model.CarColor.TYPE_CUSTOM, c.type)
+        assertEquals(0xFFFFFDF8.toInt(), c.color)
+        assertEquals(0xFF3A0B07.toInt(), c.colorDark)
+        assertNull(CarModels.hostBackground(CarTrip.from(mapOf("phase" to "guiding"))))
+    }
+
+    @Test
     fun switchesAreReadFromTheTrip() {
         val t = trip("dark", climb = false, mini = true)
         assertFalse(t.overlay.climb)

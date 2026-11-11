@@ -106,7 +106,18 @@ class CarSessionTest {
         val info = t.navigationInfo as RoutingInfo
         assertEquals("Turn left onto Road 1.", info.currentStep!!.cue.toString())
         assertNotNull(t.destinationTravelEstimate)
-        assertEquals(2, t.actionStrip!!.actions.size)
+        // End route, Route overview, the voice switch.
+        assertEquals(3, t.actionStrip!!.actions.size)
+        assertEquals("End route", t.actionStrip!!.actions[0].title.toString())
+        // The map buttons: pan, zoom in, zoom out (Recenter joins once the map was moved).
+        assertEquals(3, t.mapActionStrip!!.actions.size)
+        assertEquals(androidx.car.app.model.Action.TYPE_PAN, t.mapActionStrip!!.actions[0].type)
+        // The host's own arrival time, remaining time and distance, in the phone's time zone.
+        val est = t.destinationTravelEstimate!!
+        assertEquals(1_794_200_000_000L, est.arrivalTimeAtDestination!!.timeSinceEpochMillis)
+        assertEquals(java.util.TimeZone.getDefault().getOffset(1_794_200_000_000L) / 1000, est.arrivalTimeAtDestination!!.zoneOffsetSeconds)
+        assertEquals(1080L, est.remainingTimeSeconds)
+        assertEquals(13.0, est.remainingDistance!!.displayDistance, 0.0)
         // Guidance ends (Stop, arrival on the phone): the host is told and the car goes back to the map.
         push("trip", trip("browsing"))
         assertEquals(1, nav.navigationEndedCount)
@@ -240,5 +251,45 @@ class CarSessionTest {
         assertEquals(1500L + 80L * 10, CarAudio.holdMs("Turn left."))
         assertEquals(20_000L, CarAudio.holdMs("x".repeat(1000)))
         assertEquals(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE, CarAudio.ATTRIBUTES.usage)
+    }
+
+    @Test
+    fun theGuidanceCardTakesTheThemesColorAndShowsTheNextStep() {
+        start()
+        val pal = mapOf(
+            "day" to mapOf("theme" to "light", "route" to "#1f6fa8", "routeDriven" to "#9aa3ad", "badge" to "#ffffff", "badgeGlyph" to "#1a1d1f", "badgeEdge" to "#1f6fa8", "startDot" to "#7c8590", "destDot" to "#1a1d1f", "posFill" to "#ffffff", "posRing" to "#1f6fa8", "card" to "#fffdf8", "cardText" to "#1a1d1f", "cardSecondary" to "#55594f", "hatch" to "#1a1d1f", "miniBg" to "#f3ebd9", "miniBorder" to "#aca99b", "hostCard" to "#fffdf8"),
+            "night" to mapOf("theme" to "tactical", "route" to "#ff5a4a", "routeDriven" to "#7a2a24", "badge" to "#ff8a7d", "badgeGlyph" to "#3a0b07", "badgeEdge" to "#000000", "startDot" to "#8e2b24", "destDot" to "#ff5a4a", "posFill" to "#ff9a90", "posRing" to "#ff5a4a", "card" to "#120404", "cardText" to "#e0473c", "cardSecondary" to "#8e2b24", "hatch" to "#e0473c", "miniBg" to "#000000", "miniBorder" to "#4a1612", "hostCard" to "#3a0b07"),
+        )
+        val then = mapOf("turn" to "right", "type" to "right", "cue" to "Turn right onto Road 2.", "road" to "Road 2", "distanceM" to 8000.0)
+        push("trip", trip("guiding", guiding + mapOf("palette" to pal, "then" to then)))
+        val t = templateOf(screens.top) as NavigationTemplate
+        assertEquals(0xFF3A0B07.toInt(), t.backgroundColor!!.colorDark)
+        assertEquals(0xFFFFFDF8.toInt(), t.backgroundColor!!.color)
+        assertEquals("Turn right onto Road 2.", (t.navigationInfo as RoutingInfo).nextStep!!.cue.toString())
+    }
+
+    @Test
+    fun routeOverviewShowsTheWholeRouteAndBackReturnsToGuidance() {
+        start()
+        val two = listOf(
+            mapOf("index" to 0, "distanceM" to 24000.0, "durationS" to 1200, "via" to "Via Road 0"),
+            mapOf("index" to 1, "distanceM" to 26000.0, "durationS" to 1300, "via" to "Via Road 9"),
+        )
+        push("trip", trip("guiding", guiding + mapOf("routes" to two)))
+        val nav = screens.top as NavigationScreen
+        // The overview button is the second one in the action strip.
+        assertEquals(3, (templateOf(nav) as NavigationTemplate).actionStrip!!.actions.size)
+        nav.openOverview()
+        assertTrue(screens.top is RouteOverviewScreen)
+        val t = templateOf(screens.top) as MapWithContentTemplate
+        val list = (t.contentTemplate as ListTemplate)
+        assertEquals(3, list.singleList!!.items.size)
+        assertEquals(androidx.car.app.model.Action.TYPE_BACK, list.header!!.startHeaderAction!!.type)
+        // A trip update while the overview is up does not throw it away.
+        push("trip", trip("guiding", guiding + mapOf("routes" to two)))
+        assertTrue(screens.top is RouteOverviewScreen)
+        // Guidance ending takes the car back to the map.
+        push("trip", trip("browsing"))
+        assertTrue(screens.top is HomeScreen)
     }
 }

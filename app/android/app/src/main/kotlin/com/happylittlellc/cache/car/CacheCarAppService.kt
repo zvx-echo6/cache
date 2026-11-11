@@ -164,7 +164,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
                 }
                 notifications?.show(trip)
             }
-            if (screenManager.top !is NavigationScreen) {
+            if (screenManager.top !is NavigationScreen && screenManager.top !is RouteOverviewScreen) {
                 screenManager.popToRoot()
                 screenManager.push(NavigationScreen(carContext, renderer))
             }
@@ -178,7 +178,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
                 }
             }
             notifications?.cancel()
-            if (screenManager.top is NavigationScreen) screenManager.popToRoot()
+            if (screenManager.top is NavigationScreen || screenManager.top is RouteOverviewScreen) screenManager.popToRoot()
         }
     }
 

@@ -266,14 +266,15 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     }
 }
 
-/** Turn by turn: the phone's guidance, with Stop and the voice switch. */
+/** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
 class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
 
     override fun onGetTemplate(): Template {
         val t = CarLink.trip
         val b = NavigationTemplate.Builder()
         val strip = ActionStrip.Builder()
-            .addAction(Action.Builder().setTitle("Stop").setOnClickListener { stop() }.build())
+            .addAction(Action.Builder().setTitle("End route").setOnClickListener { stop() }.build())
+            .addAction(Action.Builder().setIcon(CarIcons.overview).setOnClickListener { openOverview() }.build())
             .addAction(
                 Action.Builder().setIcon(if (t.voiceOn) CarIcons.voiceOn else CarIcons.voiceOff)
                     .setOnClickListener { CarLink.call("voice", mapOf("on" to !CarLink.trip.voiceOn)) }.build(),
@@ -281,6 +282,8 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
         b.setActionStrip(strip.build())
         b.setMapActionStrip(map.mapActionStrip())
         b.setPanModeListener { on -> map.panMode = on }
+        // The host's own guidance card in the theme's color (the host may override it for contrast).
+        CarModels.hostBackground(t)?.let { b.setBackgroundColor(it) }
         when {
             t.arrived -> b.setNavigationInfo(MessageInfo.Builder("You have arrived").setText(t.destinationName ?: "").build())
             t.rerouting -> b.setNavigationInfo(MessageInfo.Builder("Finding a new route").build())
@@ -292,5 +295,50 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
 
     private fun stop() {
         CarLink.call("stop")
+    }
+
+    internal fun openOverview() = screenManager.push(RouteOverviewScreen(carContext, map))
+}
+
+/**
+ * The whole route on the map, with what is left and the routes there are (information only: the route is chosen before the
+ * drive). Back returns to guidance. Not RoutePreviewNavigationTemplate: its rows are routes to pick and a Navigate button, which
+ * is for before the drive; this is a map with a list, as the Car App Library's MapWithContentTemplate is meant for.
+ */
+class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+    private var shownSig: String? = null
+
+    override fun onShown() = map.setOverview(true)
+
+    override fun onGone() = map.setOverview(false)
+
+    // The summary changes with the minute, not with every position update.
+    override fun onTrip(trip: CarTrip) {
+        val sig = listOf(trip.remainingS?.div(30), trip.routes, trip.routeIndex, trip.destinationName, trip.imperial).toString()
+        if (sig == shownSig) return
+        shownSig = sig
+        invalidate()
+    }
+
+    override fun onGetTemplate(): Template {
+        val t = CarLink.trip
+        val header = Header.Builder().setTitle("Route overview").setStartHeaderAction(Action.BACK).build()
+        val items = ItemList.Builder()
+        val left = Row.Builder().setTitle(t.destinationName ?: "Destination")
+        CarModels.leftText(t)?.let { left.addText(it) }
+        t.destinationAddress?.let { left.addText(it) }
+        items.addItem(left.build())
+        if (t.routes.size > 1) {
+            for (r in t.routes) {
+                val row = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
+                row.addText(if (r.index == t.routeIndex) "Your route" else "Other route")
+                r.via?.let { row.addText(it) }
+                items.addItem(row.build())
+            }
+        }
+        return MapWithContentTemplate.Builder()
+            .setContentTemplate(ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build())
+            .setMapController(map.mapController())
+            .build()
     }
 }
