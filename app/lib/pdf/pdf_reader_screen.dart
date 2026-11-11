@@ -301,9 +301,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() => _phase = _Phase.opening);
     try {
       if (data == null && !await File(path!).exists()) throw const PdfGone();
-      // A phone or desktop app starts PDFium with the core's one font mapper and lock (pdfium_init.dart); a browser has neither (no
-      // process PDFium, and Platform is not there), so it only starts pdfrx.
-      await (kIsWeb ? pdfrxFlutterInitialize() : initPdfium());
+      await initPdfium();
       final passwords = password == null ? null : createSimplePasswordProvider(password);
       final doc = data != null
           ? await PdfDocument.openData(
