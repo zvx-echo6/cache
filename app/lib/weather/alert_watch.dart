@@ -390,7 +390,13 @@ String seriousMark(String mark) => 'serious:$mark';
 
 /// One item that may pop up, before copies of the same alert are joined.
 class _Seen {
-  _Seen(this.item, this.view, this.place, this.custom, this.serious, this.extreme);
+  _Seen(this.item, this.view, this.place, this.custom, this.serious, this.extreme, {this.fireNamed = false});
+
+  /// A fire with a name of its own in its source ([ownFireNames]): the same fire as another fire source's of that name.
+  final bool fireNamed;
+
+  /// Whether [o] is this fire as another fire source has it.
+  bool sameFireAs(_Seen o) => fireNamed && o.fireNamed && view.source.id != o.view.source.id && fireName(item) == fireName(o.item);
 
   final LiveItem item;
   final SourceView view;
@@ -419,8 +425,54 @@ bool sameAlert(LiveItem a, WatchPlace pa, bool alertA, LiveItem b, WatchPlace pb
   return pa.id == pb.id;
 }
 
-/// The items in [views] (grouped by place) that have not been told about before, at most one fire source per place (incidents and
-/// perimeters describe the same fires: the source with the most items speaks for them), one pop-up per alert: copies of the same
+/// A fire's name as two feeds would both write it: its label in small letters, without the "perimeter" a perimeter source puts
+/// after it ("East Fork fire perimeter" is the "East Fork fire" of the incident source).
+String fireName(LiveItem i) {
+  final n = i.label.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  return n.endsWith(' perimeter') ? n.substring(0, n.length - ' perimeter'.length) : n;
+}
+
+/// The names that tell a fire apart in [v]: those exactly one of its items has. A named incident has its own name; a feed of
+/// satellite detections writes the same label on every one, and that label names no fire.
+Set<String> ownFireNames(SourceView v) {
+  final count = <String, int>{};
+  for (final i in v.active) {
+    count.update(fireName(i), (n) => n + 1, ifAbsent: () => 1);
+  }
+  return {for (final e in count.entries) if (e.value == 1) e.key};
+}
+
+/// The fires of every fire source at one place, as one list. Every item of every source is in it, except that a fire two
+/// sources both name ([fireName], a name of its own in each: [ownFireNames]) is listed once, as the first source has it. The
+/// feeds share nothing else the app can see (their item keys are each feed's own), so two feeds that write a fire's name
+/// differently list it twice: twice is better than not at all. The sources take turns (each one's first item, which is its
+/// nearest, before any one's second), so a source with many items, as satellite detections are, cannot push a named fire out of
+/// the few lines Home has.
+///
+/// Before, one source spoke for all: the one with the most items, because incidents and their perimeters describe the same
+/// fires. With satellite detections on, that was the detections, and no named fire was listed or popped up.
+List<(LiveItem, SourceView)> firesOnce(List<SourceView> fireViews) {
+  final seenNames = <String>{};
+  final lists = <List<(LiveItem, SourceView)>>[];
+  for (final v in fireViews) {
+    final own = ownFireNames(v);
+    lists.add([
+      for (final i in v.active)
+        if (!(own.contains(fireName(i)) && seenNames.contains(fireName(i)))) (i, v),
+    ]);
+    seenNames.addAll(own);
+  }
+  final out = <(LiveItem, SourceView)>[];
+  for (var n = 0; lists.any((l) => l.length > n); n++) {
+    for (final l in lists) {
+      if (l.length > n) out.add(l[n]);
+    }
+  }
+  return out;
+}
+
+/// The items in [views] (grouped by place) that have not been told about before. Every fire source speaks; the same fire from
+/// two of them is one pop-up (see [firesOnce] for how they are told to be the same). One pop-up per alert: copies of the same
 /// alert from several sources (NWS and FEMA IPAWS) and at several watched places are joined ([sameAlert]) and pop up once, near
 /// all of those places. [told] holds the addresses told about (and the [seriousMark]s); [toldAlerts] what is remembered of each
 /// alert told about, so an update or another source's copy does not pop up again ([ToldAlert.matches]).
@@ -437,9 +489,8 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
     final custom = rule.mode == PlaceAlertMode.custom;
     bool counts(SourceView v) => custom ? rule.kinds.contains(v.source.category == 'other' && v.source.id == 'alerts' ? 'alerts' : v.source.category) : raisesAlerts(v);
     final counted = [for (final v in e.value) if (counts(v) && !v.missing && !v.expired) v];
-    final fires = [for (final v in counted) if (v.source.category == 'fire') v]..sort((a, b) => b.active.length.compareTo(a.active.length));
-    final speaking = [for (final v in counted) if (v.source.category != 'fire') v, if (fires.isNotEmpty) fires.first];
-    for (final v in speaking) {
+    for (final v in counted) {
+      final ownNames = v.source.category == 'fire' ? ownFireNames(v) : const <String>{};
       for (final i in v.active) {
         if (custom) {
           final mi = distanceMiles(i) ?? milesIn(i.distance);
@@ -447,14 +498,14 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
         }
         final severity = i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
         final serious = isSerious(i, fire: v.source.category == 'fire', severity: severity, fireReachMiles: fireReach?.call(place) ?? (custom ? rule.miles.toDouble() : kFireReachMiles));
-        seen.add(_Seen(i, v, place, custom, serious, severity == 'extreme'));
+        seen.add(_Seen(i, v, place, custom, serious, severity == 'extreme', fireNamed: ownNames.contains(fireName(i))));
       }
     }
   }
   // join the copies of one alert (each joins the first group it is the same as)
   final groups = <List<_Seen>>[];
   for (final s in seen) {
-    final g = groups.where((g) => g.any((o) => sameAlert(o.item, o.place, o.alert, s.item, s.place, s.alert, sourceA: o.view.source.id, sourceB: s.view.source.id))).firstOrNull;
+    final g = groups.where((g) => g.any((o) => o.sameFireAs(s) || sameAlert(o.item, o.place, o.alert, s.item, s.place, s.alert, sourceA: o.view.source.id, sourceB: s.view.source.id))).firstOrNull;
     if (g == null) {
       groups.add([s]);
     } else {

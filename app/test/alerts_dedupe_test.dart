@@ -410,6 +410,29 @@ void main() {
       expect(pickNewAlerts({here: [view(here, fireSrc, [at('at:42.56,-113.79', '3 mi N')])]}, {...before, ...close.single.allAddresses, ...close.single.marks}), isEmpty);
     });
 
+    test('every fire source is listed; a fire two of them name is listed once; the sources take turns', () {
+      final home = place('place:home', 'Home');
+      final perimeterSrc = src('wfigs-perimeters-near', 'fire'), satelliteSrc = src('firms-viirs-near', 'fire');
+      LiveItem item(String source, String key, String label) => LiveItem.fromJson({'address': 'live:$source/home/$key', 'label': label, 'fields': {}});
+      final detections = view(home, satelliteSrc, [for (var k = 1; k <= 5; k++) item('firms-viirs-near', 'd$k', 'Satellite fire detection')]);
+      final incidents = view(home, fireSrc, [item('wfigs-incidents-near', '1', 'East Fork fire'), item('wfigs-incidents-near', '2', 'Forleen fire')]);
+      final perimeters = view(home, perimeterSrc, [item('wfigs-perimeters-near', '1', 'East Fork Fire  Perimeter'), item('wfigs-perimeters-near', '7', 'Bear Gulch fire perimeter')]);
+      expect(fireName(perimeters.items.first), 'east fork fire');
+      expect(ownFireNames(detections), isEmpty, reason: 'a label every item has names no fire');
+      expect([for (final (i, _) in firesOnce([detections, incidents, perimeters])) i.label], [
+        'Satellite fire detection', 'East Fork fire', 'Bear Gulch fire perimeter',
+        'Satellite fire detection', 'Forleen fire',
+        'Satellite fire detection', 'Satellite fire detection', 'Satellite fire detection',
+      ]);
+      // as pop-ups: each detection, each named fire once (the two feeds' East Fork joined), and the same key in two feeds is not the same fire
+      final out = pickNewAlerts({home: [detections, incidents, perimeters]}, const {});
+      expect(out.where((a) => a.item.label == 'Satellite fire detection'), hasLength(5));
+      expect([for (final a in out) if (a.item.label != 'Satellite fire detection') a.item.label], ['East Fork fire', 'Forleen fire', 'Bear Gulch fire perimeter']);
+      expect(out.firstWhere((a) => a.item.label == 'East Fork fire').allAddresses, ['live:wfigs-incidents-near/home/1', 'live:wfigs-perimeters-near/home/1']);
+      final sameKey = pickNewAlerts({home: [view(home, fireSrc, [item('wfigs-incidents-near', '1', 'East Fork fire')]), view(home, perimeterSrc, [item('wfigs-perimeters-near', '1', 'Bear Gulch fire perimeter')])]}, const {});
+      expect(sameKey, hasLength(2));
+    });
+
     test('fires are joined only with the same fire of the same source', () {
       final home = place('place:home', 'Home'), cabin = place('place:cabin', 'Cabin');
       LiveItem fire(String p, String k) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$p/$k', 'label': 'East Fork fire', 'fields': {'Distance': '4 mi N'}});

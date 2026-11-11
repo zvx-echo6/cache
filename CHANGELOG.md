@@ -24,6 +24,7 @@ release notes).
 - Weather alerts: with Where I am watched, the same fire no longer pops up again each time you move about a kilometre; it pops up once more only if it comes close enough to be serious
 - Weather alerts: a warning that reaches another of your places now pops up for that place even if you were told about it elsewhere, and an update pops up again when it becomes more severe; an update that only changes the end time or the wording stays quiet
 - Weather alerts: a fire whose mapped edge you are inside now counts as serious and pops up under Serious only (before, only fires with a distance in miles did)
+- Weather alerts and Home: with Satellite fire hotspots on, named fires are no longer left out; every fire source is listed and can pop up, and a fire two sources both name is shown once
 - Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
 
 ## 1.1.0 (build 49, test) - 2026-11-11

@@ -1538,8 +1538,8 @@ class WeatherState extends ChangeNotifier {
 
   /// The Weather and alerts card on Home, for the place Home talks about ([homePlace]): the forecast now (temperature, conditions,
   /// the day's high and low), and the warnings in force and fires near it. Other watched places are on the Weather screen; so are
-  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
-  /// listed are those of the one fire source that reports the most.
+  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters): a fire two
+  /// of them name is listed once, and every source's fires are listed ([firesOnce]).
   Future<HomeWeather> homeCard() async {
     final early = _homeEarly();
     if (early != null) return early;
@@ -1654,9 +1654,14 @@ class WeatherState extends ChangeNotifier {
     age ??= [for (final (_, v) in ranked) v.age].firstOrNull;
     if (period == null) forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
     final warnings = <HomeAlert>[];
+    HomeAlert line(LiveItem i, SourceView v) => HomeAlert(
+      fire: v.source.category == 'fire',
+      label: i.label,
+      detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (v.source.provider.isNotEmpty) v.source.provider].join(' · '),
+    );
     // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
     final listed = <(LiveItem, String)>[];
-    var fires = <HomeAlert>[];
+    final fireViews = <SourceView>[];
     var anyAlerts = false, alertsExpired = false;
     String? checked;
     for (final v in views) {
@@ -1664,24 +1669,18 @@ class WeatherState extends ChangeNotifier {
       anyAlerts = true;
       alertsExpired = alertsExpired || v.expired;
       checked ??= v.age;
-      final who = v.source.provider;
-      final fire = v.source.category == 'fire';
-      final items = [
-        for (final i in v.active)
-          if (fire || !listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id)))
-          HomeAlert(
-            fire: v.source.category == 'fire',
-            label: i.label,
-            detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (who.isNotEmpty) who].join(' · '),
-          ),
-      ];
-      if (fire) {
-        if (items.length > fires.length) fires = items;
-      } else {
-        warnings.addAll(items);
-        listed.addAll([for (final i in v.active) (i, v.source.id)]);
+      if (v.source.category == 'fire') {
+        fireViews.add(v);
+        continue;
       }
+      warnings.addAll([
+        for (final i in v.active)
+          if (!listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id))) line(i, v),
+      ]);
+      listed.addAll([for (final i in v.active) (i, v.source.id)]);
     }
+    // every fire source's fires, a fire two of them name listed once, the sources in turn (see firesOnce)
+    final fires = [for (final (i, v) in firesOnce(fireViews)) line(i, v)];
     return HomeWeather(
       place: p.name,
       temperature: temperature,

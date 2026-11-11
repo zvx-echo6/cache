@@ -1478,6 +1478,37 @@ void main() {
       expect(n.shown.single.serious, isTrue);
     });
 
+    // Design read: one fire source spoke for all, the one with the most items (incidents and their perimeters describe the same
+    // fires). With satellite detections on that was the detections: a named fire near the place gave no pop-up and no Home line.
+    test('with satellite detections on, a named fire inside reach still pops up, once, and is on Home', () async {
+      final n = FakeNotifier();
+      h = await Harness.create(notifier: n);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, 'made-up-key-for-a-test');
+      Map<String, dynamic> stored(List<Map<String, dynamic>> items) => {'age': '5 minutes old', 'expired': false, 'items': items};
+      h.core.stored['firms-viirs-near'] = stored([
+        for (var k = 1; k <= 6; k++) {'address': 'live:firms-viirs-near/x/d$k', 'label': 'Satellite fire detection', 'fields': {'From the place': '${40 + k} mi W'}},
+      ]);
+      h.core.stored['wfigs-incidents-near'] = stored([
+        {'address': 'live:wfigs-incidents-near/x/rc', 'label': 'Rock Creek fire', 'fields': {'From the place': '6 mi SE', 'Size': '120 acres'}},
+      ]);
+      h.core.stored['wfigs-perimeters-near'] = stored([
+        {'address': 'live:wfigs-perimeters-near/x/rc-edge', 'label': 'Rock Creek fire perimeter', 'fields': {'Distance to fire edge': '5 mi SE'}},
+      ]);
+      await h.weather.updateNow();
+      expect(n.shown, hasLength(1), reason: 'the named fire, once for its two feeds; the detections 40 miles off are not serious');
+      expect(n.shown.single.item.label, startsWith('Rock Creek fire'));
+      final card = await h.weather.homeCard();
+      expect(card.alerts.where((a) => a.label.startsWith('Rock Creek fire')), hasLength(1), reason: 'one line for the fire two feeds name');
+      expect(card.alerts.take(4).any((a) => a.label.startsWith('Rock Creek fire')), isTrue, reason: 'among the lines Home has room for');
+      expect(card.alerts.where((a) => a.label == 'Satellite fire detection'), hasLength(6), reason: 'the detections count as themselves');
+      // two feeds that write a fire's name differently list it twice: twice is better than not at all
+      h.core.stored['wfigs-perimeters-near'] = stored([
+        {'address': 'live:wfigs-perimeters-near/x/rc-edge', 'label': 'ROCK CK', 'fields': {'Distance to fire edge': '5 mi SE'}},
+      ]);
+      expect((await h.weather.homeCard()).alerts.where((a) => !a.label.startsWith('Satellite')).map((a) => a.label).toSet(), {'Rock Creek fire', 'ROCK CK'});
+    });
+
     // 1.1 audit: a check reads what was told, shows, then writes. Two at once both saw a new alert before either had written.
     test('two alert checks at once tell a new fire once', () async {
       final n = FakeNotifier();
