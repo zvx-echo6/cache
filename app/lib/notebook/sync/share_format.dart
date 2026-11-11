@@ -63,6 +63,13 @@ class NbRecord {
   final Map<String, dynamic> body;
 
   String get name => '${body['name'] ?? ''}';
+
+  /// The notebook's map icon and colour, each with the time it was last set: they are changed independently, like the name (null:
+  /// none, or cleared).
+  String? get icon => body['icon'] as String?;
+  int get iconAt => (body['icon_at'] as num?)?.toInt() ?? 0;
+  String? get color => body['color'] as String?;
+  int get colorAt => (body['color_at'] as num?)?.toInt() ?? 0;
   String? get aliasOf => kind == RecordKind.alias ? body['alias_of'] as String? : null;
 
   Map<String, dynamic> toJson() => switch (kind) {
@@ -101,9 +108,39 @@ class NbRecord {
   }
 
   /// The one record that two devices' writes of one notebook's file come to: a tombstone beats everything (a delete is on purpose),
-  /// an alias beats a live record (a merge is not undone), and among live records the later rename wins, as for any field; a tie
-  /// goes to the greater text, so every device picks the same.
+  /// an alias beats a live record (a merge is not undone), and among live records each property is the later writer's: the name, the
+  /// icon and the colour independently (a rename on one device and a colour on another both stay). A tie on the time goes to the
+  /// greater value (null least), so every device picks the same.
   static NbRecord? merge(Iterable<NbRecord> all) {
+    final best = _mergeKinds(all);
+    if (best == null || best.kind != RecordKind.live) return best;
+    final lives = [for (final r in all) if (r.kind == RecordKind.live) r];
+    if (lives.length < 2) return best;
+    final body = {...best.body};
+    for (final (key, at, val) in <(String, int Function(NbRecord), String? Function(NbRecord))>[
+      ('icon', (r) => r.iconAt, (r) => r.icon),
+      ('color', (r) => r.colorAt, (r) => r.color),
+    ]) {
+      var w = lives.first;
+      for (final r in lives.skip(1)) {
+        final c = at(r).compareTo(at(w));
+        if (c > 0 || (c == 0 && (val(r) ?? '').compareTo(val(w) ?? '') > 0)) w = r;
+      }
+      if (w.body.containsKey(key)) {
+        body[key] = w.body[key];
+      } else {
+        body.remove(key);
+      }
+      if (w.body.containsKey('${key}_at')) {
+        body['${key}_at'] = w.body['${key}_at'];
+      } else {
+        body.remove('${key}_at');
+      }
+    }
+    return NbRecord.live(best.id, nameAt: best.at, body: body);
+  }
+
+  static NbRecord? _mergeKinds(Iterable<NbRecord> all) {
     NbRecord? best;
     int rank(NbRecord r) => switch (r.kind) { RecordKind.tombstone => 2, RecordKind.alias => 1, RecordKind.live => 0 };
     for (final r in all) {

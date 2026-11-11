@@ -395,6 +395,66 @@ void main() {
     });
   });
 
+  group('a notebook\'s icon and colour travel like its name', () {
+    Future<(Dev, Dev, ShareLink)> shared() async {
+      final a = await started('a');
+      final b = await started('b');
+      await a.nb.saveNotebook(id: 'p-1', template: 'places', def: const NotebookDef(name: 'Camps', fields: [], sort: NotebookSort.recent, icon: 'trailhead', color: 'teal'));
+      final link = ShareLink(a.folder, b.folder);
+      await rounds([a, b], [link]);
+      expect((b.nb.notebook('p-1')!.def.icon, b.nb.notebook('p-1')!.def.color), ('trailhead', 'teal'));
+      return (a, b, link);
+    }
+
+    test('a change on one device arrives on the other, and a cleared icon too', () async {
+      final (a, b, link) = await shared();
+      await a.nb.saveNotebook(id: 'p-1', def: a.nb.notebook('p-1')!.def.copyWith(icon: 'tent', color: 'orange'));
+      await rounds([a, b], [link], n: 3);
+      expect((b.nb.notebook('p-1')!.def.icon, b.nb.notebook('p-1')!.def.color), ('tent', 'orange'));
+      await b.nb.saveNotebook(id: 'p-1', def: b.nb.notebook('p-1')!.def.copyWith(clearIcon: true));
+      await rounds([a, b], [link], n: 3);
+      expect(a.nb.notebook('p-1')!.def.icon, isNull);
+      expect(a.nb.notebook('p-1')!.def.color, 'orange');
+    });
+
+    test('an icon changed on one device and a colour on the other, and a rename, are all kept', () async {
+      final (a, b, link) = await shared();
+      await a.nb.saveNotebook(id: 'p-1', def: a.nb.notebook('p-1')!.def.copyWith(icon: 'tent'));
+      await b.nb.saveNotebook(id: 'p-1', def: b.nb.notebook('p-1')!.def.copyWith(color: 'orange', name: 'Base camps'));
+      await rounds([a, b], [link], n: 4);
+      for (final d in [a, b]) {
+        final n = d.nb.notebook('p-1')!;
+        expect((n.name, n.def.icon, n.def.color), ('Base camps', 'tent', 'orange'), reason: d.label);
+        expect(d.folder.text.keys.where((k) => k.contains('conflict')), isEmpty);
+      }
+    });
+
+    test('two devices that change the same property get one answer', () async {
+      final (a, b, link) = await shared();
+      await a.nb.saveNotebook(id: 'p-1', def: a.nb.notebook('p-1')!.def.copyWith(color: 'orange'));
+      await b.nb.saveNotebook(id: 'p-1', def: b.nb.notebook('p-1')!.def.copyWith(color: 'blue'));
+      await rounds([a, b], [link], n: 4);
+      expect(a.nb.notebook('p-1')!.def.color, b.nb.notebook('p-1')!.def.color);
+      expect({'orange', 'blue'}, contains(a.nb.notebook('p-1')!.def.color));
+    });
+
+    test('equal times resolve the same way whichever order the records are met in', () {
+      NbRecord rec(String? color, int at) => NbRecord.live('x', nameAt: 5, body: {'name': 'N', 'color': ?color, 'color_at': at});
+      final a = rec('orange', 100), b = rec('blue', 100), c = rec('teal', 90);
+      for (final order in [[a, b, c], [c, b, a], [b, c, a], [a, c, b]]) {
+        expect(NbRecord.merge(order)!.color, 'orange', reason: 'the later time first, then the greater value');
+        expect(NbRecord.merge(order)!.colorAt, 100);
+      }
+      // a clear at the same time as a value: the value (null is least)
+      expect(NbRecord.merge([rec(null, 100), rec('blue', 100)])!.color, 'blue');
+      // the icon and the colour are merged apart
+      final x = NbRecord.live('x', nameAt: 5, body: {'name': 'N', 'icon': 'tent', 'icon_at': 200, 'color': 'old', 'color_at': 1});
+      final y = NbRecord.live('x', nameAt: 5, body: {'name': 'N', 'icon': 'old', 'icon_at': 1, 'color': 'orange', 'color_at': 300});
+      final m = NbRecord.merge([x, y])!;
+      expect((m.icon, m.color), ('tent', 'orange'));
+    });
+  });
+
   group('private notebooks', () {
     test('one that is not included writes nothing, is never matched by name, and is never filled by a note of another device', () async {
       final a = await started('a');

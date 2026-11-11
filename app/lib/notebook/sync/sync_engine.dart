@@ -191,7 +191,7 @@ class NotebookSync {
   final Set<String> _stopped = {};
 
   /// Format 2: what each notebook's record said when it was last synced here (its name and when it got it), by notebook id.
-  Map<String, ({String name, int at})> _snap = {};
+  Map<String, ({String name, int at, String? icon, int iconAt, String? color, int colorAt})> _snap = {};
 
   /// Format 2: the notebook each folder of the share holds entries of (an alias points to the notebook it was merged into), the
   /// folders that are tombstones, and the notebooks they stand for.
@@ -241,7 +241,15 @@ class NotebookSync {
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
       _bookSnap = {for (final e in (j['book_snap'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _snap = {
-        for (final e in (j['snap'] as Map? ?? const {}).entries) '${e.key}': (name: '${(e.value as Map)['name']}', at: ((e.value as Map)['at'] as num?)?.toInt() ?? 0),
+        for (final e in (j['snap'] as Map? ?? const {}).entries)
+          '${e.key}': (
+            name: '${(e.value as Map)['name']}',
+            at: ((e.value as Map)['at'] as num?)?.toInt() ?? 0,
+            icon: (e.value as Map)['icon'] as String?,
+            iconAt: ((e.value as Map)['icon_at'] as num?)?.toInt() ?? 0,
+            color: (e.value as Map)['color'] as String?,
+            colorAt: ((e.value as Map)['color_at'] as num?)?.toInt() ?? 0,
+          ),
       };
     } catch (e) {
       logError('Notebook sync: state unreadable', error: e);
@@ -259,7 +267,10 @@ class NotebookSync {
         'ignored': [..._ignored],
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_bookSnap.isNotEmpty) 'book_snap': _bookSnap,
-        if (_snap.isNotEmpty) 'snap': {for (final e in _snap.entries) e.key: {'name': e.value.name, 'at': e.value.at}},
+        if (_snap.isNotEmpty) 'snap': {
+          for (final e in _snap.entries)
+            e.key: {'name': e.value.name, 'at': e.value.at, 'icon': e.value.icon, 'icon_at': e.value.iconAt, 'color': e.value.color, 'color_at': e.value.colorAt},
+        },
       }),
     );
   }
@@ -574,12 +585,20 @@ class NotebookSync {
     return made;
   }
 
+  /// The icon and colour a record gives now (they change after the notebook was first shared) over the ones in its first definition.
+  NotebookDef _withProps(NotebookDef d, Map<String, dynamic>? shared) {
+    if (shared == null) return d;
+    if (shared.containsKey('icon')) d = shared['icon'] is String ? d.copyWith(icon: shared['icon'] as String) : d.copyWith(clearIcon: true);
+    if (shared.containsKey('color')) d = shared['color'] is String ? d.copyWith(color: shared['color'] as String) : d.copyWith(clearColor: true);
+    return d;
+  }
+
   /// A notebook made here the way another device made it: [shared] is its definition there (template, def, private, props).
   Future<Notebook> _makeBook({String? id, required String name, Map<String, dynamic>? shared}) async {
     final made = await notebook.saveNotebook(
       id: id,
       template: (shared?['template'] as String?) ?? 'notes',
-      def: shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)).copyWith(name: name) : NotebookDef(name: name, fields: const [], sort: NotebookSort.recent),
+      def: _withProps(shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)).copyWith(name: name) : NotebookDef(name: name, fields: const [], sort: NotebookSort.recent), shared),
       private: shared?['private'] == true,
     );
     // The other device's property names, by label, so both write the same ones.
@@ -734,8 +753,9 @@ class NotebookSync {
     return n;
   }
 
-  Map<String, dynamic> _recBody(Notebook n) =>
-      {'name': n.name, if (_eligible(n.id)) 'legacy': true, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
+  /// A notebook's record body; [at] is the time its icon and colour (when it has them) are set.
+  Map<String, dynamic> _recBody(Notebook n, {int at = 0}) =>
+      {'name': n.name, if (n.def.icon != null) ...{'icon': n.def.icon, 'icon_at': at}, if (n.def.color != null) ...{'color': n.def.color, 'color_at': at}, if (_eligible(n.id)) 'legacy': true, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
 
   /// Whether a notebook deleted on another device (a tombstone in its folder) is deleted here too. Always, today. This is the one
   /// place a "Don't replace my copies from this device" switch plugs in: for a device with it on, this returns false, the notebook
@@ -841,25 +861,53 @@ class NotebookSync {
       final r = recs[n.id];
       final snap = _snap[n.id];
       if (r == null) {
-        final rec = NbRecord.live(n.id, nameAt: now, body: _recBody(n));
+        final rec = NbRecord.live(n.id, nameAt: now, body: _recBody(n, at: now));
         await folder.writeText('${n.id}/$kRecordFile', rec.text);
         recs[n.id] = rec;
-        _snap[n.id] = (name: n.name, at: now);
+        _snap[n.id] = (name: n.name, at: now, icon: n.def.icon, iconAt: rec.iconAt, color: n.def.color, colorAt: rec.colorAt);
       } else if (r.kind == RecordKind.live) {
-        final localChanged = snap != null && n.name != snap.name;
-        if (localChanged) {
-          final at = max(now, r.at + 1);
-          final rec = NbRecord.live(n.id, nameAt: at, body: {...r.body, 'name': n.name});
+        // The name, the icon and the colour each go the way of the later writer. What changed here since the last sync is written
+        // (later than the record's); what changed in the record and not here is taken here.
+        final nameLocal = snap != null && n.name != snap.name;
+        final iconLocal = snap != null && n.def.icon != snap.icon;
+        final colorLocal = snap != null && n.def.color != snap.color;
+        final body = {...r.body};
+        var nameAt = r.at, iconAt = r.iconAt, colorAt = r.colorAt;
+        if (nameLocal) {
+          nameAt = max(now, r.at + 1);
+          body['name'] = n.name;
+        }
+        if (iconLocal) {
+          iconAt = max(now, r.iconAt + 1);
+          body['icon'] = n.def.icon;
+          body['icon_at'] = iconAt;
+        }
+        if (colorLocal) {
+          colorAt = max(now, r.colorAt + 1);
+          body['color'] = n.def.color;
+          body['color_at'] = colorAt;
+        }
+        if (nameLocal || iconLocal || colorLocal) {
+          final rec = NbRecord.live(n.id, nameAt: nameAt, body: body);
           await folder.writeText('${n.id}/$kRecordFile', rec.text);
           recs[n.id] = rec;
-          _snap[n.id] = (name: n.name, at: at);
-        } else {
-          var name = n.name;
-          if (r.name != n.name && !notebook.nameTaken(r.name, exceptId: n.id)) {
-            name = (await notebook.saveNotebook(id: n.id, def: n.def.copyWith(name: r.name))).name;
-          }
-          _snap[n.id] = (name: name, at: r.at);
         }
+        var d = n.def;
+        var changed = false;
+        if (!nameLocal && r.name != n.name && !notebook.nameTaken(r.name, exceptId: n.id)) {
+          d = d.copyWith(name: r.name);
+          changed = true;
+        }
+        if (!iconLocal && r.icon != n.def.icon) {
+          d = r.icon == null ? d.copyWith(clearIcon: true) : d.copyWith(icon: r.icon);
+          changed = true;
+        }
+        if (!colorLocal && r.color != n.def.color) {
+          d = r.color == null ? d.copyWith(clearColor: true) : d.copyWith(color: r.color);
+          changed = true;
+        }
+        final now0 = changed ? await notebook.saveNotebook(id: n.id, def: d) : n;
+        _snap[n.id] = (name: now0.name, at: nameAt, icon: now0.def.icon, iconAt: iconAt, color: now0.def.color, colorAt: colorAt);
       }
     }
     // Tombstones: a notebook deleted on another device, and one deleted here (not when the list of notebooks could not be read:
@@ -897,10 +945,11 @@ class NotebookSync {
       if (n != null && _inShare(n)) {
         final snap = _bookSnap[n.id];
         if (snap == null || n.savedPlaces || await _changedHere(n, snap) || !appliesRemoteNotebookDelete(n)) {
-          final rec = NbRecord.live(n.id, nameAt: max(now, r.at + 1), body: _recBody(n));
+          final at = max(now, r.at + 1);
+          final rec = NbRecord.live(n.id, nameAt: at, body: _recBody(n, at: at));
           await folder.writeText('${n.id}/$kRecordFile', rec.text);
           recs[n.id] = rec;
-          _snap[n.id] = (name: n.name, at: rec.at);
+          _snap[n.id] = (name: n.name, at: at, icon: n.def.icon, iconAt: rec.iconAt, color: n.def.color, colorAt: rec.colorAt);
           _keepBooks.add(n.id);
           continue;
         }
@@ -925,8 +974,8 @@ class NotebookSync {
       // A name a notebook here already has (made on its own, not the same notebook): this one is another notebook, kept under its
       // name with a few characters of its id added here, and the record keeps the name it has.
       final name = _freeName(r.name, r.id);
-      await _makeBook(id: r.id, name: name, shared: r.body);
-      _snap[r.id] = (name: name, at: r.at);
+      final made = await _makeBook(id: r.id, name: name, shared: r.body);
+      _snap[r.id] = (name: name, at: r.at, icon: made.def.icon, iconAt: r.iconAt, color: made.def.color, colorAt: r.colorAt);
     }
     dirNames = {for (final e in recs.entries) if (e.value.kind == RecordKind.live) e.key: e.value.name};
     // Which notebook each folder's entries belong to (only notebooks here and in the share).
