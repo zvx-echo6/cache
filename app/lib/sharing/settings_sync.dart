@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../chat/ask_focus.dart';
 import '../files.dart';
 import '../platform/app_log.dart';
 import 'sharing_state.dart';
@@ -515,7 +516,19 @@ class SettingsSync extends ChangeNotifier {
 
   /// One look: when sharing has just started, the keys are given to the engine; then the keys that came are kept and the logs
   /// of the devices whose settings this one takes are read.
+  bool _waitingForAsk = false;
+
   Future<void> tick() async {
+    // While Ask answers, no new round starts (one waits, the timer's other ticks do not pile up behind it); it goes on after.
+    if (_waitingForAsk) return;
+    if (askFocusShared?.focused ?? false) {
+      _waitingForAsk = true;
+      try {
+        await askIdle(worker: 'Settings sync');
+      } finally {
+        _waitingForAsk = false;
+      }
+    }
     if (!sharing.running || sharing.myId == null) {
       _wasRunning = false;
       return;
