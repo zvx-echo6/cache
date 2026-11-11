@@ -615,6 +615,45 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    Future<void> guide() async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Made Up Clinic'})) as Map;
+      expect(r['started'], isTrue);
+    }
+
+    String? lastPhase() {
+      final trips = toCar.where((c) => c.method == 'trip').toList();
+      return trips.isEmpty ? null : (trips.last.arguments as Map)['phase'] as String?;
+    }
+
+    // Bug: unplugging the car ended the route on the phone.
+    test('the car going away in a real drive leaves the phone guiding, and the car gets guidance again when it is back', () async {
+      await guide();
+      await fromCar('connected', {'on': false});
+      await settle();
+      expect(nav.guiding, isTrue);
+      expect(gps.stops, 0);
+      expect(speaker.stops, 0);
+      toCar.clear();
+      await fromCar('connected', {'on': true});
+      await settle();
+      expect(lastPhase(), 'guiding');
+      expect((toCar.lastWhere((c) => c.method == 'route').arguments as Map)['geojson'], contains('LineString'));
+    });
+
+    test('a test drive ends with the car session, and the phone is back on its real position', () async {
+      await fromCar('autoDrive', {'on': true});
+      await guide();
+      expect(drive.simulating, isTrue);
+      await fromCar('connected', {'on': false});
+      await settle();
+      expect(nav.guiding, isFalse);
+      expect(drive.simulating, isFalse);
+      expect(drive.simulate, isFalse);
+    });
+
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Burley Library')]);

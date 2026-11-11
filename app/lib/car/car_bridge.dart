@@ -137,7 +137,13 @@ class CarBridge {
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
+      // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
+      // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
+      // position.
+      final testDrive = drive.simulating;
       drive.simulate = false;
+      if (testDrive && nav.guiding) unawaited(nav.end());
     }
   }
 

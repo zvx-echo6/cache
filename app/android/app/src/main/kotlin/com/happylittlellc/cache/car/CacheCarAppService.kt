@@ -42,7 +42,10 @@ class CacheCarAppService : CarAppService() {
  *
  * [startEngine] is the shared engine; the tests give a stand-in.
  */
-class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obtain(it) }) : Session(), CarLink.Listener {
+class CarSession(
+    private val startEngine: (Context) -> Unit = { SharedEngine.obtain(it) },
+    private val endEngine: (keep: Boolean) -> Unit = { SharedEngine.carEnded(it) },
+) : Session(), CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
     private var navigating = false
@@ -82,7 +85,12 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         nav.setNavigationManagerCallback(object : NavigationManagerCallback {
             // The host stops Cache's guidance (another navigation app started, or the car asked): no more turns, notifications or
             // voice from Cache, at once.
+            //
+            // The Car App Library also calls this when the session is destroyed (NavigationManager's own lifecycle observer;
+            // the callback is posted, so it runs after tearDown). That is the car going away, not another navigation source:
+            // the phone keeps guiding, and tearDown has already ended everything on the car side.
             override fun onStopNavigation() {
+                if (!ready) return
                 if (navigating) {
                     navigating = false
                     try {
@@ -192,6 +200,12 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
     private fun tearDown() {
         if (!ready) return
         ready = false
+        // The car went away during a real drive: the phone keeps guiding (the car side never asks it to stop here), so the
+        // app's engine, where guidance runs, must stay even with no phone screen open. When the car connects again the phone
+        // pushes its trip and onTrip shows guidance and tells the host it started. A simulated test drive is the deliberate
+        // exception: it exists only for the car's review, so the phone ends it when the car leaves (lib/car/car_bridge.dart)
+        // and nothing is kept for it.
+        val keepEngine = CarLink.trip.guiding && !autoDrive
         CarLink.removeListener(this)
         CarLink.setCarConnected(false)
         if (navigating) {
@@ -207,7 +221,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         CarLink.audio = null
         renderer.release()
         CarLocationService.stop(carContext)
-        SharedEngine.carEnded()
+        endEngine(keepEngine)
     }
 
     companion object {

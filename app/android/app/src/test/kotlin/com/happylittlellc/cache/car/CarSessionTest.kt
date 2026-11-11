@@ -299,6 +299,51 @@ class CarSessionTest {
         assertFalse(screens.top is NavigationScreen)
     }
 
+    // Bug: unplugging the car ended the route on the phone.
+    @Test
+    fun theCarGoingAwayInARealDriveLeavesThePhoneGuidingAndComingBackShowsGuidance() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            done(null)
+        }
+        val kept = mutableListOf<Boolean>()
+        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        push("trip", trip("guiding", guiding))
+        // As the library does it when the session is destroyed: its own stop first (the app's callback is posted), then the
+        // session's teardown, then the callback.
+        nav.onStopNavigation()
+        c.moveToState(Lifecycle.State.DESTROYED)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("stop" in asked)
+        assertFalse(CarLink.carConnected)
+        // The engine guidance runs in stays for the phone.
+        assertEquals(listOf(true), kept)
+        // The car connects again; the phone, still guiding, pushes its trip.
+        car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
+        start()
+        assertTrue(screens.top is HomeScreen)
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is NavigationScreen)
+        assertEquals(1, nav.navigationStartedCount)
+        assertEquals(1, nav.tripsSent.size)
+    }
+
+    @Test
+    fun nothingIsKeptForATestDriveOrWithNoGuidance() {
+        CarLink.dartForTests = { _, _, done -> done(null) }
+        val kept = mutableListOf<Boolean>()
+        // No guidance when the car leaves.
+        start(session = CarSession(startEngine = {}, endEngine = { kept += it })).moveToState(Lifecycle.State.DESTROYED)
+        // A test drive (the host switched it on): it ends with the car session.
+        car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
+        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        nav.navigationManagerCallback!!.onAutoDriveEnabled()
+        push("trip", trip("guiding", guiding))
+        c.moveToState(Lifecycle.State.DESTROYED)
+        assertEquals(listOf(false, false), kept)
+    }
+
     // Bug: a navigation request delivered to the phone's activity threw in Flutter and went nowhere.
     @Test
     fun aNavigationRequestThatReachedThePhoneGoesToTheCarSession() {

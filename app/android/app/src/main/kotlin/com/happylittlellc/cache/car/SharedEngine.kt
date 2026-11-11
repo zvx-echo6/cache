@@ -66,10 +66,14 @@ object SharedEngine {
         carSessions++
     }
 
-    /** A car session ended: with no activity either, nothing needs the engine any more. */
-    fun carEnded() {
+    /**
+     * A car session ended: with no activity either, nothing needs the engine any more, unless [keep] says the phone is still
+     * guiding (a real drive the car left; see CarSession.tearDown). A kept engine goes with the next activity or car session
+     * that ends without guidance, or with the process.
+     */
+    fun carEnded(keep: Boolean = false) {
         carSessions = (carSessions - 1).coerceAtLeast(0)
-        if (carSessions == 0 && !activityAttached) {
+        if (carSessions == 0 && !activityAttached && !keep) {
             val engine = FlutterEngineCache.getInstance().get(ID)
             drop()
             engine?.destroy()
