@@ -125,11 +125,13 @@ class _GgufReader {
   int _bufStart = 0; // file offset of _buf[0]
   int _pos = 0; // file offset of the next byte
 
+  static const _maxRead = 16 << 20;
   static const _fixed = <int, int>{0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8};
 
   /// [n] bytes at the read position, refilled from the file in chunks.
   ByteData _take(int n) {
-    if (n < 0 || n > (1 << 30)) throw const FormatException('implausible length');
+    // One read is at most 16 MiB (the largest real string or tensor name is a few KB); a bigger length is a damaged header.
+    if (n < 0 || n > _maxRead) throw const FormatException('implausible length');
     final end = _pos + n;
     if (_pos < _bufStart || end > _bufStart + _buf.length) {
       _f.setPositionSync(_pos);
