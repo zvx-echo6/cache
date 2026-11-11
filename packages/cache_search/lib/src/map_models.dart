@@ -473,6 +473,41 @@ class MapRoute {
   }
 }
 
+/// A direction a lane allows: Valhalla's `kTurnLane*` bits (baldr/turnlanes.h), in bit order from 1 << 0.
+enum LaneDirection { none, through, sharpLeft, left, slightLeft, slightRight, right, sharpRight, reverse, mergeToLeft, mergeToRight }
+
+/// One lane of the road at a maneuver: the directions it allows, the one the route takes from it (`active`, set on the lane to
+/// be in) and the one a lane that also works carries (`valid`). Null when the reply did not say.
+class Lane {
+  const Lane({this.directions = const {}, this.active, this.valid});
+
+  /// From Valhalla's `{"directions": bits, "active": bit, "valid": bit}`; bits that are not known are left out.
+  factory Lane.fromJson(Map<String, dynamic> j) => Lane(directions: _laneSet(_i(j['directions'])), active: _laneBit(_i(j['active'])), valid: _laneBit(_i(j['valid'])));
+
+  final Set<LaneDirection> directions;
+  final LaneDirection? active;
+  final LaneDirection? valid;
+
+  @override
+  bool operator ==(Object other) => other is Lane && other.active == active && other.valid == valid && other.directions.length == directions.length && other.directions.containsAll(directions);
+
+  @override
+  int get hashCode => Object.hash(active, valid, Object.hashAllUnordered(directions));
+
+  @override
+  String toString() => 'Lane($directions, active: $active, valid: $valid)';
+
+  /// The lanes of a maneuver's JSON `lanes`: absent, empty or not a list is an empty list ("no lanes").
+  static List<Lane> listFrom(Object? v) => [for (final l in _l(v)) if (l is Map) Lane.fromJson(l.cast<String, dynamic>())];
+}
+
+Set<LaneDirection> _laneSet(int? bits) => bits == null ? const {} : {for (final d in LaneDirection.values) if (bits & (1 << d.index) != 0) d};
+
+LaneDirection? _laneBit(int? bits) {
+  final s = _laneSet(bits);
+  return s.isEmpty ? null : s.first;
+}
+
 class ProgressManeuver {
   const ProgressManeuver({
     required this.index,
@@ -492,6 +527,7 @@ class ProgressManeuver {
     this.gradeClass,
     this.followName,
     this.trailKind,
+    this.lanes = const [],
   });
 
   factory ProgressManeuver.fromJson(Map<String, dynamic> j) => ProgressManeuver(
@@ -512,6 +548,7 @@ class ProgressManeuver {
         gradeClass: _s(j['grade_class']),
         followName: _s(_m(j['follow'])['name']),
         trailKind: _s(_m(j['follow'])['trail_kind']),
+        lanes: Lane.listFrom(j['lanes']),
       );
 
   final int index;
@@ -537,6 +574,9 @@ class ProgressManeuver {
   /// A leg that follows a mapped track or trail: its name (null when it has none) and kind (road, track, trail).
   final String? followName;
   final String? trailKind;
+
+  /// The lanes of the road here, when the tiles gave them; empty means none (older packs, off-road, walking).
+  final List<Lane> lanes;
 
   bool get isOffroad => kind != 'road';
   bool get isArrival => type.startsWith('destination');

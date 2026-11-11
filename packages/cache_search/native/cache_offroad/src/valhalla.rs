@@ -28,6 +28,32 @@ pub struct Maneuver {
     pub end_shape_index: i64,
     pub bearing_after: Option<f64>,
     pub bearing_before: Option<f64>,
+    /// Turn lanes at the maneuver (Valhalla `turn_lanes`); empty when the tiles or the costing have none.
+    pub lanes: Vec<Lane>,
+}
+
+/// One lane of a maneuver. `directions` is Valhalla's `kTurnLane*` bitmask (baldr/turnlanes.h); `active` is the one bit the
+/// route takes when the lane is the one to be in, `valid` the bit a lane that also works carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lane {
+    pub directions: u16,
+    pub active: Option<u16>,
+    pub valid: Option<u16>,
+}
+
+impl Lane {
+    /// The guidance JSON of the lane: `{"directions": n}` with `active` or `valid` only when the reply had one.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        o.insert("directions".into(), self.directions.into());
+        if let Some(a) = self.active {
+            o.insert("active".into(), a.into());
+        }
+        if let Some(v) = self.valid {
+            o.insert("valid".into(), v.into());
+        }
+        serde_json::Value::Object(o)
+    }
 }
 
 /// First leg of a `/route` reply (the reference server only ever uses `legs[0]` of a two-location request).
