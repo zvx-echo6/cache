@@ -86,16 +86,11 @@ void main() {
       final a = await make('tablet', 'Tablet', 'pixel', 'Pixel');
       final b = await make('pixel', 'Pixel', 'tablet', 'Tablet');
 
-      Future<void> ra(String label, Future<void> Function() f) async {
-        stdout.writeln('step: $label');
-        await tester.runAsync(() => f().timeout(const Duration(seconds: 20)));
-      }
-
       Future<void> reset() async {
         for (final p in [a, b]) {
           p.peer['link'] = {'mode': 'off', 'ask': true};
           p.peer['link_t'] = 0;
-          await ra('reset refresh', p.sharing.refresh);
+          await tester.runAsync(p.sharing.refresh);
         }
       }
 
@@ -134,26 +129,41 @@ void main() {
         await showPage(p);
         unawaited(askSettingsLink(tester.element(find.byType(Scaffold).first), p.sync, p.peerId, p.peerName));
         await _settle(tester);
-        await snap(tester, _out, '$name-$t');
+        if (!name.endsWith('unrendered-$t') && !name.contains('unrendered')) await snap(tester, _out, '$name-$t');
+      }
+
+      Future<void> tapReal(WidgetTester tester, String key) async {
+        await tester.runAsync(() async {
+          await tester.tap(find.byKey(ValueKey(key)));
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+        });
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
       }
 
       // 1: the question, on a new link
       await popup(a, '1-popup-phone-A');
 
-      // 2-5: A answers; A's device page, then B's pop-up (open when A answered) as a notice
-      final choices = <String, SettingsLink>{'2-send-mine': SettingsLink.sending, '3-take-theirs': SettingsLink.receiving, '4-match': SettingsLink.match, '5-off': SettingsLink.off};
+      // 2-5: A answers in the pop-up (the answer is written the way a tap does it); the engine hands the record to B, whose
+      // pop-up is then a notice
+      final choices = <String, (String, SettingsLink)>{
+        '2-send-mine': ('send', SettingsLink.sending),
+        '3-take-theirs': ('receive', SettingsLink.receiving),
+        '4-match': ('match', SettingsLink.match),
+        '5-off': ('off', SettingsLink.off),
+      };
       for (final c in choices.entries) {
         await reset();
-        await ra('answer ${c.key}', () => a.sync.answer(a.peerId, c.value));
+        await popup(a, '${c.key}-A-pop-up-unrendered');
+        await tapReal(tester, 'ask-${c.value.$1}');
         await propagate(a, b);
+        expect(a.sync.linkWith(a.peerId), c.value.$2);
         await device(a, '${c.key}-A-device-page');
         await popup(b, '${c.key}-B-notice');
         // 6: the device page offers the four choices from either phone (here B's, after A sent)
-        if (c.value == SettingsLink.sending) await device(b, '6-device-page-B-four-choices');
-        // B's answer can't override the first.
-        if (c.value == SettingsLink.off) continue;
-        await ra('B answer', () => b.sync.answer(b.peerId, SettingsLink.off));
-        expect(b.sync.linkWith(b.peerId), c.value == SettingsLink.sending ? SettingsLink.receiving : c.value == SettingsLink.receiving ? SettingsLink.sending : c.value);
+        if (c.value.$2 == SettingsLink.sending) await device(b, '6-device-page-B-four-choices');
+        expect(b.sync.decidedByOther(b.peerId), isTrue);
       }
 
       await showPage(a);

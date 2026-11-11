@@ -120,7 +120,7 @@ Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String pee
             return AlertDialog(
               key: const ValueKey('settings-link-notice'),
               title: Text(settingsLinkNotice(sync.linkWith(peer), name)),
-              content: const Text('Change this any time on the device\'s page.'),
+              content: Text("Change this any time on $name's page in Sharing and sync."),
               actions: [TextButton(key: const ValueKey('notice-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
             );
           }

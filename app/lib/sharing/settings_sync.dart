@@ -380,7 +380,7 @@ class SettingsSync extends ChangeNotifier {
     // Who answered the question, and when: the first answer is kept (the engine's merge compares `at`, then the lower id).
     if (first) {
       l['by'] = sharing.myId;
-      l['at'] = DateTime.now().millisecondsSinceEpoch;
+      l['at'] = _now().millisecondsSinceEpoch;
     }
     await sharing.setLink(peer, l);
     if (to != SettingsLink.off && to != SettingsLink.receiving) await _seed([for (final s in settings) if (settingOn(peer, s.key)) s.key]);

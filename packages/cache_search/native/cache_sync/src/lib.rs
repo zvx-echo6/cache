@@ -248,6 +248,26 @@ struct Link {
     t: u64,
 }
 
+/// Who answered a link's first question and when (`by`, `at` in the app's value), if anyone has.
+fn link_answer(l: &Link) -> Option<(&str, u64)> {
+    let by = l.v.get("by")?.as_str()?;
+    Some((by, l.v.get("at").and_then(|a| a.as_u64()).unwrap_or(u64::MAX)))
+}
+
+/// Whether `theirs` (the copy `peer` sent) replaces `mine`, so both devices end up with the same one. The first answer to the
+/// link's question is the pair's: a record with an answer beats one without; of two answers the earlier `at` wins, then the
+/// lower device id. The same answer on both: the later `t` wins (a change made since on the device's page), and on the same
+/// `t` the device with the greater key, so both still agree.
+fn link_replaces(mine: &Link, theirs: &Link, peer: &str, me: &str) -> bool {
+    match (link_answer(mine), link_answer(theirs)) {
+        (None, Some(_)) => return true,
+        (Some(_), None) => return false,
+        (Some(a), Some(b)) if a != b => return (b.1, b.0) < (a.1, a.0),
+        _ => {}
+    }
+    theirs.t > mine.t || (theirs.t == mine.t && theirs.v != mine.v && peer > me)
+}
+
 /// A link's kind for [`Config::with`]: its `mode`, or `"match"` while it has none (a link only an older version of the other
 /// device knows about; every link here has one, see [`new_link`] and [`migrate_links`]).
 fn link_mode(link: Option<&Link>) -> String {
@@ -1182,15 +1202,14 @@ impl Inner {
         modes.contains(&mode)
     }
 
-    /// The link as `peer` last set it, when that is later than the copy here (on the same time, the device with the greater key
-    /// wins, so both end up the same).
+    /// The link as `peer` last set it, when it should replace the copy here (see [`link_replaces`]).
     fn adopt_link(&self, peer: &str, theirs: Link) {
         let changed = {
             let mut sv = self.saved.lock().unwrap();
             let Some(p) = sv.peers.iter_mut().find(|p| p.id == peer) else { return };
             let newer = match &p.link {
                 None => true,
-                Some(l) => theirs.t > l.t || (theirs.t == l.t && theirs.v != l.v && peer > self.me.as_str()),
+                Some(l) => link_replaces(l, &theirs, peer, self.me.as_str()),
             };
             if newer {
                 p.link = Some(theirs);
@@ -2410,6 +2429,60 @@ mod space_tests {
         let d = std::env::temp_dir();
         let (now, allowed) = (Inner::free_bytes(&d).unwrap(), Inner::allowed_bytes(&d).unwrap());
         assert!(allowed >= now.saturating_sub(1 << 20));
+    }
+}
+
+#[cfg(test)]
+mod link_merge_tests {
+    use super::*;
+
+    fn l(v: Value, t: u64) -> Link {
+        Link { v, t }
+    }
+    fn answered(mode: &str, by: &str, at: u64, t: u64) -> Link {
+        l(json!({"mode": mode, "from": by, "by": by, "at": at}), t)
+    }
+
+    #[test]
+    fn an_answer_beats_the_pending_question() {
+        let pending = new_link();
+        let a = answered("send", "a", 100, 100);
+        assert!(link_replaces(&pending, &a, "a", "b"));
+        assert!(!link_replaces(&a, &pending, "b", "a"));
+    }
+
+    #[test]
+    fn the_earlier_answer_wins_whatever_the_stamp() {
+        let first = answered("send", "a", 100, 100);
+        // b answered Off later but its record was stamped later too.
+        let late = answered("off", "b", 200, 205);
+        assert!(!link_replaces(&first, &late, "b", "a"));
+        assert!(link_replaces(&late, &first, "a", "b"));
+    }
+
+    #[test]
+    fn the_same_moment_goes_to_the_lower_id_and_both_agree() {
+        let a = answered("send", "a", 100, 100);
+        let b = answered("off", "b", 100, 101);
+        assert!(!link_replaces(&a, &b, "b", "a"));
+        assert!(link_replaces(&b, &a, "a", "b"));
+    }
+
+    #[test]
+    fn a_later_change_to_the_same_answer_wins() {
+        let a = answered("send", "a", 100, 100);
+        let mut changed = answered("match", "a", 100, 300);
+        changed.v["from"] = json!("b");
+        assert!(link_replaces(&a, &changed, "a", "b"));
+        assert!(!link_replaces(&changed, &a, "a", "b"));
+    }
+
+    #[test]
+    fn records_with_no_answer_keep_the_later_stamp_rule() {
+        let old = l(json!({"mode": "match"}), 5);
+        let newer = l(json!({"mode": "off"}), 9);
+        assert!(link_replaces(&old, &newer, "p", "m"));
+        assert!(!link_replaces(&newer, &old, "p", "m"));
     }
 }
 
