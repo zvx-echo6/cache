@@ -11,6 +11,7 @@ import 'caption_search.dart';
 import 'format.dart';
 import 'token_store.dart';
 import '../platform.dart' as plat;
+import 'video_media.dart';
 import 'video_prefs.dart';
 
 /// What a person is told when a video call fails.
@@ -94,7 +95,7 @@ class DownloadTask {
 /// The video connector as the app uses it: instances, logins (tokens in secure storage), browse calls with the
 /// token and one automatic refresh, downloads with progress, the saved videos, and citation links.
 class VideoState extends ChangeNotifier {
-  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, VideoPrefs? prefs, this.captionSearch = const CaptionSearchMissing(), this.spaceOf, this.indexesDir})
+  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, VideoPrefs? prefs, this.captionSearch = const CaptionSearchMissing(), this.spaceOf, this.indexesDir, this.webFs})
       : tokens = tokens ?? const SecureTokenStore(),
         // ignore: prefer_initializing_formals
         _prefs = prefs;
@@ -127,8 +128,17 @@ class VideoState extends ChangeNotifier {
   /// Whether a download may start on the current connection (mobile data switches). Null: always.
   final DataPolicy? policy;
 
-  /// The folder the saved videos are in, once started.
+  /// The folder the saved videos are in, once started. Null in a browser (a `Directory` of the server's folder cannot be opened
+  /// there): see [dirPath].
   Directory? dir;
+
+  /// The saved videos' folder as a path: the phone's `<files>/videos`; in a browser, `<docs>/videos` on the server, which is where a
+  /// video that arrives by sync lands too.
+  String? get dirPath => dir?.path ?? _webDirPath;
+  String? _webDirPath;
+
+  /// A browser's file seam for the prefs (tests); null: the app's own.
+  final AppFs? webFs;
 
   /// Test hooks.
   final Directory? dirOverride;
@@ -153,9 +163,7 @@ class VideoState extends ChangeNotifier {
 
   Future<void> init() async {
     if (plat.isWeb) {
-      // Videos are saved into a folder on the phone; there is none in a browser.
-      unavailable = 'Videos are not available on this device';
-      notifyListeners();
+      await _initWeb();
       return;
     }
     final Directory dir;
@@ -182,6 +190,64 @@ class VideoState extends ChangeNotifier {
     await refresh();
   }
 
+  /// A browser: the engine is on the server (its helper's video core), the videos are saved into `<docs>/videos` there, and the
+  /// downloads run on the server, so they go on with no tab open.
+  Future<void> _initWeb() async {
+    _prefs ??= VideoPrefs(fs: webFs ?? createAppFs());
+    await prefs.load();
+    try {
+      final core = await VideoCore.open('', native: nativeFactory ?? _defaultNative);
+      _core = core;
+      _webDirPath = core.dir;
+      VideoMedia.root = core.dir;
+    } catch (e) {
+      unavailable = e is CacheSearchException ? e.message : 'Videos are not available on this device';
+      notifyListeners();
+      return;
+    }
+    await refresh();
+  }
+
+  /// A browser: the server's downloads this tab does not know (started in another tab or before a reload) join [tasks]. A finished
+  /// one already in [saved] is let go without a row.
+  Future<void> _adoptServerJobs() async {
+    if (!plat.isWeb) return;
+    try {
+      for (final j in await core.jobs()) {
+        final i = j.info;
+        if (taskFor(i.instance, i.video) != null) continue;
+        final t = taskFromServerJob(i);
+        if (t.phase == DownloadPhase.running) {
+          t.job = j.job;
+          tasks.add(t);
+          _ensurePolling();
+        } else {
+          await j.job.free();
+          if (!(t.phase == DownloadPhase.done && savedFor(i.instance, i.video) != null)) tasks.add(t);
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// A download task for what the server reports of a download.
+  static DownloadTask taskFromServerJob(VideoJobInfo i) {
+    final t = DownloadTask(instance: i.instance, uuid: i.video, title: i.title, choice: i.choice, label: i.label)
+      ..done = i.done
+      ..total = i.total;
+    switch (i.state) {
+      case 'running':
+        t.phase = DownloadPhase.running;
+      case 'done':
+        t.phase = DownloadPhase.done;
+      case 'cancelled':
+        t.phase = DownloadPhase.cancelled;
+      default:
+        t.phase = DownloadPhase.failed;
+        t.error = videoErrorText(CacheSearchException(i.errorCode ?? 'internal', i.errorMessage ?? ''));
+    }
+    return t;
+  }
+
   /// Reloads the instance list and the saved videos from the core.
   Future<void> refresh() async {
     try {
@@ -192,6 +258,7 @@ class VideoState extends ChangeNotifier {
         if (u != null) _users[i.id] = u;
       }
     } catch (_) {}
+    await _adoptServerJobs();
     if (!_disposed) notifyListeners();
   }
 
@@ -349,7 +416,7 @@ class VideoState extends ChangeNotifier {
     }
     try {
       final token = await tokens.read(_k(task.instance, 'access'));
-      task.job = await core.startDownload(task.instance, task.uuid, choice: task.choice, token: token);
+      task.job = await core.startDownload(task.instance, task.uuid, choice: task.choice, token: token, title: task.title, label: task.label);
       _ensurePolling();
     } catch (e) {
       task

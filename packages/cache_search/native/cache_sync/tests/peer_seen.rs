@@ -31,6 +31,23 @@ fn wait(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// Waits for `ok`, asking both devices to sync again about every 2 seconds. The app syncs again and again, and a restarted device
+/// (no relay, DHT, mDNS or lookup here) learns where the other one is only when that one connects to it, so `other` syncing is
+/// what lets `e` find it; one request alone can wait for ever. On a timeout the panic says what `e` saw of the other device.
+fn wait_syncing(what: &str, secs: u64, e: &SyncEngine, other: &SyncEngine, mut ok: impl FnMut() -> bool) {
+    for i in 0..secs * 4 {
+        if ok() {
+            return;
+        }
+        if i % 8 == 0 {
+            call(other, "sync_now", json!({}));
+            call(e, "sync_now", json!({}));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    panic!("timed out waiting for {what}; the device sees the other one as {}", peer(e));
+}
+
 #[test]
 fn last_seen_survives_a_restart_and_a_rename_follows() {
     let tmp = tempfile::tempdir().unwrap();
@@ -61,8 +78,7 @@ fn last_seen_survives_a_restart_and_a_rename_follows() {
 
     // A is renamed; B takes the new name on its next round.
     call(&a, "set_name", json!({"name": "Pixel nine"}));
-    call(&b, "sync_now", json!({}));
-    wait("B to take A's new name", 30, || peer(&b)["name"] == "Pixel nine");
+    wait_syncing("B to take A's new name", 90, &b, &a, || peer(&b)["name"] == "Pixel nine");
     b.close();
     let b = engine_on(&db, "Phone", Some(b_port));
     assert_eq!(peer(&b)["name"], "Pixel nine", "the new name was saved");

@@ -6,6 +6,19 @@ release notes).
 
 ## Unreleased
 
+### Fixed
+- Home: the weather card shows the forecast even when a weather station lists no temperature
+
+### New
+- Sharing: after linking, one answer sets how settings sync on both devices, and you can take the other device's settings.
+- Discover is now a module: open it from Modules or pin it to the bottom bar.
+- Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
+- Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
+- Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
+- Library: Add to Library now shows Your own (Your own library, Add a PDF, Add a folder) at the top
+- Ask: when a chat is full, it says so plainly with a New chat button, and marks an answer cut short
+
+### Changed
 - Android: Cache now ships for 64-bit ARM phones only (x86 devices and Chromebooks are not supported)
 
 ## 1.1.0 (build 48, test) - 2026-11-10

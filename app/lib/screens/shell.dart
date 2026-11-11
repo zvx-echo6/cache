@@ -28,6 +28,8 @@ import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../desktop/desktop.dart';
 import '../desktop/desktop_shell.dart';
+import '../desktop/linux_updates.dart';
+import '../linux_ui.dart';
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
@@ -288,6 +290,9 @@ class _ShellState extends State<Shell> {
 
   late final AppUpdates? _updates = plat.isIOS || plat.isAndroid
       ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: plat.isAndroid, dismissed: DismissedUpdate())
+      // Cache on Linux: a newer release is a new tarball for the server, which the banner on Home explains.
+      : linuxUi
+      ? linuxAppUpdates(openUrl: widget.hub.openUrl)
       : null;
 
   bool _whatsNewAsked = false;
@@ -747,6 +752,7 @@ class _ShellState extends State<Shell> {
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };

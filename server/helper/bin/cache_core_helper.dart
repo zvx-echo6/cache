@@ -8,6 +8,7 @@ import 'fs_ops.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
 import 'regions_ops.dart';
+import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
 /// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
@@ -59,6 +60,7 @@ Future<void> main() async {
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
       regionsOps,
+      VideoOps(dirs, () => FfiCsNative(lib), log: log),
     ],
   );
   indexer.stop();

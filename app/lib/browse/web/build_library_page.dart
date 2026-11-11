@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../screens/download_confirm.dart' show confirmDelete;
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
@@ -86,7 +87,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       final choice = await choosePdfCompression(context, c, files);
       if (choice.cancelled || !mounted) return;
       final u = await c.addFiles(files, libraryId: id, compression: choice.choice);
-      if (u != null && mounted) say(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.');
+      if (u != null && mounted) sayUntil(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.', u.done);
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));
     }
@@ -115,11 +116,14 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
           icon: const Icon(Icons.more_horiz),
           onSelected: (v) {
             if (v == 'rename') unawaited(_renameLibrary(lib));
+            if (v == 'delete') unawaited(_deleteLibrary(lib));
             if (v == 'linked-folders' && widget.build.linkedFolders != null) {
               Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId)));
             }
           },
-          itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library'))],
+          itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library')),
+            if (c.canDeleteLibrary) PopupMenuItem(value: 'delete', child: Text('Delete · frees ${formatBytes(c.sizeOf?.call(lib.id) ?? 0)}', style: TextStyle(color: context.t.emergency))),
+          ],
         ),
       ]),
       body: ScrollingTwoColumn(left: _left(context, lib), right: _right(context, lib)),
@@ -669,7 +673,24 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       final choice = await choosePdfCompression(context, c, [file]);
       if (choice.cancelled || !mounted) return;
       final u = await c.replaceBook(lib.id, b, file, compression: choice.choice);
-      if (u != null && mounted) say(context, 'Uploading the new copy of ${b.title}. Keep this tab open.');
+      if (u != null && mounted) sayUntil(context, 'Uploading the new copy of ${b.title}. Keep this tab open.', u.done);
+    } on DeviceException catch (e) {
+      if (mounted) say(context, callWords(e));
+    }
+  }
+
+  /// The same Delete a phone's library menu has: sure?, then the library and its search data go. Your own PDFs are not touched.
+  Future<void> _deleteLibrary(BuildLibrary lib) async {
+    final ok = await confirmDelete(
+      context,
+      name: lib.title,
+      bytes: c.sizeOf?.call(lib.id) ?? 0,
+      free: c.freeSpace?.call(),
+      again: 'Your PDF on this computer is not deleted. To get it back, add the PDF again.',
+    );
+    if (!ok || !mounted) return;
+    try {
+      await c.deleteLibrary(lib.id);
     } on DeviceException catch (e) {
       if (mounted) say(context, callWords(e));
     }

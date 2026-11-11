@@ -11,6 +11,10 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         // flutter_local_notifications needs core library desugaring.
         isCoreLibraryDesugaringEnabled = true
@@ -24,6 +28,8 @@ android {
         val testApk = (project.findProperty("cacheTestApk") as String?) == "true"
         applicationId = if (testApk) "com.happylittlellc.cache.test" else "com.happylittlellc.cache"
         manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
+        // True only in that test build: MainActivity reads the bench's intent extras (cache_preread_mbps) then.
+        buildConfigField("boolean", "TEST_APK", testApk.toString())
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cache/browse/opds.dart';
+import 'package:cache/browse/web/build_api.dart';
+import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/browse/web/device_api.dart';
 import 'package:cache/browse/web/device_library.dart';
 import 'package:cache/net/fetch.dart';
@@ -10,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'build_fakes.dart';
 import 'web_fakes.dart';
 
 void main() {
@@ -36,6 +39,28 @@ void main() {
   });
 
   group('reading the device', () {
+    test('a built library that changes (a book removed, a library published) makes the sizes and the app\'s books read again at once', () async {
+      api.itemList = [item('proof', kind: 'library', bytes: 66 << 20)];
+      final buildApi = FakeBuildApi()..libs = [const BuildLibrary(id: 'proof', title: 'Proof', books: 4, passages: 4, published: true)];
+      final b = BuildController(api: buildApi, poll: false, leaveWarning: (_) {});
+      final d = DeviceLibrary(api: api, fs: fs, uploader: uploader, leaveWarning: warnings.add, onItemsChanged: () async => changed++, build: b);
+      await d.start();
+      expect(b.sizeOf!('proof'), 66 << 20);
+      final reads = api.jobsReads;
+      // nothing changed: nothing is read again
+      await b.refresh();
+      expect(api.jobsReads, reads);
+      // the books go and the device's folder is small again
+      api.itemList = [item('proof', kind: 'library', bytes: 3 << 10)];
+      buildApi.libs = [const BuildLibrary(id: 'proof', title: 'Proof')];
+      await b.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.jobsReads, greaterThan(reads));
+      expect(b.sizeOf!('proof'), 3 << 10);
+      expect(changed, greaterThan(0));
+      d.dispose();
+    });
+
     test('items, transfers and free space are read; the device that cannot be reached is said, not thrown', () async {
       api.itemList = [item('a.zim', bytes: 10), item('guide', kind: 'library', bytes: 5)];
       api.jobList = [job('j1', 'running', bytes: 5, total: 20)];
