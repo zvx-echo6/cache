@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:pdfrx/pdfrx.dart';
 
+import 'pdfium_init.dart';
+
 /// Search in PDFs on the device: the app reads each page's text (PDFium, through pdfrx) and hands the pages to the search core,
 /// which indexes them as a library document. Page n of the document is `pages[n - 1]`; a page with no text (a scanned picture)
 /// is an empty string, so page numbers stay right. The core's call (cs_library_add_pdf) is being added by the training work;
@@ -47,7 +49,7 @@ typedef PdfPagesReader = Stream<String> Function(String path, {String? password}
 
 /// The text of each page of the PDF at [path], read with PDFium (one page at a time, in reading order).
 Stream<String> readPdfPages(String path, {String? password}) async* {
-  await pdfrxFlutterInitialize();
+  await initPdfium();
   final doc = await PdfDocument.openFile(path, passwordProvider: password == null ? null : createSimplePasswordProvider(password));
   try {
     for (final page in doc.pages) {
