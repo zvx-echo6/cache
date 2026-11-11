@@ -5,7 +5,7 @@
 //
 // Two groups, both needing PDFium (downloaded once, as pdfium_for_tests.dart does) and CACHE_PDF_FONTS=1:
 // - the abort test: a child process with two isolates that both start PDFium and read a PDF with fonts that are not embedded (`exited`,
-//   `alive`, `concurrent`); it exits 0 when nothing aborts. It fails on the old code, with the abort.
+//   `alive`, `interleaved`); it exits 0 when nothing aborts. It fails on the old code, with the abort.
 // - the golden test: every fixture in test/fixtures/pdf_fonts/ read by the core the way Add PDF reads it (the text layer and a SHA-256
 //   of each page drawn at 72 dpi), compared byte for byte with test/fixtures/pdf_fonts/golden/<name>.json, which was made on the code
 //   before this change. CACHE_PDF_FONTS_UPDATE=1 writes them instead. Also needs libcache_search on the library path.
@@ -40,7 +40,7 @@ void main() {
   });
 
   group('two isolates of one process use PDFium', skip: _on ? null : 'needs PDFium (CACHE_PDF_FONTS=1)', () {
-    for (final mode in ['exited', 'alive', 'concurrent']) {
+    for (final mode in ['exited', 'alive', 'interleaved']) {
       for (final fixture in ['calibri', 'mixed', 'cjk']) {
         test('$mode, $fixture.pdf: nothing aborts', () async {
           final r = await Process.run(

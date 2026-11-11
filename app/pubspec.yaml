@@ -94,6 +94,14 @@ dependencies:
   # Material Symbols (Google's icon font, Apache-2.0; community package, fonts unchanged): the map icons for notebooks and places. Approved 2026-11-10.
   material_symbols_icons: 4.2960.0
 
+# pdfrx_engine 0.4.7 (the PDFium engine under pdfrx 2.4.8) with ONE change: it no longer installs its own PDFium font mapper (Dart
+# callbacks bound to the isolate that started it, installed again by every Flutter engine, which aborted the app when the background
+# run's engine replaced the UI's). The core installs one native mapper for the process instead. The change, why, and what to check when
+# pdfrx is updated: third_party/pdfrx_engine/PATCH.md. Approved 2026-11-11.
+dependency_overrides:
+  pdfrx_engine:
+    path: ../third_party/pdfrx_engine
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

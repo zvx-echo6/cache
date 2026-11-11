@@ -10,7 +10,7 @@ use crate::error::{Code, Error, Result};
 use libloading::Library;
 use std::ffi::{c_char, c_int, c_ulong, c_void, CString};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
 
 type Handle = *mut c_void;
 
@@ -101,9 +101,13 @@ impl Lib {
     fn load(path: Option<&str>) -> Result<Lib> {
         let (l, _) = Lib::bind(path)?;
         let init: unsafe extern "C" fn() = get(&l._lib, "FPDF_InitLibrary")?;
-        let _g = lock();
-        // SAFETY: FPDF_InitLibrary takes no arguments; calling it again when the host already did is allowed.
-        unsafe { init() };
+        {
+            let _g = lock();
+            // SAFETY: FPDF_InitLibrary takes no arguments; calling it again when the host already did is allowed.
+            unsafe { init() };
+        }
+        // the one font mapper of the process, whichever engine or isolate reaches PDFium first
+        install_font_mapper(&l._lib, path);
         Ok(l)
     }
 
@@ -137,6 +141,96 @@ impl Lib {
         let _ = init;
         Ok((l, from))
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The process's one font mapper
+
+/// `FPDF_SYSFONTINFO` (fpdf_sysfontinfo.h).
+#[repr(C)]
+struct SysFontInfo {
+    version: c_int,
+    release: Option<unsafe extern "C" fn(*mut SysFontInfo)>,
+    enum_fonts: Option<unsafe extern "C" fn(*mut SysFontInfo, *mut c_void)>,
+    map_font: Option<unsafe extern "C" fn(*mut SysFontInfo, c_int, c_int, c_int, c_int, *const c_char, *mut c_int) -> *mut c_void>,
+    get_font: Option<unsafe extern "C" fn(*mut SysFontInfo, *const c_char) -> *mut c_void>,
+    get_font_data: Option<unsafe extern "C" fn(*mut SysFontInfo, *mut c_void, u32, *mut u8, c_ulong) -> c_ulong>,
+    get_face_name: Option<unsafe extern "C" fn(*mut SysFontInfo, *mut c_void, *mut c_char, c_ulong) -> c_ulong>,
+    get_font_charset: Option<unsafe extern "C" fn(*mut SysFontInfo, *mut c_void) -> c_int>,
+    delete_font: Option<unsafe extern "C" fn(*mut SysFontInfo, *mut c_void)>,
+}
+
+struct StaticFontInfo(SysFontInfo);
+
+// SAFETY: the struct is never written after it is made and holds only code addresses.
+unsafe impl Sync for StaticFontInfo {}
+
+/// PDFium asks the system for a font it does not find in the PDF: no system font is offered, so PDFium uses its built-in substitutes.
+/// This is what the Dart mapper pdfrx used to install answered for every font, since the app gives it no font files.
+unsafe extern "C" fn no_font(_: *mut SysFontInfo, _: c_int, _: c_int, _: c_int, _: c_int, _: *const c_char, _: *mut c_int) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+unsafe extern "C" fn no_font_data(_: *mut SysFontInfo, _: *mut c_void, _: u32, _: *mut u8, _: c_ulong) -> c_ulong {
+    0
+}
+
+unsafe extern "C" fn no_face_name(_: *mut SysFontInfo, _: *mut c_void, _: *mut c_char, _: c_ulong) -> c_ulong {
+    0
+}
+
+unsafe extern "C" fn default_charset(_: *mut SysFontInfo, _: *mut c_void) -> c_int {
+    1
+}
+
+unsafe extern "C" fn delete_none(_: *mut SysFontInfo, _: *mut c_void) {}
+
+/// The mapper PDFium keeps for the life of the process: static, with plain `extern "C"` functions, so any thread of any isolate or
+/// engine may make PDFium look for a font, and it never goes away. (pdfrx's own was Dart callbacks bound to the isolate that started
+/// it; a second Flutter engine replaced it and PDFium then called into an isolate it did not belong to, or one that had ended, which
+/// the Dart VM answers by aborting the app.) The values are the ones pdfrx's mapper set: version 2, and MapFont, GetFontData,
+/// GetFaceName, GetFontCharset and DeleteFont; Release, EnumFonts and GetFont stay unset.
+static FONT_INFO: StaticFontInfo = StaticFontInfo(SysFontInfo {
+    version: 2,
+    release: None,
+    enum_fonts: None,
+    map_font: Some(no_font),
+    get_font: None,
+    get_font_data: Some(no_font_data),
+    get_face_name: Some(no_face_name),
+    get_font_charset: Some(default_charset),
+    delete_font: Some(delete_none),
+});
+
+static FONTS_ONCE: Once = Once::new();
+
+/// Gives PDFium the process's one font mapper, once. `lib` is the PDFium library the process uses; one more handle on it is kept for
+/// the life of the process, so it is never unloaded (which would drop the mapper PDFium holds).
+fn install_font_mapper(lib: &Library, path: Option<&str>) {
+    FONTS_ONCE.call_once(|| {
+        if let Ok(set) = get::<unsafe extern "C" fn(*mut SysFontInfo)>(lib, "FPDF_SetSystemFontInfo") {
+            let _g = lock();
+            // SAFETY: FONT_INFO is a static with the layout of FPDF_SYSFONTINFO that PDFium keeps a pointer to; it is never changed or freed.
+            unsafe { set(std::ptr::addr_of!(FONT_INFO.0).cast_mut()) };
+        }
+        if let Ok((keep, _)) = open_library(path) {
+            std::mem::forget(keep);
+        }
+    });
+}
+
+/// Starts PDFium in this process if nothing has and installs the process's font mapper (once). Reports where PDFium was found
+/// (`path`, `name` or `process`). Safe to call again, from any thread.
+pub fn install_fonts(path: Option<&str>) -> Result<&'static str> {
+    let (l, from) = Lib::bind(path)?;
+    let init: unsafe extern "C" fn() = get(&l._lib, "FPDF_InitLibrary")?;
+    {
+        let _g = lock();
+        // SAFETY: FPDF_InitLibrary takes no arguments; calling it again when the host already did is allowed.
+        unsafe { init() };
+    }
+    install_font_mapper(&l._lib, path);
+    Ok(from)
 }
 
 /// Whether PDFium can be loaded with these settings, and from where (`path`, `name` or `process`). Nothing stays initialised.
