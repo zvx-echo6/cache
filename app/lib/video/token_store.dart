@@ -23,6 +23,20 @@ class SecureTokenStore implements TokenStore {
   Future<void> delete(String key) => _s.delete(key: key);
 }
 
+/// A store with nothing in it that keeps nothing (a browser's source of keys to send to another device: its keys are on the server).
+class NoTokenStore implements TokenStore {
+  const NoTokenStore();
+
+  @override
+  Future<String?> read(String key) async => null;
+
+  @override
+  Future<void> write(String key, String value) async {}
+
+  @override
+  Future<void> delete(String key) async {}
+}
+
 /// For tests.
 class MemoryTokenStore implements TokenStore {
   final Map<String, String> values = {};
