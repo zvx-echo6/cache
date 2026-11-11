@@ -2220,3 +2220,180 @@ fn the_facts_and_the_view_for_the_browser_come_from_the_packs_and_the_log() {
     assert!(h.get("samebook").is_none());
     assert_eq!(svc.bookshelves_stamp(), json!({"stamp": svc.shelves_stamp()}));
 }
+
+// ---- linked folders and a library Cache builds
+
+fn register_folder(svc: &Arc<BuildService>, lib: &str, id: &str, root: &Path) {
+    let body = json!({"id": id, "label": "Folder", "root": root}).to_string();
+    linked_api::request(svc, "POST", lib, &[], body.as_bytes()).unwrap();
+}
+
+fn linked_items(svc: &BuildService) -> Vec<Item> {
+    lock(&svc.st).items.iter().filter(|i| i.origin == Origin::Linked).cloned().collect()
+}
+
+/// Every file under `root` with its bytes, size and modified time: what "the originals are unchanged" compares.
+fn tree(root: &Path) -> std::collections::BTreeMap<String, (Vec<u8>, u64, std::time::SystemTime)> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let meta = std::fs::metadata(e.path()).unwrap();
+            if meta.is_dir() {
+                stack.push(e.path());
+            } else {
+                out.insert(e.path().strip_prefix(root).unwrap().to_string_lossy().into_owned(), (std::fs::read(e.path()).unwrap(), meta.len(), meta.modified().unwrap()));
+            }
+        }
+    }
+    out
+}
+
+fn files_under(dir: &Path) -> usize {
+    let mut n = 0;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            n += if e.path().is_dir() { files_under(&e.path()) } else { 1 };
+        }
+    }
+    n
+}
+
+#[test]
+fn a_linked_folder_holding_a_book_the_built_library_has_only_relinks_it() {
+    let d = TempDir::new("lk1");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let pdf = book("well", 3, Some("Wells"));
+    add(&svc, &lib, "wells.pdf", &pdf);
+    drain(&svc);
+    svc.publish(&lib).unwrap();
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    // the same content twice: under another name, and in a subfolder
+    let source = d.0.join("linked");
+    std::fs::create_dir_all(source.join("sub")).unwrap();
+    std::fs::write(source.join("same.pdf"), &pdf).unwrap();
+    std::fs::write(source.join("sub/other-name.pdf"), &pdf).unwrap();
+    let before = tree(&source);
+    register_folder(&svc, &lib, "r1", &source);
+    let queued = lock(&svc.st).items.len();
+    let out = linked_api::request(&svc, "POST", &lib, &["check".into()], b"").unwrap();
+    let books = out["report"]["books"].as_array().unwrap();
+    assert_eq!(books.len(), 1, "one book");
+    assert_eq!(books[0]["doc_id"], json!(doc));
+    assert_eq!(books[0]["locations"].as_array().unwrap().len(), 2, "with two places");
+    assert_eq!(lock(&svc.st).items.len(), queued, "nothing was queued");
+    assert!(linked_items(&svc).is_empty());
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(tree(&source), before, "originals untouched");
+}
+
+#[test]
+fn a_new_pdf_in_a_folder_linked_to_a_built_library_is_built_in_place_without_a_copy() {
+    use super::linked_auto::{Auto, AutoConfig};
+    let d = TempDir::new("lk2");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    add(&svc, &lib, "wells.pdf", &book("well", 3, Some("Wells")));
+    drain(&svc);
+    svc.publish(&lib).unwrap();
+    let source = d.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    register_folder(&svc, &lib, "r1", &source);
+    let cfg = AutoConfig { settle_ms: 300, quiet_ms: 100, rescan_ms: 3_600_000, poll_ms: 50, sync_ms: 100, retry_ms: 100 };
+    let mut auto = Auto::new(cfg, super::linked_watch::system_notifier());
+    let turn = |auto: &mut Auto, ms: u64| {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < end {
+            auto.tick(&svc);
+        }
+    };
+    turn(&mut auto, 300);
+    std::fs::write(source.join("tanks.pdf"), book("tank", 3, None)).unwrap();
+    let written = tree(&source);
+    let end = Instant::now() + Duration::from_secs(20);
+    while linked_items(&svc).is_empty() && Instant::now() < end {
+        auto.tick(&svc);
+    }
+    let queued = linked_items(&svc);
+    assert_eq!(queued.len(), 1, "queued by the automatic check, no button");
+    assert_eq!(queued[0].linked.as_ref().unwrap().rel, "tanks.pdf");
+    turn(&mut auto, 1500); // more checks: still one item
+    assert_eq!(linked_items(&svc).len(), 1, "never queued twice");
+    drain(&svc);
+    let built = linked_items(&svc);
+    assert_eq!(built[0].state, S::Done, "{:?}", built[0].error);
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(files_under(&svc.data.join("app/docs/sources").join(&lib)), 1, "no copy of the linked file was kept");
+    assert_eq!(files_under(&svc.packs_dir(&lib)), 2, "but it is indexed");
+    assert_eq!(tree(&source), written, "the original is untouched");
+    // the next check finds the book it now holds: a location, and nothing more queued
+    let out = linked_api::request(&svc, "POST", &lib, &["check".into()], b"").unwrap();
+    let books = out["report"]["books"].as_array().unwrap();
+    assert_eq!(books.len(), 1);
+    assert!(books[0]["doc_id"].is_string() && books[0]["locations"][0]["relative_path"] == json!("tanks.pdf"));
+    assert_eq!(linked_items(&svc).len(), 1);
+}
+
+#[test]
+fn a_linked_pdf_that_is_not_the_one_that_was_checked_is_dropped_not_built() {
+    let d = TempDir::new("lk3");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    add(&svc, &lib, "wells.pdf", &book("well", 3, Some("Wells")));
+    drain(&svc);
+    let source = d.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("x.pdf"), book("tank", 3, None)).unwrap();
+    let source = source.canonicalize().unwrap();
+    let before = tree(&source);
+    let stale = blake3::hash(b"what the file was when it was checked").to_hex().to_string();
+    assert!(svc.enqueue_linked(&lib, &source, "x.pdf", &stale));
+    assert!(!svc.enqueue_linked(&lib, &source, "x.pdf", &stale), "the same file is not queued twice");
+    drain(&svc);
+    assert!(linked_items(&svc).is_empty(), "dropped, to be found again once stable");
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(tree(&source), before);
+}
+
+#[test]
+fn a_book_the_person_deleted_is_never_added_back_from_the_linked_folder() {
+    use super::linked_auto::{Auto, AutoConfig};
+    let d = TempDir::new("lk4");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let pdf = book("well", 3, Some("Wells"));
+    add(&svc, &lib, "wells.pdf", &pdf);
+    drain(&svc);
+    svc.publish(&lib).unwrap();
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let source = d.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("wells.pdf"), &pdf).unwrap();
+    register_folder(&svc, &lib, "r1", &source);
+    linked_api::request(&svc, "POST", &lib, &["check".into()], b"").unwrap(); // relinked
+    assert!(linked_items(&svc).is_empty());
+    // the person deletes the book; its file stays in the folder; the queue's history is gone
+    svc.delete_book(&lib, &doc).unwrap();
+    lock(&svc.st).items.clear();
+    let before = tree(&source);
+    let cfg = AutoConfig { settle_ms: 300, quiet_ms: 100, rescan_ms: 3_600_000, poll_ms: 50, sync_ms: 100, retry_ms: 100 };
+    let mut auto = Auto::new(cfg, super::linked_watch::system_notifier());
+    let end = Instant::now() + Duration::from_millis(2500);
+    while Instant::now() < end {
+        auto.tick(&svc);
+    }
+    assert!(auto.jobs_started >= 1, "an automatic check ran");
+    assert!(lock(&svc.st).items.is_empty(), "nothing was queued for the deleted book's file");
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 0);
+    // a different new PDF is still queued: the guard is about that book's hash only
+    std::fs::write(source.join("tanks.pdf"), book("tank", 3, None)).unwrap();
+    let end = Instant::now() + Duration::from_secs(20);
+    while linked_items(&svc).is_empty() && Instant::now() < end {
+        auto.tick(&svc);
+    }
+    assert_eq!(linked_items(&svc).len(), 1);
+    assert_eq!(linked_items(&svc)[0].linked.as_ref().unwrap().rel, "tanks.pdf");
+    assert_eq!(std::fs::read(source.join("wells.pdf")).unwrap(), pdf);
+    assert_eq!(tree(&source).get("wells.pdf"), before.get("wells.pdf"));
+}

@@ -204,6 +204,16 @@ impl S {
 pub enum Origin {
     Upload,
     Drop,
+    /// A PDF in a linked folder, read in place: never copied, moved or changed (see [`linked_auto`]).
+    Linked,
+}
+
+/// Where a linked PDF is: the registered folder, the path inside it, and the BLAKE3 the check recorded.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LinkedSource {
+    pub root: String,
+    pub rel: String,
+    pub blake3: String,
 }
 
 /// One book in the queue, as it is kept in `queue.json`.
@@ -271,6 +281,9 @@ pub struct Item {
     pub finished_at: Option<String>,
     #[serde(default)]
     pub finished_epoch: Option<u64>,
+    /// For a linked-folder PDF (`Origin::Linked`): where to read it in place.
+    #[serde(default)]
+    pub linked: Option<LinkedSource>,
 }
 
 impl Item {
@@ -306,6 +319,7 @@ impl Item {
             started_at: None,
             finished_at: None,
             finished_epoch: None,
+            linked: None,
         }
     }
 }
@@ -964,10 +978,23 @@ impl BuildService {
 
     /// Read, check, extract, embed and store one book.
     fn process(&self, item: &Item) -> Outcome {
-        let bytes = match std::fs::read(&item.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && item.origin == Origin::Drop => return Outcome::Gone,
-            Err(e) => return Outcome::Failed(format!("The file could not be read: {e}")),
+        let bytes = if item.origin == Origin::Linked {
+            // Read in place, once, through one handle. A file that is still changing, or is not the one that was checked, is
+            // dropped from the queue; the next automatic check finds it again once it is stable.
+            let Some(src) = &item.linked else { return Outcome::Gone };
+            match linked_source::read_stable(Path::new(&src.root), &src.rel, &src.blake3) {
+                Ok(b) => b,
+                Err(why) => {
+                    eprintln!("cache: linked PDF {} not read now ({why}); it will be tried again when it is stable", src.rel);
+                    return Outcome::Gone;
+                }
+            }
+        } else {
+            match std::fs::read(&item.path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && item.origin == Origin::Drop => return Outcome::Gone,
+                Err(e) => return Outcome::Failed(format!("The file could not be read: {e}")),
+            }
         };
         let mut bytes = bytes;
         let mut hash = blake3::hash(&bytes).to_hex().to_string();
@@ -1282,12 +1309,15 @@ impl BuildService {
             }
         };
         book.call_text = call_text;
-        let folder = cls.folder_rel(book.division.as_deref());
-        let dir = root.join(&folder);
-        std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
-        let name = dropdir::unique_name(&dir, &classify::file_name(&book.call_number(), &book.title));
-        write_bytes_atomic(&dir.join(&name), pdf).map_err(|e| io("keeping the PDF", e))?;
-        book.source_rel = Some(format!("{}/{}", folder.to_string_lossy().replace('\\', "/"), name));
+        // A linked original stays where it is: no copy is kept.
+        if item.origin != Origin::Linked {
+            let folder = cls.folder_rel(book.division.as_deref());
+            let dir = root.join(&folder);
+            std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
+            let name = dropdir::unique_name(&dir, &classify::file_name(&book.call_number(), &book.title));
+            write_bytes_atomic(&dir.join(&name), pdf).map_err(|e| io("keeping the PDF", e))?;
+            book.source_rel = Some(format!("{}/{}", folder.to_string_lossy().replace('\\', "/"), name));
+        }
         {
             let w = self.open_work(&item.library_id)?;
             w.upsert_pack(pack).map_err(|e| e.to_string())?;
@@ -1827,7 +1857,7 @@ impl BuildService {
             self.save_queue_locked(&st);
             it
         };
-        if it.state == S::NeedsDecision {
+        if it.state == S::NeedsDecision && it.origin != Origin::Linked {
             // the person leaves the copy out: it waits in Removed like any copy that was not kept
             let why = "Not added: you chose to leave it out";
             if self.to_removed(Path::new(&it.path), &it.file_name, why, if it.origin == Origin::Drop { "drop" } else { "upload" }, &it.library_id).is_err() && it.origin == Origin::Upload {
@@ -2015,6 +2045,7 @@ impl BuildService {
     /// `DELETE /api/build/libraries/{id}/books/{doc}`: the book's points, pack and PDF copy. The PDF the person gave is untouched.
     pub fn delete_book(&self, id: &str, doc: &str) -> Result<Value, ApiErr> {
         let _g = lock(&self.ops);
+        let mut deleted_hashes: Vec<String> = vec![];
         {
             let mut st = lock(&self.st);
             if st.items.iter().any(|i| i.library_id == id && i.state.working() && i.replace.as_deref() == Some(doc)) {
@@ -2022,6 +2053,8 @@ impl BuildService {
             }
             let m = st.libs.iter_mut().find(|l| l.id == id).ok_or_else(|| err(404, "not_found", "no such library"))?;
             let b = m.books.iter().find(|b| b.doc_id == doc).cloned().ok_or_else(|| err(404, "not_found", "no such book"))?;
+            deleted_hashes.push(b.blake3.clone());
+            deleted_hashes.extend(b.original_blake3.clone());
             m.books.retain(|x| x.doc_id != doc);
             m.pending_deletes.push(PendingDelete { doc_id: b.doc_id.clone(), doc_version: b.doc_version, pieces: b.pieces });
             m.dirty = true;
@@ -2035,6 +2068,7 @@ impl BuildService {
             }
             self.save_queue_locked(&st);
         }
+        self.remember_deleted(id, &deleted_hashes);
         self.apply_pending_deletes(id);
         if let Err(e) = self.update_copies(id, doc, None) {
             eprintln!("cache: writing the copies file: {e}");
@@ -2142,6 +2176,43 @@ impl BuildService {
         drop(st);
         self.poke();
         Ok(v)
+    }
+
+    /// The books of a library Cache builds, for a linked folder to match files against: `(blake3, doc_id, version, title)`. Both the
+    /// hash of the file as kept and the hash of the file as it arrived (before compression) are listed. `None` for any other
+    /// library (an imported one), which keeps matching against its own catalogue.
+    pub(crate) fn linked_catalog(&self, lib: &str) -> Option<Vec<(String, String, u32, String)>> {
+        let st = lock(&self.st);
+        let m = st.libs.iter().find(|l| l.id == lib)?;
+        let mut out = vec![];
+        for b in &m.books {
+            out.push((b.blake3.clone(), b.doc_id.clone(), b.doc_version, b.title.clone()));
+            if let Some(o) = &b.original_blake3 {
+                out.push((o.clone(), b.doc_id.clone(), b.doc_version, b.title.clone()));
+            }
+        }
+        Some(out)
+    }
+
+    /// Queue a linked PDF whose hash the library does not hold, to be built in place by the ordinary queue. Nothing is queued if
+    /// the same file (by hash) is already in the queue in any state, so a failed or waiting file is not retried every check.
+    /// Returns whether it was queued.
+    pub(crate) fn enqueue_linked(&self, lib: &str, root: &Path, rel: &str, blake3: &str) -> bool {
+        let path = root.join(rel);
+        if self.was_deleted(lib, blake3) {
+            return false; // the person deleted this book: its file in the folder never brings it back on its own
+        }
+        {
+            let st = lock(&self.st);
+            if st.items.iter().any(|i| i.library_id == lib && i.linked.as_ref().is_some_and(|l| l.blake3 == blake3)) {
+                return false;
+            }
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let name = Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string());
+        let mut item = Item::new(random_hex(), lib.to_string(), path.to_string_lossy().into_owned(), name, size, Origin::Linked);
+        item.linked = Some(LinkedSource { root: root.to_string_lossy().into_owned(), rel: rel.to_string(), blake3: blake3.to_string() });
+        self.enqueue(item).is_ok()
     }
 
     pub(crate) fn has_library(&self, id: &str) -> bool {

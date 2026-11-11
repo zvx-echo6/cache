@@ -9,7 +9,7 @@ use std::{collections::{BTreeMap,BTreeSet},fs,io,path::{Component,Path,PathBuf},
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct RegistryData { pub roots:Vec<RootConfig>, pub books:Vec<LinkedBook> }
 #[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootReport { pub root_id:String, pub paused:bool, pub unavailable:bool, pub complete:bool, pub candidates:usize, pub pending:usize, pub errors:Vec<String>, #[serde(skip)] pub issues:Vec<super::linked_source::RootIssue> }
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct ScanReport { pub roots:Vec<RootReport>, pub books:Vec<LinkedBook> }
-pub struct LinkedRegistry { sidecar:PathBuf, library:PathBuf, data:RegistryData }
+pub struct LinkedRegistry { sidecar:PathBuf, library:PathBuf, data:RegistryData, known_override:Option<Catalog> }
 fn safe_id(s:&str)->bool {!s.is_empty()&&s.len()<=80&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')}
 fn valid_rel(p:&Path)->bool {!p.as_os_str().is_empty()&&p.components().all(|c|matches!(c,Component::Normal(_)))}
 fn hash_ok(s:&str)->bool {s.len()==64&&s.bytes().all(|b|b.is_ascii_hexdigit())}
@@ -37,7 +37,7 @@ if !md.is_file()||path.extension().and_then(|x|x.to_str())!=Some("cdoc"){continu
 }
 impl LinkedRegistry {
  /// Open device-local state under the supplied cache-owned sidecar; use the trusted existing library path.
- pub fn open(sidecar:&Path,library:&Path)->io::Result<Self>{fs::create_dir_all(sidecar)?;if fs::symlink_metadata(sidecar)?.file_type().is_symlink(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"sidecar is a symlink"))}let sidecar=fs::canonicalize(sidecar)?;let library=fs::canonicalize(library)?;if !library.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"library is not a directory"))}let f=sidecar.join("linked-registry.json");if fs::symlink_metadata(&f).map(|m|m.file_type().is_symlink()).unwrap_or(false){return Err(io::Error::new(io::ErrorKind::InvalidInput,"registry file is a symlink"))}let data=if f.exists(){serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)?}else{RegistryData::default()};let mut x=Self{sidecar,library,data};x.validate()?;Ok(x)}
+ pub fn open(sidecar:&Path,library:&Path)->io::Result<Self>{fs::create_dir_all(sidecar)?;if fs::symlink_metadata(sidecar)?.file_type().is_symlink(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"sidecar is a symlink"))}let sidecar=fs::canonicalize(sidecar)?;let library=fs::canonicalize(library)?;if !library.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"library is not a directory"))}let f=sidecar.join("linked-registry.json");if fs::symlink_metadata(&f).map(|m|m.file_type().is_symlink()).unwrap_or(false){return Err(io::Error::new(io::ErrorKind::InvalidInput,"registry file is a symlink"))}let data=if f.exists(){serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)?}else{RegistryData::default()};let mut x=Self{sidecar,library,data,known_override:None};x.validate()?;Ok(x)}
  fn persist(&self)->io::Result<()>{save(&self.sidecar.join("linked-registry.json"),&self.data)}
  fn validate(&mut self)->io::Result<()>{self.data.roots.retain(|r|safe_id(&r.id));let mut ids=BTreeSet::new();self.data.roots.retain(|r|ids.insert(r.id.clone()));if self.data.roots.iter().any(|r|r.exclusions.iter().any(|e|!valid_rel(e))){return Err(io::Error::new(io::ErrorKind::InvalidData,"invalid exclusion"))}self.data.books.retain(|b|hash_ok(&b.blake3));for b in &mut self.data.books{b.blake3.make_ascii_lowercase();b.locations.retain(|l|safe_id(&l.root_id)&&valid_rel(Path::new(&l.relative_path))&&hash_ok(&l.blake3));}Ok(())}
  fn canonical_root(&self,root:&Path)->io::Result<PathBuf>{let p=fs::canonicalize(root)?;if !p.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"source is not a directory"))}let _=fs::read_dir(&p)?;if self.sidecar.starts_with(&p)||p.starts_with(&self.sidecar)||p.starts_with(&self.library)||self.library.starts_with(&p){return Err(io::Error::new(io::ErrorKind::InvalidInput,"source overlaps library or cache sidecar"))}Ok(p)}
@@ -72,7 +72,7 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
  where
      F: FnMut(&str, usize, usize, u64, usize, &ScanState),
  {
-     let known = catalog(&self.library)?;
+     let known = match &self.known_override { Some(known) => known.clone(), None => catalog(&self.library)? };
      let when = ms();
      let mut reports = vec![];
      for index in 0..self.data.roots.len() {
@@ -159,6 +159,9 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
      self.persist()?;
      Ok(ScanReport { roots: reports, books: self.data.books.clone() })
  }
+ /// For a library Cache builds: use the builder's own books, each `(blake3, doc_id, version, title)`, as the catalog instead of
+ /// an imported library's `documents.tsv`. A hash that two different documents hold is ambiguous, as for an imported library.
+ pub fn use_builder_books(&mut self,books:impl IntoIterator<Item=(String,String,u32,String)>){let mut rows:BTreeMap<String,Vec<(String,u32,String)>>=BTreeMap::new();for(h,id,v,t)in books{rows.entry(h.to_ascii_lowercase()).or_default().push((id,v,t))}let mut out=Catalog::new();for(h,rs)in rows{let ids:BTreeSet<_>=rs.iter().map(|r|r.0.clone()).collect();if ids.len()!=1{out.insert(h,None);continue}let best=rs.iter().max_by_key(|r|r.1).unwrap();out.insert(h,Some((best.0.clone(),best.1,if best.2.is_empty(){None}else{Some(best.2.clone())})))}self.known_override=Some(out)}
  /// The registry as saved, read without validating or touching anything (for the automatic-check scheduler).
  pub fn read_saved(sidecar:&Path)->io::Result<RegistryData>{let f=sidecar.join("linked-registry.json");if !f.is_file(){return Ok(RegistryData::default())}serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)}
  /// Local configuration includes absolute roots; never expose this in a shared response.

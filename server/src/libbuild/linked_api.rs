@@ -202,7 +202,7 @@ fn attached(file: &JobFile, scope: &Scope, synchronous: bool) -> Result<Option<C
 }
 
 fn start(
-    service: &BuildService,
+    service: &Arc<BuildService>,
     path: &Path,
     root_id: Option<String>,
     legacy: Option<Sender<CheckResult>>,
@@ -213,7 +213,7 @@ fn start(
 /// Start (or attach to) a check. `auto_settle_ms` is `Some` for an automatic check: the settle rule is
 /// that delay, and the check never sleeps inside the job (the scheduler comes back after the delay).
 pub(super) fn start_with(
-    _service: &BuildService,
+    service: &Arc<BuildService>,
     path: &Path,
     root_id: Option<String>,
     legacy: Option<Sender<CheckResult>>,
@@ -282,8 +282,9 @@ pub(super) fn start_with(
     drop(guard);
     let worker_path = path.to_path_buf();
     let worker_rt = rt.clone();
+    let worker_service = service.clone();
     if let Err(e) = thread::Builder::new().name("linked-folder-check".into())
-        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy, auto_settle_ms))
+        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy, auto_settle_ms, worker_service))
     {
         finish_error(&sidecar, &rt, &e);
         return Err(error(500, "could not start linked-folder check"));
@@ -418,12 +419,14 @@ fn run_check(
     mut registry: LinkedRegistry,
     legacy: Option<Sender<CheckResult>>,
     auto_settle_ms: Option<u64>,
+    service: Arc<BuildService>,
 ) {
     let sidecar = path.join(".local");
+    let library = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let result = {
         let operation = op_lock(&path);
         let _guard = operation.lock().unwrap_or_else(|e| e.into_inner());
-        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry, auto_settle_ms);
+        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry, auto_settle_ms, &service, &library);
         if let Err(e) = &result {
             finish_error(&sidecar, &rt, e);
         }
@@ -442,8 +445,19 @@ fn run_check_locked(
     root_id: Option<&str>,
     registry: &mut LinkedRegistry,
     auto_settle_ms: Option<u64>,
+    service: &BuildService,
+    library: &str,
 ) -> io::Result<Value> {
     let settle_ms = auto_settle_ms.unwrap_or(2_000);
+    // A library Cache builds is matched against its own books (the builder keeps no `documents.tsv`), and files whose hash it
+    // does not hold are queued below. An imported library keeps matching against its catalogue and queues nothing.
+    let built = service.linked_catalog(library).is_some();
+    let refresh_books = |registry: &mut LinkedRegistry| {
+        if let Some(books) = service.linked_catalog(library) {
+            registry.use_builder_books(books);
+        }
+    };
+    refresh_books(&mut *registry);
     {
         let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = state.active.as_mut() {
@@ -462,6 +476,7 @@ fn run_check_locked(
         let bases = rt.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref()
             .map(progress_bases).unwrap_or_default();
         progress.checkpoint_seen.clear();
+        refresh_books(&mut *registry);
         report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases, settle_ms)?;
     }
     let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
@@ -472,6 +487,17 @@ fn run_check_locked(
         .map(|root| root.root_id.as_str()).collect();
     let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
         .any(|location| location.available && scanned.contains(location.root_id.as_str()))).collect();
+    if built {
+        // Match first (a book the library holds is only relinked, above); only a hash the library does not hold is queued, once,
+        // and built in place by the ordinary queue. The builder drops a file that is no longer the one that was checked.
+        for book in books.iter().filter(|book| book.doc_id.is_none()) {
+            let place = book.locations.iter().find(|l| l.available && scanned.contains(l.root_id.as_str()));
+            let root = place.and_then(|l| registry.local_config().roots.iter().find(|r| r.id == l.root_id));
+            if let (Some(l), Some(root)) = (place, root) {
+                service.enqueue_linked(library, &root.path, &l.relative_path, &book.blake3);
+            }
+        }
+    }
     let ids: HashSet<_> = books.iter().filter_map(|book| book.doc_id.as_deref()).collect();
     let locations = books.iter().filter(|book| book.doc_id.is_some()).map(|book|
         book.locations.iter().filter(|location| location.available && scanned.contains(location.root_id.as_str())).count()
@@ -486,6 +512,11 @@ fn run_check_locked(
         if successful {
             job.last_successful_at = job.finished_at;
         }
+        let covered: Vec<(String, bool)> = report.roots.iter().filter(|root| !root.paused).map(|root| (
+            root.root_id.clone(),
+            root.complete && !root.unavailable && root.issues.is_empty() && root.pending == 0,
+        )).collect();
+        linked_checks::record_folder_checks(&mut completed, &covered, job.finished_at.unwrap_or_else(now));
         job.counts.roots_seen = Some(report.roots.len());
         job.counts.files_seen = Some(job.counts.files_seen.unwrap_or(0));
         job.counts.files_hashed = Some(job.counts.files_hashed.unwrap_or(0));
@@ -511,7 +542,9 @@ fn finish_error(sidecar: &Path, rt: &Arc<Mutex<JobFile>>, failure: &io::Error) {
         job.state = "failed".into();
         job.stage = None;
         job.finished_at = Some(now());
-        job.error = Some(json!({"code": issue_code(failure), "message": failure.to_string()}));
+        // The operating system's own text goes to the log; the browser is given the reason code it already has words for.
+        eprintln!("cache: linked-folder check failed: {failure}");
+        job.error = Some(json!({"code": issue_code(failure), "message": issue_code(failure)}));
         state.latest = Some(job);
         if let Err(e) = persist(sidecar, &state) {
             state.state_error = Some(json!({"code": "io_error", "message": e.to_string()}));
@@ -523,7 +556,7 @@ fn job_status(sidecar: &Path) -> Result<Value, ApiErr> {
     let rt = runtime(sidecar);
     let state = rt.lock().unwrap_or_else(|e| e.into_inner());
     healthy(&state)?;
-    Ok(json!({"active": state.active, "latest": state.latest}))
+    Ok(json!({"active": state.active, "latest": state.latest, "folders": state.folders}))
 }
 
 fn validate_preview(data: &Path, input: Preview) -> Result<(PathBuf, Vec<PathBuf>), ApiErr> {
@@ -552,7 +585,7 @@ pub fn preview(service: &BuildService, body: &[u8]) -> Result<Value, ApiErr> {
 }
 
 pub fn request(
-    service: &BuildService,
+    service: &Arc<BuildService>,
     method: &str,
     library: &str,
     rest: &[String],
@@ -574,7 +607,7 @@ pub fn request(
             Ok(json!({
                 "local_config": config,
                 "capabilities": {
-                    "reuse_existing": true, "index_new_pdfs": false,
+                    "reuse_existing": true, "index_new_pdfs": service.has_library(library),
                     "automatic_checks": true, "sync_locations": false, "open_original": false
                 }
             }))
@@ -613,7 +646,7 @@ pub fn request(
             let (sender, receiver) = mpsc::channel();
             start(service, &target, None, Some(sender))?;
             let report = receive_report(receiver)?;
-            Ok(json!({"report": report, "indexing_new_pdfs": false}))
+            Ok(json!({"report": report, "indexing_new_pdfs": service.has_library(library)}))
         }
         ("POST", [id, action]) if action == "pause" || action == "resume" => {
             let paused = action == "pause";

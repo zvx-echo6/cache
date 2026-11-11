@@ -232,7 +232,7 @@ impl Auto {
     }
 
     /// One turn: refresh the folder list now and then, wait for changes (up to `poll_ms`), and start what is due.
-    pub fn tick(&mut self, svc: &BuildService) {
+    pub fn tick(&mut self, svc: &Arc<BuildService>) {
         let now = self.now();
         if self.last_sync.is_none_or(|at| now.saturating_sub(at) >= self.cfg.sync_ms) {
             self.sync(svc, now);
@@ -499,6 +499,10 @@ mod tests {
         assert!(rig.pump(&mut auto, 20, |r| r.book_at("new.pdf").is_some_and(|b| b.doc_id.as_deref() == Some("doc-one") && !b.pending_indexing)));
         // the PDF the library does not know yet is recorded, still waiting to be indexed, never half-way
         assert!(rig.pump(&mut auto, 20, |r| r.book_at("not-in-catalog.pdf").is_some_and(|b| b.doc_id.is_none() && b.pending_indexing)));
+        // an imported library only matches: the unknown PDF is not queued for building, and the library says so
+        assert!(super::super::lock(&rig.svc.st).items.is_empty());
+        let caps = linked_api::request(&rig.svc, "GET", "example", &[], b"").unwrap();
+        assert_eq!(caps["capabilities"]["index_new_pdfs"], json!(false));
         // no check button, no manual job: the scheduler started the checks
         assert!(auto.jobs_started >= 1);
         // originals: same bytes, sizes and times as when they were written, and nothing else appeared in the folder
