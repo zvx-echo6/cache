@@ -14,6 +14,7 @@ import '../../notebook/sync/folder_access.dart' show openSyncFolder;
 import '../../notebook/sync/saf_stream_shim.dart';
 import '../../platform/app_log.dart';
 import '../../platform/battery.dart';
+import '../../platform/proc_diag.dart';
 import '../../search/index_scheduler.dart';
 import '../../search/index_throttle.dart';
 import '../../sources/libraries_state.dart';
@@ -129,6 +130,10 @@ class AddPdfJob {
   int pagesDone = 0;
   int pieces = 0;
   int piecesDone = 0;
+
+  /// Diagnostic only: wall and CPU time of the core's step now, and of the pieces since the last batch (logged by [_status]).
+  StepClock? stepClock;
+  StepClock? pieceClock;
 
   /// Scanned pages asked for so far, and read and handed back; [scanInBatch] are read in the batch now being read.
   int scans = 0;
@@ -773,6 +778,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   void _status(AddPdfJob job, Map<String, dynamic> s) {
     final before = job.state;
+    final piecesBefore = job.piecesDone;
     job.state = (s['state'] ?? job.state) as String;
     final p = (s['progress'] as Map?)?.cast<String, dynamic>();
     if (p != null) {
@@ -788,7 +794,16 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
         if (page != null && job._scanPages.add(page)) job.scans++;
       }
     }
+    final clock = job.stepClock ??= StepClock();
+    if (before == job.state && job.state == 'embedding' && job.piecesDone != piecesBefore) {
+      logInfo('Add PDF timing: pieces ${job.piecesDone} of ${job.pieces} embedded, last batch ${(job.pieceClock ?? clock).took()}', job: job.key);
+      job.pieceClock = StepClock();
+    }
     if (before != job.state) {
+      logInfo('Add PDF timing: step $before took ${clock.took()}', job: job.key);
+      job
+        ..stepClock = StepClock()
+        ..pieceClock = StepClock();
       logInfo('Add PDF: ${job.state} (pages ${job.pagesDone} of ${job.pages}, pieces ${job.piecesDone} of ${job.pieces})', job: job.key);
       unawaited(save());
     }
