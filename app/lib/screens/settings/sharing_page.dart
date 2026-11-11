@@ -589,15 +589,17 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
     try {
       final c = await s.checkVersion(widget.peer);
       // 'busy': a check of this device is already going (the button says Checking…), so nothing more to say.
-      if (mounted && c != 'busy') say(
-        context,
-        switch (c) {
-          'ok' => 'Versions match. Syncing with $name starts again.',
-          'unreachable' || 'unknown' => 'Could not reach $name.',
-          'network_off' => 'Sync is paused: no network it may use.',
-          _ => 'Still a different version.',
-        },
-      );
+      if (mounted && c != 'busy') {
+        say(
+          context,
+          switch (c) {
+            'ok' => 'Versions match. Syncing with $name starts again.',
+            'unreachable' || 'unknown' => 'Could not reach $name.',
+            'network_off' => 'Sync is paused: no network it may use.',
+            _ => 'Still a different version.',
+          },
+        );
+      }
     } catch (e) {
       if (mounted) say(context, '$e');
     } finally {
