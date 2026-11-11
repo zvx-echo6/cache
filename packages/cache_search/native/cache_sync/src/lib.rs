@@ -61,6 +61,10 @@ const STALL: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// How long a link made by showing a code may wait for the other device to show that it holds the link too, before it is
+/// removed here ([`Peer::unconfirmed`]). Four times the life of a code: the other device normally asks for the file list
+/// within seconds of linking, and an hour leaves room for one that is busy or briefly out of reach.
+const CONFIRM_WINDOW: Duration = Duration::from_secs(4 * LINK_WINDOW.as_secs());
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
 
@@ -205,6 +209,11 @@ struct Peer {
     /// the device announces a different one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     announced: Option<String>,
+    /// Set on the device that showed the link code, until the other device has shown that it holds the link too: its answer to
+    /// the code may never have reached it, and then it does not know it is linked. Absent once confirmed, on the device that
+    /// read the code, and in files saved by older versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unconfirmed: bool,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -460,6 +469,9 @@ struct Inner {
     stop: AtomicBool,
     /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
     settle_again: Arc<AtomicBool>,
+    /// Since when this run has seen each link that is not yet confirmed ([`Peer::unconfirmed`]), by device. Counted by this
+    /// run's own clock, so a wrong or changing date on the device cannot remove a link early; a restart starts the wait again.
+    unconfirmed_since: Mutex<HashMap<String, Instant>>,
     /// Files dated in the future (a device with a wrong clock), by share then path: the size and modification time each was
     /// last seen with, and since when. Their date cannot say whether they are still being written, so they count as settled
     /// once they have stayed the same for [`SETTLE`]. In memory only; an entry goes when its file settles, changes or goes.
@@ -1232,6 +1244,61 @@ impl Inner {
         modes.contains(&mode)
     }
 
+    /// The linked device `peer` has shown that it holds the link too: the link is no longer waiting ([`Peer::unconfirmed`]).
+    fn confirm_peer(&self, peer: &str) {
+        let changed = {
+            let mut sv = self.saved.lock().unwrap();
+            sv.peers.iter_mut().find(|p| p.id == peer).map(|p| std::mem::take(&mut p.unconfirmed)).unwrap_or(false)
+        };
+        if changed {
+            self.unconfirmed_since.lock().unwrap().remove(peer);
+            let _ = self.save();
+        }
+    }
+
+    /// How long a link may stay unconfirmed ([`CONFIRM_WINDOW`]).
+    fn confirm_window(&self) -> Duration {
+        #[cfg(feature = "test-hooks")]
+        if let Some(ms) = std::fs::read_to_string(self.dir.join("confirm-window-ms")).ok().and_then(|v| v.trim().parse().ok()) {
+            // A test's own, shorter wait: the milliseconds in `<dir>/confirm-window-ms`.
+            return Duration::from_millis(ms);
+        }
+        CONFIRM_WINDOW
+    }
+
+    /// Removes the links made here by showing a code that the other device has not confirmed in time: it never learned it was
+    /// linked, so the entry here would stay for ever as a device that never answers. A confirmed link is never touched.
+    fn drop_unconfirmed(&self) {
+        let window = self.confirm_window();
+        let mut gone: Vec<Peer> = Vec::new();
+        {
+            let mut sv = self.saved.lock().unwrap();
+            let mut since = self.unconfirmed_since.lock().unwrap();
+            since.retain(|id, _| sv.peers.iter().any(|p| p.unconfirmed && p.id == *id));
+            let now = Instant::now();
+            sv.peers.retain(|p| {
+                if !p.unconfirmed || now.duration_since(*since.entry(p.id.clone()).or_insert(now)) < window {
+                    return true;
+                }
+                gone.push(p.clone());
+                false
+            });
+        }
+        if gone.is_empty() {
+            return;
+        }
+        for p in &gone {
+            if let Ok(k) = p.id.parse::<EndpointId>() {
+                self.allowed.write().unwrap().remove(&k);
+            }
+            self.run.lock().unwrap().peers.remove(&p.id);
+            self.secrets.lock().unwrap().remove(&p.id);
+            self.received.lock().unwrap().remove(&p.id);
+            self.note(format!("{} did not finish linking with this device, so the link was removed. Link the two again to connect them.", p.name));
+        }
+        let _ = self.save();
+    }
+
     /// The link as `peer` last set it, when it should replace the copy here (see [`link_replaces`]).
     fn adopt_link(&self, peer: &str, theirs: Link) {
         let changed = {
@@ -1335,6 +1402,7 @@ impl Inner {
             self.run.lock().unwrap().paused = Some("Sync is paused: no network it may use".into());
             return;
         }
+        self.drop_unconfirmed();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
@@ -1344,6 +1412,11 @@ impl Inner {
             let res = self.fetch_index(&p.id).await;
             let mut asks = None;
             let mut learned = None;
+            // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
+            // enough: a device still waiting for the answer to a code already lets this one in.)
+            if p.unconfirmed && res.as_ref().map(|(idx, _)| idx.link.is_some()).unwrap_or(false) {
+                self.confirm_peer(&p.id);
+            }
             {
                 let mut run = self.run.lock().unwrap();
                 let st = run.peers.entry(p.id.clone()).or_default();
@@ -1851,7 +1924,8 @@ impl ProtocolHandler for PairProto {
         };
         let reply = if let (true, Some(h)) = (ok, hello) {
             let id = conn.remote_id();
-            add_peer(inner, &id.to_string(), &h.name);
+            // Not confirmed until the other device comes back: this answer may never reach it.
+            add_peer(inner, &id.to_string(), &h.name, true);
             inner.note(format!("Linked with {}", h.name));
             inner.wake.notify_one();
             json!({"ok": true, "name": inner.saved.lock().unwrap().name})
@@ -1865,12 +1939,14 @@ impl ProtocolHandler for PairProto {
     }
 }
 
-fn add_peer(inner: &Inner, id: &str, name: &str) {
+fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()) });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
+    // A link made again waits afresh, whatever an earlier one with the same device left.
+    inner.unconfirmed_since.lock().unwrap().remove(id);
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
     }
@@ -1892,6 +1968,8 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
+        // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
+        self.0.confirm_peer(&peer);
         if ask == b"secrets" {
             // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
             let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
@@ -2034,6 +2112,7 @@ impl SyncEngine {
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
+            unconfirmed_since: Mutex::new(HashMap::new()),
             settling: Mutex::new(HashMap::new()),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
@@ -2121,7 +2200,7 @@ impl SyncEngine {
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
-                add_peer(inner, &peer.to_string(), &pname);
+                add_peer(inner, &peer.to_string(), &pname, false);
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
@@ -2487,6 +2566,7 @@ impl SyncEngine {
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
+                    "unconfirmed": p.unconfirmed,
                 })
             })
             .collect();
@@ -2659,7 +2739,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()) }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
     }
 
     #[test]
