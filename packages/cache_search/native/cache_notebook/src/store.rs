@@ -263,14 +263,16 @@ fn attached_of(c: &Connection, sql_where: &str, arg: &str) -> Result<Vec<(String
     Ok(r)
 }
 
-/// An entry's app properties: `{"color"?: "<name>", "on_map"?: bool}`. A place's marker colour (a name the app knows, letters
-/// only) and whether it is shown on the map (absent = shown). Not exported to other apps' properties.
+/// An entry's app properties: `{"color"?: "<name>", "icon"?: "<id>", "on_map"?: bool}`. A place's marker colour (a name the app
+/// knows, letters only), its own map icon (an id the app knows; absent = its notebook's) and whether it is shown on the map
+/// (absent = shown). Not exported to other apps' properties.
 fn parse_props(v: Option<&Value>) -> Result<Option<String>> {
     let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(None) };
     let o = v.as_object().ok_or_else(|| Error::bad("props must be an object"))?;
     for (k, x) in o {
         let ok = match k.as_str() {
             "color" => x.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_lowercase())),
+            "icon" => x.as_str().is_some_and(crate::def::valid_icon),
             "on_map" => x.is_boolean(),
             _ => return Err(Error::bad(format!("props.{k}: not allowed"))),
         };
@@ -305,7 +307,7 @@ fn nb_row(r: &Row) -> rusqlite::Result<(NotebookRow, String)> {
             template: r.get(1)?,
             private: r.get::<_, i64>(2)? != 0,
             map: r.get::<_, i64>(3)? != 0,
-            def: NotebookDef { meta: vec![], name: String::new(), due_every: None, shape: Map::new(), fields: vec![] },
+            def: NotebookDef { meta: vec![], name: String::new(), due_every: None, shape: Map::new(), fields: vec![], icon: None, color: None },
             template_ref: r.get(5)?,
             last_used: r.get(6)?,
             created: r.get(7)?,

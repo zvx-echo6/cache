@@ -60,6 +60,7 @@ import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
 import 'notebook/media.dart' show storePhoto;
 import 'notebook/sync/connections.dart';
+import 'screens/notebooks/icon_picker.dart' show MapIconSetup;
 import 'screens/pin_screen.dart';
 import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
@@ -643,7 +644,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
       notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
-      shareAvailable: () => sharing.enabled);
+      shareAvailable: () => sharing.enabled, icons: MapIconSetup.of(maps));
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,

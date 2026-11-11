@@ -31,7 +31,10 @@ import '../nav/overview/route_overview.dart';
 import '../nav/ui/elevation_dock.dart';
 import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
+import '../notebook/map_icons.dart';
 import '../notebook/notebook_map.dart';
+import '../notebook/pin_image.dart';
+import '../notebook/place_style.dart';
 import '../notebook/notebook_model.dart';
 import '../notebook/notebook_state.dart';
 import '../notebook/notebook_text.dart';
@@ -286,6 +289,11 @@ class _MapsScreenState extends State<MapsScreen> {
     if (c == null) return;
     _styleReady = true;
     _keepOnline(c);
+    final tactical = widget.themeId == CacheThemeId.tactical;
+    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical);
+    try {
+      await images.ensure(kRepeaterIcon, mapIcon(kRepeaterIcon).icon, repeaterTint(tactical: tactical));
+    } catch (_) {}
     try {
       final p = _palette;
       await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));
@@ -478,6 +486,9 @@ class _MapsScreenState extends State<MapsScreen> {
   int _notebookSig = -1;
   List<NbEntry> _pins = const [];
 
+  /// The pin images the loaded style has (a new style has none).
+  PinImages? _pinImages;
+
   /// The notebooks' pins follow their entries and map switches.
   Future<void> _pushNotebooks() async {
     final nb = widget.notebooks;
@@ -487,7 +498,16 @@ class _MapsScreenState extends State<MapsScreen> {
     try {
       await nb.start();
       _pins = await nb.pins();
-      await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins));
+      // Each pin's image (its style, icon and colour) is drawn once and added to the style; the layer names it per feature.
+      final images = _pinImages;
+      final names = <String, String>{};
+      if (images != null) {
+        for (final e in _pins) {
+          final look = PinLook.of(e, nb.notebook(e.notebookId), tactical: widget.themeId == CacheThemeId.tactical);
+          names[e.id] = await images.ensure(look.icon.id, look.glyph, look.tint);
+        }
+      }
+      await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
     } catch (_) {}
   }
 
@@ -698,7 +718,18 @@ class _MapsScreenState extends State<MapsScreen> {
         const RingItem(id: 'measure', label: 'Measure', icon: Icons.straighten),
       ];
     }
-    final all = [for (final n in widget.notebooks?.notebooks ?? const <Notebook>[]) RingItem(id: n.id, label: n.name, icon: _bookIcon(n))];
+    final all = [
+      for (final n in widget.notebooks?.notebooks ?? const <Notebook>[])
+        RingItem(
+          id: n.id,
+          label: n.name,
+          icon: _bookIcon(n),
+          leading: SizedBox(
+            height: 24,
+            child: PinGlyph(icon: mapIconOrTemplate(n.def.icon ?? defaultNotebookIcon(n)).icon, tint: pinTint(context, markerColor(n.def.color).color), style: maps.pinStyle, size: 24),
+          ),
+        ),
+    ];
     return ringPage(all, r.page);
   }
 
