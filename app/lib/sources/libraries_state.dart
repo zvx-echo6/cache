@@ -38,7 +38,7 @@ const String kGuideVersion = '2026-11-11';
 /// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
 /// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
 /// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index'];
+const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without

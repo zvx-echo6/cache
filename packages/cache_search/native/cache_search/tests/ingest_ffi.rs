@@ -499,3 +499,118 @@ fn a_classifier_trained_on_another_embedder_is_refused_and_the_book_goes_to_unso
     assert_eq!(probe(json!({"engines": {"classifier": good}}))["classifier"], json!({"ok": true, "version": 1}));
     assert_eq!(probe(json!({}))["classifier"]["ok"], false);
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Add PDF after the keyword index was sealed into a snapshot (the seal removes the library's old `index` folder)
+
+mod sealed {
+    use super::*;
+    use cache_search::ffi::*;
+    use cache_search::handle::Handle;
+    use std::ffi::{c_char, CStr, CString};
+
+    fn take(p: *mut c_char) -> Option<String> {
+        if p.is_null() {
+            return None;
+        }
+        let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
+        unsafe { cs_free_string(p) };
+        Some(s)
+    }
+
+    fn cstr(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+
+    fn status(h: *mut Handle) -> Value {
+        serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap()
+    }
+
+    pub fn status_of(h: *mut Handle) -> Value {
+        status(h)
+    }
+
+    pub fn open(lib: &Path, indexes: &Path) -> *mut Handle {
+        let src = json!({"kind": "library", "path": lib.join("shard").to_str().unwrap(), "index_dir": lib.join("index").to_str().unwrap(), "settings": settings()});
+        let cfg = cstr(&json!({"sources": [src], "indexes_dir": indexes.to_str().unwrap()}).to_string());
+        let h = unsafe { cs_open(cfg.as_ptr()) };
+        assert!(!h.is_null(), "cs_open failed: {:?}", take(unsafe { cs_last_error(std::ptr::null_mut()) }));
+        let t0 = std::time::Instant::now();
+        while !status(h)["sources"].as_array().unwrap().iter().all(|s| s["opening"] == false) {
+            assert!(t0.elapsed().as_secs() < 120, "the library did not open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h
+    }
+
+    pub fn until_snapshot(h: *mut Handle) {
+        let t0 = std::time::Instant::now();
+        while status(h)["sources"][0]["index"]["location"] != "snapshot" {
+            assert!(t0.elapsed().as_secs() < 60, "no snapshot: {}", status(h));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    pub fn seal(indexes: &Path) -> Value {
+        let params = json!({"indexes_dir": indexes.to_str().unwrap(), "kind": "library", "source_id": "mine"});
+        let j = unsafe { cs_job_start(cstr("index_seal").as_ptr(), cstr(&params.to_string()).as_ptr()) };
+        assert!(!j.is_null(), "index_seal did not start: {:?}", take(unsafe { cs_last_error(std::ptr::null_mut()) }));
+        let t0 = std::time::Instant::now();
+        loop {
+            let p: Value = serde_json::from_str(&take(unsafe { cs_job_progress(j) }).unwrap()).unwrap();
+            if p["state"] != "running" {
+                unsafe { cs_job_free(j) };
+                return p;
+            }
+            assert!(t0.elapsed().as_secs() < 60);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    pub fn found(h: *mut Handle, word: &str) -> usize {
+        let r = take(unsafe { cs_search(h, cstr(word).as_ptr(), cstr(r#"{"k": 20}"#).as_ptr()) }).expect("search result");
+        let v: Value = serde_json::from_str(&r).unwrap();
+        v["results"].as_array().map(|a| a.len()).unwrap_or(0)
+    }
+
+    pub fn close(h: *mut Handle) {
+        unsafe { cs_close(h) };
+    }
+}
+
+/// The device sealed the library's keyword index into a snapshot, which removes `index/`. The next books added must still be found
+/// by their words (the add used to extend only an `index/` folder, which was gone, so they were silently left out).
+#[test]
+fn books_added_after_the_keyword_index_was_sealed_are_found_by_their_words() {
+    let tmp = TempDir::new("sealed-add");
+    let lib = make_library(&tmp.0);
+    let svc = service();
+    add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
+    let idx = lib.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    let cfg = settings();
+    let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &idx, heap_mb: 15, checkpoint_docs: 1000 };
+    build_library_index(&p, &|_, _| {}, &|| false).unwrap();
+
+    let indexes = tmp.0.join("indexes");
+    let h = sealed::open(&lib, &indexes);
+    let done = sealed::seal(&indexes);
+    assert_eq!(done["state"], "done", "{done}");
+    sealed::until_snapshot(h);
+    assert_eq!(sealed::found(h, "quasar") > 0, true);
+    sealed::close(h);
+
+    // the sealed library takes two books one after the other, and each is found, with the first still found
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_snapshot(h);
+    assert!(sealed::found(h, "nebula") > 0, "the first book added after the seal is found");
+    sealed::close(h);
+    add_book(&svc, &tmp.0, &lib, "Pulsar Guide", "pulsar", 5);
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_snapshot(h);
+    assert!(sealed::found(h, "pulsar") > 0, "the second book added after the seal is found");
+    assert!(sealed::found(h, "nebula") > 0 && sealed::found(h, "quasar") > 0, "the earlier books still are");
+    sealed::close(h);
+    no_leftovers(&lib);
+}

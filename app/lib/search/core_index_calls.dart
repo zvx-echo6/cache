@@ -158,7 +158,8 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     logInfo('Index job $key starts (${need.seal ? 'index_seal' : 'index_source'})', job: key);
     steps[key] = 'Starting';
     return CoreIndexRun(job, key, progress, pulse: pulse, steps: steps, poll: poll, onError: (code) {
-      if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
+      // A seal that cannot be made here (missing or stale index, or the files cannot be moved: io) is not tried again this session.
+      if (need.seal && (code == 'index_missing' || code == 'index_stale' || code == 'io')) _skip.add(key);
       if (code == 'busy') _backOff(key);
     }, onDone: () {
       _later.remove(key);
@@ -227,7 +228,8 @@ class CoreIndexRun implements IndexRun {
       }
       if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
       if (p.state == JobState.done) onDone?.call();
-      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}', job: key);
+      // The core's own words for a failure (they can name folders, so the log shows them from Detailed).
+      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}', detail: p.errorMessage, job: key);
       _end(p.state == JobState.done);
     } catch (e) {
       logError('Index job $key', error: e, job: key);

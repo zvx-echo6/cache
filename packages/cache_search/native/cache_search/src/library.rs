@@ -1032,8 +1032,11 @@ impl LibSlot {
             return Ok(self.snap.ready().map(|s| &s.index));
         }
         let IndexState::Done(meta) = self.legacy_state() else {
-            self.kw = None;
-            return Ok(None);
+            // A seal that moved the index away (where links are refused) leaves the open index serving until the snapshot is ready.
+            if !(self.kw.is_some() && self.snap.opening()) {
+                self.kw = None;
+            }
+            return Ok(self.kw.as_ref());
         };
         let dir = self.index_dir.clone().expect("done implies index_dir");
         if self.kw.as_ref().map(|o| o.is_outdated(&dir)).unwrap_or(true) {

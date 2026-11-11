@@ -1301,3 +1301,131 @@ fn a_library_index_built_on_one_device_is_used_on_another() {
     assert!(!root.join("b-old-place").exists());
     unsafe { cs_close(h) };
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Sealing across volumes (Android: libraries on the app's external storage, the indexes folder on its internal storage)
+
+/// A folder on another volume than the temp folder, or None (the test is then skipped): `/dev/shm` on Linux, else the folder named
+/// by CS_TEST_OTHER_VOLUME (a folder on another drive).
+fn other_volume(name: &str) -> Option<PathBuf> {
+    let base = match std::env::var("CS_TEST_OTHER_VOLUME") {
+        Ok(v) if !v.is_empty() => PathBuf::from(v),
+        _ => PathBuf::from("/dev/shm"),
+    };
+    if !base.is_dir() || cache_search::idxsnap::same_volume(&std::env::temp_dir(), &base) {
+        eprintln!("skipped: no other volume ({})", base.display());
+        return None;
+    }
+    let p = base.join(format!("cs-xvol-{}-{}", std::process::id(), name));
+    let _ = std::fs::remove_dir_all(&p);
+    std::fs::create_dir_all(&p).unwrap();
+    Some(p)
+}
+
+fn seal_params(indexes: &Path) -> Value {
+    json!({"indexes_dir": indexes.to_str().unwrap(), "kind": "library", "source_id": "t@1"})
+}
+
+/// The library's old index is on one volume and the app's indexes folder on another: the seal must not copy and must not fail. The
+/// snapshot is made beside the old index (one volume), the other volume's indexes folder gets nothing, and search goes on.
+#[test]
+fn a_library_is_sealed_when_its_indexes_folder_is_on_another_volume() {
+    let Some(far) = other_volume("seal") else { return };
+    let f = make_fixture("xvol-seal");
+    let root = f._tmp.0.clone();
+    let legacy = root.join("kw_idx");
+    let mut st = settings(default_leave_out(), true);
+    st["version"] = json!("1");
+    let mut p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300});
+    p["index_dir"] = json!(legacy.to_str().unwrap());
+    assert_eq!(run_job("index_library", p)["state"], "done");
+    let indexes = far.join("indexes");
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    let s = status(h)["sources"][0].clone();
+    assert_eq!(s["index"]["needs_seal"], true, "{s}");
+    let before = addrs(&ksearch(h, "xylophonic", 5));
+    assert_eq!(before, vec!["lib:t/1234"]);
+
+    // the index is open in the handle, as it is in the app, and the seal still works
+    let p = run_job("index_seal", seal_params(&indexes));
+    assert_eq!(p["state"], "done", "{p}");
+    assert_ne!(p["result"]["adopted"], true);
+    let s = until_snapshot(h);
+    let snap = s["index"]["snapshot"].as_str().unwrap().to_string();
+    let dir = root.join("kw_idx-snapshots").join("library").join("t@1").join("snap").join(&snap);
+    assert!(dir.join("manifest.json").is_file(), "the snapshot is beside the old index: {s}");
+    assert!(!indexes.join("library").join("t@1").join("snap").exists(), "nothing went to the other volume");
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
+    assert_eq!(status(h)["sources"][0]["keyword_source"], "device");
+    assert!(status(h)["sources"][0]["index"].get("needs_seal").is_none());
+    unsafe { cs_close(h) };
+
+    // after a restart the snapshot is found again, and no seal is asked for
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    let s = until_snapshot(h);
+    assert_eq!(s["index"]["snapshot"], snap.as_str());
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
+    unsafe { cs_close(h) };
+    let _ = std::fs::remove_dir_all(&far);
+}
+
+/// An earlier build put a library's snapshot in the indexes folder, on another volume than the library. It keeps working where it
+/// is: nothing is copied or moved, and a seal adopts it instead of making another.
+#[test]
+fn a_snapshot_an_earlier_build_made_in_the_indexes_folder_keeps_working_across_volumes() {
+    let Some(far) = other_volume("old-snap") else { return };
+    let f = make_fixture("xvol-old");
+    let root = f._tmp.0.clone();
+    let legacy = root.join("kw_idx");
+    let mut st = settings(default_leave_out(), true);
+    st["version"] = json!("1");
+    let indexes = far.join("indexes");
+    let mk = |extra: (&str, &Path)| {
+        let mut p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300});
+        p[extra.0] = json!(extra.1.to_str().unwrap());
+        p
+    };
+    assert_eq!(run_job("index_library", mk(("index_dir", &legacy)))["state"], "done");
+    assert_eq!(run_job("index_library", mk(("indexes_dir", &indexes)))["state"], "done");
+    let snaps = indexes.join("library").join("t@1").join("snap");
+    assert_eq!(std::fs::read_dir(&snaps).unwrap().count(), 1);
+
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    let s = until_snapshot(h);
+    let snap = s["index"]["snapshot"].as_str().unwrap().to_string();
+    assert!(snaps.join(&snap).join("manifest.json").is_file(), "it is used where it is: {s}");
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), vec!["lib:t/1234"]);
+    let p = run_job("index_seal", seal_params(&indexes));
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(p["result"]["adopted"], true, "{p}");
+    assert!(!root.join("kw_idx-snapshots").exists(), "no second snapshot beside the old index");
+    assert_eq!(std::fs::read_dir(&snaps).unwrap().count(), 1);
+    unsafe { cs_close(h) };
+    let _ = std::fs::remove_dir_all(&far);
+}
+
+/// Where links are refused on one volume (Android's shared storage), the seal renames the files, also while the index is open, and
+/// the open index goes on serving.
+#[test]
+fn the_seal_renames_when_links_are_refused_even_with_the_index_open() {
+    let f = make_fixture("nolink-seal");
+    let root = f._tmp.0.clone();
+    let (indexes, legacy) = (root.join("indexes"), root.join("kw_idx"));
+    let mut st = settings(default_leave_out(), true);
+    st["version"] = json!("1");
+    let mut p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300});
+    p["index_dir"] = json!(legacy.to_str().unwrap());
+    assert_eq!(run_job("index_library", p)["state"], "done");
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    let before = addrs(&ksearch(h, "xylophonic", 5));
+    assert_eq!(before, vec!["lib:t/1234"]);
+    cache_search::idxsnap::force_no_link_under(&legacy);
+    let p = run_job("index_seal", seal_params(&indexes));
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(p["result"]["method"], "rename");
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before, "the open index goes on serving");
+    until_snapshot(h);
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
+    assert!(!legacy.join("meta.json").exists());
+    unsafe { cs_close(h) };
+}

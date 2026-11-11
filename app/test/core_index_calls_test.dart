@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:cache/platform/app_log.dart';
 import 'package:cache/search/core_index_calls.dart';
 import 'package:cache/search/epub_index_row.dart';
 import 'package:cache/search/index_scheduler.dart';
@@ -200,6 +203,32 @@ void main() {
     job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'index_stale');
     expect(await r2.finished.timeout(const Duration(seconds: 2)), isFalse);
     expect(await CoreIndexWork(calls).pending(), isEmpty);
+  });
+
+  test('a seal that failed with io is not tried again this session, and the log gives the core\'s own message', () async {
+    final dir = Directory.systemTemp.createTempSync('seal-log');
+    addTearDown(() async {
+      await appLog.setLevel(LogLevel.standard);
+      await appLog.close();
+      dir.deleteSync(recursive: true);
+    });
+    await appLog.open(dir);
+    await appLog.setLevel(LogLevel.detailed);
+    statuses = [
+      SourceStatus.fromJson({
+        'id': 'lib', 'kind': 'library', 'path': '/l', 'title': 'L', 'indexed': true, 'docs': 1, 'source_id': 'my-books@1',
+        'index': {'kind': 'library', 'location': 'legacy', 'dir': '/l/index', 'needs_seal': true},
+      }),
+    ];
+    final run = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'io', errorMessage: 'segment.idx: Invalid cross-device link');
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'not again, not even after a long wait');
+    now = now.add(const Duration(hours: 1));
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+    await appLog.flush();
+    final text = [for (final f in appLog.logFiles.reversed) f.readAsStringSync()].join();
+    expect(text, contains('ends: failed (io): segment.idx: Invalid cross-device link'));
   });
 
   test('busy (a writer or merge still at work on the index) is tried again on a later pass, waiting longer each time', () async {

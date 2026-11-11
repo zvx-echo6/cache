@@ -692,7 +692,8 @@ impl Handle {
                     }
                 }
                 Source::Library(l) => {
-                    l.indexes_dir = root.clone();
+                    // a library whose old index is on another volume keeps its snapshots beside it (see idxsnap::snap_root)
+                    l.indexes_dir = root.as_ref().map(|r| idxsnap::snap_root(r, idxsnap::KIND_LIBRARY, &l.source_id(), l.index_dir.as_deref()));
                     if let (Some(root), Some(d)) = (&root, &l.index_dir) {
                         idxsnap::note_legacy(root, idxsnap::KIND_LIBRARY, &l.source_id(), d);
                     }

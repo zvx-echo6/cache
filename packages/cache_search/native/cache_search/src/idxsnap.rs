@@ -135,6 +135,24 @@ pub fn is_open(dir: &Path) -> bool {
     OPEN.lock().map(|g| g.contains(&c)).unwrap_or(false)
 }
 
+/// Old index folders under which hard links are refused (a test's stand-in for a volume that cannot link, such as Android's
+/// shared storage): the seal then renames.
+static NO_LINK_UNDER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+pub fn force_no_link_under(dir: &Path) {
+    if let Ok(mut g) = NO_LINK_UNDER.lock() {
+        g.push(canon(dir));
+    }
+}
+
+fn link(from: &Path, to: &Path) -> std::io::Result<()> {
+    let refused = NO_LINK_UNDER.lock().map(|g| g.iter().any(|d| canon(from).starts_with(d))).unwrap_or(false);
+    if refused {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "hard links are refused here"));
+    }
+    std::fs::hard_link(from, to)
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Where the old index of a source is (so `index_seal` needs only the source id)
 
@@ -156,6 +174,76 @@ pub fn note_legacy(indexes_dir: &Path, kind: &str, source_id: &str, dir: &Path) 
 
 fn legacy_of(indexes_dir: &Path, kind: &str, source_id: &str) -> Option<PathBuf> {
     LEGACY.lock().ok()?.as_ref()?.get(&legacy_key(indexes_dir, kind, source_id)).cloned()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Where a library's snapshots live
+
+/// The folder beside a library's old index folder where its snapshots go when the app's indexes folder is on another volume
+/// (`<library>/index` gives `<library>/index-snapshots`): a hard link or a rename cannot cross volumes, and a copy of an index
+/// is not made. It holds the same layout as the indexes folder (`library/<id>/snap/...`) and never syncs.
+pub fn local_root(legacy: &Path) -> PathBuf {
+    let name = legacy.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "index".into());
+    legacy.with_file_name(format!("{name}-snapshots"))
+}
+
+/// True when both paths are on one volume (a link or a rename between them can work). The nearest existing parent stands for a
+/// path that is not made yet. Where this cannot be told the answer is yes, as it always was.
+pub fn same_volume(a: &Path, b: &Path) -> bool {
+    fn id(p: &Path) -> Option<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let mut q = Some(p);
+            while let Some(d) = q {
+                if let Ok(m) = std::fs::metadata(d) {
+                    return Some(m.dev().to_string());
+                }
+                q = d.parent();
+            }
+            None
+        }
+        #[cfg(windows)]
+        {
+            // the drive (or share) the path starts with
+            match p.components().next() {
+                Some(std::path::Component::Prefix(x)) => Some(x.as_os_str().to_string_lossy().to_ascii_lowercase()),
+                _ => None,
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = p;
+            None
+        }
+    }
+    match (id(a), id(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    }
+}
+
+/// The root a source's snapshots are under. Always `indexes_dir`, except for a library whose old index folder is on another
+/// volume than `indexes_dir` and which has nothing in `indexes_dir` yet (no snapshot, no build): then [`local_root`] of that
+/// folder, so sealing is a rename or a link on one volume. A library that already has snapshots in `indexes_dir` (an earlier
+/// build put them there) keeps them where they are: nothing is moved or copied.
+pub fn snap_root(indexes_dir: &Path, kind: &str, source_id: &str, legacy: Option<&Path>) -> PathBuf {
+    snap_root_with(indexes_dir, kind, source_id, legacy, &same_volume)
+}
+
+pub fn snap_root_with(
+    indexes_dir: &Path,
+    kind: &str,
+    source_id: &str,
+    legacy: Option<&Path>,
+    same: &dyn Fn(&Path, &Path) -> bool,
+) -> PathBuf {
+    let Some(legacy) = legacy.filter(|_| kind == KIND_LIBRARY) else { return indexes_dir.to_path_buf() };
+    let sd = dir_for(indexes_dir, kind, source_id);
+    if !snapshot::list(&sd).is_empty() || snapshot::build_dir(&sd).exists() || same(indexes_dir, legacy) {
+        return indexes_dir.to_path_buf();
+    }
+    local_root(legacy)
 }
 
 /// True while a Tantivy writer holds `<dir>/.tantivy-writer.lock` (it takes an exclusive `flock` on it, here probed without
@@ -623,7 +711,8 @@ pub fn prepare_seal(params_json: &str) -> Result<SealRequest> {
         .map(PathBuf::from)
         .or_else(|| legacy_of(Path::new(&p.indexes_dir), kind, &source_id))
         .ok_or_else(|| Error::not_found(format!("no old index is known for {kind} {source_id}")))?;
-    let sd = dir_for(Path::new(&p.indexes_dir), kind, &source_id);
+    let root = snap_root(Path::new(&p.indexes_dir), kind, &source_id, Some(&legacy));
+    let sd = dir_for(&root, kind, &source_id);
     let lock = Lock::acquire(&snapshot::build_dir(&sd))?;
     Ok(SealRequest { kind, source_id, sd, legacy, lock: Some(lock) })
 }
@@ -731,9 +820,13 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
             return Ok(Outcome::Cancelled);
         }
         let to = stage.join(n);
-        match std::fs::hard_link(legacy.join(n), &to) {
+        match link(&legacy.join(n), &to) {
             Ok(()) => placed.push((n.clone(), Placed::Linked)),
             Err(link_err) => {
+                // Where links are refused the files are moved, also while this process has the index open: on a Unix system an
+                // open file stays readable after its name moves, and the open index goes on serving until the snapshot is ready.
+                // Elsewhere an open file cannot be moved: busy, and a later try.
+                #[cfg(not(unix))]
                 if is_open(legacy) {
                     undo(&placed);
                     return Err(Error::busy(format!(
@@ -908,6 +1001,30 @@ mod tests {
         assert!(is_open(&d));
         drop(g);
         assert!(!is_open(&d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_librarys_snapshots_go_beside_its_old_index_only_when_the_indexes_folder_is_on_another_volume() {
+        let d = std::env::temp_dir().join(format!("cs-idxsnap-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (idx, old) = (d.join("indexes"), d.join("lib").join("index"));
+        std::fs::create_dir_all(&idx).unwrap();
+        let (other, same): (&dyn Fn(&Path, &Path) -> bool, &dyn Fn(&Path, &Path) -> bool) = (&|_, _| false, &|_, _| true);
+        // another volume, nothing in the indexes folder yet: beside the old index
+        let local = snap_root_with(&idx, KIND_LIBRARY, "l@1", Some(&old), other);
+        assert_eq!(local, d.join("lib").join("index-snapshots"));
+        // one volume: the indexes folder, as before
+        assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@1", Some(&old), same), idx);
+        // a ZIM, and a library with no old index, never move
+        assert_eq!(snap_root_with(&idx, KIND_ZIM, "u", Some(&old), other), idx);
+        assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@1", None, other), idx);
+        // snapshots an earlier build left in the indexes folder keep it: nothing moves, nothing is copied
+        let sd = dir_for(&idx, KIND_LIBRARY, "l@1");
+        std::fs::create_dir_all(sd.join(SNAP_DIR).join("b1")).unwrap();
+        assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@1", Some(&old), other), idx);
+        // another library of the same indexes folder is not held by that
+        assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@2", Some(&old), other), local);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
