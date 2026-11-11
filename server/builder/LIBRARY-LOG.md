@@ -213,7 +213,7 @@ copies is in a library given to the resolver; events about other copies still co
 4. **Title.** The latest `title` over the book's copies, else the publisher's seed-log `title` for the reading copy, else the reading copy's pack title. Other copies' pack titles that differ from the shown title are listed as `aka`.
 5. **Removed.** The latest `remove` or `restore` over the book's copies. Hiding is per person; a publisher removes a book by publishing a new library version without it.
 6. **Facts.** Per field (`author`, `edition`, `year`): the person's own latest `facts` over the book's copies, else the seed log's `facts` for the reading copy, else the reading copy's pack `book` block, else `null`.
-7. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book.
+7. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book. The view carries `filed` (true for a seed `place`; for a pack, its `book.suggested.filed`, false when absent) and the pack's `suggestions` (top three) when it has them.
 
 ### Worked example: a clash
 
@@ -259,7 +259,7 @@ If `A`, `B` and `C` are linked `A-B` (0.90) and `B-C` (0.95), a user `notsame` b
 
 ## Arriving libraries and existing logs
 
-- **A library arrives** (downloaded, given, or built): for each copy, run detection and write `same` where it matches. Copies matching nothing are new books: `place` in the suggested division (the seed log's `place`, else `book.suggested`, else Unsorted) and `assign` the next free number, in (title, copy) order, so two devices that shelve the same library offline make the same choices except for clashes.
+- **A library arrives** (downloaded, given, or built): for each copy, run detection and write `same` where it matches. Copies matching nothing are new books. A book is shelved only when it was filed with confidence: `place` in the seed log's `place` division (the publisher placed it), else in `book.suggested.div` when the pack says the sorter was confident (`book.suggested.filed` is `true`; a pack without the flag is not confident); either way `assign` the next free number, in (title, copy) order. A book the sorter was not confident about (`filed` false or absent) is not placed: it stays in Unsorted, offering `book.suggested.suggestions` (the sorter's top three; an older pack has only `div` and `second_div`). Two devices that shelve the same library offline make the same choices except for clashes.
 - **Existing per-device library logs** (only test devices and the build service have any; 1.1 has not shipped): on first run each device imports its OWN events from every library's `log/<own id>.jsonl` into its Bookshelves log (`cache_shelves::import`, core op `shelvesImport`). Each `doc` is mapped to the copy key through that library's copies file, else its live packs; the event keeps its `at` and gets `loc` = `<library_id>/<doc_id>`; an `assign` or `retire` about a `doc` with no pack in that library (a deleted book) is written as a `retire` of that division and number, with `copy` = the `doc_id` (the copy key of a pack with no `original_blake3`), the `loc` and the original `at`, and is counted as `reserved`: no book appears for it, but the number counts toward next free and is never given out again; any other event about such a `doc` is not imported and is counted as `unmapped`. Events are appended oldest first **with their original `at`** (the import does not raise them to the device's last `at`, so an old `place` never overrides a newer move), and an event already present in the device's Bookshelves log is not written again, so a crash between the append and the record cannot duplicate events. A file with no `unmapped` events is recorded in `.local/migrated.json`; a file with unmapped events is not recorded, so a later import maps them once their pack is here:
 
   ```json
@@ -295,7 +295,8 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
       "call": {"div": "210", "seq": 1, "suffix": 0, "text": "CDS 210-001"},
       "removed": false,
       "author": "A. Writer", "edition": "7th edition", "year": 2018,
-      "suggested": {"div": "610", "label": "Medicine", "from": "pack"}
+      "suggested": {"div": "610", "label": "Medicine", "from": "pack", "filed": false,
+                "suggestions": [{"div": "610", "label": "Medicine", "score": 0.41}, {"div": "620", "label": "Engineering", "score": 0.3}, {"div": "570", "label": "Life sciences", "score": 0.2}]}
     }
   },
   "retired": {"210": [5]},

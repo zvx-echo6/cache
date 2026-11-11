@@ -114,7 +114,7 @@ impl WebSearchProvider for KagiProvider {
         let auth = format!("Bearer {key}");
         let body = json!({"query": query, "limit": limit}).to_string();
         *lock(&self.failure) = None;
-        let reply = http_request(
+        let reply = request_unguarded_for_search(
             self.base_url.trim(),
             &[("Authorization", auth.as_str()), ("Accept", "application/json"), ("Content-Type", "application/json")],
             Some(body),
@@ -322,9 +322,15 @@ pub const fn tls_roots() -> TlsRoots {
 
 /// The one HTTP client of web search and web reads: `ureq` (blocking, rustls, `tls_roots()`), a fresh agent per request so
 /// the request's own timeout is the remaining time to the deadline.
-fn web_agent(timeout: Duration) -> ureq::Agent {
+fn web_agent(timeout: Duration, guarded: bool) -> ureq::Agent {
+    // A page read (and every redirect it follows) is guarded on every platform, with no setting: what the model reads is public by
+    // definition, so a redirect to a LAN or metadata address is never legitimate. A refusal is a connect-layer failure, which the
+    // read already reports as unavailable. The search provider's own endpoint is owner configuration (it may be a local stand-in or
+    // a self-hosted server), so its request is not guarded.
+    let b = ureq::AgentBuilder::new();
+    let b = if guarded { cache_netguard::always(b) } else { b };
     // ureq's limit counts the final request too: `redirects(n)` follows n - 1 redirects, so one more than MAX_REDIRECTS
-    ureq::AgentBuilder::new().timeout(timeout).redirects(MAX_REDIRECTS as u32 + 1).user_agent(&user_agent()).build()
+    b.timeout(timeout).redirects(MAX_REDIRECTS as u32 + 1).user_agent(&user_agent()).build()
 }
 
 /// `s` with `url`'s query string taken out wherever the URL (or just its query) appears.
@@ -383,12 +389,12 @@ fn describe(t: &ureq::Transport, url: &str) -> HttpFailure {
     HttpFailure { kind, cause: cap_chars(&format!("{layer}: {detail}"), CAUSE_CHARS), chain }
 }
 
-fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
+fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, deadline: Instant, cap: usize, guarded: bool) -> std::result::Result<HttpReply, HttpFailure> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(HttpFailure::timed_out("the deadline had passed before the request started"));
     }
-    let agent = web_agent(remaining);
+    let agent = web_agent(remaining, guarded);
     let mut req = match body {
         Some(_) => agent.post(url),
         None => agent.get(url),
@@ -423,11 +429,19 @@ fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, 
 /// runs on its own thread; if it has not answered by the deadline the call returns `TimedOut` and the thread ends by
 /// itself when its own request times out.
 pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
-    http_request(url, headers, None, deadline, cap)
+    request(url, headers, None, deadline, cap, true)
 }
 
-/// `http_get`, or a POST with `body` when one is given (no redirects are followed differently; same limits).
-pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
+/// The search provider's POST. Its endpoint is owner configuration (a self-hosted or stand-in server is legitimate), so this one is
+/// not guarded; everything the model reads through it is, by `http_get`. Private on purpose: no caller outside this file can turn the
+/// guard off for a page read.
+fn request_unguarded_for_search(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
+    request(url, headers, body, deadline, cap, false)
+}
+
+/// A GET, or a POST with `body` when one is given (no redirects are followed differently; same limits). `guarded` refuses every
+/// address that is not on the public internet, on each hop.
+fn request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize, guarded: bool) -> std::result::Result<HttpReply, HttpFailure> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(HttpFailure::timed_out("the deadline had passed before the request started"));
@@ -436,7 +450,7 @@ pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, d
     let headers: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(send_blocking(&url, &headers, body, deadline, cap));
+        let _ = tx.send(send_blocking(&url, &headers, body, deadline, cap, guarded));
     });
     match rx.recv_timeout(remaining) {
         Ok(r) => r,
@@ -918,6 +932,8 @@ mod tests {
 
     /// A server that accepts one connection, sends `reply` (or nothing) and closes.
     fn one_shot_server(reply: &'static [u8]) -> String {
+        // the web client is always guarded; these tests use a server on this machine, so loopback is let through for this process
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -961,6 +977,7 @@ mod tests {
 
     #[test]
     fn a_refused_connection_names_the_connect_layer() {
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         drop(l);
@@ -978,6 +995,7 @@ mod tests {
 
     #[test]
     fn a_silent_server_is_a_timeout() {
+        cache_netguard::loopback_everywhere_for_tests();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {

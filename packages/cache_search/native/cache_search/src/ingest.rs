@@ -308,7 +308,10 @@ impl Classifier for CoreClassifier {
     fn classify(&self, pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing> {
         let v = cache_pack::sorter::classify(&self.model, pieces).ok()?;
         let best = v.top.first()?;
-        let label = self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == best.division).map(|c| c.label.clone()).unwrap_or_else(|| best.division.clone());
+        let label_of = |div: &str| self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == div).map(|c| c.label.clone()).unwrap_or_else(|| div.to_string());
+        let label = label_of(&best.division);
+        // the top three, best first: kept in the pack so Unsorted can offer them
+        let suggestions = v.top.iter().map(|s| cache_pack::pack::ShelfSuggestion { div: s.division.clone(), label: label_of(&s.division), score: Some(s.score) }).collect();
         Some(Filing {
             suggested: cache_pack::pack::Suggested {
                 div: best.division.clone(),
@@ -317,6 +320,8 @@ impl Classifier for CoreClassifier {
                 classifier_version: Some(v.version),
                 source: "classifier".to_string(),
                 second_div: v.top.get(1).map(|s| s.division.clone()),
+                filed: Some(v.division.is_some()),
+                suggestions,
             },
             filed: v.division.is_some(),
         })
@@ -404,18 +409,21 @@ pub fn service_with(provider: cache_ingest::EnvProvider) -> Service {
 }
 
 /// `cs_ingest_probe`: tries to load PDFium and the embedder with the paths of `engines` and reports; keeps nothing loaded and writes
-/// nothing. Only malformed JSON is an error.
+/// nothing. `load_embedder` false skips the embedder's load (reported as `{"ok": null, "skipped": true}`); the model file's
+/// presence and `hash_model` still apply. Only malformed JSON is an error.
 pub fn probe(args: &str) -> Result<String> {
     use serde_json::json;
     let v: Value = serde_json::from_str(args).map_err(|e| Error::bad_json(format!("the request is not JSON: {e}")))?;
     let engines = v.get("engines").cloned().unwrap_or(Value::Null);
     let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
+    let load_embedder = v.get("load_embedder").and_then(Value::as_bool).unwrap_or(true);
     let pdfium = match cache_ingest::pdfium::probe(text(&engines, "pdfium_lib").as_deref()) {
         Ok(from) => json!({"ok": true, "version": text(&engines, "pdfium_version"), "from": from}),
         Err(e) => json!({"ok": false, "version": null, "from": null, "error": e.message}),
     };
     let (lib, model, expected) = (text(&engines, "embed_lib"), text(&engines, "embed_model"), text(&engines, "embed_sha256"));
     let embedder = match (&lib, &model) {
+        _ if !load_embedder => json!({"ok": null, "skipped": true}),
         (Some(l), Some(m)) => match cache_embed::Embedder::load(l, m, None, None, 1) {
             Ok(_) => json!({"ok": true}),
             Err(e) => json!({"ok": false, "error": e.to_string()}),

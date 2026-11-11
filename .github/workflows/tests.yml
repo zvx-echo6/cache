@@ -30,7 +30,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.ref }}
+  # rel-1.1 and main: a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
+  group: tests-${{ (github.ref == 'refs/heads/rel-1.1' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -136,6 +137,15 @@ jobs:
       - name: App tests
         working-directory: app
         run: flutter test --no-pub
+      # When the phone guard fails, its expected, actual and difference pictures, so the change can be seen (debug output only).
+      - name: Phone guard failure pictures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-guard-failures-${{ github.run_attempt }}
+          path: app/test/phone_guard/failures/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Plugin tests (cache_search)
         working-directory: packages/cache_search
         run: |

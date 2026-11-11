@@ -21,9 +21,11 @@ import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'desktop/desktop_theme.dart';
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
+import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -36,6 +38,10 @@ import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
 import 'library/add_pdf/add_pdf_calls.dart';
 import 'library/add_pdf/add_pdf_engines.dart';
 import 'library/add_pdf/add_pdf_state.dart';
+import 'library/add_pdf/watch_background.dart';
+import 'library/add_pdf/watch_folders.dart';
+import 'background/background_dispatcher.dart';
+import 'background/background_lock.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -58,6 +64,7 @@ import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
 import 'notebook/media.dart' show storePhoto;
 import 'notebook/sync/connections.dart';
+import 'screens/notebooks/icon_picker.dart' show MapIconSetup;
 import 'screens/pin_screen.dart';
 import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
@@ -288,11 +295,12 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
-      notShared: const {'libraries': kLibraryNotShared},
+      notShared: const {'library': kZimNotShared, 'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
       items: () => libraryItems(sources, libraries),
       remoteItem: libraryRemoteItem,
+      alongside: libraryAlongside,
     ),
     DataKind(
       id: 'models',
@@ -422,7 +430,7 @@ class _CacheAppState extends State<CacheApp> {
       return core == null ? null : CoreIndexJob(await core.startJob(kind, params));
     },
     indexesDir: () => _support(kIndexesDirName)?.path,
-    videoDir: () => video.dir?.path,
+    videoDir: () => video.dirPath,
     duty: () => indexThrottle.duty,
     // a finished index job: the status is read again, so the Library and the queue say it is built
     onJobDone: () => unawaited(sources.refresh()),
@@ -445,21 +453,121 @@ class _CacheAppState extends State<CacheApp> {
     engines: _addPdfEngines,
     libraries: libraries,
     ocrEngine: deviceOcrEngine,
-    bookshelves: () async {
-      final dev = await libraryDeviceIdShared?.call();
-      final dir = _support(kBookshelvesDir);
-      if (dev == null || !validDeviceId(dev) || dir == null) return null;
-      return {
-        'dir': dir.path,
-        'dev': dev,
-        'libraries': [
-          for (final l in libraries.libraries)
-            if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
-        ],
-      };
+    // a background run is adding PDFs: it is asked to stop, and the jobs are offered again at the next look
+    mayRun: () async {
+      final l = _bgLock;
+      return l == null || await l.takeOver(kAddPdfWork, wait: Duration.zero);
     },
+    bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+  );
+
+  /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.
+  Future<Map<String, dynamic>?> _addPdfShelves() async {
+    final dev = await libraryDeviceIdShared?.call();
+    final dir = _support(kBookshelvesDir);
+    if (dev == null || !validDeviceId(dev) || dir == null) return null;
+    return {
+      'dir': dir.path,
+      'dev': dev,
+      'libraries': [
+        for (final l in libraries.libraries)
+          if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
+      ],
+    };
+  }
+
+  /// The one lock with the background runs (background/background_lock.dart), once the support folder is known.
+  BackgroundLock? _bgLock;
+  Timer? _bgOpenTimer;
+  int _bgSeen = 0;
+  int _watchCount = -1;
+
+  /// The app is open: the lock says so (and keeps saying so while it is).
+  void _bgAppOpen() {
+    _bgLock?.appOpened();
+    _bgOpenTimer ??= Timer.periodic(BackgroundLock.refreshEvery, (_) => _bgLock?.appOpened());
+  }
+
+  /// Back at the front: a background run adding PDFs is stopped first; when one ran meanwhile, Add PDF's jobs and the watched
+  /// folders are read again; then index work and the watched folders' check go on.
+  Future<void> _backToFront() async {
+    _atFront = true;
+    final l = _bgLock;
+    if (l != null) {
+      _bgAppOpen();
+      await l.takeOver(kAddPdfWork);
+      final g = l.generation;
+      if (g != _bgSeen) {
+        _bgSeen = g;
+        await addPdf.reload();
+        await watchFolders.reload();
+      }
+    }
+    if (!mounted) return;
+    indexing.setOpen(true);
+    // watched folders are checked each time Cache comes back to the front (not again within a minute)
+    unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
+  }
+
+  /// Cache is at the front (false from going to the back until it comes back).
+  bool _atFront = true;
+
+  /// To the back: once the index work that ran has really stopped and Add PDF's jobs are on disk, background runs may go ahead,
+  /// and PDFs a watched folder found that are still to add are added in the background while charging (Android). Letting go
+  /// earlier let a background slice start a PDF the app was still pausing (the job folder was still held; Pixel, 2026-11-10).
+  void _toBack() {
+    _atFront = false;
+    unawaited(_toBackAfterPause());
+  }
+
+  Future<void> _toBackAfterPause() async {
+    try {
+      await backgroundHandOff(
+        closed: indexing.closed,
+        save: () async {
+          await addPdf.save();
+          await watchFolders.save();
+        },
+        atFront: () => _atFront,
+        release: () {
+          _bgOpenTimer?.cancel();
+          _bgOpenTimer = null;
+          _bgLock?.appClosed();
+        },
+        hasWork: () => Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson),
+        queueAdd: scheduleWatchAdd,
+      );
+      await _writeBackgroundContext();
+    } catch (e, st) {
+      logError('Background hand-off failed', error: e, stack: st);
+    }
+  }
+
+  Future<void> _writeBackgroundContext() async {
+    final s = _supportPath;
+    if (s == null || !Platform.isAndroid) return;
+    await writeWatchAddContext(support: s, bookshelves: await _addPdfShelves());
+  }
+
+  /// The watched folders changed: the background count runs while any are watched (Android).
+  void _onWatchFolders() {
+    final n = watchFolders.folders.length;
+    if (_watchCount >= 0 && (n > 0) == (_watchCount > 0)) {
+      _watchCount = n;
+      return;
+    }
+    _watchCount = n;
+    unawaited(scheduleWatchDetect(anyFolders: n > 0));
+  }
+
+  /// Watch a folder: new PDFs in a folder the person chose go through Add PDF by themselves. Checked when Cache opens; on Android
+  /// also every [kWatchEvery] as index work (the indexing rules: charging, battery, heat). iOS checks only when Cache opens.
+  late final WatchFoldersState watchFolders = WatchFoldersState(
+    addPdf: addPdf,
+    dir: () async => _support('ingest'),
+    every: !plat.isWeb && Platform.isAndroid ? kWatchEvery : null,
   );
 
   Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await appSupportPath())), modelsDir: await _modelsDir());
@@ -470,6 +578,7 @@ class _CacheAppState extends State<CacheApp> {
       CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
       if (!plat.isWeb) addPdf,
+      if (!plat.isWeb) watchFolders,
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
@@ -506,6 +615,7 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
+    focus: askFocus,
     supportDir: () async => Directory(await appSupportPath()),
     catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
@@ -556,7 +666,10 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final LayoutState layout = LayoutState();
+  /// Held while Ask generates an answer: background work (sync, downloads, indexing) starts nothing new meanwhile (chat/ask_focus.dart).
+  late final AskFocus askFocus = AskFocus();
   late final ChatController chat = ChatController(
+    focus: askFocus,
     // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
     tools: const [],
     // Try again (or the next question) after the core could not start starts it again.
@@ -568,7 +681,7 @@ class _CacheAppState extends State<CacheApp> {
         ? null
         : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector, runAction: actionRegistry.run),
     numberingState: CoreNumberingState(() => sources.core),
-    locationKnown: () => chatLocation.known,
+    locationKnown: () => chatLocation.turnKnown,
     prepareTurn: chatLocation.prepare,
     actions: actionRegistry,
     actCore: actCore,
@@ -638,7 +751,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
       notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
-      shareAvailable: () => sharing.enabled);
+      shareAvailable: () => sharing.enabled, icons: MapIconSetup.of(maps));
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
@@ -678,7 +791,8 @@ class _CacheAppState extends State<CacheApp> {
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
     hereOnMap: () => location.enabled,
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
-    map: (context, pin, onPick) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick),
+    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look),
+    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false),
     directions: (p, name) {
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
@@ -731,6 +845,8 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
+    if (plat.isWeb) unawaited(searchModel.refreshServer());
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
     _guidanceAwake;
@@ -741,15 +857,24 @@ class _CacheAppState extends State<CacheApp> {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
         if (!plat.isWeb) unawaited(connections.syncAll());
-        if (!plat.isWeb) indexing.setOpen(true);
+        if (!plat.isWeb) unawaited(_backToFront());
       },
+      // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
+      // search box does (SearchModel.aboutToSearch).
+      onStateChange: searchModel.onLifecycle,
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         if (!plat.isWeb) indexing.setOpen(false);
+        if (!plat.isWeb) _toBack();
       },
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    askFocusShared = askFocus;
+    // The workers that hold off while Ask answers (named in the log). Indexing follows the throttle (chat.busy, _onChatForIndexing).
+    for (final name in ['Indexing', 'Notebook sync', 'Settings sync', 'Downloads', 'Region downloads']) {
+      askFocus.register(name);
+    }
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
@@ -775,11 +900,14 @@ class _CacheAppState extends State<CacheApp> {
     });
     // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      if (!releaseModelOn(level, reading)) return;
+      searchModel.onTrim(level);
+      if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    });
+    }, onWarning: searchModel.onMemoryWarning);
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -797,6 +925,28 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) appTempPath().then((p) => _tempPath = p).catchError((_) => '');
     if (!plat.isWeb) {
       addPdfShared = addPdf;
+      watchFoldersShared = watchFolders;
+      // the lock with the background runs: the app is open; a background run adding PDFs is stopped, and what it changed is
+      // read again. Then the watched folders are checked, once the libraries can be read (a first PDF may make My books).
+      unawaited(supportRead.then((_) async {
+        final s = _supportPath;
+        if (s == null) return;
+        final l = _bgLock = BackgroundLock(Directory(backgroundDir(s)));
+        _bgSeen = l.generation;
+        _bgAppOpen();
+        final ran = l.runs(kAddPdfWork);
+        await l.takeOver(kAddPdfWork);
+        if (ran) {
+          await addPdf.reload();
+          await watchFolders.reload();
+        }
+        watchFolders.addListener(_onWatchFolders);
+        await watchFolders.load();
+        _onWatchFolders();
+        await _writeBackgroundContext();
+      }).then((_) => sources.whenCoreReady()).then((_) => watchFolders.checkAll()).catchError((Object e) {
+        logError('Watch a folder: the check at start', error: e);
+      }));
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
       unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
         final s = _supportPath;
@@ -894,8 +1044,9 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
       Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
-      settingsRead.then((_) => regions.init());
     }
+    // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
+    settingsRead.then((_) => regions.init());
     _layoutRead = layout.init();
     sources.init();
     if (!plat.isWeb) unawaited(pdfIndex.init());
@@ -1025,7 +1176,12 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
+    _bgOpenTimer?.cancel();
+    watchFolders.removeListener(_onWatchFolders);
+    watchFolders.dispose();
     indexThrottle.dispose();
+    if (identical(askFocusShared, askFocus)) askFocusShared = null;
+    askFocus.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
@@ -1075,7 +1231,7 @@ class _CacheAppState extends State<CacheApp> {
                   children: [
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
-                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
                   ],
                 ),
               ),

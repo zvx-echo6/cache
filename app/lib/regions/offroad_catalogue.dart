@@ -1,10 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../app_fs.dart';
 import '../files.dart';
 import '../maps/geo.dart';
+import '../platform.dart' as plat;
 import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
+import 'region_catalogue.dart' show kRegionCatalogueDir;
 
 /// Where the off-road packs are published (cache-packs' recipes/offroad-regions.md): `current.json`, then one folder per build.
 const String kOffroadBaseUrl = '$kDataBaseUrl/offroad/';
@@ -115,6 +118,7 @@ class OffroadCatalogue {
   Future<List<OffroadPack>> packs() async {
     final known = _packs;
     if (known != null && _readAt != null && _now().difference(_readAt!) < maxAge) return known;
+    if (plat.isWeb) return _packsOnServer();
     final f = File('${(await dir()).path}/offroad-current.json');
     final have = await f.exists();
     if (have && _now().difference(await f.lastModified()) < maxAge) return _keep(parseOffroadCatalogue(await f.readAsString()));
@@ -126,6 +130,30 @@ class OffroadCatalogue {
       return _keep(list);
     } catch (e) {
       if (have) return _keep(parseOffroadCatalogue(await f.readAsString()));
+      if (e is NetworkProblem) rethrow;
+      throw NetworkProblem('The off-road list could not be read: $e');
+    }
+  }
+
+  AppFs? _webFs;
+
+  /// [packs] in a browser: the copy is `region-catalogue/offroad-current.json` in the server's support folder.
+  Future<List<OffroadPack>> _packsOnServer() async {
+    final fs = _webFs ??= createAppFs();
+    const path = '$kRegionCatalogueDir/offroad-current.json';
+    final stat = await fs.stat(AppRoot.support, path);
+    if (stat != null && _now().difference(stat.mtime) < maxAge) {
+      final text = await fs.readString(AppRoot.support, path);
+      if (text != null) return _keep(parseOffroadCatalogue(text));
+    }
+    try {
+      final text = utf8.decode(await _fetch(Uri.parse(url)));
+      final list = parseOffroadCatalogue(text); // never keep something that is not the catalogue
+      await fs.writeStringAtomic(AppRoot.support, path, text);
+      return _keep(list);
+    } catch (e) {
+      final old = stat == null ? null : await fs.readString(AppRoot.support, path);
+      if (old != null) return _keep(parseOffroadCatalogue(old));
       if (e is NetworkProblem) rethrow;
       throw NetworkProblem('The off-road list could not be read: $e');
     }

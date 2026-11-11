@@ -236,6 +236,9 @@ impl Helper {
         let sources = read_sources(&self.cfg.sources_file)?;
         let mut cmd = Command::new(&self.cfg.exe);
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
+        // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
+        // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.
+        cmd.env(cache_netguard::ENV_VAR, cache_netguard::ENV_VALUE);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
             // The keystore (`<data>/keystore.json`, owner only) sits outside the folders the browser's `fs.*` ops reach.
