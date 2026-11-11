@@ -91,6 +91,22 @@ class IndexDriver {
 
   bool get busy => _job != null || _pdfBusy;
 
+  /// Why the host holds index work now ("heat" or "memory"), or null when it does not; `index.state` carries it.
+  String? get hold => _hold;
+  String? _hold;
+
+  /// Logs when a hold starts, changes or ends (once each, not at every tick).
+  void _noteHold(HostDuty? d) {
+    final h = d != null && d.paused ? (d.hold ?? 'load') : null;
+    if (h == _hold) return;
+    _hold = h;
+    if (h == null) {
+      log?.call('index work goes on: the host no longer holds it');
+    } else {
+      log?.call('index work is held: ${h == 'memory' ? 'the host is short of memory' : h == 'heat' ? 'the host is too hot' : h}');
+    }
+  }
+
   /// Whether the timer is running (it stops when nothing is left to start or wait for).
   bool get running => _timer != null;
 
@@ -98,6 +114,7 @@ class IndexDriver {
     _pdfRun?.cancel();
     _timer?.cancel();
     _timer = null;
+    _hold = null;
   }
 
   /// One step: advance the running job, or start the next one. Public so a test can drive it.
@@ -107,9 +124,15 @@ class IndexDriver {
         _advance();
         if (_job != null) return;
       }
-      if (_pdfBusy) return;
+      if (_pdfBusy) {
+        // The PDF loop waits between PDFs while the host holds work (the pacer's permit).
+        _noteHold(load?.duty());
+        return;
+      }
       // The host is too hot or short of memory: nothing new starts now (the timer goes on and looks again).
-      if (load?.duty().paused ?? false) return;
+      final duty = load?.duty();
+      _noteHold(duty);
+      if (duty?.paused ?? false) return;
       final next = _next();
       if (next == null) {
         if (_startPdf()) return;
@@ -300,6 +323,7 @@ class IndexDriver {
     final l = load;
     if (l == null || !_paced) return;
     final d = l.duty();
+    _noteHold(d);
     if (_sent == d && ++_paceTicks % 15 != 0) return;
     _sent = d;
     try {

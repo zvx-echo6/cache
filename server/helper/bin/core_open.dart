@@ -105,6 +105,8 @@ class IndexStateOp implements OpHandler {
   Object? handle(String op, Map<String, dynamic> a) => {
         for (final e in indexer.progress.entries) e.key: {'fraction': e.value, 'error': null},
         for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
+        // Only while the host holds index work: why ("heat" or "memory"), under a key no source path can be.
+        if (indexer.hold != null) 'hold': {'fraction': null, 'error': null, 'hold': indexer.hold},
       };
 }
 

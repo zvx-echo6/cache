@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 
 import '../../../app/lib/pdf/index/pdf_index_core.dart';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
+import '../bin/core_open.dart';
 import '../bin/host_load.dart';
 import '../bin/index_driver.dart';
 import '../bin/pdf_zim_indexer.dart';
@@ -192,6 +193,40 @@ void main() {
     temp = 20; // heat eases off by halves: below the resume level on the next reading
     driver.tick();
     expect(jobs(), hasLength(1));
+  });
+
+  test('a hold is logged once when it starts and once when it ends, and index.state says why', () {
+    var temp = 100.0;
+    final load = HostLoad(readTempC: () => temp, readMemory: () => null, every: Duration.zero);
+    status['a.zim'] = _st('a.zim', index: {'location': 'old', 'kind': 'zim', 'dir': '/i', 'needs_seal': true});
+    final lines = <String>[];
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, load: load, log: lines.add)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    final op = IndexStateOp(driver);
+    expect((op.handle('index.state', const {}) as Map).containsKey('hold'), isFalse);
+    driver.tick();
+    driver.tick();
+    expect(lines.where((l) => l.startsWith('index work is held')), ['index work is held: the host is too hot']);
+    expect(driver.hold, 'heat');
+    expect((op.handle('index.state', const {}) as Map)['hold'], {'fraction': null, 'error': null, 'hold': 'heat'});
+    temp = 20; // each reading halves the heat: 0.5 is under the level where work goes on
+    driver.tick();
+    driver.tick();
+    expect(lines.where((l) => l.startsWith('index work goes on')), hasLength(1));
+    expect(driver.hold, isNull);
+    expect((op.handle('index.state', const {}) as Map).containsKey('hold'), isFalse);
+  });
+
+  test('a host short of memory holds index work, and the hold says memory', () {
+    final load = HostLoad(readTempC: () => null, readMemory: () => (available: 100 << 20, total: 8 << 30), every: Duration.zero);
+    status['a.zim'] = _st('a.zim', index: {'location': 'old', 'kind': 'zim', 'dir': '/i', 'needs_seal': true});
+    final lines = <String>[];
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, load: load, log: lines.add)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    driver.tick();
+    expect(jobs(), isEmpty);
+    expect(driver.hold, 'memory');
+    expect(lines, contains('index work is held: the host is short of memory'));
   });
 
   test('the PDFs of a ZIM whose PDF index is not ready are indexed, once; the core gets the list again when the index is published', () async {
