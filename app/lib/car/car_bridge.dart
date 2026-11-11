@@ -153,6 +153,17 @@ class CarBridge {
 
   CacheThemeId? _lastTheme;
 
+  /// What makes the car reload its map: the layers it draws (their ids and style signatures) and the pin style; the theme is tracked
+  /// on its own ([_onSettings]). The phone's MapsState.styleKey also has each layer's opacity, whether the engine is ready and the
+  /// connection count, and those must not reload the car's map: a reconnect would reload it every time the phone regains data, a
+  /// not-ready engine has no style to send (the car asks again by itself), and an opacity change waits for the next load (the car
+  /// style does draw layers at their opacity; the owner chose not to reload for it).
+  String get _carStyleKey => [
+        for (final u in maps.uses) u.def.id,
+        'pins-${maps.pinStyle.name}',
+        for (final l in maps.engine.layers) l.styleSignature,
+      ].join(',');
+
   /// A phone setting changed: a new theme reloads the car's map style (the car asks for it again with the same request it always
   /// uses), and the trip goes out again for the switches and the palette.
   void _onSettings() {
@@ -166,7 +177,7 @@ class CarBridge {
 
   void _onMaps() {
     if (!connected.value) return;
-    final key = maps.styleKey;
+    final key = _carStyleKey;
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
     unawaited(_send('styleChanged', null));
@@ -292,7 +303,7 @@ class CarBridge {
     } catch (_) {
       return null;
     }
-    _lastStyleKey = maps.styleKey;
+    _lastStyleKey = _carStyleKey;
     return {
       'style': await maps.styleJson(palette, glyphs),
       'colors': {for (final r in const ['route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'position', 'positionRing', 'pin']) r: palette.css(r)},

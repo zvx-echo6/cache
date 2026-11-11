@@ -13,6 +13,7 @@ import 'package:cache/car/car_trip.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
@@ -23,6 +24,17 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'nav_fakes.dart';
 import 'support/test_layer_engine.dart';
+
+/// A layer engine whose connection count the test moves (a reconnect).
+class _GenEngine extends TestLayerEngine {
+  int gen = 0;
+  @override
+  int get sourcesGeneration => gen;
+  void reconnect() {
+    gen++;
+    notifyListeners();
+  }
+}
 
 class _NoSource implements PositionSource {
   @override
@@ -415,6 +427,43 @@ void main() {
       final day = await styleFor(CacheThemeId.tactical, dark: false);
       expect((day!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.light).css('route'));
       expect(tac['style'], isNot(dk['style']));
+    });
+
+    test('the car map reloads for its own look only: not a reconnect or an opacity change, but pins and layers', () async {
+      final eng = _GenEngine();
+      final m = MapsState(engine: eng, settingsDirOverride: dir);
+      addTearDown(m.dispose);
+      await m.init();
+      final b = CarBridge(nav: nav, maps: m, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(m.uses, isNotEmpty);
+      await b.style(dark: true); // the car's own first style: the key is recorded as the car loads it
+      int count() => toCar.where((c) => c.method == 'styleChanged').length;
+      toCar.clear();
+      // The connection came back: the phone's key moves, the car's does not.
+      final keyBefore = m.styleKey;
+      eng.reconnect();
+      await settle();
+      expect(m.styleKey, isNot(keyBefore));
+      expect(count(), 0);
+      // A layer's opacity.
+      m.setOpacity(m.uses.first.def.id, 0.5);
+      await settle();
+      expect(count(), 0);
+      // The pin style.
+      m.setPinStyle(m.pinStyle == PinStyle.icon ? PinStyle.teardrop : PinStyle.icon);
+      await settle();
+      expect(count(), 1);
+      // A layer switched off, then on again.
+      final on = m.layersOn;
+      m.setLayersOn(on.take(on.length - 1));
+      await settle();
+      expect(count(), 2);
+      m.setLayersOn(on);
+      await settle();
+      expect(count(), 3);
+      b.dispose();
     });
 
     test('a new phone theme makes the car reload its map style, without reconnecting', () async {
