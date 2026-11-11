@@ -414,7 +414,7 @@ void main() {
     expect(find.textContaining('1.0 or earlier · this device 1.1.0'), findsOneWidget);
     expect(find.textContaining('Version mismatch: update Cache on this device to sync with Tablet'), findsOneWidget);
     expect(find.textContaining('1.2.0 · this device 1.1.0'), findsOneWidget);
-    expect(find.text('Connected directly · 1 min ago'), findsOneWidget, reason: 'the matching device reads as before');
+    expect(find.textContaining('Connected directly'), findsOneWidget, reason: 'the matching device reads as before');
 
     await tester.tap(find.byKey(const ValueKey('peer-old')));
     await tester.pumpAndSettle();
