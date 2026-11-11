@@ -271,6 +271,23 @@ void main() {
       expect(jobs().last, contains('/docs/a.zim'), reason: 'the stopped source is the first to start again');
     });
 
+    test('a quick Pause then Resume, before the tick sees the job cancelled, starts the same source again', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript.add(_running(1));
+      driver.useSources([_src('a.zim')]);
+      driver.tick();
+      expect(jobs(), hasLength(1));
+      driver.pause();
+      driver.resume();
+      fake.progressScript
+        ..clear()
+        ..add(cancelled);
+      driver.tick();
+      expect(driver.failures, isEmpty);
+      expect(jobs(), hasLength(2), reason: 'the job the Pause cancelled is not dropped until the next rescan');
+      expect(jobs().last, contains('/docs/a.zim'));
+    });
+
     test('Pause before anything has started holds every start; Resume lets them go', () {
       status['a.zim'] = _st('a.zim');
       fake.progressScript.add(_done);

@@ -96,6 +96,9 @@ class IndexDriver {
   bool _paused = false;
   bool get paused => _paused;
 
+  /// The job a Pause cancelled, until the tick that sees it ended: it is tried again even when Resume came first.
+  int? _pauseCancelled;
+
   /// Whether there is index work, running or still to start (the Catalog shows Pause only while there is).
   bool get hasWork {
     if (busy || _waiting) return true;
@@ -113,6 +116,7 @@ class IndexDriver {
     _paused = true;
     final job = _job;
     if (job != null) {
+      _pauseCancelled = job;
       try {
         dispatcher.handle('jobCancel', {'job': job});
       } catch (_) {}
@@ -204,6 +208,7 @@ class IndexDriver {
       // The job is gone (the core was closed, or the server's caller freed it).
       _job = null;
       _jobPath = null;
+      _pauseCancelled = null;
       progress.remove(path);
       return;
     }
@@ -215,14 +220,16 @@ class IndexDriver {
     try {
       dispatcher.handle('jobFree', {'job': job});
     } catch (_) {}
+    final byPause = _paused || _pauseCancelled == job;
+    _pauseCancelled = null;
     _job = null;
     _jobPath = null;
     progress.remove(path);
     if (p.state == JobState.failed) {
       failures[path] = p.errorMessage ?? 'Indexing failed';
       log?.call('index of $path failed: ${failures[path]}');
-    } else if (p.state == JobState.cancelled && _paused) {
-      // Stopped by Pause: it is tried again at Resume.
+    } else if (p.state == JobState.cancelled && byPause) {
+      // Stopped by Pause: it is tried again at Resume (also when Resume came before this tick saw the job end).
       _tried.remove(path);
       log?.call('index of $path paused');
     } else {
