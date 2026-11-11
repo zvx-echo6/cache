@@ -248,6 +248,26 @@ void main() {
     expect(pdfCore.calls, hasLength(5), reason: 'tried once for each open or rescan');
   });
 
+  test('Pause while a ZIM\'s PDFs are being listed keeps the PDF run from starting; Resume starts it', () async {
+    status['a.zim'] = _st('a.zim', pdf: {'state': 'none'});
+    final driver = make(withPdf: true)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    driver.tick();
+    expect(driver.busy, isTrue, reason: 'the list is being made');
+    driver.pause();
+    await pumpEventQueue();
+    expect(pdfCore.calls, ['list:id-a.zim'], reason: 'no PDF is opened, read or added while paused');
+    expect(driver.busy, isFalse);
+    expect(driver.failures, isEmpty);
+    driver.tick();
+    await pumpEventQueue();
+    expect(pdfCore.calls, ['list:id-a.zim']);
+    driver.resume();
+    driver.tick();
+    await pumpEventQueue();
+    expect(pdfCore.calls, ['list:id-a.zim', 'list:id-a.zim', 'open:id-a.zim', 'add:a.pdf', 'close', 'finish']);
+  });
+
   test('a ZIM whose PDF index is ready, or that has no PDFs, is left alone', () async {
     status['ready.zim'] = _st('ready.zim', pdf: {'state': 'ready', 'snapshot': 's'});
     status['none.zim'] = _st('none.zim', pdf: {'state': 'none'});

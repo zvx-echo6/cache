@@ -323,9 +323,16 @@ class IndexDriver {
       final list = await w.core.zimPdfs(id);
       _pdfCounts['$path|$id'] = list.pdfs.length;
       if (list.pdfs.isEmpty) return;
+      if (_paused) {
+        // Paused while the PDFs were being listed (there was no run to cancel yet): the run does not start, and Resume starts it.
+        _tried.remove(key);
+        log?.call('PDF index of $path paused');
+        return;
+      }
       log?.call('indexing the PDFs of $path (${list.pdfs.length})');
       final run = _pdfRun = ZimPdfIndexer(core: w.core, read: w.read, indexesDir: w.indexesDir, permit: _pacer.permit, log: log);
-      _pacer.cancelled = () => !_pdfBusy || _timer == null;
+      // A Pause also ends the wait for the host before a PDF; the run then sees its cancel before that PDF.
+      _pacer.cancelled = () => _paused || !_pdfBusy || _timer == null;
       // Progress for the status (index.state) while it runs.
       final watch = Timer.periodic(const Duration(seconds: 1), (_) => progress[key] = run.fraction);
       final ZimPdfEnd end;
