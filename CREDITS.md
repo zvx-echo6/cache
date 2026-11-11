@@ -164,7 +164,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - pdfium_dart 0.2.5: MIT (Copyright (c) 2025 @espresso3389 (Takashi Kawasaki))
 - pdfium_flutter 0.2.3: MIT (Copyright (c) 2025 @espresso3389 (Takashi Kawasaki))
 - pdfrx 2.4.8: MIT (Copyright (c) 2018 @espresso3389 (Takashi Kawasaki))
-- pdfrx_engine 0.4.7: MIT (Copyright (c) 2018 @espresso3389 (Takashi Kawasaki)); a patched copy in third_party/pdfrx_engine (it installs no PDFium font mapper; see its PATCH.md)
+- pdfrx_engine 0.4.7: MIT (Copyright (c) 2018 @espresso3389 (Takashi Kawasaki))
 - petitparser 7.0.2: MIT (Copyright (c) 2006-2024 Lukas Renggli.)
 - platform 3.2.0: BSD-3-Clause (Copyright 2017, the Dart project authors. All rights reserved.)
 - plugin_platform_interface 2.1.8: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
