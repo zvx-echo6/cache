@@ -627,6 +627,44 @@ class CarOverlayTest {
         assertEquals(5.0, CarMarkerMotion.heading(725.0, null)!!, 1e-9)
     }
 
+    @Test
+    fun whileTheMapIsTurnedToTheHeadingTheArrowPointsStraightUpThroughACorner() {
+        // Guidance: the camera's bearing is the heading, frame by frame, so the arrow's turn on the screen is 0 before, during
+        // and after a corner. (It was the heading itself, sent to the map for every degree and shown late.)
+        for (i in 0..30) {
+            val heading = CarMarkerMotion.lerpHeading(350.0, 80.0, i / 30.0)
+            assertEquals(0.0, CarMarkerMotion.arrowTurn(heading, heading), 0.0)
+        }
+        // North up (looking at the map, the route overview): the turn is the heading.
+        assertEquals(90.0, CarMarkerMotion.arrowTurn(90.0, 0.0), 0.0)
+        assertEquals(270.0, CarMarkerMotion.arrowTurn(270.0, 0.0), 0.0)
+        // The driver has panned away while guiding: the camera keeps its bearing, the vehicle turns on.
+        assertEquals(90.0, CarMarkerMotion.arrowTurn(100.0, 10.0), 1e-9)
+        assertEquals(340.0, CarMarkerMotion.arrowTurn(10.0, 30.0), 1e-9)
+        assertEquals(20.0, CarMarkerMotion.arrowTurn(10.0, 350.0), 1e-9)
+        // How far apart two turns are, the shorter way round.
+        assertEquals(2.0, CarMarkerMotion.angleBetween(359.0, 1.0), 1e-9)
+        assertEquals(2.0, CarMarkerMotion.angleBetween(1.0, 359.0), 1e-9)
+        assertEquals(0.0, CarMarkerMotion.angleBetween(0.0, 360.0), 1e-9)
+        assertEquals(180.0, CarMarkerMotion.angleBetween(90.0, 270.0), 1e-9)
+        assertEquals(0.5, CarMarkerMotion.angleBetween(10.0, 10.5), 1e-9)
+    }
+
+    @Test
+    fun parkedWithNoCourseTheMarkerIsADotAfterADriveAsBeforeOne() {
+        // Guiding: a position without a heading keeps the last one.
+        assertEquals(90.0, CarMarkerMotion.heading(null, 90.0, guiding = true)!!, 0.0)
+        assertEquals(45.0, CarMarkerMotion.heading(45.0, 90.0, guiding = true)!!, 0.0)
+        assertNull(CarMarkerMotion.heading(null, null, guiding = true))
+        // Not guiding (the drive is over, the vehicle is parked): a position without a heading has none, whatever the drive's
+        // last heading was, so the marker is the dot (it stayed an arrow with the old heading).
+        assertNull(CarMarkerMotion.heading(null, 90.0, guiding = false))
+        assertNull(CarMarkerMotion.heading(Double.NaN, 90.0, guiding = false))
+        // Moving without guidance: the position's own course.
+        assertEquals(200.0, CarMarkerMotion.heading(200.0, 90.0, guiding = false)!!, 0.0)
+        assertEquals(200.0, CarMarkerMotion.heading(200.0, null, guiding = false)!!, 0.0)
+    }
+
     // ---- the vehicle's movement between positions ------------------------------------------------------------------------
 
     @Test

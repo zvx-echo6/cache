@@ -37,7 +37,6 @@ import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Point
-import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 
@@ -66,8 +65,9 @@ import kotlin.math.max
  * MapLibre layers (they are part of the map, so they follow the camera).
  *
  * The vehicle is an arrow (CarOverlayPainter.arrowBitmap, a symbol layer above the route and the badge) turned to the heading,
- * with its turn tied to the map, so it points the right way whether the map is turned to the heading or north is up. While no
- * heading was ever known it is the plain dot instead.
+ * on the screen: its turn is the heading less the camera's bearing, so it points the right way whether the map is turned to the
+ * heading (the turn is then 0 and stays 0 through a corner) or north is up. While there is no heading to show (none known, or
+ * a position without one while nothing is guided: parked) it is the plain dot instead.
  *
  * The vehicle is the one thing on the map that is animated. Positions come about once a second; between one and the next the
  * marker and the camera glide together at a steady rate (one ValueAnimator drives both: see moveMarker and onGlideFrame), and
@@ -113,7 +113,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var arrowShown: Boolean? = null
     private var shownRotation = Float.NaN
 
-    /** The last heading the phone gave: the arrow keeps it while a position comes without one. */
+    /** The bearing the camera was last given (0: north up). Nothing else turns the map: there is no rotate gesture. */
+    private var cameraBearing = 0.0
+
+    /** The last heading the phone gave: the arrow keeps it while a position comes without one, as long as the trip is guiding. */
     private var lastHeading: Double? = null
 
     /** The position's source in the present style, kept so that a frame does not look it up. */
@@ -162,8 +165,12 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         }
         if (lat != drawnLat || lon != drawnLon || !sameHeading(heading, drawnHeading)) {
             lastFrameAt = now
-            drawMarker(lat, lon, heading)
+            // The camera first: the arrow's turn is worked out against the bearing the camera has in this same frame.
+            drawnLat = lat
+            drawnLon = lon
+            drawnHeading = heading
             glideCamera()
+            drawMarker(lat, lon, heading)
         }
     }
 
@@ -203,6 +210,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 .attributionEnabled(false)
                 .textureMode(false)
             val mv = MapView(p.context, options)
+            // MapLibre draws a frame at every screen refresh for as long as the camera keeps moving (its labels are re-placed
+            // behind the moving camera), whatever the rate the camera is moved at: 60 a second through all of guidance. The
+            // glide moves the camera about 30 times a second, so more than that only draws the same picture twice.
+            mv.setMaximumFps(MAP_MAX_FPS)
             mv.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             val frame = FrameLayout(p.context)
             frame.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -326,6 +337,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     private fun onMap(m: MapLibreMap) {
         map = m
+        cameraBearing = 0.0
         m.uiSettings.setAllGesturesEnabled(false)
         m.uiSettings.isLogoEnabled = false
         m.uiSettings.isAttributionEnabled = false
@@ -437,11 +449,13 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         )
         st.addLayer(dot)
         st.addImage(ARROW_IMAGE, CarOverlayPainter.arrowBitmap(colorOf("position"), colorOf("positionRing"), density))
-        // Turned with the map (so the heading is a compass heading whatever way the map is turned), but upright on the screen
-        // when the map is tilted, as the dot was: its size on the screen does not change with the tilt.
+        // Tied to the screen, not to the map: its turn is the heading less the camera's bearing (showHeading), which is 0 all
+        // through guidance. Tied to the map it had to be turned again for every degree of a corner, and a symbol's turn is laid
+        // out again on a worker each time, so it reached the screen well after the camera's bearing (which is applied at once):
+        // the arrow kept pointing down the old road while the map swung. Upright when the map is tilted, as the dot was.
         val arrow = SymbolLayer("car-pos", SRC_POS).withProperties(
             PropertyFactory.iconImage(ARROW_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
-            PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+            PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_VIEWPORT),
             PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
             PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE),
         )
@@ -461,7 +475,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     }
 
     /** The marker for [heading] (degrees from north; NaN when none is known): the arrow turned to it, or the dot with none.
-     * Only what changed is sent to the map; the arrow is turned again once the heading is [ROTATE_STEP] away from its turn. */
+     * The arrow's turn is on the screen, so it is the heading less the bearing the camera was last given ([cameraBearing]).
+     * Only what changed is sent to the map; the arrow is turned again once that is [ROTATE_STEP] away from the turn it has. */
     private fun showHeading(heading: Double) {
         val arrow = !heading.isNaN()
         if (arrowShown != arrow) {
@@ -470,10 +485,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             dotLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.NONE else Property.VISIBLE))
         }
         if (!arrow) return
-        val r = heading.toFloat()
-        if (shownRotation.isNaN() || abs(r - shownRotation) >= ROTATE_STEP) {
-            shownRotation = r
-            arrowLayer?.setProperties(PropertyFactory.iconRotate(r))
+        val turn = CarMarkerMotion.arrowTurn(heading, cameraBearing)
+        if (shownRotation.isNaN() || CarMarkerMotion.angleBetween(turn, shownRotation.toDouble()) >= ROTATE_STEP) {
+            shownRotation = turn.toFloat()
+            arrowLayer?.setProperties(PropertyFactory.iconRotate(shownRotation))
         }
     }
 
@@ -575,7 +590,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             hasMarker = false
             return false
         }
-        val known = CarMarkerMotion.heading(t.heading, lastHeading)
+        val known = CarMarkerMotion.heading(t.heading, lastHeading, t.guiding)
         lastHeading = known
         val heading = known ?: Double.NaN
         val now = SystemClock.elapsedRealtime()
@@ -643,14 +658,23 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         // While guiding the position sits low in the area, so more of the road ahead shows. The overlay's pieces keep clear of
         // that spot (CarOverlayPainter.vehiclePoint works it out from the same area and the same share).
         val extraTop = if (guiding) CarOverlayPainter.guidanceTopInset(area) else 0.0
+        val bearing = if (guiding) (if (heading.isNaN()) m.cameraPosition.bearing else heading) else 0.0
         val cam = CameraPosition.Builder()
             .target(LatLng(lat, lon))
             .zoom(if (guiding) 16.0 else if (resetZoom) 14.0 else m.cameraPosition.zoom)
-            .bearing(if (guiding) (if (heading.isNaN()) m.cameraPosition.bearing else heading) else 0.0)
+            .bearing(bearing)
             .tilt(if (guiding) 45.0 else 0.0)
             .padding(area.left.toDouble(), area.top + extraTop, max(0, width - area.right).toDouble(), max(0, height - area.bottom).toDouble())
             .build()
         m.moveCamera(CameraUpdateFactory.newCameraPosition(cam))
+        cameraTurnedTo(bearing)
+    }
+
+    /** The camera was given [bearing]: the arrow's turn on the screen follows from it (showHeading), in the same frame. */
+    private fun cameraTurnedTo(bearing: Double) {
+        if (bearing == cameraBearing) return
+        cameraBearing = bearing
+        if (hasMarker) showHeading(drawnHeading)
     }
 
     /** The camera for the phase: the whole route while choosing one, close behind the position and turned to the heading while
@@ -683,6 +707,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                     .bearing(ROUTE_VIEW_BEARING).tilt(ROUTE_VIEW_TILT).build()
                 m.moveCamera(CameraUpdateFactory.newCameraPosition(cam))
             }
+            cameraTurnedTo(ROUTE_VIEW_BEARING)
             // Back in guidance the heading and the tilt return with the next placeCamera: leaving the overview and starting
             // a route both come through follow(force = true). The glide does not touch the camera in these two phases
             // (glideCamera), so nothing turns this view back.
@@ -745,6 +770,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         /** The whole-route view (the route overview and the route choice): north up, not tilted. */
         private const val ROUTE_VIEW_BEARING = 0.0
         private const val ROUTE_VIEW_TILT = 0.0
+
+        /** The most frames a second the car's map is drawn at: the rate the glide moves it at (CarMarkerMotion.MIN_FRAME_MS). */
+        private const val MAP_MAX_FPS = 30
 
         /** The arrow is turned again when the heading is this many degrees from the turn it has. */
         private const val ROTATE_STEP = 1f

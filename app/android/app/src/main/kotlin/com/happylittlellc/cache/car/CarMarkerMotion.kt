@@ -36,10 +36,24 @@ object CarMarkerMotion {
         return if (m < 0) m + 360.0 else m
     }
 
+    /** How far apart two turns are, in degrees, the shorter way round (359 and 1 are 2 apart). */
+    fun angleBetween(a: Double, b: Double): Double = kotlin.math.abs(((a - b) % 360.0 + 540.0) % 360.0 - 180.0)
+
+    /** The arrow's turn on the screen, clockwise from straight up, for a vehicle heading [heading] on a map whose camera is
+     * turned to [cameraBearing] (both compass degrees). The arrow's picture is tied to the screen, not to the map, so this is
+     * the one number that turns it: while the camera is turned to the heading (guidance) it is 0 and stays 0 through every
+     * corner, so the arrow and the map's rotation cannot come apart; with north up it is the heading itself. */
+    fun arrowTurn(heading: Double, cameraBearing: Double): Double = norm(heading - cameraBearing)
+
     /** The heading the arrow shows: the one the phone [reported], or with none the [last] one known. Null when none was ever
      * known: then there is no arrow (a dot is drawn), because an arrow must not point in a made-up direction. */
     fun heading(reported: Double?, last: Double?): Double? =
         if (reported != null && !reported.isNaN() && !reported.isInfinite()) norm(reported) else last
+
+    /** The same, for a trip that is [guiding] or not. While guiding, a position that comes without a heading keeps the last
+     * one (the vehicle is on its route). At any other time a position without a heading has none: the vehicle is parked or
+     * its course is not known, and the marker is the dot, after a drive as before the first one. */
+    fun heading(reported: Double?, last: Double?, guiding: Boolean): Double? = heading(reported, if (guiding) last else null)
 
     /** The share [f] (0 to 1) of the way from [a] to [b]; exactly [a] at 0 and exactly [b] at 1. */
     fun lerp(a: Double, b: Double, f: Double): Double = if (f >= 1.0) b else if (f <= 0.0) a else a + (b - a) * f
