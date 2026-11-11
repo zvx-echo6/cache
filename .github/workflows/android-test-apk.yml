@@ -188,7 +188,9 @@ jobs:
         run: |
           flutter --version
           flutter pub get
-          flutter build apk --release
+          # Test builds never edit pubspec.yaml: the build number comes from the run number, so it rises with each run and is
+          # above every number already installed.
+          flutter build apk --release --build-number=$((100000 + GITHUB_RUN_NUMBER))
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
       - name: Verify the APK
