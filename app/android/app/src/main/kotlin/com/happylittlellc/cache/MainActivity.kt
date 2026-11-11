@@ -2,6 +2,7 @@ package com.happylittlellc.cache
 
 import android.Manifest
 import android.app.ActivityManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.Context
 import android.os.Bundle
