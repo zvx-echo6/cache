@@ -385,6 +385,8 @@ pub struct Step {
     pub end: (f64, f64),
     pub instruction: Option<String>,
     pub follow: Option<Follow>,
+    /// Turn lanes of a road maneuver, for the guidance path only (`to_json` leaves them out).
+    pub lanes: Vec<crate::valhalla::Lane>,
 }
 
 impl Step {
@@ -454,6 +456,7 @@ fn make_step(run: &Run, vi: usize, vj: usize, mode: &str, extra_s: f64, min_leg_
         end: pt(run.pt(b)),
         instruction: None,
         follow,
+        lanes: Vec::new(),
     };
     (step, (p.dist, dur))
 }
