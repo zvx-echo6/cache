@@ -100,7 +100,7 @@ fn run(t: &NavigateTool, args: Value) -> Value {
     let ctx = ToolCtx { location: Some(&here), places: &NoSavedPlaces, now: "2026-10-25T12:00:00-06:00", geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args) {
         Ok(ToolOutput::Json(v)) => v,
-        Ok(ToolOutput::Text(_)) => panic!("text"),
+        Ok(ToolOutput::Text(_) | ToolOutput::Pieces(_)) => panic!("text"),
         Err(e) => e.to_json(),
     }
 }
