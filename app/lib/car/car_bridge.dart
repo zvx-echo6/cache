@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../maps/maps_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../maps/palette/map_palette.dart';
 import '../maps/ui/map_assets.dart';
 import '../nav/nav_geojson.dart';
@@ -29,6 +30,8 @@ class CarBridge {
     required this.nav,
     required this.maps,
     required this.drive,
+    this.elevation,
+    this.theme,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -40,6 +43,12 @@ class CarBridge {
   final NavState nav;
   final MapsState maps;
   final CarDriveSource drive;
+
+  /// The app-level elevation of the route shown (one for the phone's Maps screen and the car); null: the car draws no climb card.
+  final RouteElevation? elevation;
+
+  /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
+  final CacheThemeId Function()? theme;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -81,6 +90,7 @@ class CarBridge {
     _started = true;
     _channel.setMethodCallHandler(_onCall);
     nav.addListener(_schedule);
+    elevation?.addListener(_schedule);
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
     try {
@@ -97,6 +107,7 @@ class CarBridge {
   void dispose() {
     _pushTimer?.cancel();
     nav.removeListener(_schedule);
+    elevation?.removeListener(_schedule);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -148,7 +159,9 @@ class CarBridge {
     final onRoute = nav.guiding && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
-    return carTrip(nav, position: pos, heading: heading);
+    // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
+    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark);
   }
 
   Future<void> push() async {

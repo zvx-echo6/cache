@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
+import 'package:cache/car/car_overlay.dart';
+import 'package:cache/maps/palette/map_palette.dart';
+import 'package:cache/nav/elevation/elevation_profile.dart';
+import 'package:cache/theme.dart';
 import 'package:cache/car/car_trip.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
@@ -10,6 +15,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -181,6 +187,152 @@ void main() {
     test('the speed is the route average, at least walking pace', () {
       final r = MapRoute.fromJson(routeJson);
       expect(simulatedSpeed(r), closeTo(r.distanceM / r.durationS, 1e-9));
+    });
+  });
+
+  group('the climb card and the route mini map (car_overlay.dart)', () {
+    // Sample data: a gentle rise for 9 km, then 2 km at about 9%, then flat.
+    ElevationProfile profile(double total) {
+      final dist = <double>[], h = <double>[];
+      for (var d = 0.0; d <= total; d += 40) {
+        dist.add(d);
+        h.add(1000 + (d < 9000 ? d * 0.02 : d < 11000 ? 180 + (d - 9000) * 0.09 : 360));
+      }
+      return ElevationProfile.fromSamples(dist, h, totalM: total);
+    }
+
+    Future<void> guide(double fraction) async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, fraction)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.8 + 0.3 * fraction, heading: 90));
+      await settle();
+    }
+
+    test('no elevation data: no climb block, but the mini map and palette still go', () async {
+      await guide(0.1);
+      final t = carTrip(nav);
+      expect(t.containsKey('climb'), isFalse);
+      expect(t['overview'], isNotNull);
+      expect(t['palette'], isNotNull);
+      expect(t['overlay'], {'climb': kCarClimbAheadDefault, 'miniMap': kCarRouteMiniMapDefault});
+      final none = ElevationProfile.none(24000);
+      expect(none.hasData, isFalse);
+      expect(carClimb(none, distanceAlongM: 0, routeM: 24000), isNull);
+      expect(carClimb(null, distanceAlongM: 0, routeM: 24000), isNull);
+      expect(carTrip(nav, elevation: none).containsKey('climb'), isFalse);
+    });
+
+    test('the climb block: climb ahead, steepest grade and how far, heights and the steep span', () async {
+      final total = (routeJson['distance_m'] as num).toDouble();
+      final p = profile(total);
+      final c = carClimb(p, distanceAlongM: 0, routeM: total)!;
+      expect((c['heightsM'] as List), hasLength(kClimbSamples));
+      expect((c['heightsM'] as List).first, closeTo(1000, 2));
+      expect(c['climbAheadM'] as double, closeTo(360, 30));
+      expect(c['gradePct'] as double, closeTo(9, 1.5));
+      expect(c['steepestInM'] as double, closeTo(9000, 700));
+      final from = c['steepFrom'] as int, to = c['steepTo'] as int;
+      expect(from, lessThan(to));
+      expect(to, lessThanOrEqualTo(kClimbSamples - 1));
+      expect(c['windowM'] as double, greaterThanOrEqualTo(8000));
+
+      // Further along: the steep part is nearer, the heights start at the position, and less climb is left.
+      final later = carClimb(p, distanceAlongM: 4000, routeM: total)!;
+      expect(later['steepestInM'] as double, lessThan(c['steepestInM'] as double));
+      expect(later['climbAheadM'] as double, lessThan(c['climbAheadM'] as double));
+      expect((later['heightsM'] as List).first, closeTo(1000 + 4000 * 0.02, 3));
+
+      // On the steep part: it counts from the position, and it is 0 m away.
+      final on = carClimb(p, distanceAlongM: 10000, routeM: total)!;
+      expect(on['steepestInM'], 0);
+      // Past it: no steep climb, so no grade and no span.
+      final past = carClimb(p, distanceAlongM: 12000, routeM: total)!;
+      expect(past['gradePct'], isNull);
+      expect(past['steepFrom'], isNull);
+    });
+
+    test('the climb block is in the trip while guiding, with the heights and the overview', () async {
+      await guide(0.1);
+      final total = nav.route!.distanceM;
+      final t = carTrip(nav, elevation: profile(total));
+      expect(t['climb'], isNotNull);
+      expect((t['climb'] as Map)['heightsM'], hasLength(kClimbSamples));
+    });
+
+    test('the overview: the route simplified, the driven fraction, the steepest point and the destination', () async {
+      await guide(0.33);
+      final total = nav.route!.distanceM;
+      final t = carTrip(nav, elevation: profile(total));
+      final o = t['overview'] as Map;
+      expect(o['drivenFraction'], closeTo(0.33, 0.001));
+      expect((o['points'] as List).length, lessThanOrEqualTo(kOverviewMaxPoints));
+      final steep = o['steep'] as Map;
+      expect(steep['gradePct'] as double, closeTo(9, 1.5));
+      // The steep part is about 9 to 11 km of 24.6 km along a straight east line.
+      expect(steep['lon'] as double, greaterThan(-113.8 + 0.3 * 0.35));
+      expect(steep['lon'] as double, lessThan(-113.8 + 0.3 * 0.5));
+      expect((o['destination'] as Map)['lon'], -113.5);
+      // Without elevation there is no steep point.
+      expect((carTrip(nav)['overview'] as Map)['steep'], isNull);
+    });
+
+    test('a long route is cut to at most 150 points and keeps both ends', () {
+      final pts = [for (var i = 0; i < 3000; i++) GeoPoint(42.5 + 0.0002 * i + 0.00005 * ((i * 37) % 11), -113.8 + 0.0003 * i + 0.00008 * ((i * 17) % 7))];
+      final s = simplifyRoute(pts, kOverviewMaxPoints);
+      expect(s.length, lessThanOrEqualTo(kOverviewMaxPoints));
+      expect(s.first, pts.first);
+      expect(s.last, pts.last);
+    });
+
+    test('no route: no overview', () {
+      expect(carOverview(null, distanceAlongM: 0), isNull);
+    });
+
+    test('day and night themes: the chosen theme when it fits, else Light by day and Dark by night', () {
+      expect(carDayTheme(CacheThemeId.parchment), CacheThemeId.parchment);
+      expect(carDayTheme(CacheThemeId.light), CacheThemeId.light);
+      expect(carDayTheme(CacheThemeId.dark), CacheThemeId.light);
+      expect(carDayTheme(CacheThemeId.tactical), CacheThemeId.light);
+      expect(carNightTheme(CacheThemeId.tactical), CacheThemeId.tactical);
+      expect(carNightTheme(CacheThemeId.dark), CacheThemeId.dark);
+      expect(carNightTheme(CacheThemeId.light), CacheThemeId.dark);
+      expect(carNightTheme(CacheThemeId.parchment), CacheThemeId.dark);
+      final p = carOverlayPalette(CacheThemeId.tactical);
+      expect((p['day'] as Map)['theme'], 'light');
+      expect((p['night'] as Map)['theme'], 'tactical');
+    });
+
+    test('palette colors come from the theme tokens: one route color, a white badge, and Tactical all red', () {
+      for (final id in [CacheThemeId.light, CacheThemeId.dark]) {
+        final c = carOverlayColors(id);
+        expect(c['route'], mapPaletteFor(id).css('route'));
+        final hsl = HSLColor.fromColor(Color(int.parse('FF${c['route']!.substring(1)}', radix: 16)));
+        expect(hsl.hue, inInclusiveRange(180, 260), reason: '${id.name} route is blue, never a traffic color');
+      }
+      expect(carOverlayColors(CacheThemeId.parchment)['route'], mapPaletteFor(CacheThemeId.parchment).css('route'));
+      expect(carOverlayColors(CacheThemeId.light)['badge'], '#ffffff');
+      expect(carOverlayColors(CacheThemeId.dark)['badgeGlyph'], '#161b20');
+      final t = carOverlayColors(CacheThemeId.tactical);
+      expect(t['route'], '#ff5a4a');
+      for (final e in t.entries) {
+        final r = int.parse(e.value.substring(1, 3), radix: 16), g = int.parse(e.value.substring(3, 5), radix: 16), b = int.parse(e.value.substring(5, 7), radix: 16);
+        expect(r >= g && r >= b, isTrue, reason: 'tactical ${e.key} ${e.value} is on the red ramp');
+        expect(g < 0xC0 && b < 0xC0, isTrue, reason: 'tactical ${e.key} is not white');
+      }
+      // Inverted badge: a dark red glyph on a light red pill.
+      expect(t['badge'], isNot(t['badgeGlyph']));
+      expect(t['routeDriven'], isNot(t['route']));
+    });
+
+    test('the Kotlin tests read the same palette: the fixture is these colors', () {
+      final f = File('android/app/src/test/resources/car/overlay_palette.json');
+      final now = {for (final id in CacheThemeId.values) id.name: {'theme': id.name, ...carOverlayColors(id)}};
+      if (Platform.environment['CAR_AA_WRITE_FIXTURE'] == '1') {
+        f.createSync(recursive: true);
+        f.writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(now)}\n');
+      }
+      expect(jsonDecode(f.readAsStringSync()), now, reason: 'run once with CAR_AA_WRITE_FIXTURE=1 to rewrite it');
     });
   });
 

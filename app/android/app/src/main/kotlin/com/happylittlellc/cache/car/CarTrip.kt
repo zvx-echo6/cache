@@ -39,6 +39,10 @@ data class CarTrip(
     val remainingM: Double?,
     val remainingS: Long?,
     val etaMs: Long?,
+    val overlay: CarOverlaySwitches = CarOverlaySwitches.DEFAULT,
+    val climb: CarClimb? = null,
+    val overview: CarOverview? = null,
+    val palette: CarOverlayPalette? = null,
 ) {
     val guiding: Boolean get() = phase == "guiding"
     val previewing: Boolean get() = phase == "previewing"
@@ -87,6 +91,10 @@ data class CarTrip(
                 remainingM = m["remainingM"].asDouble(),
                 remainingS = (m["remainingS"] as? Number)?.toLong(),
                 etaMs = (m["etaMs"] as? Number)?.toLong(),
+                overlay = CarOverlaySwitches.from(m["overlay"]),
+                climb = CarClimb.from(m["climb"]),
+                overview = CarOverview.from(m["overview"]),
+                palette = CarOverlayPalette.from(m["palette"]),
             )
         }
 

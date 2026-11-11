@@ -45,6 +45,7 @@ import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'nav/demo_backend.dart';
+import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
@@ -703,6 +704,8 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
+  late final RouteElevation routeElevation = RouteElevation(loader: tileServerElevationLoader(maps.engine));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
@@ -933,6 +936,8 @@ class _CacheAppState extends State<CacheApp> {
         nav: nav,
         maps: maps,
         drive: carDrive,
+        elevation: routeElevation,
+        theme: () => app.theme,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
@@ -1126,6 +1131,7 @@ class _CacheAppState extends State<CacheApp> {
           video: video,
           browse: browse,
           nav: nav,
+          elevation: routeElevation,
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,

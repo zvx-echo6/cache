@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.graphics.Bitmap
 import androidx.car.app.CarContext
 import androidx.car.app.SurfaceCallback
 import androidx.car.app.SurfaceContainer
@@ -28,6 +30,7 @@ import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import kotlin.math.ln
 import kotlin.math.max
@@ -42,8 +45,19 @@ import kotlin.math.max
  * phone's Flutter map is not touched or moved, and both read the same offline tiles from the core's tile server on 127.0.0.1
  * with the same style, which Dart builds (the light or dark map palette, as the car asks).
  *
- * Only map content is drawn on the surface (quality rule NF-2): the base map, the route, the destination and the position.
- * The turn, distances and arrival time are the templates'.
+ * Quality rule NF-2 says only map content is drawn on the surface: the base map, the route, the destination and the position,
+ * with the turn, distances and arrival time left to the templates. Two things here are deliberately drawn on the surface anyway:
+ * the climb-ahead card (bottom left) and the route mini map (bottom right), plus a grade badge at the steepest point and the
+ * driven part of the route in faded grey on the map. This is in tension with NF-2. The owner chose to try it in review. Both
+ * pieces are on by default, and the defaults are single constants in lib/car/car_overlay.dart (kCarClimbAheadDefault,
+ * kCarRouteMiniMapDefault), so flipping them is a one-line change.
+ *
+ * How the pieces are composited: the Presentation holds a FrameLayout with the MapView and, above it, a [CarOverlayView], an
+ * ordinary View whose onDraw calls [CarOverlayPainter] (pure Canvas drawing). That is the cleanest fit for the VirtualDisplay
+ * set-up: the whole Presentation is already what the host shows, so one more View in it needs no second surface, no second
+ * renderer and no MapLibre change, and it sits exactly over the map in the same pixels. The pieces are static: the View repaints
+ * only in steps (at most once every few seconds) and nothing is animated or touchable. The grade badge and the driven path are
+ * MapLibre layers (they are part of the map, so they follow the camera).
  */
 class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
@@ -60,6 +74,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var width = 0
     private var height = 0
     private var lastCameraPhase: String? = null
+    private var overlayView: CarOverlayView? = null
+    private var routeCoords: List<DoubleArray> = emptyList()
+    private var badgeKey: String? = null
+    private var routeColorKey: String? = null
 
     /** The camera keeps the position in view (the Recenter button turns it back on after panning). */
     var following = true
@@ -97,7 +115,16 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 .textureMode(false)
             val mv = MapView(p.context, options)
             mv.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            p.setContentView(mv)
+            val frame = FrameLayout(p.context)
+            frame.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            frame.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
+            ov.setSurfaceSize(width, height)
+            ov.setVisibleArea(visible ?: stable)
+            ov.setTrip(CarLink.trip, dark, now = true)
+            frame.addView(ov, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            overlayView = ov
+            p.setContentView(frame)
             mv.onCreate(null)
             mv.onStart()
             mv.onResume()
@@ -116,11 +143,13 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     override fun onVisibleAreaChanged(visibleArea: Rect) {
         visible = Rect(visibleArea)
+        overlayView?.setVisibleArea(visible)
         follow(force = true)
     }
 
     override fun onStableAreaChanged(stableArea: Rect) {
         stable = Rect(stableArea)
+        if (visible == null) overlayView?.setVisibleArea(stable)
         follow(force = true)
     }
 
@@ -187,6 +216,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun setDark(on: Boolean) {
         if (on == dark) return
         dark = on
+        overlayView?.setTrip(CarLink.trip, dark, now = true)
         loadStyle()
     }
 
@@ -244,6 +274,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         st.addSource(GeoJsonSource(SRC_ROUTE, CarLink.EMPTY_GEOJSON))
         st.addSource(GeoJsonSource(SRC_DEST, CarLink.EMPTY_GEOJSON))
         st.addSource(GeoJsonSource(SRC_POS, CarLink.EMPTY_GEOJSON))
+        st.addSource(GeoJsonSource(SRC_DRIVEN, CarLink.EMPTY_GEOJSON))
+        st.addSource(GeoJsonSource(SRC_BADGE, CarLink.EMPTY_GEOJSON))
+        badgeKey = null
+        routeColorKey = null
         val isAlt = Expression.eq(Expression.get("alt"), Expression.literal(true))
         val isMain = Expression.eq(Expression.get("alt"), Expression.literal(false))
         val isRoad = Expression.eq(Expression.get("kind"), Expression.literal("road"))
@@ -265,6 +299,13 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND), PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ),
         )
+        // The part already driven, faded grey, over the route line (the grey comes from the theme tokens, Dart's palette block).
+        st.addLayer(
+            LineLayer("car-route-driven", SRC_DRIVEN).withProperties(
+                PropertyFactory.lineColor(overlayColors()?.routeDriven?.let { hex(it) } ?: "#4a5866"), PropertyFactory.lineWidth(8f),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND), PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            ),
+        )
         st.addLayer(
             LineLayer("car-route-offroad", SRC_ROUTE).withFilter(Expression.all(isMain, Expression.not(isRoad))).withProperties(
                 PropertyFactory.lineColor(colors.getValue("routeOffroad")), PropertyFactory.lineWidth(8f),
@@ -278,6 +319,11 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             ),
         )
         st.addLayer(
+            SymbolLayer("car-grade-badge", SRC_BADGE).withProperties(
+                PropertyFactory.iconImage(BADGE_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
+            ),
+        )
+        st.addLayer(
             CircleLayer("car-pos", SRC_POS).withProperties(
                 PropertyFactory.circleColor(colors.getValue("position")), PropertyFactory.circleRadius(10f),
                 PropertyFactory.circleStrokeColor(colors.getValue("positionRing")), PropertyFactory.circleStrokeWidth(4f),
@@ -286,6 +332,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     }
 
     override fun onTrip(trip: CarTrip) {
+        overlayView?.setTrip(trip, dark, now = false)
         applyTrip(trip)
         follow(force = trip.phase != lastCameraPhase)
     }
@@ -305,6 +352,43 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     private fun applyRoute(geojson: String) {
         style?.getSourceAs<GeoJsonSource>(SRC_ROUTE)?.setGeoJson(geojson)
+        routeCoords = CarOverlayGeo.mainRoute(geojson)
+        applyDriven(CarLink.trip)
+    }
+
+    private fun overlayColors(t: CarTrip = CarLink.trip): CarOverlayColors? = t.palette?.forMode(dark)
+
+    private fun hex(c: Int): String = String.format("#%06x", c and 0xFFFFFF)
+
+    /** The driven part of the route (faded grey) and the grade badge at the steepest point; both follow the trip's figures. */
+    private fun applyDriven(t: CarTrip) {
+        val st = style ?: return
+        val ov = t.overview
+        val driven = if (t.guiding && ov != null) CarOverlayGeo.drivenGeoJson(routeCoords, ov.drivenFraction) else CarLink.EMPTY_GEOJSON
+        st.getSourceAs<GeoJsonSource>(SRC_DRIVEN)?.setGeoJson(driven)
+        val pal = overlayColors(t)
+        if (pal != null) {
+            val key = "${pal.theme}|${dark}"
+            if (key != routeColorKey) {
+                routeColorKey = key
+                st.getLayer("car-route")?.setProperties(PropertyFactory.lineColor(hex(pal.route)))
+                st.getLayer("car-route-driven")?.setProperties(PropertyFactory.lineColor(hex(pal.routeDriven)))
+            }
+        }
+        // The badge shows with the climb switch, at the steepest point ahead.
+        val g = ov?.steepGradePct
+        val showBadge = t.guiding && t.overlay.climb && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
+        if (showBadge) {
+            val key = "${pal!!.theme}|${dark}|${CarOverlayPainter.gradeText(g!!)}"
+            if (key != badgeKey) {
+                badgeKey = key
+                val bmp: Bitmap = CarOverlayPainter.badgeBitmap(g, pal, carContext.resources.displayMetrics.density)
+                st.addImage(BADGE_IMAGE, bmp)
+            }
+            st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(point(ov.steepLat, ov.steepLon))
+        } else {
+            st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(CarLink.EMPTY_GEOJSON)
+        }
     }
 
     private fun applyTrip(t: CarTrip) {
@@ -312,6 +396,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         st.getSourceAs<GeoJsonSource>(SRC_POS)?.setGeoJson(point(t.lat, t.lon))
         val showDest = t.phase != "browsing"
         st.getSourceAs<GeoJsonSource>(SRC_DEST)?.setGeoJson(if (showDest) point(t.destinationLat, t.destinationLon) else CarLink.EMPTY_GEOJSON)
+        applyDriven(t)
     }
 
     /** The camera for the phase: the whole route while choosing one, close behind the position and turned to the heading while
@@ -371,6 +456,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             }
         }
         mapView = null
+        overlayView?.stop()
+        overlayView = null
         presentation?.dismiss()
         presentation = null
         display?.release()
@@ -388,6 +475,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         private const val SRC_ROUTE = "car-route-src"
         private const val SRC_DEST = "car-dest-src"
         private const val SRC_POS = "car-pos-src"
+        private const val SRC_DRIVEN = "car-driven-src"
+        private const val SRC_BADGE = "car-badge-src"
+        private const val BADGE_IMAGE = "car-grade-badge-img"
         private val DEFAULT_COLORS = mapOf(
             "route" to "#2f7df6", "routeCasing" to "#0b3a8a", "routeOffroad" to "#d9822b", "routeAlternate" to "#8aa4c8",
             "position" to "#2f7df6", "positionRing" to "#ffffff", "pin" to "#d93a3a",
