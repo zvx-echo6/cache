@@ -19,6 +19,7 @@ class NewAlert {
     List<WatchPlace>? places,
     List<String>? addresses,
     this.told = const [],
+    this.marks = const [],
   }) : serious = serious ?? extreme,
        places = places ?? const [],
        addresses = addresses ?? const [];
@@ -38,6 +39,10 @@ class NewAlert {
 
   /// What is remembered of it so a copy that comes later (an update, another source) does not pop up again.
   final List<ToldAlert> told;
+
+  /// Kept in the told list beside [allAddresses]: for a serious fire or other event at "Where I am", that it was told as serious
+  /// ([seriousMark]).
+  final List<String> marks;
 
   /// The source marks it extreme (NWS "Severity: extreme": evacuation orders, tornado and flash flood warnings and the like).
   final bool extreme;
@@ -203,6 +208,20 @@ class ToldAlert {
   }
 }
 
+/// The address of an item at "Where I am" without the position in it: `live:<source>/at:<lat>,<lon>/<item>` as
+/// `live:<source>/at:/<item>`. The place key of "Where I am" is the position rounded to 0.01 degrees, so the same fire has a new
+/// address each time the phone moves about a kilometre. Null for an item at any other place.
+String? hereMark(String address) {
+  final parts = address.split('/');
+  if (parts.length < 3 || !parts[0].startsWith('live:') || !parts[1].startsWith('at:')) return null;
+  // parameters other than a source's defaults are part of the place key ("at:42.54,-113.79~1a2b3c4d"): they stay
+  final cut = parts[1].indexOf('~');
+  return [parts[0], cut < 0 ? 'at:' : 'at:${parts[1].substring(cut)}', ...parts.sublist(2)].join('/');
+}
+
+/// What the told list keeps when the item of [hereMark] was told while it was serious.
+String seriousMark(String mark) => 'serious:$mark';
+
 /// One item that may pop up, before copies of the same alert are joined.
 class _Seen {
   _Seen(this.item, this.view, this.place, this.custom, this.serious, this.extreme);
@@ -235,8 +254,8 @@ bool sameAlert(LiveItem a, WatchPlace pa, bool alertA, LiveItem b, WatchPlace pb
 /// The items in [views] (grouped by place) that have not been told about before, at most one fire source per place (incidents and
 /// perimeters describe the same fires: the source with the most items speaks for them), one pop-up per alert: copies of the same
 /// alert from several sources (NWS and FEMA IPAWS) and at several watched places are joined ([sameAlert]) and pop up once, near
-/// all of those places. [told] holds the addresses told about; [toldAlerts] what is remembered of each alert told about, so an
-/// update or another source's copy does not pop up again ([ToldAlert.matches]).
+/// all of those places. [told] holds the addresses told about (and the [seriousMark]s); [toldAlerts] what is remembered of each
+/// alert told about, so an update or another source's copy does not pop up again ([ToldAlert.matches]).
 /// [rules] gives a place's own alert rule (Places notebook, the place's gear): off pops up nothing for it, custom pops up the
 /// chosen kinds within its distance; the default follows [raisesAlerts]. [fireReach] is how far out fires count as serious for a
 /// place (else a custom rule's distance, else [kFireReachMiles]).
@@ -274,9 +293,20 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
       g.add(s);
     }
   }
+  // "Where I am" moved: a fire (or another event that is not a warning; warnings are known by their identifiers) told at one
+  // position is the same one at the next, though its address differs. It pops up again only when it is serious now and was not
+  // told as serious before: a fire first seen far away still pops up once it is close.
+  final toldHere = {for (final a in told) ?hereMark(a)};
+  bool toldAtAnotherPosition(_Seen s) {
+    if (s.alert) return false;
+    final mark = hereMark(s.item.address);
+    if (mark == null || !toldHere.contains(mark)) return false;
+    return !s.serious || told.contains(seriousMark(mark));
+  }
+
   final out = <NewAlert>[];
   for (final g in groups) {
-    final isTold = g.any((s) => told.contains(s.item.address) || (s.alert && toldAlerts.any((t) => t.matches(s.item, s.place.id))));
+    final isTold = g.any((s) => told.contains(s.item.address) || (s.alert && toldAlerts.any((t) => t.matches(s.item, s.place.id))) || toldAtAnotherPosition(s));
     if (isTold) continue;
     final first = g.first;
     final places = <WatchPlace>[];
@@ -293,6 +323,11 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
       serious: g.any((s) => s.serious),
       custom: g.any((s) => s.custom),
       told: [for (final s in g) if (s.alert) ToldAlert.of(s.item, [for (final p in places) p.id])],
+      marks: [
+        for (final s in g)
+          if (!s.alert && s.serious)
+            if (hereMark(s.item.address) case final m?) seriousMark(m),
+      ],
     ));
   }
   return out;

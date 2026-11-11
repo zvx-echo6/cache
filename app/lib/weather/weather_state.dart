@@ -1503,7 +1503,7 @@ class WeatherState extends ChangeNotifier {
         if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
       }
     }
-    await t.add([for (final a in fresh) ...a.allAddresses], alerts: [for (final a in fresh) ...a.told]);
+    await t.add([for (final a in fresh) ...a.allAddresses, for (final a in fresh) ...a.marks], alerts: [for (final a in fresh) ...a.told]);
     return shown;
   }
 

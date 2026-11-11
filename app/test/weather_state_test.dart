@@ -1403,6 +1403,44 @@ void main() {
       expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
     });
 
+    // 1.1 audit: the address of an item at "Where I am" holds the position (rounded to 0.01 degrees) and a fire was known as told
+    // by its address only, so the same fire popped up as new each time the phone moved about a kilometre.
+    test('a fire told at one position of "Where I am" is not new at the next; it pops up once more when it becomes serious', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      Map<String, dynamic> fireAt(String key, String distance, {List<String> more = const []}) => {
+        'age': '5 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/$key/EF1', 'label': 'East Fork fire', 'fields': {'Distance': distance}},
+          for (final m in more) {'address': 'live:wfigs-incidents-near/$key/$m', 'label': m, 'fields': {'Distance': '40 mi W'}},
+        ],
+      };
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.54,-113.79', '38 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'new');
+      expect(n.shown.single.serious, isFalse);
+      // the phone moves about a kilometre: the same fire comes under a new address
+      h.here = (lat: 42.55, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.55,-113.79', '37 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'the same fire, told already');
+      // a drive towards it: within 10 mi it is serious, which it was not when it was told
+      h.here = (lat: 42.90, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.90,-113.79', '8 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'serious now: told once more');
+      expect(n.shown.last.serious, isTrue);
+      h.here = (lat: 42.91, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.91,-113.79', '7 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'told as serious already');
+      // a fire not told before is still new there
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.91,-113.79', '7 mi S', more: ['Forleen fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire', 'Forleen fire']);
+    });
+
     // 1.1 audit: a check reads what was told, shows, then writes. Two at once both saw a new alert before either had written.
     test('two alert checks at once tell a new fire once', () async {
       final n = FakeNotifier();

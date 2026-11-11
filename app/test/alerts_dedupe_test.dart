@@ -181,6 +181,28 @@ void main() {
       dir.deleteSync(recursive: true);
     });
 
+    test('an item at "Where I am" is known without the position in its address; at a saved place by its address', () {
+      expect(hereMark('live:wfigs-incidents-near/at:42.54,-113.79/EF1'), 'live:wfigs-incidents-near/at:/EF1');
+      expect(hereMark('live:wfigs-incidents-near/at:42.55,-113.79/EF1'), hereMark('live:wfigs-incidents-near/at:42.54,-113.79/EF1'));
+      expect(hereMark('live:own-creek/at:42.54,-113.79~1a2b3c4d/a/b'), 'live:own-creek/at:~1a2b3c4d/a/b');
+      expect(hereMark('live:wfigs-incidents-near/home/EF1'), isNull);
+      expect(hereMark(seriousMark('live:wfigs-incidents-near/at:/EF1')), isNull);
+      // a saved place: a fire told near Home is still new when it comes near Cabin later
+      final home = place('place:home', 'Home'), cabin = place('place:cabin', 'Cabin');
+      LiveItem fire(String p) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$p/f1', 'label': 'East Fork fire', 'fields': {'Distance': '40 mi N'}});
+      final told = {fire('home').address};
+      expect(pickNewAlerts({home: [view(home, fireSrc, [fire('home')])]}, told), isEmpty);
+      expect(pickNewAlerts({cabin: [view(cabin, fireSrc, [fire('cabin')])]}, told), hasLength(1));
+      // "Where I am": the same fire at another position is told already, until it is serious and was not told as serious
+      const here = WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Where I am', subtitle: '', lat: 42.55, lon: -113.79, key: 'at:42.55,-113.79');
+      LiveItem at(String key, String miles) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$key/f1', 'label': 'East Fork fire', 'fields': {'Distance': miles}});
+      final before = {at('at:42.54,-113.79', '40 mi N').address};
+      expect(pickNewAlerts({here: [view(here, fireSrc, [at('at:42.55,-113.79', '39 mi N')])]}, before), isEmpty);
+      final close = pickNewAlerts({here: [view(here, fireSrc, [at('at:42.55,-113.79', '4 mi N')])]}, before);
+      expect(close.single.marks, ['serious:live:wfigs-incidents-near/at:/f1']);
+      expect(pickNewAlerts({here: [view(here, fireSrc, [at('at:42.56,-113.79', '3 mi N')])]}, {...before, ...close.single.allAddresses, ...close.single.marks}), isEmpty);
+    });
+
     test('fires are joined only with the same fire of the same source', () {
       final home = place('place:home', 'Home'), cabin = place('place:cabin', 'Cabin');
       LiveItem fire(String p, String k) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$p/$k', 'label': 'East Fork fire', 'fields': {'Distance': '4 mi N'}});
