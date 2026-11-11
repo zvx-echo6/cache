@@ -167,6 +167,7 @@ class _ShellState extends State<Shell> {
 
   /// This opening of Ask has had its read ahead (or has none to have).
   bool _openingRead = false;
+  int _seenGeneration = 0;
 
   /// Completes when this opening's read ahead has finished, been skipped or stopped, or none is coming (the test APK's switch that
   /// defers the search model's load until then reads it).
@@ -206,6 +207,10 @@ class _ShellState extends State<Shell> {
 
   void _onApp() {
     final app = widget.app;
+    if (app.modelGeneration != _seenGeneration) {
+      _seenGeneration = app.modelGeneration;
+      _openingRead = false; // another model is loaded while Ask stays open: it gets its read ahead
+    }
     _readAhead(); // Ask was opened while the model loaded: its read starts when the load is done
     final arrived = _noModelSeen && app.started && app.models.isNotEmpty;
     if (app.started) _noModelSeen = app.models.isEmpty;
@@ -246,6 +251,7 @@ class _ShellState extends State<Shell> {
     // PDF indexing's messages ("Another device finished this. Using its index.").
     pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
+    _seenGeneration = widget.app.modelGeneration;
     widget.app.addListener(_onApp);
     _lifecycle;
     _navEvents = widget.nav.events.listen((e) {

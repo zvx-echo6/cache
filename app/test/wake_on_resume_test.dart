@@ -261,6 +261,19 @@ void main() {
       await tearDownShell(tester);
     });
 
+    testWidgets('another model loaded while Ask stays open: the new model gets its read ahead', (tester) async {
+      await setUpShell(tester);
+      await openAsk(tester);
+      await until(tester, () => engine.checks.isNotEmpty);
+      expect(engine.checks, [true]);
+      engine.checks.clear();
+      await tester.runAsync(r.app.release);
+      await tester.runAsync(r.app.wake); // the model is loaded again (a new generation), Ask never closed
+      await until(tester, () => engine.checks.isNotEmpty);
+      expect(engine.checks, [true], reason: 'a new model: one read');
+      await tearDownShell(tester);
+    });
+
     testWidgets('another module shown: nothing loads on resume', (tester) async {
       await setUpShell(tester); // Home is shown; there is room
       await background(tester);
@@ -361,6 +374,17 @@ void main() {
       expect(session.calls, ['unload', 'load']);
       expect(app.active, isNotNull);
       consistent();
+    });
+
+    test('a manual unload in progress: a load that follows waits for it, as after a release', () async {
+      session.unloadGate = Completer<void>();
+      final un = app.unload();
+      final act = app.activate(app.models.first);
+      await pause(30);
+      expect(session.calls, ['unload'], reason: 'the load has not begun under the unload');
+      session.unloadGate!.complete();
+      await Future.wait([un, act]);
+      expect(session.calls, ['unload', 'load']);
     });
 
     test('the release timer fires while a wake-load is in flight: it waits, and never unloads a model just asked for', () async {

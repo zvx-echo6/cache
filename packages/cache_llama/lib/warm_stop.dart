@@ -46,8 +46,9 @@ class WarmStopPolicy {
     if (_warmInFlight) _background = true;
   }
 
-  /// A read is in flight and no question is waiting behind it: Cache going to the background may stop it.
-  bool get canStopRead => _warmInFlight && !_joined;
+  /// A read is in flight and no live question is waiting behind it (none joined, or the one that joined was cancelled by Stop):
+  /// Cache going to the background may stop it.
+  bool get canStopRead => _warmInFlight && (!_joined || _cancelled);
 
   bool get warmInFlight => _warmInFlight;
 

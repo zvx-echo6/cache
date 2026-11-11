@@ -249,6 +249,19 @@ void main() {
       expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
     });
 
+    test('join, Stop (the question is cancelled), then Cache goes to the background: the read is stopped', () async {
+      final (reading, asked, go) = await joinedQuestion();
+      chat.stop(); // only the question is cancelled; the read goes on
+      expect(native.stopCalls, 0);
+      ahead.toBackground(); // no live question waits behind the read any more
+      go.complete();
+      await reading;
+      await asked;
+      expect(native.stopCalls, 1, reason: 'the background stop reached the read');
+      expect(native.files, isEmpty, reason: 'stopped, nothing saved');
+      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
+    });
+
     test('a Stop with no question joined is the full stop', () async {
       final inRead = Completer<void>();
       final go = Completer<void>();

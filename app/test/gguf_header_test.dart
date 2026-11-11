@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cache/models/gguf_header.dart';
+import 'package:cache/platform/memory.dart' show modelMemoryNeed;
+import 'package:cache/platform/memory_need.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Writes a GGUF header by hand.
@@ -139,6 +141,22 @@ void main() {
     expect(h.tensors[0].bytes, 2 * 34 * 100);
     expect(h.tensors[1].bytes, 144 * 8, reason: 'Q4_K: 256 elements in 144 bytes');
     expect(h.tensors[2].bytes, 64 * 4);
+  });
+
+  test('one read is at most 16 MiB: a string length above it is a damaged header (null), and the size estimate takes over', () async {
+    final g = _Gguf()
+      ..bytes(utf8.encode('GGUF'))
+      ..u32(3)
+      ..u64(0) // no tensors
+      ..u64(1) // one metadata entry
+      ..u64(20 << 20); // its key claims 20 MiB
+    // The file is long enough to hold that key, so only the cap says no.
+    final body = Uint8List(g.build().length + (21 << 20))..setAll(0, g.build());
+    final f = File('${dir.path}/huge-string.gguf')..writeAsBytesSync(body);
+    expect(readGgufHeader(f.path), isNull);
+    final need = (await memoryNeedForFile(f.path, fallbackBytes: 3 << 30))!;
+    expect(need.fromHeader, isFalse, reason: 'the size-based fallback applies');
+    expect(need.sizeTotal, modelMemoryNeed(3 << 30));
   });
 
   test('a file that is not a version 3 GGUF, or that ends inside the header, gives null', () {
