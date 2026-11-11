@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/ui/place_map.dart';
 import 'package:cache/notebook/notebook_model.dart';
@@ -151,13 +152,40 @@ void main() {
       expect(cam.moves, isEmpty);
     });
 
-    testWidgets('no permission, nothing remembered, no places: a regional zoom, never 3', (tester) async {
+    testWidgets('nothing at all: the wide view, the first tap only zooms in (pin unchanged), a later tap places the pin', (tester) async {
       final cam = _Cam();
-      await tester.pumpWidget(_host(_Pin(cam, ValueNotifier(null))));
+      final pin = ValueNotifier<NbPlace?>(null);
+      await tester.pumpWidget(_host(_Pin(cam, pin)));
       await tester.pump(kPlaceFixWait + const Duration(milliseconds: 100));
       await tester.pump();
-      expect(cam.initial!.zoom, greaterThan(3));
-      expect(cam.initial!.zoom, kPlaceRegion.zoom);
+      expect(cam.initial!.zoom, kPlaceWideView.zoom);
+      cam.tapped!(LatLng(43.5, -112.0));
+      await tester.pump();
+      expect(pin.value, isNull);
+      expect(cam.moves.single.$2, kPrecisePlaceZoom);
+      expect(cam.moves.single.$1.latitude, 43.5);
+      cam.tapped!(LatLng(43.51, -112.01));
+      await tester.pump();
+      expect(pin.value!.lat, 43.51);
+      expect(cam.moves.last.$2, isNull);
+    });
+
+    testWidgets('a downloaded region: opens on its centre', (tester) async {
+      final cam = _Cam();
+      const region = GeoBounds(south: 42.5, west: -113.8, north: 42.6, east: -113.66);
+      await tester.pumpWidget(_host(_Pin(cam, ValueNotifier(null), fallback: () async => placeFallbackCamera(regions: const [region]))));
+      await tester.pump(kPlaceFixWait + const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(cam.initial!.target.latitude, closeTo(42.55, 1e-9));
+      expect(cam.initial!.target.longitude, closeTo(-113.73, 1e-9));
+      expect(cam.initial!.zoom, kPlaceZoom);
+    });
+
+    test('a big region fits at a lower zoom, the largest one is used', () {
+      final c = placeFallbackCamera(regions: const [GeoBounds(south: 42.5, west: -113.8, north: 42.6, east: -113.66), GeoBounds(south: 40, west: -120, north: 48, east: -110)])!;
+      expect(c.lat, 44.0);
+      expect(c.zoom, lessThan(kPlaceZoom));
+      expect(c.zoom, greaterThanOrEqualTo(3));
     });
 
     test('the fallback: the last camera, else the places\' middle at the place zoom, else nothing', () {
@@ -251,7 +279,7 @@ void main() {
       await open(tester, d);
       await tester.pump(kPlaceFixWait + const Duration(milliseconds: 100));
       await tester.pump();
-      expect(cam.initial!.zoom, kPlaceRegion.zoom);
+      expect(cam.initial!.zoom, kPlaceWideView.zoom);
       expect(cam.moves, isEmpty);
     });
 
@@ -261,7 +289,7 @@ void main() {
       await open(tester, await deps(tester, untouched, fixAfter: const Duration(seconds: 5)));
       await tester.pump(const Duration(seconds: 6));
       await tester.pump();
-      expect(untouched.initial!.zoom, kPlaceRegion.zoom);
+      expect(untouched.initial!.zoom, kPlaceWideView.zoom);
       _expectClose(untouched);
 
       final touched = _Cam();
@@ -274,7 +302,7 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       await tester.pump();
       expect(touched.moves, isEmpty);
-      expect(touched.end.zoom, kPlaceRegion.zoom);
+      expect(touched.end.zoom, kPlaceWideView.zoom);
     });
 
     testWidgets('editing an existing place opens on its pin at the place zoom', (tester) async {
@@ -304,7 +332,7 @@ void main() {
       // The opening position fix is slow; the person has the map open on the fallback and presses "Where I am".
       await tester.pump(const Duration(seconds: 4));
       await tester.pump();
-      expect(cam.initial!.zoom, kPlaceRegion.zoom);
+      expect(cam.initial!.zoom, kPlaceWideView.zoom);
       await tester.tap(find.byKey(const ValueKey('picker-here')));
       await tester.pump(const Duration(seconds: 6));
       await tester.pump(const Duration(milliseconds: 100));
@@ -327,6 +355,26 @@ void main() {
       await tester.pump(const Duration(seconds: 2));
       await tester.pump();
       _expectClose(cam);
+    });
+
+    testWidgets('the picker from the wide view: the first tap zooms in and leaves the spot unset, the next sets it', (tester) async {
+      bigView(tester);
+      final cam = _Cam();
+      final d = await deps(tester, cam, fixAfter: Duration.zero, fix: false);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+      ));
+      await tester.pump(kPlaceFixWait + const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(cam.initial!.zoom, kPlaceWideView.zoom);
+      cam.tapped!(LatLng(43.5, -112.0));
+      await tester.pump();
+      expect(cam.moves.single.$2, kPrecisePlaceZoom);
+      expect(find.text('Move the map to the spot'), findsOneWidget);
+      cam.tapped!(LatLng(43.51, -112.01));
+      await tester.pump();
+      expect(find.text('43.51000, -112.01000'), findsOneWidget);
     });
   });
 }

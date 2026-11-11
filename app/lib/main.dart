@@ -770,11 +770,11 @@ class _CacheAppState extends State<CacheApp> {
   });
   // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
   // and directions.
-  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places.
+  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places, else a downloaded region's centre.
   Future<({double lat, double lon, double zoom})?> _placeMapFallback() async {
     final last = maps.savedCamera;
     if (last != null && last.zoom >= 6) return placeFallbackCamera(last: last);
-    return placeFallbackCamera(places: await notebookPlaces.saved());
+    return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
   }
 
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(

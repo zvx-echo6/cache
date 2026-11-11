@@ -10,6 +10,7 @@ import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
 import '../../theme.dart';
+import '../geo.dart';
 import '../maps_state.dart';
 import '../palette/map_palette.dart';
 import '../style/style_generator.dart';
@@ -22,20 +23,40 @@ const double kPlaceZoom = 16;
 /// How long the map waits for the phone's position before it opens without one.
 const Duration kPlaceFixWait = Duration(seconds: 3);
 
-/// Where the map opens with no pin and no fix: a region at a mid zoom, never the whole continent.
-const ({double lat, double lon, double zoom}) kPlaceRegion = (lat: 44.0, lon: -114.5, zoom: 6);
+/// Below this zoom a tap on the place map zooms in on the tapped spot instead of moving the pin, so a place can never be saved
+/// from a wide view by one tap.
+const double kPrecisePlaceZoom = 10;
+
+/// The last resort when there is no pin, no fix, no remembered camera, no places and no downloaded region: the wide view. Taps
+/// zoom in on it ([kPrecisePlaceZoom]) before they place anything.
+const ({double lat, double lon, double zoom}) kPlaceWideView = (lat: 39.8, lon: -98.6, zoom: 3);
 
 /// A camera to open on when there is no position: the Maps tab's last camera (when it was zoomed in to somewhere), else the
-/// middle of [places] at [kPlaceZoom], else null (the caller falls back to [kPlaceRegion]).
-({double lat, double lon, double zoom})? placeFallbackCamera({SavedCamera? last, List<NbPlace> places = const []}) {
+/// middle of [places] at [kPlaceZoom], else the centre of a downloaded map region ([regions], the largest one) at the zoom that
+/// fits it (at most [kPlaceZoom]), else null (the caller falls back to [kPlaceWideView]).
+({double lat, double lon, double zoom})? placeFallbackCamera({SavedCamera? last, List<NbPlace> places = const [], List<GeoBounds> regions = const []}) {
   if (last != null && last.zoom >= 6) return (lat: last.lat, lon: last.lon, zoom: last.zoom);
-  if (places.isEmpty) return null;
-  var la = 0.0, lo = 0.0;
-  for (final p in places) {
-    la += p.lat;
-    lo += p.lon;
+  if (places.isNotEmpty) {
+    var la = 0.0, lo = 0.0;
+    for (final p in places) {
+      la += p.lat;
+      lo += p.lon;
+    }
+    return (lat: la / places.length, lon: lo / places.length, zoom: kPlaceZoom);
   }
-  return (lat: la / places.length, lon: lo / places.length, zoom: kPlaceZoom);
+  if (regions.isEmpty) return null;
+  GeoBounds? big;
+  var bigSpan = -1.0;
+  for (final r in regions) {
+    final span = math.max(r.north - r.south, r.east - r.west);
+    if (span > bigSpan) {
+      bigSpan = span;
+      big = r;
+    }
+  }
+  // A 360-degree world is 256 px wide at zoom 0 and doubles per zoom; about 300 px of map shows the region at this zoom.
+  final fit = bigSpan <= 0 ? kPlaceZoom : math.log(360 / bigSpan) / math.ln2;
+  return (lat: big!.centerLat, lon: big.centerLon, zoom: fit.clamp(3.0, kPlaceZoom).toDouble());
 }
 
 /// What tests put in place of the platform map: the surface drawn, the style, and where the camera is told to go.
@@ -99,6 +120,9 @@ class _PlaceMapState extends State<PlaceMap> {
   NbPlace? _aimed;
   LatLng? _tapAt;
 
+  /// The zoom the camera is at (read from the map when it reports one).
+  double _zoom = kPlaceZoom;
+
   @override
   void initState() {
     super.initState();
@@ -140,9 +164,9 @@ class _PlaceMapState extends State<PlaceMap> {
     _opening = true;
     CameraPosition? cam;
     if (p == null) {
-      var f = kPlaceRegion;
+      var f = kPlaceWideView;
       try {
-        f = await widget.fallback?.call() ?? kPlaceRegion;
+        f = await widget.fallback?.call() ?? kPlaceWideView;
       } catch (_) {}
       cam = CameraPosition(target: LatLng(f.lat, f.lon), zoom: f.zoom);
     }
@@ -153,6 +177,7 @@ class _PlaceMapState extends State<PlaceMap> {
       _aimed = q;
       cam = CameraPosition(target: LatLng(q.lat, q.lon), zoom: kPlaceZoom);
     }
+    _zoom = cam!.zoom;
     setState(() => _initial = cam);
   }
 
@@ -183,6 +208,7 @@ class _PlaceMapState extends State<PlaceMap> {
   }
 
   Future<void> _move(LatLng target, double? zoom) async {
+    if (zoom != null) _zoom = zoom;
     final h = widget.hooks;
     if (h != null) return h.camera(target, zoom);
     final c = _c;
@@ -193,6 +219,14 @@ class _PlaceMapState extends State<PlaceMap> {
   }
 
   void _tap(LatLng at) {
+    final z = widget.hooks == null ? (_c?.cameraPosition?.zoom ?? _zoom) : _zoom;
+    _zoom = z;
+    // From a wide view a tap only zooms in on the spot; the pin is placed by a tap once the map is close.
+    if (z < kPrecisePlaceZoom) {
+      _tapAt = null;
+      _move(at, kPrecisePlaceZoom);
+      return;
+    }
     _tapAt = at;
     widget.onPick?.call(NbPlace(lat: at.latitude, lon: at.longitude));
   }
@@ -260,6 +294,7 @@ class _PlaceMapState extends State<PlaceMap> {
       logoEnabled: false,
       attributionButtonMargins: const math.Point(-200, -200),
       myLocationEnabled: false,
+      trackCameraPosition: true,
     );
   }
 }
