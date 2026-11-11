@@ -12,10 +12,12 @@
 //! - A word is analyzed with the index's own analyzer, token by token (a token is a run of letters and digits).
 //!   One token: a plain term clause, a term in any of the fields (title boosted).
 //!   Several tokens: a SHOULD of two clauses that add up in the score. (a) the all-terms conjunction: every token
-//!   MUST be in the title or the body (or the lead), which works on a field without positions; (b) for each field that HAS
-//!   positions (the title, and a ZIM's lead), the exact phrase of the tokens, boosted. A passage that has the words in
-//!   a title in the typed order matches both clauses and so ranks above one that has them scattered, which matches only
-//!   (a). The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
+//!   MUST be in the title or the body (or the lead), which works on a field without positions, scored as ONE unit (its
+//!   parts' scores scaled by 1/n, see `one_unit`: a compound weighs like one word of the query, not like n words, or generic
+//!   passages with "long" and "term" would outrank those that match the rest of the query); (b) for each field that HAS
+//!   positions (the title, and a ZIM's lead), the exact phrase of the tokens at that field's normal weight, exactly what
+//!   the old parser scored. A passage that has the words in a title in the typed order matches both clauses and so ranks
+//!   above one that has them scattered, which matches only (a). The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
 //!   matches a passage that has "don" and "t" anywhere. That is approximate, by the index's design (no change to the
 //!   index was asked for).
 //! - A token that has letters and digits together ("covid19") is ALSO tried split at the letter/digit boundary
@@ -33,8 +35,6 @@ use tantivy::schema::{Field, IndexRecordOption};
 use tantivy::tokenizer::TextAnalyzer;
 use tantivy::{DocAddress, Index, Searcher, Term};
 
-/// A phrase on a field is worth this many times the same field's term (an exact phrase outranks scattered terms).
-const PHRASE_BOOST: f32 = 2.0;
 
 /// One searched token: its literal term, and the terms of its letter/digit split when it has one.
 #[derive(Debug, Clone)]
@@ -168,6 +168,13 @@ fn term_clause(cx: &Ctx, term: &str) -> Box<dyn Query> {
     one_or(per)
 }
 
+/// A conjunction of `n` terms scored as ONE unit: its parts' scores add up inside a BooleanQuery, so a compound ("long-term",
+/// "5.56mm") would weigh like n query words and push generic passages above the ones that match the rest of the query. Scaled
+/// by 1/n it weighs about as much as one word.
+fn one_unit(q: Box<dyn Query>, n: usize) -> Box<dyn Query> {
+    boosted(q, 1.0 / n.max(1) as f32)
+}
+
 fn one_or(mut v: Vec<(Occur, Box<dyn Query>)>) -> Box<dyn Query> {
     match v.len() {
         0 => Box::new(EmptyQuery),
@@ -183,7 +190,8 @@ fn tok_clause(cx: &Ctx, t: &Tok) -> Box<dyn Query> {
         return lit;
     }
     let all: Vec<(Occur, Box<dyn Query>)> = t.parts.iter().map(|p| (Occur::Must, term_clause(cx, p))).collect();
-    Box::new(BooleanQuery::new(vec![(Occur::Should, lit), (Occur::Should, Box::new(BooleanQuery::new(all)))]))
+    let pieces = one_unit(Box::new(BooleanQuery::new(all)), t.parts.len());
+    Box::new(BooleanQuery::new(vec![(Occur::Should, lit), (Occur::Should, pieces)]))
 }
 
 /// Several tokens as one unit: the all-terms conjunction OR (adding to the score) the exact phrase on each field with
@@ -199,15 +207,15 @@ fn multi_clause(cx: &Ctx, toks: &[Tok], quoted: bool) -> Box<dyn Query> {
             let sub = Ctx { fields: &flat, positional: Vec::new() };
             let conj: Vec<(Occur, Box<dyn Query>)> =
                 toks.iter().map(|t| (Occur::Must, term_clause(&sub, &t.literal))).collect();
-            clauses.push((Occur::Should, Box::new(BooleanQuery::new(conj))));
+            clauses.push((Occur::Should, one_unit(Box::new(BooleanQuery::new(conj)), toks.len())));
         }
     } else {
         let conj: Vec<(Occur, Box<dyn Query>)> = toks.iter().map(|t| (Occur::Must, tok_clause(cx, t))).collect();
-        clauses.push((Occur::Should, Box::new(BooleanQuery::new(conj))));
+        clauses.push((Occur::Should, one_unit(Box::new(BooleanQuery::new(conj)), toks.len())));
     }
     for (f, b) in &cx.positional {
         let terms: Vec<Term> = toks.iter().map(|t| Term::from_field_text(*f, &t.literal)).collect();
-        clauses.push((Occur::Should, boosted(Box::new(PhraseQuery::new(terms)), b * PHRASE_BOOST)));
+        clauses.push((Occur::Should, boosted(Box::new(PhraseQuery::new(terms)), *b)));
     }
     one_or(clauses)
 }
