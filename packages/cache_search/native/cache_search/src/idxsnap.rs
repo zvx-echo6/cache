@@ -1268,7 +1268,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         let (idx, old) = (d.join("indexes"), d.join("lib").join("index"));
         std::fs::create_dir_all(&idx).unwrap();
-        let (other, same): (&dyn Fn(&Path, &Path) -> bool, &dyn Fn(&Path, &Path) -> bool) = (&|_, _| false, &|_, _| true);
+        let other: &dyn Fn(&Path, &Path) -> bool = &|_, _| false;
+        let same: &dyn Fn(&Path, &Path) -> bool = &|_, _| true;
         // another volume, nothing in the indexes folder yet: beside the old index
         let local = snap_root_with(&idx, KIND_LIBRARY, "l@1", Some(&old), other);
         assert_eq!(local, d.join("lib").join("index-snapshots"));

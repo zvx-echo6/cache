@@ -513,7 +513,7 @@ impl Job {
             None => (crate::library::dir_name(&lib_path), None),
         };
         let source_id = idxsnap::library_source_id(&library_id, version.as_deref());
-        let legacy = Some(PathBuf::from(&p.index_dir)).filter(|_| !p.index_dir.is_empty()).or_else(|| idxsnap::legacy_for(&root, &source_id));
+        let legacy = (!p.index_dir.is_empty()).then_some(PathBuf::from(&p.index_dir)).or_else(|| idxsnap::legacy_for(&root, &source_id));
         let root = idxsnap::snap_root(&root, idxsnap::KIND_LIBRARY, &source_id, legacy.as_deref());
         let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
         let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
