@@ -45,6 +45,7 @@ import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
+import 'car/car_support.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
@@ -933,6 +934,7 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
+      unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
       _car = CarBridge(
         nav: nav,
         maps: maps,

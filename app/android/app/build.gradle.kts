@@ -30,6 +30,9 @@ android {
         manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
         // True only in that test build: MainActivity reads the bench's intent extras (cache_preread_mbps) then.
         buildConfigField("boolean", "TEST_APK", testApk.toString())
+        // True only when built with -PcacheAndroidAuto=true (the same switch that merges the car manifest): Dart reads it through
+        // the cache/build channel, so Settings shows its Car group only then.
+        buildConfigField("boolean", "CACHE_ANDROID_AUTO", ((project.findProperty("cacheAndroidAuto") as String?) == "true").toString())
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28

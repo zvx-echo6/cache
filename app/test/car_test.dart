@@ -417,6 +417,30 @@ void main() {
       expect(tac['style'], isNot(dk['style']));
     });
 
+    test('a new phone theme makes the car reload its map style, without reconnecting', () async {
+      await maps.engine.start();
+      var chosen = CacheThemeId.dark;
+      final changed = ValueNotifier(0);
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed, theme: () => chosen,
+          glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      toCar.clear();
+      // Something else changed: no style refresh.
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), isEmpty);
+      chosen = CacheThemeId.tactical;
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), hasLength(1));
+      // The car's own style request then builds the Tactical night style.
+      final st = await b.style(dark: true);
+      expect((st!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
+      b.dispose();
+    });
+
     test('the two car switches reach the car in the trip within one update', () async {
       final climb = ValueNotifier(true);
       final mini = ValueNotifier(true);

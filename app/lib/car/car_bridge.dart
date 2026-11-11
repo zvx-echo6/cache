@@ -99,7 +99,8 @@ class CarBridge {
     _channel.setMethodCallHandler(_onCall);
     nav.addListener(_schedule);
     elevation?.addListener(_schedule);
-    settings?.addListener(_schedule);
+    settings?.addListener(_onSettings);
+    _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
     try {
@@ -117,7 +118,7 @@ class CarBridge {
     _pushTimer?.cancel();
     nav.removeListener(_schedule);
     elevation?.removeListener(_schedule);
-    settings?.removeListener(_schedule);
+    settings?.removeListener(_onSettings);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -148,6 +149,19 @@ class CarBridge {
       _pushTimer = null;
       unawaited(push());
     });
+  }
+
+  CacheThemeId? _lastTheme;
+
+  /// A phone setting changed: a new theme reloads the car's map style (the car asks for it again with the same request it always
+  /// uses), and the trip goes out again for the switches and the palette.
+  void _onSettings() {
+    final t = theme?.call();
+    if (t != _lastTheme) {
+      _lastTheme = t;
+      if (connected.value) unawaited(_send('styleChanged', null));
+    }
+    _schedule();
   }
 
   void _onMaps() {

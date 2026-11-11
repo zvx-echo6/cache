@@ -164,6 +164,14 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // What this build was made with (Dart shows Settings > Car only when androidAuto is true).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/build")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "get" -> result.success(mapOf("androidAuto" to BuildConfig.CACHE_ANDROID_AUTO))
+                    else -> result.notImplemented()
+                }
+            }
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
