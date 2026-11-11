@@ -6,7 +6,7 @@ import '../platform/app_log.dart' show appLog;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../theme.dart';
 import '../library/add_pdf/add_pdf_pages.dart' show openAddPdfProgress;
-import '../library/add_pdf/add_pdf_state.dart' show addPdfShared, addPdfErrorWords;
+import '../library/add_pdf/add_pdf_state.dart' show AddPdfJob, addPdfShared, addPdfErrorWords;
 import 'index_scheduler.dart';
 import 'index_status.dart';
 
@@ -75,11 +75,29 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     // a PDF whose adding stopped: the card stays, its line in the danger color ("Water purification manual · Stopped: no readable
     // text"), until it is tried again or put away on the progress page
     final stopped = addPdfShared?.failed.firstOrNull;
-    final line = stopped == null ? s.line : 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done';
+    // a PDF paused by the person is not index work, so the scheduler does not list it: the card stays, so its Resume can be
+    // reached, with the same words as its own card ("Paused by you · Resume")
+    final paused = stopped == null && !s.busy ? addPdfShared?.active.where((j) => j.pausedByPerson).toList() ?? const [] : const <AddPdfJob>[];
+    final line = stopped != null
+        ? 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done'
+        : (paused.isNotEmpty ? (paused.length == 1 ? 'Paused · 1 PDF waiting' : 'Paused · ${paused.length} PDFs waiting') : s.line);
     final done = _doneTotal;
     if (line == null && done == null) return const SizedBox.shrink();
-    final held = line != null && s.reason != IndexWait.none && stopped == null;
-    final current = stopped != null ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}' : (line == null ? null : indexCurrentWords(s));
+    // everything paused by the person: said plainly, in the normal text color (nothing is wrong)
+    final held = line != null && s.reason != IndexWait.none && stopped == null && paused.isEmpty;
+    var current = stopped != null
+        ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}'
+        : (paused.isNotEmpty ? '${paused.first.title} · Paused by you · Resume' : (line == null ? null : indexCurrentWords(s)));
+    // a PDF a watched folder found: the folder and how many its check found come first ("Manuals: 2 new PDFs · ...")
+    final run = s.running;
+    if (stopped == null && current != null && run != null && run.startsWith('pdf-add/')) {
+      final j = addPdfShared?.byId(run.substring('pdf-add/'.length));
+      final check = j?.checkId;
+      if (j != null && j.watchName != null && check != null) {
+        final n = addPdfShared!.jobs.where((o) => o.checkId == check).length;
+        current = '${j.watchName}: ${n == 1 ? '1 new PDF' : '$n new PDFs'} · $current';
+      }
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
       child: Material(
@@ -88,7 +106,9 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           key: const ValueKey('index-overview'),
-          onTap: line == null ? null : (!widget.queueOnTap && (stopped != null || (s.running?.startsWith('pdf-add/') ?? false)) ? () => openAddPdfProgress(context) : () => showIndexQueueSheet(context, s)),
+          onTap: line == null
+              ? null
+              : (!widget.queueOnTap && (stopped != null || paused.isNotEmpty || (s.running?.startsWith('pdf-add/') ?? false)) ? () => openAddPdfProgress(context) : () => showIndexQueueSheet(context, s)),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             child: Row(

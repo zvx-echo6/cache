@@ -1,11 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:cache_search/cache_search.dart';
-import 'package:flutter/widgets.dart';
 import '../app_fs.dart';
-import 'package:workmanager/workmanager.dart';
+
+import '../background/background_tasks.dart';
 
 import '../maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import '../search/core_config.dart';
@@ -21,8 +20,9 @@ import 'weather_state.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
-/// The background task's name. On iPhone it is also the BGTaskScheduler identifier, so it is listed in Info.plist.
-const String kBackgroundTask = 'com.happylittle.cache.live-update';
+/// The background task's name (the shared layer's weather task). On iPhone it is also the BGTaskScheduler identifier, so it is
+/// listed in Info.plist.
+const String kBackgroundTask = kWeatherTask;
 
 /// How often Android may run it (Android's minimum is 15 minutes; it picks the moment). iOS decides on its own.
 const Duration kBackgroundEvery = Duration(minutes: 30);
@@ -85,20 +85,10 @@ class LastPlace {
   }
 }
 
-/// The entry point the system starts for a background run.
-@pragma('vm:entry-point')
-void cacheBackgroundDispatcher() {
-  Workmanager().executeTask((task, input) async {
-    WidgetsFlutterBinding.ensureInitialized();
-    DartPluginRegistrant.ensureInitialized();
-    try {
-      await runBackgroundUpdate();
-    } catch (e) {
-      logError('Background update', error: e);
-    }
-    // Always done: a failed run waits for the next turn rather than being retried at once.
-    return true;
-  });
+/// The weather job of the shared background layer (background/background_dispatcher.dart routes the weather task here).
+Future<String> weatherBackgroundJob(Map<String, dynamic>? input) async {
+  await runBackgroundUpdate();
+  return 'done';
 }
 
 /// One background run: the same update as Update now, for the sources that are on and the watched places, then the alert check.
@@ -134,22 +124,17 @@ Future<void> runBackgroundUpdate() async {
   }
 }
 
-/// Schedules the background run when anything is switched on, and cancels it when nothing is. Safe to call often.
-Future<bool> scheduleBackgroundUpdates({required bool anythingOn}) async {
-  if (!(plat.isAndroid || plat.isIOS)) return false;
+/// Schedules the background run when anything is switched on, and cancels it when nothing is. Safe to call often. [mobile]:
+/// a test's stand-in for "on a phone".
+Future<bool> scheduleBackgroundUpdates({required bool anythingOn, bool? mobile}) async {
+  if (!(mobile ?? (plat.isAndroid || plat.isIOS))) return false;
   try {
     await backgroundReady;
     if (!anythingOn) {
-      await Workmanager().cancelByUniqueName(kBackgroundTask);
+      await backgroundScheduler.cancel(kBackgroundTask);
       return false;
     }
-    await Workmanager().registerPeriodicTask(
-      kBackgroundTask,
-      kBackgroundTask,
-      frequency: kBackgroundEvery,
-      constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
-    );
+    await backgroundScheduler.periodic(kBackgroundTask, every: kBackgroundEvery, constraints: BackgroundPresets.network());
     return true;
   } catch (e) {
     logError('Background updates could not be scheduled', error: e);

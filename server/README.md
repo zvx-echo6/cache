@@ -62,6 +62,29 @@ requests are same-origin, so they carry it and there is no separate token. The p
 Only `layers/...` paths of letters, digits, `.`, `_`, `-` are forwarded (404 otherwise), only GET and HEAD, and the query is dropped.
 The map fonts are not here: they are Flutter assets under `/assets/assets/map/fonts/`.
 
+### Videos
+
+The browser's Videos run on the same engine as the phone's. The helper opens a video core handle on `<data>/app/docs/videos` (the phone's folder
+under the files root, so a video that arrives by sync lands there too) and answers the `video.*` ops through `/api/core`: `video.info`,
+`video.call {op, request}` (any `cs_video_*` call), `video.jobStart|jobProgress|jobCancel|jobFree` and `video.jobs`. A download is a core job
+in the helper, so it goes on with no tab open; pausing cancels it and keeps the partial file, resuming starts it again (the core continues the
+file), and a tab opened later lists the running and finished downloads with `video.jobs`. A server restart ends running downloads; their partial
+files stay. The helper handles one request at a time, so a slow video-site call holds up other ops until it answers.
+
+Playing goes through three GET routes. A same-origin `<video>` sends the session cookie, so none needs a token:
+
+    GET|HEAD /api/video/media/<path under the videos folder>   a saved video, sound, caption or picture, with Range (206, 416)
+    GET|HEAD /api/video/zim/<zim id>/<entry path>              a video or caption entry of a ZIM, with Range (the last entry read is kept in memory)
+    GET      /api/video/stream?u=<address>                     a video site's file, caption or picture, read by the server, with Range
+
+`media` takes plain file names only (no `..`, hidden or empty names, backslashes) and the real file must be inside the videos folder (404
+otherwise). `stream` reaches `http`/`https` hosts whose every address is public: the client's name lookup refuses loopback, private,
+link-local, shared (100.64/10), multicast and reserved addresses, so a redirect or a DNS answer cannot reach this machine or the home
+network (502); up to four redirects; `Range` is passed on; an upstream error status is passed on with no body. What it sends back has a
+media, caption or picture type only (anything else is `application/octet-stream`) and `Content-Security-Policy: sandbox`, so a page from a
+video site cannot run on this origin. An HLS playlist (`.m3u8`) is rewritten so its parts, keys and sub-playlists come back through this
+route; a private video's `videoFileToken` is kept on addresses of the site it came with. 401 without a session; only GET and HEAD.
+
 ### The text embedder
 
 The server embeds text with the same model the phone uses (bge-m3 Q8_0, the pinned `lm-kit/bge-m3-gguf` revision in

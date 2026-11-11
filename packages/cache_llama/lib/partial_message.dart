@@ -1,5 +1,16 @@
 import 'dart:convert';
 
+/// The prompt does not fit the model's context: the chat is full. Thrown by the session; [detail] is the engine text, for the
+/// log only (never shown).
+class ContextFullException implements Exception {
+  const ContextFullException([this.detail = '']);
+
+  final String detail;
+
+  @override
+  String toString() => 'ContextFullException: $detail';
+}
+
 /// A tool call requested by the model.
 class ToolCall {
   const ToolCall({required this.id, required this.name, required this.arguments});
@@ -41,6 +52,7 @@ class PartialMessage {
     this.firstTokenMs,
     this.totalMs,
     this.prefixNote,
+    this.cutByContext = false,
   });
 
   factory PartialMessage.fromJson(Map<String, dynamic> j,
@@ -68,6 +80,7 @@ class PartialMessage {
       firstTokenMs: firstTokenMs,
       totalMs: totalMs,
       prefixNote: prefixNote,
+      cutByContext: j['stop'] == 'context',
     );
   }
 
@@ -94,6 +107,9 @@ class PartialMessage {
   /// What the native layer did with the saved prompt prefix in this request ("Prompt prefix restored (N tokens, T ms)", "...
   /// saved ..."), for the app log; null when nothing.
   final String? prefixNote;
+
+  /// The generation ended because the context filled up, so the answer is cut off (native "stop":"context").
+  final bool cutByContext;
 
   int? get evaluatedPromptTokens => reusedTokens == null ? null : promptTokens - reusedTokens!;
 

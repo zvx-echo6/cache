@@ -446,7 +446,12 @@ fn a_book_is_filed_by_the_builders_sorter_and_a_copy_of_it_is_not_scored() {
     let pack = cache_pack::pack::read_pack(&lib.join("packs").join(format!("{copy}@1.cdoc"))).unwrap();
     let sug = pack.header.book.as_ref().unwrap().suggested.clone().unwrap();
     assert_eq!((sug.div.as_str(), sug.label.as_str(), sug.source.as_str()), ("510", "Wells", "classifier"));
-    assert!(std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().contains("\"suggested\":{\"div\":\"510\",\"label\":\"Wells\"}"));
+    // the pack says the sorter was confident, and keeps its top three (the model has three divisions)
+    assert_eq!((sug.filed, sug.suggestions.len()), (Some(true), 3));
+    assert_eq!(sug.suggestions[0].div, "510");
+    let line: Value = std::fs::read_to_string(lib.join("copies.jsonl")).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["copy"] == copy).unwrap();
+    assert_eq!((line["suggested"]["div"].as_str(), line["suggested"]["label"].as_str(), line["suggested"]["filed"].as_bool()), (Some("510"), Some("Wells"), Some(true)));
+    assert_eq!(line["suggested"]["suggestions"].as_array().unwrap().len(), 3);
 
     // not confident: Unsorted, no place, and the guess kept
     let k = add_shelved(&svc, &tmp.0, &lib, "Kiln Book", "kiln");
@@ -454,7 +459,8 @@ fn a_book_is_filed_by_the_builders_sorter_and_a_copy_of_it_is_not_scored() {
     assert!(k["result"]["suggested"]["div"].is_string(), "the best guess is reported even though the book stays in Unsorted");
     assert_eq!(shelf_log(&tmp.0).len(), 2, "nothing was placed");
     let kc = k["result"]["copy"].as_str().unwrap();
-    assert!(cache_pack::pack::read_pack(&lib.join("packs").join(format!("{kc}@1.cdoc"))).unwrap().header.book.as_ref().unwrap().suggested.is_some());
+    let ksug = cache_pack::pack::read_pack(&lib.join("packs").join(format!("{kc}@1.cdoc"))).unwrap().header.book.as_ref().unwrap().suggested.clone().unwrap();
+    assert_eq!((ksug.filed, ksug.suggestions.len()), (Some(false), 3), "not confident: the pack says so and keeps the three");
 
     // a copy of a book on the shelves is detected, and skips filing
     let w2 = add_shelved(&svc, &tmp.0, &lib, "Well Book Again", "well");

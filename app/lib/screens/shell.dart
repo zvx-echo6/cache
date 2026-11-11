@@ -37,6 +37,7 @@ import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
+import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
@@ -354,6 +355,8 @@ class _ShellState extends State<Shell> {
   void _goModule(ModuleId m) {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
     if (m == ModuleId.ask) unawaited(widget.app.wake());
+    // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
+    if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
     setState(() {
       _module = m;
       _onModules = false;
@@ -752,6 +755,7 @@ class _ShellState extends State<Shell> {
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };

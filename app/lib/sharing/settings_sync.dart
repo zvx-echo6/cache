@@ -341,8 +341,18 @@ class SettingsSync extends ChangeNotifier {
   /// The answer to the question asked right after linking: Match, Send mine or Off, chosen here as on the device's page; null
   /// when it was closed, which is Off while neither device has answered and keeps what the other device answered meanwhile.
   Future<void> answer(String peer, SettingsLink? to) async {
-    if (to == null && !unanswered(peer)) return;
+    // The first answer is the pair's: once either device has answered, a later one is only read (a notice), never applied.
+    if (!unanswered(peer)) return;
     await setLink(peer, to ?? SettingsLink.off);
+  }
+
+  /// The device that answered the question for the pair ([Link] `by`), null while it is open.
+  String? decidedBy(String peer) => sharing.linkOf(peer)?['by'] as String?;
+
+  /// The other device answered first: this one's question is only a notice of what it chose.
+  bool decidedByOther(String peer) {
+    final by = decidedBy(peer);
+    return by != null && by != sharing.myId;
   }
 
   bool _sendsTo(String peer) => const {SettingsLink.match, SettingsLink.sending}.contains(linkWith(peer));
@@ -352,22 +362,28 @@ class SettingsSync extends ChangeNotifier {
 
   Set<String> _list(Map<String, Object?> l, String k) => {for (final x in (l[k] as List? ?? const [])) '$x'};
 
-  /// Chooses how settings go with [peer] (Match, Send mine or Off; not [SettingsLink.receiving], which is the other device's
-  /// Send mine). Switching Match or Send mine on makes this device where they come from: its included settings go as they are.
+  /// Chooses how settings go with [peer] for both devices in one step (Match, Send mine, Take theirs or Off); the other device
+  /// takes the same record with the next sync. The record says which way (`from`) relative to the two ids. Switching Match or
+  /// Send mine on makes this device where they come from: its included settings go as they are.
   Future<void> setLink(String peer, SettingsLink to) async {
-    if (to == SettingsLink.receiving) throw ArgumentError('Receiving is chosen on the other device');
     final was = linkWith(peer);
     if (was == to && !unanswered(peer)) return;
+    final first = unanswered(peer);
     final l = _linkValue(peer)
       ..remove('ask')
       ..['mode'] = switch (to) {
         SettingsLink.match => 'match',
-        SettingsLink.sending => 'send',
+        SettingsLink.sending || SettingsLink.receiving => 'send',
         _ => 'off',
       }
-      ..['from'] = sharing.myId;
+      ..['from'] = to == SettingsLink.receiving ? peer : sharing.myId;
+    // Who answered the question, and when: the first answer is kept (the engine's merge compares `at`, then the lower id).
+    if (first) {
+      l['by'] = sharing.myId;
+      l['at'] = _now().millisecondsSinceEpoch;
+    }
     await sharing.setLink(peer, l);
-    if (to != SettingsLink.off) await _seed([for (final s in settings) if (settingOn(peer, s.key)) s.key]);
+    if (to != SettingsLink.off && to != SettingsLink.receiving) await _seed([for (final s in settings) if (settingOn(peer, s.key)) s.key]);
     _links = _linkSignature();
     await pushKeys();
     _tell();

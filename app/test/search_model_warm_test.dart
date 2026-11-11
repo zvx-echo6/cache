@@ -121,7 +121,7 @@ void main() {
     });
   }
 
-  test('back in front: it loads again, with the same memory check', () async {
+  test('back in front and asked for again (Ask or a search box): it loads again, with the same memory check', () async {
     await start();
     await sm.warmLoad();
     sm.onLifecycle(AppLifecycleState.paused);
@@ -136,6 +136,40 @@ void main() {
     expect(made.single.warms, 2);
     expect(made.single.keepLoaded, isTrue);
     expect(sm.isWarm, isTrue);
+  });
+
+  test('Cache opened or back in front: nothing loads until Ask or a search box asks for it', () async {
+    await start();
+    sm.onLifecycle(AppLifecycleState.resumed);
+    await pumpEventQueue();
+    expect(made, isEmpty, reason: 'in front is not a reason to load 635 MB');
+    sm.onLifecycle(AppLifecycleState.paused);
+    sm.onLifecycle(AppLifecycleState.resumed);
+    await pumpEventQueue();
+    expect(made, isEmpty);
+    expect(sm.isWarm, isFalse);
+  });
+
+  test('Ask or a search box opened: the app\'s search model loads and is held', () async {
+    await start();
+    SearchModel.shared = sm;
+    addTearDown(() => SearchModel.shared = null);
+    SearchModel.aboutToSearch();
+    await pumpEventQueue();
+    expect(made.single.warms, 1);
+    expect(made.single.keepLoaded, isTrue);
+    expect(sm.isWarm, isTrue);
+  });
+
+  test('a search made before the model has loaded still gets its vector (loaded on use, idling out as today)', () async {
+    await start();
+    sm.onLifecycle(AppLifecycleState.resumed);
+    await pumpEventQueue();
+    final v = await sm.vectorFor(sm.defaultModel, 'water');
+    expect(v, isNotNull);
+    expect(made.single.embeds, 1);
+    expect(made.single.warms, 0, reason: 'nothing loaded it ahead');
+    expect(made.single.keepLoaded, isFalse);
   });
 
   test('a memory trim lets it go; the next search loads it lazily and it idles out as today', () async {

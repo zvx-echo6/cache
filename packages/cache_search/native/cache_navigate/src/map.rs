@@ -218,6 +218,9 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
         m.insert("bearing_deg".into(), json!(s.bearing_deg));
         m.insert("cardinal".into(), json!(s.cardinal));
         m.insert("travel".into(), json!(travel));
+        if !s.lanes.is_empty() {
+            m.insert("lanes".into(), Value::Array(s.lanes.iter().map(|l| l.to_json()).collect()));
+        }
         if class != "road" {
             m.insert("grade_class".into(), json!(s.grade_class));
             m.insert("elev_gain_m".into(), json!(s.elev_gain_m));
@@ -504,6 +507,9 @@ impl ActiveRoute {
                 v["elev_gain_m"] = m["elev_gain_m"].clone();
                 v["elev_loss_m"] = m["elev_loss_m"].clone();
                 v["grade_class"] = m["grade_class"].clone();
+            }
+            if let Some(l) = m.get("lanes") {
+                v["lanes"] = l.clone();
             }
             v
         };

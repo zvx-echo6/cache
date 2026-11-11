@@ -68,7 +68,9 @@ class LlamaSession {
         c?.close();
       case 'error':
         final c = _gens.remove(id);
-        c?.addError(StateError(msg['error'] as String));
+        c?.addError(msg['contextFull'] == true
+            ? ContextFullException(msg['error'] as String)
+            : StateError(msg['error'] as String));
         c?.close();
     }
   }
@@ -228,7 +230,8 @@ void _workerMain(SendPort toMain) {
         final startMs = clock.elapsedMilliseconds;
         malloc.free(req);
         if (rc != 0) {
-          toMain.send({'type': 'error', 'id': id, 'error': err.toDartString()});
+          // -3: the prompt does not fit the context (the chat is full); any other code is a plain failure.
+          toMain.send({'type': 'error', 'id': id, 'error': err.toDartString(), 'contextFull': rc == -3});
           break;
         }
         final maxTokens = msg['maxTokens'] as int?;

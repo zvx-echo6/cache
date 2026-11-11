@@ -33,7 +33,8 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // 64-bit ARM only: the search core, llama, libzim, Valhalla and iroh are built for arm64-v8a only, so an x86_64 slice would load but not work.
+        ndk { abiFilters += listOf("arm64-v8a") }
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -47,6 +48,9 @@ android {
             // Not shipped: on the Pixel 8 (Tensor G3) the SVE2 variants read prompts at about half the
             // speed of armv8.6_1, and ggml would prefer them. Keep every armv8.x variant.
             excludes += "**/libggml-cpu-android_armv9*.so"
+            // arm64-v8a only. abiFilters does not drop the prebuilt libraries inside plugin AARs (libdartjni, libmaplibre,
+            // libmlkit_google_ocr_pipeline), which would leave x86_64 and armeabi-v7a folders holding only those, so exclude them outright.
+            excludes += listOf("**/x86_64/**", "**/x86/**", "**/armeabi-v7a/**", "**/armeabi/**")
         }
     }
 
@@ -92,8 +96,9 @@ flutter {
 }
 
 // Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
-// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. The release on Play stays out of
-// Android Auto until it ships together with CarPlay (owner, 2026-11-08); the test APK and the car tests turn it on.
+// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. Play builds leave Android Auto out
+// unless the store workflow's android_auto input is on (.github/workflows/android-play.yml), which is for closed testing only;
+// the test APK and the car tests turn it on.
 val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
 if (androidAuto) {
     androidComponents {
