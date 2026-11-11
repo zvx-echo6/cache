@@ -526,10 +526,6 @@ mod sealed {
         serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap()
     }
 
-    pub fn status_of(h: *mut Handle) -> Value {
-        status(h)
-    }
-
     pub fn open(lib: &Path, indexes: &Path) -> *mut Handle {
         let src = json!({"kind": "library", "path": lib.join("shard").to_str().unwrap(), "index_dir": lib.join("index").to_str().unwrap(), "settings": settings()});
         let cfg = cstr(&json!({"sources": [src], "indexes_dir": indexes.to_str().unwrap()}).to_string());
@@ -651,7 +647,7 @@ fn sealed_library(tmp: &TempDir) -> (PathBuf, Service, PathBuf) {
     let done = sealed::seal(&indexes);
     assert_eq!(done["state"], "done", "{done}");
     sealed::until_snapshot(h);
-    assert_eq!(sealed::found(h, "quasar") > 0, true);
+    assert!(sealed::found(h, "quasar") > 0);
     sealed::close(h);
     (lib, svc, indexes)
 }
