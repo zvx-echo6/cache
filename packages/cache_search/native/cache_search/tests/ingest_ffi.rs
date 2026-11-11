@@ -30,7 +30,7 @@ impl Drop for TempDir {
 
 fn settings() -> Value {
     json!({"format": 1, "library_id": "mine", "title": "Mine", "fields": {"title": "title", "text": "text", "page": "page", "source_type": "source", "link": "link", "document": "doc_id"},
-           "leave_out": [], "embedding": {"vector": "", "model": "fake-hash-v1", "dims": 1024}, "keyword_index": "auto"})
+           "leave_out": [], "embedding": {"vector": "", "model": "fake-hash-v1", "dims": 1024}, "keyword_index": "auto", "own": true})
 }
 
 /// An empty library as the app keeps it: `shard/` (one unnamed 1024-dimension Cosine vector) and `cache-library.json`.

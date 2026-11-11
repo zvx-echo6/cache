@@ -274,11 +274,18 @@ pub fn snap_root_with(
     local_root(legacy)
 }
 
-/// A library that grows: one Add PDF writes to has a `copies.jsonl` (in the library folder, or in its shard folder). Its keyword
-/// snapshot is extended by generations and picked by the highest ([`PickRule::HighestGeneration`]); every other library, and
-/// every ZIM, is picked by the earliest as before. `library_path` is the library's source path (its shard folder or the library).
+/// A library that grows: one the person made on the device (`"own": true` in its `cache-library.json`, written when the app creates
+/// "My books" or another library of their own, where Add PDF adds books). Its keyword snapshot is extended by generations and
+/// picked by the highest ([`PickRule::HighestGeneration`]). Every other library (a server-built or catalogue one, which also ships a
+/// `copies.jsonl`) and every ZIM is picked by the earliest, as before. `library_path` is the library's source path (its shard folder
+/// or the library folder); the settings file is read from it or from its parent.
 pub fn appendable_library(library_path: &Path) -> bool {
-    library_path.join("copies.jsonl").is_file() || library_path.parent().is_some_and(|p| p.join("copies.jsonl").is_file())
+    [Some(library_path), library_path.parent()].into_iter().flatten().any(|d| {
+        std::fs::read_to_string(d.join("cache-library.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|v| v.get("own") == Some(&Value::Bool(true)))
+    })
 }
 
 pub fn pick_rule_for(library_path: &Path) -> PickRule {
@@ -1276,6 +1283,41 @@ mod tests {
         assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@1", Some(&old), other), idx);
         // another library of the same indexes folder is not held by that
         assert_eq!(snap_root_with(&idx, KIND_LIBRARY, "l@2", Some(&old), other), local);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn only_a_library_made_on_the_device_grows_by_generations() {
+        let d = std::env::temp_dir().join(format!("cs-idxsnap-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let mk = |name: &str, settings: Option<&str>, copies: bool| {
+            let lib = d.join(name);
+            std::fs::create_dir_all(lib.join("shard")).unwrap();
+            if let Some(t) = settings {
+                std::fs::write(lib.join("cache-library.json"), t).unwrap();
+            }
+            if copies {
+                std::fs::write(lib.join("copies.jsonl"), b"{}\n").unwrap();
+            }
+            lib
+        };
+        // (3) a library made on the device (Add PDF's My books): its settings say own
+        let mine = mk("mine", Some(r#"{"library_id":"m","own":true,"own_default":true,"version":"0"}"#), true);
+        // (1) a catalogue library (downloaded, immutable) and (2) one a library builder made on the person's own server and synced
+        // here: both ship copies.jsonl, neither says own, so Add PDF never targets them and an update is a new version
+        let catalogue = mk("catalogue", Some(r#"{"library_id":"c","version":"2026-10-28"}"#), true);
+        let server_built = mk("server", Some(r#"{"library_id":"s","version":"7","title":"Built on my server"}"#), true);
+        let no_settings = mk("bare", None, true);
+        let not_own = mk("explicit-false", Some(r#"{"library_id":"c","own":false}"#), true);
+        assert_eq!(pick_rule_for(&mine.join("shard")), PickRule::HighestGeneration);
+        assert_eq!(pick_rule_for(&mine), PickRule::HighestGeneration);
+        // copies.jsonl is NOT a marker: every kind has one
+        for lib in [&catalogue, &server_built, &no_settings, &not_own] {
+            assert!(lib.join("copies.jsonl").is_file());
+            assert_eq!(pick_rule_for(&lib.join("shard")), PickRule::Earliest, "{}", lib.display());
+            assert_eq!(pick_rule_for(lib), PickRule::Earliest);
+        }
+        assert_eq!(pick_rule_for(Path::new("/nonexistent/lib/shard")), PickRule::Earliest);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -1441,3 +1441,48 @@ fn where_links_are_refused_the_seal_is_declined_once_and_never_offered_again() {
     assert_eq!(last_code(), "unsupported");
     unsafe { cs_close(h) };
 }
+
+/// Generations are taken by the highest only for a library the person made on the device (`"own": true`). A catalogue or server-built
+/// library, which also ships `copies.jsonl`, takes the earliest snapshot as it always did, even when a snapshot of a higher generation
+/// is beside it.
+#[test]
+fn the_highest_generation_is_picked_only_for_an_own_library_whatever_copies_jsonl_says() {
+    let f = make_fixture("gen-own");
+    let root = f._tmp.0.clone();
+    let indexes = root.join("indexes");
+    let mut st = settings(default_leave_out(), true);
+    st["version"] = json!("1");
+    let p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300, "indexes_dir": indexes.to_str().unwrap()});
+    assert_eq!(run_job("index_library", p)["state"], "done");
+    let snaps = indexes.join("library").join("t@1").join("snap");
+    let first = std::fs::read_dir(&snaps).unwrap().flatten().next().unwrap().file_name().to_string_lossy().into_owned();
+    // a later generation beside it (the same files, a newer manifest with generation 1)
+    let second = "zz-generation-1";
+    let make_second = || {
+        let (a, b) = (snaps.join(&first), snaps.join(second));
+        let _ = std::fs::remove_dir_all(&b);
+        std::fs::create_dir_all(&b).unwrap();
+        for e in std::fs::read_dir(&a).unwrap().flatten() {
+            std::fs::copy(e.path(), b.join(e.file_name())).unwrap();
+        }
+        let mut m: Value = serde_json::from_str(&std::fs::read_to_string(b.join("manifest.json")).unwrap()).unwrap();
+        m["generation"] = json!(1);
+        m["created"] = json!("2999-01-01T00:00:00Z");
+        std::fs::write(b.join("manifest.json"), m.to_string()).unwrap();
+    };
+    let snapshot_in_use = |h: *mut Handle| until_snapshot(h)["index"]["snapshot"].as_str().unwrap().to_string();
+    std::fs::write(f.dir.join("copies.jsonl"), b"{}\n").unwrap();
+
+    // a catalogue or server-built library: copies.jsonl, no "own": the earliest
+    make_second();
+    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &indexes);
+    assert_eq!(snapshot_in_use(h), first, "not an own library: the earliest, as ever");
+    unsafe { cs_close(h) };
+
+    // the same library made on the device: the highest generation
+    std::fs::write(f.dir.join("cache-library.json"), json!({"library_id": "t", "version": "1", "own": true}).to_string()).unwrap();
+    make_second();
+    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &indexes);
+    assert_eq!(snapshot_in_use(h), second, "an own library takes the highest generation");
+    unsafe { cs_close(h) };
+}
