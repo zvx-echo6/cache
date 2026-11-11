@@ -431,6 +431,23 @@ class CarOverlayTest {
         }
     }
 
+    @Test
+    fun theMiniMapIsPaintedInTheClimbCardsColorInAllFourThemes() {
+        for (theme in listOf("light", "parchment", "dark", "tactical")) {
+            val t = trip(theme)
+            val pal = t.palette!!.night
+            assertEquals(theme, pal.card, pal.miniBg)
+            val bmp = Bitmap.createBitmap(1280, 560, Bitmap.Config.ARGB_8888)
+            CarOverlayPainter.draw(Canvas(bmp), t, dark = true, width = 1280, height = 560, visible = visible, density = 1f)
+            val l = CarOverlayPainter.layout(1280, 560, visible, 1f, showClimb = true, showMini = true)
+            // A spot inside each piece away from its drawing: the two fills are one color.
+            val climbFill = bmp.getPixel((l.climb!!.left + 100).toInt(), (l.climb!!.top + 3).toInt())
+            val miniFill = bmp.getPixel((l.mini!!.left + 8).toInt(), (l.mini!!.top + 70).toInt())
+            assertEquals(theme, pal.card, climbFill)
+            assertEquals(theme, climbFill, miniFill)
+        }
+    }
+
     // ---- texts and geometry ---------------------------------------------------------------------------------------------
 
     @Test
