@@ -13,6 +13,7 @@ export 'src/pdf_image.dart';
 export 'src/pdf_link.dart';
 export 'src/pdf_outline_node.dart';
 export 'src/pdf_page.dart';
+export 'src/pdfium_lock_stub.dart' if (dart.library.io) 'src/native/pdfium_lock.dart';
 export 'src/pdf_page_status_change.dart';
 export 'src/pdf_permissions.dart';
 export 'src/pdf_point.dart';

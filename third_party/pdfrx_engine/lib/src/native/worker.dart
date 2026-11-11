@@ -7,6 +7,7 @@ import 'package:ffi/ffi.dart';
 import 'package:synchronized/extension.dart';
 
 import '../pdfrx.dart';
+import 'pdfium_lock.dart';
 
 typedef PdfrxComputeCallback<M, R> = FutureOr<R> Function(M message);
 
@@ -33,7 +34,8 @@ class BackgroundWorker {
       await _compute((params) {
         Pdfrx.pdfiumModulePath = params.modulePath;
         Pdfrx.pdfiumNativeBindings = params.bindings;
-      }, (modulePath: Pdfrx.pdfiumModulePath, bindings: Pdfrx.pdfiumNativeBindings));
+        PdfiumLock.functions = params.lock; // CACHE PATCH: the process's one PDFium lock
+      }, (modulePath: Pdfrx.pdfiumModulePath, bindings: Pdfrx.pdfiumNativeBindings, lock: PdfiumLock.functions), lockPdfium: false);
     });
     return _sendPort!;
   }
@@ -108,8 +110,8 @@ class BackgroundWorker {
   /// a [Future<R>].
   /// Inside [callback], you can only use passed message and create new objects.
   /// You cannot access any variables from the outer scope, otherwise, it will throw an error.
-  Future<R> _compute<M, R>(PdfrxComputeCallback<M, R> callback, M message) async {
-    final result = await _sendComputeParams((sendPort) => _ExecuteParams(sendPort, callback, message));
+  Future<R> _compute<M, R>(PdfrxComputeCallback<M, R> callback, M message, {bool lockPdfium = true}) async {
+    final result = await _sendComputeParams((sendPort) => _ExecuteParams(sendPort, callback, message, lockPdfium));
     if (result is _ComputeError) {
       // The original error/stack trace object may itself be unsendable (arbitrary user exception types can hold
       // non-sendable fields), so only their string forms cross the isolate boundary; reconstruct a generic
@@ -128,8 +130,11 @@ class BackgroundWorker {
   /// a [Future<R>].
   /// Inside [callback], you can only use passed message and create new objects.
   /// You cannot access any variables from the outer scope, otherwise, it will throw an error.
-  static Future<R> compute<M, R>(PdfrxComputeCallback<M, R> callback, M message) async =>
-      await _instance._compute(callback, message);
+  ///
+  /// CACHE PATCH: with [lockPdfium] (the default) the callback runs with the process's one PDFium lock held (its synchronous part only).
+  /// The app's own callbacks (PdfrxEntryFunctions.compute) pass false: they take the lock themselves around each PDFium call.
+  static Future<R> compute<M, R>(PdfrxComputeCallback<M, R> callback, M message, {bool lockPdfium = true}) async =>
+      await _instance._compute(callback, message, lockPdfium: lockPdfium);
 
   /// Suspends the worker isolate during the execution of [action].
   static Future<T> suspendDuringAction<T>(FutureOr<T> Function() action) async {
@@ -168,9 +173,10 @@ class _ComputeParams {
 }
 
 class _ExecuteParams<M, R> extends _ComputeParams {
-  _ExecuteParams(super.sendPort, this.callback, this.message);
+  _ExecuteParams(super.sendPort, this.callback, this.message, this.lockPdfium);
   final PdfrxComputeCallback<M, R> callback;
   final M message;
+  final bool lockPdfium;
 
   // A pending Future is not a sendable isolate message on its own (SendPort.send throws
   // "object is unsendable" for it), so a callback returning FutureOr<R> only worked by
@@ -179,7 +185,7 @@ class _ExecuteParams<M, R> extends _ComputeParams {
   // makes genuinely asynchronous callbacks (and synchronous throws) work correctly too.
   @override
   void execute() {
-    Future<R> asFuture() async => callback(message);
+    Future<R> asFuture() async => lockPdfium ? PdfiumLock.hold(() => callback(message)) : callback(message);
     asFuture().then(
       (value) => sendPort.send(_ComputeResult<R>(value)),
       onError: (Object error, StackTrace stackTrace) =>

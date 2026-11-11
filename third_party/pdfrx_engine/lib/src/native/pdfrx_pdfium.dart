@@ -586,7 +586,8 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
 
   @override
   Future<R> compute<M, R>(FutureOr<R> Function(M message) callback, M message) async {
-    return await BackgroundWorker.compute(callback, message);
+    // CACHE PATCH: the app's own callbacks hold the PDFium lock themselves, around each PDFium call (PdfiumLock.hold)
+    return await BackgroundWorker.compute(callback, message, lockPdfium: false);
   }
 
   @override

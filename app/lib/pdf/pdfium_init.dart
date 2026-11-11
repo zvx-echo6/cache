@@ -33,10 +33,26 @@ Future<void> installNativePdfFonts({bool onPdfrxWorker = false}) async {
   }
 }
 
-/// Starts pdfrx (PDFium for the viewer and the PDF indexing) and the core's one font mapper. pdfrx itself no longer installs a font
-/// mapper (third_party/pdfrx_engine): it did so in every Flutter engine, with Dart callbacks bound to that engine's isolate, and a
-/// second engine's (the background run's) replaced the first's.
+/// The addresses of the core's one PDFium lock (null when the core has none: an older build, or no core yet). Asked on a short-lived
+/// isolate, before pdfrx starts its worker, so the worker can take the same lock around each of its PDFium calls.
+Future<({int lock, int unlock})?> _coreLockFunctions() async {
+  try {
+    final lib = pdfiumLibraryPath();
+    final r = await Isolate.run(() => _installFonts(lib));
+    final f = r['lock_fns'];
+    if (f is Map && f['lock'] is int && f['unlock'] is int) return (lock: f['lock'] as int, unlock: f['unlock'] as int);
+  } catch (_) {
+    // no core, or one without the lock
+  }
+  return null;
+}
+
+/// Starts pdfrx (PDFium for the viewer and the PDF indexing), the core's one font mapper and the core's one PDFium lock. pdfrx itself
+/// no longer installs a font mapper (third_party/pdfrx_engine): it did so in every Flutter engine, with Dart callbacks bound to that
+/// engine's isolate, and a second engine's (the background run's) replaced the first's. Its worker takes the core's lock around each
+/// PDFium call, so the viewer and the core never use PDFium (which is not thread-safe) at the same moment.
 Future<void> initPdfium() async {
+  PdfiumLock.functions ??= await _coreLockFunctions();
   await pdfrxFlutterInitialize();
   await installNativePdfFonts(onPdfrxWorker: true);
 }

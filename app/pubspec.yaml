@@ -103,6 +103,8 @@ dependency_overrides:
     path: ../third_party/pdfrx_engine
 
 dev_dependencies:
+  # the PDFium engine under pdfrx (the vendored copy, see dependency_overrides): the test children that start PDFium without Flutter use it directly
+  pdfrx_engine: ^0.4.7
   flutter_test:
     sdk: flutter
 

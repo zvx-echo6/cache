@@ -10,7 +10,7 @@ use crate::error::{Code, Error, Result};
 use libloading::Library;
 use std::ffi::{c_char, c_int, c_ulong, c_void, CString};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, Once, PoisonError};
 
 type Handle = *mut c_void;
 
@@ -21,10 +21,75 @@ const RENDER_ANNOT: c_int = 0x01;
 /// The largest page image, in pixels (a 300 dpi A3 page is about 17 million): a bigger page is drawn at a lower resolution.
 const MAX_PIXELS: f64 = 40_000_000.0;
 
-static PDFIUM_LOCK: Mutex<()> = Mutex::new(());
+/// The process's one PDFium lock. PDFium is not thread-safe, so every thread that calls it holds this around each call (or each
+/// page's worth of calls: one page's text, one page drawn), never across anything that waits for something else: no await, no
+/// callback into Dart. It is reentrant (the same thread may take it again) so a call made while the same thread already holds it
+/// does not wait for itself. pdfrx's worker takes the same lock around each of its PDFium calls, through [`lock_functions`]
+/// (third_party/pdfrx_engine/PATCH.md), so the viewer and the core never run PDFium at the same moment.
+struct Reentrant {
+    state: Mutex<(Option<std::thread::ThreadId>, usize)>,
+    free: Condvar,
+}
 
-fn lock() -> MutexGuard<'static, ()> {
-    PDFIUM_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+static PDFIUM: Reentrant = Reentrant { state: Mutex::new((None, 0)), free: Condvar::new() };
+
+impl Reentrant {
+    fn acquire(&self) {
+        let me = std::thread::current().id();
+        let mut g = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            match g.0 {
+                None => {
+                    *g = (Some(me), 1);
+                    return;
+                }
+                Some(t) if t == me => {
+                    g.1 += 1;
+                    return;
+                }
+                Some(_) => g = self.free.wait(g).unwrap_or_else(PoisonError::into_inner),
+            }
+        }
+    }
+
+    fn release(&self) {
+        let me = std::thread::current().id();
+        let mut g = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if g.0 == Some(me) {
+            g.1 -= 1;
+            if g.1 == 0 {
+                g.0 = None;
+                self.free.notify_one();
+            }
+        }
+    }
+}
+
+struct Guard;
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        PDFIUM.release();
+    }
+}
+
+fn lock() -> Guard {
+    PDFIUM.acquire();
+    Guard
+}
+
+extern "C" fn lock_c() {
+    PDFIUM.acquire();
+}
+
+extern "C" fn unlock_c() {
+    PDFIUM.release();
+}
+
+/// The addresses of the lock and unlock functions (`extern "C" fn()`), for pdfrx's worker, which takes the same lock around each of
+/// its PDFium calls. They live as long as the library does.
+pub fn lock_functions() -> (usize, usize) {
+    (lock_c as extern "C" fn() as usize, unlock_c as extern "C" fn() as usize)
 }
 
 struct Lib {
@@ -242,17 +307,38 @@ pub fn probe(path: Option<&str>) -> Result<&'static str> {
 /// `dpi` (a change to how PDFium finds fonts shows in the text's spacing and in the picture). For tests and diagnostics; the job
 /// itself never calls it.
 pub fn dump(path: Option<String>, pdf: &Path, dpi: u32) -> Result<serde_json::Value> {
+    dump_with(path, pdf, dpi, false)
+}
+
+/// [`dump`], with `timings`: how long each page's text and drawing took, in milliseconds (the longest single stretch the PDFium lock is
+/// held by the core is about one of these), and how long opening the document took.
+pub fn dump_with(path: Option<String>, pdf: &Path, dpi: u32, timings: bool) -> Result<serde_json::Value> {
     use sha2::{Digest, Sha256};
     let engine = PdfiumEngine::new(path, None);
+    let t0 = std::time::Instant::now();
     let doc = engine.open(pdf)?;
+    let open_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let mut pages = Vec::new();
     for i in 0..doc.page_count() {
+        let t = std::time::Instant::now();
         let text = doc.page_text(i)?;
+        let text_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let t = std::time::Instant::now();
         let page = doc.render_gray_png(i, dpi)?;
+        let draw_ms = t.elapsed().as_secs_f64() * 1000.0;
         let hex: String = Sha256::digest(&page.png).iter().map(|b| format!("{b:02x}")).collect();
-        pages.push(serde_json::json!({"text": text, "label": doc.page_label(i), "png_sha256": hex, "width": page.width, "height": page.height, "dpi": page.dpi}));
+        let mut v = serde_json::json!({"text": text, "label": doc.page_label(i), "png_sha256": hex, "width": page.width, "height": page.height, "dpi": page.dpi});
+        if timings {
+            v["text_ms"] = text_ms.into();
+            v["draw_ms"] = draw_ms.into();
+        }
+        pages.push(v);
     }
-    Ok(serde_json::json!({"title": doc.title(), "pages": pages}))
+    let mut out = serde_json::json!({"title": doc.title(), "pages": pages});
+    if timings {
+        out["open_ms"] = open_ms.into();
+    }
+    Ok(out)
 }
 
 /// PDFium, found when the first PDF is opened.
@@ -405,29 +491,44 @@ impl PdfDocument for PdfiumDoc {
     }
 
     fn render_gray_png(&self, page: usize, dpi: u32) -> Result<RenderedPage> {
-        let _g = lock();
         let damaged = |m: String| Error::new(Code::Damaged, m);
-        // SAFETY: the page and bitmap are released before returning; the bitmap buffer is read within `stride * height` bytes.
-        unsafe {
-            let p = (self.lib.load_page)(self.doc, page as c_int);
-            if p.is_null() {
-                return Err(damaged(format!("page {} cannot be read", page + 1)));
+        // The PDFium calls (open the page, draw it) are made under the lock; turning the picture to gray and encoding it, which call
+        // nothing in PDFium, are not, so another thread's PDFium call is not held up by them. Only the bitmap and the page are
+        // released (under the lock again) afterwards.
+        let (bmp, p, w, h, scale) = {
+            let _g = lock();
+            // SAFETY: the page and bitmap are released by the code below; the handles are used by one thread at a time.
+            unsafe {
+                let p = (self.lib.load_page)(self.doc, page as c_int);
+                if p.is_null() {
+                    return Err(damaged(format!("page {} cannot be read", page + 1)));
+                }
+                let (pw, ph) = ((self.lib.page_width)(p) as f64, (self.lib.page_height)(p) as f64);
+                let mut scale = f64::from(dpi) / 72.0;
+                if pw * ph * scale * scale > MAX_PIXELS {
+                    scale = (MAX_PIXELS / (pw * ph)).sqrt();
+                }
+                let (w, h) = (((pw * scale).ceil() as c_int).max(1), ((ph * scale).ceil() as c_int).max(1));
+                let bmp = (self.lib.bitmap_create)(w, h, 0);
+                if bmp.is_null() {
+                    (self.lib.close_page)(p);
+                    return Err(damaged(format!("page {} is too large to draw", page + 1)));
+                }
+                (self.lib.bitmap_fill)(bmp, 0, 0, w, h, 0xFFFF_FFFF as c_ulong);
+                (self.lib.render)(bmp, p, 0, 0, w, h, 0, RENDER_ANNOT);
+                (bmp, p, w, h, scale)
             }
-            let (pw, ph) = ((self.lib.page_width)(p) as f64, (self.lib.page_height)(p) as f64);
-            let mut scale = f64::from(dpi) / 72.0;
-            if pw * ph * scale * scale > MAX_PIXELS {
-                scale = (MAX_PIXELS / (pw * ph)).sqrt();
-            }
-            let (w, h) = (((pw * scale).ceil() as c_int).max(1), ((ph * scale).ceil() as c_int).max(1));
-            let bmp = (self.lib.bitmap_create)(w, h, 0);
-            if bmp.is_null() {
-                (self.lib.close_page)(p);
-                return Err(damaged(format!("page {} is too large to draw", page + 1)));
-            }
-            (self.lib.bitmap_fill)(bmp, 0, 0, w, h, 0xFFFF_FFFF as c_ulong);
-            (self.lib.render)(bmp, p, 0, 0, w, h, 0, RENDER_ANNOT);
-            let stride = (self.lib.bitmap_stride)(bmp).max(0) as usize;
-            let buf = (self.lib.bitmap_buffer)(bmp) as *mut u8;
+        };
+        // SAFETY: `bmp` is alive until the destroy below; its buffer is read within `stride * height` bytes.
+        let encoded = unsafe {
+            let stride = {
+                let _g = lock();
+                (self.lib.bitmap_stride)(bmp).max(0) as usize
+            };
+            let buf = {
+                let _g = lock();
+                (self.lib.bitmap_buffer)(bmp) as *mut u8
+            };
             let ok = !buf.is_null() && stride >= w as usize * 4;
             if ok {
                 // BGRx to gray, in place in PDFium's own buffer (no second image in memory): the gray row y goes to y * w, which is
@@ -441,12 +542,18 @@ impl PdfDocument for PdfiumDoc {
                     }
                 }
             }
-            let encoded = if ok { Some(crate::png::encode_gray(w as u32, h as u32, w as usize, std::slice::from_raw_parts(buf, w as usize * h as usize))) } else { None };
-            (self.lib.bitmap_destroy)(bmp);
-            (self.lib.close_page)(p);
-            let png = encoded.ok_or_else(|| damaged(format!("page {} cannot be drawn", page + 1)))?.map_err(damaged)?;
-            let actual_dpi = (scale * 72.0).round().max(1.0) as u32;
-            Ok(RenderedPage { png, width: w as u32, height: h as u32, dpi: actual_dpi.min(dpi) })
+            if ok { Some(crate::png::encode_gray(w as u32, h as u32, w as usize, std::slice::from_raw_parts(buf, w as usize * h as usize))) } else { None }
+        };
+        {
+            let _g = lock();
+            // SAFETY: each is released once.
+            unsafe {
+                (self.lib.bitmap_destroy)(bmp);
+                (self.lib.close_page)(p);
+            }
         }
+        let png = encoded.ok_or_else(|| damaged(format!("page {} cannot be drawn", page + 1)))?.map_err(damaged)?;
+        let actual_dpi = (scale * 72.0).round().max(1.0) as u32;
+        Ok(RenderedPage { png, width: w as u32, height: h as u32, dpi: actual_dpi.min(dpi) })
     }
 }

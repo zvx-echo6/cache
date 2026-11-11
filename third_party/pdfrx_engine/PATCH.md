@@ -3,7 +3,7 @@
 Upstream: `pdfrx_engine` 0.4.7 (MIT, Copyright (c) 2018 @espresso3389 (Takashi Kawasaki)), as published on pub.dev. It is the PDFium
 engine under `pdfrx` 2.4.8. The app uses this copy through `dependency_overrides` in `app/pubspec.yaml`. `LICENSE` is unchanged.
 
-## What is changed (two edits)
+## What is changed (three edits)
 
 1. `lib/src/native/pdfrx_pdfium.dart`: `_installFontMapper()` is an empty function. Upstream makes a `_PdfFontMapper` (five
    `NativeCallable.isolateLocal` callbacks), installs it with `FPDF_SetSystemFontInfo`, and does so once per isolate that starts pdfrx.
@@ -11,7 +11,14 @@ engine under `pdfrx` 2.4.8. The app uses this copy through `dependency_overrides
    second replaces the first's, and a font lookup from the wrong isolate, or after the engine that installed it has ended, aborts the
    process ("Cannot invoke native callback from a different isolate"). Nothing else in the file changes: `_init`, `_deinit`, the font
    file reloads and the missing-font query still exist and still work on a mapper that is never made (`_fontMapper` stays null).
-2. `pubspec.yaml`: the line `resolution: workspace` is removed (this copy is a path dependency, not a member of pdfrx's workspace).
+2. The process's one PDFium lock (`lib/src/native/pdfium_lock.dart`, `lib/src/pdfium_lock_stub.dart`, exported by `lib/pdfrx_engine.dart`;
+   `lib/src/native/worker.dart`; `lib/src/native/pdfrx_pdfium.dart`). PDFium is not thread-safe and the app's core, a native library in
+   the same process, calls it from other threads than pdfrx's worker. The core exports a lock and an unlock function (reentrant); the app
+   hands their addresses to `PdfiumLock.functions` BEFORE pdfrx starts, the worker isolate is told them when it starts, and
+   `BackgroundWorker.compute` holds the lock around each callback (its synchronous part: never across an `await`). The app's own
+   callbacks (`PdfrxEntryFunctions.compute`) pass `lockPdfium: false` and take the lock themselves around each PDFium call
+   (`PdfiumLock.hold`, used by `app/lib/pdf/index/pdf_meta_io.dart` and, in Rust, by every call in `cache_ingest/src/pdfium.rs`).
+3. `pubspec.yaml`: the line `resolution: workspace` is removed (this copy is a path dependency, not a member of pdfrx's workspace).
 
 ## What replaces it
 
@@ -29,7 +36,9 @@ package with the abort.
   not happen. Remove `resolution: workspace` again if it is there.
 - Check whether upstream has made the mapper safe on its own (a mapper installed once per process, callbacks that do not depend on one
   isolate). If so, drop this copy and the `dependency_overrides` entry, and keep the core's mapper only if it is still needed.
-- Run `app/test/pdf/pdfium_font_mapper_test.dart` with `CACHE_PDF_FONTS=1` (the add-pdf-core CI job does): the goldens must still match
+- Look for every place the new version calls PDFium from the worker: each must still go through `BackgroundWorker.compute` (so the lock
+  is held), or take `PdfiumLock.hold` itself. A new call from another isolate or thread would not.
+- Run `app/test/pdf/pdfium_font_mapper_test.dart` and `pdfium_lock_test.dart` with `CACHE_PDF_FONTS=1` (the add-pdf-core CI job does): the goldens must still match
   and the two-isolate child must exit 0.
 - Check that pdfrx still gets the PDFium path from `Pdfrx.pdfiumModulePath` and that `FPDF_InitLibrary` is still called once by it
   (the core also calls it, which PDFium allows).

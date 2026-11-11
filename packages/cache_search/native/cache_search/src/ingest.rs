@@ -426,7 +426,9 @@ pub fn probe(args: &str) -> Result<String> {
         None
     };
     if v.get("fonts_only").and_then(Value::as_bool).unwrap_or(false) {
-        return Ok(json!({"fonts": fonts}).to_string());
+        // and the addresses of the process's one PDFium lock (see cache_ingest::pdfium), for pdfrx's worker
+        let (lock, unlock) = cache_ingest::pdfium::lock_functions();
+        return Ok(json!({"fonts": fonts, "lock_fns": {"lock": lock, "unlock": unlock}}).to_string());
     }
     let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
     let load_embedder = v.get("load_embedder").and_then(Value::as_bool).unwrap_or(true);
@@ -470,7 +472,8 @@ pub fn probe(args: &str) -> Result<String> {
     if let Some(d) = v.get("dump") {
         let pdf = d.get("pdf").and_then(Value::as_str).ok_or_else(|| Error::bad_json("dump.pdf must be a path"))?;
         let dpi = d.get("dpi").and_then(Value::as_u64).unwrap_or(72) as u32;
-        out["dump"] = cache_ingest::pdfium::dump(text(&engines, "pdfium_lib"), Path::new(pdf), dpi).map_err(to_core)?;
+        let timings = d.get("timings").and_then(Value::as_bool).unwrap_or(false);
+        out["dump"] = cache_ingest::pdfium::dump_with(text(&engines, "pdfium_lib"), Path::new(pdf), dpi, timings).map_err(to_core)?;
     }
     Ok(out.to_string())
 }
