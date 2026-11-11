@@ -458,7 +458,11 @@ class CarOverlayTest {
         assertTrue(two.width > one.width)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
         assertEquals(34f + p.measureText("12%") + 12f, CarOverlayPainter.badgeWidth("12%", 1f), 0.01f)
-        assertEquals(2 * CarOverlayPainter.badgeWidth("9%", 1f), CarOverlayPainter.badgeWidth("9%", 2f), 0.5f)
+        // Density 2: the fixed parts double and the text is as a paint at twice the size measures it (font metrics do not
+        // promise that this is exactly twice the density 1 width, so that is only checked loosely).
+        val p2 = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.BADGE_TEXT_SIZE * 2f; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
+        assertEquals((34f + 12f) * 2f + p2.measureText("9%"), CarOverlayPainter.badgeWidth("9%", 2f), 0.01f)
+        assertEquals(2.0, (CarOverlayPainter.badgeWidth("9%", 2f) / CarOverlayPainter.badgeWidth("9%", 1f)).toDouble(), 0.1)
         // The text is inside the pill: the columns of the last 6 px before the right edge's round end hold no glyph color,
         // and the pill is painted at its middle.
         val w = two.width
