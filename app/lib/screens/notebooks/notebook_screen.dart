@@ -15,6 +15,7 @@ import '../../notebook/places.dart';
 import '../../theme.dart';
 import 'entry_editor.dart';
 import 'field_inputs.dart';
+import 'icon_picker.dart' show MapIconSetup;
 import 'notebook_editor.dart';
 import 'notebook_search_screen.dart';
 import 'places_screen.dart';
@@ -35,6 +36,7 @@ class NotebookDeps {
     this.onShowRepeater,
     this.onRepeaterDirections,
     this.fmt,
+    this.icons,
   });
 
   /// The same deps with the repeater lists' map actions (the shell's: they switch to Maps).
@@ -51,6 +53,7 @@ class NotebookDeps {
     onShowRepeater: onShow,
     onRepeaterDirections: onDirections,
     fmt: fmt,
+    icons: icons,
   );
 
   /// A repeater list's row tapped: Maps opens on the repeater with its card; null: rows do nothing.
@@ -61,6 +64,9 @@ class NotebookDeps {
 
   /// Distances in the person's units (the map's).
   final Fmt? fmt;
+
+  /// Map icons: the icon picker's Recent and the pin style. Null leaves the icon controls out (tests).
+  final MapIconSetup? icons;
 
   final NotebookState notebook;
   final PlaceChoices places;
@@ -180,7 +186,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   Future<void> _menu(Notebook book, String choice) async {
     switch (choice) {
       case 'edit':
-        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book)));
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book, icons: widget.deps.icons)));
       case 'map':
         await nb.setOnMap(book, !book.map);
       case 'home':

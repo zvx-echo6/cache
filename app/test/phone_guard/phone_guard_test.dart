@@ -12,6 +12,7 @@ import 'package:cache/browse/browse_state.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/chat/tool.dart';
 import 'package:cache/chat/tool_loop.dart';
+import 'package:cache/discover/discover_state.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'package:cache/nav/nav_state.dart';
@@ -231,13 +232,36 @@ class _Rig {
   }
 }
 
+/// Waits until the Shell on screen has started its Discover (its file read, and kept when it was not there). Home shows Discover's
+/// card in the Set up card's place only once that is done, and it is real file work (a temp file written, flushed to the disk and
+/// renamed), which takes as long as the disk takes: the fixed turns of [_settle] were not always enough for it, and then the picture
+/// had the Set up card. Once it is started this Discover writes nothing more, so the next picture can empty the support folder
+/// without taking a file from under it.
+Future<void> _discoverStarted(WidgetTester tester) async {
+  final discover = DiscoverState.shared;
+  if (discover == null) fail('The Shell on screen has no Discover');
+  var turns = 0;
+  while (!discover.started) {
+    if (++turns > 400) fail('Discover had not started after $turns turns');
+    await _settle(tester, 1);
+  }
+  // The card is drawn in the frame after Discover says it has started; a Home that waited settles as a new page does.
+  if (turns == 0) {
+    await tester.pump();
+  } else {
+    await _settle(tester);
+  }
+}
+
 /// A new Shell at [size]; taps [path] (keys) in turn after [tab] (the bar's or rail's label, or null for Home).
 Future<void> _shoot(WidgetTester tester, _Rig rig, String size, CacheThemeId theme, String name, {String? tab, List<String> path = const []}) async {
-  // each picture starts from the defaults: what a picture chose is kept in files in the support folder
+  // each picture starts from the defaults: what a picture chose is kept in files in the support folder (the Shell before this one
+  // has finished its Discover's file by now: see _discoverStarted)
   for (final f in rig.support.listSync().whereType<File>()) {
     f.deleteSync();
   }
   await _show(tester, rig.shell(), size, theme);
+  await _discoverStarted(tester);
   if (tab != null) {
     final label = find.text(tab).first;
     await tester.ensureVisible(label);

@@ -37,6 +37,7 @@ import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
+import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
 import '../nav/elevation/route_elevation.dart';
 import '../regions/regions_state.dart';
@@ -357,6 +358,8 @@ class _ShellState extends State<Shell> {
   void _goModule(ModuleId m) {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
     if (m == ModuleId.ask) unawaited(widget.app.wake());
+    // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
+    if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
     setState(() {
       _module = m;
       _onModules = false;

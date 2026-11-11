@@ -15,12 +15,16 @@ import '../../search/index_status.dart' show indexSlowedWords, indexWaitWords, i
 import '../../sources/libraries_state.dart';
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
-import '../book_pages.dart' show openPlace, PlaceChip;
+import '../../weather/words.dart' show agoWords, dayWords;
+import '../book_pages.dart' show openPlace, PlaceChip, showDeleteBook;
 import '../cds.dart';
 import '../library_pages.dart';
 import '../library_panes.dart';
 import '../shelf_source.dart';
 import 'add_pdf_state.dart';
+import 'watch_folders.dart';
+
+part 'watch_folder_pages.dart';
 
 /// The Library's pages and states, for Add PDF's result actions (Move, Undo, Place, Open book): set by the Library screen.
 LibraryDeps? addPdfLibraryDeps;
@@ -195,7 +199,10 @@ class _Stack extends StatelessWidget {
 
 /// A fact: its small label, the value, an optional line under it, and a button at the end.
 class _Fact extends StatelessWidget {
-  const _Fact({required this.label, required this.value, this.note, this.trailing, this.valueKey});
+  const _Fact({required this.label, required this.value, this.note, this.trailing, this.valueKey, this.valueWeight});
+
+  /// The value's weight (the watch screens' values are medium, as their mockup).
+  final FontWeight? valueWeight;
 
   final String label;
   final String value;
@@ -214,7 +221,7 @@ class _Fact extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(label, style: TextStyle(fontSize: 13, color: k.secondary)),
-              Text(value, key: valueKey, style: TextStyle(fontSize: 16, color: k.text)),
+              Text(value, key: valueKey, style: TextStyle(fontSize: 16, fontWeight: valueWeight, color: k.text)),
               if (note != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(note!, style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary))),
             ],
           ),
@@ -302,7 +309,10 @@ class _Big extends StatelessWidget {
 
 /// A note inside a card: a stripe down its left side in its tone, a heading, a line, and its buttons.
 class _Note extends StatelessWidget {
-  const _Note({required this.tone, required this.title, this.body, this.actions = const [], this.leading, this.trailing, this.plain = false, super.key});
+  const _Note({required this.tone, required this.title, this.body, this.actions = const [], this.leading, this.trailing, this.plain = false, this.fill, super.key});
+
+  /// Its own fill (a watched folder's summary: the page's color), in place of [plain]'s.
+  final Color? fill;
 
   /// On the page itself (an error or a wait), white like a card; inside a card the note is tinted.
   final bool plain;
@@ -329,7 +339,7 @@ class _Note extends StatelessWidget {
     );
     return Container(
       decoration: BoxDecoration(
-        color: plain ? k.surface : Color.alphaBlend(k.secondary.withValues(alpha: 0.08), k.surface),
+        color: fill ?? (plain ? k.surface : Color.alphaBlend(k.secondary.withValues(alpha: 0.08), k.surface)),
         borderRadius: BorderRadius.circular(plain ? 16 : 12),
         border: Border(left: BorderSide(color: tone, width: 4)),
       ),
@@ -683,10 +693,7 @@ class AddPdfProgressPage extends StatelessWidget {
                       padding: const EdgeInsets.all(8),
                       child: Text('No PDFs are being added.', style: TextStyle(fontSize: 14, color: context.t.secondary)),
                     ),
-                  for (final j in jobs) ...[
-                    AddPdfJobCard(state: state, job: j, scheduler: s, deps: deps, full: !compact),
-                    const SizedBox(height: 10),
-                  ],
+                  ..._progressCards(this, jobs, s, compact),
                   if (jobs.any((j) => j.status == AddPdfStatus.active))
                     Padding(
                       padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
@@ -700,6 +707,32 @@ class AddPdfProgressPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The progress page's cards, newest first. The PDFs one check of a watched folder added become one summary card once none of
+/// them is still being added (a PDF of it that stopped keeps its own card).
+List<Widget> _progressCards(AddPdfProgressPage page, List<AddPdfJob> jobs, IndexScheduler? s, bool compact) {
+    final state = page.state, deps = page.deps;
+    final out = <Widget>[];
+    final summed = <String>{};
+    for (final j in jobs) {
+      final c = j.checkId;
+      if (c != null && j.status == AddPdfStatus.done) {
+        final batch = [for (final o in jobs) if (o.checkId == c) o];
+        if (batch.every((o) => o.status != AddPdfStatus.active)) {
+          if (summed.add(c)) {
+            out
+              ..add(WatchCheckSummary(state: state, jobs: [for (final o in batch) if (o.status == AddPdfStatus.done) o], deps: deps))
+              ..add(const SizedBox(height: 10));
+          }
+          continue;
+        }
+      }
+      out
+        ..add(AddPdfJobCard(state: state, job: j, scheduler: s, deps: deps, full: !compact))
+        ..add(const SizedBox(height: 10));
+    }
+    return out;
 }
 
 /// Stop adding this PDF? Asked once; nothing has been added yet.
@@ -766,7 +799,31 @@ class AddPdfJobCard extends StatelessWidget {
 
 Future<void> _cancel(BuildContext context, AddPdfState state, AddPdfJob job) async {
   if (job.status == AddPdfStatus.active && !await confirmStopAdding(context)) return;
+  // it finished while the question was open: the book is in the library, so it is said, and the person keeps it or deletes it
+  // (the book's own Delete, which asks as it always does); stopping it now would only hide its card
+  if (job.status == AddPdfStatus.done) {
+    if (context.mounted) await showFinishedFirst(context, state, job);
+    return;
+  }
   await state.cancel(job);
+}
+
+/// The PDF finished before the stop: "It finished first", Keep, or Delete it (the book's Delete sheet).
+Future<void> showFinishedFirst(BuildContext context, AddPdfState state, AddPdfJob job) async {
+  final deps = addPdfLibraryDeps;
+  final book = addPdfBook(deps, job);
+  final delete = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('It finished first'),
+      content: Text('${job.title} was added to ${job.libraryTitle} before it could stop.'),
+      actions: [
+        _Txt(key: const ValueKey('add-pdf-keep'), label: 'Keep it', onPressed: () => Navigator.of(ctx).pop(false)),
+        if (deps != null && book != null) _Txt(key: const ValueKey('add-pdf-delete-it'), label: 'Delete it', danger: true, onPressed: () => Navigator.of(ctx).pop(true)),
+      ],
+    ),
+  );
+  if (delete == true && deps != null && book != null && context.mounted) await showDeleteBook(context, deps, book);
 }
 
 /// The PDF running now: its phases in order (done, running, to come), the time left, Pause and Cancel.
@@ -835,10 +892,10 @@ class _PhaseCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (full)
-                Text('${formatBytes(job.bytes)} · ${job.libraryTitle}', style: TextStyle(fontSize: 15, color: k.text))
+                _sizeLine(context, job, TextStyle(fontSize: 15, color: k.text))
               else ...[
                 Text(job.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                Text('${formatBytes(job.bytes)} · ${job.libraryTitle}', style: TextStyle(fontSize: 13, color: k.secondary)),
+                _sizeLine(context, job, TextStyle(fontSize: 13, color: k.secondary)),
               ],
               const SizedBox(height: 6),
               for (final p in phases) phase(p),
@@ -874,7 +931,11 @@ class _HeldCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(job.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-          Text(job.stepWords, style: TextStyle(fontSize: 13, color: k.secondary)),
+          // a watched folder's PDF says where it came from, as the running card does
+          if (job.watchName != null)
+            _sizeLine(context, job, TextStyle(fontSize: 13, color: k.secondary))
+          else
+            Text(job.stepWords, style: TextStyle(fontSize: 13, color: k.secondary)),
           const SizedBox(height: 8),
           _bar(context, job.fraction, warn: true),
           const SizedBox(height: 8),
@@ -1233,12 +1294,15 @@ class AddPdfRow extends StatelessWidget {
 
 /// "Add a folder" in Add to Library, under Add a PDF: every PDF in a folder and its subfolders.
 class AddPdfFolderRow extends StatelessWidget {
-  const AddPdfFolderRow({super.key});
+  const AddPdfFolderRow({super.key, this.last = true});
+
+  /// The last row of Your own (round at the bottom); Watch a folder comes under it where folders can be watched.
+  final bool last;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    const radius = BorderRadius.vertical(top: Radius.circular(4), bottom: Radius.circular(14));
+    final radius = BorderRadius.vertical(top: const Radius.circular(4), bottom: Radius.circular(last ? 14 : 4));
     return Material(
       color: k.surface,
       borderRadius: radius,

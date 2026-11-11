@@ -261,12 +261,14 @@ class IndexThrottle extends ChangeNotifier {
 
   /// For the app's own loops (the PDF loop between PDFs and between pages): returns at once while the burst lasts, rests when it
   /// is over, and waits while work is paused (heat, low battery, the model generating).
-  Future<void> permit() async {
+  /// [stop]: the work was asked to stop (paused, Cache going to the back): the wait ends at once, so the work can stop.
+  Future<void> permit({bool Function()? stop}) async {
     await read();
-    while (_duty.paused && !_disposed) {
+    while (_duty.paused && !_disposed && !(stop?.call() ?? false)) {
       final c = _resume ??= Completer<void>();
       // Looks again now and then: the warmth goes down without anyone saying so.
       await Future.any([c.future, _sleep(every)]);
+      if (stop?.call() ?? false) return;
       await read(fresh: true);
     }
     final now = _clock();

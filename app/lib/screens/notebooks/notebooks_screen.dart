@@ -343,7 +343,7 @@ class _NewNotebookScreenState extends State<NewNotebookScreen> {
   NotebookState get nb => widget.deps.notebook;
 
   Future<void> _fromTemplate(NotebookTemplate t) async {
-    final made = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => NotebookEditor(notebook: nb, template: t)));
+    final made = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => NotebookEditor(notebook: nb, template: t, icons: widget.deps.icons)));
     if (made == true && mounted) Navigator.of(context).pop();
   }
 

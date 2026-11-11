@@ -6,16 +6,28 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 49, test) - 2026-11-11
+
 ### Fixed
 - Home: the weather card shows the forecast even when a weather station lists no temperature
+- Home: a phone that is already set up no longer shows the Set up Cache card for a moment when Cache opens
+- Ask: Stop now works while Ask is searching or reading, not only while the answer is being written
+- Sharing and sync: a file dated in the future now syncs; a damaged links file no longer loses your linked devices; and syncing starts again by itself after an internal error
 
 ### New
+- Sharing: after linking, one answer sets how settings sync on both devices, and you can take the other device's settings.
 - Discover is now a module: open it from Modules or pin it to the bottom bar.
+- Library: Watch a folder: new PDFs in a folder you choose are added by themselves, when you open Cache or, on Android, in the background while charging
+- Notebooks and Maps: a notebook has a map icon and a color, and each place can have its own icon and color; pick them from a searchable icon set, and choose how pins look in Settings > Maps > Pin style (Icon, Teardrop or Badge). A place's icon, color and Show on map now sync between your devices
 - Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
 - Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
 - Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
 - Library: Add to Library now shows Your own (Your own library, Add a PDF, Add a folder) at the top
 - Ask: when a chat is full, it says so plainly with a New chat button, and marks an answer cut short
+
+### Changed
+- Android: Cache now ships for 64-bit ARM phones only (x86 devices and Chromebooks are not supported)
+- Ask and search: the search model loads when you open Ask or tap a search box, not every time Cache opens, so Cache holds less memory when you aren't searching
 
 ## 1.1.0 (build 48, test) - 2026-11-10
 

@@ -282,19 +282,22 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
     }
   }
 
-  // ---------------- warm while Cache is in front ----------------
+  // ---------------- warm while the person is in Ask or in search ----------------
 
   /// Memory kept free on top of the model's file before it is loaded ahead of use.
   static const int warmMargin = 512 << 20;
 
-  /// True while the app is in front: the model is held warm (no idle release) and a background or a memory release is undone
-  /// on the next [warmLoad].
+  /// True while the app is in front. Opening Cache or coming back to the front loads nothing: the model is loaded and held
+  /// warm (no idle release) by [warmLoad], which runs when the person opens Ask or a search box ([aboutToSearch]).
   bool _foreground = true;
   bool _warmWanted = false;
   Future<void>? _warmRun;
 
   /// True while the model is loaded ahead of use and held.
   bool get isWarm => embedder.isWarm;
+
+  /// The person opened Ask or put the cursor in a search box: the app's search model loads ahead of the search ([warmLoad]).
+  static void aboutToSearch() => unawaited(shared?.warmLoad());
 
   /// Loads the search model in the background when it is installed and the phone has room for it (its file plus
   /// [warmMargin]); a search then finds it loaded. Never throws; call it without awaiting. Does nothing in a browser, where the
@@ -336,13 +339,13 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
     }
   }
 
-  /// The app's lifecycle: in front (resumed) loads the model ahead of use; hidden, paused or detached lets it go. Inactive
-  /// (a dialog, the notification shade) changes nothing.
+  /// The app's lifecycle: hidden, paused or detached lets the model go. Back in front (resumed) loads nothing: Ask or a
+  /// search box opened again does ([aboutToSearch]), and a search before that loads it on use. Inactive (a dialog, the
+  /// notification shade) changes nothing.
   void onLifecycle(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
         _foreground = true;
-        unawaited(warmLoad());
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
