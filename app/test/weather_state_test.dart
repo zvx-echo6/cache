@@ -900,6 +900,70 @@ void main() {
       expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
     });
 
+    // build 48 on a phone: Home said "no forecast yet" while the Weather screen showed Open-Meteo's forecast, because the first
+    // forecast source (NWS current conditions) listed a station with wind and pressure but no temperature.
+    Future<Harness> withStations(Map<String, dynamic> stations) async {
+      final x = await Harness.create(serve: false);
+      x.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-observations-latest', 'weather', 'Current conditions (NWS stations)', provider: 'NWS'),
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+      ]));
+      await x.weather.refreshCatalogues();
+      await x.weather.setSourcesOn([x.weather.sourceById('nws-observations-latest')!, x.weather.sourceById('openmeteo-forecast')!], true);
+      x.core.stored['nws-observations-latest'] = stations;
+      return x;
+    }
+
+    test('Home weather: a station with no temperature does not hide the forecast after it', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph', 'Pressure': '30.1 inHg', 'From the place': '4 mi'}},
+          {'address': 'live:nws-observations-latest/x/KBBB', 'label': 'Conditions at KBBB', 'fields': {'Temperature': '48 °F', 'From the place': '19 mi'}},
+        ],
+      });
+      expect(h.weather.enabledSources.first.id, 'nws-observations-latest', reason: 'the stations come first, as on the phone');
+      h.core.stored['openmeteo-forecast'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '50 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon 26 Oct', 'fields': {'Daytime high': '57 °F', 'Low (early morning)': '33 °F'}},
+        ],
+      };
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.high, c.low, c.age), ('50 °F', 'clear sky', '57 °F', '33 °F', '1 minute old'));
+      expect(c.forecastMissing, isFalse);
+    });
+
+    test('Home weather: from a list of stations, the nearest one that reports a temperature', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph', 'From the place': '4 mi'}},
+          {'address': 'live:nws-observations-latest/x/KCCC', 'label': 'Conditions at KCCC', 'fields': {'Temperature': '44 °F', 'Conditions': 'cloudy', 'From the place': '31 mi'}},
+          {'address': 'live:nws-observations-latest/x/KBBB', 'label': 'Conditions at KBBB', 'fields': {'Temperature': '48 °F', 'Conditions': 'fair', 'From the place': '19 mi'}},
+        ],
+      });
+      // nothing from Open-Meteo yet: the stations are all there is
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.age), ('48 °F', 'fair', '3 minutes old'));
+      expect(c.forecastMissing, isFalse);
+    });
+
+    test('Home weather: no source with a temperature or conditions still says no forecast yet', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph'}},
+        ],
+      });
+      expect((await h.weather.homeCard()).forecastMissing, isTrue);
+    });
+
     test('Home weather: the field names the definition uses now', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);

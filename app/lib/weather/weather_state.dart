@@ -1465,19 +1465,57 @@ class WeatherState extends ChangeNotifier {
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     String? temperature, conditions, high, low, age;
     var forecastExpired = false;
+    // Each forecast source gives its best "now": a forecast's own /now item first, else (a weather station list, as NWS current
+    // conditions) the nearest station that reports a temperature, else its first item. A source that lists no temperature (a
+    // station with only wind and pressure) must not hide the one after it, so every source is scanned and temperature and
+    // conditions each come from the best source that has them. Forecast /now items rank before station lists.
+    final nows = <(LiveItem, SourceView)>[];
+    final stations = <(LiveItem, SourceView)>[];
     for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
-      final now = v.items.firstWhere((i) => i.address.endsWith('/now'), orElse: () => v.items.first);
-      final day = v.items.firstWhere((i) => !i.address.endsWith('/now'), orElse: () => now);
-      temperature = now.fields['Temperature'];
-      conditions = now.fields['Conditions'];
-      // the names before "Daytime high" and "Low (early morning)" too, for a definition not updated yet
-      high = day.fields['Daytime high'] ?? day.fields['High'];
-      low = day.fields['Low (early morning)'] ?? day.fields['Low'];
-      age = v.age;
-      forecastExpired = v.expired;
-      break;
+      final own = [for (final i in v.items) if (i.address.endsWith('/now')) i];
+      if (own.isNotEmpty) {
+        nows.add((own.first, v));
+        continue;
+      }
+      LiveItem? pick;
+      double? best;
+      for (final i in v.items) {
+        if (i.fields['Temperature'] == null) continue;
+        final d = distanceMiles(i);
+        if (pick == null || (d != null && (best == null || d < best))) {
+          pick = i;
+          best = d;
+        }
+      }
+      stations.add((pick ?? v.items.first, v));
     }
+    final ranked = [...nows, ...stations];
+    for (final (i, v) in ranked) {
+      if (temperature == null && i.fields['Temperature'] != null) {
+        temperature = i.fields['Temperature'];
+        age = v.age;
+        forecastExpired = v.expired;
+      }
+      conditions ??= i.fields['Conditions'];
+    }
+    // the day's high and low from the first source that has them; the names before "Daytime high" and "Low (early morning)" too,
+    // for a definition not updated yet
+    for (final v in views) {
+      if (v.group != LiveGroup.forecast) continue;
+      for (final i in v.items) {
+        if (i.address.endsWith('/now')) continue;
+        final h = i.fields['Daytime high'] ?? i.fields['High'];
+        final l = i.fields['Low (early morning)'] ?? i.fields['Low'];
+        if (h == null && l == null) continue;
+        high = h;
+        low = l;
+        break;
+      }
+      if (high != null || low != null) break;
+    }
+    age ??= [for (final (_, v) in ranked) v.age].firstOrNull;
+    forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
     final warnings = <HomeAlert>[];
     // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
     final listed = <(LiveItem, String)>[];

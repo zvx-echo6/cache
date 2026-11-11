@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### Fixed
+- Home: the weather card shows the forecast even when a weather station lists no temperature
+
 ### New
 - Discover is now a module: open it from Modules or pin it to the bottom bar.
 - Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
