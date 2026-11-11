@@ -148,6 +148,18 @@ void main() {
       expect(dropCitationMarks('a [1] b [1, 2] c [1,2,3] d [4-6] e [2 - 3].'), 'a b c d e.');
     });
 
+    test('a bracket with a 0 is never a citation: it stays', () {
+      expect(dropCitationMarks('the value lies in [0, 1] and [0] and x[0] but not [1, 2] or [3] or [10].'), 'the value lies in [0, 1] and [0] and x[0] but not or or.');
+    });
+
+    testWidgets('[0, 1], [0] and x[0] stay in an answer with no sources, and [1, 2] and [3] still go', (tester) async {
+      await show(tester, r'Use list[0] when [0] is empty; the value lies in [0, 1] [1, 2] [3].');
+      expect(find.textContaining('list[0]'), findsOneWidget);
+      expect(find.textContaining('[0, 1]'), findsOneWidget);
+      expect(find.textContaining('[1, 2]'), findsNothing);
+      expect(find.textContaining('[3]'), findsNothing);
+    });
+
     testWidgets('the stored text is unchanged', (tester) async {
       const text = 'Ray Charles played tenor saxophone [1, 2].';
       await show(tester, text);
