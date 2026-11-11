@@ -1,0 +1,146 @@
+# A test APK that runs the Pocket TTS voice model through the sherpa-onnx speech engine, to time the model's speed and
+# memory on one test phone. It is not the app and nothing here is released: this branch exists only to build this APK,
+# which is uploaded as a workflow artifact. Runs on a push to this branch that touches tools/voice-test or this file.
+#
+# The engine's project publishes ready-made Android TTS apps for other models, but none for Pocket TTS. This builds one
+# from the engine's own example app (android/SherpaOnnxTts) at a pinned release, the way its APK script
+# (scripts/apk/build-apk-tts.sh.in) does, with two differences: the engine's prebuilt Android libraries for that release
+# are downloaded instead of compiled, and the files under tools/voice-test/overlay replace the example's activity,
+# layout, strings, manifest and app/build.gradle. tools/voice-test/prepare.sh puts it all together; the overlay's
+# MainActivity.kt lists the log lines (logcat tag PocketTiming) and the intent extras.
+#
+# Java 17, not the 21 the rest of this repository builds with: the example app's Gradle wrapper is 8.2, which runs on
+# Java 17 and not on 21.
+#
+# What is packaged, and its licence:
+#   engine            sherpa-onnx v2.0.1, Apache-2.0; its prebuilt libraries carry ONNX Runtime 1.28.2, MIT
+#   model             sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2 from the engine's tts-models release: the Pocket TTS
+#                     weights, CC BY 4.0 (the archive's LICENSE file, and the model makers' own model card). The archive's
+#                     README adds that it is for non-commercial use.
+#   reference clips   ref/donated.wav is voice-donations/Selfie.wav from the model makers' voices catalogue, CC0 (the
+#                     catalogue's README). ref/archive.wav is the clip in the model archive's test_wavs that the engine's
+#                     Pocket TTS examples use; the archive's README says it comes from the model makers'
+#                     delayed-streams-modeling repository, which states no licence for its audio samples.
+#   app libraries     AndroidX, Material Components and Kotlin, Apache-2.0
+#
+# Where the SHA-256 values below come from: the libraries' and the model's are the digests GitHub lists for the release
+# assets, and the model's is also in the tts-models release's own checksum.txt; the donated clip's is the one the
+# catalogue's host lists for the file; the archive clip's was read from the checked model archive. Each also matched a
+# download made when this file was written.
+name: Voice test APK
+
+on:
+  push:
+    branches: [voice/pocket-tts-test]
+    paths:
+      - tools/voice-test/**
+      - .github/workflows/voice-test-apk.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-test-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENGINE_REPO: https://github.com/k2-fsa/sherpa-onnx
+  ENGINE_TAG: v2.0.1
+  ENGINE_COMMIT: af2d8d81dbfa61c4cea4c568da78f3982edca005
+  LIBS_ARCHIVE: sherpa-onnx-v2.0.1-android.tar.bz2
+  LIBS_SHA256: 39003753ec293425ed56723ea9b972b98841a490af3311670c3060548d654330
+  MODEL_DIR: sherpa-onnx-pocket-tts-int8-2026-01-26
+  MODEL_SHA256: 2f3b88823cbbb9bf0b2477ec8ae7b3fec417b3a87b6bb5f256dba66f2ad967cb
+  VOICES_REPO: https://huggingface.co/kyutai/tts-voices
+  VOICES_COMMIT: 323332d33f997de8394f24a193e1a76df720e01a
+  DONATED_CLIP: voice-donations/Selfie.wav
+  DONATED_SHA256: 076968c3122520f3412eb7090e8c1c3f75fe57be1e24a2f96465583d84c71e16
+  ARCHIVE_CLIP_SHA256: 85f46d6f0642f657a6bd689ddaa52d5a5f53e4314715e1032704c80917392181
+  PACKAGE: com.k2fsa.sherpa.onnx.pocket
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/voice-test
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK parts the example app is built with
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-32" "build-tools;30.0.3" > /dev/null
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+      - name: Engine source, libraries, model and reference clips (pinned)
+        run: bash tools/voice-test/prepare.sh "$RUNNER_TEMP/voice-test"
+      - name: Build the debug APK
+        working-directory: ${{ runner.temp }}/voice-test/engine/android/SherpaOnnxTts
+        run: ./gradlew --no-daemon --console=plain --stacktrace assembleDebug
+      - name: Check the APK
+        run: |
+          work="$RUNNER_TEMP/voice-test"
+          mkdir -p out
+          apk="out/pocket-tts-test-arm64-v8a-debug-${GITHUB_SHA::7}.apk"
+          cp "$work/engine/android/SherpaOnnxTts/app/build/outputs/apk/debug/app-debug.apk" "$apk"
+          cp "$work/build-info.txt" out/build-info.txt
+          ls -l "$apk"
+          sha256sum "$apk"
+
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n 1)
+          "$aapt2" dump badging "$apk" > out/badging.txt
+          cat out/badging.txt
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > out/manifest-tree.txt
+          cat out/manifest-tree.txt
+          unzip -l "$apk" > out/contents.txt
+          grep -E " (assets|lib)/" out/contents.txt || true
+
+          fail=0
+          grep -q "^package: name='$PACKAGE' " out/badging.txt || { echo "::error::The package name is not $PACKAGE"; fail=1; }
+          grep -q -E "^native-code: 'arm64-v8a' *$" out/badging.txt || { echo "::error::The APK is not arm64-v8a only"; fail=1; }
+          # No permission is expected at all. One that reaches the network fails the build; any other is only pointed out.
+          grep -E "^uses-permission" out/badging.txt > out/permissions.txt || true
+          if [ -s out/permissions.txt ]; then
+            echo "::warning::The APK asks for permissions: $(tr '\n' ' ' < out/permissions.txt)"
+          else
+            echo "permissions: none"
+          fi
+          if grep -q -i -E "INTERNET|NETWORK|WIFI" out/permissions.txt; then
+            echo "::error::The APK asks for network access"; fail=1
+          fi
+          for f in lm_flow.int8.onnx lm_main.int8.onnx encoder.onnx decoder.int8.onnx text_conditioner.onnx vocab.json token_scores.json LICENSE; do
+            unzip -l "$apk" "assets/$MODEL_DIR/$f" > /dev/null || { echo "::error::$f is not in the APK"; fail=1; }
+          done
+          for f in assets/ref/donated.wav assets/ref/archive.wav lib/arm64-v8a/libsherpa-onnx-jni.so lib/arm64-v8a/libonnxruntime.so; do
+            unzip -l "$apk" "$f" > /dev/null || { echo "::error::$f is not in the APK"; fail=1; }
+          done
+
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          "$apksigner" verify --verbose --print-certs "$apk" > out/signature.txt 2>&1 || { echo "::error::apksigner verify failed"; fail=1; }
+          cat out/signature.txt
+
+          {
+            echo
+            echo "apk: $(basename "$apk") $(stat -c %s "$apk") bytes sha256 $(sha256sum "$apk" | cut -d ' ' -f 1)"
+            grep -E "^package:|^sdkVersion:|^targetSdkVersion:|^application-label:|^application-debuggable|^launchable-activity:|^native-code:" out/badging.txt || true
+            echo "testOnly: $(grep -q 'testOnly.*=true' out/manifest-tree.txt && echo yes || echo no)"
+            echo "permissions: $(if [ -s out/permissions.txt ]; then tr '\n' ' ' < out/permissions.txt; else echo none; fi)"
+          } >> out/build-info.txt
+          {
+            echo '### Pocket TTS test APK'
+            echo '```'
+            cat out/build-info.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: pocket-tts-test-apk
+          path: out/
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

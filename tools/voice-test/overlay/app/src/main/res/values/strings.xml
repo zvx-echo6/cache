@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Pocket TTS test</string>
+    <string name="threads_label">Threads</string>
+    <string name="threads_hint">2</string>
+    <string name="steps_label">Flow steps</string>
+    <string name="steps_hint">2</string>
+    <string name="reload">Reload the model (uses the thread count)</string>
+    <string name="status_start">Starting</string>
+    <string name="text_hint">Please input your text here</string>
+    <string name="generate">Generate</string>
+    <string name="play">Play</string>
+    <string name="stop">Stop</string>
+</resources>
