@@ -501,7 +501,7 @@ class PlaceView extends StatelessWidget {
                         overrideId: e.icon,
                         notebookIconId: book.def.icon ?? defaultNotebookIcon(book),
                         notebookName: book.name,
-                        tint: iconTint(context, markerColor(e.color).color),
+                        tint: iconTint(context, markerColor(e.color ?? book.def.color).color),
                         recent: icons!.recent,
                         onChanged: (id) => icons!.onPlaceIcon?.call(e, id),
                       ),
@@ -595,7 +595,9 @@ class _PlaceFormState extends State<PlaceForm> {
   late final MarkdownController _notes = MarkdownController(text: widget.entry?.body ?? '');
   final TextEditingController _search = TextEditingController();
   late NbPlace? _pin = widget.entry?.place ?? widget.at;
-  late MarkerColor _color = widget.entry?.color != null ? markerColor(widget.entry!.color) : defaultMarkerColor(widget.others);
+  late MarkerColor _color = widget.entry?.color != null
+      ? markerColor(widget.entry!.color)
+      : (widget.book.def.color != null ? markerColor(widget.book.def.color) : defaultMarkerColor(widget.others));
   late bool _onMap = widget.entry?.onMap ?? true;
   late String? _icon = widget.entry?.icon;
   late bool _weather = _id == null ? true : pd?.watched(_id!) ?? false;

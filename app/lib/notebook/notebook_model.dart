@@ -140,7 +140,7 @@ enum NotebookSort { date, recent, distance }
 
 /// A notebook's definition (made from a template, which is data): its name, fields, how often it is due and its shape.
 class NotebookDef {
-  const NotebookDef({required this.name, required this.fields, this.dueEvery, this.sort = NotebookSort.date, this.quickAdd = false, this.meta = const {}, this.icon});
+  const NotebookDef({required this.name, required this.fields, this.dueEvery, this.sort = NotebookSort.date, this.quickAdd = false, this.meta = const {}, this.icon, this.color});
 
   final String name;
   final List<LogField> fields;
@@ -159,6 +159,10 @@ class NotebookDef {
   /// The notebook's map icon (an id of map_icons.dart); null uses the default for its template.
   final String? icon;
 
+  /// The notebook's colour (a marker colour name, see place_style.dart): the default pin colour of its places. A place's own
+  /// colour (`props.color`) wins. Null uses the first marker colour.
+  final String? color;
+
   List<LogField> get visible => [for (final f in fields) if (!f.hidden) f];
 
   LogField? field(String fid) {
@@ -168,7 +172,7 @@ class NotebookDef {
     return null;
   }
 
-  NotebookDef copyWith({String? name, List<LogField>? fields, String? dueEvery, bool clearDue = false, NotebookSort? sort, bool? quickAdd, String? icon, bool clearIcon = false}) => NotebookDef(
+  NotebookDef copyWith({String? name, List<LogField>? fields, String? dueEvery, bool clearDue = false, NotebookSort? sort, bool? quickAdd, String? icon, bool clearIcon = false, String? color, bool clearColor = false}) => NotebookDef(
         name: name ?? this.name,
         fields: fields ?? this.fields,
         dueEvery: clearDue ? null : (dueEvery ?? this.dueEvery),
@@ -176,12 +180,14 @@ class NotebookDef {
         quickAdd: quickAdd ?? this.quickAdd,
         meta: meta,
         icon: clearIcon ? null : (icon ?? this.icon),
+        color: clearColor ? null : (color ?? this.color),
       );
 
   Map<String, dynamic> toJson() => {
         ...meta,
         'name': name,
         'icon': ?icon,
+        'color': ?color,
         'due_every': dueEvery,
         'shape': {'sort': sort.name, if (quickAdd) 'quick_add': true},
         'fields': [for (final f in fields) f.toJson()],
@@ -199,6 +205,7 @@ class NotebookDef {
       fields: [for (final f in (j['fields'] as List? ?? const [])) ?LogField.fromJson(f)],
       meta: {for (final k in const ['id', 'version', 'author', 'group']) if (j[k] != null) k: j[k]},
       icon: j['icon'] is String ? j['icon'] as String : null,
+      color: j['color'] is String ? j['color'] as String : null,
     );
   }
 }
