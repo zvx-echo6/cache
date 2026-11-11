@@ -51,6 +51,11 @@ CL_API int cl_info(void * h, char * out_json, int len);
 // caller must not show it: the chat is full).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
 
+// cl_start for a caller that queues the call (the app's worker isolate): [epoch] is cl_stop_epoch as of when the question was
+// queued. If a cl_stop came after that and before the call began, the question ends at once as a stop before the first token does
+// (returns 0, no decode, cl_next returns -1, cl_finish gives an empty answer). A stop before it was queued does not affect it.
+CL_API int cl_start_e(void * h, const char * request_json, unsigned long long epoch, char * err, int err_len);
+
 // Reads the prompt start ahead, before any question: [request_json] is a request as cl_start takes it but with no user message
 // (the system message, the tools, enable_thinking). It is rendered by the same code as cl_start's, the stable prompt start is
 // found the same way (the tokens the template renders for it with two different one-word questions share), and that start is

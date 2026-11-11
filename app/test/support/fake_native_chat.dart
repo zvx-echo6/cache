@@ -50,6 +50,9 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   /// Holds a read in the worker before it begins (the worker busy with an earlier call).
   Future<void>? holdBeforeRead;
 
+  /// Holds a question's answer after its prompt is decoded (the model generating).
+  Future<void>? holdGenerate;
+
   Future<void> _tail = Future.value();
   bool _stop = false;
   bool _warming = false;
@@ -197,8 +200,16 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
   Stream<PartialMessage> generate(Map<String, dynamic> request) {
     if (_warming) _joined = true;
     questionRequests.add(request);
+    final epoch = stopEpoch; // read when it is queued, as the session does
     final c = StreamController<PartialMessage>();
     _enqueue(() async {
+      if (epoch != stopEpoch) {
+        // Stopped after it was queued and before it began: it ends as a stop before the first token does.
+        c.add(const PartialMessage(isFinal: true));
+        await c.close();
+        return;
+      }
+      _stop = false;
       final tokens = render(request);
       questions.add(tokens);
       var keep = _common(cached, tokens, tokens.length - 1);
@@ -210,7 +221,9 @@ class FakeNativeChat implements ModelBackend, ReadAheadEngine {
       }
       decoded += tokens.length - keep;
       cached = [...tokens, 'ok'];
-      c.add(PartialMessage(isFinal: true, content: 'ok', promptTokens: tokens.length, reusedTokens: keep));
+      await holdGenerate;
+      final stopped = _stop;
+      c.add(PartialMessage(isFinal: true, content: stopped ? 'part' : 'ok', promptTokens: tokens.length, reusedTokens: keep));
       await c.close();
     });
     return c.stream;

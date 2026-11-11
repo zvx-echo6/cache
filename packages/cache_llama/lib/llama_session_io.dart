@@ -153,7 +153,10 @@ class LlamaSession {
     _gens[id] = c;
     // "max_tokens" caps what one request generates; the worker counts the tokens (the native request ignores the key).
     final max = request['max_tokens'];
-    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null});
+    // The stop epoch as of now (the question is queued): a stop that comes before the worker starts it, behind a read ahead for
+    // example, ends it at once; a stop from before it was queued does not.
+    final epoch = _handleAddress == 0 ? 0 : (_mainBindings?.clStopEpoch?.call(Pointer<Void>.fromAddress(_handleAddress)) ?? 0);
+    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null, 'epoch': epoch});
     return c.stream;
   }
 
@@ -291,7 +294,7 @@ void _workerMain(SendPort toMain) {
         }
         final clock = Stopwatch()..start();
         final req = (msg['request'] as String).toNativeUtf8();
-        final rc = b.clStart(handle, req, err, _kErrLen);
+        final rc = b.clStartE != null ? b.clStartE!(handle, req, msg['epoch'] as int, err, _kErrLen) : b.clStart(handle, req, err, _kErrLen);
         final startMs = clock.elapsedMilliseconds;
         malloc.free(req);
         if (rc != 0) {

@@ -1121,7 +1121,7 @@ int cl_info(void * hp, char * out_json, int len) {
     }
 }
 
-int cl_start(void * hp, const char * request_json, char * err, int err_len) {
+int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, char * err, int err_len) {
     auto * h = (Handle *) hp;
     try {
         h->finished = true;
@@ -1178,6 +1178,16 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         if (h->n_prompt == 0 || h->n_prompt >= h->n_ctx) {
             set_err(err, err_len, "prompt does not fit the context (" + std::to_string(h->n_prompt) + " tokens)");
             return -3;  // context full: distinct from the other failures (-1)
+        }
+
+        // Stopped after the question was queued and before it began (the stop epoch moved: a read ahead it waited behind was
+        // stopped, or the person tapped Stop): it ends as a stop before the first token does, with no decode. `stop` was cleared at
+        // the top, so the epoch is looked at after that clear: a stop before it is seen here, one after it sets the flag the decode
+        // obeys. A stop before the question was queued is not seen: the caller read the epoch when it queued it.
+        if (h->stop_epoch.load() != epoch) {
+            cl_logi("question stopped before it began");
+            h->finished = true;
+            return 0;
         }
 
         // The stable prompt start. The prompt start of this request shape is the system prompt and the tool schemas the template
@@ -1287,6 +1297,11 @@ int cl_warm(void * hp, const char * request_json, int check_only, unsigned long 
 }
 
 int cl_prompt_decoded(void * hp) { return (int) ((Handle *) hp)->prompt_decoded; }
+
+int cl_start(void * hp, const char * request_json, char * err, int err_len) {
+    // No epoch from the caller: the question counts as queued now, so no earlier stop can end it.
+    return cl_start_e(hp, request_json, ((Handle *) hp)->stop_epoch.load(), err, err_len);
+}
 
 int cl_next(void * hp, char * buf, int buf_len) {
     auto * h = (Handle *) hp;

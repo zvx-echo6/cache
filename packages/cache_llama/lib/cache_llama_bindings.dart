@@ -14,6 +14,8 @@ typedef _WarmC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int32, Uint64, Poi
 typedef LlamaWarmCall = int Function(Pointer<Void>, Pointer<Utf8>, int, int, Pointer<Int32>, Pointer<Utf8>, int);
 typedef _EpochC = Uint64 Function(Pointer<Void>);
 typedef LlamaEpochCall = int Function(Pointer<Void>);
+typedef _StartEC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint64, Pointer<Utf8>, Int32);
+typedef LlamaStartECall = int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Utf8>, int);
 typedef _IntHC = Int32 Function(Pointer<Void>);
 typedef LlamaHandleIntCall = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
@@ -29,6 +31,7 @@ class CacheLlamaBindings {
       : clLoad = lib.lookupFunction<_LoadC, LlamaLoadCall>('cl_load'),
         clInfo = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_info'),
         clStart = lib.lookupFunction<_StartC, LlamaStartCall>('cl_start'),
+        clStartE = lib.providesSymbol('cl_start_e') ? lib.lookupFunction<_StartEC, LlamaStartECall>('cl_start_e') : null,
         clWarm = lib.providesSymbol('cl_warm') ? lib.lookupFunction<_WarmC, LlamaWarmCall>('cl_warm') : null,
         clStopEpoch = lib.providesSymbol('cl_stop_epoch') ? lib.lookupFunction<_EpochC, LlamaEpochCall>('cl_stop_epoch') : null,
         clNext = lib.lookupFunction<_BufC, LlamaBufferCall>('cl_next'),
@@ -71,6 +74,9 @@ class CacheLlamaBindings {
   final LlamaLoadCall clLoad;
   final LlamaBufferCall clInfo;
   final LlamaStartCall clStart;
+  /// cl_start with the stop epoch of when the question was queued; null in an older library (cl_start is used).
+  final LlamaStartECall? clStartE;
+
   /// Reads the prompt start ahead (cl_warm); null in an older library.
   final LlamaWarmCall? clWarm;
 

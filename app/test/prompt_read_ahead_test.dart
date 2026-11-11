@@ -184,6 +184,63 @@ void main() {
     expect(readLog().last, matches(RegExp(r'^Prompt read ahead: skipped \(stopped after 0 of \d+ tokens\)$')));
   });
 
+  group('Stop and a question', () {
+    test('a question that joins the read, then Stop: the read aborts, the turn ends stopped (empty, no error), the next question works', () async {
+      final inRead = Completer<void>();
+      final go = Completer<void>();
+      native.afterBatch = (n) async {
+        if (!inRead.isCompleted) {
+          inRead.complete();
+          await go.future;
+        }
+      };
+      final reading = ahead.start();
+      await inRead.future;
+      final asked = chat.send('how do I purify water');
+      for (var i = 0; i < 50 && native.questionRequests.isEmpty; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(native.questionRequests, hasLength(1), reason: 'the question is sent (queued behind the read)');
+      chat.stop();
+      go.complete();
+      await reading;
+      await asked;
+      expect(native.files, isEmpty, reason: 'the read was aborted: no prefix file');
+      expect(native.decoded, native.batch, reason: 'one whole batch of the read; the question decoded nothing');
+      expect(chat.messages.last.error, isNull);
+      expect(chat.messages.last.text, isEmpty);
+      expect(readLog().last, startsWith('Prompt read ahead: skipped (stopped after'));
+      native.afterBatch = null;
+      await chat.send('and then?');
+      expect(chat.messages.last.error, isNull);
+      expect(chat.messages.last.text, 'ok');
+    });
+
+    test('a Stop before the question is sent has no effect on it', () async {
+      native.stop(); // an earlier Stop
+      await chat.send('hello');
+      expect(chat.messages.last.text, 'ok');
+      expect(chat.messages.last.error, isNull);
+      expect(native.decoded, native.questions.single.length);
+    });
+
+    test('a Stop while the model is generating still ends the answer as before: what it wrote so far', () async {
+      final gen = Completer<void>();
+      native.holdGenerate = gen.future;
+      final asked = chat.send('hello');
+      for (var i = 0; i < 50 && native.decoded == 0; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(native.decoded, greaterThan(0));
+      chat.stop();
+      gen.complete();
+      await asked;
+      expect(chat.messages.last.text, 'part');
+      expect(chat.messages.last.error, isNull);
+      expect(native.decoded, native.questions.single.length, reason: 'the prompt was decoded: the stop came after the start');
+    });
+  });
+
   test('leaving Ask with Cache still in front lets the read finish', () async {
     final inRead = Completer<void>();
     final leave = Completer<void>();
