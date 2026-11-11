@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cache/history/conversation_store.dart';
 import 'package:cache/history/server_conversation_store.dart';
 import 'package:cache_search/cache_search.dart' show CacheSearchException, CoreTransport;
@@ -11,6 +13,10 @@ class FakeServer implements CoreTransport {
   int rev = 0;
   bool down = false;
 
+  /// An error to throw for an op (by name) instead of doing it, and the `since` of the last sync.
+  final Map<String, Object> fails = {};
+  int lastSince = -1;
+
   @override
   Future<void> close() async {}
 
@@ -18,6 +24,9 @@ class FakeServer implements CoreTransport {
   Future<dynamic> call(String op, Map<String, dynamic> a) async {
     if (down) throw const CacheSearchException('internal', 'unreachable');
     calls.add(op);
+    final f = fails[op];
+    if (f != null) throw f;
+    if (op == 'history.sync') lastSince = a['since'] as int;
     Map<String, dynamic> save(Map<String, dynamic> c) {
       c['rev'] = ++rev;
       return c;
@@ -62,8 +71,8 @@ class FakeServer implements CoreTransport {
   }
 }
 
-Future<ServerConversationStore> tab(FakeServer s, {void Function()? onChanged}) =>
-    ServerConversationStore.open(s, poll: null, onChanged: onChanged);
+Future<ServerConversationStore> tab(FakeServer s, {void Function()? onChanged, List<String>? log}) =>
+    ServerConversationStore.open(s, poll: null, onChanged: onChanged, log: log?.add ?? (_) {}, retryDelay: const Duration(milliseconds: 5));
 
 Future<void> say(ServerConversationStore st, int id, String q) async {
   st.addMessage(id, role: 'user', content: q, message: {'role': 'user', 'content': q});
@@ -171,8 +180,124 @@ void main() {
     expect(ids.length, 100);
   });
 
-  test('the first sync failing is an error, so the page can fall back to memory', () async {
+  test('the first sync failing is an error unless the caller keeps the store', () async {
     final server = FakeServer()..down = true;
     expect(() => tab(server), throwsA(isA<CacheSearchException>()));
+  });
+
+  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
+
+  test('a write the server refuses (io_error) is dropped with a log, and the writes behind it still go', () async {
+    final server = FakeServer();
+    final log = <String>[];
+    final a = await tab(server, log: log);
+    final c = a.create(title: 'T');
+    await a.flush();
+    server.fails['history.update'] = const CacheSearchException('io_error', 'History could not be saved: disk full');
+    a.rename(c.id, 'New');
+    await a.flush();
+    server.fails.clear();
+    await say(a, c.id, 'still saved');
+    await a.flush();
+    expect(log.where((l) => l.contains('history.update was dropped') && l.contains('io_error')), hasLength(1));
+    expect((server.convs[c.id]!['messages'] as List), hasLength(1), reason: 'the queue went on');
+  });
+
+  test('a write that keeps failing inside the server (internal) while it answers is dropped after a few tries, with a log', () async {
+    final server = FakeServer();
+    final log = <String>[];
+    final a = await tab(server, log: log);
+    final c = a.create(title: 'T');
+    await a.flush();
+    server.fails['history.update'] = const CacheSearchException('internal', 'type error in the helper');
+    a.rename(c.id, 'New');
+    await say(a, c.id, 'behind it');
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(log.where((l) => l.contains('history.update was dropped')), hasLength(1));
+    expect(server.calls.where((x) => x == 'history.update').length, ServerConversationStore.maxInternalRetries);
+    server.fails.clear();
+    await a.flush();
+    expect((server.convs[c.id]!['messages'] as List), hasLength(1), reason: 'the write behind it was not blocked');
+  });
+
+  test('internal while the server cannot be reached is kept and retried, never dropped', () async {
+    final server = FakeServer();
+    final log = <String>[];
+    final a = await tab(server, log: log);
+    final c = a.create(title: 'T');
+    await a.flush();
+    server.down = true;
+    await say(a, c.id, 'later');
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(log.any((l) => l.contains('was dropped')), isFalse);
+    server.down = false;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect((server.convs[c.id]!['messages'] as List), hasLength(1));
+  });
+
+  test('an error in the poll is caught: no uncaught async error while the server is away', () async {
+    final server = FakeServer();
+    final log = <String>[];
+    final errors = <Object>[];
+    await runZonedGuarded(() async {
+      final a = await ServerConversationStore.open(server, poll: const Duration(milliseconds: 10), log: log.add);
+      server.down = true;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      a.close();
+    }, (e, _) => errors.add(e));
+    expect(errors, isEmpty);
+    expect(log.any((l) => l.contains('could not look for changes')), isTrue);
+  });
+
+  test('one malformed row is logged and skipped, the rest are taken in, and the position still moves on', () async {
+    final server = FakeServer();
+    final a0 = await tab(server);
+    final good = a0.create(title: 'Good');
+    await a0.flush();
+    server.convs[7] = {'id': 7, 'rev': ++server.rev, 'title': 5, 'titleSource': 'user', 'created': 1, 'updated': 1, 'messages': <Object>[]};
+    server.convs[8] = {'id': 8, 'rev': ++server.rev, 'title': 'ok', 'created': 1, 'updated': 2, 'messages': [{'id': 1, 'role': 'user', 'message': 'not a map'}]};
+    server.convs[9] = {'id': 9, 'rev': ++server.rev, 'title': 'After', 'created': 1, 'updated': 3, 'messages': <Object>[]};
+    final log = <String>[];
+    final b = await tab(server, log: log);
+    expect({for (final c in b.list()) c.title}, {'Good', 'After'});
+    expect(log.where((l) => l.contains('skipped a conversation')), hasLength(2));
+    expect(good.id, isNonZero);
+    await b.refresh();
+    expect(server.lastSince, server.rev, reason: 'since advanced past the bad rows');
+    expect(log.where((l) => l.contains('skipped a conversation')), hasLength(2), reason: 'not downloaded and failed again');
+  });
+
+  test('the first sync is tried again with a wait; a server that comes up in time gives the history', () async {
+    final server = FakeServer();
+    final seed = await tab(server);
+    seed.create(title: 'Kept');
+    await seed.flush();
+    server.down = true;
+    Timer(const Duration(milliseconds: 30), () => server.down = false);
+    final log = <String>[];
+    final a = await ServerConversationStore.open(server, poll: null, attempts: 4, backoff: const Duration(milliseconds: 25), log: log.add);
+    expect([for (final c in a.list()) c.title], ['Kept']);
+    expect(log.any((l) => l.contains('the first sync failed')), isTrue);
+  });
+
+  test('if the first sync never works it is logged, the session keeps its chats, and a later sync attaches the server', () async {
+    final server = FakeServer();
+    final seed = await tab(server);
+    seed.create(title: 'On the server');
+    await seed.flush();
+    server.down = true;
+    final log = <String>[];
+    final a = await ServerConversationStore.open(server,
+        poll: const Duration(milliseconds: 20), attempts: 2, backoff: const Duration(milliseconds: 5), keepOnFailure: true, log: log.add, retryDelay: const Duration(milliseconds: 10));
+    expect(log.any((l) => l.contains('this session keeps its chats')), isTrue);
+    final mine = a.create(title: 'Written offline');
+    await say(a, mine.id, 'hello');
+    server.down = false;
+    await settle();
+    await settle();
+    expect(server.convs[mine.id]!['title'], 'Written offline', reason: 'the session was not lost');
+    expect((server.convs[mine.id]!['messages'] as List), hasLength(1));
+    expect({for (final c in a.list()) c.title}, {'On the server', 'Written offline'}, reason: 'the server history came in too');
+    a.close();
   });
 }

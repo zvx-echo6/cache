@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cache_search/cache_search.dart' show CacheSearchException, CoreTransport;
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../chat/navigation_action.dart';
 import 'conversation_store.dart';
@@ -17,8 +18,10 @@ import 'memory_conversation_store.dart';
 /// cannot be reached. Ids are made here (time based), so `create` stays synchronous. Every few seconds [refresh] asks the server
 /// what changed and takes in what other tabs did, except for a conversation this tab has unsent or just-sent writes for.
 class ServerConversationStore implements ConversationStore {
-  ServerConversationStore(this._t, {DateTime Function()? now, Random? random, this.onChanged})
+  ServerConversationStore(this._t, {DateTime Function()? now, Random? random, this.onChanged, void Function(String message)? log, Duration? retryDelay})
       : _now = now ?? DateTime.now,
+        _log = log ?? ((m) => debugPrint('history: $m')),
+        _retryDelay = retryDelay ?? const Duration(seconds: 3),
         _random = random ?? Random(),
         _mem = MemoryConversationStore(now: now);
 
@@ -30,10 +33,32 @@ class ServerConversationStore implements ConversationStore {
     DateTime Function()? now,
     Random? random,
     void Function()? onChanged,
+    void Function(String message)? log,
+    Duration? retryDelay,
+    int attempts = 1,
+    Duration backoff = const Duration(milliseconds: 500),
+    bool keepOnFailure = false,
   }) async {
-    final s = ServerConversationStore(transport, now: now, random: random, onChanged: onChanged);
-    await s.refresh();
-    if (poll != null) s._timer = Timer.periodic(poll, (_) => unawaited(s.refresh()));
+    final s = ServerConversationStore(transport, now: now, random: random, onChanged: onChanged, log: log, retryDelay: retryDelay);
+    // The first sync is tried [attempts] times, waiting [backoff], 2x, 4x... between. If it still fails: throw, unless [keepOnFailure]
+    // (then the store goes on with what this session writes: the writes queue, the poll keeps asking, and the first sync that works
+    // brings the server's history in and sends the queue, so nothing of the session is lost).
+    for (var i = 1;; i++) {
+      try {
+        await s.refresh();
+        break;
+      } catch (e) {
+        s._log('the first sync failed (try $i of $attempts): $e');
+        if (i < attempts) {
+          await Future<void>.delayed(backoff * (1 << (i - 1)));
+          continue;
+        }
+        if (!keepOnFailure) rethrow;
+        s._log('the server could not be reached; this session keeps its chats and sends them when the server answers');
+        break;
+      }
+    }
+    if (poll != null) s._timer = Timer.periodic(poll, (_) => unawaited(s._poll()));
     return s;
   }
 
@@ -41,6 +66,13 @@ class ServerConversationStore implements ConversationStore {
   final DateTime Function() _now;
   final Random _random;
   final MemoryConversationStore _mem;
+  final void Function(String message) _log;
+  final Duration _retryDelay;
+
+  /// How many times in a row the server may answer `internal` to one write while it can still be reached (a probe sync works)
+  /// before that write is dropped and logged: a helper-side exception would otherwise block every write behind it forever.
+  static const int maxInternalRetries = 5;
+  int _internalFails = 0;
 
   /// Called when a refresh changed what the list or an open conversation shows.
   void Function()? onChanged;
@@ -74,6 +106,15 @@ class ServerConversationStore implements ConversationStore {
 
   bool _unsent(int id) => _queue.any((o) => o.conversation == id || o.conversation == null);
 
+  /// One look for changes from the timer: an error (the server is away) is logged, never left uncaught.
+  Future<void> _poll() async {
+    try {
+      await refresh();
+    } catch (e) {
+      _log('could not look for changes: $e');
+    }
+  }
+
   Future<void> _pump() async {
     if (_pumping) return;
     _pumping = true;
@@ -82,17 +123,40 @@ class ServerConversationStore implements ConversationStore {
         final o = _queue.first;
         try {
           await _t.call(o.op, o.args);
+          _internalFails = 0;
         } on CacheSearchException catch (e) {
-          if (e.code == 'internal' || e.code == 'unauthorized' || e.code == 'core_unavailable') {
-            _retry ??= Timer(const Duration(seconds: 3), () {
+          var retry = e.code == 'unauthorized' || e.code == 'core_unavailable';
+          if (e.code == 'internal') {
+            retry = true;
+            // `internal` is also what an unreachable server looks like: ask once whether it answers. If it does, this write is what fails.
+            if (++_internalFails >= maxInternalRetries) {
+              var reachable = true;
+              try {
+                await _t.call('history.sync', {'since': 1 << 52});
+              } catch (_) {
+                reachable = false;
+              }
+              if (reachable) {
+                retry = false;
+              } else {
+                _internalFails = 0;
+              }
+            }
+          }
+          if (retry) {
+            _log('${o.op} will be tried again: ${e.code}: ${e.message}');
+            _retry ??= Timer(_retryDelay, () {
               _retry = null;
               unawaited(_pump());
             });
             return;
           }
-          // The server refused this op (it would be refused again): drop it.
-        } catch (_) {
+          // The server refused this op (it would be refused again), or kept failing on it: drop it, and say so.
+          _log('${o.op} was dropped: ${e.code}: ${e.message}');
+          _internalFails = 0;
+        } catch (e) {
           // Anything else would fail the same way again: drop it rather than block the ones behind it.
+          _log('${o.op} was dropped: $e');
         }
         _queue.removeAt(0);
         if (o.conversation != null) _touched.add(o.conversation!);
@@ -124,26 +188,35 @@ class ServerConversationStore implements ConversationStore {
       if (r is! Map) return;
       var skipped = false;
       var changed = false;
+      // One bad row is logged and skipped; the rest are taken in and `_since` still moves on.
       for (final raw in (r['conversations'] as List? ?? const [])) {
-        final c = (raw as Map).cast<String, dynamic>();
-        final id = (c['id'] as num).toInt();
-        if (_unsent(id) || _touched.contains(id)) {
-          skipped = true;
-          continue;
+        try {
+          final c = (raw as Map).cast<String, dynamic>();
+          final id = (c['id'] as num).toInt();
+          if (_unsent(id) || _touched.contains(id)) {
+            skipped = true;
+            continue;
+          }
+          final before = _sig(id);
+          _apply(c);
+          if (_sig(id) != before) changed = true;
+        } catch (e) {
+          _log('skipped a conversation the server sent: $e');
         }
-        final before = _sig(id);
-        _apply(c);
-        if (_sig(id) != before) changed = true;
       }
       for (final raw in (r['gone'] as List? ?? const [])) {
-        final id = (raw as num).toInt();
-        if (_unsent(id) || _touched.contains(id)) {
-          skipped = true;
-          continue;
-        }
-        if (_mem.has(id)) {
-          _mem.forget(id);
-          changed = true;
+        try {
+          final id = (raw as num).toInt();
+          if (_unsent(id) || _touched.contains(id)) {
+            skipped = true;
+            continue;
+          }
+          if (_mem.has(id)) {
+            _mem.forget(id);
+            changed = true;
+          }
+        } catch (e) {
+          _log('skipped a removed id the server sent: $e');
         }
       }
       // A skipped conversation is looked at again next time: its rev is not passed over.
