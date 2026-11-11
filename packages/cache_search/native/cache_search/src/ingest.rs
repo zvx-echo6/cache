@@ -415,6 +415,21 @@ pub fn probe(args: &str) -> Result<String> {
     use serde_json::json;
     let v: Value = serde_json::from_str(args).map_err(|e| Error::bad_json(format!("the request is not JSON: {e}")))?;
     let engines = v.get("engines").cloned().unwrap_or(Value::Null);
+    // `fonts`: true installs the process's one PDFium font mapper (idempotent; see cache_ingest::pdfium::install_fonts). With
+    // `fonts_only` that is all: the answer is `{"fonts": {...}}` and nothing else is tried.
+    let fonts = if v.get("fonts").and_then(Value::as_bool).unwrap_or(false) {
+        Some(match cache_ingest::pdfium::install_fonts(text(&engines, "pdfium_lib").as_deref()) {
+            Ok(from) => json!({"ok": true, "from": from}),
+            Err(e) => json!({"ok": false, "error": e.message}),
+        })
+    } else {
+        None
+    };
+    if v.get("fonts_only").and_then(Value::as_bool).unwrap_or(false) {
+        // and the addresses of the process's one PDFium lock (see cache_ingest::pdfium), for pdfrx's worker
+        let (lock, unlock) = cache_ingest::pdfium::lock_functions();
+        return Ok(json!({"fonts": fonts, "lock_fns": {"lock": lock, "unlock": unlock}}).to_string());
+    }
     let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
     let load_embedder = v.get("load_embedder").and_then(Value::as_bool).unwrap_or(true);
     let pdfium = match cache_ingest::pdfium::probe(text(&engines, "pdfium_lib").as_deref()) {
@@ -449,5 +464,16 @@ pub fn probe(args: &str) -> Result<String> {
             Err(e) => json!({"ok": false, "version": null, "error": e}),
         },
     };
-    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier}).to_string())
+    let mut out = json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier});
+    // `dump`: {"pdf": "<path>", "dpi": 72}: what the job reads from that PDF, page by page (see cache_ingest::pdfium::dump)
+    if let Some(f) = fonts {
+        out["fonts"] = f;
+    }
+    if let Some(d) = v.get("dump") {
+        let pdf = d.get("pdf").and_then(Value::as_str).ok_or_else(|| Error::bad_json("dump.pdf must be a path"))?;
+        let dpi = d.get("dpi").and_then(Value::as_u64).unwrap_or(72) as u32;
+        let timings = d.get("timings").and_then(Value::as_bool).unwrap_or(false);
+        out["dump"] = cache_ingest::pdfium::dump_with(text(&engines, "pdfium_lib"), Path::new(pdf), dpi, timings).map_err(to_core)?;
+    }
+    Ok(out.to_string())
 }
