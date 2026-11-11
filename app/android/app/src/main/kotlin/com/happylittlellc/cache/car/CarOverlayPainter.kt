@@ -111,10 +111,12 @@ object CarOverlayPainter {
         return Layout(climb, mini)
     }
 
-    /** Both pieces for [trip] (the switches are the trip's), in the car's day or night colors. */
-    fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null) {
+    /** Both pieces for [trip] (the switches are the trip's), in the car's day or night colors. Nothing is drawn unless the
+     * trip is guiding, and nothing while the route overview screen is up ([overview]): the mini map would repeat what that
+     * screen's map already shows, and both pieces would sit on the route and the vehicle there. */
+    fun draw(canvas: Canvas, trip: CarTrip, dark: Boolean, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false) {
         val pal = trip.palette?.forMode(dark) ?: return
-        if (!trip.guiding) return
+        if (!trip.guiding || overview) return
         val l = layout(width, height, visible, density, showClimb = trip.overlay.climb && trip.climb != null, showMini = trip.overlay.miniMap && trip.overview != null, stable = stable)
         val climb = trip.climb
         if (l.climb != null && climb != null) drawClimbCard(canvas, l.climb, climb, trip.imperial, pal, density)

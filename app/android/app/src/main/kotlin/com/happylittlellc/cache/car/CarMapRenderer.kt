@@ -124,6 +124,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
             ov.setSurfaceSize(width, height)
             ov.setAreas(visible, stable)
+            ov.setOverview(overview)
             ov.setTrip(CarLink.trip, dark, now = true)
             frame.addView(ov, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             overlayView = ov
@@ -200,6 +201,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun setOverview(on: Boolean) {
         if (overview == on) return
         overview = on
+        // The climb card and the mini map are not drawn over the overview (CarOverlayPainter.draw).
+        overlayView?.setOverview(on)
         following = true
         lastCameraPhase = null
         onFollowingChanged?.invoke()

@@ -16,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -325,6 +326,44 @@ class CarOverlayTest {
                 assertVehicleClear(CarOverlayPainter.layout(w, h, visible, 1f, showClimb = true, showMini = false, stable = stable), stable)
             }
         }
+    }
+
+    // ---- when the pieces are drawn at all -------------------------------------------------------------------------------
+
+    /** Whether the View paints the climb card and the mini map right now (1280 x 560, the mock's visible area). */
+    private fun painted(v: CarOverlayView): Pair<Boolean, Boolean> {
+        val bmp = Bitmap.createBitmap(1280, 560, Bitmap.Config.ARGB_8888)
+        v.paint(Canvas(bmp))
+        val l = CarOverlayPainter.layout(1280, 560, visible, 1f, showClimb = true, showMini = true)
+        return Pair(
+            bmp.getPixel((l.climb!!.left + 100).toInt(), (l.climb!!.top + 3).toInt()) != 0,
+            bmp.getPixel((l.mini!!.left + 100).toInt(), (l.mini!!.top + 3).toInt()) != 0,
+        )
+    }
+
+    private fun overlayView() = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+        setSurfaceSize(1280, 560)
+        setAreas(visible, null)
+    }
+
+    @Test
+    fun neitherPieceIsDrawnWhileTheRouteOverviewIsShown() {
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        v.setOverview(true)
+        assertEquals(Pair(false, false), painted(v))
+        // Figures that arrive while the overview is up do not bring them back.
+        v.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(Pair(false, false), painted(v))
+        v.setOverview(false)
+        assertEquals(Pair(true, true), painted(v))
+        // The painter itself: the overview flag alone stops both pieces.
+        val bmp = Bitmap.createBitmap(1280, 560, Bitmap.Config.ARGB_8888)
+        CarOverlayPainter.draw(Canvas(bmp), trip("dark"), dark = true, width = 1280, height = 560, visible = visible, density = 1f, overview = true)
+        val px = IntArray(1280 * 560)
+        bmp.getPixels(px, 0, 1280, 0, 0, 1280, 560)
+        assertTrue(px.all { it == 0 })
     }
 
     // ---- texts and geometry ---------------------------------------------------------------------------------------------

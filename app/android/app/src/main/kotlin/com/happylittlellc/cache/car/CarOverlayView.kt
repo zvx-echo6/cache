@@ -11,7 +11,7 @@ import android.view.View
 /**
  * The View that lays the climb card and the route mini map over the car map (see CarMapRenderer's header). It paints
  * [CarOverlayPainter] and does nothing else: no touch, no animation. New figures are shown in steps, at most once every
- * [MIN_STEP_MS], so the pieces never flicker or tween while the car moves.
+ * [MIN_STEP_MS], so the pieces never flicker or tween while the car moves. The route overview screen hides them.
  */
 class CarOverlayView(context: Context, private val density: Float) : View(context) {
     private val main = Handler(Looper.getMainLooper())
@@ -20,6 +20,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private var visible: Rect? = null
     private var stable: Rect? = null
     private var dark = false
+    private var overview = false
     private var shown: CarTrip = CarTrip.EMPTY
     private var pending: CarTrip? = null
     private var lastStepAt = 0L
@@ -48,6 +49,13 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         invalidate()
     }
 
+    /** The route overview screen is up (CarMapRenderer.setOverview): the pieces are not drawn while it is. */
+    fun setOverview(on: Boolean) {
+        if (overview == on) return
+        overview = on
+        invalidate()
+    }
+
     /** [now]: show it at once (the first trip, a day/night change); otherwise in the next step. */
     fun setTrip(t: CarTrip, dark: Boolean, now: Boolean) {
         val mode = this.dark != dark
@@ -68,10 +76,13 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         main.removeCallbacks(flush)
     }
 
-    override fun onDraw(canvas: Canvas) {
+    override fun onDraw(canvas: Canvas) = paint(canvas)
+
+    /** What onDraw paints (its own function so a test can paint the View's present state onto a bitmap). */
+    fun paint(canvas: Canvas) {
         val w = if (width > 0) width else getWidth()
         val h = if (height > 0) height else getHeight()
-        CarOverlayPainter.draw(canvas, shown, dark, w, h, visible, density, stable)
+        CarOverlayPainter.draw(canvas, shown, dark, w, h, visible, density, stable, overview)
     }
 
     companion object {
