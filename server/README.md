@@ -260,7 +260,11 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   the PIN hash only. A browser hands a key to the engine as a reference, `keystore://<name>`, which the helper swaps for the
   value before the core op runs, so the browser never holds the key. The helper remembers the last `setWeb` and sends it to the
   engine again after `open`. Code inside the helper (the sharing host's `set_secrets` and `take_secrets`) calls the `KeyStore`
-  class directly (`get`, `set`, `delete`, `names`). These are not the sign-in keys of `src/keys.rs`.
+  class directly (`get`, `set`, `delete`, `names`). These are not the sign-in keys of `src/keys.rs`. The swap also reaches the
+  video ops (`video.call`'s request and `video.jobStart`'s token, which the helper answers itself) and `GET /api/fetch` (a
+  reference in `url`, for trying an own data source with its saved key: the server asks the helper's `keys.expandUrl`, which a
+  tab may not call). Code on a signed-in page can still use a reference to send a stored key to an address of its own choosing
+  (within what the fetch rules allow), so "the browser never holds the key" is about normal use, not a script on the page.
 
 ## TLS
 

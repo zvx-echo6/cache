@@ -99,4 +99,35 @@ void main() {
     KeyStore(file).replay(d);
     expect(fake.calls, ['setWeb:null:null:false']);
   });
+
+  test('a failed save leaves memory as it was, for set and for delete', () {
+    keys.set('a.key', 'ONE');
+    // The keystore folder becomes a file, so no temp file can be made there and every save fails.
+    final dir = file.parent;
+    final bad = KeyStore(File('${tmp.path}/blocked/keystore.json'));
+    File('${tmp.path}/blocked').writeAsStringSync('in the way');
+    expect(codeOf(() => bad.set('b.key', 'TWO')), 'io_error');
+    expect(bad.get('b.key'), isNull, reason: 'the browser got an error, so the helper must not use the value either');
+    expect(bad.names(), isEmpty);
+    // delete: load a key, then block the folder
+    expect(dir.existsSync(), isTrue);
+    final d = KeyStore(File('${dir.path}/keystore.json'));
+    expect(d.get('a.key'), 'ONE');
+    dir.renameSync('${tmp.path}/sub-moved');
+    File(dir.path).writeAsStringSync('in the way');
+    expect(codeOf(() => d.delete('a.key')), 'io_error');
+    expect(d.get('a.key'), 'ONE', reason: 'a failed delete keeps the key');
+    expect(codeOf(() => d.set('a.key', 'CHANGED')), 'io_error');
+    expect(d.get('a.key'), 'ONE');
+  });
+
+  test('keys.expandUrl swaps a reference in an address (plain or percent-encoded), encoded as a query value; a missing key is not_found', () {
+    keys.set('live.key.river', 'SECRET key&1');
+    const want = 'https://h/x?a=1&appid=SECRET%20key%261&z=2';
+    expect(keys.handle('keys.expandUrl', {'url': 'https://h/x?a=1&appid=keystore%3A%2F%2Flive.key.river&z=2'}), want);
+    expect(keys.handle('keys.expandUrl', {'url': 'https://h/x?a=1&appid=keystore://live.key.river&z=2'}), want);
+    expect(keys.handle('keys.expandUrl', {'url': 'https://h/plain'}), 'https://h/plain');
+    expect(codeOf(() => keys.handle('keys.expandUrl', {'url': 'https://h/?k=keystore://nope'})), 'not_found');
+    expect(codeOf(() => keys.handle('keys.expandUrl', {})), 'bad_args');
+  });
 }

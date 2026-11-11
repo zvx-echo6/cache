@@ -59,15 +59,16 @@ class KeyStore implements OpHandler, CoreHook {
     }
   }
 
-  void _save() {
-    final dir = file.parent..createSync(recursive: true);
+  void _save([Map<String, String>? values]) {
+    final dir = file.parent;
     final tmp = File('${dir.path}/.${file.uri.pathSegments.last}.$pid.tmp');
     try {
+      dir.createSync(recursive: true);
       tmp.createSync();
       try {
         Process.runSync('chmod', ['600', tmp.path]);
       } catch (_) {} // no chmod (Windows): the user's own folder is what protects it there
-      tmp.writeAsStringSync(jsonEncode({'v': 1, 'keys': _values, if (_web != null) 'web': _web}), flush: true);
+      tmp.writeAsStringSync(jsonEncode({'v': 1, 'keys': values ?? _values, if (_web != null) 'web': _web}), flush: true);
       tmp.renameSync(file.path);
     } catch (e) {
       try {
@@ -90,14 +91,16 @@ class KeyStore implements OpHandler, CoreHook {
     _check(name);
     if (value.isEmpty || value.length > _maxValue) throw const CacheSearchException('bad_args', 'A key value is 1 to 65536 characters');
     if (_values[name] == value) return;
+    // Memory changes only once the file is written: a failed save leaves both as they were.
+    _save({..._values, name: value});
     _values[name] = value;
-    _save();
   }
 
   /// Removes [name]; false when it was not there.
   bool delete(String name) {
-    if (_values.remove(name) == null) return false;
-    _save();
+    if (!_values.containsKey(name)) return false;
+    _save({..._values}..remove(name));
+    _values.remove(name);
     return true;
   }
 
@@ -121,6 +124,11 @@ class KeyStore implements OpHandler, CoreHook {
         return null;
       case 'keys.delete':
         return delete(_check(a['name']));
+      case 'keys.expandUrl':
+        // For the server's own `/api/fetch` (it refuses a tab's call to this op): an address with its references swapped.
+        final u = a['url'];
+        if (u is! String) throw const CacheSearchException('bad_args', 'keys.expandUrl needs a string "url"');
+        return expandUrl(u);
       case 'keys.get':
         final n = _check(a['name']);
         if (!_browserMayRead(n)) throw const CacheSearchException('forbidden', 'That key is never handed out; use its reference');
@@ -142,6 +150,17 @@ class KeyStore implements OpHandler, CoreHook {
     if (v is List) return [for (final e in v) resolve(e)];
     return v;
   }
+
+  static final RegExp _urlRef = RegExp(r'keystore(?::|%3A)(?:/|%2F)(?:/|%2F)((?:[A-Za-z0-9._-]|:|%3A){1,120})', caseSensitive: false);
+
+  /// [url] with every reference in it (`keystore://name`, or percent-encoded as an own-source address carries it) replaced by the
+  /// stored key, percent-encoded as a query value. Used by the server's `/api/fetch` so a saved key is spliced in on the server.
+  String expandUrl(String url) => url.replaceAllMapped(_urlRef, (m) {
+        final name = m.group(1)!.replaceAll(RegExp('%3A', caseSensitive: false), ':');
+        final value = _values[name];
+        if (value == null) throw const CacheSearchException('not_found', 'That key is not saved on the server');
+        return Uri.encodeComponent(value);
+      });
 
   /// The core ops that carry a key or token. Only these get references swapped: an op that carries what the person or the model
   /// wrote (`convTool`, `convImport`, `search`, `notebook`, ...) is passed on exactly as it came, so nothing the model sees changes.
