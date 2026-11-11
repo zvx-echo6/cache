@@ -942,10 +942,9 @@ packages:
   pdfrx_engine:
     dependency: transitive
     description:
-      name: pdfrx_engine
-      sha256: "4399846809a75aed03881d8b8a19e5e70addd4b46b22fd94a0effd8859258f07"
-      url: "https://pub.dev"
-    source: hosted
+      path: "../third_party/pdfrx_engine"
+      relative: true
+    source: path
     version: "0.4.7"
   petitparser:
     dependency: transitive
