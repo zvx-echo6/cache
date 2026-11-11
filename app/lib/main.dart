@@ -98,6 +98,7 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/foreground_updates.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -854,6 +855,7 @@ class _CacheAppState extends State<CacheApp> {
       onResume: () {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) unawaited(_backToFront());
       },
@@ -862,9 +864,12 @@ class _CacheAppState extends State<CacheApp> {
       onStateChange: searchModel.onLifecycle,
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
         if (!plat.isWeb) _toBack();
       },
+      // On the screen again (a desktop window shown without being clicked into does not "resume").
+      onShow: () => _foregroundUpdates.front(),
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
@@ -974,6 +979,9 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1086,6 +1094,15 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
+
+  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
+  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
+    every: kBackgroundEvery,
+    on: () => weather.enabledSources.isNotEmpty,
+    update: () => weather.updateNow(),
+    wanted: foregroundUpdatesWanted(),
+  );
   int? _backendGeneration;
   bool? _scheduledFor;
   bool _askedNotifications = false;
@@ -1154,6 +1171,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _foregroundUpdates.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
