@@ -66,8 +66,9 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench})
+  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench, LlamaSession? session})
       : memory = memory ?? readMemory,
+        session = session ?? LlamaSession(),
         _bench = bench ?? readBenchOptions;
 
   /// The bench's launch options (test APK only; off everywhere else), read at each model load.
@@ -83,7 +84,11 @@ class AppState extends ChangeNotifier {
   final Directory? settingsDirOverride;
   final Directory? modelsDirOverride;
 
-  final LlamaSession session = LlamaSession();
+  /// The native session (a test hook: a fake stands in for it).
+  final LlamaSession session;
+
+  /// The unload a [release] sent, until it is done: a load that follows waits for it, so a load never begins under an unload.
+  Future<void>? _unloading;
 
   CacheThemeId theme = CacheThemeId.dark;
 
@@ -345,6 +350,7 @@ class AppState extends ChangeNotifier {
     loadError = null;
     notifyListeners();
     try {
+      await _unloading;
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
       logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
@@ -456,7 +462,13 @@ class AppState extends ChangeNotifier {
     activeInfo = null;
     modelGeneration++;
     notifyListeners();
-    await session.unload();
+    final u = session.unload();
+    _unloading = u;
+    try {
+      await u;
+    } finally {
+      if (identical(_unloading, u)) _unloading = null;
+    }
   }
 
   /// What [e] needs in memory while it answers ([memoryNeedForFile]: the header's tensors with the lazy per-layer table left out,
@@ -475,6 +487,9 @@ class AppState extends ChangeNotifier {
   Future<void> wake({bool force = false}) async {
     final r = resting;
     if (r == null || active != null || loading != null) return;
+    // A release in progress finishes first (and the memory it frees is there to be read below).
+    await _unloading;
+    if (resting != r || active != null || loading != null) return;
     if (!force) {
       final room = await memory();
       final need = room == null ? null : await _needOf(r);

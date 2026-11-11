@@ -1103,10 +1103,12 @@ class _CacheAppState extends State<CacheApp> {
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
   late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
-    busy: () => chat.busy,
+    // A load in flight holds the release like an answer does: it never unloads a model the person just asked for, and when the
+    // load ends with Cache still in the back, a new grace period starts.
+    busy: () => chat.busy || app.loading != null,
     loaded: () => app.active != null,
     release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
-    changes: chat,
+    changes: Listenable.merge([chat, app]),
   );
   int? _backendGeneration;
   bool? _scheduledFor;

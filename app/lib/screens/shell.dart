@@ -139,6 +139,13 @@ class _ShellState extends State<Shell> {
   final Set<ModuleId> _built = {};
   StreamSubscription<NavEvent>? _navEvents;
   StreamSubscription<AlertFocus>? _alertTaps;
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: _onResume);
+
+  /// Back in front with Ask shown: the chosen model, let go while Cache was in the back, loads again, under the same memory gate
+  /// as opening Ask (not forced). Nothing else loads on resume.
+  void _onResume() {
+    if (_module == ModuleId.ask) unawaited(widget.app.wake());
+  }
 
   /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
   /// and the rail (its pin is kept and it takes its old place when a model comes), and every way into Ask is closed or explained.
@@ -190,6 +197,7 @@ class _ShellState extends State<Shell> {
     pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     widget.app.addListener(_onApp);
+    _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
       if (e is MapRequested && mounted) _goModule(ModuleId.maps);
@@ -336,6 +344,7 @@ class _ShellState extends State<Shell> {
     if (DiscoverState.shared == _discover) DiscoverState.shared = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
+    _lifecycle.dispose();
     super.dispose();
   }
 
