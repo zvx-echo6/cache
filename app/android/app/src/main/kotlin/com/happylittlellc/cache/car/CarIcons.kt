@@ -136,6 +136,18 @@ object CarIcons {
         c.drawPath(p, paint(w * 1.2f))
     }
 
+    /** Saved places: the outlined bookmark the phone's place list marks saved places with. */
+    val saved: CarIcon get() = icon("saved", tint = true) { c, s ->
+        val p = Path()
+        p.moveTo(s * 0.3f, s * 0.2f)
+        p.lineTo(s * 0.7f, s * 0.2f)
+        p.lineTo(s * 0.7f, s * 0.82f)
+        p.lineTo(s * 0.5f, s * 0.68f)
+        p.lineTo(s * 0.3f, s * 0.82f)
+        p.close()
+        c.drawPath(p, paint(s * 0.08f))
+    }
+
     val zoomIn: CarIcon get() = icon("zoomIn", tint = true) { c, s ->
         val w = s * 0.1f
         val p = Path()

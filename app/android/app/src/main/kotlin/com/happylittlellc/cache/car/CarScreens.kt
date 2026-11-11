@@ -22,8 +22,9 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 
 /**
- * The car's screens. Three steps at most from opening Cache to driving (saved places or search, the route, guidance), within the
- * Car App Library's limits. The words are short and never send the driver to the phone.
+ * The car's screens. Opening Cache shows the map with two buttons, Search and Saved places. From there to driving is three steps
+ * at most (saved places or search, the route, guidance), so four screens with the map, within the Car App Library's limits.
+ * Search reached from the saved places list is one screen more. The words are short and never send the driver to the phone.
  */
 
 /** A screen that redraws when the trip changes, while it is on. */
@@ -71,8 +72,30 @@ private fun combine(dist: CharSequence, addr: String): CharSequence {
     return s
 }
 
-/** Saved places on the map, with Search. Opening Cache in the car starts here. */
+/** The whole map, with two buttons: Search and Saved places. Opening Cache in the car starts here. */
 class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+    // Nothing here changes with the trip (the map buttons redraw through the renderer's own callback).
+    override fun onTrip(trip: CarTrip) {}
+
+    override fun onGetTemplate(): Template =
+        NavigationTemplate.Builder()
+            .setActionStrip(
+                ActionStrip.Builder()
+                    .addAction(Action.Builder().setIcon(CarIcons.search).setOnClickListener { openSearch() }.build())
+                    .addAction(Action.Builder().setIcon(CarIcons.saved).setOnClickListener { openSaved() }.build())
+                    .build(),
+            )
+            .setMapActionStrip(map.mapActionStrip())
+            .setPanModeListener { on -> map.panMode = on }
+            .build()
+
+    internal fun openSearch() = screenManager.push(SearchScreen(carContext, map))
+
+    internal fun openSaved() = screenManager.push(SavedPlacesScreen(carContext, map))
+}
+
+/** Saved places in a list over the map, with Search. Back closes it. */
+class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
     private var places: List<CarPlace>? = null
     private val main = Handler(Looper.getMainLooper())
     private val retry = Runnable { load() }
@@ -109,7 +132,7 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
     }
 
     override fun onGetTemplate(): Template {
-        val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.APP_ICON).build()
+        val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.BACK).build()
         val content = ListTemplate.Builder().setHeader(header)
         val list = places
         if (list == null) {
@@ -135,7 +158,10 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
     }
 }
 
-/** Search for a place (by name, address or kind of place; by meaning when the phone's search model is loaded). */
+/**
+ * Search for a place (by name, address or kind of place; by meaning when the phone's search model is loaded). While the box is
+ * empty it lists the saved places, unless it was opened with text or with places already found.
+ */
 class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, private val initial: String? = null, preset: List<CarPlace>? = null) :
     Screen(carContext) {
     private var results: List<CarPlace>? = preset
@@ -144,8 +170,19 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
     private val main = Handler(Looper.getMainLooper())
     private var pending: Runnable? = null
 
+    // The saved places, listed while the box is empty. They are kept apart from the results, and shown only when there are no
+    // results and no search is running, so an answer that comes late never replaces what was found for typed text.
+    private val offersSaved = preset == null && initial.isNullOrBlank()
+    private var saved: List<CarPlace> = emptyList()
+
     init {
         if (preset == null && !initial.isNullOrBlank()) find(initial)
+        if (offersSaved) {
+            CarLink.call("saved") { r ->
+                saved = CarPlace.list(r)
+                if (results == null && !searching) invalidate()
+            }
+        }
     }
 
     private fun find(text: String) {
@@ -166,19 +203,23 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
         }
     }
 
+    internal fun textChanged(searchText: String) {
+        pending?.let { main.removeCallbacks(it) }
+        val r = Runnable { find(searchText) }
+        pending = r
+        main.postDelayed(r, 600)
+    }
+
+    internal fun submitted(searchText: String) {
+        pending?.let { main.removeCallbacks(it) }
+        find(searchText)
+    }
+
     override fun onGetTemplate(): Template {
         val b = SearchTemplate.Builder(object : SearchTemplate.SearchCallback {
-            override fun onSearchTextChanged(searchText: String) {
-                pending?.let { main.removeCallbacks(it) }
-                val r = Runnable { find(searchText) }
-                pending = r
-                main.postDelayed(r, 600)
-            }
+            override fun onSearchTextChanged(searchText: String) = textChanged(searchText)
 
-            override fun onSearchSubmitted(searchText: String) {
-                pending?.let { main.removeCallbacks(it) }
-                find(searchText)
-            }
+            override fun onSearchSubmitted(searchText: String) = submitted(searchText)
         })
             .setHeaderAction(Action.BACK)
             .setSearchHint("Search for a place")
@@ -191,12 +232,17 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
             val items = ItemList.Builder()
             if (list != null) {
                 items.setNoItemsMessage("No places found")
-                for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { screenManager.push(RoutePreviewScreen(carContext, map, p)) })
+                for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
+            } else if (offersSaved) {
+                // The box is empty: the saved places (none, and the list is empty as before).
+                for (p in saved.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
             }
             b.setItemList(items.build())
         }
         return b.build()
     }
+
+    private fun open(p: CarPlace) = screenManager.push(RoutePreviewScreen(carContext, map, p))
 
     companion object {
         const val MAX_ROWS = 6

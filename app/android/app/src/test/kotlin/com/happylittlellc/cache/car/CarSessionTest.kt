@@ -6,6 +6,8 @@ import android.os.Looper
 import androidx.car.app.CarContext
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.MessageTemplate
+import androidx.car.app.model.Row
+import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.model.MapWithContentTemplate
 import androidx.car.app.navigation.model.MessageInfo
@@ -83,16 +85,160 @@ class CarSessionTest {
     private val screens get() = car.getCarService(TestScreenManager::class.java)
     private val nav get() = car.getCarService(TestNavigationManager::class.java)
 
+    private fun place(n: Int, name: String = "Place $n"): Map<String, Any?> =
+        mapOf("id" to "place:$n", "name" to name, "address" to "", "lat" to 42.0 + n, "lon" to -113.0, "distanceM" to 1000.0 * n)
+
+    private fun savedList(screen: androidx.car.app.Screen): ListTemplate = (templateOf(screen) as MapWithContentTemplate).contentTemplate as ListTemplate
+
+    private fun searchRows(screen: androidx.car.app.Screen): List<String> =
+        (templateOf(screen) as SearchTemplate).itemList!!.items.map { (it as Row).title.toString() }
+
     @Test
-    fun opensOnSavedPlacesOverTheMap() {
+    fun opensOnTheWholeMapWithSearchAndSavedPlacesButtons() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            done(null)
+        }
         start()
         val home = screens.top
         assertTrue(home is HomeScreen)
-        val t = templateOf(home) as MapWithContentTemplate
-        assertTrue((t.contentTemplate as ListTemplate).isLoading)
-        assertNotNull(t.mapController!!.mapActionStrip)
+        val t = templateOf(home) as NavigationTemplate
+        // The map only: no guidance card.
+        assertEquals(null, t.navigationInfo)
+        // Search, then Saved places: icons with no words.
+        val actions = t.actionStrip!!.actions
+        assertEquals(2, actions.size)
+        assertEquals(CarIcons.search, actions[0].icon)
+        assertEquals(CarIcons.saved, actions[1].icon)
+        for (a in actions) assertEquals(null, a.title)
+        // The map buttons: pan, zoom in, zoom out.
+        assertEquals(3, t.mapActionStrip!!.actions.size)
+        assertEquals(androidx.car.app.model.Action.TYPE_PAN, t.mapActionStrip!!.actions[0].type)
+        // Home does not ask the phone for saved places.
+        assertFalse("saved" in asked)
         assertTrue(CarLink.carConnected)
         assertNotNull(nav.navigationManagerCallback)
+    }
+
+    @Test
+    fun theHomeButtonsOpenSearchAndSavedPlaces() {
+        CarLink.dartForTests = { _, _, done -> done(null) }
+        start()
+        val home = screens.top as HomeScreen
+        home.openSaved()
+        assertTrue(screens.top is SavedPlacesScreen)
+        screens.pop()
+        assertTrue(screens.top is HomeScreen)
+        home.openSearch()
+        assertTrue(screens.top is SearchScreen)
+    }
+
+    @Test
+    fun savedPlacesIsAListOverTheMapThatBackCloses() {
+        CarLink.dartForTests = { method, _, done -> done(if (method == "saved") (1..8).map { place(it) } else null) }
+        start()
+        (screens.top as HomeScreen).openSaved()
+        val saved = screens.top as SavedPlacesScreen
+        // Asked for, not answered yet.
+        assertTrue(savedList(saved).isLoading)
+        shadowOf(Looper.getMainLooper()).idle()
+        val t = templateOf(saved) as MapWithContentTemplate
+        val list = t.contentTemplate as ListTemplate
+        assertEquals("Saved places", list.header!!.title.toString())
+        assertEquals(androidx.car.app.model.Action.TYPE_BACK, list.header!!.startHeaderAction!!.type)
+        // No more rows than the screen's limit, in the phone's order.
+        assertEquals(SavedPlacesScreen.MAX_ROWS, list.singleList!!.items.size)
+        assertEquals("Place 1", (list.singleList!!.items[0] as Row).title.toString())
+        // Search is its one button, and the map keeps its own.
+        assertEquals(1, t.actionStrip!!.actions.size)
+        assertEquals(CarIcons.search, t.actionStrip!!.actions[0].icon)
+        assertNotNull(t.mapController!!.mapActionStrip)
+    }
+
+    @Test
+    fun savedPlacesWithNoneSaysSo() {
+        CarLink.dartForTests = { method, _, done -> done(if (method == "saved") emptyList<Any>() else null) }
+        start()
+        (screens.top as HomeScreen).openSaved()
+        shadowOf(Looper.getMainLooper()).idle()
+        val list = savedList(screens.top).singleList!!
+        assertEquals(0, list.items.size)
+        assertEquals("No saved places yet. Search for a place to go.", list.noItemsMessage.toString())
+    }
+
+    @Test
+    fun theEmptySearchBoxListsSavedPlacesAndTypingReplacesThem() {
+        CarLink.dartForTests = { method, _, done ->
+            when (method) {
+                "saved" -> done((1..8).map { place(it) })
+                "search" -> done(listOf(place(20, "Found 20")))
+                else -> done(null)
+            }
+        }
+        start()
+        (screens.top as HomeScreen).openSearch()
+        val search = screens.top as SearchScreen
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals((1..SearchScreen.MAX_ROWS).map { "Place $it" }, searchRows(search))
+        // The keyboard still opens with the empty box, as before.
+        assertTrue((templateOf(search) as SearchTemplate).isShowKeyboardByDefault)
+        // Typing: the places found take the list's place, after the usual wait.
+        search.textChanged("found")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertEquals(listOf("Found 20"), searchRows(search))
+        // The box cleared: the saved places again.
+        search.textChanged("")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertEquals((1..SearchScreen.MAX_ROWS).map { "Place $it" }, searchRows(search))
+    }
+
+    @Test
+    fun aLateSavedAnswerDoesNotReplaceWhatWasFound() {
+        CarLink.dartForTests = { method, _, done ->
+            when (method) {
+                "saved" -> android.os.Handler(Looper.getMainLooper()).postDelayed({ done(listOf(place(1), place(2))) }, 2000)
+                "search" -> done(listOf(place(20, "Found 20")))
+                else -> done(null)
+            }
+        }
+        start()
+        (screens.top as HomeScreen).openSearch()
+        val search = screens.top as SearchScreen
+        search.submitted("found")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("Found 20"), searchRows(search))
+        // The saved places arrive now: the places found stay.
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3))
+        assertEquals(listOf("Found 20"), searchRows(search))
+        // They are there once the box is cleared.
+        search.submitted("")
+        assertEquals(listOf("Place 1", "Place 2"), searchRows(search))
+    }
+
+    @Test
+    fun theEmptySearchBoxWithNoSavedPlacesIsEmptyAsBefore() {
+        CarLink.dartForTests = { method, _, done -> done(if (method == "saved") emptyList<Any>() else null) }
+        start()
+        (screens.top as HomeScreen).openSearch()
+        shadowOf(Looper.getMainLooper()).idle()
+        val items = (templateOf(screens.top) as SearchTemplate).itemList!!
+        assertEquals(0, items.items.size)
+        assertEquals(null, items.noItemsMessage)
+    }
+
+    @Test
+    fun searchOpenedWithPlacesFoundDoesNotAskForSavedPlaces() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            done(null)
+        }
+        start()
+        val search = SearchScreen(car, CarMapRenderer(car), "found", CarPlace.list(listOf(place(20, "Found 20"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("Found 20"), searchRows(search))
+        assertFalse("saved" in asked)
     }
 
     @Test
@@ -189,19 +335,19 @@ class CarSessionTest {
             asked += method
             if (method == "saved") {
                 android.os.Handler(Looper.getMainLooper()).postDelayed({
-                    done(listOf(mapOf("id" to "place:42.6,-113.7", "name" to "Twin Falls Public Library", "address" to "", "lat" to 42.6, "lon" to -113.7, "distanceM" to 11700.0)))
+                    done(listOf(place(1)))
                 }, 2000)
             } else {
                 done(null)
             }
         }
         val c = start()
-        val home = screens.top as HomeScreen
-        assertTrue(((templateOf(home) as MapWithContentTemplate).contentTemplate as ListTemplate).isLoading)
+        (screens.top as HomeScreen).openSaved()
+        val saved = screens.top as SavedPlacesScreen
+        assertTrue(savedList(saved).isLoading)
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3))
-        val list = ((templateOf(home) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!
-        assertEquals(1, list.items.size)
-        assertTrue("saved" in asked)
+        assertEquals(1, savedList(saved).singleList!!.items.size)
+        assertEquals(1, asked.count { it == "saved" })
         // Dart says the saved places changed (or the core opened after the first ask): the list is asked for again.
         push("savedChanged", null)
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3))

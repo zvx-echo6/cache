@@ -23,6 +23,7 @@ Checked against the 1.7.0 sources (`androidx.car.app:app:1.7.0`). Cache draws th
 
 | Screen | Template | Notes |
 |---|---|---|
+| Home | `NavigationTemplate` with no navigation info | The whole map. Cache sets two icon buttons (Search, Saved places) and the map buttons. |
 | Saved places, route overview, route choice | `MapWithContentTemplate` + `ListTemplate` | The host draws the list and header; Cache sets rows, titles, the header action, and the map controller. |
 | Search | `SearchTemplate` | Host keyboard and list. |
 | Rows' times and distances | Host formats | `DurationSpan.create(long)`, `DistanceSpan.create(Distance)` in a row's text. |
