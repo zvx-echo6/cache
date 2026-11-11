@@ -4,11 +4,14 @@
 // book, nor while the index status is still being read again after the add.
 
 import 'package:cache/library/add_pdf/add_pdf_pages.dart';
+import 'package:cache/library/add_pdf/add_pdf_state.dart' show AddPdfStatus;
 import 'package:cache/library/shelves_pages.dart';
+import 'package:cache/search/index_overview.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'add_pdf_fixtures.dart';
 import 'add_pdf_world.dart';
 
 const _pending = 'Added to My books · Adding to search index';
@@ -118,5 +121,55 @@ void main() {
     expect(bookMark(w.deps, book), isNull, reason: 'done: nothing');
     pending = true;
     expect(bookMark(w.deps, book), isNull, reason: 'it let go once the words were in');
+  });
+
+  // The Library's overview card: a PDF that was just added is said to be added, also while another PDF the person paused waits in the
+  // queue (the card used to show only "Paused · 1 PDF waiting" then, so the book going in was never said).
+  Widget overview(DateTime Function() clock) => MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: Scaffold(body: IndexOverviewLine(scheduler: w.scheduler, clock: clock)),
+      );
+
+  testWidgets('with a paused PDF already waiting, the overview card says the new book was added, with its words state', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    var now = DateTime(2026, 11, 11, 13, 0);
+    final paused = sampleJob('paused', title: 'FEMA-IS513', paused: true);
+    final added = sampleJob('added', status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})..finishedAt = now;
+    w.state.wordsPending = (_) => pending;
+    w.state.debugSet([paused, added]);
+    pending = false;
+    await tester.pumpWidget(overview(() => now));
+    await tester.pump();
+    expect(find.text('Added to My books · 254 pieces searchable'), findsOneWidget, reason: 'no word index is pending: the done line straight away');
+    expect(find.text('Paused · 1 PDF waiting'), findsNothing);
+
+    // the words of the book are still being added
+    pending = true;
+    w.state.debugSet([paused, added]);
+    await tester.pump();
+    expect(find.text('Added to My books · Adding to search index'), findsOneWidget);
+    expect(find.textContaining('pieces searchable'), findsNothing);
+
+    // a little later the paused PDF is the card again, so its Resume can be reached
+    now = now.add(const Duration(seconds: 60));
+    w.state.debugSet([paused, added]);
+    await tester.pump();
+    expect(find.text('Paused · 1 PDF waiting'), findsOneWidget);
+    expect(find.textContaining('Added to'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a PDF finished long ago (or read from disk) does not take the overview card', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    final now = DateTime(2026, 11, 11, 13, 0);
+    final paused = sampleJob('paused', title: 'FEMA-IS513', paused: true);
+    final old = sampleJob('old', status: AddPdfStatus.done, state: 'done', result: {'pieces': 9});
+    w.state.debugSet([paused, old]);
+    await tester.pumpWidget(overview(() => now));
+    await tester.pump();
+    expect(find.text('Paused · 1 PDF waiting'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
   });
 }

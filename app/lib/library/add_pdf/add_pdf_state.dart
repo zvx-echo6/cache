@@ -131,6 +131,9 @@ class AddPdfJob {
   int pieces = 0;
   int piecesDone = 0;
 
+  /// When the book was saved, in this run (null for a job read from disk): the Library's overview card says "Added to ..." for a while.
+  DateTime? finishedAt;
+
   /// The book is in and the library's index status has been read again since (see [AddPdfState.wordsPending]): until then the card
   /// says only where the book went. True for a job read from disk.
   bool wordsChecked = true;
@@ -412,6 +415,20 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// Every job, newest first: being added, then stopped, then added.
   List<AddPdfJob> get jobs => List.unmodifiable(_jobs);
   List<AddPdfJob> get active => [for (final j in _jobs) if (j.status == AddPdfStatus.active) j];
+  /// How long the Library's overview card keeps saying a PDF was added.
+  static const Duration kDoneLineFor = Duration(seconds: 45);
+
+  /// The newest PDF saved within [kDoneLineFor] before [now] and not put away (null for none): the overview card says it was added.
+  AddPdfJob? justFinished(DateTime now) {
+    AddPdfJob? best;
+    for (final j in _jobs) {
+      final at = j.finishedAt;
+      if (j.status != AddPdfStatus.done || at == null || now.difference(at) >= kDoneLineFor) continue;
+      if (best == null || at.isAfter(best.finishedAt!)) best = j;
+    }
+    return best;
+  }
+
   List<AddPdfJob> get failed => [for (final j in _jobs) if (j.status == AddPdfStatus.failed) j];
 
   /// Being added (shown on Bookshelves' row: "1 being added").
@@ -841,6 +858,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   Future<void> _done(AddPdfJob job, Map<String, dynamic>? result) async {
     job
       ..wordsChecked = false
+      ..finishedAt = _clock()
       ..status = AddPdfStatus.done
       ..state = 'done'
       ..coreJob = null
