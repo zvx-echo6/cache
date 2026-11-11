@@ -1484,13 +1484,19 @@ class WeatherState extends ChangeNotifier {
   /// "Where I am" moved) both saw the same alert as new and it sounded twice. A second check waits for the first, then sees what
   /// the first told.
   Future<int> checkAlerts() {
-    final run = _alertChecks.then((_) => _checkAlerts());
-    _alertChecks = run.then<void>((_) {}, onError: (_) {});
+    // Only a check that is still running is waited for. A future that is already complete is never chained on: its listeners
+    // are told in the zone it was made in, which need not be the caller's (a widget test makes this object in its fake-time
+    // zone and updates in real time, and an update waiting on such a future never came back).
+    final before = _alertChecksOpen > 0 ? _alertChecks : null;
+    final run = before == null ? _checkAlerts() : before.then((_) => _checkAlerts());
+    _alertChecksOpen++;
+    _alertChecks = run.then<void>((_) {}, onError: (_) {}).whenComplete(() => _alertChecksOpen--);
     return run;
   }
 
-  /// The alert check under way, or the last one.
-  Future<void> _alertChecks = Future<void>.value();
+  /// The last alert check asked for, and how many have not finished.
+  Future<void>? _alertChecks;
+  int _alertChecksOpen = 0;
 
   Future<int> _checkAlerts() async {
     final n = notifier, t = told;
