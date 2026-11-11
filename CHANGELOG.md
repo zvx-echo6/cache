@@ -7,6 +7,8 @@ release notes).
 ## Unreleased
 
 - Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
+- Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
+- Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
 - Ask: when a chat is full, it says so plainly with a New chat button, and marks an answer cut short
 
 ## 1.1.0 (build 48, test) - 2026-11-10

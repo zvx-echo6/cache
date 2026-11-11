@@ -10,6 +10,7 @@ import '../history/markdown_export.dart';
 import '../history/titles.dart';
 import '../search/numbering_state.dart';
 import 'ask_about.dart';
+import 'ask_focus.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
 import 'progress_steps.dart';
@@ -95,9 +96,13 @@ class ChatController extends ChangeNotifier {
     this.numberingState,
     this.actions,
     this.waitForCore,
+    this.focus,
     required this.actCore,
     this.outcomeForm = kActOutcomeForm,
   });
+
+  /// Held while an answer generates, so background work waits (chat/ask_focus.dart); null: nothing is held.
+  final AskFocus? focus;
 
   /// The actions a confirm card runs; null: a tapped card fails.
   final ActionRegistry? actions;
@@ -371,6 +376,7 @@ class ChatController extends ChangeNotifier {
     var start = 0;
     final clock = Stopwatch()..start();
     TurnUpdate? last;
+    var focusing = false; // AskFocus is held from the first generation to the end of the turn
     try {
       await _cancelTitle(backend);
       if (cancelled()) return;
@@ -448,6 +454,8 @@ class ChatController extends ChangeNotifier {
         if (epoch == _epoch) notifyListeners();
       };
       final seeded = seed == null || loop.host == null ? null : (name: seed.toolName, arguments: spacedJson(seed.arguments));
+      focusing = true;
+      focus?.begin();
       await for (final u in loop.ask(text, seed: seeded, message: question)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
@@ -457,6 +465,7 @@ class ChatController extends ChangeNotifier {
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
+      if (focusing) focus?.end();
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
       if (loop != null && convId != null) {
@@ -587,6 +596,7 @@ class ChatController extends ChangeNotifier {
     var start = 0;
     final clock = Stopwatch()..start();
     TurnUpdate? last;
+    var focusing = false; // AskFocus is held from the first generation to the end of the turn
     try {
       var made = _loop;
       if (made == null) {
@@ -609,6 +619,8 @@ class ChatController extends ChangeNotifier {
         reply.navigationActions = [...reply.navigationActions, ...actions];
         if (epoch == _epoch) notifyListeners();
       };
+      focusing = true;
+      focus?.begin();
       await for (final u in loop.resume()) {
         if (epoch != _epoch) return;
         last = u;
@@ -618,6 +630,7 @@ class ChatController extends ChangeNotifier {
     } catch (e) {
       reply.error = e.toString().replaceFirst('Bad state: ', '');
     } finally {
+      if (focusing) focus?.end();
       reply.phase = TurnPhase.done;
       reply.queuePosition = null;
       if (loop != null && convId != null) {

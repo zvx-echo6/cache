@@ -27,9 +27,24 @@ class MainActivity : FlutterActivity() {
     private var keyboardVisible = false
     private val restoreSystemBars = Runnable { applySystemBars() }
 
+    // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
+    // build nothing is read and the channel answers zeros.
+    private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+
+    private fun readBenchExtras(i: Intent?) {
+        if (!BuildConfig.TEST_APK || i == null) return
+        if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        readBenchExtras(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         super.onCreate(savedInstanceState)
+        readBenchExtras(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -135,6 +150,20 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        // The bench's options (test APK only; nothing in the release build).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // Only what was given: no "preread_mbps" key when the extra is absent, and never in the release build.
+                    "get" -> {
+                        val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
+                        val mbps = benchPrereadMbps
+                        if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        result.success(out)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")

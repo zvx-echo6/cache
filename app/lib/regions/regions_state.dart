@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../app_fs.dart';
 import '../browse/zim_download.dart';
+import '../chat/ask_focus.dart';
 import '../files.dart';
 import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
@@ -533,10 +534,15 @@ class RegionsState extends ChangeNotifier {
     this.offroadCatalogue,
     ZimDownloader? packDownloader,
     this.position,
+    this.focus,
   }) : _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
   final DataPolicy policy;
+
+  /// While Ask answers, the core starts no new region tile (set_policy hold); the tile in flight finishes and the downloads go on
+  /// when the answer is done. Not the person's pause ([held]): that one stays as it is. Null: not observed.
+  final AskFocus? focus;
   final Future<Directory> Function() supportDir;
   final RegionCatalogue catalogue;
   final MapsState maps;
@@ -646,6 +652,7 @@ class RegionsState extends ChangeNotifier {
     _net = policy.probe.changes.listen((_) => _applyPolicy().catchError((_) {}));
     // Switching mobile data for downloads on or off applies at once, mid-download too.
     policy.settings.addListener(_onSettings);
+    focus?.addListener(_onAskFocus);
     await refresh();
     unawaited(recheckPublished().catchError((_) {}));
   }
@@ -656,6 +663,16 @@ class RegionsState extends ChangeNotifier {
   }
 
   bool? _lastMobile;
+
+  bool? _lastFocused;
+
+  /// Ask starts or stops answering: the core is told to hold the next tile, or to go on.
+  void _onAskFocus() {
+    final on = focus?.focused ?? false;
+    if (_lastFocused == on) return;
+    _lastFocused = on;
+    _applyPolicy().catchError((_) {});
+  }
 
   void _onSettings() {
     if (_lastMobile == policy.settings.mobileForDownloads) return;
@@ -668,7 +685,7 @@ class RegionsState extends ChangeNotifier {
   Future<void> _applyPolicy() async {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok, 'hold': held});
+    await _core?.call('set_policy', {'network': ok, 'hold': held || (focus?.focused ?? false)});
     if (ok && !held) unawaited(_resumePacks());
     if (ok && _carryOnWaiting.isNotEmpty) {
       final go = List.of(_carryOnWaiting);
@@ -1725,6 +1742,7 @@ class RegionsState extends ChangeNotifier {
     _net?.cancel();
     maps.removeListener(_onMaps);
     if (_core != null) policy.settings.removeListener(_onSettings);
+    focus?.removeListener(_onAskFocus);
     _core?.close();
     super.dispose();
   }
