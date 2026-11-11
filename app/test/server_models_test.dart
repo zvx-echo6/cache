@@ -239,6 +239,14 @@ void main() {
     expect(d.stateOf(_hf).phase, DlPhase.running);
   });
 
+  test('the search model on the server cannot be paused or removed, so its row is not given those', () async {
+    expect(d.canStop(_search), isFalse);
+    expect(d.canStop(_hf), isTrue);
+    final phone = ModelDownloads(app: AppState(settingsDirOverride: dir), searchModel: _search);
+    addTearDown(phone.dispose);
+    expect(phone.canStop(_search), isTrue, reason: 'a phone runs the download itself');
+  });
+
   test('a refused request ends in a failed row, not a thrown error', () async {
     fake.failWith = 403;
     await d.start(_hf);

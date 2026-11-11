@@ -24,9 +24,10 @@ String _count(int n) {
 /// full device opens Storage.
 DlActions modelActions(BuildContext context, ModelDownloads d, HfFile f) => DlActions(
       download: () => downloadModel(context, d, f),
-      pause: () => d.pause(f),
+      // the search model on Cache on Linux: the server cannot pause or remove its download, so neither is offered
+      pause: d.canStop(f) ? () => d.pause(f) : null,
       resume: () => d.resume(f),
-      remove: () => d.remove(f),
+      remove: d.canStop(f) ? () => d.remove(f) : null,
       downloadNow: () => d.resume(f, anyway: true),
       freeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
     );

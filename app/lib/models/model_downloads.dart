@@ -447,6 +447,10 @@ class ModelDownloads extends ChangeNotifier {
   /// Downloads this page asked for whose failure it has not told yet: a failure is told once, by the download that failed.
   final Set<String> _asked = {};
 
+  /// Whether the download of [f] can be paused and removed. A browser's search model cannot: its download is the server's own,
+  /// which starts and reports it and has no way to stop it.
+  bool canStop(HfFile f) => !(_server != null && isSearchModel(f));
+
   /// The search model is on this device (a browser: on the server).
   bool get hasSearchModel => _server != null ? _searchReady : app.searchModel != null;
 
