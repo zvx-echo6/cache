@@ -16,6 +16,7 @@ release notes).
 - Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Sharing: updating from 1.0 no longer turns sharing off at the next start
 - Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
 - Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
 - Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
