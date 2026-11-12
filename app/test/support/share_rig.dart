@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -210,6 +211,58 @@ class Dev {
 
   Future<void> add(String notebookId, String id, String title, {String body = 'Body'}) =>
       nb.saveEntry(id: id, notebookId: notebookId, occurredAt: '2026-11-01T09:00:00-07:00', title: title, body: body).then((_) {});
+
+  /// A notebook with fields.
+  Future<Notebook> makeWith(String name, List<LogField> fields, {String? id}) =>
+      nb.saveNotebook(id: id, template: 'log', def: NotebookDef(name: name, fields: fields, sort: NotebookSort.recent));
+
+  /// The notebook's fields as shown here: visible ones by label (hidden ones are not in the list), in order.
+  List<String> labels(String id) => [for (final f in nb.notebook(id)!.def.visible) f.label];
+
+  LogField field(String id, String label) => nb.notebook(id)!.def.fields.firstWhere((f) => f.label == label);
+
+  /// Changes the fields the way the editor does (a save without `from_sync`).
+  Future<void> editFields(String id, List<LogField> Function(List<LogField> now) f) async {
+    final n = nb.notebook(id)!;
+    await nb.saveNotebook(id: id, def: n.def.copyWith(fields: f(n.def.fields)));
+  }
+
+  /// An entry with values of fields (by label).
+  Future<void> addValues(String notebookId, String id, Map<String, Object> byLabel) => nb
+      .saveEntry(id: id, notebookId: notebookId, occurredAt: '2026-11-01T09:00:00-07:00', title: id, values: {for (final e in byLabel.entries) field(notebookId, e.key).fid!: e.value})
+      .then((_) {});
+
+  /// What this device was before the field sync existed: fields without ids, and nothing remembered of them.
+  Future<void> beforeFields() async {
+    for (final n in store.notebooks) {
+      for (final f in (n['def']['fields'] as List)) {
+        (f as Map).remove('gid');
+      }
+    }
+    final f = File('${stateDir.path}/share2.json');
+    if (await f.exists()) {
+      final j = jsonDecode(await f.readAsString()) as Map;
+      j.remove('fields');
+      await f.writeAsString(jsonEncode(j));
+    }
+    await nb.reload();
+  }
+
+  /// What a build before the field sync wrote of the records: no `fields`.
+  static void stripRecordFields(MemFolder folder) {
+    for (final k in folder.text.keys.toList()) {
+      if (!k.endsWith('/notebook.json')) continue;
+      final j = jsonDecode(folder.text[k]!) as Map;
+      j.remove('fields');
+      j.remove('fields_at');
+      folder.text[k] = '${jsonEncode(j)}\n';
+    }
+  }
+
+  Map<String, dynamic>? record(String id) {
+    final t = folder.text['$id/notebook.json'];
+    return t == null ? null : jsonDecode(t) as Map<String, dynamic>;
+  }
 
   List<String> ids(String name) => [for (final n in nb.notebooks) if (n.name == name) n.id];
 

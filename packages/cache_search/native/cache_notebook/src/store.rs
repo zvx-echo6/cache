@@ -482,7 +482,8 @@ fn field_has_values(c: &Connection, nb: &str, fid: &str) -> Result<bool> {
 /// used; `template` is then required) or replaces one's definition and switches (see `NotebookDef::merge`); a switch left out
 /// keeps its value. Names are unique, ignoring case.
 pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
-    check_keys(args, &["id", "template", "def", "private", "map", "template_ref"])?;
+    check_keys(args, &["id", "template", "def", "private", "map", "template_ref", "from_sync"])?;
+    let from_sync = opt_bool(args, "from_sync")?.unwrap_or(false);
     let given = NotebookDef::parse(args.get("def").ok_or_else(|| Error::bad("def is missing"))?)?;
     let template = match args.get("template") {
         None | Some(Value::Null) => None,
@@ -513,7 +514,7 @@ pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
             probe_err = Some(e);
             true
         }
-    })?;
+    }, from_sync)?;
     if let Some(e) = probe_err {
         return Err(e);
     }

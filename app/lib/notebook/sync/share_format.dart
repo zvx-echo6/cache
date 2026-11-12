@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'field_sync.dart';
 import 'folder.dart';
 
 /// The format of the internal notebooks share (notebook sync between a person's own devices), version 2.
@@ -125,7 +126,7 @@ class NbRecord {
       'color',
       for (final r in lives)
         for (final k in r.body.keys)
-          if (k.endsWith('_at') && k.length > 3) k.substring(0, k.length - 3),
+          if (k.endsWith('_at') && k.length > 3 && k != 'fields_at') k.substring(0, k.length - 3),
     };
     String val(NbRecord r, String k) {
       final v = r.body[k];
@@ -150,8 +151,15 @@ class NbRecord {
         body.remove('${key}_at');
       }
     }
+    // The fields are merged one by one (each property of each field by its own time); `fields_at` is the latest of those times, so a
+    // build that knows nothing of fields still takes the later list whole.
+    if (lives.any((r) => r.body['fields'] is List)) {
+      final fields = mergeFieldLists([for (final r in lives) r.body['fields']]);
+      body['fields'] = fields;
+      body['fields_at'] = fieldsAt(fields);
+    }
     // What no pair decides: whatever a record has and the best one lacks, from the latest name first.
-    final taken = {for (final k in pairs) ...[k, '${k}_at']};
+    final taken = {for (final k in pairs) ...[k, '${k}_at'], 'fields', 'fields_at'};
     final byName = [...lives]..sort((a, b) => b.at != a.at ? b.at.compareTo(a.at) : b.text.compareTo(a.text));
     for (final r in byName) {
       for (final e in r.body.entries) {

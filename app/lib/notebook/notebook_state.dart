@@ -152,9 +152,13 @@ class NotebookState extends ChangeNotifier {
   // ---- notebooks ----
 
   /// Makes a notebook (no [id]) or replaces its definition and switches. A name another notebook has is refused by the core.
-  Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef}) =>
+  ///
+  /// [fromSync] is notebook sync applying what another device did: the store then lifts the cap of 12 visible fields and the one-label
+  /// rule, and lets a field's type change when no entry holds a value for it.
+  Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef, bool fromSync = false}) =>
       _change(() async => Notebook.fromJson(await backend.call('notebook_save', {
             'id': ?id,
+            if (fromSync) 'from_sync': true,
             'template': ?template,
             'def': def.toJson(),
             'private': ?private,

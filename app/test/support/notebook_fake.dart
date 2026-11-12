@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:io';
 
 import 'package:cache/notebook/notebook_state.dart';
@@ -147,7 +148,14 @@ class FakeNotebookBackend implements NotebookBackend {
     }
     final fields = <Map<String, dynamic>>[
       for (final f in (def['fields'] as List? ?? const []))
-        {...(f as Map).cast<String, dynamic>(), 'fid': f['fid'] ?? 'f${++next}'},
+        () {
+          final given = (f as Map).cast<String, dynamic>();
+          final prev = given['fid'] == null ? null : oldFields.where((x) => x['fid'] == given['fid']).firstOrNull;
+          // a gid that is set never changes; a new field gets the one it is given, else its own
+          final prevGid = prev == null ? null : prev['gid'];
+          final gid = prevGid is String && prevGid.isNotEmpty ? prevGid : (given['gid'] as String? ?? (prev != null ? null : _gid()));
+          return {...given, 'fid': given['fid'] ?? 'f${++next}', 'gid': ?gid};
+        }(),
     ];
     for (final f in oldFields) {
       final fid = f['fid'];
@@ -206,6 +214,9 @@ class FakeNotebookBackend implements NotebookBackend {
     }
     return n;
   }
+
+  static final Random _rnd = Random.secure();
+  static String _gid() => List.generate(32, (_) => _rnd.nextInt(16).toRadixString(16)).join();
 
   Map<String, dynamic> _deleteNb(String id) {
     _nb(id);

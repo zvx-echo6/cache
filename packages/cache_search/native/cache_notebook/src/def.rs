@@ -17,6 +17,9 @@ const MAX_CHOICES: usize = 30;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub fid: String,
+    /// A stable id the same on every device that shares the notebook (32 lower-case hex), given when the field is made or, for a
+    /// field from before, set once by notebook sync. Empty: not given yet. The `fid` stays the local key of stored values.
+    pub gid: String,
     pub label: String,
     pub kind: String,
     pub unit: Option<String>,
@@ -28,6 +31,9 @@ impl Field {
     fn to_json(&self) -> Value {
         let mut m = Map::new();
         m.insert("fid".into(), json!(self.fid));
+        if !self.gid.is_empty() {
+            m.insert("gid".into(), json!(self.gid));
+        }
         m.insert("label".into(), json!(self.label));
         m.insert("type".into(), json!(self.kind));
         if let Some(u) = &self.unit {
@@ -180,7 +186,11 @@ impl NotebookDef {
 
     /// The definition to store when `self` (as the app sent it) replaces `old`. New fields get the next `fid`; a field the app
     /// left out is dropped, or kept hidden when `has_values(fid)`; a field's type is fixed once `has_entries`.
-    pub fn merge(mut self, old: Option<&NotebookDef>, has_entries: bool, mut has_values: impl FnMut(&str) -> bool) -> Result<NotebookDef> {
+    ///
+    /// `from_sync` is notebook sync applying what another device did: it may leave more than [`MAX_FIELDS`] visible fields and two
+    /// with one label (two devices added fields at once), and may change a field's type when no entry holds a value for it. The
+    /// editor's saves never set it. A save of the editor that does not add a field is never refused for the cap.
+    pub fn merge(mut self, old: Option<&NotebookDef>, has_entries: bool, mut has_values: impl FnMut(&str) -> bool, from_sync: bool) -> Result<NotebookDef> {
         let num = |fid: &str| fid.strip_prefix('f').and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
         let mut next = old.map(|o| o.fields.iter().map(|f| num(&f.fid)).max().unwrap_or(0)).unwrap_or(0);
         for f in &self.fields {
@@ -188,19 +198,31 @@ impl NotebookDef {
                 let Some(prev) = old.and_then(|o| o.field(&f.fid)) else {
                     return Err(Error::bad(format!("the notebook has no field {:?}", f.fid)));
                 };
-                if has_entries && prev.kind != f.kind {
+                if has_entries && prev.kind != f.kind && !(from_sync && !has_values(&f.fid)) {
                     return Err(Error::bad(format!("{}: a field's type can't change once the notebook has entries", f.label)));
                 }
             }
         }
         let mut seen = std::collections::HashSet::new();
+        let mut gids = std::collections::HashSet::new();
         for f in &mut self.fields {
-            if f.fid.is_empty() {
-                next += 1;
-                f.fid = format!("f{next}");
+            match old.and_then(|o| o.field(&f.fid)).filter(|_| !f.fid.is_empty()) {
+                // A gid that is set is never changed; one that is not yet set may be set once.
+                Some(prev) if !prev.gid.is_empty() => f.gid = prev.gid.clone(),
+                Some(_) => {}
+                None => {
+                    next += 1;
+                    f.fid = format!("f{next}");
+                    if f.gid.is_empty() {
+                        f.gid = uuid::Uuid::new_v4().simple().to_string();
+                    }
+                }
             }
             if !seen.insert(f.fid.clone()) {
                 return Err(Error::bad(format!("field {:?} is listed twice", f.fid)));
+            }
+            if !f.gid.is_empty() && !gids.insert(f.gid.clone()) {
+                return Err(Error::bad(format!("{}: another field has the same gid", f.label)));
             }
         }
         if let Some(o) = old {
@@ -211,12 +233,14 @@ impl NotebookDef {
             }
         }
         let visible: Vec<&Field> = self.fields.iter().filter(|f| !f.hidden).collect();
-        if visible.len() > MAX_FIELDS {
+        let had = old.map(|o| o.fields.iter().filter(|f| !f.hidden).count()).unwrap_or(0);
+        // The cap is for adding: a save that does not make the notebook longer passes (a synced notebook may hold more).
+        if visible.len() > MAX_FIELDS && visible.len() > had && !from_sync {
             return Err(Error::bad(format!("a notebook has at most {MAX_FIELDS} fields")));
         }
         let mut labels = std::collections::HashSet::new();
         for f in &visible {
-            if !labels.insert(f.label.to_lowercase()) {
+            if !labels.insert(f.label.to_lowercase()) && !from_sync {
                 return Err(Error::bad(format!("two fields are named {:?}", f.label)));
             }
         }
@@ -273,5 +297,10 @@ fn parse_field(v: &Value) -> Result<Field> {
         (true, _) => return Err(Error::bad(format!("{label}: a choice field needs its choices"))),
     };
     let hidden = o.get("hidden").and_then(Value::as_bool).unwrap_or(false);
-    Ok(Field { fid, label, kind: kind.to_string(), unit, choices, hidden })
+    let gid = match o.get("gid") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) if s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) => s.clone(),
+        Some(_) => return Err(Error::bad(format!("{label}: gid must be 32 lower-case hex characters"))),
+    };
+    Ok(Field { fid, gid, label, kind: kind.to_string(), unit, choices, hidden })
 }

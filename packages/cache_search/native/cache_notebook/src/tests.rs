@@ -179,7 +179,10 @@ fn rename_keeps_values_and_types_lock_once_entries_exist() {
     let mut def = l["def"].clone();
     def["fields"][0]["label"] = json!("Minutes run");
     let l = call(&nb, "notebook_save", json!({"id": gid, "def": def.clone()}));
-    assert_eq!(l["def"]["fields"][0], json!({"fid": "f1", "label": "Minutes run", "type": "number", "unit": "min"}));
+    // (a field also has its gid, which a rename keeps)
+    let mut f0 = l["def"]["fields"][0].clone();
+    assert_eq!(f0.as_object_mut().unwrap().remove("gid").unwrap().as_str().unwrap().len(), 32);
+    assert_eq!(f0, json!({"fid": "f1", "label": "Minutes run", "type": "number", "unit": "min"}));
     assert_eq!(l["last_entry"]["values"]["f1"], 20);
     def["fields"][0] = json!({"fid": "f1", "label": "Minutes run", "type": "text"});
     assert!(err(&nb, "notebook_save", json!({"id": gid, "def": def})).message.contains("can't change"));
@@ -189,8 +192,14 @@ fn rename_keeps_values_and_types_lock_once_entries_exist() {
     let l = call(&nb, "notebook_save", json!({"id": gid, "def": def}));
     let fields = l["def"]["fields"].as_array().unwrap();
     assert_eq!(fields.len(), 3);
-    assert_eq!(fields[1], json!({"fid": "f4", "label": "Oil", "type": "yes_no"}));
-    assert_eq!(fields[2], json!({"fid": "f3", "label": "Fuel", "type": "text", "hidden": true}));
+    let bare = |f: &Value| {
+        let mut f = f.clone();
+        f.as_object_mut().unwrap().remove("gid");
+        f
+    };
+    assert_eq!(bare(&fields[1]), json!({"fid": "f4", "label": "Oil", "type": "yes_no"}));
+    assert_eq!(bare(&fields[2]), json!({"fid": "f3", "label": "Fuel", "type": "text", "hidden": true}));
+    assert_eq!(fields[2]["gid"].as_str().unwrap().len(), 32, "a field kept hidden keeps its gid");
     assert_eq!(l["last_entry"]["values"]["f3"], "full tank");
     let bad = json!({"name": "Generator test", "fields": [{"fid": "f9", "label": "x", "type": "text"}]});
     assert_eq!(err(&nb, "notebook_save", json!({"id": gid, "def": bad})).code, "bad_json");
@@ -447,4 +456,91 @@ fn a_notebook_has_an_icon_and_a_colour_of_its_own() {
         def.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
         assert_eq!(err(&nb, "notebook_save", json!({"id": a["id"], "def": def})).code, "bad_json", "{bad}");
     }
+}
+
+fn fields_of(n: &Value) -> Vec<(String, String)> {
+    n["def"]["fields"].as_array().unwrap().iter().map(|f| (f["label"].as_str().unwrap().to_string(), f["gid"].as_str().unwrap_or("").to_string())).collect()
+}
+
+#[test]
+fn a_field_has_a_stable_gid_that_is_given_once() {
+    let (nb, _t) = notebook("gid");
+    let a = call(&nb, "notebook_save", json!({"template": "log", "def": {"name": "Hikes", "fields": [{"label": "Distance", "type": "number"}]}}));
+    let fs = fields_of(&a);
+    assert_eq!(fs[0].1.len(), 32, "a new field is born with a gid");
+    // a rename and a new field keep the gid; the new one gets its own
+    let b = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Hikes", "fields": [
+        {"fid": "f1", "label": "Dist", "type": "number"}, {"label": "Weather", "type": "text"}]}}));
+    let fb = fields_of(&b);
+    assert_eq!((fb[0].0.as_str(), fb[0].1.clone()), ("Dist", fs[0].1.clone()));
+    assert_eq!(fb[1].1.len(), 32);
+    assert_ne!(fb[1].1, fb[0].1);
+    // a gid that is set can't be changed by the app
+    let c = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Hikes", "fields": [
+        {"fid": "f1", "gid": "0".repeat(32), "label": "Dist", "type": "number"}, {"fid": "f2", "label": "Weather", "type": "text"}]}}));
+    assert_eq!(fields_of(&c)[0].1, fs[0].1);
+    // a field given a gid keeps it; the same gid twice is refused; a bad gid is refused
+    let d = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Hikes", "fields": [
+        {"fid": "f1", "label": "Dist", "type": "number"}, {"fid": "f2", "label": "Weather", "type": "text"},
+        {"label": "Given", "type": "text", "gid": "ab".repeat(16)}]}}));
+    assert_eq!(fields_of(&d)[2].1, "ab".repeat(16));
+    assert_eq!(err(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Hikes", "fields": [
+        {"fid": "f1", "label": "Dist", "type": "number"}, {"label": "Twin", "type": "text", "gid": fs[0].1}]}})).code, "bad_json");
+    assert_eq!(err(&nb, "notebook_save", json!({"template": "log", "def": {"name": "X", "fields": [{"label": "A", "type": "text", "gid": "XYZ"}]}})).code, "bad_json");
+}
+
+#[test]
+fn a_field_from_before_gets_its_gid_once() {
+    let (nb, _t) = notebook("gid-once");
+    // a stored field with no gid (made before gids): the app may set it once
+    let a = call(&nb, "notebook_save", json!({"template": "log", "def": {"name": "Old", "fields": [{"label": "Distance", "type": "number"}]}}));
+    let c = rusqlite::Connection::open(_t.0.join("notebook.sqlite")).unwrap();
+    let text: String = c.query_row("SELECT def_json FROM notebooks WHERE id=?1", [a["id"].as_str().unwrap()], |r| r.get(0)).unwrap();
+    let mut v: Value = serde_json::from_str(&text).unwrap();
+    v["fields"][0].as_object_mut().unwrap().remove("gid");
+    c.execute("UPDATE notebooks SET def_json=?2 WHERE id=?1", rusqlite::params![a["id"].as_str().unwrap(), v.to_string()]).unwrap();
+    drop(c);
+    let set = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Old", "fields": [{"fid": "f1", "gid": "cd".repeat(16), "label": "Distance", "type": "number"}]}}));
+    assert_eq!(fields_of(&set)[0].1, "cd".repeat(16));
+    let again = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Old", "fields": [{"fid": "f1", "gid": "ef".repeat(16), "label": "Distance", "type": "number"}]}}));
+    assert_eq!(fields_of(&again)[0].1, "cd".repeat(16), "once set, it stays");
+}
+
+#[test]
+fn sync_may_leave_more_than_twelve_and_two_alike_but_the_editor_may_not_add() {
+    let (nb, _t) = notebook("cap");
+    let fields: Vec<Value> = (0..14).map(|i| json!({"label": if i == 13 { "Field 0".to_string() } else { format!("Field {i}") }, "type": "text"})).collect();
+    let def = json!({"name": "Big", "fields": fields});
+    // the editor's save refuses a new notebook that long, and two fields with one label
+    assert_eq!(err(&nb, "notebook_save", json!({"template": "log", "def": def})).code, "bad_json");
+    // sync's apply may
+    let n = call(&nb, "notebook_save", json!({"template": "log", "def": def, "from_sync": true}));
+    assert_eq!(n["def"]["fields"].as_array().unwrap().len(), 14);
+    let mut stored = n["def"].clone();
+    stored["name"] = json!("Bigger");
+    stored["fields"].as_array_mut().unwrap()[13]["label"] = json!("Field 13");
+    // a save of the editor that does not add a field passes: a rename, a reorder, a removal
+    let renamed = call(&nb, "notebook_save", json!({"id": n["id"], "def": stored}));
+    assert_eq!(renamed["def"]["name"], "Bigger");
+    let mut shorter = stored.clone();
+    shorter["fields"].as_array_mut().unwrap().remove(0);
+    assert_eq!(call(&nb, "notebook_save", json!({"id": n["id"], "def": shorter}))["def"]["fields"].as_array().unwrap().len(), 13);
+    // but adding one is refused
+    let mut longer = shorter.clone();
+    longer["fields"].as_array_mut().unwrap().push(json!({"label": "One more", "type": "text"}));
+    assert_eq!(err(&nb, "notebook_save", json!({"id": n["id"], "def": longer})).code, "bad_json");
+}
+
+#[test]
+fn sync_may_change_a_type_only_when_no_entry_has_a_value() {
+    let (nb, _t) = notebook("type-sync");
+    let n = call(&nb, "notebook_save", json!({"template": "log", "def": {"name": "T", "fields": [{"label": "A", "type": "text"}, {"label": "B", "type": "text"}]}}));
+    let id = n["id"].as_str().unwrap().to_string();
+    call(&nb, "entry_save", json!({"notebook_id": id, "occurred_at": "2026-11-01T10:00:00-07:00", "values": {"f1": "x"}}));
+    let flip = |f1: &str, f2: &str, sync: bool| json!({"id": id, "from_sync": sync, "def": {"name": "T", "fields": [
+        {"fid": "f1", "label": "A", "type": f1}, {"fid": "f2", "label": "B", "type": f2}]}});
+    assert_eq!(err(&nb, "notebook_save", flip("text", "number", false)).code, "bad_json", "the editor can't, once there are entries");
+    // B has no values: sync may change it; A has one: sync may not
+    assert_eq!(call(&nb, "notebook_save", flip("text", "number", true))["def"]["fields"][1]["type"], "number");
+    assert_eq!(err(&nb, "notebook_save", flip("number", "number", true)).code, "bad_json");
 }

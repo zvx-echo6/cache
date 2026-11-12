@@ -9,6 +9,7 @@ import 'share_format.dart';
 import '../notebook_model.dart';
 import '../notebook_state.dart';
 import 'folder.dart';
+import 'field_sync.dart';
 import 'formats.dart';
 import 'merge.dart';
 import '../../platform/app_log.dart';
@@ -184,6 +185,10 @@ class NotebookSync {
 
   Map<String, _Item> _items = {};
   Map<String, Map<String, String>> _props = {};
+
+  /// What this device last applied of each notebook's fields (see field_sync.dart), by notebook id. A notebook without one has not met
+  /// its record's `fields` yet: that is the migration.
+  Map<String, FieldSnap> _fieldSnap = {};
   List<SyncConflict> _conflicts = [];
   final Set<String> _ignored = {};
 
@@ -239,6 +244,7 @@ class NotebookSync {
       _stopped
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
+      _fieldSnap = {for (final e in (j['fields'] as Map? ?? const {}).entries) '${e.key}': FieldSnap.fromJson(e.value as Map)};
       _bookSnap = {for (final e in (j['book_snap'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _snap = {
         for (final e in (j['snap'] as Map? ?? const {}).entries)
@@ -267,6 +273,7 @@ class NotebookSync {
         'ignored': [..._ignored],
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_bookSnap.isNotEmpty) 'book_snap': _bookSnap,
+        if (_fieldSnap.isNotEmpty) 'fields': {for (final e in _fieldSnap.entries) e.key: e.value.toJson()},
         if (_snap.isNotEmpty) 'snap': {
           for (final e in _snap.entries)
             e.key: {'name': e.value.name, 'at': e.value.at, 'icon': e.value.icon, 'icon_at': e.value.iconAt, 'color': e.value.color, 'color_at': e.value.colorAt},
@@ -595,12 +602,26 @@ class NotebookSync {
 
   /// A notebook made here the way another device made it: [shared] is its definition there (template, def, private, props).
   Future<Notebook> _makeBook({String? id, required String name, Map<String, dynamic>? shared}) async {
+    var def = _withProps(shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)).copyWith(name: name) : NotebookDef(name: name, fields: const [], sort: NotebookSort.recent), shared);
+    // The record's `fields` (what every device agrees on now) over the definition it was first written with.
+    final recFields = shared?['fields'] is List ? mergeFieldLists([shared!['fields']]) : null;
+    if (recFields != null) {
+      final plan = reconcileFields(notebookId: id ?? '', record: recFields, local: const [], snap: FieldSnap(), hasValues: (_) => false, now: _now().millisecondsSinceEpoch);
+      def = def.copyWith(fields: plan.local);
+    }
     final made = await notebook.saveNotebook(
       id: id,
       template: (shared?['template'] as String?) ?? 'notes',
-      def: _withProps(shared?['def'] is Map ? NotebookDef.fromJson(_withoutFids(shared!['def'] as Map)).copyWith(name: name) : NotebookDef(name: name, fields: const [], sort: NotebookSort.recent), shared),
+      def: def,
       private: shared?['private'] == true,
+      fromSync: recFields != null,
     );
+    if (recFields != null) {
+      final props = {for (final r in recFields) '${r['gid']}': '${r['pname']}'};
+      _props[made.id] = {for (final f in made.def.fields) if (f.fid != null && f.gid != null && props[f.gid] != null) f.fid!: props[f.gid]!};
+      _fieldSnap[made.id] = _snapOfFields(made, recFields);
+      return made;
+    }
     // The other device's property names, by label, so both write the same ones.
     final sharedProps = shared?['props'];
     final sharedFields = shared?['def'] is Map ? (shared!['def'] as Map)['fields'] as List? ?? const [] : const [];
@@ -755,7 +776,125 @@ class NotebookSync {
 
   /// A notebook's record body; [at] is the time its icon and colour (when it has them) are set.
   Map<String, dynamic> _recBody(Notebook n, {int at = 0}) =>
-      {'name': n.name, if (n.def.icon != null) ...{'icon': n.def.icon, 'icon_at': at}, if (n.def.color != null) ...{'color': n.def.color, 'color_at': at}, if (_eligible(n.id)) 'legacy': true, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)};
+      {'name': n.name, if (n.def.icon != null) ...{'icon': n.def.icon, 'icon_at': at}, if (n.def.color != null) ...{'color': n.def.color, 'color_at': at}, if (_eligible(n.id)) 'legacy': true, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n), ..._fieldsBody(n)};
+
+  /// A record's `fields` for a notebook made or revived here: this device's fields as the list every device agrees on. Each keeps the
+  /// id it has (one still without is given the one the first-share rule gives, which is the one a device that reads the record's
+  /// definition comes to). Every property is at time 0, so any later change from any device wins.
+  Map<String, dynamic> _fieldsBody(Notebook n) {
+    final props = _fieldProps(n);
+    final derived = fieldsOfSnapshot(n.id, [for (final f in n.def.fields) f.toJson()], props);
+    final fields = <Map<String, dynamic>>[];
+    for (var i = 0; i < derived.length && i < n.def.fields.length; i++) {
+      final g = n.def.fields[i].gid;
+      fields.add({...derived[i], if (g != null && g.isNotEmpty) 'gid': g});
+    }
+    return {'fields': fields, 'fields_at': 0};
+  }
+
+  /// What a device remembers of a notebook's fields after a sync: each field's state by gid, and their order.
+  FieldSnap _snapOfFields(Notebook n, List<Map<String, dynamic>> record) {
+    final recBy = {for (final r in record) '${r['gid']}': r};
+    final state = <String, FieldState>{};
+    for (final f in n.def.fields) {
+      final g = f.gid;
+      if (g == null || g.isEmpty) continue;
+      state[g] = FieldState.ofLocal(f);
+    }
+    // a field the record has removed and this device has dropped stays known as removed, so it is not "removed here" again
+    for (final r in record) {
+      final g = '${r['gid']}';
+      if (r['removed'] == true && !state.containsKey(g) && recBy.containsKey(g)) {
+        state[g] = FieldState(name: '${r['name']}', type: '${r['type']}', removed: true);
+      }
+    }
+    return FieldSnap(state: state, order: [for (final f in n.def.fields) if (!f.hidden && f.gid != null && f.gid!.isNotEmpty) f.gid!]);
+  }
+
+  /// The fields of one notebook with a live record: the first time (the migration: this device's fields are matched to the record's
+  /// and given their ids) and every time after (what changed here goes into the record, what the record says goes into the notebook).
+  /// Each step is repeatable, so a run that stopped halfway is finished by the next one: the record is written before the notebook
+  /// takes its ids, and what this device remembers is written last.
+  Future<void> _syncFields(Notebook n, Map<String, NbRecord> recs, int now) async {
+    final r = recs[n.id];
+    if (r == null || r.kind != RecordKind.live) return;
+    var book = notebook.notebook(n.id) ?? n;
+    var record = r.body['fields'] is List ? mergeFieldLists([r.body['fields']]) : <Map<String, dynamic>>[];
+    var snap = _fieldSnap[n.id];
+    var local = book.def.fields;
+    final migrating = snap == null;
+    final values = <String>{};
+    for (final e in await notebook.entries(n.id)) {
+      for (final v in e.values.entries) {
+        if (v.value != null) values.add(v.key);
+      }
+    }
+    if (snap == null) {
+      final mig = migrateFields(
+        notebookId: n.id,
+        snapshot: (r.body['def'] is Map ? (r.body['def'] as Map)['fields'] as List? : null) ?? const [],
+        snapProps: r.body['props'] is Map ? r.body['props'] as Map : const {},
+        existing: r.body['fields'] is List ? record : null,
+        local: local,
+        localProps: {..._fieldProps(book)},
+        now: now,
+      );
+      record = mig.fields;
+      for (final line in mig.log) {
+        logInfo(line, job: 'notebook sync');
+      }
+      local = [for (final f in local) (f.gid == null || f.gid!.isEmpty) && mig.gids[f.fid] != null ? LogField(fid: f.fid, gid: mig.gids[f.fid], label: f.label, type: f.type, unit: f.unit, choices: f.choices, hidden: f.hidden) : f];
+      snap = FieldSnap(state: {for (final e in mig.baseline.entries) e.key: e.value}, order: mig.baselineOrder);
+      // what this device added before the migration is its own from the start (not a change to carry)
+      final matched = {for (final f in local) if (f.gid != null && snap.state[f.gid] == null && mig.baseline[f.gid] == null) f.gid!: f};
+      for (final e in matched.entries) {
+        snap.state[e.key] = FieldState.ofLocal(e.value);
+      }
+    }
+    final plan = reconcileFields(
+      notebookId: n.id,
+      record: record,
+      local: local,
+      snap: snap,
+      hasValues: values.contains,
+      props: {..._fieldProps(book)},
+      now: now,
+      migrating: migrating,
+    );
+    for (final line in plan.log) {
+      logInfo(line, job: 'notebook sync');
+    }
+    if (migrating || plan.recordChanged) {
+      final body = {...r.body, 'fields': plan.record, 'fields_at': fieldsAt(plan.record)};
+      final nameAt = r.at;
+      final rec = NbRecord.live(n.id, nameAt: nameAt, body: body);
+      if (rec.text != r.text) {
+        await folder.writeText('${n.id}/$kRecordFile', rec.text);
+        recs[n.id] = rec;
+      }
+    }
+    final same = _sameFields(book.def.fields, plan.local);
+    if (!same) {
+      book = await notebook.saveNotebook(id: n.id, def: book.def.copyWith(fields: plan.local), fromSync: true);
+    }
+    // the names the files use, by the record's say
+    final m = _props.putIfAbsent(n.id, () => {});
+    for (final f in book.def.fields) {
+      final g = f.gid;
+      if (f.fid != null && g != null && plan.pnames[g] != null) m[f.fid!] = plan.pnames[g]!;
+    }
+    _fieldSnap[n.id] = _snapOfFields(book, plan.record);
+  }
+
+  static bool _sameFields(List<LogField> a, List<LogField> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i], y = b[i];
+      if (x.fid != y.fid || x.gid != y.gid || x.label != y.label || x.type != y.type || x.hidden != y.hidden || (x.type == FieldType.number && x.unit != y.unit)) return false;
+      if (x.type == FieldType.choice && jsonEncode(x.choices ?? const []) != jsonEncode(y.choices ?? const [])) return false;
+    }
+    return true;
+  }
 
   /// Whether a notebook deleted on another device (a tombstone in its folder) is deleted here too. Always, today. This is the one
   /// place a "Don't replace my copies from this device" switch plugs in: for a device with it on, this returns false, the notebook
@@ -909,6 +1048,7 @@ class NotebookSync {
         final now0 = changed ? await notebook.saveNotebook(id: n.id, def: d) : n;
         _snap[n.id] = (name: now0.name, at: nameAt, icon: now0.def.icon, iconAt: iconAt, color: now0.def.color, colorAt: colorAt);
       }
+      await _syncFields(n, recs, now);
     }
     // Tombstones: a notebook deleted on another device, and one deleted here (not when the list of notebooks could not be read:
     // everything would look deleted).
@@ -920,6 +1060,7 @@ class NotebookSync {
     for (final id in [..._snap.keys]) {
       if (local.contains(id) || !listed) continue;
       _snap.remove(id);
+      _fieldSnap.remove(id);
       _bookSnap.remove(id);
       if (recs[id]?.kind == RecordKind.live) {
         // Deleted here: the tombstone goes in, and the notebook's files (and those of folders merged into it) come out.
@@ -950,6 +1091,8 @@ class NotebookSync {
           await folder.writeText('${n.id}/$kRecordFile', rec.text);
           recs[n.id] = rec;
           _snap[n.id] = (name: n.name, at: at, icon: n.def.icon, iconAt: rec.iconAt, color: n.def.color, colorAt: rec.colorAt);
+          _fieldSnap.remove(n.id);
+          await _syncFields(n, recs, now);
           _keepBooks.add(n.id);
           continue;
         }
@@ -960,6 +1103,7 @@ class NotebookSync {
         _snap.remove(n.id);
         _bookSnap.remove(n.id);
         _props.remove(n.id);
+        _fieldSnap.remove(n.id);
         privateBooks.remove(n.id);
       }
       _tombDirs.add(e.key);
@@ -1048,12 +1192,17 @@ class NotebookSync {
   static Future<void> moveProps(File f, String oldId, String newId) async {
     if (!await f.exists()) return;
     final j = jsonDecode(await f.readAsString());
-    final props = j is Map ? j['props'] : null;
-    if (j is! Map || props is! Map || !props.containsKey(oldId)) return;
-    final m = {...props};
-    final moved = m.remove(oldId);
-    m.putIfAbsent(newId, () => moved);
-    await writeStringAtomic(f, jsonEncode({...j, 'props': m}));
+    if (j is! Map) return;
+    final out = {...j};
+    for (final key in const ['props', 'fields']) {
+      final map = j[key];
+      if (map is! Map || !map.containsKey(oldId)) continue;
+      final m = {...map};
+      final moved = m.remove(oldId);
+      m.putIfAbsent(newId, () => moved);
+      out[key] = m;
+    }
+    await writeStringAtomic(f, jsonEncode(out));
   }
 
   // ---- the run ----

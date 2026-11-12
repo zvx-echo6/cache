@@ -82,9 +82,13 @@ class NbPhoto {
 
 /// One field of a notebook. [fid] is the store's stable id (null for a field not saved yet).
 class LogField {
-  const LogField({this.fid, required this.label, required this.type, this.unit, this.choices, this.hidden = false});
+  const LogField({this.fid, this.gid, required this.label, required this.type, this.unit, this.choices, this.hidden = false});
 
   final String? fid;
+
+  /// A stable id the same on every device that shares the notebook (32 hex), given by the store when the field is made; null for a
+  /// field not saved yet. [fid] stays the local key of the values.
+  final String? gid;
   final String label;
   final FieldType type;
   final String? unit;
@@ -93,18 +97,20 @@ class LogField {
   /// Taken out of the log while entries still hold its values.
   final bool hidden;
 
-  LogField copyWith({String? label, FieldType? type, String? unit, List<String>? choices, bool clearUnit = false, bool clearChoices = false}) => LogField(
+  LogField copyWith({String? label, FieldType? type, String? unit, List<String>? choices, bool clearUnit = false, bool clearChoices = false, bool? hidden}) => LogField(
         fid: fid,
+        gid: gid,
         label: label ?? this.label,
         type: type ?? this.type,
         unit: clearUnit ? null : (unit ?? this.unit),
         choices: clearChoices ? null : (choices ?? this.choices),
-        hidden: hidden,
+        hidden: hidden ?? this.hidden,
       );
 
   /// As the store takes it.
   Map<String, dynamic> toJson() => {
         'fid': ?fid,
+        'gid': ?gid,
         'label': label,
         'type': type.wire,
         if (type == FieldType.number && unit != null && unit!.trim().isNotEmpty) 'unit': unit,
@@ -126,6 +132,7 @@ class LogField {
     if (type == null || j['label'] is! String) return null;
     return LogField(
       fid: j['fid'] is String ? j['fid'] as String : null,
+      gid: j['gid'] is String ? j['gid'] as String : null,
       label: j['label'] as String,
       type: type,
       unit: j['unit'] is String ? j['unit'] as String : null,

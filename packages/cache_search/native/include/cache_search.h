@@ -610,9 +610,13 @@ char *cs_place_delete(cs_handle *h, const char *key);
  * op and args_json:
  *   "notebooks"       {}                                {"notebooks":[notebook...]}, most recently used first, then newest made
  *   "notebook"        {"id"}                            notebook
- *   "notebook_save"   {"id"?,"template"?,"def","private"?,"map"?,"template_ref"?}   makes a notebook (no id, or a new id;
+ *   "notebook_save"   {"id"?,"template"?,"def","private"?,"map"?,"template_ref"?,"from_sync"?}   makes a notebook (no id, or a new id;
  *                                                     "template" required) or replaces its definition and switches (a
- *                                                     switch left out keeps its value); fields without fid are new
+ *                                                     switch left out keeps its value); fields without fid are new and get a `gid` (32 hex, the same on every device
+ *                                                     that shares the notebook; one given is kept; a gid that is set never changes); "from_sync" (notebook
+ *                                                     sync only) lifts the cap of 12 visible fields and the one-label rule and lets a
+ *                                                     type change when no entry has a value for the field. A save that does not add a
+ *                                                     field is not refused for the cap
  *   "notebook_reid"   {"id","new_id"}                   gives a notebook another id (its entries, the saved-places link and
  *                                                     its map layer follow); the new id must be unused; run again after
  *                                                     it went through, it answers the notebook under the new id
