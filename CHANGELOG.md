@@ -16,6 +16,7 @@ release notes).
 - Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
 - Maps: the note on a route with an off-road part reads "Part of this route is off-road", with the distance; it said "has no road" and "over open ground" even where that part follows a trail
 - Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
 - Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
