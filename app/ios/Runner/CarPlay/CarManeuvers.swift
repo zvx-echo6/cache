@@ -93,6 +93,15 @@ final class CarGuidance: CarLinkListener {
     CarLink.shared.call("stop")
   }
 
+  /// A navigation alert (the climb ahead) has gone, by itself or by its button. CarPlay then shows the panel with only the
+  /// next turn until it is given the turns again, so they are made and given again here.
+  func alertGone() {
+    guard guiding, session != nil else { return }
+    shownTurns = nil
+    carLinkTrip(CarLink.shared.trip)
+    Self.log.info("car guidance: the alert has gone, the turns are given again")
+  }
+
   /// The Overview button: the whole route, or the position again.
   func overviewPressed() {
     guard guiding else { return }

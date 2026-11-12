@@ -232,6 +232,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   }
 
   /// While another app is in front on the car screen, CarPlay shows the next turn as a banner.
+  func mapTemplate(
+    _ mapTemplate: CPMapTemplate, didDismiss navigationAlert: CPNavigationAlert, dismissalContext: CPNavigationAlert.DismissalContext
+  ) {
+    guidance?.alertGone()
+  }
+
   func mapTemplate(_ mapTemplate: CPMapTemplate, shouldShowNotificationFor maneuver: CPManeuver) -> Bool {
     true
   }

@@ -904,7 +904,13 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # A climb ahead: CarPlay's own alert with Android's words and the road's shape. Then, once the alert has gone, the bar's
   # Overview button: the whole route north up, with the grade marker at the steepest point; and back.
   guide_step climb 'car guidance: climb alert shown' "$label-guide-climb"
-  sleep 9
+  # The alert goes by itself after ten seconds; the panel then has both its turns again.
+  if wait_log 'car guidance: the alert has gone' 16; then
+    sleep 2
+    shot_ext "$label-guide-after-climb"
+  else
+    GUIDE_MISSING="$GUIDE_MISSING [the app did not say the climb alert had gone]"
+  fi
   if at=$(tap_until 'car map: route overview on' 3 $(( (FREE_LEFT + 22) * CAR_S )) "$bar" $(( (FREE_LEFT + 36) * CAR_S )) "$bar" $(( (FREE_LEFT + 14) * CAR_S )) "$bar"); then
     sleep 3
     shot_ext "$label-guide-overview"
@@ -983,8 +989,15 @@ bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulato
       esac
     done
     [ "$lit" = ok ] && break
-    say "the CarPlay display stayed black after boot $try at $1x$2"
+    # Seen: three boots in a row with a black display, on a Simulator that did not answer about its windows either. Another
+    # boot on the same simulator service did not help, so the service is started afresh before the next one.
+    say "the CarPlay display stayed black after boot $try at $1x$2: the simulator service is started afresh before the next boot"
     shot_host "black-$4-boot$try"
+    killall Simulator > /dev/null 2>&1
+    xcrun simctl shutdown all > /dev/null 2>&1
+    killall -9 com.apple.CoreSimulator.CoreSimulatorService > /dev/null 2>&1
+    killall "System Events" > /dev/null 2>&1
+    sleep 10
   done
   [ "$lit" = ok ] || return 1
   start_stream "$4"
@@ -1154,6 +1167,11 @@ done
 # and does iOS in fact bring it after that copy is replaced by the real build.
 if [ -n "$STREAM" ] && [ -d "$APPS/car/Runner.app" ]; then
   say "== the update case: a scene that brings the storyboard's window"
+  # The case reads the app's own log lines: if the last size never came up, nothing is listening for them.
+  if [ -z "$STREAM_PID" ] || ! kill -0 "$STREAM_PID" 2> /dev/null; then
+    xcrun simctl bootstatus "$UDID" -b > /dev/null 2>&1
+    start_stream update
+  fi
   xcrun simctl terminate "$UDID" "$BID" > /dev/null 2>&1
   run xcrun simctl uninstall "$UDID" "$BID"
   rm -rf "$APPS/old"
