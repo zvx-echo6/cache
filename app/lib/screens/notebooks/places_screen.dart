@@ -22,6 +22,7 @@ import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
+import '../../maps/ui/place_map.dart' show PlaceFixScope;
 import 'map_spot_picker.dart';
 import 'photo_viewer.dart';
 import 'notebook_editor.dart';
@@ -645,6 +646,12 @@ class _PlaceFormState extends State<PlaceForm> {
   bool _saving = false;
   String? _error;
 
+  /// The person has touched the form's map: a position that arrives later leaves it where they put it.
+  bool _touched = false;
+
+  /// A position fix is still being read (false once it answered that there is none).
+  bool _fixComing = true;
+
   String? get _id => widget.entry == null ? null : watchId(widget.entry!);
   bool get _isNew => widget.entry == null;
   bool get _weatherApplies => widget.book.savedPlaces && pd != null;
@@ -654,8 +661,15 @@ class _PlaceFormState extends State<PlaceForm> {
     super.initState();
     if (_pin == null) {
       widget.deps.places.herePlace().then((p) {
-        if (mounted && _pin == null && p != null) setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
-      }).catchError((_) {});
+        if (!mounted) return;
+        if (p == null) {
+          setState(() => _fixComing = false);
+        } else if (_pin == null && !_touched) {
+          setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
+        }
+      }).catchError((_) {
+        if (mounted) setState(() => _fixComing = false);
+      });
     }
   }
 
@@ -833,7 +847,7 @@ class _PlaceFormState extends State<PlaceForm> {
               // 220 high, less on a short window (a phone held sideways), so the name and the switches show under it.
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))),
+                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: PlaceFixScope(coming: _fixComing, child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _touched = true, child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))))),
               ),
               if (pd?.pickerMap != null)
                 Align(

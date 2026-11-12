@@ -783,6 +783,13 @@ class _CacheAppState extends State<CacheApp> {
   });
   // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
   // and directions.
+  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places, else a downloaded region's centre.
+  Future<({double lat, double lon, double zoom})?> _placeMapFallback() async {
+    final last = maps.savedCamera;
+    if (last != null && last.zoom >= 6) return placeFallbackCamera(last: last);
+    return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
+  }
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -802,8 +809,8 @@ class _CacheAppState extends State<CacheApp> {
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
     hereOnMap: () => location.enabled,
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
-    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look),
-    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false),
+    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
+    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();

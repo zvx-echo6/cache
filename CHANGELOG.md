@@ -12,6 +12,7 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Places: the map when adding a place always opens close in on where you are
 - Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
 - Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
