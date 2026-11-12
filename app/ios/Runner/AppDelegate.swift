@@ -9,9 +9,12 @@ import flutter_local_notifications
 import workmanager_apple
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate {
   let folderAccess = FolderAccess()
   let routeSnapshot = RouteSnapshot()
+  /// The app's one Flutter engine. It is made by the first scene that needs it (obtainFlutterEngine), not by a storyboard's
+  /// view controller, so that it does not belong to one window: a window is built around it (SceneDelegate.swift).
+  private var flutterEngine: FlutterEngine?
 
   override func application(
     _ application: UIApplication,
@@ -36,18 +39,45 @@ import workmanager_apple
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+  /// The app's Flutter engine: made, started and given its plugins and channels by the first caller, the same engine for
+  /// every later one. It starts at the first scene, not when the process starts, so a launch with no scene (the weather
+  /// update, a location relaunch) stays as light as it was.
+  ///
+  /// What the storyboard's view controller used to do for its own engine is done here, in the same order: the engine with the
+  /// name and settings Flutter gave it ("io.flutter", no state restoration), the plugins and the app's channels, then the two
+  /// launch events Flutter sends plugins once they are registered. Two things differ. The engine keeps running without a view
+  /// (the storyboard's stopped with its view controller). And Dart starts here rather than when the view loads, a moment
+  /// earlier; its first calls still wait for this method to return, so they find the plugins.
+  func obtainFlutterEngine() -> FlutterEngine {
+    if let engine = flutterEngine { return engine }
+    let engine = FlutterEngine(name: "io.flutter", project: nil, allowHeadlessExecution: true)
+    if !engine.run() {
+      os_log("The Flutter engine did not start", type: .fault)
+    }
+    flutterEngine = engine
+    connect(registry: engine, messenger: engine.binaryMessenger)
+    // Plugins hear about the launch after they are registered. With scenes, Flutter sent these two events from the
+    // storyboard's view controller (FlutterViewController.sharedSetupWithProject), with empty options; nothing else sends
+    // them for an engine the app makes itself.
+    _ = super.application(UIApplication.shared, willFinishLaunchingWithOptions: [:])
+    _ = super.application(UIApplication.shared, didFinishLaunchingWithOptions: [:])
+    os_log("The Flutter engine was started for the first scene", type: .info)
+    return engine
+  }
+
+  /// The plugins and the app's own channels, once, on the engine obtainFlutterEngine made.
+  private func connect(registry: FlutterPluginRegistry, messenger: FlutterBinaryMessenger) {
     FlutterLocalNotificationsPlugin.setPluginRegistrantCallback { registry in
       GeneratedPluginRegistrant.register(with: registry)
     }
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    GeneratedPluginRegistrant.register(with: registry)
     // Notebooks > Connections: a folder the person picks for Obsidian or Logseq, kept as a security-scoped bookmark.
-    let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: messenger)
     let access = folderAccess
     folders.setMethodCallHandler { call, result in access.handle(call, result: result) }
     let permissions = FlutterMethodChannel(
       name: "co.cache/network_access",
-      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+      binaryMessenger: messenger
     )
     permissions.setMethodCallHandler { call, result in
       switch call.method {
@@ -69,7 +99,7 @@ import workmanager_apple
       }
     }
     // The log's device identifier and fresh app memory readings for guards and PDF diagnostics.
-    let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: messenger)
     memory.setMethodCallHandler { call, result in
       if call.method == "read" {
         result(cacheMemoryReading())
@@ -91,7 +121,7 @@ import workmanager_apple
       memory.invokeMethod("memoryWarning", arguments: nil)
     }
     // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
-    let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: messenger)
     // Monitoring is on from the start, so the first read already has the level (UIDevice reports -1 until it is on; the app
     // then treats the battery as unknown and does not hold work for it).
     UIDevice.current.isBatteryMonitoringEnabled = true
@@ -119,12 +149,12 @@ import workmanager_apple
       result(answer)
     }
     // The whole-route picture during guidance (RouteSnapshot below, lib/nav/overview/route_overview.dart).
-    let snapshots = FlutterMethodChannel(name: "co.cache/route_snapshot", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let snapshots = FlutterMethodChannel(name: "co.cache/route_snapshot", binaryMessenger: messenger)
     let snapshot = routeSnapshot
     snapshots.setMethodCallHandler { call, result in snapshot.handle(call, result: result) }
     // Turn-by-turn guidance keeps the screen on (lib/nav/guidance_wakelock.dart): the idle timer is off while it asks, and back on
     // as soon as it says so or the app goes to the background.
-    let screenAwake = FlutterMethodChannel(name: "co.cache/screen_awake", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    let screenAwake = FlutterMethodChannel(name: "co.cache/screen_awake", binaryMessenger: messenger)
     screenAwake.setMethodCallHandler { call, result in
       guard call.method == "keepScreenOn" else {
         result(FlutterMethodNotImplemented)
