@@ -34,7 +34,7 @@ import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
-import 'package:cache/notebook/pin_image.dart' show PinImages, PinStyle;
+import 'package:cache/notebook/pin_image.dart' show PinImages, PinStyle, pinImageRatio;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
@@ -1346,6 +1346,8 @@ void main() {
       glyphsLoader: () async => mapGlyphs,
       snapshotter: m.kit.inset,
       elevation: m.elevation,
+      // The pictures stand for a 3x phone: its pins are drawn for that screen, as the renderer shows them.
+      imagePixelRatio: kGuidePhoneScale,
     ));
     for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
@@ -1566,7 +1568,7 @@ void main() {
     final images = <String, Uint8List>{};
     final image = (await tester.runAsync(() => PinImages((name, png) async {
       images[name] = png;
-    }, pins).ensure(look.icon.id, look.glyph, look.tint)))!;
+    }, pins, ratio: pinImageRatio(kGuidePhoneScale)).ensure(look.icon.id, look.glyph, look.tint)))!;
     Map<String, dynamic> points(List<Map<String, dynamic>> features) => {'type': 'FeatureCollection', 'features': features};
     kit.writeScene(
       'place-form',

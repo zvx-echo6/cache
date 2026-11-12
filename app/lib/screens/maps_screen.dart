@@ -78,7 +78,12 @@ EdgeInsets routeFitPadding({required Size screen, required Size map, double? cov
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio});
+
+  /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
+  /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
+  @visibleForTesting
+  final double? imagePixelRatio;
 
   /// The route's elevation profile; null: worked out from the layer engine's elevation tiles (tests give their own).
   final RouteElevation? elevation;
@@ -325,7 +330,8 @@ class _MapsScreenState extends State<MapsScreen> {
     _styleReady = true;
     _keepOnline(c);
     final tactical = widget.themeId == CacheThemeId.tactical;
-    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical);
+    final screenRatio = widget.imagePixelRatio ?? (mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
+    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical, ratio: pinImageRatio(screenRatio));
     try {
       await images.ensure(kRepeaterIcon, mapIcon(kRepeaterIcon).icon, repeaterTint(tactical: tactical));
     } catch (_) {}
