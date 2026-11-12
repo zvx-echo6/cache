@@ -18,6 +18,7 @@ const MethodChannel _build = MethodChannel('cache/build');
 const MethodChannel _car = MethodChannel('co.cache/car');
 const MethodChannel _steps = MethodChannel('harness/steps');
 const MethodChannel _link = MethodChannel('co.cache/link');
+const MethodChannel _phoneWindow = MethodChannel('co.cache/phone_window');
 const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
 // The recorded drive, moved along by the job while guiding.
 const List<String> _drive = <String>['trip_guiding', 'trip_guiding_near', 'trip_guiding_next', 'trip_rerouting', 'trip_arrived'];
@@ -48,6 +49,7 @@ class _HarnessAppState extends State<HarnessApp> {
     super.initState();
     unawaited(_startLinks());
     unawaited(_startCarSide());
+    unawaited(_startPhoneWindow());
   }
 
   void _say(String text) {
@@ -68,6 +70,21 @@ class _HarnessAppState extends State<HarnessApp> {
       if (first != null) await _steps.invokeMethod<void>('say', 'link taken at start, ${first.length} characters');
     } on MissingPluginException {
       // No link channel on this side.
+    }
+  }
+
+  /// Whether the phone's own window is on the phone's screen, as lib/platform/phone_window.dart follows it: asked at start,
+  /// then heard as it changes. Said in the app's log, where the job reads it.
+  Future<void> _startPhoneWindow() async {
+    _phoneWindow.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'changed') await _steps.invokeMethod<void>('say', 'phone window visible ${call.arguments}');
+      return null;
+    });
+    try {
+      final Object? now = await _phoneWindow.invokeMethod<Object?>('get');
+      await _steps.invokeMethod<void>('say', 'phone window at start: visible $now');
+    } on MissingPluginException {
+      // No phone window channel on this side.
     }
   }
 
@@ -215,7 +232,7 @@ class _HarnessAppState extends State<HarnessApp> {
       _say('The car has gone.');
       return;
     }
-    _phase = 0;
+    // As the phone: what it is doing goes on while the car is away, and the car is shown it again when it comes back.
     await _push();
     await _car.invokeMethod<void>('savedChanged');
     await _car.invokeMethod<void>('notice', <String, Object?>{'text': 'A recorded notice'});

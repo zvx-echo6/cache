@@ -30,6 +30,57 @@ final class LinkBridge {
   }
 }
 
+/// Whether the phone's own window is on the phone's screen, for Dart (lib/platform/phone_window.dart, channel
+/// `co.cache/phone_window`). With the car screen in use the app is not in the background while the phone lies locked in a
+/// pocket, so nothing else tells the phone's own views to rest: the phone's scene says so itself, here. Only a build with the
+/// car screen has the channel (AppDelegate.connect); in any other build Dart finds nobody to ask and nothing changes.
+final class PhoneWindow {
+  static let shared = PhoneWindow()
+  /// False until a phone scene is in front: the car can start the app with the phone locked.
+  private(set) var visible = false
+  private var channel: FlutterMethodChannel?
+  private var observers: [NSObjectProtocol] = []
+
+  func attach(messenger: FlutterBinaryMessenger) {
+    let made = FlutterMethodChannel(name: "co.cache/phone_window", binaryMessenger: messenger)
+    made.setMethodCallHandler { [weak self] call, result in
+      if call.method == "get" {
+        result(self?.visible ?? false)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    channel = made
+  }
+
+  /// The phone's scene connected: its coming to the front and its going are followed from here on.
+  func follow(_ scene: UIScene) {
+    let center = NotificationCenter.default
+    for observer in observers { center.removeObserver(observer) }
+    observers = []
+    let shown: [Notification.Name] = [UIScene.willEnterForegroundNotification, UIScene.didActivateNotification]
+    let hidden: [Notification.Name] = [UIScene.didEnterBackgroundNotification, UIScene.didDisconnectNotification]
+    for name in shown {
+      observers.append(center.addObserver(forName: name, object: scene, queue: .main) { [weak self] _ in self?.set(true) })
+    }
+    for name in hidden {
+      observers.append(center.addObserver(forName: name, object: scene, queue: .main) { [weak self] _ in self?.set(false) })
+    }
+    set(scene.activationState == .foregroundActive || scene.activationState == .foregroundInactive)
+  }
+
+  private func set(_ on: Bool) {
+    if on == visible { return }
+    visible = on
+    if on {
+      os_log("The phone scene came to the front", type: .info)
+    } else {
+      os_log("The phone scene went to the background", type: .info)
+    }
+    channel?.invokeMethod("changed", arguments: on)
+  }
+}
+
 /// The phone's window, built here around the app's one Flutter engine (AppDelegate.obtainFlutterEngine) instead of by the
 /// storyboard, whose view controller made an engine of its own that no other scene could share.
 class SceneDelegate: FlutterSceneDelegate {
@@ -56,6 +107,7 @@ class SceneDelegate: FlutterSceneDelegate {
       phoneWindow.rootViewController = controller
       window = phoneWindow
       phoneWindow.makeKeyAndVisible()
+      PhoneWindow.shared.follow(scene)
     }
     // FlutterSceneDelegate finds the engine through the window's view controller, which is why the window is set first: it
     // then passes this connection, and every later scene event, to the plugins.

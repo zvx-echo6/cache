@@ -21,6 +21,7 @@ import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
+import '../platform/phone_window.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
@@ -199,6 +200,8 @@ class _MapsScreenState extends State<MapsScreen> {
 
   @override
   void dispose() {
+    final c = _controller;
+    if (c != null) phoneMapRest.remove(c);
     _lifecycle.dispose();
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
@@ -271,7 +274,11 @@ class _MapsScreenState extends State<MapsScreen> {
   // ---- map events ---------------------------------------------------------------------------------------
 
   void _onMapCreated(MapLibreMapController c) {
+    final old = _controller;
+    if (old != null) phoneMapRest.remove(old);
     _controller = c;
+    // The map rests while the phone's window is not on its screen (an iPhone in a pocket with the car screen in use).
+    phoneMapRest.add(c, pause: c.pauseMap, resume: c.resumeMap);
     _keepOnline(c);
   }
 

@@ -121,6 +121,7 @@ import 'platform/app_log.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
+import 'platform/phone_window.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -908,6 +909,8 @@ class _CacheAppState extends State<CacheApp> {
             _modelRelease.toBackground();
           case AppLifecycleState.resumed:
             _modelRelease.toFront();
+            // Where the phone's window stands is asked again: a missed message must not leave the phone's map still.
+            if (plat.isIOS) unawaited(phoneWindow.refresh());
           case AppLifecycleState.inactive:
           case AppLifecycleState.detached:
             break;
@@ -1129,6 +1132,8 @@ class _CacheAppState extends State<CacheApp> {
         _car = _newCarBridge();
         unawaited(_car!.start());
       }));
+      // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
+      unawaited(phoneWindow.start());
     }
     _openHistory();
   }

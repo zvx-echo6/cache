@@ -318,8 +318,9 @@ app_crashes() {  # the app's own crash reports made since this job began, one fi
   find "$HOME/Library/Logs/DiagnosticReports" -name 'Runner*.ips' -newer "$OUT/.began" 2> /dev/null
 }
 
-car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay screen; 0 when its CarPlay scene connected
-  local label="$1" way
+car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay screen; 0 when its CarPlay scene connected (a new line of it)
+  local label="$1" way had
+  had=$(log_count 'car scene connected')
   front
   say "  $(osa sim_raise CarPlay)"
   sleep 1
@@ -329,7 +330,7 @@ car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay scree
         anchor "$OUT/.anchor.png" "$HOST_FOUND"
       fi
       click_at "$ICON_X" "$ICON_Y" "$way"
-      if wait_log 'car scene connected' 25; then
+      if wait_more 'car scene connected' "$had" 25; then
         say "the app's CarPlay scene connected ($label, click way $way)"
         WAYS="$way 1 2 3"
         return 0
@@ -1172,10 +1173,33 @@ for size in $SIZES; do
     sleep 5
     shot_phone "$label-phone-window"
     shot_ext "$label-car-after-phone"
+    # The phone's window goes to the background (another app in front on the phone) and comes back, with the car scene
+    # running all the while: Dart is told each time (the phone's maps rest by it), and the car goes on getting its trips.
+    PHONE_REST=""
+    before=$(log_count 'harness steps: phone window visible false')
+    run xcrun simctl launch "$UDID" com.apple.Preferences
+    if wait_more 'harness steps: phone window visible false' "$before" 15; then
+      grep -q 'The phone scene went to the background' "$STREAM" || PHONE_REST="$PHONE_REST [no line of the phone scene going to the background]"
+      trips=$(log_count 'car link: trip ')
+      notify next
+      wait_more 'car link: trip ' "$trips" 10 || PHONE_REST="$PHONE_REST [no trip reached the car while the phone's window was in the background]"
+      sleep 2
+      shot_phone "$label-phone-other-app-in-front"
+      shot_ext "$label-car-while-phone-window-away"
+      before=$(log_count 'harness steps: phone window visible true')
+      run xcrun simctl launch "$UDID" "$BID"
+      wait_more 'harness steps: phone window visible true' "$before" 15 || PHONE_REST="$PHONE_REST [Dart was not told that the phone's window came back]"
+      sleep 2
+      shot_phone "$label-phone-window-back"
+    else
+      PHONE_REST=" [Dart was not told that the phone's window went to the background]"
+    fi
     engines=$(grep -c 'The Flutter engine was started' "$STREAM")
     linked=$(grep -c 'harness steps: link opened while running' "$STREAM")
-    if [ "$engines" = 1 ] && [ "$linked" -ge 1 ] && ! grep -q 'car scene disconnected' "$STREAM"; then
-      result "OK phone: a cachelink: link opened the phone's window beside the car scene, on the engine the car scene had started (one engine start in all), and the link reached Dart there (shots/$label-phone-window.png)"
+    if [ -n "$PHONE_REST" ]; then
+      result "FAILED phone window:$PHONE_REST; engine-start lines $engines, car scene disconnected: $(grep -c 'car scene disconnected' "$STREAM")"
+    elif [ "$engines" = 1 ] && [ "$linked" -ge 1 ] && ! grep -q 'car scene disconnected' "$STREAM"; then
+      result "OK phone: the app was started by the car with no phone window (Dart heard at start: $(grep 'harness steps: phone window at start' "$STREAM" | head -n 1 | sed 's/.*at start: //')); the phone's window then went to the background behind another app and came back, Dart was told both times and the car went on getting trips, its scene never ending (shots/$label-phone-other-app-in-front.png, shots/$label-car-while-phone-window-away.png, shots/$label-phone-window-back.png); and before that a cachelink: link opened the phone's window beside the car scene, on the engine the car scene had started (one engine start in all), and the link reached Dart there (shots/$label-phone-window.png)"
     else
       result "FAILED phone: engine-start lines $engines (1 expected), lines saying the link reached Dart $linked (1 expected), car scene disconnected: $(grep -c 'car scene disconnected' "$STREAM")"
     fi
@@ -1183,6 +1207,74 @@ for size in $SIZES; do
   say "the app's log lines at this size:"
   sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 70 | tee -a "$LOG"
 done
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The car goes away during guidance and comes back. The Simulator app is closed: its CarPlay display goes with it, as a
+# car's does when the cable is pulled, while the simulated phone and the app run on. Opened again, the display comes back
+# from the saved defaults, and the app is to show the guidance again that went on meanwhile.
+reconnect_case() {
+  local began gone conn before lit=""
+  say "== the car goes away during guidance and comes back"
+  to_browsing
+  before=$(log_count 'car link: trip previewing')
+  notify next
+  wait_more 'car link: trip previewing' "$before" 10
+  began=$(log_count 'car guidance: began')
+  notify next
+  if ! wait_more 'car guidance: began' "$began" 12; then
+    result "FAILED reconnect: guidance did not start on the car before the car was taken away"
+    return
+  fi
+  sleep 3
+  shot_ext reconnect-1-guiding
+  began=$(log_count 'car guidance: began')
+  gone=$(log_count 'car scene disconnected')
+  conn=$(log_count 'car scene connected')
+  run killall Simulator
+  if ! wait_more 'car scene disconnected' "$gone" 40; then
+    result "FAILED reconnect: the app's car scene did not end within 40 s of the CarPlay display going away (closing the Simulator app may not take the display away)"
+    return
+  fi
+  say "the app's car scene ended with the CarPlay display"
+  sleep 4
+  ANCHOR=""
+  if ! open_carplay; then
+    result "FAILED reconnect: the CarPlay display did not come back"
+    return
+  fi
+  for lit in 1 2 3 4 5 6; do
+    xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.lit.png" > /dev/null 2>&1
+    case "$(python3 -I "$HERE/find_icon.py" lit "$OUT/.lit.png" 2> /dev/null)" in
+      "lit 0.0"|"") say "  the CarPlay display is black (look $lit)"; sleep 8 ;;
+      *) break ;;
+    esac
+  done
+  shot_ext reconnect-2-display-back
+  # CarPlay may bring the app back by itself; if not, its icon is pressed as at the start.
+  if wait_more 'car scene connected' "$conn" 15; then
+    say "the app's car scene came back by itself"
+  elif ! car_launch reconnect; then
+    result "FAILED reconnect: the app's car scene did not connect again; see shots/reconnect-2-display-back.png"
+    return
+  fi
+  if wait_more 'car guidance: began' "$began" 30; then
+    sleep 4
+    shot_ext reconnect-3-guiding-again
+    if [ "$(grep -c 'The Flutter engine was started' "$STREAM")" = 1 ]; then
+      result "OK reconnect: during guidance the CarPlay display went away and the app's car scene ended; the app ran on; the display came back, the car scene connected again on the same engine, and the guidance that had gone on was shown again without being started again (shots/reconnect-{1-guiding,2-display-back,3-guiding-again}.png)"
+    else
+      result "FAILED reconnect: guidance came back, but the engine-start lines are $(grep -c 'The Flutter engine was started' "$STREAM") (1 expected: the app was to run on)"
+    fi
+  else
+    shot_ext reconnect-3-no-guidance
+    result "FAILED reconnect: the car scene connected again, but guidance was not shown again within 30 s (the last trip after it: $(grep 'car link: trip ' "$STREAM" | tail -n 1 | sed 's/.*car link: //'))"
+  fi
+}
+if [ -n "$STREAM" ] && grep -q 'car scene connected' "$STREAM" 2> /dev/null && ! grep -q 'car scene disconnected' "$STREAM" 2> /dev/null; then
+  reconnect_case
+else
+  result "FAILED reconnect: not tried, the last size's car scene was not up"
+fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
 # The update case, on the phone alone. Builds before the shared engine named the storyboard in the phone's scene, and iOS may

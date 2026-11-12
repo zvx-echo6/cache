@@ -116,6 +116,9 @@ import workmanager_apple
       CarLink.shared.attach(messenger: messenger)
       // Before each spoken prompt Dart asks the car side how iOS wants it given (Runner/CarPlay/CarPrompts.swift).
       CarPrompts.shared.start()
+      // Whether the phone's own window is on the phone's screen, so the phone's maps rest while it is not (PhoneWindow in
+      // SceneDelegate.swift).
+      PhoneWindow.shared.attach(messenger: messenger)
     }
     // A cachelink: link from outside (see LinkBridge in SceneDelegate.swift). Set where the engine is made, so a link reaches
     // Dart whichever scene started the engine.
