@@ -211,8 +211,8 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
         ? '${regionKindLabel(rec.kind, country: rec.country)} · ${l.partsLine.isEmpty ? formatBytes(l.bytes) : l.partsLine}'
         : [
             offerLine(rec, o, offroadFrom: r.offroadSharedWith(rec)),
-            // On the phone with its places not published for the area: said here too, as on its row in Regions.
-            if (o.kind == RegionOfferKind.onPhone && (l?.placesNotAvailable ?? false)) kPlacesNotAvailableShort,
+            // On the phone with a part not published for the area (places, or directions): said here too, as on its row in Regions.
+            if (o.kind == RegionOfferKind.onPhone) ...?l?.notAvailableNotes,
           ].join(' · ');
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),

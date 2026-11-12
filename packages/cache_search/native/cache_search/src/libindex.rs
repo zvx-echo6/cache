@@ -500,3 +500,96 @@ pub fn append_segment(dir: &Path, tokenizer: &str, docs: &[IndexDoc], remove: &[
     tv(writer.wait_merging_threads())?;
     Ok(before)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The point whose text holds the words searched for.
+    const TARGET: &str = "target";
+
+    /// A device index of two points, built as `build_library_index` builds it (same schema, same analyzer) but from text
+    /// given here, so no library file is needed. The words are in the body only: the title has none of them.
+    fn two_point_index(name: &str) -> (std::path::PathBuf, LibOpenIndex) {
+        let d = std::env::temp_dir().join(format!("cs-libindex-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let index = Index::create_in_dir(&d, build_schema().0).unwrap();
+        index.tokenizers().register(ANALYZER, make_analyzer(TOKENIZER));
+        let f = fields_of(&index).unwrap();
+        let mut w = index.writer(15_000_000).unwrap();
+        w.add_document(doc!(
+            f.point_id => TARGET,
+            f.title => "Clinic handbook",
+            f.body => "The COVID-19 ward is on the second floor. Staff don't enter without a mask. \
+                       The U.S. guidance was followed. The filters are state-of-the-art.",
+            f.source_type => "pdf"
+        ))
+        .unwrap();
+        w.add_document(doc!(
+            f.point_id => "other",
+            f.title => "Garden notes",
+            f.body => "Tomatoes want sun and water. Prune them in spring.",
+            f.source_type => "pdf"
+        ))
+        .unwrap();
+        w.commit().unwrap();
+        drop(w);
+        let oi = LibOpenIndex::open(&d, TOKENIZER).unwrap();
+        (d, oi)
+    }
+
+    /// The queries of `queries` that do not return the target point.
+    fn not_found(name: &str, queries: &[&'static str]) -> Vec<&'static str> {
+        let (d, oi) = two_point_index(name);
+        let missed = queries
+            .iter()
+            .copied()
+            .filter(|q| !keyword_hits(&oi, q, 10).unwrap().0.iter().any(|h| h.point_id == TARGET))
+            .collect();
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+        missed
+    }
+
+    // The three tests below settle finding 4 of the search audit of 2026-11-11: does a word with a hyphen, an apostrophe or
+    // a dot inside it find the passage that contains it? Each assertion is what a person expects (the passage is found).
+    // Nothing here changes the analyzer or the query handling: a change there means every library is indexed again.
+
+    #[test]
+    fn words_typed_with_spaces_find_the_passage() {
+        // Expected to pass: each word of these queries is one token, and one token is a plain term on the body.
+        assert_eq!(not_found("spaces", &["covid 19", "state of the art", "second floor"]), Vec::<&str>::new());
+        // and the helper can tell found from not found
+        assert_eq!(not_found("spaces-none", &["zeppelin", "tomatoes"]), vec!["zeppelin", "tomatoes"]);
+    }
+
+    #[test]
+    #[ignore = "known gap (search audit finding 4): expected to fail until the owner decides on a fix; run with --ignored"]
+    fn words_typed_with_their_punctuation_find_the_passage() {
+        // Expected to FAIL, all four. The analyzer (SimpleTokenizer) cuts each of these words into several tokens
+        // ("covid" + "19", "don" + "t", "u" + "s", "state" + "of" + "the" + "art"). Tantivy's query parser makes a word of
+        // several tokens a phrase, a phrase needs positions, and `body` is indexed with frequencies only, so
+        // `parse_query_lenient` drops the body clause and only the title is searched (see the comment on `keyword_hits`).
+        // The title has none of these words, so nothing is found. This rests on Tantivy 0.27's parser, which was read
+        // from memory, not from its source: if this test passes, the finding is wrong and the `#[ignore]` can go.
+        assert_eq!(
+            not_found("punctuation", &["COVID-19", "don't", "U.S.", "state-of-the-art"]),
+            Vec::<&str>::new(),
+            "typed as written in the passage, and not found"
+        );
+    }
+
+    #[test]
+    #[ignore = "known gap (search audit finding 4): expected to fail until the owner decides on a fix; run with --ignored"]
+    fn words_typed_without_their_punctuation_find_the_passage() {
+        // Expected to FAIL, all three, for a different reason: the passage's "COVID-19", "don't" and "U.S." are indexed as
+        // "covid" + "19", "don" + "t" and "u" + "s", while the same word typed without its punctuation is one token
+        // ("covid19", "dont", "us") that is not in the index. Only a change of analyzer (and so a new index) can join them.
+        assert_eq!(
+            not_found("joined", &["covid19", "dont", "US"]),
+            Vec::<&str>::new(),
+            "typed without the punctuation, and not found"
+        );
+    }
+}

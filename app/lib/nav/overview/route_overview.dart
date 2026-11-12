@@ -13,6 +13,38 @@ import '../../maps/style/style_generator.dart';
 import '../nav_geojson.dart';
 import 'overview_camera.dart';
 
+/// The height of the strip at the foot of a snapshot where the native snapshotter draws its own map credit ("(c) OpenStreetMap
+/// contributors"; showsLogo/withLogo(false) turns the logo off, not the credit), in points. The corner picture is rendered this much
+/// taller than the corner and the strip is cut off on display ([CreditStripCrop]); the one credit shown is the credit chip under the
+/// map. An estimate from the iPhone screenshot (the strip and its margin are about 26 points there); not read from MapLibre's code.
+const double kSnapshotCreditStripPt = 30;
+
+/// The size the corner picture is rendered at for a visible square of [side]: the square plus the credit strip below it.
+Size insetPictureSize(double side) => Size(side, side + kSnapshotCreditStripPt);
+
+/// The corner picture's padding: the route stays clear of the edges of the visible square, and of the strip.
+const EdgeInsets insetPicturePadding = EdgeInsets.fromLTRB(14, 16, 14, 16 + kSnapshotCreditStripPt);
+
+/// Shows the top of its [child] (the corner picture, [kSnapshotCreditStripPt] taller than the space it is given) and cuts off the
+/// bottom strip, so the snapshotter's credit never shows in the corner.
+class CreditStripCrop extends StatelessWidget {
+  const CreditStripCrop({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ClipRect(
+        child: LayoutBuilder(
+          builder: (context, box) => OverflowBox(
+            alignment: Alignment.topCenter,
+            minHeight: box.maxHeight + kSnapshotCreditStripPt,
+            maxHeight: box.maxHeight + kSnapshotCreditStripPt,
+            child: child,
+          ),
+        ),
+      );
+}
+
 /// One rendered whole-route picture: RGBA pixels and how long the offscreen render took on the device.
 class OverviewPicture {
   const OverviewPicture({required this.image, required this.camera, required this.pixelRatio, required this.renderMs});
