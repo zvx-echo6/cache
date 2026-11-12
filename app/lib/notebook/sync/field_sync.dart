@@ -143,7 +143,8 @@ class FieldSnap {
   final Map<String, FieldState> state;
   final List<String> order;
 
-  /// The device's own property names (`.cnote` keys) for its fields before it took the record's: still read as that field.
+  /// The device's own property names (`.cnote` keys) from before it took the record's, by that name to the field's local id: files
+  /// that still use one are read as that field.
   final Map<String, String> pnames;
 
   Map<String, dynamic> toJson() => {'state': {for (final e in state.entries) e.key: e.value.toJson()}, 'order': order, if (pnames.isNotEmpty) 'aliases': pnames};

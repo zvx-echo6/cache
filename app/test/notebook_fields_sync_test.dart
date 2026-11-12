@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/sync/field_sync.dart';
 import 'package:cache/notebook/sync/share_format.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'fixtures/prefix/share_format_prefix.dart' as pre;
 import 'support/share_rig.dart';
 
 /// A notebook's fields between a person's own devices: a field has one id on every device, each of its properties (name, type,
@@ -352,12 +354,150 @@ void main() {
       // the same result whichever way round
       expect(jsonEncode(NbRecord.merge([r2, r1])!.body['fields']), jsonEncode(m.body['fields']));
     });
+  });
 
-    test('a record with fields is read by a build that only knows key/key_at pairs: the later `fields` is kept as a whole', () {
-      // what the generic merge does with `fields`/`fields_at` (the test of the unknown-property merge covers the mechanism); here the
-      // pair is there, so a build without the fix carries it
-      final rec = NbRecord.live('n', nameAt: 1, body: {'name': 'Hikes', 'fields': const [], 'fields_at': 7});
-      expect(rec.body['fields_at'], 7);
+  group('a device that stored values under its own earlier property name', () {
+    test('its notes are written again under the shared name, so the other device reads the value as the field', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Weather'), txt('Notes')]);
+      await a.addValues(id, 'e1', {'Weather': 'Sun'});
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      // b had named the field "sky" before: its file for the note says so
+      final fidB = b.field(id, 'Weather').fid!;
+      await b.beforeFields(props: {id: jsonEncode({fidB: 'sky'})});
+      final path = b.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.endsWith('.cnote'));
+      b.folder.text[path] = b.folder.text[path]!.replaceFirst('weather:', 'sky:');
+      final stateFile = b.stateDir.uri.resolve('share2.json');
+      final j = jsonDecode(await File.fromUri(stateFile).readAsString()) as Map;
+      ((j['items'] as Map)['e1'] as Map)['base'] = b.folder.text[path];
+      await File.fromUri(stateFile).writeAsString(jsonEncode(j));
+      link.sync();
+      await rounds([a, b], link, n: 4);
+      for (final d in [a, b]) {
+        final e = (await d.nb.entries(id)).single;
+        expect(e.values[d.field(id, 'Weather').fid], 'Sun', reason: '${d.label}: the value is in the field');
+      }
+      expect(b.folder.text[path], contains('weather: Sun'));
+      expect(b.folder.text[path], isNot(contains('sky:')));
+    });
+  });
+
+  group('a build without the field sync carries the fields it does not understand', () {
+    test('a real record with fields survives merge and rewrite in both conflict orders', () async {
+      final (a, b, link, id) = await shared();
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Weather' ? f.copyWith(label: 'Sky') : f]);
+      await rounds([a, b], link);
+      final real = a.folder.text['$id/notebook.json']!;
+      final rec = NbRecord.parse(real)!;
+      expect((rec.body['fields'] as List).length, 3);
+      // two writes of the record at once, as an older build sees them: this one, and an older-looking one (earlier fields_at)
+      final other = {...jsonDecode(real) as Map}..['fields_at'] = (rec.body['fields_at'] as int) - 1;
+      other['name'] = 'Hikes';
+      for (final cutoffOrder in [0, 1]) {
+        final x = pre.NbRecord.parse(real)!;
+        final y = pre.NbRecord.parse(jsonEncode(other))!;
+        final m = pre.NbRecord.merge(cutoffOrder == 0 ? [x, y] : [y, x])!;
+        // the rewrite: written, read again, merged again
+        final again = pre.NbRecord.merge([pre.NbRecord.parse(m.text)!, y])!;
+        expect(jsonEncode(again.body['fields']), jsonEncode(rec.body['fields']), reason: 'order $cutoffOrder');
+        expect(again.body['fields_at'], rec.body['fields_at']);
+        // and the fixed build reads what the older one wrote
+        final back = NbRecord.parse(again.text)!;
+        expect(jsonEncode(back.body['fields']), jsonEncode(rec.body['fields']));
+      }
+    });
+  });
+
+  group('a crash in the middle of the migration', () {
+    Future<(Dev, Dev, ShareLink, String)> old() async {
+      final (a, b, link, id) = await shared(fields: [num_('Distance', unit: 'km'), txt('Weather'), txt('Notes')]);
+      await a.addValues(id, 'e1', {'Distance': 3, 'Weather': 'Sun'});
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      return (a, b, link, id);
+    }
+
+    Future<void> checkSame(Dev a, Dev b, String id) async {
+      expect(a.labels(id), ['Distance', 'Weather', 'Notes']);
+      expect(b.labels(id), a.labels(id));
+      for (final l in ['Distance', 'Weather', 'Notes']) {
+        expect(a.field(id, l).gid, isNotNull);
+        expect(a.field(id, l).gid, b.field(id, l).gid, reason: l);
+      }
+      expect(a.nb.notebook(id)!.def.fields.length, 3, reason: 'no field twice');
+      for (final d in [a, b]) {
+        final e = (await d.nb.entries(id)).single;
+        expect(e.values.values.toSet(), {3, 'Sun'}, reason: d.label);
+      }
+    }
+
+    test('both devices stop after the record was written and before their notebooks took the ids; then they sync', () async {
+      final (a, b, link, id) = await old();
+      for (final d in [a, b]) {
+        await d.sync();
+        link.sync();
+        await d.beforeFields(); // the ids and what it remembers are gone; the record stays
+      }
+      await rounds([a, b], link, n: 4);
+      await checkSame(a, b, id);
+    });
+
+    test('both stop after their notebooks took the ids and before they wrote down that they were done; then they sync', () async {
+      final (a, b, link, id) = await old();
+      for (final d in [a, b]) {
+        await d.sync();
+        link.sync();
+        await d.beforeFields(keepGids: true);
+      }
+      await rounds([a, b], link, n: 4);
+      await checkSame(a, b, id);
+    });
+
+    test('each device stops at a different step, each of which looks complete on its own', () async {
+      final (a, b, link, id) = await old();
+      await a.sync();
+      link.sync();
+      await a.beforeFields(); // a: the record is written, a has no ids
+      await b.sync();
+      link.sync();
+      await b.beforeFields(keepGids: true); // b: it has the ids, it does not remember
+      await rounds([a, b], link, n: 4);
+      await checkSame(a, b, id);
+    });
+
+    test('after the rerun nothing is written any more (no loop)', () async {
+      final (a, b, link, id) = await old();
+      for (final d in [a, b]) {
+        await d.sync();
+        link.sync();
+        await d.beforeFields(keepGids: true);
+      }
+      await rounds([a, b], link, n: 4);
+      final before = {for (final d in [a, b]) d.label: Map.of(d.folder.text)};
+      await rounds([a, b], link, n: 2);
+      expect(a.folder.text, before['a']);
+      expect(b.folder.text, before['b']);
+      await checkSame(a, b, id);
+    });
+
+    test('an inferred removal is not lost or turned round by a rerun', () async {
+      final (a, b, link, id) = await old();
+      await b.editFields(id, (fs) => fs.where((f) => f.label != 'Weather').toList());
+      for (final d in [b, a]) {
+        await d.sync();
+        link.sync();
+      }
+      await b.beforeFields(keepGids: true); // b repeats its migration
+      await rounds([a, b], link, n: 5);
+      expect(a.labels(id), contains('Weather'), reason: 'a holds values for it');
+      expect(b.labels(id), contains('Weather'));
     });
   });
 }

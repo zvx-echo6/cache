@@ -439,30 +439,30 @@ void main() {
     });
 
     test('a property a newer build added (a key with its _at) and a plain key survive a merge and a rewrite, whichever record wins on the name', () {
-      final fields = [{'label': 'Distance', 'type': 'number'}];
-      // an older build's record: no fields; its name is the later one
+      final extras = [{'label': 'Distance', 'type': 'number'}];
+      // an older build's record: no extras; its name is the later one
       NbRecord older({int nameAt = 500}) => NbRecord.live('x', nameAt: nameAt, body: {'name': 'Camps', 'def': {'name': 'Camps', 'future': 1}});
-      NbRecord newer({int nameAt = 10, int fieldsAt = 100, Object? list}) =>
-          NbRecord.live('x', nameAt: nameAt, body: {'name': 'Old name', 'fields': list ?? fields, 'fields_at': fieldsAt, 'note': 'kept'});
+      NbRecord newer({int nameAt = 10, int extrasAt = 100, Object? list}) =>
+          NbRecord.live('x', nameAt: nameAt, body: {'name': 'Old name', 'extras': list ?? extras, 'extras_at': extrasAt, 'note': 'kept'});
       for (final (a, b) in [(older(), newer()), (older(nameAt: 5), newer(nameAt: 50))]) {
         for (final order in [[a, b], [b, a]]) {
           final m = NbRecord.merge(order)!;
-          expect(m.body['fields'], fields, reason: 'the list is not wiped by a record that has none');
-          expect(m.body['fields_at'], 100);
+          expect(m.body['extras'], extras, reason: 'the list is not wiped by a record that has none');
+          expect(m.body['extras_at'], 100);
           expect(m.body['note'], 'kept', reason: 'a key with no _at is kept');
           expect((m.body['def'] as Map)['future'], 1, reason: 'a def key this build does not know stays');
           // and a rewrite: written, read again, merged again, the same
           final again = NbRecord.merge([NbRecord.parse(m.text)!, a])!;
           expect(again.text, m.text);
-          expect(again.body['fields'], fields);
+          expect(again.body['extras'], extras);
         }
       }
       // two records with the pair: the later _at wins, a tie goes to the greater value
-      final x = newer(fieldsAt: 200, list: [{'label': 'Miles'}]);
-      expect(NbRecord.merge([older(), newer(), x])!.body['fields'], [{'label': 'Miles'}]);
-      expect(NbRecord.merge([x, newer(), older()])!.body['fields_at'], 200);
+      final x = newer(extrasAt: 200, list: [{'label': 'Miles'}]);
+      expect(NbRecord.merge([older(), newer(), x])!.body['extras'], [{'label': 'Miles'}]);
+      expect(NbRecord.merge([x, newer(), older()])!.body['extras_at'], 200);
       final t1 = newer(list: [{'label': 'A'}]), t2 = newer(list: [{'label': 'B'}]);
-      expect(NbRecord.merge([t1, t2])!.body['fields'], NbRecord.merge([t2, t1])!.body['fields']);
+      expect(NbRecord.merge([t1, t2])!.body['extras'], NbRecord.merge([t2, t1])!.body['extras']);
       // a plain key the best record has wins over another's
       final p1 = NbRecord.live('x', nameAt: 9, body: {'name': 'N', 'extra': 'best'}), p2 = NbRecord.live('x', nameAt: 1, body: {'name': 'N', 'extra': 'other', 'more': 2});
       final pm = NbRecord.merge([p2, p1])!;

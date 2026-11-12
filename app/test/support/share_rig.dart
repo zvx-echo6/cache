@@ -233,16 +233,29 @@ class Dev {
       .then((_) {});
 
   /// What this device was before the field sync existed: fields without ids, and nothing remembered of them.
-  Future<void> beforeFields() async {
-    for (final n in store.notebooks) {
-      for (final f in (n['def']['fields'] as List)) {
-        (f as Map).remove('gid');
+  ///
+  /// With [keepGids] the notebook keeps its ids and only what the device remembers is lost: a run that stopped after the notebook took
+  /// its ids and before the device wrote down that it was done.
+  Future<void> beforeFields({bool keepGids = false, Map<String, String>? props}) async {
+    if (!keepGids) {
+      for (final n in store.notebooks) {
+        for (final f in (n['def']['fields'] as List)) {
+          (f as Map).remove('gid');
+        }
       }
     }
     final f = File('${stateDir.path}/share2.json');
     if (await f.exists()) {
       final j = jsonDecode(await f.readAsString()) as Map;
       j.remove('fields');
+      // the device's own property names from before (by notebook id, then field id)
+      if (props != null) {
+        final m = {...((j['props'] as Map?) ?? const {})};
+        for (final e in props.entries) {
+          m[e.key] = {...((m[e.key] as Map?) ?? const {}), ...jsonDecode(e.value) as Map};
+        }
+        j['props'] = m;
+      }
       await f.writeAsString(jsonEncode(j));
     }
     await nb.reload();
