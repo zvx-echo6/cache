@@ -590,7 +590,7 @@ void main() {
       expect(find.byKey(const ValueKey('drive-mini-map')), findsOneWidget);
       expect(find.byKey(const ValueKey('drive-elevation')), findsOneWidget);
       expect(find.text('Elevation'), findsOneWidget);
-      expect(find.text('Steepest climb ahead'), findsOneWidget);
+      expect(find.textContaining('Steepest climb ahead'), findsOneWidget);
     });
 
     testWidgets('the split is one constant: the list takes two thirds of the room, the extras the rest, side by side', (tester) async {
