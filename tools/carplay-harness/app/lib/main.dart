@@ -17,6 +17,7 @@ import 'recorded.dart';
 const MethodChannel _build = MethodChannel('cache/build');
 const MethodChannel _car = MethodChannel('co.cache/car');
 const MethodChannel _steps = MethodChannel('harness/steps');
+const MethodChannel _link = MethodChannel('co.cache/link');
 const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
 // The recorded drive, moved along by the job while guiding.
 const List<String> _drive = <String>['trip_guiding', 'trip_guiding_near', 'trip_guiding_next', 'trip_rerouting', 'trip_arrived'];
@@ -45,11 +46,29 @@ class _HarnessAppState extends State<HarnessApp> {
   @override
   void initState() {
     super.initState();
+    unawaited(_startLinks());
     unawaited(_startCarSide());
   }
 
   void _say(String text) {
     if (mounted) setState(() => _status = text);
+  }
+
+  /// A cachelink: link, as lib/sharing/link_inbox.dart takes it: listen for one opened while running, then take one the app
+  /// was opened with. What came is said in the app's log (its length only), where the job reads it.
+  Future<void> _startLinks() async {
+    _link.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'opened' && call.arguments is String) {
+        await _steps.invokeMethod<void>('say', 'link opened while running, ${(call.arguments as String).length} characters');
+      }
+      return null;
+    });
+    try {
+      final String? first = await _link.invokeMethod<String>('take');
+      if (first != null) await _steps.invokeMethod<void>('say', 'link taken at start, ${first.length} characters');
+    } on MissingPluginException {
+      // No link channel on this side.
+    }
   }
 
   Future<void> _startCarSide() async {

@@ -981,17 +981,18 @@ for size in $SIZES; do
   shot_host "$label"
   if [ "$PHONE_DONE" = 0 ]; then
     PHONE_DONE=1
-    say "-- the phone's window, opened while the car scene runs"
+    say "-- the phone's window, opened by a cachelink: link while the car scene runs"
     shot_phone "$label-phone-before"
-    run xcrun simctl launch "$UDID" "$BID"
+    run xcrun simctl openurl "$UDID" "cachelink://harness.example/opened-while-the-car-runs"
     sleep 10
     shot_phone "$label-phone-window"
     shot_ext "$label-car-after-phone"
     engines=$(grep -c 'The Flutter engine was started' "$STREAM")
-    if [ "$engines" = 1 ] && ! grep -q 'car scene disconnected' "$STREAM"; then
-      result "OK phone: the phone's window opened beside the car scene on the engine the car scene had started; one engine start in all (shots/$label-phone-window.png)"
+    linked=$(grep -c 'harness steps: link opened while running' "$STREAM")
+    if [ "$engines" = 1 ] && [ "$linked" -ge 1 ] && ! grep -q 'car scene disconnected' "$STREAM"; then
+      result "OK phone: a cachelink: link opened the phone's window beside the car scene, on the engine the car scene had started (one engine start in all), and the link reached Dart there (shots/$label-phone-window.png)"
     else
-      result "FAILED phone: engine-start lines $engines (1 expected), car scene disconnected: $(grep -c 'car scene disconnected' "$STREAM")"
+      result "FAILED phone: engine-start lines $engines (1 expected), lines saying the link reached Dart $linked (1 expected), car scene disconnected: $(grep -c 'car scene disconnected' "$STREAM")"
     fi
   fi
   say "the app's log lines at this size:"
@@ -1031,15 +1032,17 @@ if [ -n "$STREAM" ] && [ -d "$APPS/car/Runner.app" ]; then
   : > "$STREAM"
   run xcrun simctl install "$UDID" "$APPS/car/Runner.app"
   sleep 5
-  run xcrun simctl launch "$UDID" "$BID"
-  sleep 10
+  # Opened by a cachelink: link with nothing running: the phone scene starts the engine, and Dart takes the link when it is up.
+  run xcrun simctl openurl "$UDID" "cachelink://harness.example/opened-with-nothing-running"
+  sleep 12
   shot_phone update-2-after-the-update
   came=$(grep -c "came with the storyboard" "$STREAM")
   engines=$(grep -c 'The Flutter engine was started' "$STREAM")
-  if [ "$engines" = 1 ]; then
-    result "OK update-2: after the update the app came up with one engine; iOS brought the old storyboard window: $([ "$came" = 0 ] && echo no || echo yes) (shots/update-2-after-the-update.png)"
+  linked=$(grep 'harness steps: link' "$STREAM" | tail -n 1 | sed 's/.*harness steps: //')
+  if [ "$engines" = 1 ] && [ -n "$linked" ]; then
+    result "OK update-2: after the update a cachelink: link opened the app with nothing running; one engine, and the link reached Dart ($linked); iOS brought the old storyboard window: $([ "$came" = 0 ] && echo no || echo yes) (shots/update-2-after-the-update.png)"
   else
-    result "FAILED update-2: engine-start lines $engines (1 expected) after the update; storyboard-window lines $came"
+    result "FAILED update-2: engine-start lines $engines (1 expected) after the update; the link reached Dart: ${linked:-no}; storyboard-window lines $came"
   fi
   say "the app's log lines in the update case:"
   sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 20 | tee -a "$LOG"

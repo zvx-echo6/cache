@@ -22,7 +22,15 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static let toDart: [String] = ["next", "nosaved", "saved", "drive"]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
-    channel = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())
+    let steps = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())
+    // The stand-in Dart side says what happened to it in the app's log, where the job reads it.
+    steps.setMethodCallHandler { call, result in
+      if call.method == "say", let text = call.arguments as? String {
+        NSLog("%@", "harness steps: " + text)
+      }
+      result(nil)
+    }
+    channel = steps
     let center = CFNotificationCenterGetDarwinNotifyCenter()
     let names: [String] = (toDart + ["day", "night"]).map { "org.example.carharness." + $0 }
     for name in names {
