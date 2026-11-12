@@ -88,7 +88,9 @@ impl BuildService {
                 .into_iter()
                 .map(|b| {
                     let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
-                    self.book_json(&cls, b, replacing)
+                    let mut v = self.book_json(&cls, b, replacing);
+                    v["bytes"] = json!(self.book_bytes(id, b));
+                    v
                 })
                 .collect(),
         ))

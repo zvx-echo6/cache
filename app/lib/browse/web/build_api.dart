@@ -19,6 +19,7 @@ class BuildLibrary {
     this.waiting = 0,
     this.building = false,
     this.publishError,
+    this.bytes,
   });
 
   final String id;
@@ -38,6 +39,9 @@ class BuildLibrary {
   final bool building;
   final String? publishError;
 
+  /// What deleting the library frees (its folder, work copy, stored PDFs and record); null from a device that does not say.
+  final int? bytes;
+
   static BuildLibrary fromJson(Map<String, dynamic> j) => BuildLibrary(
         id: j['id'] as String,
         title: (j['title'] ?? '') as String,
@@ -50,6 +54,7 @@ class BuildLibrary {
         waiting: (j['waiting'] as num?)?.toInt() ?? 0,
         building: j['building'] == true,
         publishError: j['publish_error'] as String?,
+        bytes: (j['bytes'] as num?)?.toInt(),
       );
 }
 
@@ -65,6 +70,7 @@ class BuildBook {
     this.partial,
     this.fileName = '',
     this.size = 0,
+    this.bytes,
     this.addedAt,
     this.status = 'ready',
     this.division,
@@ -84,6 +90,9 @@ class BuildBook {
   final String? partial;
   final String fileName;
   final int size;
+
+  /// What removing the book frees (its stored PDF and its pack on disk); null from a device that does not say, then [size].
+  final int? bytes;
   final DateTime? addedAt;
 
   /// `ready` or `replacing`.
@@ -94,6 +103,9 @@ class BuildBook {
   final List<BuildSuggestion> suggestions;
   final Map<String, dynamic>? compression;
   bool get unsorted => division == null;
+
+  /// What removing the book frees.
+  int get freesBytes => bytes ?? size;
 
 
   bool get replacing => status == 'replacing';
@@ -111,6 +123,7 @@ class BuildBook {
         partial: j['partial'] as String?,
         fileName: (j['file_name'] ?? '') as String,
         size: (j['size'] as num?)?.toInt() ?? 0,
+        bytes: (j['bytes'] as num?)?.toInt(),
         addedAt: DateTime.tryParse((j['added_at'] ?? '') as String),
         status: (j['status'] ?? 'ready') as String,
         division: j['division'] as String?,

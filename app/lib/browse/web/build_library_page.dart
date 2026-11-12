@@ -123,7 +123,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
             }
           },
           itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library')),
-            if (c.canDeleteLibrary) PopupMenuItem(value: 'delete', child: Text('Delete · frees ${formatBytes(c.sizeOf?.call(lib.id) ?? 0)}', style: TextStyle(color: context.t.emergency))),
+            if (c.canDeleteLibrary) PopupMenuItem(value: 'delete', child: Text('Delete · frees ${formatBytes(c.freesOf(lib.id) ?? 0)}', style: TextStyle(color: context.t.emergency))),
           ],
         ),
       ]),
@@ -205,7 +205,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
 
   Widget _facts(BuildContext context, BuildLibrary lib) {
     final k = context.t;
-    final bytes = c.sizeOf?.call(lib.id);
+    final bytes = c.freesOf(lib.id);
     final rows = <(String, String)>[
       ('Books', thousands(lib.books)),
       ('Passages', thousands(lib.passages)),
@@ -635,15 +635,15 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
               children: [
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   Text('Frees', style: TextStyle(fontSize: 14, color: k.text)),
-                  Flexible(child: Text('${b.size > 0 ? '${formatBytes(b.size)} · ' : ''}${thousands(b.passages)} passages', textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.text))),
+                  Flexible(child: Text('${b.freesBytes > 0 ? '${formatBytes(b.freesBytes)} · ' : ''}${thousands(b.passages)} passages', textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.text))),
                 ]),
-                if (free != null && b.size > 0)
+                if (free != null && b.freesBytes > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       const Small('Device storage'),
                       const SizedBox(width: 12),
-                      Flexible(child: Text('${formatBytes(free)} free now, ${formatBytes(free + b.size)} after', textAlign: TextAlign.end, style: TextStyle(fontSize: 12, color: k.secondary))),
+                      Flexible(child: Text('${formatBytes(free)} free now, ${formatBytes(free + b.freesBytes)} after', textAlign: TextAlign.end, style: TextStyle(fontSize: 12, color: k.secondary))),
                     ]),
                   ),
                 const SizedBox(height: 8),
@@ -690,7 +690,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     final ok = await confirmDelete(
       context,
       name: lib.title,
-      bytes: c.sizeOf?.call(lib.id) ?? 0,
+      bytes: c.freesOf(lib.id) ?? 0,
       free: c.freeSpace?.call(),
       again: 'Your PDF on this computer is not deleted. To get it back, add the PDF again.',
     );
