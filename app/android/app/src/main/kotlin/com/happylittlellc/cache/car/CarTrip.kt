@@ -12,8 +12,9 @@ data class CarStep(
     val distanceM: Double,
 )
 
-/** A stop still ahead on the route (the phone's Add stop, or the car's). */
-data class CarStop(val name: String, val address: String?)
+/** A stop still ahead on the route (the phone's Add stop, or the car's). [number] is the one the turn card says when the stop
+ * is reached: its place in the route as it was made, kept when the stops before it are passed. */
+data class CarStop(val name: String, val address: String?, val number: Int)
 
 data class CarRoute(val index: Int, val distanceM: Double, val durationS: Long, val via: String?)
 
@@ -110,9 +111,13 @@ data class CarTrip(
                 climb = CarClimb.from(m["climb"]),
                 overview = CarOverview.from(m["overview"]),
                 palette = CarOverlayPalette.from(m["palette"]),
-                stops = (m["stops"] as? List<*>).orEmpty().mapNotNull { s ->
-                    val x = s.asMap() ?: return@mapNotNull null
-                    CarStop(name = x["name"] as? String ?: return@mapNotNull null, address = (x["address"] as? String)?.takeIf { it.isNotBlank() })
+                stops = (m["stops"] as? List<*>).orEmpty().mapIndexedNotNull { i, s ->
+                    val x = s.asMap() ?: return@mapIndexedNotNull null
+                    CarStop(
+                        name = x["name"] as? String ?: return@mapIndexedNotNull null,
+                        address = (x["address"] as? String)?.takeIf { it.isNotBlank() },
+                        number = (x["number"] as? Number)?.toInt() ?: (i + 1),
+                    )
                 },
             )
         }
