@@ -89,6 +89,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
@@ -143,6 +144,8 @@ void main() {
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  // A cachelink: link the app was opened with, or that arrives while it runs (the native side holds it; see LinkInbox).
+  unawaited(linkInbox.start());
   runApp(const CacheApp());
 }
 

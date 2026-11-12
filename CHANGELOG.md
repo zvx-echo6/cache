@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it

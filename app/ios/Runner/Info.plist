@@ -101,8 +101,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. No handler yet;
-	     Flutter deep linking is off, so the link only opens the app on its normal first screen. -->
+	<!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. SceneDelegate reads the
+	     link itself and passes it to Dart on the co.cache/link channel; Flutter deep linking is off, so the link never becomes a
+	     Flutter route. -->
 	<key>FlutterDeepLinkingEnabled</key>
 	<false/>
 	<key>CFBundleURLTypes</key>

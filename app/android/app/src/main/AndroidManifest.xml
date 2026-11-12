@@ -39,9 +39,9 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. There is no
-                 handler yet; Flutter deep linking is off (the meta-data below), so the link only opens the app on its normal
-                 first screen. -->
+            <!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. MainActivity reads
+                 the link itself and passes it to Dart on the co.cache/link channel; Flutter deep linking is off (the meta-data
+                 below), so the link never becomes a Flutter route. -->
             <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>

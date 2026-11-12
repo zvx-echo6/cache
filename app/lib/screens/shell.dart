@@ -74,6 +74,7 @@ import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/own_source_pages.dart' show OwnSourceFormPage;
+import '../sharing/link_inbox.dart';
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -272,6 +273,20 @@ class _ShellState extends State<Shell> {
     DiscoverState.shared = _discover;
     discoverLinks = _discoverLinks;
     unawaited(_startDiscover());
+    // A cachelink: link from outside (a camera scanning a device's link code) opens Sharing and sync, which fills in the code.
+    linkInbox.addListener(_openIncomingLink);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
+  }
+
+  bool _linkPageUp = false;
+
+  void _openIncomingLink() {
+    final sharing = widget.hub.sharing;
+    if (!mounted || sharing == null || _linkPageUp || linkInbox.pending == null || linkInbox.pageOpen) return;
+    _linkPageUp = true;
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync)))
+        .whenComplete(() => _linkPageUp = false);
   }
 
   /// Discover: what activities added, and whether first run is done. A device with a model, a library or a region on it already
@@ -374,6 +389,7 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
+    linkInbox.removeListener(_openIncomingLink);
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
