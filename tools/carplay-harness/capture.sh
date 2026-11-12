@@ -23,6 +23,7 @@ LOG="$OUT/steps.log"
 RESULTS="$OUT/results.txt"
 : > "$RESULTS"
 T0=$SECONDS
+: > "$OUT/.began"
 WAYS="1 2 3"
 ICON_X=0
 ICON_Y=0
@@ -311,6 +312,10 @@ go_home() {  # the dock's last button (bottom left in both layouts, 26 points in
   say "  clicking the dock's last button by the window's place ($x,$y)"
   click_at "$x" "$y" "${WAYS%% *}" > /dev/null
   sleep 3
+}
+
+app_crashes() {  # the app's own crash reports made since this job began, one file a line (a simulator's are the Mac's)
+  find "$HOME/Library/Logs/DiagnosticReports" -name 'Runner*.ips' -newer "$OUT/.began" 2> /dev/null
 }
 
 car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay screen; 0 when its CarPlay scene connected
@@ -996,15 +1001,38 @@ for size in $SIZES; do
   label="${W}x${H}-${S}x"
   case "$W$H$S" in *[!0-9]*|"") result "FAILED $size: not WIDTHxHEIGHT@SCALE"; continue ;; esac
   say "== $W x $H pixels at ${S}x"
-  if ! bring_up "$W" "$H" "$S" "$label"; then
+  # Seen once: a boot whose Simulator did not answer about its windows also took no click, so the app's icon on the car
+  # screen was never pressed and the app never started. Such a boot is given up and the size booted again, three boots at
+  # most. Not when the app itself is at fault: a scene that connected, or a crash report of the app, ends the tries.
+  up=0
+  launched=0
+  got=""
+  for boot in 1 2 3; do
+    up=0
+    bring_up "$W" "$H" "$S" "$label" || break
+    up=1
+    shot_ext "$label-home"
+    got=$(pic_size "$OUT/shots/$label-home.png")
+    [ "$got" = "${W}x${H}" ] || say "asked for ${W}x${H}, the CarPlay display's picture is $got"
+    if car_launch "$label"; then
+      launched=1
+      break
+    fi
+    crashed=$(app_crashes | head -n 1)
+    if [ -n "$crashed" ]; then
+      say "the app left a crash report, $(basename "$crashed"): no other boot is tried"
+      python3 -I "$HERE/crash_summary.py" "$crashed" 2>&1 | head -n 20 | sed 's/^/        /' | tee -a "$LOG"
+      break
+    fi
+    grep -E -q 'car scene|The Flutter engine' "$STREAM" 2> /dev/null && break
+    [ "$boot" = 3 ] || say "the app did not start from its icon on the car screen at $label (boot $boot), and it left no line and no crash report: the size is booted again"
+  done
+  if [ "$up" = 0 ]; then
     result "FAILED $label: the CarPlay display did not come up"
     shot_host "$label-no-carplay"
     continue
   fi
-  shot_ext "$label-home"
-  got=$(pic_size "$OUT/shots/$label-home.png")
-  [ "$got" = "${W}x${H}" ] || say "asked for ${W}x${H}, the CarPlay display's picture is $got"
-  if car_launch "$label"; then
+  if [ "$launched" = 1 ]; then
     sleep 4
     shot_ext "$label-car"
     line=$(grep 'car scene connected' "$STREAM" | tail -n 1 | sed 's/.*car scene connected/car scene connected/')
@@ -1080,7 +1108,7 @@ for size in $SIZES; do
   else
     # No log line is not proof of no screen: the picture decides when the icon grid is gone.
     shot_ext "$label-car"
-    result "FAILED $label: no 'car scene connected' line after the clicks; see shots/$label-car.png"
+    result "FAILED $label: no 'car scene connected' line after the clicks, in $boot boot(s); the app's crash reports: $(app_crashes | wc -l | tr -d ' '); see shots/$label-car.png"
   fi
   shot_host "$label"
   if [ "$PHONE_DONE" = 0 ]; then
@@ -1165,5 +1193,5 @@ shot_host end
 say "pictures:"
 ls -l "$OUT/shots" | sed 's/^/        /' | tee -a "$LOG"
 say "capture took $((SECONDS - T0)) s"
-rm -f "$OUT/.last" "$OUT/.anchor.png" "$OUT/.lit.png"
+rm -f "$OUT/.last" "$OUT/.anchor.png" "$OUT/.lit.png" "$OUT/.began" "$OUT/.phone.png" "$OUT/.phone-small.png"
 exit 0
