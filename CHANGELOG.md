@@ -13,6 +13,7 @@ release notes).
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+- Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
 - Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
