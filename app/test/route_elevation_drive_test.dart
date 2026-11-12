@@ -38,6 +38,8 @@ ElevationProfile _profile(double total, {double base = 1000}) {
 MapRoute _route(String id) => MapRoute.fromJson(fakeRouteJson(id: id));
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('RouteElevation while following a route', () {
     test('a re-route keeps the profile on screen until the new route\'s is ready, then swaps', () async {
       final jobs = _Jobs();
