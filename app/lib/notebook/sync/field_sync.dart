@@ -20,19 +20,12 @@ String _gid(String text) => sha256.convert(utf8.encode(text)).toString().substri
 /// A label as it is compared: trimmed, whitespace collapsed, lower case.
 String normLabel(String s) => s.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
 
-/// The id of a field of the snapshot a record was first written with (`record.def.fields`, hidden fields counted), from what the
-/// record says alone: the notebook's id, the field's place in that list and its label.
-String gidOfSnapshotField(String notebookId, int index, String label) => _gid('cache-field-v1\u0000snap\u0000$notebookId\u0000$index\u0000${normLabel(label)}');
-
-/// The id of a field a device added before it migrated (it is in no snapshot): from the notebook, the label and the type, so two
-/// devices that each added "Elevation" (number) come to one field. Not from the device's own field id (`f4` here is unrelated to `f4`
-/// there).
-///
-/// Two different fields of one device never share one: a field the person took out ([hidden]) and a visible one with the same label
-/// and type differ, and so do two taken out ([ordinal] counts the ones alike, in the order the device has them). A field that is
-/// visible and the first of its kind (the usual one) keeps the plain form, so devices that each added it still come to one id.
-String gidOfLocalField(String notebookId, String label, String type, {bool hidden = false, int ordinal = 0}) =>
-    _gid('cache-field-v1\u0000local\u0000$notebookId\u0000${normLabel(label)}\u0000$type${hidden ? '\u0000hidden' : ''}${ordinal > 0 ? '\u0000$ordinal' : ''}');
+/// The id a field from before the field sync gets by rule: from the key its notes use (fixed when the field was made, and the same on
+/// every device however the field was renamed since) and its type. So two devices that never met give one field one id, whatever it was
+/// called on each, and two that each made "Elevation" (number) came to one field. Not from the notebook's id (it differs between
+/// devices until they have met, and changes then). [variant] tells apart fields of one device that would have the same (a field taken
+/// out and one made again, with one key): 0 is the usual one.
+String gidOfKey(String key, String type, {int variant = 0}) => _gid('cache-field-v3\u0000key\u0000$key\u0000$type${variant > 0 ? '\u0000$variant' : ''}');
 
 /// How a notebook's field order is kept: spaced keys, sorted by `(ord, gid)`.
 const double kOrdStep = 1000;
@@ -102,6 +95,19 @@ List<Map<String, dynamic>> mergeFieldLists(Iterable<Object?> lists) {
     }
     out.add(m);
   }
+  // Two fields never share a key in the notes (two devices each made a field of that name). Neither keeps it: the notes written under
+  // it before are read, by each device, as the field it had itself (see FieldSnap.pnames), and never taken for the other one.
+  // Every device works this out from the same list, so they come to the same keys.
+  final byKey = <String, List<Map<String, dynamic>>>{};
+  for (final f in out) {
+    if (f['pname'] is String) byKey.putIfAbsent(f['pname'] as String, () => []).add(f);
+  }
+  for (final e in byKey.entries) {
+    if (e.value.length < 2) continue;
+    for (final f in e.value) {
+      f['pname'] = '${e.key}_${(f['gid'] as String).substring(0, 6)}';
+    }
+  }
   out.sort(_byOrd);
   return out;
 }
@@ -147,7 +153,7 @@ class FieldState {
 /// notebook's id changes ([forId] is no longer its id) they are dropped and the fields are matched to the record again. [pending]: the
 /// migration wrote the record and was setting the ids when the run stopped (or still is); the next run does it again from the start.
 class FieldSnap {
-  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}, Set<String>? derived, this.forId = '', this.pending = false})
+  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}, Set<String>? derived, this.forId = '', this.pending = false, this.at = 0, this.assigned = const {}})
       : state = state ?? {},
         order = order ?? [],
         derived = derived ?? {};
@@ -157,6 +163,11 @@ class FieldSnap {
   final Set<String> derived;
   final String forId;
   final bool pending;
+
+  /// A migration that did not finish: the time it stamps its changes with (a rerun stamps the same, so what another device did in
+  /// between is never undone), and the id it gave each local field (by local field id), so the rerun gives the same ones.
+  final int at;
+  final Map<String, String> assigned;
 
   /// The device's own property names (`.cnote` keys) from before it took the record's, by that name to the field's local id: files
   /// that still use one are read as that field.
@@ -169,6 +180,8 @@ class FieldSnap {
         if (derived.isNotEmpty) 'derived': derived.toList()..sort(),
         if (forId.isNotEmpty) 'for': forId,
         if (pending) 'pending': true,
+        if (at != 0) 'at': at,
+        if (assigned.isNotEmpty) 'assigned': assigned,
       };
 
   static FieldSnap fromJson(Map j) => FieldSnap(
@@ -178,6 +191,8 @@ class FieldSnap {
         derived: {for (final x in (j['derived'] as List? ?? const [])) '$x'},
         forId: '${j['for'] ?? ''}',
         pending: j['pending'] == true,
+        at: (j['at'] as num?)?.toInt() ?? 0,
+        assigned: {for (final e in (j['assigned'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'},
       );
 }
 
@@ -189,6 +204,7 @@ class FieldSnap {
 List<Map<String, dynamic>> fieldsOfSnapshot(String notebookId, List<dynamic> snapshot, Map<dynamic, dynamic> props, {Set<String>? derived}) {
   final out = <Map<String, dynamic>>[];
   final used = <String>{};
+  final ruledUsed = <String>{};
   for (var i = 0; i < snapshot.length; i++) {
     final sf = snapshot[i];
     if (sf is! Map || sf['label'] is! String) continue;
@@ -197,11 +213,19 @@ List<Map<String, dynamic>> fieldsOfSnapshot(String notebookId, List<dynamic> sna
     if (!used.add(pname)) pname = propName(label, taken: used);
     used.add(pname);
     final own = sf['gid'];
-    final ruled = gidOfSnapshotField(notebookId, i, label);
+    final type = '${sf['type']}';
+    var variant = 0;
+    while (!ruledUsed.add(gidOfKey(pname, type, variant: variant))) {
+      variant++;
+    }
+    final ruled = gidOfKey(pname, type, variant: variant);
     final given = own is String && RegExp(r'^[0-9a-f]{32}$').hasMatch(own);
     if (!given) derived?.add(ruled);
     out.add({
       'gid': given ? own : ruled,
+      // the notebook id a gid given by rule depends on: a device that holds such an id by way of the record knows to drop it when the
+      // notebook's id changes
+      if (!given) 'dfor': notebookId,
       'pname': pname,
       'name': label,
       'type': '${sf['type']}',
@@ -252,6 +276,7 @@ FieldMigration migrateFields({
   required List<LogField> local,
   required Map<String, String> localProps,
   required int now,
+  Map<String, String> preassigned = const {},
 }) {
   final snapDerived = <String>{};
   final snapD = fieldsOfSnapshot(notebookId, snapshot, snapProps, derived: snapDerived);
@@ -313,12 +338,26 @@ FieldMigration migrateFields({
   // the device's own additions (in no snapshot): one id by rule, in the record
   final taken = {for (final f in base) '${f['pname']}'};
   var last = base.fold<double>(0, (a, f) => a > ((f['ord'] as num?)?.toDouble() ?? 0) ? a : ((f['ord'] as num?)?.toDouble() ?? 0));
-  final alike = <String, int>{};
+  // Two local fields of one kind (label and type) are told apart; but the usual one keeps the plain id, so that a field added on two
+  // devices is one field even where one of them has taken it out: the visible one, or else the first, gets it.
+  final keyOf = {for (final lf in needs) lf.fid!: localProps[lf.fid] ?? propName(lf.label)};
+  final groups = <String, List<LogField>>{};
+  for (final lf in needs) {
+    if (!matched.containsKey(lf.fid)) groups.putIfAbsent('${keyOf[lf.fid]}\u0000${lf.type.wire}', () => []).add(lf);
+  }
+  final plainFor = <String>{};
+  final ordinalOf = <String, int>{};
+  for (final grp in groups.values) {
+    final pick = grp.firstWhere((f) => !f.hidden, orElse: () => grp.first);
+    plainFor.add(pick.fid!);
+    var k = 0;
+    for (final f in grp) {
+      if (f.fid != pick.fid) ordinalOf[f.fid!] = ++k;
+    }
+  }
   for (final lf in needs) {
     if (matched.containsKey(lf.fid)) continue;
-    final kind = '${normLabel(lf.label)}\u0000${lf.type.wire}\u0000${lf.hidden}';
-    final ordinal = alike[kind] = (alike[kind] ?? -1) + 1;
-    final g = gidOfLocalField(notebookId, lf.label, lf.type.wire, hidden: lf.hidden, ordinal: ordinal);
+    final g = preassigned[lf.fid] ?? gidOfKey(keyOf[lf.fid]!, lf.type.wire, variant: plainFor.contains(lf.fid) ? 0 : (ordinalOf[lf.fid] ?? 1));
     m.gids[lf.fid!] = g;
     m.derived.add(g);
     if (byGid.containsKey(g)) continue;
@@ -333,6 +372,7 @@ FieldMigration migrateFields({
     // a field taken out here is a removal that was made on purpose (the store keeps only fields with values hidden): not inferred
     final f = <String, dynamic>{
       'gid': g,
+      'dfor': notebookId,
       'pname': pname,
       'name': lf.label,
       'name_at': now,
@@ -399,13 +439,18 @@ FieldPlan reconcileFields({
   required bool Function(String fid) hasValues,
   required int now,
   Map<String, String> props = const {},
+  bool exact = false,
 }) {
   final rec = <String, Map<String, dynamic>>{for (final f in record) f['gid'] as String: {...f}};
   final plan = FieldPlan([], []);
   int bump(Map<String, dynamic> f, String p) => [now, _at(f, p) + 1].reduce((a, b) => a > b ? a : b);
-  void set(Map<String, dynamic> f, String p, Object? v) {
+  // A change made here is stamped later than what the record has, so it wins. In an [exact] run (a migration, which a stopped run may
+  // be repeating) it is stamped with [now] itself, and wins only against what is older than that: what another device did since the
+  // first try stays. A correction that must beat what the record has ([force]) is always later.
+  void set(Map<String, dynamic> f, String p, Object? v, {bool force = false}) {
+    if (exact && !force && _at(f, p) >= now) return; // the record has something as late: it stays
     f[p] = v;
-    f['${p}_at'] = bump(f, p);
+    f['${p}_at'] = exact && !force ? now : bump(f, p);
     plan.recordChanged = true;
   }
 
@@ -486,7 +531,7 @@ FieldPlan reconcileFields({
       if (hasValues(lf.fid!)) {
         if (r['inferred'] == true) {
           // values beat a shape that was only inferred: the field stays, and the record is told
-          set(r, 'removed', false);
+          set(r, 'removed', false, force: true);
           r.remove('inferred');
           plan.log.add('Notebook fields: "${lf.label}" was removed on another device before the migration, but this one has values in it; it stays');
           desired.add(lf.copyWith(hidden: false));
@@ -504,7 +549,7 @@ FieldPlan reconcileFields({
       type = lf.type;
       unit = lf.type == FieldType.number ? lf.unit : null;
       choices = lf.type == FieldType.choice ? lf.choices : null;
-      set(r, 'type', lf.type.wire);
+      set(r, 'type', lf.type.wire, force: true);
       plan.log.add('Notebook fields: the type of "${lf.label}" changed on another device, but this one has values in it; it keeps its type');
     }
     desired.add(LogField(

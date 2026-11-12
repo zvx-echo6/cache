@@ -130,12 +130,12 @@ void main() {
       expect(b.field(id, 'Distance').unit, 'km');
     });
 
-    test('the ids by rule are stable, and tell fields apart', () {
-      expect(gidOfSnapshotField('n1', 0, 'Distance'), gidOfSnapshotField('n1', 0, '  distance '));
-      expect(gidOfSnapshotField('n1', 0, 'Distance'), isNot(gidOfSnapshotField('n1', 1, 'Distance')));
-      expect(gidOfSnapshotField('n1', 0, 'Distance'), isNot(gidOfSnapshotField('n2', 0, 'Distance')));
-      expect(gidOfSnapshotField('n1', 0, 'Distance'), hasLength(32));
-      expect(gidOfLocalField('n1', 'Elevation', 'number'), isNot(gidOfLocalField('n1', 'Elevation', 'text')));
+    test('the ids by rule come from the key and the type, not from the notebook or the label', () {
+      expect(gidOfKey('distance', 'number'), hasLength(32));
+      expect(gidOfKey('distance', 'number'), gidOfKey('distance', 'number'));
+      expect(gidOfKey('distance', 'number'), isNot(gidOfKey('distance', 'text')));
+      expect(gidOfKey('distance', 'number'), isNot(gidOfKey('elevation', 'number')));
+      expect(gidOfKey('distance', 'number', variant: 1), isNot(gidOfKey('distance', 'number')));
     });
   });
 
@@ -682,7 +682,7 @@ void main() {
       await expectOneSet(a, b);
     });
 
-    test('5. a field added on both devices before the update, each with its own key in the notes: every value is kept', () async {
+    test('5. a field added on both devices before the update, each with its own key in the notes: every value is kept (a field is told by its key: two keys, two fields)', () async {
       final (a, b, link, id) = await shared(fields: [txt('Weather')]);
       await rounds([a, b], link);
       for (final d in [a, b]) {
@@ -699,9 +699,9 @@ void main() {
       await b.beforeFields(props: {id: jsonEncode({b.field(id, 'Trail').fid!: 'trail_b'})});
       await rounds([a, b], link, n: 6);
       for (final d in [a, b]) {
-        expect((await valuesOf(d, id, 'ea'))['Trail'], 'north', reason: d.label);
-        expect((await valuesOf(d, id, 'eb'))['Trail'], 'south', reason: d.label);
-        expect(d.labels(id), ['Weather', 'Trail'], reason: d.label);
+        expect((await valuesOf(d, id, 'ea')).values, contains('north'), reason: d.label);
+        expect((await valuesOf(d, id, 'eb')).values, contains('south'), reason: d.label);
+        expect(d.labels(id).toSet(), {'Weather', 'Trail', 'Trail (2)'}, reason: '${d.label}: two keys are two fields; the second is shown with (2)');
       }
     });
 
@@ -712,6 +712,128 @@ void main() {
         final v = await valuesOf(d, id, 'e1');
         expect(v['Weather'], 'Sun', reason: d.label);
         expect(v.containsKey('Sky'), isFalse, reason: '${d.label}: not in Sky');
+      }
+    });
+  });
+
+  group('second review', () {
+    Future<String> pathOf(Dev d, String id, String entryId) async => d.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.contains(entryId) && k.endsWith('.cnote'));
+
+    test('A. keys swapped between two devices: the other device already rewrote and edited the note; the values stay in their fields', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Weather')]);
+      await a.editFields(id, (fs) => [...fs, txt('Pond'), txt('Quarry')]);
+      await b.editFields(id, (fs) => [...fs, txt('Pond'), txt('Quarry')]);
+      await a.addValues(id, 'E', {'Pond': 'pond-1', 'Quarry': 'quarry-1'});
+      await rounds([a, b], link, n: 4);
+      // before the update: no ids, no record fields; a's notes use the keys x and y, b's use y and x (the other way round)
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      await a.beforeFields(props: {id: jsonEncode({a.field(id, 'Pond').fid!: 'x', a.field(id, 'Quarry').fid!: 'y'})});
+      await b.beforeFields(props: {id: jsonEncode({b.field(id, 'Pond').fid!: 'y', b.field(id, 'Quarry').fid!: 'x'})});
+      final path = await pathOf(a, id, 'E');
+      final asA = a.folder.text[path]!.replaceFirst('pond:', 'x:').replaceFirst('quarry:', 'y:');
+      for (final d in [a, b]) {
+        d.folder.text[path] = asA;
+        final f = File('${d.stateDir.path}/share2.json');
+        final j = jsonDecode(await f.readAsString()) as Map;
+        ((j['items'] as Map)['E'] as Map)['base'] = asA;
+        await f.writeAsString(jsonEncode(j));
+      }
+      link.sync();
+      // b updates first and edits the note; then a updates
+      await b.sync();
+      await b.editFields(id, (fs) => fs); // (no change)
+      await b.nb.saveEntry(id: 'E', notebookId: id, occurredAt: '2026-11-01T09:00:00-07:00', title: 'E', values: {b.field(id, 'Pond').fid!: 'pond-2', b.field(id, 'Quarry').fid!: 'quarry-1'});
+      await b.sync();
+      link.sync();
+      await rounds([a, b], link, n: 6);
+      for (final d in [a, b]) {
+        final v = await valuesOf(d, id, 'E');
+        expect(v['Pond'], 'pond-2', reason: '${d.label}: Pond');
+        expect(v['Quarry'], 'quarry-1', reason: '${d.label}: Quarry');
+      }
+    });
+
+    test('B. a field added on both devices before the update with the same key, and taken out on one: one field, one key in the notes, values kept', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Weather')]);
+      await a.editFields(id, (fs) => [...fs, num_('Elev')]);
+      await b.editFields(id, (fs) => [...fs, num_('Elev')]);
+      await a.addValues(id, 'ea', {'Elev': 1});
+      await b.addValues(id, 'eb', {'Elev': 2});
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      await b.editFields(id, (fs) => fs.where((f) => f.label != 'Elev').toList());
+      expect(b.nb.notebook(id)!.def.fields.where((f) => f.label == 'Elev' && f.hidden).length, 1);
+      await rounds([a, b], link, n: 6);
+      for (final d in [a, b]) {
+        expect(d.nb.notebook(id)!.def.fields.where((f) => f.label.startsWith('Elev')).length, 1, reason: '${d.label}: one Elev');
+        expect((await d.nb.entries(id)).map((e) => e.values.values.first).toSet(), {1, 2}, reason: '${d.label}: values kept');
+      }
+      for (final k in b.folder.text.keys.where((k) => k.endsWith('.cnote'))) {
+        expect('elev:'.allMatches(b.folder.text[k]!).length, lessThanOrEqualTo(1), reason: '$k: one elev line');
+      }
+    });
+
+    test('C. three devices, one of them gets the notebook from the record; then the notebook gets a lower id: one set of fields', () async {
+      final (a, b, ab) = await oldShare();
+      await b.updateCache();
+      await b.sync();
+      ab.sync();
+      final c = Dev('c');
+      await c.boot();
+      final bc = ShareLink(b.folder, c.folder);
+      for (var i = 0; i < 3; i++) {
+        await b.sync();
+        bc.sync();
+        await c.sync();
+        bc.sync();
+      }
+      expect(c.ids('Hikes'), ['b-2'], reason: 'c got the notebook from the record');
+      await a.updateCache();
+      for (var i = 0; i < 8; i++) {
+        for (final d in [a, b, c]) {
+          await d.sync();
+        }
+        ab.sync();
+        bc.sync();
+      }
+      for (final d in [a, b, c]) {
+        expect(d.ids('Hikes'), ['a-1'], reason: d.label);
+        expect(d.labels('a-1'), ['Distance', 'Weather', 'Notes'], reason: '${d.label}: one set');
+        expect(d.nb.notebook('a-1')!.def.fields.length, 3, reason: d.label);
+        expect(await valuesOf(d, 'a-1', 'ea1'), {'Distance': 3, 'Weather': 'Sun'}, reason: d.label);
+      }
+    });
+
+    test('D. stopped after the record was applied here, another device renames again, then the rerun: the later rename stays', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Weather'), txt('Notes')]);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      await a.sync();
+      link.sync();
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Weather' ? f.copyWith(label: 'Sky') : f]);
+      await a.sync();
+      link.sync();
+      await b.add(id, 'eb', 'Entry on b'); // a note b has to write: the run stops there
+      failOn(b, (p) => p.endsWith('.cnote'));
+      await syncQuiet(b);
+      expect(b.labels(id), contains('Sky'), reason: 'b applied the record before it stopped');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Sky' ? f.copyWith(label: 'Conditions') : f]);
+      await a.sync();
+      link.sync();
+      b.folder.beforeWrite = null;
+      await rounds([a, b], link, n: 5);
+      for (final d in [a, b]) {
+        expect(d.labels(id), ['Conditions', 'Notes'], reason: d.label);
       }
     });
   });

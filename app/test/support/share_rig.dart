@@ -42,10 +42,14 @@ class MemFolder implements SyncFolder {
     final h = beforeWrite;
     if (h != null) await h(path);
     text[path] = t;
+    onWrite?.call(path, t);
   }
 
   /// A fault: called before each write of a text file; it may throw (a folder error mid-run).
   Future<void> Function(String path)? beforeWrite;
+
+  /// Called after each write of a text file (a test that wants to see who wrote what).
+  void Function(String path, String text)? onWrite;
 
   @override
   Future<void> writeBytes(String path, Uint8List b) async => bytes[path] = b;
@@ -285,6 +289,13 @@ class Dev {
       final j = jsonDecode(folder.text[k]!) as Map;
       j.remove('fields');
       j.remove('fields_at');
+      // a record written before the field sync has no ids in its definition either
+      final def = j['def'];
+      if (def is Map && def['fields'] is List) {
+        for (final f in def['fields'] as List) {
+          (f as Map).remove('gid');
+        }
+      }
       folder.text[k] = '${jsonEncode(j)}\n';
     }
   }
