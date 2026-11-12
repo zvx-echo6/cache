@@ -28,6 +28,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var mapController: CarMapViewController?
   private var panning = false
   private var heldPan: Timer?
+  private var lastStep: TimeInterval = 0
 
   private lazy var searchButton = barButton("magnifyingglass", "Search")
   private lazy var savedButton = barButton("bookmark", "Saved places")
@@ -193,9 +194,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     heldPan = nil
   }
 
-  /// One step of the map towards a side: what lies that way comes into view.
-  private func step(_ direction: CPMapTemplate.PanDirection) {
+  /// One step of the map towards a side: what lies that way comes into view. CarPlay may tell one press twice over, as a
+  /// press and as the start of a hold: the two make one step. `held` is a step of a hold going on.
+  private func step(_ direction: CPMapTemplate.PanDirection, held: Bool = false) {
     guard let map = mapController else { return }
+    let now = ProcessInfo.processInfo.systemUptime
+    if !held && now - lastStep < 0.2 { return }
+    lastStep = now
     let by = map.panStep
     var dx: CGFloat = 0
     var dy: CGFloat = 0
@@ -213,11 +218,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     step(direction)
   }
 
-  /// A panning arrow is being held down: a step now and then until it is let go.
+  /// A panning arrow is being held down: a step at once, then one now and then until it is let go.
   func mapTemplate(_ mapTemplate: CPMapTemplate, panBeganWith direction: CPMapTemplate.PanDirection) {
     stopHeldPan()
+    step(direction)
     heldPan = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
-      self?.step(direction)
+      self?.step(direction, held: true)
     }
   }
 

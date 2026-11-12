@@ -344,6 +344,8 @@ notify() {  # notify <next|day|night>: asks the harness's own plugin in the app 
 
 MAP_MISSING=""
 MAP_NOTES=""
+BUTTONS=""
+BUTTONS_MISSING=""
 
 map_step() {  # map_step <next|day|night> <log text to wait for> <picture name or ""> : one step of the map pictures
   local before
@@ -357,10 +359,12 @@ map_step() {  # map_step <next|day|night> <log text to wait for> <picture name o
   return 0
 }
 
-map_pictures() {  # map_pictures <label>: the map in the three phases, in the car's own dark setting and in the light one
-  local label="$1" before x y found=""
+map_pictures() {  # map_pictures <label>: the map in the three phases, dark and light; then the panning state and the buttons
+  local label="$1" before x y found="" free ft fl fb fr ax ay moved="" rx ry
   MAP_MISSING=""
   MAP_NOTES=""
+  BUTTONS=""
+  BUTTONS_MISSING=""
   # The Simulator's car is in its dark setting. The app's style has to be the one drawn before the first picture.
   wait_log 'car map: style loaded, dark' 40 || MAP_MISSING="$MAP_MISSING [no 'style loaded, dark' line]"
   sleep 3
@@ -388,24 +392,68 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, in the ca
     if wait_more 'car map: panning began' "$before" 2; then found="$x,$y"; break; fi
     y=$((y + 14 * CAR_S))
   done
-  if [ -n "$found" ]; then
-    sleep 3
-    shot_ext "$label-map-panning"
-    MAP_NOTES="the Pan button answered a tap at pixel $found"
-    # Done, the one text button of the bar while panning, at the bar's trailing end.
-    before=$(log_count 'car map: panning ended')
-    tap_carplay $((CAR_W - 34 * CAR_S)) $((22 * CAR_S))
-    if wait_more 'car map: panning ended' "$before" 3; then
-      sleep 2
-      shot_ext "$label-map-after-done"
-      MAP_NOTES="$MAP_NOTES; Done ended panning"
-    else
-      MAP_NOTES="$MAP_NOTES; Done did not answer a tap at pixel $((CAR_W - 34 * CAR_S)),$((22 * CAR_S)) (its place is to be read off the picture)"
-    fi
-  else
+  if [ -z "$found" ]; then
     shot_ext "$label-map-no-pan-button"
     MAP_MISSING="$MAP_MISSING [no tap down the map buttons' column began panning]"
+    return 0
   fi
+  sleep 3
+  shot_ext "$label-map-panning"
+  MAP_NOTES="the Pan button answered a tap at pixel $found"
+
+  # The buttons at work. First one of CarPlay's panning arrows, the one at the top of the free area: taps go down the middle
+  # of the free area from its top until the app says the camera stopped following the position.
+  free=$(grep 'car map: the bars and buttons take' "$STREAM" | tail -n 1 | sed -E 's/.*take top ([0-9]+) left ([0-9]+) bottom ([0-9]+) right ([0-9]+) of.*/\1 \2 \3 \4/')
+  read -r ft fl fb fr <<< "$free"
+  case "$ft$fl$fb$fr" in
+    *[!0-9]*|"") BUTTONS_MISSING="$BUTTONS_MISSING [the free area was not said in the log: no tap for a panning arrow]"; return 0 ;;
+  esac
+  ax=$(( (fl * CAR_S + CAR_W - fr * CAR_S) / 2 ))
+  ay=$(( (ft + 8) * CAR_S ))
+  before=$(log_count 'car map: following the position: false')
+  while [ "$ay" -le $(( (ft + 62) * CAR_S )) ]; do
+    tap_carplay "$ax" "$ay"
+    if wait_more 'car map: following the position: false' "$before" 2; then moved="$ax,$ay"; break; fi
+    ay=$((ay + 10 * CAR_S))
+  done
+  if [ -n "$moved" ]; then
+    sleep 2
+    shot_ext "$label-map-panned"
+    BUTTONS="a panning arrow moved the map (tap at pixel $moved)"
+  else
+    BUTTONS_MISSING="$BUTTONS_MISSING [no panning arrow answered taps down the middle of the free area]"
+  fi
+  # Done, the one text button of the bar while panning, at the bar's trailing end.
+  before=$(log_count 'car map: panning ended')
+  tap_carplay $((CAR_W - 34 * CAR_S)) $((22 * CAR_S))
+  if wait_more 'car map: panning ended' "$before" 3; then
+    sleep 2
+    shot_ext "$label-map-after-done"
+    BUTTONS="$BUTTONS; Done ended panning"
+  else
+    BUTTONS_MISSING="$BUTTONS_MISSING [Done did not answer a tap at pixel $((CAR_W - 34 * CAR_S)),$((22 * CAR_S))]"
+    return 0
+  fi
+  [ -n "$moved" ] || return 0
+  # Recenter, which joined the column because the map was moved. The column grows upwards, so Recenter stands where the Pan
+  # button stood: 20 points under the tap that found Pan is its middle, give or take a few points.
+  rx=${found%,*}
+  ry=$(( ${found#*,} + 20 * CAR_S ))
+  before=$(log_count 'car map: following the position: true')
+  tap_carplay "$rx" "$ry"
+  if wait_more 'car map: following the position: true' "$before" 3; then
+    sleep 2
+    shot_ext "$label-map-recentered"
+    BUTTONS="$BUTTONS; Recenter put the camera back and left the column"
+  else
+    shot_ext "$label-map-no-recenter"
+    BUTTONS_MISSING="$BUTTONS_MISSING [Recenter did not answer a tap at pixel $rx,$ry]"
+    return 0
+  fi
+  # Zoom in, one place further down the column. The app has no log line for it: the picture shows it.
+  tap_carplay "$rx" $((ry + 44 * CAR_S))
+  sleep 2
+  shot_ext "$label-map-zoomed-in"
 }
 
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
@@ -505,6 +553,11 @@ for size in $SIZES; do
         result "FAILED $label map:$MAP_MISSING; $MAP_NOTES"
       else
         result "OK $label map: shots/$label-map-dark-{browsing,previewing,guiding}.png in the car's own dark setting; shots/$label-map-light-told-by-harness-{browsing,previewing,guiding}.png after the harness told the car scene the car switched to day (Apple's bar and buttons keep the Simulator car's dark look there); shots/$label-map-panning.png; $MAP_NOTES; $area"
+        if [ -n "$BUTTONS_MISSING" ]; then
+          result "FAILED $label buttons:$BUTTONS_MISSING; $BUTTONS"
+        else
+          result "OK $label buttons: $BUTTONS; shots/$label-map-{panned,after-done,recentered,zoomed-in}.png"
+        fi
       fi
     fi
   else

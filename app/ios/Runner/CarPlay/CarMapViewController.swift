@@ -76,6 +76,9 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     map.maximumZoomLevel = 19
     // At most 30 frames a second: the phone may be doing its own drawing, and a car's screen can be large.
     map.preferredFramesPerSecond = .lowPower
+    // The free area is told to the map here (takeFreeArea), not left for the map to find in its own, later, layout.
+    map.automaticallyAdjustsContentInset = false
+    map.contentInset = view.safeAreaInsets
     let t = CarLink.shared.trip
     if let lat = t.lat ?? t.destinationLat, let lon = t.lon ?? t.destinationLon {
       map.setCenter(CLLocationCoordinate2D(latitude: lat, longitude: lon), zoomLevel: 14, animated: false)
@@ -90,6 +93,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     let width = Int(view.bounds.width)
     let height = Int(view.bounds.height)
     Self.log.info("car map: map view made, \(width) x \(height) points")
+    sayArea()
     loadStyle()
   }
 
@@ -109,13 +113,19 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   override func viewSafeAreaInsetsDidChange() {
     super.viewSafeAreaInsetsDidChange()
-    // CarPlay's bars, buttons and panels changed the free area. The map view takes the new one for itself in its own layout;
-    // the camera is put again after that, at the zoom it had.
-    DispatchQueue.main.async { [weak self] in
-      guard let self = self else { return }
-      self.sayArea()
-      self.follow(force: true, keepZoom: true)
-    }
+    takeFreeArea()
+  }
+
+  /// CarPlay's bars, buttons and panels leave part of the view free, and that part changes as they come and go. The map is
+  /// given it as its content inset: its middle, and what the camera fits, then stay inside the free area. The camera is put
+  /// again for the new area, at the zoom it had.
+  private func takeFreeArea() {
+    guard let map = mapView else { return }
+    let free = view.safeAreaInsets
+    if map.contentInset == free { return }
+    map.contentInset = free
+    sayArea()
+    follow(force: true, keepZoom: true)
   }
 
   private func sayArea() {
@@ -179,6 +189,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private func setFollowing(_ on: Bool) {
     if following == on { return }
     following = on
+    Self.log.info("car map: following the position: \(on)")
     onFollowingChanged?()
   }
 
@@ -385,7 +396,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   /// The camera for the phase: the whole route while choosing one, close behind the position and turned to the heading while
   /// guiding, the position north up while looking at the map. Nothing moves while the driver has moved the map away. The map
-  /// view keeps its middle inside the free area by itself (its content inset follows the view's safe area).
+  /// view keeps its middle inside the free area (its content inset, takeFreeArea).
   private func follow(force: Bool, keepZoom: Bool = false) {
     guard let map = mapView, following else { return }
     let t = CarLink.shared.trip
