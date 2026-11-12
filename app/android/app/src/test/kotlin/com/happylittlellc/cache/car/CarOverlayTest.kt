@@ -560,6 +560,54 @@ class CarOverlayTest {
     }
 
     @Test
+    fun aStableAreaThatComesAndGoesDoesNotFlipTheLayout() {
+        // What the host reports for a moment when another of its screens covers guidance: no left column.
+        val other = Rect(92, 91, 1177, 697)
+        assertEquals(CarOverlayMode.SPLIT, CarOverlayPainter.modeFor(other, 1f))
+        val v = overlayView()
+        v.setTrip(trip("dark"), dark = true, now = true)
+        val box = shot(v)
+        assertEquals(Pair(true, true), painted(v))
+        // The other area arrives and goes again inside the settle time: the same pixels all along, and afterwards.
+        v.setAreas(other, other)
+        assertTrue(shot(v).contentEquals(box))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.AREA_SETTLE_MS / 2))
+        assertTrue(shot(v).contentEquals(box))
+        v.setAreas(main, main)
+        assertTrue(shot(v).contentEquals(box))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3 * CarOverlayView.AREA_SETTLE_MS))
+        assertTrue(shot(v).contentEquals(box))
+        // The other area arrives and stays: nothing until the settle time has passed, then the split layout, once.
+        v.setAreas(other, other)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.AREA_SETTLE_MS - 50))
+        assertTrue(shot(v).contentEquals(box))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100))
+        val split = pixelsOf(drawn(1280, 720, other, trip("dark")))
+        assertFalse(split.contentEquals(box))
+        assertTrue(shot(v).contentEquals(split))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3 * CarOverlayView.AREA_SETTLE_MS))
+        assertTrue(shot(v).contentEquals(split))
+        // Areas that keep the layout are taken at once: the host's buttons hiding moves the split layout's tile.
+        val wider = Rect(92, 91, 1253, 697)
+        v.setAreas(wider, other)
+        assertFalse(shot(v).contentEquals(split))
+    }
+
+    @Test
+    fun theFirstLayoutOfACarSessionDoesNotWait() {
+        // As the renderer sets a new surface up: no areas yet, then the visible area, then the stable one.
+        val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f)
+        v.setSurfaceSize(1280, 720)
+        v.setAreas(null, null)
+        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setAreas(Rect(0, 0, 1280, 720), null)
+        v.setAreas(Rect(0, 0, 1280, 720), main)
+        assertEquals(Pair(true, true), painted(v))
+        v.setAreas(main, main)
+        assertEquals(Pair(true, true), painted(v))
+    }
+
+    @Test
     fun theOneLineCardsShapeKeepsOffTheCardsCornerAndIsALineWithoutAFill() {
         val r = layout(1280, 500, wide, wide).climb!!
         val withShape = drawn(1280, 500, wide, trip("light"))
