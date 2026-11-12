@@ -80,10 +80,21 @@ List<Map<String, dynamic>> mergeFieldLists(Iterable<Object?> lists) {
         if (cmp > 0 || (cmp == 0 && _canon(c[p]).compareTo(_canon(w[p])) > 0)) w = c;
       }
       if (w == null) continue;
-      if (w.containsKey(p)) m[p] = w[p];
-      if (w.containsKey('${p}_at')) m['${p}_at'] = w['${p}_at'];
+      // A removal made on purpose beats one that was only inferred (at a migration), whatever their times: the inferred one gives way to
+      // values, the other does not.
+      var pick = w;
+      if (p == 'removed' && pick['removed'] == true && pick['inferred'] == true) {
+        for (final c in copies) {
+          if (c['removed'] == true && c['inferred'] != true) {
+            pick = c;
+            break;
+          }
+        }
+      }
+      if (pick.containsKey(p)) m[p] = pick[p];
+      if (pick.containsKey('${p}_at')) m['${p}_at'] = pick['${p}_at'];
       // A removal says whether it was inferred at a migration; that goes with the removal.
-      if (p == 'removed' && w.containsKey('inferred')) m['inferred'] = w['inferred'];
+      if (p == 'removed' && pick.containsKey('inferred')) m['inferred'] = pick['inferred'];
     }
     // what no property decides (`pname`, and keys a newer build added): the greatest value, so every device picks the same
     final known = {...kFieldProps, for (final p in kFieldProps) '${p}_at', 'gid', 'inferred'};

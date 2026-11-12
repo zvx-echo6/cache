@@ -557,13 +557,16 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     if (book != null && book.private && !_privateBooks.contains(book.id)) return false;
     book ??= await notebook.saveNotebook(template: 'notes', def: NotebookDef(name: name, fields: const [], sort: NotebookSort.recent));
     elig.add(book.id);
+    // It is the old text again, and it says so: of two copies of the note that differ, one that says this loses to the other.
+    final text0 = text;
+    final marked = text0.contains(RegExp(r'^cache_legacy: true$', multiLine: true)) ? text0 : text0.replaceFirstMapped(RegExp(r'^(cache_id: .*\n)', multiLine: true), (m) => '${m.group(1)}cache_legacy: true\n');
     final base = path.split('/').last.replaceAll(RegExp(r'\.md$'), '');
     // The same name every time, so a kill between the write and the delete leaves one file, not two.
     var to = '${book.id}/$base$kNoteExt';
-    for (var i = 2; await folder.exists(to) && await folder.readText(to) != text; i++) {
+    for (var i = 2; await folder.exists(to) && await folder.readText(to) != marked; i++) {
       to = '${book.id}/$base $i$kNoteExt';
     }
-    if (await folder.readText(to) != text) await folder.writeText(to, text);
+    if (await folder.readText(to) != marked) await folder.writeText(to, marked);
     for (final m in RegExp(r'cache-([A-Za-z0-9-]+)\.jpg').allMatches(text)) {
       final b = await folder.readBytes('photos/cache-${m.group(1)}.jpg');
       if (b != null) await folder.writeBytes('${book.id}/photos/cache-${m.group(1)}.jpg', b);

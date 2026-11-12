@@ -158,8 +158,21 @@ class NbRecord {
       body['fields'] = fields;
       body['fields_at'] = fieldsAt(fields);
     }
+    // The entries deleted (by id, with the time): the union of what the records say, a delete is never undone.
+    if (lives.any((r) => r.body['gone'] is Map)) {
+      final gone = <String, int>{};
+      for (final r in lives) {
+        final g = r.body['gone'];
+        if (g is! Map) continue;
+        for (final e in g.entries) {
+          final at = (e.value as num?)?.toInt() ?? 0;
+          if (at >= (gone['${e.key}'] ?? -1)) gone['${e.key}'] = at;
+        }
+      }
+      body['gone'] = gone;
+    }
     // What no pair decides: whatever a record has and the best one lacks, from the latest name first.
-    final taken = {for (final k in pairs) ...[k, '${k}_at'], 'fields', 'fields_at'};
+    final taken = {for (final k in pairs) ...[k, '${k}_at'], 'fields', 'fields_at', 'gone'};
     final byName = [...lives]..sort((a, b) => b.at != a.at ? b.at.compareTo(a.at) : b.text.compareTo(a.text));
     for (final r in byName) {
       for (final e in r.body.entries) {

@@ -46,4 +46,42 @@ void main() {
       }
     });
   }
+
+  test('N1b. an entry edited between the two updates and then deleted stays deleted, after more syncs and restarts (no old copy is left in a retired folder)', () async {
+    final a = Dev('a', old: true);
+    final b = Dev('b', old: true);
+    await a.boot();
+    await b.boot();
+    final link = ShareLink(a.folder, b.folder);
+    link.open = () => a.old == b.old;
+    await a.make('Hikes', id: 'a-1');
+    await b.make('Hikes', id: 'b-2');
+    await a.add('a-1', 'e1', 'Ridge loop', body: 'old text');
+    await a.add('a-1', 'e2', 'Creek walk', body: 'other');
+    await rounds([a, b], link);
+    await b.updateCache();
+    await b.sync();
+    await b.add('b-2', 'e1', 'Ridge loop', body: 'edited text');
+    await b.sync();
+    await a.updateCache();
+    await a.sync();
+    link.sync();
+    await rounds([a, b], link, n: 6);
+    final id = a.ids('Hikes').single;
+    for (final d in [a, b]) {
+      expect(await bodyOf(d, id, 'e1'), 'edited text', reason: d.label);
+    }
+    // the person deletes it; nothing of the old text may bring it back
+    await b.nb.deleteEntry('e1');
+    await rounds([a, b], link, n: 4);
+    a.restart();
+    await a.boot();
+    b.restart();
+    await b.boot();
+    await rounds([a, b], link, n: 4);
+    for (final d in [a, b]) {
+      expect(await d.entryIds(id), {'e2'}, reason: '${d.label}: e1 stays deleted');
+      expect([for (final e in d.folder.text.entries) if (e.key.endsWith('.cnote') && e.value.contains('cache_id: e1')) e.key], isEmpty, reason: '${d.label}: no copy of it is left in the share');
+    }
+  });
 }

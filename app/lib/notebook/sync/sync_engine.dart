@@ -203,6 +203,10 @@ class NotebookSync {
   /// What each note said when the old sync last had it (a signature of its title, text, time, place, photos and lines no field holds),
   /// from the old sync's own state file: the text the two copies of a note that differ come from, to tell which of them was changed.
   Map<String, String> _legacySig = {};
+
+  /// The entries a record says were deleted (by id) in this run, and the ones deleted here that the records do not say yet (by notebook).
+  Set<String> _goneIds = {};
+  final Map<String, Set<String>> _goneNew = {};
   List<SyncConflict> _conflicts = [];
   final Set<String> _ignored = {};
 
@@ -359,7 +363,16 @@ class NotebookSync {
     };
   }
 
+  /// The entry as a note. One that is still what the old sync had of it is marked, so that a copy of the old text loses to any copy
+  /// written after the note was changed (see [EntryDoc.legacy]).
   EntryDoc _docOf(Notebook n, NbEntry e) {
+    final d = _docOfBase(n, e);
+    if (kind != SyncKind.share || !idLayout) return d;
+    final anc = _legacySig[e.id];
+    return anc != null && _sig(_render(d)) == anc ? d.withLegacy(true) : d;
+  }
+
+  EntryDoc _docOfBase(Notebook n, NbEntry e) {
     final m = _fieldProps(n);
     return EntryDoc(
       id: e.id,
@@ -821,7 +834,7 @@ class NotebookSync {
 
   EntryDoc _inBook(EntryDoc d, String name) => d.notebook == name
       ? d
-      : EntryDoc(id: d.id, notebook: name, when: d.when, title: d.title, body: d.body, place: d.place, photos: d.photos, fields: d.fields, private: d.private, extra: d.extra, props: d.props);
+      : EntryDoc(id: d.id, notebook: name, when: d.when, title: d.title, body: d.body, place: d.place, photos: d.photos, fields: d.fields, private: d.private, extra: d.extra, props: d.props, legacy: d.legacy);
 
   bool _inShare(Notebook n) => includePrivate || !n.private || privateBooks.contains(n.id);
 
@@ -1348,6 +1361,10 @@ class NotebookSync {
       _snap[r.id] = (name: name, at: r.at, icon: made.def.icon, iconAt: r.iconAt, color: made.def.color, colorAt: r.colorAt);
     }
     dirNames = {for (final e in recs.entries) if (e.value.kind == RecordKind.live) e.key: e.value.name};
+    _goneIds = {
+      for (final r in recs.values)
+        if (r.kind == RecordKind.live && r.body['gone'] is Map) ...[for (final k in (r.body['gone'] as Map).keys) '$k'],
+    };
     // Which notebook each folder's entries belong to (only notebooks here and in the share).
     _dirNb = {};
     for (final e in recs.entries) {
@@ -1359,6 +1376,9 @@ class NotebookSync {
       if (n != null && _inShare(n)) _dirNb[e.key] = n.id;
     }
   }
+
+  /// A note without the line that marks it as only the old text (a merge of two copies is not that).
+  static String _unmark(String t) => t.replaceAll(RegExp(r'^cache_legacy: true\n', multiLine: true), '');
 
   /// A note's content as a signature: what a person can change in it (title, text, time, place, photos, private, the lines no field
   /// holds), not how it is written, so the old sync's note and the same note written by this one are alike.
@@ -1372,6 +1392,8 @@ class NotebookSync {
   /// Format 2: the entries in the share, by their id.
   Future<Map<String, _Unit>> _scanIds(Map<String, _Unit> out, List<_Unit> newOutside, List<SyncConflict> unreadable, Map<String, (Notebook, NbEntry)> cache) async {
     final ignored = <(_Unit, _Unit)>[];
+    // copies that are only the old text and lost to a later one: they go (left, they would be read as the entry again once it is deleted)
+    final staleDrop = <String>{};
     void put(_Unit u) {
       final prev = out[u.doc.id];
       if (prev == null) {
@@ -1392,14 +1414,19 @@ class NotebookSync {
         // the other is the copy of the old text that a device wrote when it updated. Never by the folder. When both were changed, one
         // stays the entry (by folder, the same on every device) and the other is kept as an entry of its own, not dropped.
         var changedBoth = false;
-        if (u.text != prev.text) {
+        if (u.text != prev.text && u.doc.legacy != prev.doc.legacy) {
+          keep = u.doc.legacy ? prev : u;
+          staleDrop.add((identical(keep, u) ? prev : u).path);
+        } else if (u.text != prev.text) {
           final anc = _legacySig[u.doc.id];
           if (anc != null) {
             final uSame = _sig(u.text) == anc, pSame = _sig(prev.text) == anc;
             if (uSame && !pSame) {
               keep = prev;
+              staleDrop.add(u.path);
             } else if (pSame && !uSame) {
               keep = u;
+              staleDrop.add(prev.path);
             } else if (!uSame && !pSame && _sig(u.text) != _sig(prev.text)) {
               changedBoth = true;
             }
@@ -1413,7 +1440,33 @@ class NotebookSync {
           ignored.add((other, keep));
         }
       } else {
-        // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
+        // A duplicated file (in one folder: the copy a sync tool keeps when two devices wrote a note at once, or a note copied by hand).
+        // The same text is the same note: the copy goes. A copy that is only the old text loses to the other. Otherwise the one Cache
+        // knows keeps the id, and the other becomes a new entry (nothing is dropped).
+        _Unit? win;
+        if (u.text == prev.text) {
+          win = _items[u.doc.id]?.path == u.path ? u : prev;
+        } else if (u.doc.legacy != prev.doc.legacy) {
+          win = u.doc.legacy ? prev : u;
+          staleDrop.add((identical(win, u) ? prev : u).path);
+        } else {
+          final anc = _legacySig[u.doc.id];
+          if (anc != null) {
+            final uSame = _sig(u.text) == anc, pSame = _sig(prev.text) == anc;
+            if (uSame && !pSame) {
+              win = prev;
+              staleDrop.add(u.path);
+            } else if (pSame && !uSame) {
+              win = u;
+              staleDrop.add(prev.path);
+            }
+          }
+        }
+        if (win != null) {
+          out[u.doc.id] = win;
+          ignored.add((identical(win, u) ? prev : u, win));
+          return;
+        }
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
         final other = identical(keep, prev) ? u : prev;
         out[u.doc.id] = keep;
@@ -1436,6 +1489,11 @@ class NotebookSync {
         continue;
       }
       final doc = _inBook(parseObsidian(text, fallbackId: '', fallbackNotebook: book.name, fieldProps: _propTypes(book))!, book.name);
+      if (_goneIds.contains(doc.id)) {
+        // an entry deleted on a device: a copy of it that is still here (another device wrote it before it knew) goes
+        await folder.delete(f.path);
+        continue;
+      }
       final u = _Unit(f.path, text, doc);
       if (_outIds.contains(doc.id)) continue;
       if (doc.id.isEmpty) {
@@ -1446,7 +1504,7 @@ class NotebookSync {
     }
     // The old place of an entry whose own-folder copy says the same goes (nothing is lost: the text is in the other file).
     for (final (other, keep) in ignored) {
-      if (other.text == keep.text) await folder.delete(other.path);
+      if (other.text == keep.text || staleDrop.contains(other.path)) await folder.delete(other.path);
     }
     return out;
   }
@@ -1523,6 +1581,15 @@ class NotebookSync {
       final f = outside[id];
       // Format 2: a notebook another device deleted: what to do with its entries is decided where its tombstone is read (_syncRecords), not by a missing file.
       if (idLayout && ((c != null && _tombBooks.contains(c.$1.id)) || (s != null && _tombDirs.contains(_topDir(s.path))))) continue;
+      if (idLayout && _goneIds.contains(id)) {
+        // deleted on a device: here too, unless it was changed here since it was last synced (then it stays here, unsynced)
+        if (c != null && (s == null || c.$2.rev == s.rev)) {
+          await notebook.deleteEntry(id);
+          r.deleted++;
+        }
+        _items.remove(id);
+        continue;
+      }
       if (idLayout && s != null && f != null && f.path != s.path) s.path = f.path;
       if (s != null && s.imp != null) {
         // An imported note moved or renamed outside: it is followed there.
@@ -1565,7 +1632,7 @@ class NotebookSync {
           // Both have it and Cache has no record (a folder connected again, or a second device joining).
           // What the note was before (what the old sync had) tells which of the two was changed: the copy of the old text loses to the other.
           final anc = f.text != text && idLayout ? _legacySig[id] : null;
-          final cacheIsOld = anc != null && _sig(text) == anc, fileIsOld = anc != null && _sig(f.text) == anc;
+          final cacheIsOld = doc.legacy || anc != null && _sig(text) == anc, fileIsOld = f.doc.legacy || anc != null && _sig(f.text) == anc;
           if (f.text != text && fileIsOld && !cacheIsOld) {
             _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra, mine: true);
             _extraSeed.remove(id);
@@ -1575,7 +1642,7 @@ class NotebookSync {
             _rec(id, f.path, f.text, saved.rev);
             r.read++;
           } else if (f.text != text) {
-            final m = merge3('', text, f.text);
+            final m = merge3('', _unmark(text), _unmark(f.text));
             if (m.clean) {
               _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra, mine: true);
               _extraSeed.remove(id);
@@ -1608,7 +1675,7 @@ class NotebookSync {
           _rec(id, f.path, f.text, saved.rev);
           r.read++;
         } else if (cacheChanged && fileChanged) {
-          final m = merge3(s.base, text, f.text);
+          final m = merge3(_unmark(s.base), _unmark(text), _unmark(f.text));
           if (m.clean) {
             final mergedDoc = _parseAs(id, m.text, c.$1, when: doc.when);
             if (mergedDoc == null) {
@@ -1624,6 +1691,11 @@ class NotebookSync {
           }
         }
       } else if (s != null) {
+        if (idLayout && kind == SyncKind.share) {
+          // deleted here: the notebook's record says so, so that a copy another device writes later is taken away, not read again
+          final nb = _dirNb[_topDir(s.path)];
+          if (nb != null) _goneNew.putIfAbsent(nb, () => {}).add(id);
+        }
         if (f == null || kind == SyncKind.logseqExport) {
           // Gone from Cache: gone from the folder too (unless only the folder had it, already gone).
           if (f == null && kind != SyncKind.logseqExport) {
@@ -1690,6 +1762,20 @@ class NotebookSync {
       for (final n in notebook.notebooks) {
         if (_inShare(n) && dirNames.containsKey(n.id) && !_tombBooks.contains(n.id)) _bookSnap[n.id] = _snapOf(n);
       }
+      // the entries deleted here go into their notebook's record
+      for (final e in _goneNew.entries) {
+        final text = await folder.readText('${e.key}/$kRecordFile');
+        final rec = text == null ? null : NbRecord.parse(text);
+        if (rec == null || rec.kind != RecordKind.live) continue;
+        final gone = <String, dynamic>{...(rec.body['gone'] is Map ? (rec.body['gone'] as Map).cast<String, dynamic>() : const {})};
+        final at = _now().millisecondsSinceEpoch;
+        for (final id in e.value) {
+          gone.putIfAbsent(id, () => at);
+        }
+        final next = NbRecord.live(e.key, nameAt: rec.at, body: {...rec.body, 'gone': gone});
+        if (next.text != rec.text) await folder.writeText('${e.key}/$kRecordFile', next.text);
+      }
+      _goneNew.clear();
     }
     await _save();
     return r;

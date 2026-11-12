@@ -7,7 +7,7 @@ library;
 import '../notebook_model.dart';
 
 /// Cache's own property names; a field whose name would collide gets `_field`.
-const List<String> kCacheProps = ['cache_id', 'notebook', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private', 'cache_color', 'cache_icon', 'cache_on_map'];
+const List<String> kCacheProps = ['cache_id', 'notebook', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private', 'cache_color', 'cache_icon', 'cache_on_map', 'cache_legacy'];
 const List<String> _reserved = ['tags', 'aliases', 'cssclasses', 'id', 'alias', 'icon', 'template', 'public', 'collapsed', 'filters'];
 
 /// An entry as a file holds it: what Cache owns, field values by property name, and the properties it does not own (their
@@ -25,6 +25,7 @@ class EntryDoc {
     this.private = false,
     this.extra = const [],
     this.props,
+    this.legacy = false,
   });
 
   final String id;
@@ -47,6 +48,12 @@ class EntryDoc {
   /// The entry's app properties that travel: `color` (a marker colour's name), `icon` (a map icon's id) and `on_map` (false: not
   /// on the map). Null: the file says nothing about them (written before they travelled), so the entry keeps its own.
   final Map<String, dynamic>? props;
+
+  /// Only the old text again: the note says what the old sync had of it, written by a device when it updated. Of two copies of one note
+  /// that differ, such a copy loses to the other (which was written after the note was changed), whatever device looks at them.
+  final bool legacy;
+
+  EntryDoc withLegacy(bool v) => EntryDoc(id: id, notebook: notebook, when: when, title: title, body: body, place: place, photos: photos, fields: fields, private: private, extra: extra, props: props, legacy: v);
 }
 
 /// The app properties a file carries, as three lines: [color] and [icon] say `default` when the entry has none (its notebook's
@@ -205,6 +212,7 @@ String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = con
   }
 
   p('cache_id', d.id);
+  if (d.legacy && !imported) p('cache_legacy', true);
   if (!imported && withNotebook) p('notebook', d.notebook);
   if (d.title != null && d.title!.trim().isNotEmpty && !(imported && d.title!.trim() == titleDefault)) p('title', d.title);
   // Obsidian's Date and Date & time types: written as they are, unquoted.
@@ -323,6 +331,7 @@ EntryDoc? parseObsidian(String text,
     private: v('private') == true,
     extra: extra,
     props: readAppProps(v('cache_color'), v('cache_icon'), v('cache_on_map')),
+    legacy: v('cache_legacy') == true,
   );
 }
 
