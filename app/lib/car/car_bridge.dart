@@ -17,6 +17,7 @@ import '../theme.dart';
 import 'car_drive.dart';
 import 'car_overlay.dart';
 import 'car_trip.dart';
+import 'phone_drive.dart';
 
 /// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
 ///
@@ -35,6 +36,8 @@ class CarBridge {
     this.theme,
     this.overlay,
     this.settings,
+    this.phoneDrive,
+    this.carries,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -53,10 +56,19 @@ class CarBridge {
   /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
   final CacheThemeId Function()? theme;
 
-  /// The two car switches (Settings > Car); null: the defaults. [settings] tells the bridge when they may have changed, so the car
+  /// The `overlay` part of the trip ([carOverlaySwitches]); null: `phoneDrive` false. [settings] tells the bridge when they may have changed, so the car
   /// has the new trip within one update.
   final Map<String, bool> Function()? overlay;
   final Listenable? settings;
+
+  /// Changes when the phone's drive screen starts or stops showing to a person (the value itself goes out in [overlay], as
+  /// `phoneDrive`). The trip goes to the car at once on every change, with no throttle of its own: the pause and the fade
+  /// before the car acts on it are the car's.
+  final Listenable? phoneDrive;
+
+  /// Where the car carries the route mini map and the elevation, as the car side last reported it (`extras`); back to
+  /// [CarExtras.never] (absent) when the car disconnects.
+  final ValueNotifier<CarExtras>? carries;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -101,6 +113,7 @@ class CarBridge {
     nav.location.addListener(_onLocation);
     elevation?.addListener(_schedule);
     settings?.addListener(_onSettings);
+    phoneDrive?.addListener(_onPhoneDrive);
     _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
@@ -121,6 +134,7 @@ class CarBridge {
     if (_started) nav.location.removeListener(_onLocation);
     elevation?.removeListener(_schedule);
     settings?.removeListener(_onSettings);
+    phoneDrive?.removeListener(_onPhoneDrive);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -140,6 +154,7 @@ class CarBridge {
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      carries?.value = CarExtras.never;
       // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
       // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
       // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
@@ -193,6 +208,14 @@ class CarBridge {
       if (connected.value) unawaited(_send('styleChanged', null));
     }
     _schedule();
+  }
+
+  /// The phone's drive screen started or stopped showing: the trip goes out now.
+  void _onPhoneDrive() {
+    if (!connected.value) return;
+    _pushTimer?.cancel();
+    _pushTimer = null;
+    unawaited(push());
   }
 
   void _onMaps() {
@@ -275,6 +298,9 @@ class CarBridge {
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
+        return null;
+      case 'extras':
+        carries?.value = carExtrasFrom(a['carries']);
         return null;
       case 'snapshot':
         return snapshot();

@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../car/phone_drive.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
 import '../browse/library_passage_screen.dart';
@@ -104,6 +105,7 @@ class Shell extends StatefulWidget {
     required this.browse,
     required this.nav,
     this.elevation,
+    this.phoneDrive,
     required this.layout,
     required this.hub,
     this.notebooks,
@@ -134,6 +136,9 @@ class Shell extends StatefulWidget {
   final BrowseState browse;
   final NavState nav;
   final RouteElevation? elevation;
+
+  /// The car link of the Maps tab's drive screen (null: no car screen on this platform, Maps is always the map).
+  final PhoneDrive? phoneDrive;
   final LayoutState layout;
   final SettingsHub hub;
 
@@ -836,7 +841,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
