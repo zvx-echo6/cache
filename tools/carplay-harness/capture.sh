@@ -1281,8 +1281,20 @@ done
 # External Displays > Disabled), as a car's goes when the cable is pulled, while the simulated phone and the app run on
 # (closing the Simulator app was tried first and does not take the display away). Chosen again in that menu, the display
 # comes back, and the app is to show the guidance again that went on meanwhile.
+home_in_front() {  # home_in_front <label>: 0 when CarPlay's home screen (its app grid, with the app's 60-point icon) is in front
+  local found w
+  shot_ext "$1" > /dev/null 2>&1 || return 1
+  found=$(python3 -I "$HERE/find_icon.py" ext "$OUT/shots/$1.png" 2>&1 | tail -n 1)
+  rm -f "$OUT/shots/$1.png"
+  say "  the largest patch of the app's colour on the CarPlay display: $found"
+  case "$found" in found*) ;; *) return 1 ;; esac
+  # The grid's icon is 60 points wide, the dock's 29 (as find_icon_by_geometry).
+  w=$(echo "$found" | sed -n 's/.*box=[0-9]*,[0-9]*,\([0-9]*\),.*/\1/p')
+  [ -n "$w" ] && [ "$w" -ge $((45 * CAR_S)) ]
+}
+
 reconnect_case() {
-  local began gone conn before menu lit=""
+  local began gone conn before menu how lit=""
   say "== the car goes away during guidance and comes back"
   to_browsing
   before=$(log_count 'car link: trip previewing')
@@ -1332,9 +1344,25 @@ reconnect_case() {
   fi
   if wait_more 'car guidance: began' "$began" 30; then
     sleep 4
+    # The car scene can connect again while CarPlay's home screen is in front (seen: the guidance went on behind it). The
+    # app's icon is then clicked, as the driver would, and the guidance must be what shows.
+    how="came to the front by itself"
+    if home_in_front reconnect-3-check; then
+      say "CarPlay's home screen is in front: the app's icon is clicked, as the driver would"
+      how="was brought to the front by its icon on CarPlay's home screen"
+      front
+      say "  $(osa sim_raise CarPlay)"
+      sleep 1
+      if find_icon_on_host reconnect-front || find_icon_by_geometry reconnect-front; then
+        click_at "$ICON_X" "$ICON_Y" "${WAYS%% *}"
+        sleep 4
+      fi
+    fi
     shot_ext reconnect-3-guiding-again
-    if [ "$(grep -c 'The Flutter engine was started' "$STREAM")" = 1 ]; then
-      result "OK reconnect: during guidance the CarPlay display went away and the app's car scene ended; the app ran on; the display came back, the car scene connected again on the same engine, and the guidance that had gone on was shown again without being started again (shots/reconnect-{1-guiding,2-display-back,3-guiding-again}.png)"
+    if home_in_front reconnect-3-after; then
+      result "FAILED reconnect: the car scene connected again and the guidance went on, but CarPlay's home screen stays in front; see shots/reconnect-3-guiding-again.png"
+    elif [ "$(grep -c 'The Flutter engine was started' "$STREAM")" = 1 ]; then
+      result "OK reconnect: during guidance the CarPlay display went away and the app's car scene ended; the app ran on; the display came back, the car scene connected again on the same engine, the app $how, and the guidance that had gone on was shown again without being started again (shots/reconnect-{1-guiding,2-display-back,3-guiding-again}.png)"
     else
       result "FAILED reconnect: guidance came back, but the engine-start lines are $(grep -c 'The Flutter engine was started' "$STREAM") (1 expected: the app was to run on)"
     fi
@@ -1345,6 +1373,8 @@ reconnect_case() {
 }
 if [ -n "$STREAM" ] && grep -q 'car scene connected' "$STREAM" 2> /dev/null && ! grep -q 'car scene disconnected' "$STREAM" 2> /dev/null; then
   reconnect_case
+  # The update case empties the stream: the app's own lines of the last size and of this case are kept first.
+  cp "$STREAM" "$OUT/logs/app-reconnect.txt" 2> /dev/null
 else
   result "FAILED reconnect: not tried, the last size's car scene was not up"
 fi
