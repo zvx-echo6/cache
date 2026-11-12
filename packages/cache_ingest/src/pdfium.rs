@@ -21,75 +21,221 @@ const RENDER_ANNOT: c_int = 0x01;
 /// The largest page image, in pixels (a 300 dpi A3 page is about 17 million): a bigger page is drawn at a lower resolution.
 const MAX_PIXELS: f64 = 40_000_000.0;
 
-/// The process's one PDFium lock. PDFium is not thread-safe, so every thread that calls it holds this around each call (or each
-/// page's worth of calls: one page's text, one page drawn), never across anything that waits for something else: no await, no
-/// callback into Dart. It is reentrant (the same thread may take it again) so a call made while the same thread already holds it
-/// does not wait for itself. pdfrx's worker takes the same lock around each of its PDFium calls, through [`lock_functions`]
-/// (third_party/pdfrx_engine/PATCH.md), so the viewer and the core never run PDFium at the same moment.
-struct Reentrant {
-    state: Mutex<(Option<std::thread::ThreadId>, usize)>,
-    free: Condvar,
+/// The process's one PDFium lock. PDFium is not thread-safe, so every caller holds this around each call (or each page's worth of
+/// calls: one page's text, one page drawn), never across anything that waits for something else: no await, no callback into Dart.
+///
+/// Ownership is per ACQUISITION: `acquire` hands back a token and only `release(token)` of that token lets go. It is not tied to an OS
+/// thread: an isolate that is killed while it holds the lock leaves the lock held (its `finally` never runs, the kill lands when the
+/// thread's native call returns to Dart), the dead isolate's thread goes on to run other isolates, and they must not inherit the hold.
+/// An acquisition also names its OWNER (a number the acquirer chooses, one per isolate): when the owner dies, whoever notices
+/// (the spawner's exit listener, or the NativeFinalizer attached to the owner's object when its isolate group shuts down) calls
+/// `drop_owner` and the lock is released at once. Only as a last backstop, a hold longer than [`backstop`] minutes is taken away,
+/// with a loud message. A live but slow holder (a throttled phone can take many seconds in one call) keeps it: two callers in PDFium is
+/// the corruption the lock prevents.
+///
+/// pdfrx's worker takes the same lock around each of its PDFium calls, through [`lock_functions`] (third_party/pdfrx_engine/PATCH.md),
+/// so the viewer and the core never run PDFium at the same moment.
+struct Holder {
+    token: u64,
+    owner: u64,
+    since: std::time::Instant,
 }
 
-static PDFIUM: Reentrant = Reentrant { state: Mutex::new((None, 0)), free: Condvar::new() };
+#[derive(Default)]
+struct LockState {
+    holder: Option<Holder>,
+    next_token: u64,
+    backstop_releases: u64,
+    last_backstop: Option<String>,
+}
 
-impl Reentrant {
-    fn acquire(&self) {
-        let me = std::thread::current().id();
-        let mut g = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+struct PdfiumLock {
+    state: Mutex<LockState>,
+    free: Condvar,
+    /// How long a hold may last before the backstop takes it away, in milliseconds.
+    backstop_ms: std::sync::atomic::AtomicU64,
+}
+
+/// The owner of the core's own acquisitions (its threads are never killed: only its own threads use it).
+const CORE_OWNER: u64 = 1;
+
+/// The backstop: a hold this long is taken away. Minutes, not seconds: nothing that is alive holds PDFium that long.
+const BACKSTOP_MS: u64 = 5 * 60 * 1000;
+
+static PDFIUM: PdfiumLock = PdfiumLock {
+    state: Mutex::new(LockState { holder: None, next_token: 0, backstop_releases: 0, last_backstop: None }),
+    free: Condvar::new(),
+    backstop_ms: std::sync::atomic::AtomicU64::new(BACKSTOP_MS),
+};
+
+impl PdfiumLock {
+    fn guard(&self) -> std::sync::MutexGuard<'_, LockState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes the lock for `owner`, waiting for it; the token of this acquisition. Waits at most `limit` when given (`None` back).
+    fn acquire_for(&self, owner: u64, limit: Option<std::time::Duration>) -> Option<u64> {
+        let deadline = limit.map(|d| std::time::Instant::now() + d);
+        let mut g = self.guard();
         loop {
-            match g.0 {
+            let backstop = std::time::Duration::from_millis(self.backstop_ms.load(std::sync::atomic::Ordering::Relaxed));
+            match &g.holder {
                 None => {
-                    *g = (Some(me), 1);
-                    return;
+                    g.next_token += 1;
+                    let token = g.next_token;
+                    g.holder = Some(Holder { token, owner, since: std::time::Instant::now() });
+                    return Some(token);
                 }
-                Some(t) if t == me => {
-                    g.1 += 1;
-                    return;
+                Some(h) if h.since.elapsed() >= backstop => {
+                    let msg = format!(
+                        "the PDFium lock was held by owner {} for {:.0} s: taken away (its holder is gone or stuck; a live holder never keeps PDFium this long)",
+                        h.owner,
+                        h.since.elapsed().as_secs_f64()
+                    );
+                    eprintln!("cache: {msg}");
+                    g.backstop_releases += 1;
+                    g.last_backstop = Some(msg);
+                    g.holder = None;
                 }
-                Some(_) => g = self.free.wait(g).unwrap_or_else(PoisonError::into_inner),
+                Some(h) => {
+                    let mut wait = backstop.saturating_sub(h.since.elapsed()).min(std::time::Duration::from_secs(1));
+                    if let Some(d) = deadline {
+                        let now = std::time::Instant::now();
+                        if now >= d {
+                            return None;
+                        }
+                        wait = wait.min(d - now);
+                    }
+                    g = self.free.wait_timeout(g, wait).unwrap_or_else(PoisonError::into_inner).0;
+                }
             }
         }
     }
 
-    fn release(&self) {
-        let me = std::thread::current().id();
-        let mut g = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if g.0 == Some(me) {
-            g.1 -= 1;
-            if g.1 == 0 {
-                g.0 = None;
-                self.free.notify_one();
-            }
+    fn acquire(&self, owner: u64) -> u64 {
+        self.acquire_for(owner, None).unwrap_or(0)
+    }
+
+    /// Lets go of the acquisition `token`, when it is still the one held (a token the backstop took away does nothing).
+    fn release(&self, token: u64) {
+        let mut g = self.guard();
+        if g.holder.as_ref().is_some_and(|h| h.token == token) {
+            g.holder = None;
+            self.free.notify_all();
         }
     }
+
+    /// The owner is gone: lets go of its hold, if it has one.
+    fn drop_owner(&self, owner: u64) {
+        let mut g = self.guard();
+        if g.holder.as_ref().is_some_and(|h| h.owner == owner) {
+            g.holder = None;
+            self.free.notify_all();
+        }
+    }
+}
+
+thread_local! {
+    /// The core's own nesting on this thread: (depth, token). A call made while this thread already holds the lock for the core does not
+    /// wait for itself.
+    static CORE_HOLD: std::cell::Cell<(usize, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 struct Guard;
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        PDFIUM.release();
+        CORE_HOLD.with(|c| {
+            let (depth, token) = c.get();
+            if depth <= 1 {
+                c.set((0, 0));
+                PDFIUM.release(token);
+            } else {
+                c.set((depth - 1, token));
+            }
+        });
     }
 }
 
 fn lock() -> Guard {
-    PDFIUM.acquire();
+    CORE_HOLD.with(|c| {
+        let (depth, token) = c.get();
+        if depth > 0 {
+            c.set((depth + 1, token));
+        } else {
+            c.set((1, PDFIUM.acquire(CORE_OWNER)));
+        }
+    });
     Guard
 }
 
-extern "C" fn lock_c() {
-    PDFIUM.acquire();
+extern "C" fn lock_acquire_c(owner: u64) -> u64 {
+    PDFIUM.acquire(owner)
 }
 
-extern "C" fn unlock_c() {
-    PDFIUM.release();
+extern "C" fn lock_release_c(token: u64) {
+    PDFIUM.release(token);
 }
 
-/// The addresses of the lock and unlock functions (`extern "C" fn()`), for pdfrx's worker, which takes the same lock around each of
-/// its PDFium calls. They live as long as the library does.
-pub fn lock_functions() -> (usize, usize) {
-    (lock_c as extern "C" fn() as usize, unlock_c as extern "C" fn() as usize)
+extern "C" fn lock_drop_owner_c(owner: u64) {
+    PDFIUM.drop_owner(owner);
+}
+
+/// For `NativeFinalizer`: the pointer argument is the owner's number.
+extern "C" fn lock_finalize_c(owner: *mut c_void) {
+    PDFIUM.drop_owner(owner as usize as u64);
+}
+
+/// The addresses of the lock's C functions, for pdfrx's worker, which takes the same lock around each of its PDFium calls:
+/// `acquire(owner: u64) -> u64 token` (waits), `release(token: u64)`, `drop_owner(owner: u64)` and `finalize(owner as pointer)` (the
+/// callback of a `NativeFinalizer`). They live as long as the library does.
+pub struct LockFunctions {
+    pub acquire: usize,
+    pub release: usize,
+    pub drop_owner: usize,
+    pub finalize: usize,
+}
+
+pub fn lock_functions() -> LockFunctions {
+    LockFunctions {
+        acquire: lock_acquire_c as extern "C" fn(u64) -> u64 as usize,
+        release: lock_release_c as extern "C" fn(u64) as usize,
+        drop_owner: lock_drop_owner_c as extern "C" fn(u64) as usize,
+        finalize: lock_finalize_c as extern "C" fn(*mut c_void) as usize,
+    }
+}
+
+/// Whether the lock is held now, by whom and for how long, and what the backstop has done (for the app's log).
+pub fn lock_status() -> serde_json::Value {
+    let g = PDFIUM.guard();
+    serde_json::json!({
+        "held": g.holder.is_some(),
+        "owner": g.holder.as_ref().map(|h| h.owner),
+        "held_ms": g.holder.as_ref().map(|h| h.since.elapsed().as_millis() as u64),
+        "backstop_ms": PDFIUM.backstop_ms.load(std::sync::atomic::Ordering::Relaxed),
+        "backstop_releases": g.backstop_releases,
+        "last_backstop": g.last_backstop,
+    })
+}
+
+/// The lock for the tests of its rules (see the tests below): an acquisition with an owner, and the backstop's length.
+#[doc(hidden)]
+pub mod lock_for_tests {
+    pub fn acquire(owner: u64, limit_ms: u64) -> Option<u64> {
+        super::PDFIUM.acquire_for(owner, Some(std::time::Duration::from_millis(limit_ms)))
+    }
+    pub fn release(token: u64) {
+        super::PDFIUM.release(token);
+    }
+    pub fn drop_owner(owner: u64) {
+        super::PDFIUM.drop_owner(owner);
+    }
+    pub fn set_backstop_ms(ms: u64) {
+        super::PDFIUM.backstop_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn status() -> serde_json::Value {
+        super::lock_status()
+    }
 }
 
 struct Lib {
@@ -269,6 +415,9 @@ static FONT_INFO: StaticFontInfo = StaticFontInfo(SysFontInfo {
 
 static FONTS_ONCE: Once = Once::new();
 
+/// Set when the mapper was handed to PDFium (the library has FPDF_SetSystemFontInfo).
+static FONTS_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Gives PDFium the process's one font mapper, once. `lib` is the PDFium library the process uses; one more handle on it is kept for
 /// the life of the process, so it is never unloaded (which would drop the mapper PDFium holds).
 fn install_font_mapper(lib: &Library, path: Option<&str>) {
@@ -277,6 +426,7 @@ fn install_font_mapper(lib: &Library, path: Option<&str>) {
             let _g = lock();
             // SAFETY: FONT_INFO is a static with the layout of FPDF_SYSFONTINFO that PDFium keeps a pointer to; it is never changed or freed.
             unsafe { set(std::ptr::addr_of!(FONT_INFO.0).cast_mut()) };
+            FONTS_INSTALLED.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         if let Ok((keep, _)) = open_library(path) {
             std::mem::forget(keep);
@@ -286,7 +436,7 @@ fn install_font_mapper(lib: &Library, path: Option<&str>) {
 
 /// Starts PDFium in this process if nothing has and installs the process's font mapper (once). Reports where PDFium was found
 /// (`path`, `name` or `process`). Safe to call again, from any thread.
-pub fn install_fonts(path: Option<&str>) -> Result<&'static str> {
+pub fn install_fonts(path: Option<&str>) -> Result<(&'static str, bool)> {
     let (l, from) = Lib::bind(path)?;
     let init: unsafe extern "C" fn() = get(&l._lib, "FPDF_InitLibrary")?;
     {
@@ -295,7 +445,7 @@ pub fn install_fonts(path: Option<&str>) -> Result<&'static str> {
         unsafe { init() };
     }
     install_font_mapper(&l._lib, path);
-    Ok(from)
+    Ok((from, FONTS_INSTALLED.load(std::sync::atomic::Ordering::SeqCst)))
 }
 
 /// Whether PDFium can be loaded with these settings, and from where (`path`, `name` or `process`). Nothing stays initialised.
