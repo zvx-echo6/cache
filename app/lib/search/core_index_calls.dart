@@ -7,6 +7,7 @@ import '../maps/ui/format.dart' show formatCount;
 import 'index_scheduler.dart';
 import 'index_throttle.dart';
 import '../platform/app_log.dart';
+import '../platform/proc_diag.dart';
 
 /// The app's core index work, set at start; null in tests that do not need it (the Library then shows no EPUB progress).
 AppIndexCoreCalls? coreIndexShared;
@@ -108,10 +109,18 @@ class AppIndexCoreCalls implements IndexCoreCalls {
   @override
   Future<List<CoreIndexNeed>> needs() async {
     if (indexesDir() == null) return const [];
+    // a library whose words are all in its snapshot again may be listed again by a later add
+    _built.removeWhere((k) => k.startsWith('library-words/') && !statuses().any((s) => s.keywordPending == true && 'library-words/${s.sourceId}' == k));
     return [
       for (final s in statuses())
         if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}') && !_built.contains('${i.kind}/${s.sourceId}'))
           CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir, title: s.title, pulse: () => pulse['${i.kind}/${s.sourceId}'], step: () => steps['${i.kind}/${s.sourceId}']),
+      // a library that grows, whose newest points are not in its keyword snapshot yet (also: one a past add left behind): one job
+      // brings it up to date, the same queue, throttle, heat and battery rules as every other index job. It clears itself: once the
+      // snapshot covers the library's points the status says so and nothing is listed.
+      for (final s in statuses())
+        if (s.kind == 'library' && s.keywordPending == true && s.sourceId != null && !_skip.contains('library-words/${s.sourceId}') && !_waits('library-words/${s.sourceId}') && !_built.contains('library-words/${s.sourceId}') && !(s.index?.needsSeal ?? false))
+          CoreIndexNeed(kind: 'library-words', sourceId: s.sourceId!, seal: false, title: s.title, extendOf: (path: s.path, settings: s.settings), pulse: () => pulse['library-words/${s.sourceId}'], step: () => steps['library-words/${s.sourceId}']),
       for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
           if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null && !_waits('${sub.kind}/${sub.sourceId ?? s.sourceId}') && !_built.contains('${sub.kind}/${sub.sourceId ?? s.sourceId}'))
@@ -141,7 +150,12 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     final key = '${need.kind}/${need.sourceId}';
     final IndexJob? job;
     try {
-      job = await startJob(need.seal ? 'index_seal' : 'index_source', {
+      job = await startJob(need.extendOf != null ? 'index_extend' : (need.seal ? 'index_seal' : 'index_source'), need.extendOf != null ? {
+        'indexes_dir': dir,
+        'library_path': need.extendOf!.path,
+        'settings': ?need.extendOf!.settings,
+        'duty': ?pace,
+      } : {
         'indexes_dir': dir,
         'kind': need.kind,
         'source_id': need.sourceId,
@@ -155,10 +169,11 @@ class AppIndexCoreCalls implements IndexCoreCalls {
       rethrow;
     }
     if (job == null) throw StateError('the search core is not open');
-    logInfo('Index job $key starts (${need.seal ? 'index_seal' : 'index_source'})', job: key);
+    logInfo('Index job $key starts (${need.extendOf != null ? 'index_extend' : (need.seal ? 'index_seal' : 'index_source')})', job: key);
     steps[key] = 'Starting';
     return CoreIndexRun(job, key, progress, pulse: pulse, steps: steps, poll: poll, onError: (code) {
-      if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
+      // A seal that cannot be made here (missing or stale index, or the files cannot be moved: io) is not tried again this session.
+      if (need.seal && (code == 'index_missing' || code == 'index_stale' || code == 'io' || code == 'unsupported')) _skip.add(key);
       if (code == 'busy') _backOff(key);
     }, onDone: () {
       _later.remove(key);
@@ -184,6 +199,9 @@ class CoreIndexRun implements IndexRun {
     _timer = Timer.periodic(poll, (_) => _check());
     unawaited(_check());
   }
+
+  /// Diagnostic only: wall and CPU time of this job (logged when it ends).
+  final StepClock _clock = StepClock();
 
   final IndexJob job;
   final String key;
@@ -227,7 +245,8 @@ class CoreIndexRun implements IndexRun {
       }
       if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
       if (p.state == JobState.done) onDone?.call();
-      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}', job: key);
+      // The core's own words for a failure (they can name folders, so the log shows them from Detailed), and what the job cost.
+      logInfo('Index job $key ends: ${p.state.name}${p.errorCode == null ? '' : ' (${p.errorCode})'}; ${_clock.took()}', detail: p.errorMessage, job: key);
       _end(p.state == JobState.done);
     } catch (e) {
       logError('Index job $key', error: e, job: key);

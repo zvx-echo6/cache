@@ -13,10 +13,13 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are
 - Library: adding a PDF, going to Home and coming back no longer adds the PDF twice or fills the log with "waiting for the earlier run" lines; one run handles each PDF
 - Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
 - Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
+- Library: a book you add is found by its words as well as by its meaning: its words are added to the search index in a short background job (the finished card and the book's row say "Adding to search index" until then), and a library that missed them before is brought up to date by itself
+- Library: on Android the search index of your own books no longer fails and retries on every open
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers

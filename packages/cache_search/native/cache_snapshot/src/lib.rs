@@ -188,16 +188,43 @@ pub struct Picked {
     pub usable: Vec<(String, String)>,
 }
 
+/// Which usable snapshot a source uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickRule {
+    /// The earliest `created`, then the lowest build id: every device converges on the same one, and a later snapshot of the same
+    /// source is never used (ZIMs, catalogue libraries, everything made before generations).
+    Earliest,
+    /// The highest `generation`, then the earliest `created`, then the lowest build id: for a library that grows (an appendable one),
+    /// whose newer snapshot extends the older. A snapshot with no `generation` is generation 0, so without generations this is
+    /// [`PickRule::Earliest`].
+    HighestGeneration,
+}
+
+/// The `generation` a manifest records (0 when it has none): how many times the snapshot was extended.
+pub fn generation_of(m: &Manifest) -> u64 {
+    m.extra.get("generation").and_then(|g| g.as_u64()).unwrap_or(0)
+}
+
 /// The snapshot every device uses for the source: of the usable ones, the earliest `created`, then the lowest build id.
 /// Verifies (hashes) every candidate, so call it off the main thread.
 pub fn pick(source_dir: &Path, kind: &str, source_id: &str, compat: Compat) -> Option<Picked> {
+    pick_with(source_dir, kind, source_id, compat, PickRule::Earliest)
+}
+
+/// [`pick`] under a rule. `usable` lists the usable snapshots best first under that rule (the chosen one first).
+pub fn pick_with(source_dir: &Path, kind: &str, source_id: &str, compat: Compat, rule: PickRule) -> Option<Picked> {
     let mut usable: Vec<(String, String, Manifest)> = Vec::new();
     for name in list(source_dir) {
         if let Ok(m) = verify(&source_dir.join(SNAP_DIR).join(&name), kind, source_id, compat) {
             usable.push((m.created.clone(), name, m));
         }
     }
-    usable.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    match rule {
+        PickRule::Earliest => usable.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1))),
+        PickRule::HighestGeneration => {
+            usable.sort_by(|a, b| (std::cmp::Reverse(generation_of(&a.2)), &a.0, &a.1).cmp(&(std::cmp::Reverse(generation_of(&b.2)), &b.0, &b.1)))
+        }
+    }
     let list: Vec<(String, String)> = usable.iter().map(|(c, n, _)| (c.clone(), n.clone())).collect();
     usable.into_iter().next().map(|(_, name, m)| Picked {
         dir: source_dir.join(SNAP_DIR).join(&name),
@@ -233,6 +260,36 @@ pub fn gc_local(source_dir: &Path, kind: &str, source_id: &str, compat: Compat, 
     let mut v = gc(source_dir, picked);
     v.extend(gc_unusable(source_dir, kind, source_id, compat, picked, INCOMPLETE_GRACE));
     v
+}
+
+/// [`gc`] for a source that grows ([`PickRule::HighestGeneration`]): keeps the snapshot in use (the highest generation) and the one
+/// before it as a rollback, and removes the other usable ones on this device only. A removed snapshot's files that a kept one
+/// links stay (a hard link is a name: removing one name never removes the file under another).
+pub fn gc_generations(source_dir: &Path, picked: &Picked) -> Vec<String> {
+    let mut removed = Vec::new();
+    for (k, (_, name)) in picked.usable.iter().enumerate() {
+        if k < 2 {
+            continue;
+        }
+        if std::fs::remove_dir_all(source_dir.join(SNAP_DIR).join(name)).is_ok() {
+            removed.push(name.clone());
+        }
+    }
+    let why = "superseded: an older generation";
+    record_rejected(source_dir, &picked.manifest.kind, &picked.manifest.source_id, &removed, why);
+    removed
+}
+
+/// [`gc_local`] under a rule.
+pub fn gc_local_with(source_dir: &Path, kind: &str, source_id: &str, compat: Compat, picked: &Picked, rule: PickRule) -> Vec<String> {
+    match rule {
+        PickRule::Earliest => gc_local(source_dir, kind, source_id, compat, picked),
+        PickRule::HighestGeneration => {
+            let mut v = gc_generations(source_dir, picked);
+            v.extend(gc_unusable(source_dir, kind, source_id, compat, picked, INCOMPLETE_GRACE));
+            v
+        }
+    }
 }
 
 /// How long a snapshot that is not complete (no manifest yet, a listed file missing or short) is left alone with no change in
@@ -425,6 +482,13 @@ pub struct Stage {
     pub bytes: u64,
     /// Where the files came from, to put them back if the stage is aborted.
     from: PathBuf,
+}
+
+impl Stage {
+    /// A stage built by the caller in `dir` (`<build>/publish-<build id>/`): files already hashed, to be published by [`publish`].
+    pub fn prepared(build: &Path, build_id: String, dir: PathBuf, files: Vec<FileEntry>, bytes: u64) -> Stage {
+        Stage { build_id, dir, files, bytes, from: build.to_path_buf() }
+    }
 }
 
 /// MOVE the files of the finished `build` folder, except those in `exclude` (locks, bookkeeping), into
@@ -712,6 +776,102 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, "d2");
         assert!(r[0].1.contains("superseded"), "{r:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- generations ----
+
+    /// A snapshot `name` with a `generation` (None: a manifest with no such key) and one file `f` shared in content by every
+    /// generation (`seg`) plus one of its own.
+    fn fake_generation(sd: &Path, name: &str, created: &str, generation: Option<u64>) {
+        let dir = sd.join(SNAP_DIR).join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("f"), b"shared segment").unwrap();
+        std::fs::write(dir.join(format!("own-{name}")), name.as_bytes()).unwrap();
+        let mut files = Vec::new();
+        for n in ["f".to_string(), format!("own-{name}")] {
+            let (sha256, size) = hash_file(&dir.join(&n)).unwrap();
+            files.push(FileEntry { path: n, size, sha256 });
+        }
+        let mut extra = Map::new();
+        if let Some(g) = generation {
+            extra.insert("generation".into(), Value::from(g));
+        }
+        let m = Manifest { kind: "k".into(), source_id: "s".into(), format: 2, tantivy: "0.27".into(), tokenizer: None, chunker: None, core: "t".into(), created: created.into(), extra, files };
+        std::fs::write(dir.join(MANIFEST), serde_json::to_string(&m).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_highest_generation_wins_and_two_devices_with_the_same_snapshots_choose_alike() {
+        // concurrent extensions of g1 on two devices: two usable g2, and a g3 built on one of them
+        let (_ra, sda) = local_root("gen-a");
+        let (_rb, sdb) = local_root("gen-b");
+        for sd in [&sda, &sdb] {
+            fake_generation(sd, "b1", "2026-03-01T00:00:00Z", Some(1));
+            fake_generation(sd, "b2-x", "2026-03-02T00:00:02Z", Some(2));
+            fake_generation(sd, "b2-y", "2026-03-02T00:00:01Z", Some(2));
+        }
+        let name = |sd: &Path| pick_with(sd, "k", "s", compat2, PickRule::HighestGeneration).unwrap().name;
+        assert_eq!(name(&sda), "b2-y", "the highest generation, then the earliest created");
+        assert_eq!(name(&sda), name(&sdb), "every device that holds the same snapshots chooses the same one");
+        // the same `created`: the lowest build id
+        let (_rc, sdc) = local_root("gen-c");
+        fake_generation(&sdc, "b2-z", "2026-03-02T00:00:00Z", Some(2));
+        fake_generation(&sdc, "b2-a", "2026-03-02T00:00:00Z", Some(2));
+        assert_eq!(name(&sdc), "b2-a");
+        // one more extension (g3) built on the chosen one wins over both g2
+        fake_generation(&sda, "b3", "2026-03-03T00:00:00Z", Some(3));
+        assert_eq!(name(&sda), "b3");
+        // best first: g3, then the g2 before it
+        let p = pick_with(&sda, "k", "s", compat2, PickRule::HighestGeneration).unwrap();
+        assert_eq!(p.usable.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["b3", "b2-y", "b2-x", "b1"]);
+    }
+
+    #[test]
+    fn the_earliest_rule_is_what_it_always_was_whatever_the_generations() {
+        let (_r, sd) = local_root("gen-earliest");
+        fake_generation(&sd, "b1", "2026-03-01T00:00:00Z", None);
+        fake_generation(&sd, "b2", "2026-03-02T00:00:00Z", Some(5));
+        fake_generation(&sd, "b3", "2026-03-03T00:00:00Z", Some(9));
+        let p = pick(&sd, "k", "s", compat2).unwrap();
+        assert_eq!(p.name, "b1", "pick is untouched: the earliest, generations ignored");
+        assert_eq!(p.usable.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["b1", "b2", "b3"]);
+        // without generations, the new rule gives the same answer as the old
+        let (_r2, sd2) = local_root("gen-none");
+        for (n, c) in [("b1", "2026-03-01T00:00:00Z"), ("b2", "2026-03-02T00:00:00Z"), ("b3", "2026-03-02T00:00:00Z")] {
+            fake_generation(&sd2, n, c, None);
+        }
+        let old = pick(&sd2, "k", "s", compat2).unwrap();
+        let new = pick_with(&sd2, "k", "s", compat2, PickRule::HighestGeneration).unwrap();
+        assert_eq!((old.name, old.usable), (new.name, new.usable));
+        // gc under the old rule keeps what it always kept: only the chosen one
+        let removed = gc(&sd, &p);
+        assert_eq!(removed, ["b2", "b3"]);
+    }
+
+    #[test]
+    fn gc_of_generations_keeps_the_highest_and_a_rollback_and_never_removes_a_file_a_kept_snapshot_links() {
+        let (root, sd) = local_root("gen-gc");
+        let g = |n: &str, c: &str, gen: u64| fake_generation(&sd, n, c, Some(gen));
+        g("b1", "2026-03-01T00:00:00Z", 1);
+        g("b2", "2026-03-02T00:00:00Z", 2);
+        g("b3", "2026-03-03T00:00:00Z", 3);
+        // b3 and b2 link b1's shared segment (a hard link: one file, several names), as an extension makes them
+        for n in ["b2", "b3"] {
+            let to = sd.join(SNAP_DIR).join(n).join("f");
+            std::fs::remove_file(&to).unwrap();
+            std::fs::hard_link(sd.join(SNAP_DIR).join("b1").join("f"), &to).unwrap();
+        }
+        let p = pick_with(&sd, "k", "s", compat2, PickRule::HighestGeneration).unwrap();
+        assert_eq!(p.name, "b3");
+        let removed = gc_local_with(&sd, "k", "s", compat2, &p, PickRule::HighestGeneration);
+        assert_eq!(removed, ["b1"], "the oldest goes; the highest and its rollback stay");
+        assert!(sd.join(SNAP_DIR).join("b3").join(MANIFEST).exists() && sd.join(SNAP_DIR).join("b2").join(MANIFEST).exists());
+        assert!(!sd.join(SNAP_DIR).join("b1").exists());
+        // the kept snapshots still verify: the shared file survived b1's removal
+        assert!(verify(&sd.join(SNAP_DIR).join("b3"), "k", "s", compat2).is_ok());
+        assert!(verify(&sd.join(SNAP_DIR).join("b2"), "k", "s", compat2).is_ok());
+        assert_eq!(rejected_ids(&root).len(), 1, "the removal is recorded, so sync never fetches it back");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

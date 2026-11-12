@@ -667,7 +667,7 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse, this.step});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse, this.step, this.extendOf});
 
   /// The running job's step in words ("Looking through the library · 2,000 of 40,000").
   final String? Function()? step;
@@ -689,6 +689,9 @@ class CoreIndexNeed {
 
   /// For a seal: the old index's folder (cs_status's index "dir"), for when no handle has the source.
   final String? indexDir;
+
+  /// For `kind` 'library-words': the library's shard folder and settings, to bring its keyword snapshot up to date (index_extend).
+  final ({String path, Map<String, dynamic>? settings})? extendOf;
   final int size;
   final int uses;
   final int bytesNeeded;
@@ -704,7 +707,7 @@ class _NoCoreCalls implements IndexCoreCalls {
   Future<IndexRun> start(CoreIndexNeed need) => throw UnsupportedError('this core has no index_source or index_seal');
 }
 
-/// [IndexWorkSource] over the core's calls. A seal only copies what is built, so it is short work; a build is long.
+/// [IndexWorkSource] over the core's calls. A seal only links what is built, and an extension only adds the new points, so they are short work; a build is long.
 class CoreIndexWork implements IndexWorkSource {
   CoreIndexWork(this.calls);
 
@@ -717,7 +720,7 @@ class CoreIndexWork implements IndexWorkSource {
             key: '${n.kind}/${n.sourceId}',
             size: n.size,
             uses: n.uses,
-            long: !n.seal,
+            long: !n.seal && n.extendOf == null,
             bytesNeeded: n.bytesNeeded,
             title: n.title,
             progress: n.progress,

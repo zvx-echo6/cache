@@ -462,6 +462,7 @@ class _CacheAppState extends State<CacheApp> {
     bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    wordsPending: (path) => libraries.wordsPendingAt(path),
   );
 
   /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.

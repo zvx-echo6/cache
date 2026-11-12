@@ -365,6 +365,142 @@ pub fn append_documents(dir: &Path, docs: &[IndexDoc]) -> Result<Appended> {
 }
 
 
+// ---------------------------------------------------------------------------------------------------------
+// Growing a snapshot: the points the shard has and an index lacks, and one segment added to a folder of linked segments
+
+/// What differs between the shard and an index `base` of it.
+pub struct Delta {
+    /// The documents the shard has and `base` lacks (a point is in the index when a live document with its id is).
+    pub missing: Vec<IndexDoc>,
+    /// The ids `base` has live documents for that the shard no longer has, or now leaves out: a book removed, or replaced with new point
+    /// ids. They are deleted in the extension, or a keyword hit on one would be looked up in the shard and dropped.
+    pub stale: Vec<String>,
+    /// The shard's point count.
+    pub total: u64,
+}
+
+/// An extension holds its new documents (with their text) in memory: more than this many pieces missing and the library is built whole
+/// instead, which streams the shard. (A snapshot far behind: many adds while sealing was blocked, or a restored device.)
+pub const MAX_EXTEND_PIECES: usize = 2_000;
+
+/// The ids of the live documents of an index.
+fn live_ids(base: &LibOpenIndex) -> Result<std::collections::HashSet<String>> {
+    use tantivy::schema::Value as _;
+    let searcher = base.reader.searcher();
+    let mut ids = std::collections::HashSet::new();
+    for seg in searcher.segment_readers() {
+        let store = seg.get_store_reader(8).map_err(|e| Error::io(format!("reading the index store: {e}")))?;
+        for doc_id in seg.doc_ids_alive() {
+            let d: TantivyDocument = tv(store.get(doc_id))?;
+            if let Some(id) = d.get_first(base.fields.point_id).and_then(|v| v.as_str()) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// What the shard and `base` differ in. `progress(scrolled, total)` and `cancelled()` as in a build; `pace()` after each point. Reads the
+/// shard and `base` only. `Ok(None)` when cancelled; `Ok(Some(Err(n)))` when more than `max_missing` pieces are missing (the scan stops:
+/// the caller builds whole instead; `n` is how many it had found).
+pub fn missing_documents(
+    library_path: &Path,
+    given: Option<&Value>,
+    base: &LibOpenIndex,
+    max_missing: usize,
+    progress: &dyn Fn(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+    pace: &dyn Fn(),
+) -> Result<Option<std::result::Result<Delta, usize>>> {
+    let shard = open_shard_for_scroll(library_path)?;
+    let settings = resolve_settings(&shard, library_path, given)?;
+    let total = EdgeShardRead::count(&shard, edge::CountRequest::new())
+        .map_err(|e| Error::internal(format!("counting points: {e}")))? as u64;
+    let selector = settings.payload_selector();
+    let mut have = live_ids(base)?;
+    let (mut missing, mut scrolled, mut offset) = (Vec::new(), 0u64, None);
+    loop {
+        if cancelled() {
+            return Ok(None);
+        }
+        let mut sr = ScrollRequest::new();
+        sr.offset = offset;
+        sr.limit = Some(BATCH);
+        sr.with_payload = Some(selector.clone());
+        sr.with_vector = WithVector::Bool(false);
+        let (recs, next) =
+            EdgeShardRead::scroll(&shard, sr).map_err(|e| Error::internal(format!("scrolling the library: {e}")))?;
+        let empty = serde_json::Map::new();
+        for r in &recs {
+            scrolled += 1;
+            let pl = r.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
+            if settings.left_out(pl) {
+                continue;
+            }
+            let id = r.id.to_string();
+            // an id the shard has is not stale: what is left in `have` at the end is what the index has and the shard does not
+            if !have.remove(&id) {
+                if missing.len() >= max_missing {
+                    return Ok(Some(Err(missing.len() + 1)));
+                }
+                missing.push(IndexDoc {
+                    point_id: id,
+                    title: settings.base_title(pl),
+                    body: settings.main_text(pl).unwrap_or_default(),
+                    source_type: settings.field_text(pl, &settings.fields.source_type).unwrap_or_default(),
+                });
+            }
+            pace();
+        }
+        progress(scrolled, total);
+        if next.is_none() || recs.is_empty() {
+            break;
+        }
+        offset = next;
+    }
+    let mut stale: Vec<String> = have.into_iter().collect();
+    stale.sort();
+    Ok(Some(Ok(Delta { missing, stale, total })))
+}
+
+/// More segments than this and an extension lets Tantivy merge (the cost of a merge is the merged segments, once in a while).
+pub const MAX_SEGMENTS_BEFORE_MERGE: usize = 40;
+
+/// Adds `docs` to the Tantivy index in `dir` as ONE new segment and commits. `dir` holds the files of the previous snapshot
+/// (hard links): Tantivy never writes into a segment file, only adds new ones and replaces `meta.json` and `.managed.json` by a
+/// rename, so the linked files are not touched. No merge runs (the old segments stay as they are) unless the index already has
+/// [`MAX_SEGMENTS_BEFORE_MERGE`] segments. Replace-by-id: a document with the same `point_id` is deleted first (new `.del` files).
+/// `remove`: ids whose documents are deleted (points the shard no longer has). Returns the number of segments before.
+pub fn append_segment(dir: &Path, tokenizer: &str, docs: &[IndexDoc], remove: &[String], threads: usize, heap_mb: usize) -> Result<usize> {
+    let index = tv(Index::open_in_dir(dir))?;
+    index.tokenizers().register(ANALYZER, make_analyzer(tokenizer));
+    let f = fields_of(&index)?;
+    let before = tv(index.searchable_segment_ids())?.len();
+    let mut cp = Checkpoint::from_index(&index);
+    let mut writer = tv(index.writer_with_num_threads::<TantivyDocument>(threads.max(1), heap_mb.max(15) * 1_000_000))?;
+    if before < MAX_SEGMENTS_BEFORE_MERGE {
+        writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
+    }
+    for id in remove {
+        writer.delete_term(tantivy::Term::from_field_text(f.point_id, id));
+    }
+    for d in docs {
+        writer.delete_term(tantivy::Term::from_field_text(f.point_id, &d.point_id));
+        tv(writer.add_document(doc!(
+            f.point_id => d.point_id.clone(),
+            f.title => d.title.clone(),
+            f.body => cap_bytes(&d.body, MAX_BODY_BYTES),
+            f.source_type => d.source_type.clone()
+        )))?;
+    }
+    cp.scrolled += docs.len() as u64;
+    cp.indexed += docs.len() as u64;
+    cp.finished = true;
+    commit(&mut writer, &cp)?;
+    tv(writer.wait_merging_threads())?;
+    Ok(before)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
