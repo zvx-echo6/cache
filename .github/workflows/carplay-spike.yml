@@ -1,0 +1,72 @@
+# The first spike of the CarPlay work: can a CarPlay screen be seen with no Mac on a desk? A scratch Flutter app (not the
+# product: tools/carplay-spike/app, bundle id org.example.carspike) is made and built for the simulator on a macOS runner, the
+# iOS Simulator's CarPlay display is opened from a script, the app is started from the car side only, and pictures of the
+# CarPlay display come back as an artifact with a log of every command.
+#
+# What the job answers (tools/carplay-spike/host/capture.sh writes one RESULT line each):
+#   - the Simulator's CarPlay display opened and photographed by a script, at Apple's four test sizes
+#   - a simulator build in CarPlay with and without the CarPlay entitlement, never with a provisioning profile
+#   - one Flutter engine held by the app delegate, started by the CarPlay scene with no phone scene, Dart answering over a channel
+#   - a MapLibre Native map view drawing in the window CarPlay hands the app
+#   - how long one round takes
+#
+# No secret, no signing identity, nothing of the product's servers. Runs only on pushes to carplay/spike that touch the spike's
+# own files. Everything is on the macOS runner.
+name: CarPlay spike
+
+on:
+  push:
+    branches: ['carplay/spike']
+    paths:
+      - 'tools/carplay-spike/**'
+      - '.github/workflows/carplay-spike.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carplay-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  spike:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - name: Runner facts, helper tool, simulator boot
+        run: bash tools/carplay-spike/host/prepare.sh
+      - name: Build the scratch app, without and with the CarPlay entitlement
+        run: bash tools/carplay-spike/host/build.sh
+      - name: CarPlay display, start from the car side, pictures
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: bash tools/carplay-spike/host/capture.sh
+      - name: Results
+        if: ${{ !cancelled() }}
+        run: |
+          OUT="$RUNNER_TEMP/spike-out"
+          echo "job seconds so far: $(( $(date -u +%s) - $(cat "$OUT/.job-start" 2>/dev/null || date -u +%s) ))" | tee -a "$OUT/results.txt"
+          {
+            echo '### CarPlay spike'
+            echo '```'
+            cat "$OUT/results.txt" 2>/dev/null || echo 'no results'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/results.txt" 2>/dev/null || true
+          du -sh "$OUT" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carplay-spike-${{ github.run_number }}
+          path: ${{ runner.temp }}/spike-out
+          if-no-files-found: warn
+          retention-days: 7
