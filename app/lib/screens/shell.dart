@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
+import '../browse/library_passage_screen.dart';
 import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../browse/place_about.dart';
 import '../browse/reader_screen.dart';
@@ -25,6 +26,8 @@ import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
 import '../pdf/index/pdf_index_app.dart';
+import '../pdf/open_pdf.dart';
+import '../pdf/pdf_address.dart' show isPdfAddress;
 import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../desktop/desktop.dart';
@@ -40,6 +43,7 @@ import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
 import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
@@ -98,6 +102,7 @@ class Shell extends StatefulWidget {
     required this.video,
     required this.browse,
     required this.nav,
+    this.elevation,
     required this.layout,
     required this.hub,
     this.notebooks,
@@ -127,6 +132,7 @@ class Shell extends StatefulWidget {
   final VideoState video;
   final BrowseState browse;
   final NavState nav;
+  final RouteElevation? elevation;
   final LayoutState layout;
   final SettingsHub hub;
 
@@ -434,8 +440,27 @@ class _ShellState extends State<Shell> {
       unawaited(openGuide(context, title: setupGuide));
       return;
     }
-    _goModule(ModuleId.library);
-    widget.browse.openAddress(address, quote: quote);
+    // Any other source opens as a page pushed over the shell, so Back returns to Ask at the same answer (it used to switch to the
+    // Library tab and open in the Library's own stack, where Back ended on the Library's first page).
+    if (address.startsWith('lib:')) {
+      unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibraryPassageScreen(sources: widget.sources, address: address))));
+      return;
+    }
+    final id = zimIdOfAddress(address);
+    final z = id == null ? null : widget.sources.zimById(id);
+    if (z == null) {
+      _say('That source is not on this device any more.');
+      return;
+    }
+    // A PDF entry opens at its page, with the quote marked.
+    if (isPdfAddress(address)) {
+      unawaited(openZimPdf(context, widget.sources, address, quote: quote));
+      return;
+    }
+    // An article, or an EPUB chapter at the cited block, with the quote's first words marked.
+    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ZimReaderScreen(sources: widget.sources, zim: z, address: address, quote: quote, layout: widget.layout),
+    )));
   }
 
   Future<void> _openGuideAt(String address) async {
@@ -795,7 +820,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),

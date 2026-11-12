@@ -53,6 +53,7 @@ class HomeWeather {
     this.place = '',
     this.temperature,
     this.conditions,
+    this.period,
     this.high,
     this.low,
     this.age,
@@ -74,6 +75,11 @@ class HomeWeather {
   /// "45 °F" and "clear sky", as the forecast source writes them.
   final String? temperature;
   final String? conditions;
+
+  /// The label of the forecast period [conditions], [high] and [low] are for ("Wed Nov 11"), when they are not a reading taken
+  /// now: the source's "Now" has ended and this is its forecast for the period that covers now. Home writes it before them, as
+  /// the Weather screen lists a period under its label. Null for a reading.
+  final String? period;
   final String? high;
   final String? low;
 
@@ -1056,6 +1062,10 @@ class WeatherState extends ChangeNotifier {
   Timer? _hereTimer;
   DateTime? _hereFetchedAt;
 
+  /// When the sources were last fetched for "Where I am" alone, after it moved ([positionChanged]). That fetch changes no
+  /// update time, so the Weather screen reads this to know there is something new to show for the place.
+  DateTime? get hereFetchedAt => _hereFetchedAt;
+
   /// "Where I am" moved to a place nothing was downloaded for, so Home said "no forecast yet" until the next scheduled update
   /// (build 48). Once the key has settled ([hereSettle], restarted by each move) its sources are fetched for that place alone, at
   /// most once per [hereGap]. Like every update it uses any connection (mobile data too) and none while offline; the core's own
@@ -1074,7 +1084,7 @@ class WeatherState extends ChangeNotifier {
   }
 
   Future<void> _fetchHere() async {
-    if (_disposed || _updating) return;
+    if (_disposed || _updating || _updateRunning) return;
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
     if (srcs.isEmpty || here.isEmpty) return;
@@ -1189,7 +1199,22 @@ class WeatherState extends ChangeNotifier {
   /// too. [force] is a person's refresh: every source is downloaded again even when its copy is younger than its refresh interval (a
   /// forecast is kept for 3 hours), still within the core's quotas.
   Future<UpdateReport> updateNow({bool force = false}) async {
-    if (_updating) return const UpdateReport(nothingToDo: 'Already updating');
+    // One update at a time, from its first step to its alert check. [_updating] alone did not do it: it is set only once the
+    // places and the connection are known, so two calls in the same moment (back on the screen and a tap on Update now) both
+    // passed, downloaded everything twice and checked for alerts twice.
+    if (_updating || _updateRunning) return const UpdateReport(nothingToDo: 'Already updating');
+    _updateRunning = true;
+    try {
+      return await _update(force);
+    } finally {
+      _updateRunning = false;
+    }
+  }
+
+  /// An [updateNow] is under way, from before its first wait.
+  bool _updateRunning = false;
+
+  Future<UpdateReport> _update(bool force) async {
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
     final places = await watchedPlaces();
@@ -1267,7 +1292,7 @@ class WeatherState extends ChangeNotifier {
   /// may not run it for hours), so an update that is due ([every] since the last run) runs now. What a background run wrote is
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
   Future<UpdateReport?> updateIfDue(Duration every) async {
-    if (!_started || _updating || enabledSources.isEmpty) return null;
+    if (!_started || _updating || _updateRunning || enabledSources.isEmpty) return null;
     _readStatus();
     notifyListeners();
     final last = _lastRunAt;
@@ -1275,9 +1300,12 @@ class WeatherState extends ChangeNotifier {
     return updateNow();
   }
 
+  /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
+  static const String _needsKeyWords = 'needs a key';
+
   String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
     'quota' => 'reached its limit for now',
-    'key_missing' => 'needs a key',
+    'key_missing' => _needsKeyWords,
     'bad_response' => 'sent something Cache could not read',
     'fetch_failed' => _httpWords(e.message),
     _ => "couldn't update",
@@ -1307,6 +1335,21 @@ class WeatherState extends ChangeNotifier {
     final why = reason ?? (failed ? _lastFailure! : null);
     return WeatherStatus(headline: why == null ? head : '$head · $why', tone: StatusTone.warn);
   }
+
+  /// The Weather screen's own freshness line: the age and, as its only reason, the connection. A source that failed is named by
+  /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour.
+  WeatherStatus freshness() {
+    if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
+    final now = _now();
+    final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
+    final ok = _lastOkAt;
+    if (ok == null) return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', tone: StatusTone.warn);
+    final head = 'Updated ${agoWords(now.difference(ok))}';
+    return reason == null ? WeatherStatus(headline: head, tone: StatusTone.ok) : WeatherStatus(headline: '$head · $reason', tone: StatusTone.warn);
+  }
+
+  /// The time the weather part goes by (tests set it): the Weather screen works out ages and "today" from it.
+  DateTime get clockNow => _now();
 
   /// "3 on · Updated 12 min ago": the line under the Weather and alerts row of Settings.
   String settingsLine() {
@@ -1358,19 +1401,23 @@ class WeatherState extends ChangeNotifier {
         () async {
           try {
             final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-            // An answer with no items (a fetch that failed, a place not downloaded yet) must not wipe the last good one kept for
-            // Home at start (a source with nothing to say gives a "none active" item, never an empty list).
+            // A forecast's answer with no items must not wipe the last good one kept for Home at start. For everything that is
+            // happening (warnings, fires and the rest) no items is the answer: the core leaves out what has ended and gives an
+            // empty list when nothing is active (the "none active" entry is the assistant's tool's, not this call's), so it
+            // replaces what was kept; else a warning that ended came back at every start until the core answered.
             final key = '${c.id} ${p.id}';
             final had = (_shown[key]?['items'] as List?)?.isNotEmpty ?? false;
-            if (!had || (g['items'] as List?)?.isNotEmpty == true) {
+            if (!had || (g['items'] as List?)?.isNotEmpty == true || groupOf(c) == LiveGroup.alerts) {
               _shown[key] = g;
               kept = true;
             }
             return _viewOf(c, p, g);
           } on CacheSearchException catch (e) {
-            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
+            // Nothing downloaded for a source that is on without its key: an update skips it, so "Update now to get it" could
+            // never come true. It says why instead, in the words a failed update has for it.
+            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? null : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message));
           } catch (_) {
-            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]);
+            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id] ?? (keyReady(c) ? null : _needsKeyWords));
           }
         }(),
     ]);
@@ -1381,16 +1428,32 @@ class WeatherState extends ChangeNotifier {
   SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
     final le = g['last_error'];
     final fetched = DateTime.tryParse('${g['fetched_at']}');
+    // A kept answer's "expired" is as of when the core gave it: it is worked out again from the time the data runs to.
+    final until = DateTime.tryParse('${g['valid_until']}');
     return SourceView(
       source: c,
       place: p,
-      items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
+      // A kept answer's items are as the core gave them then: an alert whose own "Expires" has passed since is left out (the
+      // core would leave it out now; nothing else in a kept item says when it ends).
+      // What was taken back is not something happening: a cancel message and the alert it references are left out of the
+      // app's lists and pop-ups (see [withoutCancelled]).
+      items: [
+        for (final i in withoutCancelled([for (final j in (g['items'] as List? ?? const [])) if (j is Map) LiveItem.fromJson(j.cast<String, dynamic>())]))
+          if (!(kept && _pastItsExpires(i))) i,
+      ],
       // A kept answer's age is worked out again: it is older now than when the core said it.
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
-      expired: g['expired'] == true,
+      expired: g['expired'] == true || (kept && until != null && _now().isAfter(until)),
       error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
     );
+  }
+
+  /// Whether [i] says when it expires ("Expires", as alerts do) and that time has passed.
+  bool _pastItsExpires(LiveItem i) {
+    if (!RegExp(r'^\d{4}-\d\d-\d\d[ T]\d\d:\d\d').hasMatch(i.fields['Expires'] ?? '')) return false;
+    final span = alertSpan(i);
+    return span != null && _now().isAfter(span.to);
   }
 
   /// The last answer the core gave for each source and place, also kept in a file: the core answers one call at a time, and while
@@ -1435,7 +1498,26 @@ class WeatherState extends ChangeNotifier {
   /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's "Pop up for" says, silent in
   /// quiet hours unless it is serious. Everything checked is remembered as told, shown or not, so choosing more pop-ups later does not
   /// bring back old alerts. Returns how many were shown.
-  Future<int> checkAlerts() async {
+  ///
+  /// One check at a time: a check reads what was told, shows, then writes, so two at once (the update's and the one after
+  /// "Where I am" moved) both saw the same alert as new and it sounded twice. A second check waits for the first, then sees what
+  /// the first told.
+  Future<int> checkAlerts() {
+    // Only a check that is still running is waited for. A future that is already complete is never chained on: its listeners
+    // are told in the zone it was made in, which need not be the caller's (a widget test makes this object in its fake-time
+    // zone and updates in real time, and an update waiting on such a future never came back).
+    final before = _alertChecksOpen > 0 ? _alertChecks : null;
+    final run = before == null ? _checkAlerts() : before.then((_) => _checkAlerts());
+    _alertChecksOpen++;
+    _alertChecks = run.then<void>((_) {}, onError: (_) {}).whenComplete(() => _alertChecksOpen--);
+    return run;
+  }
+
+  /// The last alert check asked for, and how many have not finished.
+  Future<void>? _alertChecks;
+  int _alertChecksOpen = 0;
+
+  Future<int> _checkAlerts() async {
     final n = notifier, t = told;
     if (n == null || t == null) return 0;
     final byPlace = <WatchPlace, List<SourceView>>{};
@@ -1443,13 +1525,18 @@ class WeatherState extends ChangeNotifier {
       byPlace[p] = await viewFor(p);
     }
     await placeAlerts?.load();
-    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor, toldAlerts: await t.readAlerts());
+    final before = await t.load();
+    // The told list and the copy beside it are both there and neither can be read (rare, with the copy): nothing is known of
+    // what was told. These are safety alerts, and missing a new warning is worse than repeating one: it is taken as nothing
+    // told, so what is in force pops up once, the log says so, and the list is written again below.
+    if (!before.known) logError('Alerts: the told list and its copy could not be read; what is in force is told again');
+    final fresh = pickNewAlerts(byPlace, before.addresses, rules: placeAlerts?.ruleFor, toldAlerts: before.alerts);
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {
       if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
     }
-    await t.add([for (final a in fresh) ...a.allAddresses], alerts: [for (final a in fresh) ...a.told]);
+    await t.add([for (final a in fresh) ...a.allAddresses, for (final a in fresh) ...a.marks], alerts: [for (final a in fresh) ...a.told]);
     return shown;
   }
 
@@ -1483,8 +1570,8 @@ class WeatherState extends ChangeNotifier {
 
   /// The Weather and alerts card on Home, for the place Home talks about ([homePlace]): the forecast now (temperature, conditions,
   /// the day's high and low), and the warnings in force and fires near it. Other watched places are on the Weather screen; so are
-  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
-  /// listed are those of the one fire source that reports the most.
+  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters): a fire two
+  /// of them name is listed once, and every source's fires are listed ([firesOnce]).
   Future<HomeWeather> homeCard() async {
     final early = _homeEarly();
     if (early != null) return early;
@@ -1527,8 +1614,11 @@ class WeatherState extends ChangeNotifier {
     // conditions) the nearest station that reports a temperature, else its first item. A source that lists no temperature (a
     // station with only wind and pressure) must not hide the one after it, so every source is scanned and temperature and
     // conditions each come from the best source that has them. Forecast /now items rank before station lists.
+    // A first item that reports no temperature is not known to be a reading: a forecast whose "Now" has ended lists only its
+    // periods (tonight, the days), so its conditions are never taken as the conditions now. It still gives the source's age.
     final nows = <(LiveItem, SourceView)>[];
     final stations = <(LiveItem, SourceView)>[];
+    final notReadings = <LiveItem>{};
     for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
       final own = [for (final i in v.items) if (i.address.endsWith('/now')) i];
@@ -1546,6 +1636,7 @@ class WeatherState extends ChangeNotifier {
           best = d;
         }
       }
+      if (pick == null) notReadings.add(v.items.first);
       stations.add((pick ?? v.items.first, v));
     }
     final ranked = [...nows, ...stations];
@@ -1555,11 +1646,31 @@ class WeatherState extends ChangeNotifier {
         age = v.age;
         forecastExpired = v.expired;
       }
-      conditions ??= i.fields['Conditions'];
+      if (!notReadings.contains(i)) conditions ??= i.fields['Conditions'];
+    }
+    // No reading: "Now" has ended (a forecast's own lasts 3 hours, and the next download can be hours away) or was never
+    // given, and no station reports. The forecast period that covers now stands in, under its own label and with its source's
+    // age, as the Weather screen lists it. It is a forecast, not a reading, so no temperature stands in for the one that ended.
+    String? period;
+    if (temperature == null && conditions == null) {
+      for (final v in views) {
+        if (v.group != LiveGroup.forecast) continue;
+        final i = _periodNow(v);
+        if (i == null) continue;
+        period = i.label;
+        conditions = i.fields['Conditions'];
+        // the high and low of that same period, never another day's under its label
+        high = i.fields['Daytime high'] ?? i.fields['High'];
+        low = i.fields['Low (early morning)'] ?? i.fields['Low'];
+        age = v.age;
+        forecastExpired = v.expired;
+        break;
+      }
     }
     // the day's high and low from the first source that has them; the names before "Daytime high" and "Low (early morning)" too,
     // for a definition not updated yet
     for (final v in views) {
+      if (period != null) break;
       if (v.group != LiveGroup.forecast) continue;
       for (final i in v.items) {
         if (i.address.endsWith('/now')) continue;
@@ -1573,11 +1684,16 @@ class WeatherState extends ChangeNotifier {
       if (high != null || low != null) break;
     }
     age ??= [for (final (_, v) in ranked) v.age].firstOrNull;
-    forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
+    if (period == null) forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
     final warnings = <HomeAlert>[];
+    HomeAlert line(LiveItem i, SourceView v) => HomeAlert(
+      fire: v.source.category == 'fire',
+      label: i.label,
+      detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (v.source.provider.isNotEmpty) v.source.provider].join(' · '),
+    );
     // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
     final listed = <(LiveItem, String)>[];
-    var fires = <HomeAlert>[];
+    final fireViews = <SourceView>[];
     var anyAlerts = false, alertsExpired = false;
     String? checked;
     for (final v in views) {
@@ -1585,38 +1701,71 @@ class WeatherState extends ChangeNotifier {
       anyAlerts = true;
       alertsExpired = alertsExpired || v.expired;
       checked ??= v.age;
-      final who = v.source.provider;
-      final fire = v.source.category == 'fire';
-      final items = [
-        for (final i in v.active)
-          if (fire || !listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id)))
-          HomeAlert(
-            fire: v.source.category == 'fire',
-            label: i.label,
-            detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (who.isNotEmpty) who].join(' · '),
-          ),
-      ];
-      if (fire) {
-        if (items.length > fires.length) fires = items;
-      } else {
-        warnings.addAll(items);
-        listed.addAll([for (final i in v.active) (i, v.source.id)]);
+      if (v.source.category == 'fire') {
+        fireViews.add(v);
+        continue;
       }
+      warnings.addAll([
+        for (final i in v.active)
+          if (!listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id))) line(i, v),
+      ]);
+      listed.addAll([for (final i in v.active) (i, v.source.id)]);
     }
+    // every fire source's fires, a fire two of them name listed once, the sources in turn (see firesOnce)
+    final fires = [for (final (i, v) in firesOnce(fireViews)) line(i, v)];
     return HomeWeather(
       place: p.name,
       temperature: temperature,
       conditions: conditions,
+      period: period,
       high: high,
       low: low,
       age: age,
       expired: forecastExpired,
-      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null,
+      // "no forecast yet" only when there is nothing to show: never beside a high and low
+      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null && high == null && low == null,
       alerts: [...warnings, ...fires],
       alertsKnown: anyAlerts,
       alertsExpired: alertsExpired,
       checked: checked,
     );
+  }
+
+  /// The forecast period of [v] that covers now, for Home when there is no reading: of the items that give "Conditions" (not
+  /// the "Now" item), the one that started last. A day ("2026-11-11") covers that date at the place and no other, so a day that
+  /// has passed is never shown as today; a period with a start time covers from then on (the core leaves out the periods that
+  /// have ended, and an item carries no end to check here). Null when no item is known to cover now.
+  LiveItem? _periodNow(SourceView v) {
+    final now = _now();
+    // the place's clock: the offset the core writes this source's times in, else the device's
+    final stamp = RegExp(r'([+-])(\d\d):(\d\d)$').firstMatch(v.fetchedAt?.trim() ?? '');
+    final offset = stamp == null
+        ? now.timeZoneOffset.inMinutes
+        : (stamp.group(1) == '-' ? -1 : 1) * (int.parse(stamp.group(2)!) * 60 + int.parse(stamp.group(3)!));
+    final there = now.toUtc().add(Duration(minutes: offset));
+    LiveItem? pick;
+    DateTime? best;
+    for (final i in v.items) {
+      if (i.address.endsWith('/now') || i.fields['Conditions'] == null) continue;
+      final t = i.time?.trim();
+      if (t == null) continue;
+      final DateTime from;
+      final day = RegExp(r'^(\d{4})-(\d\d)-(\d\d)$').firstMatch(t);
+      if (day != null) {
+        final y = int.parse(day.group(1)!), m = int.parse(day.group(2)!), d = int.parse(day.group(3)!);
+        if (y != there.year || m != there.month || d != there.day) continue;
+        from = DateTime.utc(y, m, d).subtract(Duration(minutes: offset));
+      } else {
+        final at = DateTime.tryParse(t);
+        if (at == null || at.isAfter(now)) continue;
+        from = at.toUtc();
+      }
+      if (best == null || from.isAfter(best)) {
+        pick = i;
+        best = from;
+      }
+    }
+    return pick;
   }
 
   // ---------------------------------------------------------------- what is remembered between starts

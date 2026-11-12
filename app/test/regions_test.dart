@@ -9,7 +9,9 @@ import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/search_panel.dart';
 import 'package:cache/nav/units.dart';
+import 'package:cache/regions/problem_words.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/regions/ui/region_download.dart';
 import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/regions_state.dart';
@@ -20,6 +22,7 @@ import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/search/core_config.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/hub.dart';
+import 'package:cache/settings/space.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:cache_search/cache_search.dart';
@@ -375,6 +378,76 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a region whose known parts do not fit the phone is refused once, before any part starts', (tester) async {
+    final r = await _Rig.boot(tester);
+    var space = const Space(free: 200 << 30, reserve: 20 << 30);
+    final regions = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core, spaceOf: (_) => space);
+    await tester.runAsync(regions.init);
+    final county = r.county;
+    final cost = regions.costOf(county);
+    final need = regions.knownDownloadBytes(county, routing: true, map: true);
+    expect(need, cost.routing! + cost.map!, reason: 'the catalogue sizes the pop-up shows');
+    // One byte short for directions and the map together. Each alone fits, and each alone is all that was ever checked: the
+    // parts check themselves as they start, so both started.
+    const reserve = 5 << 30;
+    space = Space(free: reserve + need - 1, reserve: reserve);
+    expect(space.shortBy(cost.routing!) + space.shortBy(cost.map!), 0);
+    Object? refused;
+    await tester.runAsync(() async {
+      try {
+        await regions.download(county, routing: true, map: true, anyway: true);
+      } catch (e) {
+        refused = e;
+      }
+    });
+    expect(refused, isA<CacheSearchException>().having((e) => e.code, 'code', 'no_space'));
+    expect(downloadProblemWords(refused!, what: 'download Twin Falls County'),
+        "Couldn't download Twin Falls County: there is not enough free space. Free some space in Settings > Storage, then try again.");
+    expect(r.core.added, isEmpty, reason: 'directions did not start');
+    expect(r.s.engine.allAreas, isEmpty, reason: 'no map layer started');
+    expect(regions.regionOf(_county), isNull, reason: 'nothing of it is on the phone, and nothing is left to clean up');
+    // with room for all of it, it starts
+    space = Space(free: reserve + need, reserve: reserve);
+    await tester.runAsync(() => regions.download(county, routing: true, map: true, anyway: true));
+    expect(r.core.added.single['id'], _county);
+    expect(r.s.engine.allAreas, isNotEmpty);
+    // A part with no size known is not counted (an area drawn on the map has none): it starts, and its own check stands.
+    space = const Space(free: reserve, reserve: reserve);
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
+    expect(regions.knownDownloadBytes(drawn, routing: true, map: true), 0);
+    await tester.runAsync(() => regions.download(drawn, routing: true, map: false, anyway: true));
+    expect(r.core.added.last['id'], drawn.id);
+    regions.dispose();
+    await r.dispose(tester);
+  });
+
+  testWidgets('directions with no road data for the area: its page says not available yet, as it does for places, not Ready', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() async {
+      await r.regions.download(r.county, routing: true, map: false);
+      // The published roads have no tile over the area: the core has nothing to fetch and says "ready".
+      r.core.regions[_county]!
+        ..['state'] = 'ready'
+        ..['tiles'] = 0
+        ..['bytes'] = 0
+        ..['done_tiles'] = 0
+        ..['done_bytes'] = 0;
+      await r.regions.refresh();
+    });
+    final l = r.regions.regionOf(_county)!;
+    expect(l.parts.single.state, PartState.notAvailable);
+    expect(l.phase, RegionPhase.ready);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: RegionPage(regions: r.regions, id: _county)));
+    await r.settle(tester);
+    expect(find.descendant(of: find.byKey(const ValueKey('part-directions')), matching: find.text('Not available yet for this area')), findsOneWidget);
+    expect(find.textContaining('Ready · '), findsNothing, reason: 'it read "Ready · 0 B", with a tick');
+    // the same row places have: a tap says why
+    await tester.tap(find.byKey(const ValueKey('part-directions')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('part-note')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
   group('places and addresses', () {
     testWidgets('places are offered once they are published (the catalogue has their size), and downloaded first', (tester) async {
       final r = await _Rig.boot(tester, places: true);
@@ -465,6 +538,38 @@ void main() {
       expect(placesNotPublished('HTTP 410 from https://x/places/current.json'), isTrue);
       expect(placesNotPublished('HTTP 404 from https://x/places/index-b1.json.gz'), isFalse);
       expect(placesNotPublished(null), isFalse);
+    });
+
+    test('directions with no road data for the area read as places do there: not available yet, never Ready with nothing', () {
+      // the published roads have no tile over the area (an area drawn outside them): the core says "ready" with 0 tiles
+      final none = LocalRegion(
+        id: 'drawn-1',
+        name: 'Drawn area',
+        routing: {'state': 'ready', 'tiles': 0, 'bytes': 0, 'done_tiles': 0, 'done_bytes': 0, 'error': null},
+        places: {'state': 'ready', 'tiles': 4, 'bytes': 20, 'done_tiles': 4, 'done_bytes': 20},
+      );
+      final d = none.parts.firstWhere((p) => p.kind == RegionPartKind.directions);
+      expect(d.state, PartState.notAvailable);
+      expect(d.ready, isFalse);
+      expect(d.complete, isTrue);
+      expect(d.problem, isNull);
+      expect(partStateWords(d), 'Not available yet');
+      expect(none.phase, RegionPhase.ready, reason: 'nothing more will come for it: the region is complete, with nothing to try again');
+      expect(none.error, isNull);
+      expect(none.fraction, 1.0);
+      expect(none.partsLine, 'Directions not available yet');
+      expect(none.notAvailableNotes, ['Directions not available yet']);
+      expect(regionDoneLine(none), 'On this device · ${formatBytes(none.bytes)} · Directions not available yet');
+      // places in the same situation say it in the same words, the ones their row has always had
+      final noPlaces = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'tiles': 4, 'bytes': 100}, places: {'state': 'ready', 'tiles': 0, 'bytes': 0});
+      expect(noPlaces.notAvailableNotes, [kPlacesNotAvailableShort]);
+      expect(regionDoneLine(noPlaces), 'On this device · ${formatBytes(noPlaces.bytes)} · $kPlacesNotAvailableShort');
+      // road data that is there reads ready as before, also from a core that names no tile count
+      expect(LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'tiles': 4, 'bytes': 100}).parts.single.state, PartState.ready);
+      expect(LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}).parts.single.state, PartState.ready);
+      expect(LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}).notAvailableNotes, isEmpty);
+      // and a part still working out what it needs is downloading, not "not available"
+      expect(LocalRegion(id: 'r', name: 'R', routing: {'state': 'downloading', 'tiles': 0, 'bytes': 0}).parts.single.state, PartState.downloading);
     });
 
     testWidgets('places published after a region was downloaded: Check for update finds them, its page offers them, Update adds them', (tester) async {

@@ -22,8 +22,9 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 
 /**
- * The car's screens. Three steps at most from opening Cache to driving (saved places or search, the route, guidance), within the
- * Car App Library's limits. The words are short and never send the driver to the phone.
+ * The car's screens. Opening Cache shows the map with two buttons, Search and Saved places. From there to driving is three steps
+ * at most (saved places or search, the route, guidance), so four screens with the map, within the Car App Library's limits.
+ * Search reached from the saved places list is one screen more. The words are short and never send the driver to the phone.
  */
 
 /** A screen that redraws when the trip changes, while it is on. */
@@ -71,8 +72,30 @@ private fun combine(dist: CharSequence, addr: String): CharSequence {
     return s
 }
 
-/** Saved places on the map, with Search. Opening Cache in the car starts here. */
+/** The whole map, with two buttons: Search and Saved places. Opening Cache in the car starts here. */
 class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+    // Nothing here changes with the trip (the map buttons redraw through the renderer's own callback).
+    override fun onTrip(trip: CarTrip) {}
+
+    override fun onGetTemplate(): Template =
+        NavigationTemplate.Builder()
+            .setActionStrip(
+                ActionStrip.Builder()
+                    .addAction(Action.Builder().setIcon(CarIcons.search).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { openSearch() }.build())
+                    .addAction(Action.Builder().setIcon(CarIcons.saved).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { openSaved() }.build())
+                    .build(),
+            )
+            .setMapActionStrip(map.mapActionStrip())
+            .setPanModeListener { on -> map.panMode = on }
+            .build()
+
+    internal fun openSearch() = screenManager.push(SearchScreen(carContext, map))
+
+    internal fun openSaved() = screenManager.push(SavedPlacesScreen(carContext, map))
+}
+
+/** Saved places in a list over the map, with Search. Back closes it. */
+class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
     private var places: List<CarPlace>? = null
     private val main = Handler(Looper.getMainLooper())
     private val retry = Runnable { load() }
@@ -109,7 +132,7 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
     }
 
     override fun onGetTemplate(): Template {
-        val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.APP_ICON).build()
+        val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.BACK).build()
         val content = ListTemplate.Builder().setHeader(header)
         val list = places
         if (list == null) {
@@ -121,7 +144,7 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
         }
         return MapWithContentTemplate.Builder()
             .setContentTemplate(content.build())
-            .setActionStrip(ActionStrip.Builder().addAction(Action.Builder().setIcon(CarIcons.search).setOnClickListener { search() }.build()).build())
+            .setActionStrip(ActionStrip.Builder().addAction(Action.Builder().setIcon(CarIcons.search).setFlags(Action.FLAG_IS_PERSISTENT).setOnClickListener { search() }.build()).build())
             .setMapController(map.mapController())
             .build()
     }
@@ -135,21 +158,40 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
     }
 }
 
-/** Search for a place (by name, address or kind of place; by meaning when the phone's search model is loaded). */
+/**
+ * Search for a place (by name, address or kind of place; by meaning when the phone's search model is loaded). While the box is
+ * empty it lists the saved places, unless it was opened with text or with places already found.
+ */
 class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, private val initial: String? = null, preset: List<CarPlace>? = null) :
     Screen(carContext) {
     private var results: List<CarPlace>? = preset
     private var searching = false
+
+    // The text the results are for (what was last searched: typed, submitted, or the text the screen was opened with). The
+    // template puts it in the box, so when the screen is shown again (Back from a route) the box and the list still agree.
+    private var query: String = initial.orEmpty()
     private var seq = 0
     private val main = Handler(Looper.getMainLooper())
     private var pending: Runnable? = null
 
+    // The saved places, listed while the box is empty. They are kept apart from the results, and shown only when there are no
+    // results and no search is running, so an answer that comes late never replaces what was found for typed text.
+    private val offersSaved = preset == null && initial.isNullOrBlank()
+    private var saved: List<CarPlace> = emptyList()
+
     init {
         if (preset == null && !initial.isNullOrBlank()) find(initial)
+        if (offersSaved) {
+            CarLink.call("saved") { r ->
+                saved = CarPlace.list(r)
+                if (results == null && !searching) invalidate()
+            }
+        }
     }
 
     private fun find(text: String) {
         val mine = ++seq
+        query = text
         if (text.isBlank()) {
             results = null
             searching = false
@@ -166,24 +208,32 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
         }
     }
 
+    internal fun textChanged(searchText: String) {
+        pending?.let { main.removeCallbacks(it) }
+        pending = null
+        // The box holds what the list is already for (the host says so when it shows the screen again with its text): nothing
+        // to look up.
+        if (searchText == query && !searching && (results != null || searchText.isBlank())) return
+        val r = Runnable { find(searchText) }
+        pending = r
+        main.postDelayed(r, 600)
+    }
+
+    internal fun submitted(searchText: String) {
+        pending?.let { main.removeCallbacks(it) }
+        find(searchText)
+    }
+
     override fun onGetTemplate(): Template {
         val b = SearchTemplate.Builder(object : SearchTemplate.SearchCallback {
-            override fun onSearchTextChanged(searchText: String) {
-                pending?.let { main.removeCallbacks(it) }
-                val r = Runnable { find(searchText) }
-                pending = r
-                main.postDelayed(r, 600)
-            }
+            override fun onSearchTextChanged(searchText: String) = textChanged(searchText)
 
-            override fun onSearchSubmitted(searchText: String) {
-                pending?.let { main.removeCallbacks(it) }
-                find(searchText)
-            }
+            override fun onSearchSubmitted(searchText: String) = submitted(searchText)
         })
             .setHeaderAction(Action.BACK)
             .setSearchHint("Search for a place")
             .setShowKeyboardByDefault(results == null && initial == null)
-        initial?.let { b.setInitialSearchText(it) }
+        if (query.isNotEmpty()) b.setInitialSearchText(query)
         val list = results
         if (searching && list == null) {
             b.setLoading(true)
@@ -191,12 +241,17 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
             val items = ItemList.Builder()
             if (list != null) {
                 items.setNoItemsMessage("No places found")
-                for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { screenManager.push(RoutePreviewScreen(carContext, map, p)) })
+                for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
+            } else if (offersSaved) {
+                // The box is empty: the saved places (none, and the list is empty as before).
+                for (p in saved.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
             }
             b.setItemList(items.build())
         }
         return b.build()
     }
+
+    private fun open(p: CarPlace) = screenManager.push(RoutePreviewScreen(carContext, map, p))
 
     companion object {
         const val MAX_ROWS = 6
@@ -250,7 +305,7 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
         val strip = ActionStrip.Builder()
         if (ready) {
             strip.addAction(
-                Action.Builder().setTitle("Start").setFlags(Action.FLAG_PRIMARY).setBackgroundColor(CarColor.GREEN).setOnClickListener {
+                Action.Builder().setTitle("Start").setFlags(Action.FLAG_PRIMARY or Action.FLAG_IS_PERSISTENT).setBackgroundColor(CarColor.GREEN).setOnClickListener {
                     started = true
                     CarLink.call("start")
                 }.build(),
@@ -266,14 +321,15 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     }
 }
 
-/** Turn by turn: the phone's guidance, with Stop and the voice switch. */
+/** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
 class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
 
     override fun onGetTemplate(): Template {
         val t = CarLink.trip
         val b = NavigationTemplate.Builder()
         val strip = ActionStrip.Builder()
-            .addAction(Action.Builder().setTitle("Stop").setOnClickListener { stop() }.build())
+            .addAction(Action.Builder().setTitle("End route").setOnClickListener { stop() }.build())
+            .addAction(Action.Builder().setIcon(CarIcons.overview).setOnClickListener { openOverview() }.build())
             .addAction(
                 Action.Builder().setIcon(if (t.voiceOn) CarIcons.voiceOn else CarIcons.voiceOff)
                     .setOnClickListener { CarLink.call("voice", mapOf("on" to !CarLink.trip.voiceOn)) }.build(),
@@ -281,6 +337,8 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
         b.setActionStrip(strip.build())
         b.setMapActionStrip(map.mapActionStrip())
         b.setPanModeListener { on -> map.panMode = on }
+        // The host's own guidance card in the theme's color (the host may override it for contrast).
+        CarModels.hostBackground(t)?.let { b.setBackgroundColor(it) }
         when {
             t.arrived -> b.setNavigationInfo(MessageInfo.Builder("You have arrived").setText(t.destinationName ?: "").build())
             t.rerouting -> b.setNavigationInfo(MessageInfo.Builder("Finding a new route").build())
@@ -290,7 +348,51 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
         return b.build()
     }
 
-    private fun stop() {
-        CarLink.call("stop")
+    // End route: over on the car at once, and the phone is asked to end its guidance.
+    internal fun stop() = CarLink.stopGuidance()
+
+    internal fun openOverview() = screenManager.push(RouteOverviewScreen(carContext, map))
+}
+
+/**
+ * The whole route on the map, with what is left and the routes there are (information only: the route is chosen before the
+ * drive). Back returns to guidance. Not RoutePreviewNavigationTemplate: its rows are routes to pick and a Navigate button, which
+ * is for before the drive; this is a map with a list, as the Car App Library's MapWithContentTemplate is meant for.
+ */
+class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+    private var shownSig: String? = null
+
+    override fun onShown() = map.setOverview(true)
+
+    override fun onGone() = map.setOverview(false)
+
+    // The summary changes with the minute, not with every position update.
+    override fun onTrip(trip: CarTrip) {
+        val sig = listOf(trip.remainingS?.div(30), trip.routes, trip.routeIndex, trip.destinationName, trip.imperial).toString()
+        if (sig == shownSig) return
+        shownSig = sig
+        invalidate()
+    }
+
+    override fun onGetTemplate(): Template {
+        val t = CarLink.trip
+        val header = Header.Builder().setTitle("Route overview").setStartHeaderAction(Action.BACK).build()
+        val items = ItemList.Builder()
+        val left = Row.Builder().setTitle(t.destinationName ?: "Destination")
+        CarModels.leftText(t)?.let { left.addText(it) }
+        t.destinationAddress?.let { left.addText(it) }
+        items.addItem(left.build())
+        if (t.routes.size > 1) {
+            for (r in t.routes) {
+                val row = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
+                row.addText(if (r.index == t.routeIndex) "Your route" else "Other route")
+                r.via?.let { row.addText(it) }
+                items.addItem(row.build())
+            }
+        }
+        return MapWithContentTemplate.Builder()
+            .setContentTemplate(ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build())
+            .setMapController(map.mapController())
+            .build()
     }
 }
