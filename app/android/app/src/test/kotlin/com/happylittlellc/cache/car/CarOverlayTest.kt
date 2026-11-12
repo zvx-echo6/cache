@@ -103,9 +103,8 @@ class CarOverlayTest {
     private fun trip(theme: String, climb: Boolean = true, mini: Boolean = true, imperial: Boolean = true): CarTrip = CarTrip.from(
         mapOf(
             "phase" to "guiding", "available" to true, "units" to if (imperial) "imperial" else "metric",
-            "overlay" to mapOf("climb" to climb, "miniMap" to mini),
-            "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette(theme),
-        ),
+            "palette" to palette(theme),
+        ) + (if (climb) mapOf("climb" to sampleClimb()) else emptyMap()) + (if (mini) mapOf("overview" to sampleOverview()) else emptyMap()),
     )
 
     // ---- parsing ----------------------------------------------------------------------------------------------------
@@ -113,8 +112,7 @@ class CarOverlayTest {
     @Test
     fun theTripBlocksAreParsed() {
         val t = trip("dark")
-        assertTrue(t.overlay.climb)
-        assertTrue(t.overlay.miniMap)
+        assertFalse(t.overlay.phoneDrive)
         val c = t.climb!!
         assertEquals(56, c.heightsM.size)
         assertEquals(9.0, c.gradePct!!, 0.0)
@@ -137,7 +135,7 @@ class CarOverlayTest {
         assertNull(t.climb)
         assertNull(t.overview)
         assertNull(t.palette)
-        assertTrue(t.overlay.climb && t.overlay.miniMap)
+        assertFalse(t.overlay.phoneDrive)
         // A climb block with too few heights, a bad palette: dropped, not a crash.
         val odd = CarTrip.from(mapOf("phase" to "guiding", "climb" to mapOf("heightsM" to listOf(1.0)), "palette" to mapOf("day" to mapOf("route" to "nope"))))
         assertNull(odd.climb)
@@ -155,10 +153,29 @@ class CarOverlayTest {
     }
 
     @Test
-    fun switchesAreReadFromTheTrip() {
-        val t = trip("dark", climb = false, mini = true)
-        assertFalse(t.overlay.climb)
-        assertTrue(t.overlay.miniMap)
+    fun thePhonesDriveScreenIsTheOneThingReadFromTheOverlayPart() {
+        fun read(overlay: Any?) = CarTrip.from(mapOf("phase" to "guiding", "overlay" to overlay)).overlay
+        assertTrue(read(mapOf("phoneDrive" to true)).phoneDrive)
+        assertFalse(read(mapOf("phoneDrive" to false)).phoneDrive)
+        // Missing, or not a yes: false.
+        assertFalse(read(null).phoneDrive)
+        assertFalse(read(emptyMap<String, Any?>()).phoneDrive)
+        assertFalse(read(mapOf("phoneDrive" to "yes")).phoneDrive)
+        assertFalse(CarTrip.from(mapOf("phase" to "guiding")).overlay.phoneDrive)
+        assertEquals(CarOverlaySwitches(phoneDrive = false), CarOverlaySwitches.DEFAULT)
+        // The two keys the phone used to send are not read: with both false nothing is different, the pieces are the
+        // trip's data, and the one value is all the part holds.
+        val old = CarTrip.from(mapOf(
+            "phase" to "guiding", "units" to "imperial", "overlay" to mapOf("climb" to false, "miniMap" to false),
+            "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"),
+        ))
+        assertEquals(CarOverlaySwitches.DEFAULT, old.overlay)
+        assertEquals(CarOverlayView.PIECE_MINI_MAP or CarOverlayView.PIECE_CLIMB, CarOverlayView.pieces(old))
+        val v = overlayView()
+        v.setTrip(old, dark = true, now = true)
+        assertEquals(Pair(true, true), painted(v))
+        val fields = CarOverlaySwitches::class.java.declaredFields.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name }
+        assertEquals(listOf("phoneDrive"), fields)
     }
 
     // ---- layout maths -----------------------------------------------------------------------------------------------
@@ -577,20 +594,288 @@ class CarOverlayTest {
         assertTrue(shot(v).contentEquals(box))
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3 * CarOverlayView.AREA_SETTLE_MS))
         assertTrue(shot(v).contentEquals(box))
-        // The other area arrives and stays: nothing until the settle time has passed, then the split layout, once.
+        // The other area arrives and stays. It has no left column, so the two pieces do not both fit: a small screen. Nothing
+        // changes until the settle time has passed; then the pieces fade out where they are (half a second, nothing pops)
+        // and stay away.
+        assertEquals(CarExtrasClass.SMALL, CarOverlayPainter.extrasMeasure(1280, 720, other, 1f, other).cls)
         v.setAreas(other, other)
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.AREA_SETTLE_MS - 50))
         assertTrue(shot(v).contentEquals(box))
-        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100))
-        val split = pixelsOf(drawn(1280, 720, other, trip("dark")))
-        assertFalse(split.contentEquals(box))
-        assertTrue(shot(v).contentEquals(split))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50 + CarExtrasFade.FADE_MS / 2))
+        assertTrue("${opacity(v)}", opacity(v) in 1..254)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarExtrasFade.FADE_MS))
+        assertTrue(shot(v).all { it == 0 })
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3 * CarOverlayView.AREA_SETTLE_MS))
-        assertTrue(shot(v).contentEquals(split))
-        // Areas that keep the layout are taken at once: the host's buttons hiding moves the split layout's tile.
-        val wider = Rect(92, 91, 1253, 697)
-        v.setAreas(wider, other)
-        assertFalse(shot(v).contentEquals(split))
+        assertTrue(shot(v).all { it == 0 })
+        // The first areas come back and stay: after the settle time the pieces fade in, to the same picture as before.
+        v.setAreas(main, main)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.AREA_SETTLE_MS - 50))
+        assertTrue(shot(v).all { it == 0 })
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50 + CarExtrasFade.FADE_MS / 2))
+        assertTrue("${opacity(v)}", opacity(v) in 1..254)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarExtrasFade.FADE_MS))
+        assertTrue(shot(v).contentEquals(box))
+    }
+
+    @Test
+    fun areasThatKeepTheLayoutAreTakenAtOnce() {
+        // The host's buttons hiding moves the split layout's corner tile to the wider area's edge, in the same frame.
+        val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+            setSurfaceSize(1280, 500)
+            setAreas(wide, wide)
+        }
+        v.setTrip(trip("dark"), dark = true, now = true)
+        fun shotWide(): IntArray {
+            val bmp = Bitmap.createBitmap(1280, 500, Bitmap.Config.ARGB_8888)
+            v.paint(Canvas(bmp))
+            return pixelsOf(bmp)
+        }
+        val before = shotWide()
+        assertTrue(before.contentEquals(pixelsOf(drawn(1280, 500, wide, trip("dark")))))
+        v.setAreas(wideHidden, wide)
+        val after = shotWide()
+        assertFalse(after.contentEquals(before))
+        assertFalse(after.all { it == 0 })
+    }
+
+    // ---- the screen's class, the phone's drive screen, and the fade --------------------------------------------------
+
+    /** How opaque the one box is drawn at 1280 x 720 (a spot on its card fill): 0 not at all, 255 fully. */
+    private fun opacity(v: CarOverlayView): Int {
+        val l = layout(1280, 720, main, main)
+        return shot(v)[(l.mini!!.top + 8).toInt() * 1280 + (l.mini!!.left + 40).toInt()] ushr 24
+    }
+
+    private fun idle(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(ms))
+
+    /** A 1280 x 720 car whose stable area is narrower than the usual one: the one box sits where it always does, but takes
+     * more than a quarter of the free map. */
+    private val inBetween = Rect(505, 91, 650, 697)
+
+    @Test
+    fun theScreensClassIsMeasuredFromTheRoomTheCarReports() {
+        assertEquals(0.25f, CarOverlayPainter.EXTRAS_BIG_MAX_SHARE, 0f)
+        fun m(w: Int, h: Int, stable: Rect, visible: Rect = stable, d: Float = 1f) = CarOverlayPainter.extrasMeasure(w, h, visible, d, stable)
+        // 1280 x 720: the whole box fits; it takes 66,560 px of 568,032 px of free map (the stable area and the gap in the
+        // host's left column), about 12 %: big.
+        val big = m(1280, 720, main)
+        assertEquals(CarExtrasClass.BIG, big.cls)
+        assertTrue(big.fits)
+        assertEquals(66_560f, big.extrasPx, 1f)
+        assertEquals(568_032f, big.freePx, 1f)
+        assertEquals(0.117f, big.share, 0.001f)
+        // The host's buttons hiding widens the visible area only: the same measure, the same class, for the whole drive.
+        assertEquals(big, m(1280, 720, main, visible = mainHidden))
+        // 1280 x 500 (wide and short): the one-line climb card and the full-size tile fit, about 17 %: big.
+        val short = m(1280, 500, wide)
+        assertEquals(CarExtrasClass.BIG, short.cls)
+        assertEquals(56_400f, short.extrasPx, 1f)
+        assertEquals(0.169f, short.share, 0.001f)
+        // 800 x 480: only the smaller tile clears the vehicle, so the two do not fit at full size: small, whatever the share.
+        val little = m(800, 480, small)
+        assertEquals(CarExtrasClass.SMALL, little.cls)
+        assertFalse(little.fits)
+        // No left column at all (the 410 px pane, or another of the host's screens over guidance): no room for the climb: small.
+        assertEquals(CarExtrasClass.SMALL, m(410, 700, Rect(12, 84, 398, 613)).cls)
+        assertEquals(CarExtrasClass.SMALL, m(1280, 720, Rect(92, 91, 1177, 697)).cls)
+        // The boundary, both sides: the same box in a stable area that ends at x 680 takes 24.9 % (big), at 678 it takes
+        // 25.1 % (in-between).
+        val under = m(1280, 720, Rect(505, 91, 680, 697))
+        val over = m(1280, 720, Rect(505, 91, 678, 697))
+        assertTrue(under.fits && over.fits)
+        assertTrue("${under.share}", under.share < 0.25f && under.share > 0.249f)
+        assertTrue("${over.share}", over.share > 0.25f && over.share < 0.251f)
+        assertEquals(CarExtrasClass.BIG, under.cls)
+        assertEquals(CarExtrasClass.IN_BETWEEN, over.cls)
+        assertEquals(CarExtrasClass.IN_BETWEEN, m(1280, 720, inBetween).cls)
+        // The rule on its two figures: exactly a quarter is still big; fitting comes first.
+        assertEquals(CarExtrasClass.BIG, CarOverlayPainter.extrasClass(true, 25f, 100f))
+        assertEquals(CarExtrasClass.IN_BETWEEN, CarOverlayPainter.extrasClass(true, 25.1f, 100f))
+        assertEquals(CarExtrasClass.SMALL, CarOverlayPainter.extrasClass(false, 1f, 100f))
+        assertEquals(CarExtrasClass.SMALL, CarOverlayPainter.extrasClass(true, 1f, 0f))
+        // Twice the density on twice the pixels is the same screen: the same class and share.
+        val dense = m(2560, 1440, Rect(1010, 182, 2354, 1394), d = 2f)
+        assertEquals(CarExtrasClass.BIG, dense.cls)
+        assertEquals(big.share, dense.share, 0.002f)
+        // Where each class puts the extras.
+        assertFalse(CarExtrasClass.SMALL.onCar(phoneDrive = false))
+        assertFalse(CarExtrasClass.SMALL.onCar(phoneDrive = true))
+        assertTrue(CarExtrasClass.IN_BETWEEN.onCar(phoneDrive = false))
+        assertFalse(CarExtrasClass.IN_BETWEEN.onCar(phoneDrive = true))
+        assertTrue(CarExtrasClass.BIG.onCar(phoneDrive = false))
+        assertTrue(CarExtrasClass.BIG.onCar(phoneDrive = true))
+    }
+
+    @Test
+    fun theFadeWaitsOnePauseThenTakesHalfASecondAndAFlipBackInsideThePauseChangesNothing() {
+        assertEquals(2000L, CarExtrasFade.PAUSE_MS)
+        assertEquals(500L, CarExtrasFade.FADE_MS)
+        // A test clock: plain numbers of milliseconds.
+        val f = CarExtrasFade()
+        assertEquals(0f, f.alpha(0L), 0f)
+        assertNull(f.nextIn(0L))
+        // The first frame of a drive: there, at once.
+        f.snap(true)
+        assertEquals(1f, f.alpha(10_000L), 0f)
+        assertNull(f.nextIn(10_000L))
+        // Not wanted any more at 10.0 s: nothing for two seconds, then half a second down to nothing.
+        f.want(false, 10_000L)
+        assertEquals(2000L, f.nextIn(10_000L))
+        assertEquals(1f, f.alpha(10_001L), 0f)
+        assertEquals(1f, f.alpha(11_999L), 0f)
+        assertEquals(1f, f.alpha(12_000L), 0f)
+        assertEquals(0L, f.nextIn(12_001L))
+        assertEquals(0.75f, f.alpha(12_125L), 0.001f)
+        assertEquals(0.5f, f.alpha(12_250L), 0.001f)
+        assertEquals(0.02f, f.alpha(12_490L), 0.001f)
+        assertEquals(0f, f.alpha(12_500L), 0f)
+        assertEquals(0f, f.alpha(60_000L), 0f)
+        assertNull(f.nextIn(60_000L))
+        // Wanted again: the same pause, the same fade, the other way.
+        f.want(true, 60_000L)
+        assertEquals(0f, f.alpha(61_999L), 0f)
+        assertEquals(0.5f, f.alpha(62_250L), 0.001f)
+        assertEquals(1f, f.alpha(62_500L), 0f)
+        // A flip and back inside the pause: nothing changes, and nothing is waiting.
+        f.want(false, 70_000L)
+        assertEquals(1f, f.alpha(71_500L), 0f)
+        f.want(true, 71_500L)
+        assertNull(f.nextIn(71_500L))
+        for (t in 71_500L..76_000L step 100L) assertEquals(1f, f.alpha(t), 0f)
+        // A flip during a fade waits its own pause and then fades from where the opacity is: no jump.
+        f.want(false, 80_000L)
+        assertEquals(0.5f, f.alpha(82_250L), 0.001f)
+        f.want(true, 82_250L)
+        assertEquals(0f, f.alpha(82_500L), 0f)
+        assertEquals(0f, f.alpha(84_249L), 0f)
+        assertEquals(0.5f, f.alpha(84_500L), 0.001f)
+        assertEquals(1f, f.alpha(84_750L), 0f)
+        // Without the pause (the car's own room changed, after its own settle time): the fade begins at once.
+        f.want(false, 90_000L, pause = false)
+        assertEquals(0.5f, f.alpha(90_250L), 0.001f)
+        assertEquals(0f, f.alpha(90_500L), 0f)
+        // Asking for what is already wanted changes nothing.
+        f.snap(true)
+        f.want(true, 95_000L)
+        assertNull(f.nextIn(95_000L))
+    }
+
+    private fun phone(showing: Boolean) = trip("dark").copy(overlay = CarOverlaySwitches(phoneDrive = showing))
+
+    @Test
+    fun onASmallScreenThePiecesAreNeverDrawn() {
+        val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+            setSurfaceSize(800, 480)
+            setAreas(small, small)
+        }
+        fun blank(): Boolean {
+            val bmp = Bitmap.createBitmap(800, 480, Bitmap.Config.ARGB_8888)
+            v.paint(Canvas(bmp))
+            return pixelsOf(bmp).all { it == 0 }
+        }
+        // Not on the first frame of the drive, not later, whatever the phone shows. (The painter could place a one-line
+        // climb card and a smaller tile here: that is the control.)
+        assertFalse(pixelsOf(drawn(800, 480, small, trip("dark"))).all { it == 0 })
+        v.setTrip(phone(false), dark = true, now = true)
+        assertTrue(blank())
+        idle(5000)
+        assertTrue(blank())
+        v.setTrip(phone(true), dark = true, now = false)
+        idle(5000)
+        assertTrue(blank())
+        v.setTrip(phone(false), dark = true, now = false)
+        idle(5000)
+        assertTrue(blank())
+    }
+
+    @Test
+    fun onABigScreenThePiecesStayWhateverThePhoneShows() {
+        val v = overlayView()
+        v.setTrip(phone(false), dark = true, now = true)
+        val box = shot(v)
+        assertEquals(Pair(true, true), painted(v))
+        v.setTrip(phone(true), dark = true, now = false)
+        for (i in 1..10) {
+            idle(500)
+            assertTrue(shot(v).contentEquals(box))
+        }
+        // A drive that starts with the phone's drive screen showing: there from the first frame.
+        val w = overlayView()
+        w.setTrip(phone(true), dark = true, now = true)
+        assertTrue(shot(w).contentEquals(box))
+    }
+
+    @Test
+    fun onAnInBetweenScreenThePiecesFadeOutWhileThePhonesDriveScreenShowsAndBackIn() {
+        val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+            setSurfaceSize(1280, 720)
+            setAreas(inBetween, inBetween)
+        }
+        // The first frame of the drive, phone not showing: both pieces, fully there.
+        v.setTrip(phone(false), dark = true, now = true)
+        val box = shot(v)
+        assertEquals(Pair(true, true), painted(v))
+        assertEquals(255, opacity(v))
+        // The phone's drive screen shows for a second and goes again: inside the pause, so nothing on the car changes.
+        v.setTrip(phone(true), dark = true, now = false)
+        assertTrue(shot(v).contentEquals(box))
+        idle(1000)
+        assertTrue(shot(v).contentEquals(box))
+        v.setTrip(phone(false), dark = true, now = false)
+        for (i in 1..8) {
+            idle(500)
+            assertTrue(shot(v).contentEquals(box))
+        }
+        // It shows and stays: nothing for two seconds, then both pieces fade together over half a second, then nothing.
+        v.setTrip(phone(true), dark = true, now = false)
+        idle(CarExtrasFade.PAUSE_MS - 20)
+        assertTrue(shot(v).contentEquals(box))
+        idle(20 + CarExtrasFade.FADE_MS / 2)
+        assertTrue("${opacity(v)}", opacity(v) in 60..195)
+        assertEquals(painted(v), Pair(true, true))
+        idle(CarExtrasFade.FADE_MS)
+        assertTrue(shot(v).all { it == 0 })
+        // Trip updates keep coming while it shows: still nothing.
+        for (i in 1..5) {
+            v.setTrip(phone(true), dark = true, now = false)
+            idle(1000)
+            assertTrue(shot(v).all { it == 0 })
+        }
+        // The phone stops showing it: the same pause, then the pieces fade back in, to the picture they were.
+        v.setTrip(phone(false), dark = true, now = false)
+        idle(CarExtrasFade.PAUSE_MS - 20)
+        assertTrue(shot(v).all { it == 0 })
+        idle(20 + CarExtrasFade.FADE_MS / 2)
+        assertTrue("${opacity(v)}", opacity(v) in 60..195)
+        idle(CarExtrasFade.FADE_MS)
+        assertTrue(shot(v).contentEquals(box))
+        // A drive that starts while the phone's drive screen is showing: not there on the first frame, and no fade.
+        val w = CarOverlayView(RuntimeEnvironment.getApplication(), 1f).apply {
+            setSurfaceSize(1280, 720)
+            setAreas(inBetween, inBetween)
+        }
+        w.setTrip(phone(true), dark = true, now = true)
+        assertTrue(shot(w).all { it == 0 })
+        idle(3000)
+        assertTrue(shot(w).all { it == 0 })
+    }
+
+    @Test
+    fun aScreenThatBecomesInBetweenFollowsThePhoneFromThen() {
+        // The car's free room narrows (the host's own panel beside the map) but keeps the one box where it is: the class goes
+        // from big to in-between, nothing moves, and the phone's drive screen now counts.
+        val v = overlayView()
+        v.setTrip(phone(true), dark = true, now = true)
+        val box = shot(v)
+        assertEquals(Pair(true, true), painted(v))
+        v.setAreas(inBetween, inBetween)
+        assertTrue(shot(v).contentEquals(box))
+        idle(CarExtrasFade.PAUSE_MS - 20)
+        assertTrue(shot(v).contentEquals(box))
+        idle(20 + CarExtrasFade.FADE_MS / 2)
+        assertTrue("${opacity(v)}", opacity(v) in 60..195)
+        idle(CarExtrasFade.FADE_MS)
+        assertTrue(shot(v).all { it == 0 })
     }
 
     @Test

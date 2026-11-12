@@ -6,14 +6,24 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.View
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * The View that lays Cache's pieces (the route mini map and the climb) over the car map (see CarMapRenderer's header). It paints
- * [CarOverlayPainter] and does nothing else: no touch, no animation. New figures are shown in steps, at most once every
+ * [CarOverlayPainter] and does nothing else: no touch. New figures are shown in steps, at most once every
  * [MIN_STEP_MS], so the pieces never flicker or tween while the car moves. The route overview screen hides them, and they
  * are there only while the trip is guiding: when it stops they go at once, without waiting for the next step. A piece
  * also appears at once when its data first arrives; only the figures of a piece already showing wait for the step.
+ *
+ * Whether the pieces are on this car's screen at all is the screen's class, measured from the areas the car reports
+ * ([CarOverlayPainter.extrasMeasure]): never on a small screen, always on a big one, and on an in-between one except while
+ * the phone's drive screen is showing (the trip's `overlay.phoneDrive`). The one thing here that moves is that change: both
+ * pieces fade together, after one pause ([CarExtrasFade]). On the first frame of a drive, and with the first areas of a car
+ * session, the pieces are simply there or not. When the car's free room changes so that the pieces would move or go, they
+ * fade out where they are, and fade in at the new place if the new room carries them.
  */
 class CarOverlayView(context: Context, private val density: Float) : View(context) {
     private val main = Handler(Looper.getMainLooper())
@@ -29,14 +39,78 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private var waiting = false
     private var waitingVisible: Rect? = null
     private var waitingStable: Rect? = null
+
+    /** The screen's class for the areas in use, and whether the latest trip is guiding and says the phone's drive screen shows
+     * (taken from every trip at once, not at the three-second step). */
+    private var extras = CarExtrasClass.SMALL
+    private var guidingNow = false
+    private var phoneDrive = false
+    private val fade = CarExtrasFade()
+    private var said = false
+
+    /** Areas that change the layout or take the pieces away, waiting for the pieces to have faded out where they are. */
+    private var swapping = false
+    private var swapVisible: Rect? = null
+    private var swapStable: Rect? = null
+
     private val settle = Runnable {
         if (waiting) {
             waiting = false
-            visible = waitingVisible
-            stable = waitingStable
-            invalidate()
+            val now = SystemClock.elapsedRealtime()
+            if (guidingNow && fade.alpha(now) > 0f) {
+                // The pieces are showing: they fade out first, then the new areas are taken (step).
+                swapping = true
+                swapVisible = waitingVisible
+                swapStable = waitingStable
+                fade.want(false, now, pause = false)
+                schedule()
+            } else {
+                take(waitingVisible, waitingStable)
+                if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+                schedule()
+            }
         }
     }
+
+    /** Redraws while a fade runs (about thirty times a second, as the map is drawn) and once when a pause ends; nothing is
+     * scheduled while nothing is going to change. */
+    private val tick = Runnable {
+        step(SystemClock.elapsedRealtime())
+        invalidate()
+        schedule()
+    }
+
+    private fun schedule() {
+        main.removeCallbacks(tick)
+        val wait = fade.nextIn(SystemClock.elapsedRealtime()) ?: return
+        main.postDelayed(tick, max(wait, FRAME_MS))
+    }
+
+    /** Areas waiting for the pieces to be gone are taken once they are, and the pieces fade in there if that room has them. */
+    private fun step(now: Long) {
+        if (swapping && fade.alpha(now) <= 0f) {
+            swapping = false
+            take(swapVisible, swapStable)
+            if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+        }
+    }
+
+    private fun take(v: Rect?, s: Rect?) {
+        visible = v
+        stable = s
+        val m = CarOverlayPainter.extrasMeasure(surfaceW(), surfaceH(), v, density, s)
+        if (m.cls != extras || (s != null && !said)) {
+            said = s != null
+            Log.i(TAG, "car extras: ${m.cls} (they ${if (m.fits) "fit" else "do not fit"}; ${m.extrasPx.roundToInt()} px of ${m.freePx.roundToInt()} px free map, ${(m.share * 100).roundToInt()} %)")
+        }
+        extras = m.cls
+        invalidate()
+    }
+
+    private fun surfaceW() = if (width > 0) width else getWidth()
+
+    private fun surfaceH() = if (height > 0) height else getHeight()
+
     private val flush = Runnable {
         pending?.let { shown = it }
         pending = null
@@ -63,23 +137,43 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
      * first stable area. Areas that would CHANGE the layout are held back for [AREA_SETTLE_MS]: the host reports another
      * stable area for a moment when something of its own covers the guidance screen (a screen swapped and swapped back, a
      * message), and the pieces must not jump across the screen and back for that. If areas with the present layout come
-     * back within that time nothing changes on the screen; if the new ones stay, the layout switches once.
+     * back within that time nothing changes on the screen; if the new ones stay, the layout switches once: the pieces fade
+     * out where they are and fade in at their new place, or stay away where the new room is too small for them. Areas that
+     * take the pieces away or bring them back (the screen's class to or from small) are held and faded the same way.
      */
     fun setAreas(visible: Rect?, stable: Rect?) {
         val v = visible?.let { Rect(it) }
         val s = stable?.let { Rect(it) }
         main.removeCallbacks(settle)
-        if (this.stable != null && modeOf(v, s) != modeOf(this.visible, this.stable)) {
+        val now = SystemClock.elapsedRealtime()
+        // Areas that arrive while others wait for the pieces to fade out take their place.
+        val wasSwapping = swapping
+        swapping = false
+        val first = this.stable == null
+        if (!first && changesLayout(v, s)) {
             waitingVisible = v
             waitingStable = s
             waiting = true
             main.postDelayed(settle, AREA_SETTLE_MS)
+            if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+            schedule()
             return
         }
         waiting = false
-        this.visible = v
-        this.stable = s
-        invalidate()
+        take(v, s)
+        if (guidingNow) {
+            // The first areas of a car session: there or not, at once. Later ones that keep the layout: the class may have
+            // gone between big and in-between, which is a change like the phone's and waits its pause.
+            if (first) fade.snap(extras.onCar(phoneDrive)) else fade.want(extras.onCar(phoneDrive), now, pause = !wasSwapping)
+        }
+        schedule()
+    }
+
+    /** Whether new areas would move the pieces (another layout) or take them away or bring them back (small or not). */
+    private fun changesLayout(v: Rect?, s: Rect?): Boolean {
+        if (modeOf(v, s) != modeOf(this.visible, this.stable)) return true
+        val small = CarOverlayPainter.extrasMeasure(surfaceW(), surfaceH(), v, density, s).cls == CarExtrasClass.SMALL
+        return small != (extras == CarExtrasClass.SMALL)
     }
 
     private fun modeOf(visible: Rect?, stable: Rect?): CarOverlayMode =
@@ -97,6 +191,17 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     fun setTrip(t: CarTrip, dark: Boolean, now: Boolean) {
         val mode = this.dark != dark
         this.dark = dark
+        // The phone's drive screen, and the drive itself. A drive's first frame has the pieces or has not; after that a
+        // change waits its pause and fades.
+        val started = t.guiding && !guidingNow
+        guidingNow = t.guiding
+        phoneDrive = t.overlay.phoneDrive
+        if (started) {
+            fade.snap(extras.onCar(phoneDrive))
+        } else if (t.guiding && !swapping) {
+            fade.want(extras.onCar(phoneDrive), SystemClock.elapsedRealtime())
+        }
+        schedule()
         if (!t.guiding) {
             main.removeCallbacks(flush)
             pending = null
@@ -123,15 +228,25 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     fun stop() {
         main.removeCallbacks(flush)
         main.removeCallbacks(settle)
+        main.removeCallbacks(tick)
     }
 
     override fun onDraw(canvas: Canvas) = paint(canvas)
 
     /** What onDraw paints (its own function so a test can paint the View's present state onto a bitmap). */
     fun paint(canvas: Canvas) {
-        val w = if (width > 0) width else getWidth()
-        val h = if (height > 0) height else getHeight()
-        CarOverlayPainter.draw(canvas, shown, w, h, visible, density, stable, overview)
+        val now = SystemClock.elapsedRealtime()
+        step(now)
+        val a = fade.alpha(now)
+        if (a <= 0f) return
+        if (a >= 1f) {
+            CarOverlayPainter.draw(canvas, shown, surfaceW(), surfaceH(), visible, density, stable, overview)
+            return
+        }
+        // Part of the way through a fade: both pieces together, as one picture at that opacity.
+        val layer = canvas.saveLayerAlpha(null, (a * 255f).roundToInt())
+        CarOverlayPainter.draw(canvas, shown, surfaceW(), surfaceH(), visible, density, stable, overview)
+        canvas.restoreToCount(layer)
     }
 
     companion object {
@@ -143,14 +258,19 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
          * longest of those, and short enough that a change that is meant (the host's split view) follows promptly. */
         const val AREA_SETTLE_MS = 1000L
 
+        /** Between two redraws of a fade: thirty a second, as the car's map is drawn. */
+        const val FRAME_MS = 33L
+
+        private const val TAG = "CacheCarMap"
+
         const val PIECE_MINI_MAP = 1
         const val PIECE_CLIMB = 2
 
-        /** Which pieces [t] has the data and the switches for (as CarOverlayPainter.draw decides), as bits. */
+        /** Which pieces [t] has the data for (as CarOverlayPainter.draw decides), as bits. */
         fun pieces(t: CarTrip): Int {
             if (!t.guiding) return 0
-            val mini = if (t.overlay.miniMap && t.overview != null) PIECE_MINI_MAP else 0
-            val climb = if (t.overlay.climb && t.climb != null && !t.arrived) PIECE_CLIMB else 0
+            val mini = if (t.overview != null) PIECE_MINI_MAP else 0
+            val climb = if (t.climb != null && !t.arrived) PIECE_CLIMB else 0
             return mini or climb
         }
     }

@@ -118,15 +118,41 @@ data class CarOverlayPalette(val day: CarOverlayColors, val night: CarOverlayCol
     }
 }
 
-/** Which of the two pieces are on (Dart's defaults, car_overlay.dart). */
-data class CarOverlaySwitches(val climb: Boolean, val miniMap: Boolean) {
+/**
+ * The trip's `overlay` part: the one thing the phone tells the car about its own screen. [phoneDrive] is true while the
+ * phone's drive screen is showing to a person (phone unlocked, Cache in front, the Maps tab, a car connected and guiding);
+ * a missing `overlay` or a missing value is false. The phone sends the plain truth at once; the pause and the fade are the
+ * car's ([CarExtrasFade]). Whether the car draws its two extras at all is the screen's class ([CarExtrasClass]).
+ */
+data class CarOverlaySwitches(val phoneDrive: Boolean) {
     companion object {
-        val DEFAULT = CarOverlaySwitches(climb = true, miniMap = true)
+        val DEFAULT = CarOverlaySwitches(phoneDrive = false)
 
         fun from(v: Any?): CarOverlaySwitches {
             val m = v.asMap() ?: return DEFAULT
-            return CarOverlaySwitches(climb = m["climb"] != false, miniMap = m["miniMap"] != false)
+            return CarOverlaySwitches(phoneDrive = m["phoneDrive"] == true)
         }
+    }
+}
+
+/** What a car screen's free room allows for the two extras (the route mini map and the climb). Measured from the areas the car
+ * reports, never from a list of sizes or models: [CarOverlayPainter.extrasMeasure]. */
+enum class CarExtrasClass {
+    /** The two extras do not both fit at their full size without covering the vehicle or the road ahead: never drawn. */
+    SMALL,
+
+    /** They fit, but take more than [CarOverlayPainter.EXTRAS_BIG_MAX_SHARE] of the free map: drawn, except while the
+     * phone's drive screen is showing. */
+    IN_BETWEEN,
+
+    /** They fit and leave most of the free map: always drawn. */
+    BIG;
+
+    /** Whether the extras are on the car, given whether the phone's drive screen is showing. */
+    fun onCar(phoneDrive: Boolean): Boolean = when (this) {
+        SMALL -> false
+        IN_BETWEEN -> !phoneDrive
+        BIG -> true
     }
 }
 
