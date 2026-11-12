@@ -264,25 +264,11 @@ class PlaceSummary {
     final main = known.where(fills).firstOrNull ?? known.where((v) => v.items.isNotEmpty).firstOrNull ?? known.firstOrNull;
     final today = placeToday(clock, main?.fetchedAt);
 
-    LiveItem? reading;
-    DateTime? readingAt;
-    var periods = const <LiveItem>[];
-    if (main != null) {
-      final own = main.items.where((i) => i.address.endsWith('/now')).firstOrNull;
-      final rest = [for (final i in main.items) if (!identical(i, own)) i];
-      // A list of readings (weather stations) has no "Now" of its own, no day, and nothing that is still to come. Its nearest
-      // station that reports a temperature is the reading, as on Home.
-      final stations = own == null &&
-          rest.any((i) => i.fields['Temperature'] != null) &&
-          rest.every((i) => _dateOf(i) == null && !(_startOf(i)?.isAfter(clock) ?? false));
-      reading = own ?? (stations ? _nearestReading(rest) : null);
-      periods = stations ? const [] : rest;
-      if (reading != null) {
-        readingAt = DateTime.tryParse(reading.time?.trim() ?? '') ?? DateTime.tryParse(main.fetchedAt?.trim() ?? '');
-        if (readingAt != null && clock.difference(readingAt) > kReadingLasts) reading = null;
-      }
-    }
-    final upcoming = _notPassed(periods, clock, today);
+    // the one rule for what a reading is and how long it stands, Home's too
+    final pick = main == null ? null : readingOf(main, clock);
+    final reading = pick?.reading;
+    final readingAt = pick?.at;
+    final upcoming = periodsNotPassed(pick?.periods ?? const <LiveItem>[], clock, today);
     final dated = [for (final i in upcoming) if (_dateOf(i) != null) i];
     final days = dated.isNotEmpty ? dated : upcoming;
     LiveItem? now;
@@ -390,6 +376,35 @@ class PlaceSummary {
   bool get notChecked => alertsOn && !warningsChecked && !firesChecked && !tooOld;
 }
 
+/// What a weather source holds, as [readingOf] reads it: the reading that stands for the weather now (null when it holds none,
+/// or its reading has ended), when that reading was taken (also once it has ended), and the periods beside it.
+typedef ReadingPick = ({LiveItem? reading, DateTime? at, List<LiveItem> periods});
+
+/// The weather now as [v] holds it at [clock]. The one rule for what a reading is and how long it stands: the Weather
+/// screen's top card and Home's card both go by it.
+///
+/// - A forecast's own "Now" is its reading; its other items are its periods.
+/// - A list of readings (weather stations) has no "Now" of its own, no day, and nothing that is still to come: its nearest
+///   station that reports a temperature is the reading, and it has no periods.
+/// - Any other source holds no reading. A forecast written in periods gives a temperature for each of them (NWS by point:
+///   "Tonight", "Thursday"), and a period's temperature is a forecast, never the temperature now.
+/// - A reading stands for [kReadingLasts], counted from its own time (else from when it was downloaded). After that it is
+///   not the weather now, in the core's answer and in a copy the app kept alike.
+ReadingPick readingOf(SourceView v, DateTime clock) {
+  final own = v.items.where((i) => i.address.endsWith('/now')).firstOrNull;
+  final rest = [for (final i in v.items) if (!identical(i, own)) i];
+  final stations = own == null &&
+      rest.any((i) => i.fields['Temperature'] != null) &&
+      rest.every((i) => _dateOf(i) == null && !(_startOf(i)?.isAfter(clock) ?? false));
+  var reading = own ?? (stations ? _nearestReading(rest) : null);
+  DateTime? at;
+  if (reading != null) {
+    at = DateTime.tryParse(reading.time?.trim() ?? '') ?? DateTime.tryParse(v.fetchedAt?.trim() ?? '');
+    if (at != null && clock.difference(at) > kReadingLasts) reading = null;
+  }
+  return (reading: reading, at: at, periods: stations ? const <LiveItem>[] : rest);
+}
+
 /// The nearest of [items] that reports a temperature (the first, when none says how far it is); null when none does.
 LiveItem? _nearestReading(List<LiveItem> items) {
   LiveItem? pick;
@@ -406,8 +421,9 @@ LiveItem? _nearestReading(List<LiveItem> items) {
 }
 
 /// [periods] without those that have passed: a day before [today]; a period with a start time, once a later one has started.
-/// The core leaves out what has ended, but a copy the app kept is as the core gave it then.
-List<LiveItem> _notPassed(List<LiveItem> periods, DateTime clock, DateTime today) {
+/// The core leaves out what has ended, but a copy the app kept is as the core gave it then. The Weather screen's days and
+/// Home's card both go by it, so yesterday's high and low are never shown as today's.
+List<LiveItem> periodsNotPassed(List<LiveItem> periods, DateTime clock, DateTime today) {
   DateTime? latest;
   for (final i in periods) {
     final start = _startOf(i);

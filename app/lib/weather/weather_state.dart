@@ -23,6 +23,7 @@ import 'alert_watch.dart';
 import 'live_view.dart';
 import 'own_source.dart';
 import 'place_alerts.dart';
+import 'place_summary.dart' show periodsNotPassed, readingOf;
 import 'places.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
@@ -1319,21 +1320,17 @@ class WeatherState extends ChangeNotifier {
 
   // ---------------------------------------------------------------- the status line
 
-  /// The age of the data, and why when it is old (see [WeatherStatus]).
+  /// The status line of Settings > Weather and alerts and of the Weather screen's whole-page states: the Weather screen's
+  /// own line ([freshness], the one rule for the age and the connection) and, beside it, why the last update failed. Age
+  /// alone is not a warning here either: it used to warn once the data was older than the shortest refresh interval (15
+  /// minutes for alerts), which between two updates is most of the time.
   WeatherStatus status() {
-    final on = enabledSources;
-    if (on.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
-    final now = _now();
-    final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
+    final fresh = freshness();
     final ok = _lastOkAt;
-    if (ok == null) return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', tone: StatusTone.warn);
-    final age = now.difference(ok);
-    final stale = age.inMinutes > on.map((c) => c.refreshMinutes).reduce((a, b) => a < b ? a : b);
+    // nothing on, never updated, or no connection (then that is the reason): the freshness line as it is
+    if (enabledSources.isEmpty || ok == null || _kind == ConnectionKind.none) return fresh;
     final failed = _lastFailure != null && _lastRunAt != null && !_lastRunAt!.isBefore(ok);
-    final head = 'Updated ${agoWords(age)}';
-    if (!stale && !failed && reason == null) return WeatherStatus(headline: head, tone: StatusTone.ok);
-    final why = reason ?? (failed ? _lastFailure! : null);
-    return WeatherStatus(headline: why == null ? head : '$head · $why', tone: StatusTone.warn);
+    return failed ? WeatherStatus(headline: '${fresh.headline} · ${_lastFailure!}', tone: StatusTone.warn) : fresh;
   }
 
   /// The Weather screen's own freshness line: the age and, as its only reason, the connection. A source that failed is named by
@@ -1415,7 +1412,9 @@ class WeatherState extends ChangeNotifier {
           } on CacheSearchException catch (e) {
             // Nothing downloaded for a source that is on without its key: an update skips it, so "Update now to get it" could
             // never come true. It says why instead, in the words a failed update has for it.
-            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? null : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message));
+            // Nothing downloaded because the last update failed for it: it says why, in that update's words, not that an update
+            // will get it.
+            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? _sourceErrors[c.id] : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message));
           } catch (_) {
             return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id] ?? (keyReady(c) ? null : _needsKeyWords));
           }
@@ -1610,44 +1609,35 @@ class WeatherState extends ChangeNotifier {
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     String? temperature, conditions, high, low, age;
     var forecastExpired = false;
-    // Each forecast source gives its best "now": a forecast's own /now item first, else (a weather station list, as NWS current
-    // conditions) the nearest station that reports a temperature, else its first item. A source that lists no temperature (a
-    // station with only wind and pressure) must not hide the one after it, so every source is scanned and temperature and
-    // conditions each come from the best source that has them. Forecast /now items rank before station lists.
-    // A first item that reports no temperature is not known to be a reading: a forecast whose "Now" has ended lists only its
-    // periods (tonight, the days), so its conditions are never taken as the conditions now. It still gives the source's age.
-    final nows = <(LiveItem, SourceView)>[];
-    final stations = <(LiveItem, SourceView)>[];
-    final notReadings = <LiveItem>{};
+    // Each forecast source gives its reading by the rule the Weather screen goes by ([readingOf]): a forecast's own /now item,
+    // else (a weather station list, as NWS current conditions) the nearest station that reports a temperature. A source that
+    // lists no temperature (a station with only wind and pressure) must not hide the one after it, so every source is scanned
+    // and temperature and conditions each come from the best source that has them. Forecast /now items rank before station
+    // lists.
+    // A source can hold no reading: its "Now" has ended (three hours after it was taken, in the core's answer and in a copy
+    // the app kept alike, so last night's temperature is never this morning's), or it is a forecast written in periods, whose
+    // temperatures are forecasts (NWS by point: tonight's low is not the temperature now). It still gives the source's age.
+    final now = _now();
+    final nows = <(LiveItem?, SourceView)>[];
+    final stations = <(LiveItem?, SourceView)>[];
     for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
-      final own = [for (final i in v.items) if (i.address.endsWith('/now')) i];
-      if (own.isNotEmpty) {
-        nows.add((own.first, v));
-        continue;
-      }
-      LiveItem? pick;
-      double? best;
-      for (final i in v.items) {
-        if (i.fields['Temperature'] == null) continue;
-        final d = distanceMiles(i);
-        if (pick == null || (d != null && (best == null || d < best))) {
-          pick = i;
-          best = d;
-        }
-      }
-      if (pick == null) notReadings.add(v.items.first);
-      stations.add((pick ?? v.items.first, v));
+      final reading = readingOf(v, now).reading;
+      (v.items.any((i) => i.address.endsWith('/now')) ? nows : stations).add((reading, v));
     }
     final ranked = [...nows, ...stations];
     for (final (i, v) in ranked) {
+      if (i == null) continue;
       if (temperature == null && i.fields['Temperature'] != null) {
         temperature = i.fields['Temperature'];
         age = v.age;
         forecastExpired = v.expired;
       }
-      if (!notReadings.contains(i)) conditions ??= i.fields['Conditions'];
+      conditions ??= i.fields['Conditions'];
     }
+    // A source's periods that have not passed, by the Weather screen's rule: in a copy the app kept, yesterday's day is still
+    // listed, and its high and low are not today's. A list of stations has no periods.
+    List<LiveItem> periodsOf(SourceView v) => periodsNotPassed(readingOf(v, now).periods, now, placeToday(now, v.fetchedAt));
     // No reading: "Now" has ended (a forecast's own lasts 3 hours, and the next download can be hours away) or was never
     // given, and no station reports. The forecast period that covers now stands in, under its own label and with its source's
     // age, as the Weather screen lists it. It is a forecast, not a reading, so no temperature stands in for the one that ended.
@@ -1655,7 +1645,7 @@ class WeatherState extends ChangeNotifier {
     if (temperature == null && conditions == null) {
       for (final v in views) {
         if (v.group != LiveGroup.forecast) continue;
-        final i = _periodNow(v);
+        final i = _periodNow(v, periodsOf(v));
         if (i == null) continue;
         period = i.label;
         conditions = i.fields['Conditions'];
@@ -1672,8 +1662,7 @@ class WeatherState extends ChangeNotifier {
     for (final v in views) {
       if (period != null) break;
       if (v.group != LiveGroup.forecast) continue;
-      for (final i in v.items) {
-        if (i.address.endsWith('/now')) continue;
+      for (final i in periodsOf(v)) {
         final h = i.fields['Daytime high'] ?? i.fields['High'];
         final l = i.fields['Low (early morning)'] ?? i.fields['Low'];
         if (h == null && l == null) continue;
@@ -1731,11 +1720,12 @@ class WeatherState extends ChangeNotifier {
     );
   }
 
-  /// The forecast period of [v] that covers now, for Home when there is no reading: of the items that give "Conditions" (not
-  /// the "Now" item), the one that started last. A day ("2026-11-11") covers that date at the place and no other, so a day that
-  /// has passed is never shown as today; a period with a start time covers from then on (the core leaves out the periods that
-  /// have ended, and an item carries no end to check here). Null when no item is known to cover now.
-  LiveItem? _periodNow(SourceView v) {
+  /// The forecast period of [v] that covers now, for Home when there is no reading: of its [periods] (its items but the "Now"
+  /// item; none for a list of stations, see [readingOf]) that give "Conditions", the one that started last. A day
+  /// ("2026-11-11") covers that date at the place and no other, so a day that has passed is never shown as today; a period
+  /// with a start time covers from then on (the core leaves out the periods that have ended, and an item carries no end to
+  /// check here). Null when no item is known to cover now.
+  LiveItem? _periodNow(SourceView v, List<LiveItem> periods) {
     final now = _now();
     // the place's clock: the offset the core writes this source's times in, else the device's
     final stamp = RegExp(r'([+-])(\d\d):(\d\d)$').firstMatch(v.fetchedAt?.trim() ?? '');
@@ -1745,8 +1735,8 @@ class WeatherState extends ChangeNotifier {
     final there = now.toUtc().add(Duration(minutes: offset));
     LiveItem? pick;
     DateTime? best;
-    for (final i in v.items) {
-      if (i.address.endsWith('/now') || i.fields['Conditions'] == null) continue;
+    for (final i in periods) {
+      if (i.fields['Conditions'] == null) continue;
       final t = i.time?.trim();
       if (t == null) continue;
       final DateTime from;

@@ -385,7 +385,8 @@ class _MoreSourcesPageState extends State<MoreSourcesPage> {
   }
 }
 
-/// The one line at the top: how old the data is, turning into a warning when it is old, with a small round refresh button.
+/// The one line at the top: how old the data is, turning into a warning when there is no connection or the last update failed
+/// (age alone is not a warning, see [WeatherState.status]), with a small round refresh button.
 class StatusLine extends StatelessWidget {
   const StatusLine({super.key, required this.status, required this.updating, required this.onRefresh});
 
