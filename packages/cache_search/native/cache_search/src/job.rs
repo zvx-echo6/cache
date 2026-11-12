@@ -161,6 +161,10 @@ struct IndexLibraryParams {
     /// Not in the header: documents per checkpoint (default 200,000). Tests use a small value.
     #[serde(default = "default_lib_checkpoint")]
     checkpoint_docs: usize,
+    /// `index_extend` only, not in the header: the most missing pieces an extension holds in memory before the library is built whole
+    /// instead (default [`crate::libindex::MAX_EXTEND_PIECES`]). Tests use a small value.
+    #[serde(default)]
+    max_extend_pieces: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -518,6 +522,7 @@ impl Job {
         let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
         let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
         let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
+        let max_pieces = p.max_extend_pieces.unwrap_or(crate::libindex::MAX_EXTEND_PIECES);
         Self::spawn("cs-index-extend", (lock, token), 0, move |sh| {
             idxsnap::extend_library(
                 &idxsnap::ExtendRequest {
@@ -529,6 +534,7 @@ impl Job {
                     version: version.as_deref(),
                     heap_mb,
                     checkpoint_docs: checkpoint,
+                    max_pieces,
                 },
                 &Self::hooks(sh),
             )

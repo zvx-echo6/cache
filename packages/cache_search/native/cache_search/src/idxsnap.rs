@@ -1021,6 +1021,8 @@ pub struct ExtendRequest<'a> {
     pub version: Option<&'a str>,
     pub heap_mb: usize,
     pub checkpoint_docs: usize,
+    /// The most missing pieces an extension holds in memory; past it the library is built whole.
+    pub max_pieces: usize,
 }
 
 fn stat_of(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
@@ -1112,13 +1114,28 @@ fn extend_from(r: &ExtendRequest, h: &Hooks, base: &snapshot::Picked, generation
     // 1. what the shard has that the snapshot lacks
     (h.phase)("scan", 0, 1);
     let opened = crate::libindex::LibOpenIndex::open(&base.dir, &tokenizer)?;
-    let Some((missing, points)) =
-        crate::libindex::missing_documents(r.library_path, r.settings, &opened, &*h.progress, &*h.cancelled, &*h.pace)?
-    else {
-        return Err(Error::new(ErrorCode::Cancelled, "cancelled"));
+    let delta = match crate::libindex::missing_documents(
+        r.library_path,
+        r.settings,
+        &opened,
+        r.max_pieces,
+        &*h.progress,
+        &*h.cancelled,
+        &*h.pace,
+    )? {
+        None => return Err(Error::new(ErrorCode::Cancelled, "cancelled")),
+        // too far behind to hold the new pieces in memory: the caller builds whole (which streams the shard)
+        Some(Err(n)) => {
+            return Err(Error::unsupported(format!(
+                "the snapshot is {n}+ pieces behind (more than {}): built whole",
+                r.max_pieces
+            )))
+        }
+        Some(Ok(d)) => d,
     };
+    let crate::libindex::Delta { missing, stale, total: points } = delta;
     let recorded = base.manifest.extra.get("points").and_then(|p| p.as_u64());
-    if missing.is_empty() && recorded == Some(points) {
+    if missing.is_empty() && stale.is_empty() && recorded == Some(points) {
         (h.set_result)(json!({"unchanged": true, "generation": generation, "snapshot": base.name}));
         return Ok(Outcome::Done);
     }
@@ -1145,7 +1162,7 @@ fn extend_from(r: &ExtendRequest, h: &Hooks, base: &snapshot::Picked, generation
         }
         // 3. one new segment holding the missing points (no merge; Tantivy adds files and replaces meta.json by a rename)
         (h.phase)("append", 0, missing.len() as u64);
-        let segments_before = crate::libindex::append_segment(&stage, &tokenizer, &missing, h.threads.unwrap_or(1), r.heap_mb)?;
+        let segments_before = crate::libindex::append_segment(&stage, &tokenizer, &missing, &stale, h.threads.unwrap_or(1), r.heap_mb)?;
         let _ = std::fs::remove_file(stage.join(".tantivy-writer.lock"));
         // 4. hashes: a linked file that is still the old one keeps its hash; everything else is hashed
         let old: HashMap<&str, &FileEntry> = base.manifest.files.iter().map(|f| (f.path.as_str(), f)).collect();
@@ -1209,7 +1226,7 @@ fn extend_from(r: &ExtendRequest, h: &Hooks, base: &snapshot::Picked, generation
     let _ = std::fs::remove_dir(&build);
     (h.phase)("publish", 1, 1);
     (h.set_result)(json!({
-        "extended": true, "generation": generation + 1, "added": missing.len(), "files": files.len(), "reused": reused,
+        "extended": true, "generation": generation + 1, "added": missing.len(), "removed": stale.len(), "files": files.len(), "reused": reused,
         "snapshot": build_id, "from": base.name,
     }));
     Ok(Outcome::Done)

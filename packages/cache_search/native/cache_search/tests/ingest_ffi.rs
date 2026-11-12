@@ -8,7 +8,7 @@ use cache_search::libindex::{build_library_index, keyword_hits, LibBuildParams, 
 use cache_search::libreg;
 use cache_search::libupdate;
 use cache_search::library::{ensure_init, write_segments_manifest};
-use edge::{Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder};
+use edge::{Distance, EdgeConfig, EdgeShard, EdgeShardRead, EdgeVectorParamsBuilder, PointId, PointOperations, ScrollRequest, UpdateOperation, WithPayloadInterface};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -585,7 +585,14 @@ mod sealed {
     }
 
     pub fn extend(lib: &Path, indexes: &Path) -> Value {
-        let params = json!({"indexes_dir": indexes.to_str().unwrap(), "library_path": lib.join("shard").to_str().unwrap(), "settings": super::settings(), "heap_mb": 15});
+        extend_with(lib, indexes, json!({}))
+    }
+
+    pub fn extend_with(lib: &Path, indexes: &Path, extra: Value) -> Value {
+        let mut params = json!({"indexes_dir": indexes.to_str().unwrap(), "library_path": lib.join("shard").to_str().unwrap(), "settings": super::settings(), "heap_mb": 15});
+        for (k, v) in extra.as_object().unwrap() {
+            params[k] = v.clone();
+        }
         let j = unsafe { cs_job_start(cstr("index_extend").as_ptr(), cstr(&params.to_string()).as_ptr()) };
         assert!(!j.is_null(), "index_extend did not start: {:?}", take(unsafe { cs_last_error(std::ptr::null_mut()) }));
         let t0 = std::time::Instant::now();
@@ -761,7 +768,7 @@ fn a_linked_extension_writes_only_new_files_and_a_replaced_point_is_deleted_by_a
         cache_search::libindex::IndexDoc { point_id: "new-1".into(), title: "T".into(), body: "zeppelin hangar".into(), source_type: String::new() },
         cache_search::libindex::IndexDoc { point_id: first_id.clone(), title: "T".into(), body: "replacement words only".into(), source_type: String::new() },
     ];
-    let segments_before = cache_search::libindex::append_segment(&next, TOKENIZER, &docs, 1, 15).unwrap();
+    let segments_before = cache_search::libindex::append_segment(&next, TOKENIZER, &docs, &[], 1, 15).unwrap();
     assert_eq!(segments_before, 1);
 
     assert_eq!(file_hashes(&base), before, "the old folder's files are exactly what they were: Tantivy wrote new files beside, linked ones untouched");
@@ -782,6 +789,103 @@ fn a_linked_extension_writes_only_new_files_and_a_replaced_point_is_deleted_by_a
     let old = LibOpenIndex::open(&base, TOKENIZER).unwrap();
     assert!(keyword_hits(&old, "zeppelin", 5).unwrap().0.is_empty(), "the old folder does not have the new document");
     assert!(keyword_hits(&old, "quasar", 20).unwrap().0.iter().any(|h| h.point_id == first_id), "and still has the old text");
+}
+
+/// Deletes every point of the book `title` from the library's shard (what removing a book does), and returns how many.
+fn delete_book(lib: &Path, title: &str) -> usize {
+    ensure_init();
+    let shard_dir = lib.join("shard");
+    let shard = EdgeShard::load(&shard_dir, None).unwrap();
+    let mut sr = ScrollRequest::new();
+    sr.limit = Some(100_000);
+    sr.with_payload = Some(WithPayloadInterface::Bool(true));
+    let (recs, _) = EdgeShardRead::scroll(&shard, sr).unwrap();
+    let ids: Vec<PointId> = recs
+        .iter()
+        .filter(|r| r.payload.as_ref().and_then(|p| p.0.get("title")).and_then(|t| t.as_str()) == Some(title))
+        .map(|r| r.id)
+        .collect();
+    let n = ids.len();
+    assert!(n > 0, "no points of {title}");
+    shard.update(UpdateOperation::PointOperation(PointOperations::DeletePoints { ids })).unwrap();
+    shard.flush().unwrap();
+    drop(shard);
+    write_segments_manifest(&shard_dir).unwrap();
+    n
+}
+
+/// What a search does with a keyword hit on a point the shard no longer has: the point is looked up in the shard and dropped (the hit
+/// vanishes, nothing errors), but its document stays in every linked segment unless the extension deletes it by id, and a hit that is
+/// dropped still takes one of the keyword candidates. Two books are added, the snapshot is extended, one book is deleted, the snapshot is
+/// extended again: a search for words only in the deleted book finds nothing, and the generation says what it removed.
+#[test]
+fn a_book_removed_from_the_library_is_removed_from_the_next_generation_of_the_snapshot() {
+    let tmp = TempDir::new("sealed-delete");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    add_book(&svc, &tmp.0, &lib, "Pulsar Guide", "pulsar", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["generation"], 1, "{r}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    for w in ["quasar", "nebula", "pulsar"] {
+        assert!(sealed::found(h, w) > 0, "{w}");
+    }
+    sealed::close(h);
+
+    let gone = delete_book(&lib, "Nebula Guide");
+    // nothing new to add, but the snapshot has what the shard has not: the extension is a new generation that deletes by id
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["result"]["extended"], true, "{r}");
+    assert_eq!(r["result"]["generation"], 2, "{r}");
+    assert_eq!(r["result"]["added"], 0, "{r}");
+    assert_eq!(r["result"]["removed"], gone, "{r}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 2);
+    assert_eq!(sealed::found(h, "nebula"), 0, "words only in the deleted book find nothing");
+    assert!(sealed::found(h, "quasar") > 0 && sealed::found(h, "pulsar") > 0, "the other books still are found");
+    sealed::close(h);
+    // and nothing is left to do
+    let again = sealed::extend(&lib, &indexes);
+    assert_eq!(again["result"]["unchanged"], true, "{again}");
+    // the keyword index itself no longer has the deleted book (a search drops a hit the shard cannot answer, so the search alone would
+    // pass without the delete: look in the index)
+    let g2 = snap_dirs(&indexes).into_iter().find(|d| generation(d) == 2).unwrap();
+    let now = LibOpenIndex::open(&g2, TOKENIZER).unwrap();
+    assert!(keyword_hits(&now, "nebula", 20).unwrap().0.is_empty(), "the deleted book's documents are deleted from the index");
+    assert!(!keyword_hits(&now, "pulsar", 20).unwrap().0.is_empty());
+    drop(now);
+    // the generation before it is untouched (the rollback still has the deleted book)
+    let g1 = snap_dirs(&indexes).into_iter().find(|d| generation(d) == 1).unwrap();
+    let old = LibOpenIndex::open(&g1, TOKENIZER).unwrap();
+    assert!(!keyword_hits(&old, "nebula", 5).unwrap().0.is_empty());
+}
+
+/// An extension holds the missing pieces, with their text, in memory. Past `max_extend_pieces` the library is built whole instead
+/// (which streams the shard), published as the next generation, and every word is searchable.
+#[test]
+fn a_snapshot_too_far_behind_is_built_whole_not_extended() {
+    let tmp = TempDir::new("sealed-too-far");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    add_book(&svc, &tmp.0, &lib, "Pulsar Guide", "pulsar", 5);
+    // the bound is below the six or more pieces that are missing
+    let r = sealed::extend_with(&lib, &indexes, json!({"max_extend_pieces": 2}));
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["result"]["built"], true, "past the bound it is a whole build: {r}");
+    assert!(r["result"]["because"].as_str().unwrap().contains("behind"), "{r}");
+    assert_eq!(r["result"]["generation"], 1);
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    for w in ["quasar", "nebula", "pulsar"] {
+        assert!(sealed::found(h, w) > 0, "{w}");
+    }
+    sealed::close(h);
+    // at or under the bound (the default is 2,000) it is an extension
+    add_book(&svc, &tmp.0, &lib, "Comet Guide", "comet", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["extended"], true, "{r}");
 }
 
 /// Edits the manifest of the (only) first-generation snapshot in place (the manifest is not one of the hashed files).

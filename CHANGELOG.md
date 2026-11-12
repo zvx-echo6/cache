@@ -12,6 +12,7 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
 - Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
 - Library: a book you add is found by its words as well as by its meaning: its words are added to the search index in a short background job (the finished card and the book's row say "Adding to search index" until then), and a library that missed them before is brought up to date by itself
