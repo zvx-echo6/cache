@@ -45,6 +45,7 @@ void main() {
     bool shortClimbEnd = false,
     double? partial,
     double? aspect,
+    int? turns,
     bool noElevation = false,
     ElevationProfile Function()? profile,
     Size size = const Size(390, 844),
@@ -55,7 +56,7 @@ void main() {
     if (noElevation) rig.profile = () => ElevationProfile.none(24600);
     if (profile != null) rig.profile = profile;
     await tester.runAsync(() async {
-      await rig.guide(withStop: stop, aspect: aspect);
+      await rig.guide(withStop: stop && turns == null, aspect: aspect, turns: turns);
       rig.elevation.request(rig.nav.route);
       await Future<void>.delayed(const Duration(milliseconds: 30));
     });
@@ -74,7 +75,7 @@ void main() {
       rig.nav.arrived = true;
       rig.nav.poke();
     } else {
-      rig.at(2, 640);
+      rig.at(turns != null ? 1 : 2, 640);
     }
     if (rerouting) {
       rig.nav.rerouting = true;
@@ -144,6 +145,8 @@ void main() {
   testWidgets('25 a 3:1 route, stacked, 320 wide', (t) => draw(t, '25-stacked-320', aspect: 3.2, stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('26 a tall route, side by side', (t) => draw(t, '26-tall-side-by-side', aspect: 0.5));
   testWidgets('27 a 3:1 route, stacked, large text', (t) => draw(t, '27-stacked-large-text', aspect: 3.2, stop: true, lanes: true, textScale: 2));
+  testWidgets('28 a five-turn route, side by side, on a tall phone', (t) => draw(t, '28-five-turns-side-by-side', aspect: 0.8, turns: 5, size: const Size(390, 915)));
+  testWidgets('29 a two-turn wide route, stacked, on a tall phone', (t) => draw(t, '29-two-turns-stacked', aspect: 3.2, turns: 2, size: const Size(390, 915)));
   testWidgets('10 a 320 point wide phone', (t) => draw(t, '10-small-phone-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('11 large text (2x)', (t) => draw(t, '11-large-text', stop: true, lanes: true, textScale: 2));
 }
