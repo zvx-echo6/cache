@@ -1505,6 +1505,10 @@ void main() {
     m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
     await settle(tester);
     m.kit.movedTo(GuideCamera(lat: start.lat, lon: start.lon, zoom: 14));
+    // The screen is told where the map is, as the map tells it: north up again after the guidance. Its North up button goes, so
+    // the map's buttons take the room they take in the directions picture and the drive is fitted the same.
+    mapOf(tester).onCameraMove!(CameraPosition(target: LatLng(start.lat, start.lon), zoom: 14));
+    await settle(tester);
     await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
     await holdMap(tester, m, GuideSample.ringSpot);
