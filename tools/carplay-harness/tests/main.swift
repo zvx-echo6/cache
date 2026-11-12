@@ -69,7 +69,7 @@ check(browsing.phase == "browsing" && !browsing.guiding && !browsing.previewing,
 check(browsing.available && browsing.imperial, "browsing: available, in miles")
 check(browsing.destinationName == nil && browsing.routes.isEmpty && browsing.step == nil, "browsing: no destination, no routes, no step")
 check(isNumber(browsing.lat, 10.5) && isNumber(browsing.lon, 20.2), "browsing: the position")
-check(isNumber(browsing.heading, 90), "browsing: the heading")
+check(browsing.heading == nil, "browsing: parked, so no heading")
 
 let previewing = CarTrip.from(map("trip_previewing.json"))
 check(previewing.previewing && !previewing.guiding, "previewing: the phase")
@@ -226,6 +226,55 @@ let notColours: [String] = ["blue", "#12345", "#12345g", "#+12345", "rgba(1,2,3)
 for text in notColours {
   check(CarValue.rgba(text) == nil, "not a colour: '\(text)'")
 }
+
+// ---- the marker's motion (the Android car's CarMarkerMotion tests) -------------------------------------------------
+
+func near(_ a: Double?, _ b: Double, _ within: Double = 1e-9) -> Bool {
+  guard let a = a else { return false }
+  return abs(a - b) <= within
+}
+
+typealias Motion = CarMarkerMotion
+check(near(Motion.heading(reported: 45, last: 90), 45) && near(Motion.heading(reported: 45, last: nil), 45), "a reported heading is shown")
+check(near(Motion.heading(reported: nil, last: 90), 90), "with none reported, the last one known")
+check(Motion.heading(reported: nil, last: nil) == nil, "no heading ever known: none")
+check(near(Motion.heading(reported: Double.nan, last: 90), 90), "a heading that is not a number counts as none")
+check(Motion.heading(reported: Double.infinity, last: nil) == nil, "an endless heading counts as none")
+check(near(Motion.heading(reported: -10, last: nil), 350) && near(Motion.heading(reported: 360, last: nil), 0), "headings are kept from 0 up to 360")
+check(near(Motion.heading(reported: 725, last: nil), 5), "a heading of more than one turn")
+for i in 0...30 {
+  let turned: Double = Motion.lerpHeading(350, 80, Double(i) / 30)
+  check(Motion.arrowTurn(heading: turned, cameraBearing: turned) == 0, "the camera turned to the heading: the arrow points up, step \(i)")
+}
+check(Motion.arrowTurn(heading: 90, cameraBearing: 0) == 90 && Motion.arrowTurn(heading: 270, cameraBearing: 0) == 270, "north up: the arrow's turn is the heading")
+check(near(Motion.arrowTurn(heading: 100, cameraBearing: 10), 90), "the arrow's turn is the heading less the camera's")
+check(near(Motion.arrowTurn(heading: 10, cameraBearing: 30), 340) && near(Motion.arrowTurn(heading: 10, cameraBearing: 350), 20), "the arrow's turn across north")
+check(near(Motion.angleBetween(359, 1), 2) && near(Motion.angleBetween(1, 359), 2), "359 and 1 are 2 apart")
+check(near(Motion.angleBetween(0, 360), 0) && near(Motion.angleBetween(90, 270), 180) && near(Motion.angleBetween(10, 10.5), 0.5), "angles apart")
+check(Motion.arrowIsUp(heading: 90, cameraBearing: 90) && Motion.arrowIsUp(heading: 359.5, cameraBearing: 359.5) && Motion.arrowIsUp(heading: 0, cameraBearing: 0), "the arrow is up when the camera is turned to the heading")
+check(!Motion.arrowIsUp(heading: 90, cameraBearing: 0) && !Motion.arrowIsUp(heading: 100, cameraBearing: 90), "the arrow is not up otherwise")
+check(near(Motion.heading(reported: nil, last: 90, guiding: true), 90) && near(Motion.heading(reported: 45, last: 90, guiding: true), 45), "guiding: the last heading is kept")
+check(Motion.heading(reported: nil, last: nil, guiding: true) == nil, "guiding with none ever known: none")
+check(Motion.heading(reported: nil, last: 90, guiding: false) == nil && Motion.heading(reported: Double.nan, last: 90, guiding: false) == nil, "not guiding: no heading reported is none")
+check(near(Motion.heading(reported: 200, last: 90, guiding: false), 200) && near(Motion.heading(reported: 200, last: nil, guiding: false), 200), "not guiding: a reported heading is shown")
+check(Motion.lerp(42.5, 42.6, 0) == 42.5 && Motion.lerp(42.5, 42.6, 1) == 42.6, "a glide begins and ends exactly on its positions")
+check(near(Motion.lerp(42.5, 42.6, 0.5), 42.55, 1e-12) && near(Motion.lerp(-113.8, -113.7, 0.25), -113.775, 1e-12), "part of the way")
+check(Motion.lerp(42.5, 42.6, -0.2) == 42.5 && Motion.lerp(42.5, 42.6, 1.2) == 42.6, "never before the start or past the end")
+check(near(Motion.lerpHeading(359, 1, 0.5), 0) && near(Motion.lerpHeading(359, 1, 0.25), 359.5) && near(Motion.lerpHeading(359, 1, 0.75), 0.5), "a turn across north goes the short way")
+check(Motion.lerpHeading(359, 1, 1) == 1 && Motion.lerpHeading(359, 1, 0) == 359, "a turn begins and ends exactly")
+check(near(Motion.lerpHeading(1, 359, 0.5), 0) && near(Motion.lerpHeading(1, 359, 0.75), 359.5), "and the other way across north")
+check(near(Motion.lerpHeading(0, 90, 0.5), 45) && near(Motion.lerpHeading(270, 180, 0.5), 225) && near(Motion.lerpHeading(10, 330, 0.5), 350), "plain turns")
+check(Motion.maxGlideMs == 1200 && Motion.snapGapMs == 3000 && Motion.snapJumpM == 150 && Motion.minFrameMs == 30, "the numbers are Android's")
+check(Motion.durationMs(gapMs: 1000) == 1000 && Motion.durationMs(gapMs: 400) == 400 && Motion.durationMs(gapMs: 1200) == 1200, "a glide lasts as long as the time since the position before")
+check(Motion.durationMs(gapMs: 2500) == 1200 && Motion.durationMs(gapMs: -5) == 0, "but never longer than the longest, and never less than nothing")
+check(!Motion.snaps(first: false, gapMs: 1000, jumpM: 15, phaseChanged: false, force: false), "a second later and a few metres on: a glide")
+check(Motion.snaps(first: true, gapMs: 1000, jumpM: 0, phaseChanged: false, force: false), "the first position is a jump")
+check(Motion.snaps(first: false, gapMs: 3001, jumpM: 15, phaseChanged: false, force: false) && Motion.snaps(first: false, gapMs: 0, jumpM: 15, phaseChanged: false, force: false), "too long since, or no time since: a jump")
+check(Motion.snaps(first: false, gapMs: 1000, jumpM: 151, phaseChanged: false, force: false), "too far: a jump")
+check(Motion.snaps(first: false, gapMs: 1000, jumpM: 15, phaseChanged: true, force: false) && Motion.snaps(first: false, gapMs: 1000, jumpM: 15, phaseChanged: false, force: true), "a new phase, or being told to: a jump")
+check(!Motion.appliesFrame(fraction: 0.5, nowMs: 1016, lastAppliedMs: 1000) && Motion.appliesFrame(fraction: 0.5, nowMs: 1030, lastAppliedMs: 1000), "frames go to the map about 30 times a second")
+check(Motion.appliesFrame(fraction: 1, nowMs: 1001, lastAppliedMs: 1000), "the last frame always goes")
+check(near(Motion.distanceM(lat1: 10.5, lon1: 20.2, lat2: 10.5, lon2: 20.201), 109.3, 0.5), "metres between two positions")
 
 // ---- the link -------------------------------------------------------------------------------------------------------
 

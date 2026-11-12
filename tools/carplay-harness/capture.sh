@@ -400,7 +400,7 @@ open_carplay() {  # boots the simulator, starts the Simulator app and waits for 
 start_stream() {  # the app's own log lines (the car scene's, the engine's), into a file, for as long as this boot lasts
   STREAM="$OUT/logs/app-$1.txt"
   : > "$STREAM"
-  xcrun simctl spawn "$UDID" log stream --level info --style compact \
+  xcrun simctl spawn "$UDID" log stream --level debug --style compact \
     --predicate 'subsystem == "co.cache.car" OR (processImagePath ENDSWITH "Runner" AND (eventMessage CONTAINS "Flutter engine" OR eventMessage CONTAINS "phone scene" OR eventMessage CONTAINS "harness steps"))' \
     >> "$STREAM" 2>&1 &
   STREAM_PID=$!
@@ -879,6 +879,18 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   wait_log 'car guidance: turn shown, 2 maneuvers' 12 || GUIDE_MISSING=" [the app did not say the turn is shown]"
   sleep 3
   shot_ext "$label-guide"
+  # A moving vehicle: five positions a second apart. The marker glides between them and the camera goes with it; a picture
+  # is taken as fast as they come while it does.
+  before=$(log_count 'car map: the marker glides')
+  notify roll
+  for at in 1 2 3 4 5; do shot_ext "$label-guide-roll-$at"; done
+  sleep 2
+  at=$(( $(log_count 'car map: the marker glides') - before ))
+  if [ "$at" -ge 3 ]; then
+    GUIDE="the marker glided between $at of five positions a second apart"
+  else
+    GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
+  fi
   # Nearer the turn (only the distance changes), then past it (the next turn, and arriving after it).
   guide_step drive "" "$label-guide-near"
   guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
@@ -886,7 +898,7 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   if at=$(tap_until 'car guidance: voice asked off' 3 "$edge" "$bar" $((edge - 8 * CAR_S)) "$bar"); then
     sleep 3
     shot_ext "$label-guide-voice-off"
-    GUIDE="the voice switch (tap at pixel $at) asked the phone for silence and shows it"
+    GUIDE="$GUIDE; the voice switch (tap at pixel $at) asked the phone for silence and shows it"
     tap_until 'car guidance: voice asked on' 3 "${at%,*}" "${at#*,}" > /dev/null || GUIDE_MISSING="$GUIDE_MISSING [the voice switch did not turn the voice on again]"
     sleep 2
   else

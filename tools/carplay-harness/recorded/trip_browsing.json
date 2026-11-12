@@ -11,5 +11,5 @@
   "voiceOn": true,
   "arrived": false,
   "rerouting": false,
-  "position": {"lat": 10.5, "lon": 20.2, "heading": 90.0}
+  "position": {"lat": 10.5, "lon": 20.2}
 }

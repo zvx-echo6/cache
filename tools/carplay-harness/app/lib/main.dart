@@ -94,6 +94,18 @@ class _HarnessAppState extends State<HarnessApp> {
             _frame = (_frame + 1) % _drive.length;
             await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
           }
+        case 'roll':
+          // A moving vehicle: five positions a second apart along the road (about 80 km/h), the turn that much nearer.
+          if (_phase == 2) {
+            for (int i = 1; i <= 5; i++) {
+              await Future<void>.delayed(const Duration(seconds: 1));
+              final Map<String, dynamic> trip = jsonDecode(recorded['trip_guiding']!) as Map<String, dynamic>;
+              (trip['position'] as Map<String, dynamic>)['lon'] = 20.23 + 0.0002 * i;
+              (trip['step'] as Map<String, dynamic>)['distanceM'] = 320.4 - 22.0 * i;
+              trip['remainingM'] = 22860.45 - 22.0 * i;
+              await _pushRaw(jsonEncode(trip), recorded['route_guiding']!);
+            }
+          }
         case 'nosaved':
         case 'saved':
           // The phone's saved places changed: none are left, or the recorded ones are back.
