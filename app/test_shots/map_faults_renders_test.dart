@@ -173,6 +173,8 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     expect(fits, isNotEmpty, reason: 'the screen did not fit the route into view');
     final cam = const GuideCamera(lat: 0, lon: 0, zoom: 0).after(fits.last, size);
     view.value = _View(route, cam);
+    // The screen is told the camera the map has, as the map tells it (the scale bar follows it).
+    map.onCameraMove!(CameraPosition(target: LatLng(cam.lat, cam.lon), zoom: cam.zoom));
     await tester.pump();
     // Both ends of the route are on the map above the scale (under the scale: the credits and the panel).
     final coverTop = tester.getTopLeft(find.byType(ScaleBarWidget)).dy;

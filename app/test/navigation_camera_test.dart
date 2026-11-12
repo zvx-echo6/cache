@@ -11,6 +11,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -191,6 +192,9 @@ void main() {
     tester.view.physicalSize = const Size(390, 844) * 3;
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
+    // The style template is read through the asset bundle, which keeps the read the test above started (it never finishes in
+    // this one): read it afresh, or the map never appears.
+    rootBundle.clear();
     final dir = Directory.systemTemp.createTempSync('route-fit-');
     final originalPlatform = MapLibrePlatform.createInstance;
     MapLibrePlatform.createInstance = () => NoSurface();
@@ -217,6 +221,7 @@ void main() {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
         await tester.pump();
       }
+      expect(find.byType(MapLibreMap), findsOneWidget, reason: 'the map did not appear');
       final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
       map.onMapCreated!(camera);
       map.onStyleLoadedCallback!();

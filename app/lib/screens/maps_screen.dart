@@ -1636,7 +1636,7 @@ class MeasurePanel extends StatelessWidget {
                 Text(total, key: const ValueKey('measure-total'), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
                 // In full, on a second line when the bar is a phone's width (it used to be cut at one line).
                 Text(points < 2 ? 'Tap the map to add points' : '$points points · tap the map to add more',
-                    key: const ValueKey('measure-hint'), style: TextStyle(fontSize: 13, color: k.secondary)),
+                    style: TextStyle(fontSize: 13, color: k.secondary)),
               ],
             ),
           ),
