@@ -1277,11 +1277,12 @@ for size in $SIZES; do
 done
 
 # ---------------------------------------------------------------------------------------------------------------------------
-# The car goes away during guidance and comes back. The Simulator app is closed: its CarPlay display goes with it, as a
-# car's does when the cable is pulled, while the simulated phone and the app run on. Opened again, the display comes back
-# from the saved defaults, and the app is to show the guidance again that went on meanwhile.
+# The car goes away during guidance and comes back. The CarPlay display is taken away by the Simulator's own menu (I/O >
+# External Displays > Disabled), as a car's goes when the cable is pulled, while the simulated phone and the app run on
+# (closing the Simulator app was tried first and does not take the display away). Chosen again in that menu, the display
+# comes back, and the app is to show the guidance again that went on meanwhile.
 reconnect_case() {
-  local began gone conn before lit=""
+  local began gone conn before menu lit=""
   say "== the car goes away during guidance and comes back"
   to_browsing
   before=$(log_count 'car link: trip previewing')
@@ -1298,14 +1299,18 @@ reconnect_case() {
   began=$(log_count 'car guidance: began')
   gone=$(log_count 'car scene disconnected')
   conn=$(log_count 'car scene connected')
-  run killall Simulator
+  front
+  menu=$(osa sim_external Disabled)
+  say "the CarPlay display is taken away by the menu: $menu"
   if ! wait_more 'car scene disconnected' "$gone" 40; then
-    result "FAILED reconnect: the app's car scene did not end within 40 s of the CarPlay display going away (closing the Simulator app may not take the display away)"
+    result "FAILED reconnect: the app's car scene did not end within 40 s of the CarPlay display being taken away by I/O > External Displays (the menu said: $menu)"
     return
   fi
   say "the app's car scene ended with the CarPlay display"
   sleep 4
   ANCHOR=""
+  front
+  say "the CarPlay display is brought back by the menu: $(osa sim_external CarPlay)"
   if ! open_carplay; then
     result "FAILED reconnect: the CarPlay display did not come back"
     return

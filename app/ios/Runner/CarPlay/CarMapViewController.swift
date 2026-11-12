@@ -562,7 +562,11 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   /// change what CarPlay takes).
   private func measureExtras() {
     guard CarLink.shared.trip.guiding, !overview, following else { return }
-    let free = view.bounds.inset(by: view.safeAreaInsets)
+    // Only once CarPlay's guidance panel is in the room it reports: at a guidance start CarPlay first reports the plain map's
+    // room for a moment, which would give a screen a class it does not have (drawn, and the phone told, then taken back).
+    let insets = view.safeAreaInsets
+    guard CarPanel.width(withPanel: Double(insets.left), plain: plainLeft, dockAtBottom: insets.bottom > 0) != nil else { return }
+    let free = view.bounds.inset(by: insets)
     let measured = CarExtras.layout(free: free)
     if measured == extrasLayout { return }
     let first = extrasLayout == nil
