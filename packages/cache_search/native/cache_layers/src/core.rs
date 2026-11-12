@@ -6,7 +6,7 @@ use crate::def::{LayerDef, Transform};
 use crate::error::{io_at, Error, Result};
 use crate::http;
 use crate::pmtiles::{self, Reader};
-use crate::store::Store;
+use crate::store::{Store, Stored};
 use crate::tilecache::{Cached, TileCache};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -424,10 +424,20 @@ impl Inner {
         self.areas(layer)
     }
 
-    /// A tile from the layer's merged store of downloads (as the source sent it: MVT may be gzipped).
+    /// A tile from the layer's merged store of downloads (as the source sent it: MVT may be gzipped). `None` when no download
+    /// fetched it, and when one did and the source has no tile there ([`Inner::downloaded`] tells the two apart).
     pub fn downloaded_tile(&self, base: &LayerDef, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
         match self.store_read(&base.id) {
             Some(st) => st.get(z, x, y),
+            None => Ok(None),
+        }
+    }
+
+    /// What the layer's downloads hold for a tile: its bytes, "the source has no tile here", or `None` when no download
+    /// fetched it.
+    pub fn downloaded(&self, base: &LayerDef, z: u8, x: u32, y: u32) -> Result<Option<Stored>> {
+        match self.store_read(&base.id) {
+            Some(st) => st.find(z, x, y),
             None => Ok(None),
         }
     }
@@ -534,7 +544,9 @@ impl Inner {
         let r = http::get(&url, None, Some(&self.gate(l)))?;
         match r.status {
             200 if !r.body.is_empty() => Ok(Some(r.body)),
-            200 | 204 | 404 | 403 | 410 => Ok(None),
+            // The source has no tile here: an empty answer, 204 No Content, 404 Not Found or 410 Gone. Nothing else is "no
+            // tile": a refusal (403) is a failure, as a server error is, so a download with a refused tile does not finish.
+            200 | 204 | 404 | 410 => Ok(None),
             c => Err(Error::fetch_failed(format!("HTTP {c} from {url}"))),
         }
     }
@@ -610,8 +622,12 @@ impl Inner {
         let ready = |b: Vec<u8>, from| -> Result<TileOut> {
             Ok(TileOut::Tile { bytes: if is_mvt { gunzip_if_gzip(b)? } else { b }, mime, from })
         };
-        if let Some(b) = self.downloaded_tile(l, z, x, y)? {
-            return ready(b, "downloaded");
+        match self.downloaded(l, z, x, y)? {
+            Some(Stored::Tile(b)) => return ready(b, "downloaded"),
+            // A download asked the source and it has no tile here: that is the answer, with or without a connection. It was
+            // answered "not here, ask again" offline, so the map asked for every empty tile of a downloaded area every 5 s.
+            Some(Stored::Empty) => return Ok(TileOut::Empty),
+            None => {}
         }
         match self.cache.get(&l.id, z, x, y)? {
             Some(Cached::Tile(b)) => return ready(b, "cache"),

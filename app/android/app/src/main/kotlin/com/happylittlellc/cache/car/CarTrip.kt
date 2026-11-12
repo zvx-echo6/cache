@@ -39,9 +39,24 @@ data class CarTrip(
     val remainingM: Double?,
     val remainingS: Long?,
     val etaMs: Long?,
+    val overlay: CarOverlaySwitches = CarOverlaySwitches.DEFAULT,
+    val climb: CarClimb? = null,
+    val overview: CarOverview? = null,
+    val palette: CarOverlayPalette? = null,
 ) {
     val guiding: Boolean get() = phase == "guiding"
     val previewing: Boolean get() = phase == "previewing"
+
+    /**
+     * This trip with guidance over, as the phone pushes it once its own guidance has ended (lib/car/car_trip.dart): back to
+     * browsing with no routes, step, estimate, climb or overview. The car side uses it to say so at once, before the phone has
+     * answered ([CarLink.stopGuidance]).
+     */
+    fun ended(): CarTrip = copy(
+        phase = "browsing", routing = false, error = null, routes = emptyList(), routeIndex = 0, routeId = null, arrived = false,
+        rerouting = false, step = null, then = null, currentRoad = null, remainingM = null, remainingS = null, etaMs = null,
+        climb = null, overview = null,
+    )
 
     companion object {
         val EMPTY = CarTrip(
@@ -87,6 +102,10 @@ data class CarTrip(
                 remainingM = m["remainingM"].asDouble(),
                 remainingS = (m["remainingS"] as? Number)?.toLong(),
                 etaMs = (m["etaMs"] as? Number)?.toLong(),
+                overlay = CarOverlaySwitches.from(m["overlay"]),
+                climb = CarClimb.from(m["climb"]),
+                overview = CarOverview.from(m["overview"]),
+                palette = CarOverlayPalette.from(m["palette"]),
             )
         }
 

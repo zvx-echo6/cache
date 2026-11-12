@@ -11,6 +11,10 @@ import '../units.dart';
 const double _ftPerM = 3.28084;
 const double _mPerMile = 1609.344;
 
+/// The least the chart's full height stands for: 330 ft (100 m), so a small rise or drop is drawn small, not as a hill. The car card's
+/// rule (SHAPE_MIN_RISE_M in CarOverlayPainter.kt). The climb, descent, highest and lowest numbers are not changed by it.
+const double kChartMinSpanM = 100.0;
+
 String _group(int n) {
   final s = n.abs().toString();
   final b = StringBuffer(n < 0 ? '-' : '');
@@ -41,6 +45,27 @@ double niceStep(double raw, {bool quarter = true}) {
     if ((math.log(m * p) - math.log(raw)).abs() < (math.log(best) - math.log(raw)).abs()) best = m * p;
   }
   return best;
+}
+
+/// The heights the chart's full height covers, in the chart's unit, for a profile from [lo] to [hi]: its own range, or the [floor]
+/// when that is less (then the profile sits in the middle), with room below and above for the labels. A route at or above 0 never gets
+/// a window below 0.
+@visibleForTesting
+(double, double) chartWindow(double lo, double hi, {required double floor}) {
+  final span = math.max(hi - lo, floor);
+  final mid = (hi + lo) / 2;
+  var yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
+  if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
+  return (yMin, yMax);
+}
+
+/// The distance labels along the chart's foot (in the chart's own unit), as (distance, text). Enough decimals that no two read the
+/// same: the step is 1, 2 or 5 times a power of ten, and it needs as many decimals as that power is small.
+@visibleForTesting
+List<(double, String)> distanceAxisLabels(double total, {required bool full}) {
+  final step = niceStep(total / (full ? 5.5 : 2.2), quarter: false);
+  final decimals = step >= 1 ? 0 : math.max(1, -(math.log(step) / math.ln10).floor());
+  return [for (var i = 0; i * step <= total + 1e-9; i++) (i * step, (i * step).toStringAsFixed(decimals))];
 }
 
 /// The colours the chart draws with.
@@ -128,8 +153,8 @@ class ElevationChartPainter extends CustomPainter {
       lo = math.min(lo, _h(e));
       hi = math.max(hi, _h(e));
     }
-    final span = math.max(hi - lo, _us ? 30.0 : 10.0);
-    final yMin = lo - span * 0.28, yMax = hi + span * 0.18;
+    final span = math.max(hi - lo, _h(kChartMinSpanM));
+    final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM));
     final total = _d(profile.totalM);
     double x(double m) => l + (total <= 0 ? 0 : _d(m) / total * pw);
     double y(double hm) => t + (yMax - _h(hm)) / (yMax - yMin) * ph;
@@ -228,12 +253,10 @@ class ElevationChartPainter extends CustomPainter {
     }
 
     // Distance labels along the foot, and the unit.
-    final xStep = niceStep(total / (full ? 5.5 : 2.2), quarter: false);
     final unit = _text(_us ? 'mi' : 'km', 11, colors.secondary);
     final unitX = size.width - r - unit.width;
     unit.paint(canvas, Offset(unitX, size.height - 4 - unit.height + 2));
-    for (var v = 0.0; v <= total + 1e-9; v += xStep) {
-      final label = xStep < 1 ? v.toStringAsFixed(1) : v.round().toString();
+    for (final (v, label) in distanceAxisLabels(total, full: full)) {
       final tp = _text(label, 11, colors.secondary);
       final cx = l + (total <= 0 ? 0 : v / total * pw);
       if (cx + tp.width / 2 > unitX - 4 && v > 0) continue;
@@ -588,13 +611,13 @@ class RouteElevationSummary extends StatelessWidget {
         ..add(ElevationChart(key: const ValueKey('preview-elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 92, full: false))
         ..add(Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Row(
+          // Both labels in full: apart when the row has room, one under the other when it has not (large text on a narrow phone).
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            runSpacing: 2,
             children: [
-              if (p.highest case final h?)
-                Flexible(child: Text('Highest ${elevationText(fmt, h.elevM)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
-              const Spacer(),
-              if (p.lowest case final lw?)
-                Flexible(child: Text('Lowest ${elevationText(fmt, lw.elevM)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
+              if (p.highest case final h?) Text('Highest ${elevationText(fmt, h.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+              if (p.lowest case final lw?) Text('Lowest ${elevationText(fmt, lw.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
             ],
           ),
         ));

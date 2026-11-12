@@ -238,7 +238,7 @@ pub fn index_info_json(
     if matches!(legacy, IndexState::Done(_)) {
         let mut v = json!({"kind": kind, "location": "legacy", "snapshot": Value::Null, "format": format,
             "dir": legacy_dir.map(path).unwrap_or(Value::Null)});
-        if has_indexes_dir && !opening {
+        if has_indexes_dir && !opening && !legacy_dir.is_some_and(idxsnap::seal_blocked) {
             v["needs_seal"] = json!(true);
         }
         return v;
@@ -692,7 +692,8 @@ impl Handle {
                     }
                 }
                 Source::Library(l) => {
-                    l.indexes_dir = root.clone();
+                    // a library whose old index is on another volume keeps its snapshots beside it (see idxsnap::snap_root)
+                    l.indexes_dir = root.as_ref().map(|r| idxsnap::snap_root(r, idxsnap::KIND_LIBRARY, &l.source_id(), l.index_dir.as_deref()));
                     if let (Some(root), Some(d)) = (&root, &l.index_dir) {
                         idxsnap::note_legacy(root, idxsnap::KIND_LIBRARY, &l.source_id(), d);
                     }
@@ -959,6 +960,7 @@ impl Handle {
                         "docs": l.docs,
                         "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
                         "library_id": l.settings.library_id, "keyword_source": source,
+                        "keyword_pending": l.keyword_pending(),
                         "whole_library_only": l.whole_library_only,
                         "settings": l.settings.to_json(), "error": Value::Null,
                     })

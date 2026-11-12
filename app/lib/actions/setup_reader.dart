@@ -24,11 +24,15 @@ String regionSetupValue(LocalRegion r, {String? age}) {
     RegionPartKind.offroad => 'off-road',
   };
   final parts = r.parts;
-  final ready = [for (final p in parts) if (p.state == PartState.ready) name(p.kind)];
+  // What the assistant reads stays as it was. Road routing with no tile over the area is "not available yet" on the Regions
+  // screens now (it read "Ready" with no road data); here it still counts as ready, as it always has, because saying "routing
+  // not available yet" would change a tool result, and that waits for its own approval.
+  bool isReady(RegionPartStatus p) => p.state == PartState.ready || (p.kind == RegionPartKind.directions && p.state == PartState.notAvailable);
+  final ready = [for (final p in parts) if (isReady(p)) name(p.kind)];
   if (ready.isEmpty) return 'nothing ready yet';
   final not = [
     for (final p in parts)
-      if (p.state == PartState.notAvailable) '${name(p.kind)} not available yet' else if (p.state != PartState.ready) '${name(p.kind)} not finished',
+      if (!isReady(p)) p.state == PartState.notAvailable ? '${name(p.kind)} not available yet' : '${name(p.kind)} not finished',
   ];
   return [ready.join(', '), if (not.isNotEmpty) not.join(', '), ?age].join('; ');
 }

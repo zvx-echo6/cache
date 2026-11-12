@@ -167,7 +167,12 @@
           "max_chars": 400
         }
       ],
-      "area": "geometry"
+      "area": "geometry",
+      "app": {
+        "message_type": "properties.messageType",
+        "references": "properties.references",
+        "vtec": "properties.parameters.VTEC"
+      }
     }
   ]
 }
