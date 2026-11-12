@@ -15,6 +15,7 @@ release notes).
 
 ### Fixed
 - Maps: with Off-road chosen, a route shown before you start sits above the directions panel, not partly under it; the map fits the route above what the panel really covers, and fits it again when the panel grows
+- Maps: a route shown before you start also stays clear of the Layers and Find me buttons at the right edge
 - Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
 - Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
 - Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
