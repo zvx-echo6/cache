@@ -148,6 +148,21 @@ object CarIcons {
         c.drawPath(p, paint(s * 0.08f))
     }
 
+    /** Add stop: a place pin with a plus in it, as the phone's Add stop has. */
+    val addStop: CarIcon get() = icon("addStop", tint = true) { c, s ->
+        val w = s * 0.07f
+        val p = Path()
+        p.moveTo(s * 0.5f, s * 0.92f)
+        p.lineTo(s * 0.27f, s * 0.5f)
+        p.arcTo(RectF(s * 0.22f, s * 0.1f, s * 0.78f, s * 0.66f), 155f, 230f)
+        p.close()
+        c.drawPath(p, paint(w))
+        val plus = Path()
+        plus.moveTo(s * 0.38f, s * 0.38f); plus.lineTo(s * 0.62f, s * 0.38f)
+        plus.moveTo(s * 0.5f, s * 0.26f); plus.lineTo(s * 0.5f, s * 0.5f)
+        c.drawPath(plus, paint(w))
+    }
+
     val zoomIn: CarIcon get() = icon("zoomIn", tint = true) { c, s ->
         val w = s * 0.1f
         val p = Path()

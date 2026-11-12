@@ -9,6 +9,7 @@ import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
 import '../maps/maps_state.dart';
+import '../platform/app_log.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
@@ -210,6 +211,70 @@ class NavState extends ChangeNotifier {
     notifyListeners();
     await _fetchRoutes();
     return true;
+  }
+
+  /// The stops still ahead, in order: all of them before the drive, and while guiding those not passed yet.
+  List<MapPlace> get stopsAhead => [
+        for (final (i, s) in stops.indexed)
+          if (!_passedStops.contains(i)) s,
+      ];
+
+  /// Add stop while guiding (the car's Add stop during a drive): [p] becomes the next stop, before the stops still ahead, and
+  /// guidance carries on along a new route from where the phone is, through it and the other stops ahead, to the destination.
+  /// False, with the route as it was, when there is no guidance to add to (not guiding, arrived, no fix yet, a new route
+  /// already being worked out), when the route has [maxStops], or when no route through the stop could be found.
+  Future<bool> addStopWhileGuiding(MapPlace p) async {
+    final f = lastFix;
+    final to = selected;
+    if (!guiding || arrived || rerouting || f == null || to == null || route == null) return false;
+    if (stops.length >= maxStops) {
+      _events.add(const NavNotice('A route has at most 10 stops'));
+      return false;
+    }
+    final before = stops;
+    final beforePassed = {..._passedStops};
+    final passed = [
+      for (final (i, s) in stops.indexed)
+        if (_passedStops.contains(i)) s,
+    ];
+    // The stops already passed keep their places at the front, so each stop keeps its number.
+    stops = [...passed, p, ...stopsAhead];
+    _passedStops
+      ..clear()
+      ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    rerouting = true;
+    _lastReroute = _clock();
+    notifyListeners();
+    var added = false;
+    try {
+      final r = await backend.route(
+          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
+      if (!guiding) return false;
+      if (r.ok) {
+        routes = [r];
+        routeIndex = 0;
+        _routeFrom = GeoPoint(f.lat, f.lon);
+        _sendRoute = true;
+        _routeStarted = true;
+        _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
+        progress = null;
+        added = true;
+      } else {
+        _events.add(NavNotice(routeErrorText(r)));
+      }
+    } catch (_) {
+      _events.add(const NavNotice('Could not work out a new route'));
+    } finally {
+      if (!added && guiding) {
+        stops = before;
+        _passedStops
+          ..clear()
+          ..addAll(beforePassed);
+      }
+      rerouting = false;
+      notifyListeners();
+    }
+    return added;
   }
 
   Future<void> removeStop(int i) async {
@@ -672,6 +737,7 @@ class NavState extends ChangeNotifier {
         arrived = true;
         notifyListeners();
         await _stopTracking();
+        logInfo('Guidance: arrived, the position service is let go');
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -745,6 +811,7 @@ class NavState extends ChangeNotifier {
   Future<void> end() async {
     if (!guiding) return;
     await _stopTracking();
+    logInfo('Guidance: ended, the position service is let go');
     if (_simulated) {
       // A simulated drive's fixes went to the location service as guidance fixes do ([_onFix]), so its last point was left
       // there as the phone's position: the map, "here" and the car's home map all showed it until something read a real

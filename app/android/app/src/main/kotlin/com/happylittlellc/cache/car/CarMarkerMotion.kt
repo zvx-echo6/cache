@@ -45,6 +45,9 @@ object CarMarkerMotion {
      * corner, so the arrow and the map's rotation cannot come apart; with north up it is the heading itself. */
     fun arrowTurn(heading: Double, cameraBearing: Double): Double = norm(heading - cameraBearing)
 
+    /** Whether the camera is turned to the vehicle's heading, so the arrow points straight up the screen (guidance). */
+    fun arrowIsUp(heading: Double, cameraBearing: Double): Boolean = arrowTurn(heading, cameraBearing) == 0.0
+
     /** The heading the arrow shows: the one the phone [reported], or with none the [last] one known. Null when none was ever
      * known: then there is no arrow (a dot is drawn), because an arrow must not point in a made-up direction. */
     fun heading(reported: Double?, last: Double?): Double? =

@@ -1007,6 +1007,22 @@ class CarOverlayTest {
     }
 
     @Test
+    fun theUpArrowShowsOnlyWhileTheCameraIsTurnedToTheHeading() {
+        // Guidance: the camera is turned to the heading, the arrow that always points up is the one showing.
+        assertTrue(CarMarkerMotion.arrowIsUp(90.0, 90.0))
+        assertTrue(CarMarkerMotion.arrowIsUp(359.5, 359.5))
+        // The route overview opens (north up) on a road that runs east: the map-tied arrow, which already has the compass
+        // heading, shows from that same frame; the up arrow does not.
+        assertFalse(CarMarkerMotion.arrowIsUp(90.0, 0.0))
+        // And back in guidance.
+        assertTrue(CarMarkerMotion.arrowIsUp(90.0, 90.0))
+        // A panned map keeps its bearing while the vehicle turns on.
+        assertFalse(CarMarkerMotion.arrowIsUp(100.0, 90.0))
+        // North up and heading north: up is right there too.
+        assertTrue(CarMarkerMotion.arrowIsUp(0.0, 0.0))
+    }
+
+    @Test
     fun parkedWithNoCourseTheMarkerIsADotAfterADriveAsBeforeOne() {
         // Guiding: a position without a heading keeps the last one.
         assertEquals(90.0, CarMarkerMotion.heading(null, 90.0, guiding = true)!!, 0.0)
