@@ -3,25 +3,31 @@
 # and takes the pictures. Every command and what it printed goes to spike-out/steps.log; lines that start with RESULT are the
 # answers. Nothing here stops at the first failure: each part reports and the next one runs.
 #
-# What round 1 established, and this round builds on:
+# What rounds 1 and 2 established, and this round builds on:
 #   - the Simulator keeps the CarPlay display's settings in its defaults: CarPlayConfig (width, height, scale, input kinds) and,
-#     per device, SimulatorExternalDisplay = 2714 for "CarPlay". So the display is asked for by writing defaults before the
-#     Simulator app starts; the menu (I/O > External Displays > CarPlay) and its "TV Out Extended Setup" window are the fallback.
+#     per device, SimulatorExternalDisplay = 2714 for "CarPlay". Written before the Simulator app starts, they bring the CarPlay
+#     display up at that size with no click; the size must be there before the simulator boots, or the CarPlay screen keeps the
+#     layout of the first size it saw.
 #   - `xcrun simctl io <device> screenshot --display=external` photographs it.
 #   - a click made with CGEvent on the Simulator's CarPlay window is a touch on the CarPlay screen.
 #   - the app appears there with the CarPlay entitlement in a simulator build and no provisioning profile, not without it.
-#   - the app's CarPlay scene connected and Dart ran, but the simulator's CarPlayTemplateUIHost crashed about a second later.
+#   - started from the car side alone, the app's CarPlay scene connects and Dart runs; a list template shows.
+#   - on the iOS 26.5 simulator every map template crashes the simulator's CarPlayTemplateUIHost
+#     ('-[CPSTemplateInstance vehicleSupportsDestinationSharing]: unrecognized selector', in its map template's viewDidLoad).
 #
-#   A  800 x 480 at 2x, asked for through defaults alone; which content of the map template the template host survives
-#      (start words, see AppDelegate.swift); guidance; the phone joining the engine the car started
+#   R  which installed iOS runtime's template host survives a map template (oldest first)
+#   A  on that runtime, 800 x 480 at 2x: the map, the bar buttons with Dart's value, a tap on a template button, guidance,
+#      the drawn pieces in the base view, the search template, the phone joining the engine the car started
 #   B  the other three test sizes, each from a fresh boot of the simulator
+#   Z  a short look at the next runtime, for the record
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$RUNNER_TEMP/spike-out"
 APPS="$RUNNER_TEMP/spike-apps"
 TOOL="$RUNNER_TEMP/spiketool"
-UDID="${SPIKE_UDID:?no simulator was chosen}"
-DEVICE="${SPIKE_DEVICE:-iPhone}"
+UDID=""
+DEVICE="iPhone"
+RUNTIME=""
 SIMAPP="$(xcode-select -p)/Applications/Simulator.app"
 mkdir -p "$OUT/shots" "$OUT/host" "$OUT/ui" "$OUT/applog"
 LOG="$OUT/steps.log"
@@ -29,6 +35,9 @@ T0=$SECONDS
 WAYS="1 2 3"
 ICON_X=0
 ICON_Y=0
+HOST_FOUND=""
+ANCHOR=""
+OPENED_HOW=""
 
 say() { printf '[%4ds] %s\n' "$((SECONDS - T0))" "$*" | tee -a "$LOG"; }
 
@@ -151,8 +160,10 @@ find_icon_on_host() {  # the app's icon inside the CarPlay window, on a picture 
   found=$(python3 -I "$HERE/find_icon.py" host "$OUT/host/$label.png" "$SCREEN_W" $win 2>&1 | tail -n 1)
   say "  icon on the Mac screen, inside the CarPlay window ($win): $found"
   sips -s format jpeg -s formatOptions 60 "$OUT/host/$label.png" --out "$OUT/host/$label.jpg" > /dev/null 2>&1 && rm -f "$OUT/host/$label.png"
+  HOST_FOUND=""
   case "$found" in
     found*)
+      HOST_FOUND="$found"
       # shellcheck disable=SC2086
       set -- $found
       ICON_X="$2"
@@ -225,6 +236,9 @@ car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay scree
   sleep 1
   for way in $WAYS; do
     if find_icon_on_host "$label-click$way" || find_icon_by_geometry "$label-click$way"; then
+      if [ -n "$HOST_FOUND" ] && xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.anchor.png" > /dev/null 2>&1; then
+        anchor "$OUT/.anchor.png" "$HOST_FOUND"
+      fi
       click_at "$ICON_X" "$ICON_Y" "$way"
       if wait_log 'carplay didConnect' 20; then
         say "the app's CarPlay scene connected ($label, click way $way)"
@@ -321,25 +335,50 @@ fill_options_window() {  # the fallback for a size the defaults did not give: th
   say "  filling the options window: $(osa sim_options "$1" "$2" "$3" | tr '\n' ';')"
 }
 
-host_crash_reports() {  # what the Mac recorded about crashed simulator processes (the template host, the app)
+host_crash_reports() {  # what the Mac recorded about the simulator's crashed template host: the reason and where
   local dir="$HOME/Library/Logs/DiagnosticReports" f
-  sleep 6
-  say "crash reports on the Mac ($dir):"
-  ls -lt "$dir" 2> /dev/null | head -n 20 | sed 's/^/        /' | tee -a "$LOG"
+  sleep 5
   mkdir -p "$OUT/crashes"
-  for f in "$dir"/CarPlayTemplateUIHost*.ips "$dir"/Runner*.ips "$dir"/CarPlay-*.ips; do
-    [ -f "$f" ] || continue
-    cp "$f" "$OUT/crashes/" 2> /dev/null
+  for f in "$dir"/CarPlayTemplateUIHost*.ips "$dir"/Runner*.ips; do
+    [ -f "$f" ] && cp "$f" "$OUT/crashes/$RUNTIME-$(basename "$f")" 2> /dev/null
   done
+  say "crash reports on the Mac: $(ls "$dir" 2> /dev/null | grep -c .) files, $(ls "$dir" 2> /dev/null | grep -c CarPlayTemplateUIHost) of the template host"
+  say "the template host's reason, from the simulator's log:"
+  xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate 'process == "CarPlayTemplateUIHost" AND eventMessage CONTAINS[c] "terminating app"' 2> /dev/null | grep -i -A9 'terminating app' | tail -n 11 | cut -c1-400 | sed 's/^/        /' | tee -a "$LOG"
   f=$(ls -t "$dir"/CarPlayTemplateUIHost*.ips 2> /dev/null | head -n 1)
   if [ -n "$f" ]; then
-    say "the newest CarPlayTemplateUIHost report, $f:"
-    python3 -I "$HERE/crash_summary.py" "$f" 2>&1 | sed 's/^/        /' | tee -a "$LOG"
-  else
-    say "no CarPlayTemplateUIHost crash report"
+    say "the newest report, $(basename "$f"):"
+    python3 -I "$HERE/crash_summary.py" "$f" 2>&1 | head -n 16 | sed 's/^/        /' | tee -a "$LOG"
   fi
-  say "the template host's own last log lines:"
-  xcrun simctl spawn "$UDID" log show --last 4m --style compact --predicate 'process == "CarPlayTemplateUIHost" AND (messageType == error OR messageType == fault OR eventMessage CONTAINS[c] "exception" OR eventMessage CONTAINS[c] "terminating")' 2> /dev/null | tail -n 40 | cut -c1-600 | sed 's/^/        /' | tee -a "$LOG"
+}
+
+anchor() {  # remembers where the CarPlay screen sits on the Mac screen, from the icon seen in both pictures
+  local ext host
+  ext=$(python3 -I "$HERE/find_icon.py" ext "$1" 2>&1 | tail -n 1)
+  host="$2"
+  case "$ext$host" in *none*|*Error*) return 1 ;; esac
+  # found <x> <y> count=.. box=x,y,w,h image=.. scale=..
+  ANCHOR=$(python3 -I -c '
+import sys
+e, h = sys.argv[1].split(), sys.argv[2].split()
+ew = float(e[4].split("=")[1].split(",")[2]); hw = float(h[4].split("=")[1].split(",")[2]) / float(h[6].split("=")[1])
+print("%s %s %s %s %.5f" % (e[1], e[2], h[1], h[2], hw / ew))
+' "$ext" "$host" 2>> "$LOG")
+  [ -n "$ANCHOR" ] && say "  the CarPlay screen on the Mac screen: its pixel ($ANCHOR)"
+}
+
+tap_carplay() {  # tap_carplay <x> <y> in CarPlay pixels: a click at that place of the CarPlay window
+  local at
+  [ -n "$ANCHOR" ] || { say "  no anchor: cannot tap"; return 1; }
+  # shellcheck disable=SC2086
+  at=$(python3 -I -c '
+import sys
+ex, ey, hx, hy, k, x, y = [float(v) for v in sys.argv[1:8]]
+print("%.1f %.1f" % (hx + (x - ex) * k, hy + (y - ey) * k))
+' $ANCHOR "$1" "$2")
+  # shellcheck disable=SC2086
+  click_at $at "${WAYS%% *}" > /dev/null
+  say "  tapped the CarPlay screen at pixel $1,$2 (Mac screen $at)"
 }
 
 try_variant() {  # try_variant <name> <start words>: 0 when the CarPlay scene was still connected 10 s after it connected
@@ -405,6 +444,31 @@ size_check() {  # size_check <label> <W> <H>: photographs the CarPlay home scree
   return 1
 }
 
+use_device() {  # use_device <runtime>: switches to that runtime's simulator (the one before is shut down); 1 when there is none
+  local line
+  line=$(grep "^$1|" "$OUT/devices.txt" | head -n 1)
+  [ -n "$line" ] || return 1
+  [ -n "$UDID" ] && quit_simulator
+  RUNTIME="$1"
+  UDID=$(echo "$line" | cut -d'|' -f2)
+  DEVICE=$(echo "$line" | cut -d'|' -f3)
+  ANCHOR=""
+  say "simulator: $DEVICE, $RUNTIME ($UDID)"
+  return 0
+}
+
+bring_up() {  # bring_up <W> <H> <S>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
+  quit_simulator
+  write_carplay_config "$1" "$2" "$3"
+  run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
+  open_carplay || return 1
+  if [ -n "$BID" ] && [ -z "$(container)" ]; then
+    run xcrun simctl install "$UDID" "$APPS/ent/Runner.app"
+    sleep 8
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------------------------------------------------------
 say "== facts"
 BID=""
@@ -414,66 +478,60 @@ fi
 say "built app: ${BID:-none}"
 SCREEN_W=""
 [ -x "$TOOL" ] && SCREEN_W=$("$TOOL" screen 2> /dev/null | awk '{print $3}')
-[ -n "$SCREEN_W" ] || SCREEN_W=$(system_profiler SPDisplaysDataType 2> /dev/null | awk '/UI Looks like/{print $4; f=1; exit} /Resolution/{r=$2} END{if(!f) print r}')
 [ -n "$SCREEN_W" ] || SCREEN_W=1024
-say "Mac screen width in points: $SCREEN_W"
+say "Mac screen width in points: $SCREEN_W; simulators: $(tr '\n' ';' < "$OUT/devices.txt")"
 BEST=""
 GUIDE=""
 A_OK=0
+TRIED=""
 
 # ---------------------------------------------------------------------------------------------------------------------------
-say "== A. 800 x 480 at 2x, asked for by writing the Simulator's defaults before it starts (no menu, no window)"
-write_carplay_config 800 480 2
-run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
-RUN_LINES=30 run defaults read com.apple.iphonesimulator
-if open_carplay; then
-  say "RESULT open: the CarPlay display came up $OPENED_HOW"
-else
-  say "RESULT open: the CarPlay display did not come up"
-fi
-shot_host A1-carplay-open
-size_check 800x480-2x 800 480
-
-if [ -n "$BID" ]; then
-  run xcrun simctl install "$UDID" "$APPS/ent/Runner.app"
-  sleep 8
-  if icon_in_carplay A-home-with-app; then
-    say "RESULT entitlement: with the CarPlay entitlement and no provisioning profile the app's icon is on the CarPlay screen"
+say "== R. which runtime's template host survives a map template (800 x 480 at 2x)"
+for rt in $(cut -d'|' -f1 "$OUT/devices.txt"); do
+  [ "$rt" = "iOS-26-5" ] && [ -n "$TRIED" ] && continue  # round 2 answered it; tried again only when it is the only one
+  use_device "$rt" || continue
+  TRIED="$TRIED $rt"
+  if ! bring_up 800 480 2; then
+    say "RESULT runtime $rt: the CarPlay display did not come up"
+    shot_host "R-$rt-no-carplay"
+    continue
   fi
-  # Which content does the simulator's template host survive? The richest first; when it stays, only the round-1 order is
-  # tried as well, otherwise every poorer variant.
-  if try_variant full ""; then
-    BEST=""
+  say "RESULT open $rt: the CarPlay display came up $OPENED_HOW"
+  size_check "$rt-800x480-2x" 800 480
+  [ -n "$BID" ] || break
+  if try_variant "$rt-map" ""; then
+    say "RESULT runtime $rt: the map template is showing; the template host survives it"
     A_OK=1
-    try_variant late "late" || true
-  else
-    try_variant late "late" && { BEST="late"; A_OK=1; }
-    if [ "$A_OK" = 0 ]; then
-      for spec in "drawn:drawn" "no-map-buttons:nomapbuttons" "map-only:nobar nomapbuttons" "bare:nobar nomapbuttons nomaplibre"; do
-        if try_variant "${spec%%:*}" "${spec#*:}"; then
-          BEST="${spec#*:}"
-          A_OK=1
-          break
-        fi
-      done
-    fi
-    try_variant list "list nomaplibre" || true
+    break
   fi
+  say "RESULT runtime $rt: the map template crashed the template host"
   host_crash_reports
-  if [ "$A_OK" = 1 ]; then
-    say "RESULT content: the template host survives the start words '$BEST'"
-  else
-    say "RESULT content: the template host survived none of the map-template variants"
-  fi
+done
+
+if [ "$A_OK" = 0 ] && [ -n "$BID" ] && [ -n "$UDID" ]; then
+  say "no runtime shows the map template: the list template instead, for the sizes"
+  BEST="list nomaplibre"
 fi
 
+# ---------------------------------------------------------------------------------------------------------------------------
 if [ "$A_OK" = 1 ]; then
-  say "-- cold start from the car side with '$BEST', and the pictures"
+  say "== A. $RUNTIME, 800 x 480 at 2x: the map, Dart's value, a tap, guidance, drawn pieces, search, the phone joining"
   if start_best A-800x480; then
     shot_ext 800x480-2x-map
     shot_phone 800x480-2x-phone-while-only-the-car-scene-runs
     shot_host A2-app-on-carplay
     say "RESULT car-first: scenes when Dart said hello: $(grep 'dart hello' "$(applog)" 2> /dev/null | head -n 1 | sed 's/.*scenes=//'); phone-scene lines in the log: $(grep -c 'phone scene' "$(applog)" 2> /dev/null)"
+    say "RESULT map: $(grep -c 'car map drew frame' "$(applog)" 2> /dev/null) frame lines; $(grep 'layout bounds' "$(applog)" 2> /dev/null | tail -n 1 | sed 's/.*layout //')"
+    # a tap on a template button: along the top of the screen, right to left, until the app says a bar button was pressed
+    for fx in 93 87 81 75 69 63 57; do
+      tap_carplay $((800 * fx / 100)) 44 || break
+      sleep 2
+      if grep -q 'bar button pressed' "$(applog)" 2> /dev/null; then
+        say "RESULT tap: a click on the CarPlay window reached the app's bar button: $(grep 'bar button pressed' "$(applog)" | head -n 1 | sed 's/.*SPIKE //')"
+        break
+      fi
+    done
+    grep -q 'bar button pressed' "$(applog)" 2> /dev/null || say "RESULT tap: no bar button press seen after clicks along the top"
     # guidance: which pictures on a maneuver the template host survives
     for g in guide-noimage guide-drawn guide; do
       before=$(disconnects)
@@ -505,13 +563,20 @@ if [ "$A_OK" = 1 ]; then
     shot_ext 800x480-2x-demo-style
     set_mode ""
     sleep 3
+    before=$(disconnects)
+    set_mode "search"
+    sleep 6
+    shot_ext 800x480-2x-search-empty-box
+    say "RESULT search: $(grep -c 'search asked for results' "$(applog)" 2> /dev/null) calls for results with the box untouched: $(grep 'search asked for results' "$(applog)" 2> /dev/null | head -n 2 | sed 's/.*SPIKE //' | tr '\n' ';'); disconnects since: $(($(disconnects) - before))"
+    set_mode ""
+    sleep 4
     say "-- the phone window joins the engine the car started"
     run xcrun simctl launch "$UDID" "$BID"
     sleep 10
     shot_phone 800x480-2x-phone-joined-the-engine
     shot_ext 800x480-2x-map-after-phone-joined
     if grep -q 'engine joined by phone' "$(applog)" 2> /dev/null; then
-      say "RESULT phone-joins: the phone window attached to the engine the car side had started (same process)"
+      say "RESULT phone-joins: the phone window attached to the engine the car side had started, in the same process"
     else
       say "RESULT phone-joins: no 'engine joined by phone' line"
     fi
@@ -520,39 +585,26 @@ if [ "$A_OK" = 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
-say "== B. the other test sizes, each from a fresh boot with the size already in the defaults"
-for spec in "748 456 2" "1920 720 3" "900 1200 3"; do
-  # shellcheck disable=SC2086
-  set -- $spec
-  W=$1
-  H=$2
-  S=$3
-  label="${W}x${H}-${S}x"
-  say "-- size $W x $H pixels at ${S}x"
-  quit_simulator
-  write_carplay_config "$W" "$H" "$S"
-  if ! open_carplay; then
-    say "RESULT size $label: the CarPlay display did not come up"
-    shot_host "B-$label-no-carplay"
-    continue
-  fi
-  if ! size_check "$label" "$W" "$H"; then
-    say "  the defaults did not give the size: the options window instead"
-    front
-    say "  closing: $(osa sim_external Disabled)"
-    sleep 4
-    say "  asking: $(osa sim_external CarPlay)"
-    sleep 4
-    fill_options_window "$W" "$H" "$S"
-    sleep 10
-    OPENED_HOW="through the options window"
+if [ -n "$UDID" ]; then
+  say "== B. the other test sizes on $RUNTIME, each from a fresh boot with the size already in the defaults"
+  for spec in "748 456 2" "1920 720 3" "900 1200 3"; do
+    # shellcheck disable=SC2086
+    set -- $spec
+    W=$1
+    H=$2
+    S=$3
+    label="${W}x${H}-${S}x"
+    say "-- size $W x $H pixels at ${S}x"
+    if ! bring_up "$W" "$H" "$S"; then
+      say "RESULT size $label: the CarPlay display did not come up"
+      shot_host "B-$label-no-carplay"
+      continue
+    fi
     size_check "$label" "$W" "$H"
-    run defaults export com.apple.iphonesimulator -
-  fi
-  shot_host "B-$label"
-  if [ "$A_OK" = 1 ]; then
+    [ -n "$BID" ] || continue
     if start_best "B-$label"; then
       shot_ext "$label-map"
+      say "RESULT start $label: cold start from the car side; $(grep 'carplay didConnect' "$(applog)" 2> /dev/null | head -n 1 | sed 's/.*didConnect //; s/ contentStyle.*//'); $(grep 'layout bounds' "$(applog)" 2> /dev/null | tail -n 1 | sed 's/.*layout //')"
       if [ -n "$GUIDE" ]; then
         set_mode "$GUIDE"
         sleep 6
@@ -565,22 +617,39 @@ for spec in "748 456 2" "1920 720 3" "900 1200 3"; do
       sleep 5
       shot_ext "$label-overlay"
       set_mode ""
-      say "RESULT start $label: cold start from the car side, $(disconnects) disconnects"
+      say "RESULT start $label: $(disconnects) disconnects"
     else
       say "RESULT start $label: the app's CarPlay scene did not connect"
     fi
+    shot_host "B-$label"
     keep_applog "B-$label"
-  fi
-done
+  done
+fi
+
+# ---------------------------------------------------------------------------------------------------------------------------
+if [ "$A_OK" = 1 ] && [ -n "$BID" ]; then
+  for rt in $(cut -d'|' -f1 "$OUT/devices.txt"); do
+    case " $TRIED " in *" $rt "*) continue ;; esac
+    [ "$rt" = "iOS-26-5" ] && continue
+    say "== Z. for the record: the map template on $rt"
+    use_device "$rt" || continue
+    if bring_up 800 480 2 && try_variant "$rt-map" ""; then
+      say "RESULT runtime $rt: the map template is showing; the template host survives it"
+    else
+      say "RESULT runtime $rt: no map template (the display did not come up, or the template host crashed)"
+      host_crash_reports
+    fi
+  done
+fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
 say "== end"
 defaults read com.apple.iphonesimulator > "$OUT/ui/defaults-3-end.txt" 2>&1
 shot_host Z-end
-xcrun simctl spawn "$UDID" log show --last 12m --style compact --predicate 'processImagePath ENDSWITH "Runner" AND (messageType == error OR messageType == fault)' 2> /dev/null | tail -n 200 > "$OUT/applog/unified-log-errors.txt"
+xcrun simctl spawn "$UDID" log show --last 6m --style compact --predicate 'processImagePath ENDSWITH "Runner" AND (messageType == error OR messageType == fault)' 2> /dev/null | tail -n 150 > "$OUT/applog/unified-log-errors.txt"
 say "pictures:"
 ls -l "$OUT/shots" | sed 's/^/        /' | tee -a "$LOG"
 grep 'RESULT' "$LOG" | sed 's/^\[[ 0-9]*s\] //' > "$OUT/results.txt"
 say "capture took $((SECONDS - T0)) s"
-rm -f "$OUT/.last"
+rm -f "$OUT/.last" "$OUT/.anchor.png"
 exit 0

@@ -46,21 +46,34 @@ show python3 --version
 
 note ""
 note "== simulator"
-picked=$(xcrun simctl list devices available -j | python3 -I -c '
+# One iPhone simulator per iOS runtime to try, oldest first: round 2 found that the newest runtime's CarPlay template host
+# (iOS 26.5) crashes on every map template, so the map is looked for on the older ones.
+WANT="${SPIKE_RUNTIMES:-iOS-26-2 iOS-26-4 iOS-26-5}"
+: > "$OUT/devices.txt"
+for rt in $WANT; do
+  line=$(xcrun simctl list devices available -j | python3 -I -c '
 import json, sys
+want = sys.argv[1]
 d = json.load(sys.stdin)["devices"]
-ios = sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
-for k in reversed(ios):
-    for dev in d[k]:
-        if dev["name"].startswith("iPhone"):
-            print(dev["udid"] + "|" + dev["name"] + "|" + k.rsplit(".", 1)[-1]); sys.exit()
-')
-[ -n "$picked" ] || { xcrun simctl list devices available | tee -a "$FACTS"; note "no iPhone simulator"; exit 1; }
-udid="${picked%%|*}"
-rest="${picked#*|}"
-note "device: $rest ($udid)"
-echo "SPIKE_UDID=$udid" >> "$GITHUB_ENV"
-echo "SPIKE_DEVICE=${rest%%|*}" >> "$GITHUB_ENV"
+for k in d:
+    if k.endswith(want):
+        phones = [dev for dev in d[k] if dev["name"].startswith("iPhone")]
+        phones.sort(key=lambda dev: (dev["name"] != "iPhone 17 Pro", dev["name"]))
+        if phones:
+            print(want + "|" + phones[0]["udid"] + "|" + phones[0]["name"])
+' "$rt")
+  if [ -z "$line" ] && [ "$(xcrun simctl list runtimes | grep -c "SimRuntime.$rt")" != 0 ]; then
+    made=$(xcrun simctl create "Spike $rt" "iPhone 17 Pro" "com.apple.CoreSimulator.SimRuntime.$rt" 2>&1)
+    note "no iPhone simulator for $rt: created one: $made"
+    case "$made" in *-*-*-*-*) line="$rt|$made|Spike $rt" ;; esac
+  fi
+  [ -n "$line" ] && echo "$line" >> "$OUT/devices.txt"
+done
+note "devices to try (runtime|udid|name):"
+sed 's/^/    /' "$OUT/devices.txt" | tee -a "$FACTS"
+first=$(head -n 1 "$OUT/devices.txt")
+[ -n "$first" ] || { xcrun simctl list devices available | tee -a "$FACTS"; note "no iPhone simulator"; exit 1; }
+udid=$(echo "$first" | cut -d'|' -f2)
 defaults read com.apple.iphonesimulator > "$OUT/ui/defaults-0-untouched.txt" 2>&1 || true
 # A process of the simulator that crashes puts a "quit unexpectedly" window on the Mac screen, over the CarPlay window: off.
 show defaults write com.apple.CrashReporter DialogType none

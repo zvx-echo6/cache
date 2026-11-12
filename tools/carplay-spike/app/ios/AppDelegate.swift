@@ -159,7 +159,7 @@ class PhoneSceneDelegate: FlutterSceneDelegate {
 }
 
 /// The car side: a map template with bar buttons and map buttons over a base view that holds a MapLibre map.
-final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPMapTemplateDelegate {
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPMapTemplateDelegate, CPSearchTemplateDelegate {
   private var interfaceController: CPInterfaceController?
   private var mapTemplate: CPMapTemplate?
   private var mapController: CarMapViewController?
@@ -168,6 +168,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var appliedMode: String?
   private var startWords: [String] = []
   private var guideImages = "symbols"
+  private var searchShown = false
+  private var searchCalls = 0
 
   func templateApplicationScene(
     _ templateApplicationScene: CPTemplateApplicationScene,
@@ -223,6 +225,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     mapController = nil
     self.interfaceController = nil
     appliedMode = nil
+    searchShown = false
   }
 
   func sceneDidBecomeActive(_ scene: UIScene) {
@@ -358,6 +361,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let words = mode.split(separator: " ").map { String($0) }
     mapController?.setDemoStyle(words.contains("demo"))
     mapController?.setOverlay(words.contains("overlay"))
+    setSearch(words.contains("search"))
     if words.contains("guide") || words.contains("guide-drawn") || words.contains("guide-noimage") {
       guideImages = words.contains("guide-noimage") ? "none" : (words.contains("guide-drawn") ? "drawn" : "symbols")
       startGuidance()
@@ -365,6 +369,46 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
       stopGuidance()
     }
     SpikeLog.write("mode applied: '\(mode)'")
+  }
+
+  /// Mode word "search": the search template on top of the map template. The question is whether CarPlay asks for results
+  /// while its text box is still empty (the Android design lists saved places there).
+  private func setSearch(_ on: Bool) {
+    guard on != searchShown, let controller = interfaceController else { return }
+    searchShown = on
+    if on {
+      let search = CPSearchTemplate()
+      search.delegate = self
+      controller.pushTemplate(search, animated: false) { done, error in
+        SpikeLog.write("search template pushed: done=\(done) error=\(String(describing: error))")
+      }
+    } else {
+      controller.popToRootTemplate(animated: false) { done, error in
+        SpikeLog.write("back to the root template: done=\(done) error=\(String(describing: error))")
+      }
+    }
+  }
+
+  func searchTemplate(
+    _ searchTemplate: CPSearchTemplate,
+    updatedSearchText searchText: String,
+    completionHandler: @escaping ([CPListItem]) -> Void
+  ) {
+    searchCalls += 1
+    SpikeLog.write("search asked for results, call \(searchCalls), text '\(searchText)'")
+    let items = ["First saved place", "Second saved place", "Third saved place"].map { name in
+      CPListItem(text: name, detailText: "19 mi")
+    }
+    completionHandler(items)
+  }
+
+  func searchTemplate(
+    _ searchTemplate: CPSearchTemplate,
+    selectedResult item: CPListItem,
+    completionHandler: @escaping () -> Void
+  ) {
+    SpikeLog.write("search result chosen: \(item.text ?? "")")
+    completionHandler()
   }
 
   private func startGuidance() {
