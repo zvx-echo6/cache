@@ -1,6 +1,8 @@
 // Two faults of the map screens after their fixes, at a phone's width (390 x 844), light and dark, for review:
-//   offroad-fit-390-*        Off-road chosen: the route the screen fitted into view ends above the scale, the credits and the
-//                            panel; and the bar beside the panel's choices, which shows while there is more of them than fits
+//   offroad-fit-390-*        Off-road chosen: the route as the screen fitted it into view, in the free column between the
+//                            position chip and the map's buttons, with nothing of it under the header, the chip, the buttons,
+//                            the scale, the credits or the panel; and the bar beside the panel's choices, which shows while
+//                            there is more of them than fits
 //   offroad-panel-end-390-*  the same screen with the panel's choices scrolled to their end: the off-road note in full above Start
 //   measure-bar-390-*        the measuring bar with its hint in full
 //
@@ -15,10 +17,11 @@ import 'dart:math' as math;
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
-import 'package:cache/maps/ui/map_widgets.dart' show ScaleBarWidget;
+import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/elevation/route_elevation.dart';
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/route_panel.dart' show DirectionsHeader, RoutePanel;
 import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
@@ -179,13 +182,25 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     await tester.pump();
     // The bar beside the choices has come in fully.
     await tester.pump(const Duration(milliseconds: 400));
-    // Both ends of the route are on the map above the scale (under the scale: the credits and the panel).
-    final coverTop = tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
-    for (final p in [route.points.first, route.points.last]) {
-      final at = cam.project(p.lat, p.lon, size);
-      expect(at.dy, lessThan(coverTop), reason: 'an end of the route is under what covers the map\'s foot');
-      expect(at.dy, greaterThan(0), reason: 'an end of the route is above the screen');
+    // The whole route is on the map with nothing of it under what is over the map. It is a tall route, so it is in the column
+    // between the position chip and the map's buttons, which runs down beside the scale to the credits.
+    final on = [for (final p in route.points) cam.project(p.lat, p.lon, size)];
+    final box = Rect.fromLTRB(on.map((o) => o.dx).reduce(math.min), on.map((o) => o.dy).reduce(math.min), on.map((o) => o.dx).reduce(math.max), on.map((o) => o.dy).reduce(math.max));
+    final chip = tester.getRect(find.ancestor(of: find.textContaining('Within '), matching: find.byType(Container)).first);
+    final buttons = tester.getRect(find.byType(MapButton).first).expandToInclude(tester.getRect(find.byType(MapButton).last));
+    final over = {
+      'the header': tester.getRect(find.byType(DirectionsHeader)),
+      'the position chip': chip,
+      'the map\'s buttons': buttons,
+      'the scale': tester.getRect(find.byType(ScaleBarWidget)),
+      'the credits': tester.getRect(find.byType(AttributionChip)),
+      'the panel': tester.getRect(find.byType(RoutePanel)),
+    };
+    expect(box.left >= 0 && box.top >= 0 && box.right <= size.width && box.bottom <= size.height, isTrue, reason: 'the route is not wholly on the map: $box');
+    for (final MapEntry(key: what, value: rect) in over.entries) {
+      expect(rect.overlaps(box.inflate(1)), isFalse, reason: 'part of the route ($box) is under $what ($rect)');
     }
+    expect(box.left >= chip.right && box.right <= buttons.left && box.top < chip.bottom, isTrue, reason: 'the tall route is not in the column between the chip and the buttons: $box');
     await snap(tester, _out, 'offroad-fit-390-$name');
 
     // The panel's choices scroll: at their end the off-road note is in full, above Start.

@@ -15,8 +15,7 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
-- Maps: with Off-road chosen, a route shown before you start sits above the directions panel, not partly under it; the map fits the route above what the panel really covers, and fits it again when the panel grows
-- Maps: a route shown before you start also stays clear of the Layers and Find me buttons at the right edge
+- Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
 - Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
 - Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
 - Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to

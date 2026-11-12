@@ -62,8 +62,9 @@ const double kRouteFitGap = 16;
 /// all), so the route's end goes under the cover instead.
 const double kRouteFitLeast = 48;
 
-/// The room to leave around a route fitted into view on a map of [map] points, so that the route ends clear of what covers the
-/// map, as laid out:
+/// The room to leave around a route fitted into view on a map of [map] points from [kSideCardWidth] wide, where the panel is
+/// in a column on the left (a phone has two free rectangles to choose from: [routeFitRect]), so that the route ends clear of
+/// what covers the map, as laid out:
 /// - [coveredFoot]: what the scale, the credits and, on a phone, the panel cover of the map's foot (with Off-road chosen the
 ///   panel is taller than with Drive). Null (they are not shown, or not laid out yet): half the [screen], at most 420.
 /// - [coveredLeft]: how far the column on the left reaches (from [kSideCardWidth] wide the panel is there, not at the foot).
@@ -76,6 +77,83 @@ EdgeInsets routeFitPadding({required Size screen, required Size map, double? cov
   final bottom = coveredFoot == null ? math.min(screen.height * 0.5, 420.0) : math.max(0.0, math.min(coveredFoot + kRouteFitGap, map.height - kRouteFitTop - kRouteFitLeast));
   return EdgeInsets.fromLTRB(left, kRouteFitTop, right, bottom);
 }
+
+/// What is laid out over the map on a phone, each as its box in the map's own points, or null when it is not shown: the
+/// [header] (the directions header), the position [chip] under it on the left, the map's [buttons] under it on the right, and
+/// at the foot the [scale], the [credits] under it and the [panel] under them.
+class MapCovers {
+  const MapCovers({this.header, this.chip, this.buttons, this.scale, this.credits, this.panel});
+
+  final Rect? header;
+  final Rect? chip;
+  final Rect? buttons;
+  final Rect? scale;
+  final Rect? credits;
+  final Rect? panel;
+
+  /// Nothing is laid out over the map (or nothing has been laid out yet).
+  bool get isEmpty => header == null && chip == null && buttons == null && scale == null && credits == null && panel == null;
+}
+
+/// The two free rectangles of a [map] on a phone with [covers] over it, each less [kRouteFitGap] on every side:
+/// - the strip: the map's whole width, below the position chip and the buttons (below the header when neither is shown) and
+///   above the scale, the credits and the panel;
+/// - the column: between the chip's right edge and the buttons' left edge, from the header's lower edge down to what is at the
+///   foot there: the credits, or the panel when the credits do not reach that far across (the scale is beside the column).
+/// A piece that is not shown takes no room, so its rectangle grows. A rectangle with no room comes out with no width or height
+/// (or less): see [routeFitRect].
+(Rect strip, Rect column) freeMapRects(Size map, MapCovers covers) {
+  final headerFoot = covers.header?.bottom ?? 0.0;
+  double? lowest(List<Rect?> boxes) {
+    double? y;
+    for (final b in boxes) {
+      if (b != null && (y == null || b.bottom > y)) y = b.bottom;
+    }
+    return y;
+  }
+
+  // The top of what is at the map's foot, among the pieces [reaches] says are in the way.
+  double footTop(bool Function(Rect box) reaches) {
+    var y = map.height;
+    for (final b in [covers.scale, covers.credits, covers.panel]) {
+      if (b != null && reaches(b) && b.top < y) y = b.top;
+    }
+    return y;
+  }
+
+  final strip = Rect.fromLTRB(0, lowest([covers.chip, covers.buttons]) ?? headerFoot, map.width, footTop((_) => true));
+  final left = covers.chip?.right ?? 0.0, right = covers.buttons?.left ?? map.width;
+  final column = Rect.fromLTRB(left, headerFoot, right, footTop((b) => b.right + kRouteFitGap > left && b.left - kRouteFitGap < right));
+  return (strip.deflate(kRouteFitGap), column.deflate(kRouteFitGap));
+}
+
+/// The rectangle of a [map] on a phone that a route is fitted into: the one of the two free rectangles ([freeMapRects]) that
+/// shows the route larger, where [spanX] and [spanY] are the width and height of the route's bounding box in web mercator (in
+/// any one unit). A tall route takes the column, a wide one the strip. Nothing of the route is then under the header, the
+/// position chip, the buttons, the scale, the credits or the panel.
+///
+/// With no room in either (a panel that leaves the map next to nothing), the better one is grown to [kRouteFitLeast] each
+/// way, down and to the right: the map must have some room to fit a route into or it does not move at all, so the route's end
+/// goes under what is there.
+Rect routeFitRect({required Size map, required MapCovers covers, required double spanX, required double spanY}) {
+  final (strip, column) = freeMapRects(map, covers);
+  // How large a rectangle shows the route: points for each unit of its bounding box (none, with no room).
+  double shown(Rect r) => r.width <= 0 || r.height <= 0 ? 0 : math.min(r.width / math.max(spanX, 1e-12), r.height / math.max(spanY, 1e-12));
+  final best = shown(column) > shown(strip) ? column : strip;
+  final left = math.max(0.0, math.min(best.left, map.width - kRouteFitLeast));
+  final top = math.max(0.0, math.min(best.top, map.height - kRouteFitLeast));
+  return Rect.fromLTRB(left, top, math.min(map.width, math.max(best.right, left + kRouteFitLeast)), math.min(map.height, math.max(best.bottom, top + kRouteFitLeast)));
+}
+
+/// Where [lat] falls between the top of the world (0) and its foot (1) in web mercator.
+double _mercatorY(double lat) {
+  final l = math.max(-85.0511287798, math.min(85.0511287798, lat)) * math.pi / 180;
+  return (1 - math.log(math.tan(l) + 1 / math.cos(l)) / math.pi) / 2;
+}
+
+/// How many times a route is fitted again by itself as what covers the map changes under it (its elevation chart arriving, the
+/// position chip appearing), before the view is left as it is.
+const int kRouteRefits = 4;
 
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
@@ -177,9 +255,19 @@ class _MapsScreenState extends State<MapsScreen> {
   final GlobalKey _sideKey = GlobalKey();
   final GlobalKey _controlsKey = GlobalKey();
 
-  /// What covered the map's foot when the route was last fitted into view (null: not fitted, or not measured), and whether a
-  /// finger has been on the map since (the view is then the person's, and is left alone).
-  double? _fitCovered;
+  /// On a phone, the pieces over the map one by one ([MapCovers]): the header, the position chip, and at the foot the scale,
+  /// the credits and the panel (the buttons are [_controlsKey]).
+  final GlobalKey _headerKey = GlobalKey();
+  final GlobalKey _chipKey = GlobalKey();
+  final GlobalKey _scaleKey = GlobalKey();
+  final GlobalKey _creditsKey = GlobalKey();
+  final GlobalKey _panelKey = GlobalKey();
+
+  /// The room left around the route when it was last fitted into view (null: not fitted yet, or a fit is on its way), how
+  /// many times it has been fitted again by itself since, and whether a finger has been on the map since (the view is then the
+  /// person's, and is left alone).
+  EdgeInsets? _fitPad;
+  int _refits = 0;
   bool _fitTouched = false;
 
   /// Where the corner inset is in the screen's stack (the live map goes there while swapped), and the stack's size.
@@ -493,11 +581,12 @@ class _MapsScreenState extends State<MapsScreen> {
     // A new set of routes: show all of the chosen one.
     if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
       _fitFor = r.routeId;
+      _refits = 0;
       _fitRoute(r);
     }
     if (nav.phase == NavPhase.browsing) {
       _fitFor = null;
-      _fitCovered = null;
+      _fitPad = null;
     }
     // A place was chosen: bring it into view.
     final sel = nav.selected;
@@ -536,14 +625,39 @@ class _MapsScreenState extends State<MapsScreen> {
     return stack.size.width - box.localToGlobal(Offset.zero, ancestor: stack).dx;
   }
 
-  /// Fits [r] into view clear of what covers the map (routeFitPadding). The panel for this route is laid out in the next frame,
-  /// so what it covers is read after that frame (not during this one, when the panel is still the last route's).
+  /// The box of [key]'s widget in the map's own points, from where it was laid out; null when it is not shown.
+  Rect? _boxOf(GlobalKey key) {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = key.currentContext?.findRenderObject() as RenderBox?;
+    if (stack == null || box == null || !stack.hasSize || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero, ancestor: stack) & box.size;
+  }
+
+  /// The room to leave around [r] fitted into view, from what is laid out over the map now. On a phone the route goes into
+  /// the one of the map's two free rectangles that shows it larger ([routeFitRect]); from [kSideCardWidth] wide, beside the
+  /// column on the left ([routeFitPadding]).
+  EdgeInsets _fitPaddingFor(MapRoute r) {
+    final screen = MediaQuery.sizeOf(context);
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final map = stack != null && stack.hasSize ? stack.size : screen;
+    final side = _coveredLeft();
+    final covers = MapCovers(header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), scale: _boxOf(_scaleKey), credits: _boxOf(_creditsKey), panel: _boxOf(_panelKey));
+    if (side != null || covers.isEmpty) {
+      return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: side, coveredRight: _coveredRight());
+    }
+    final b = r.bounds;
+    final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]));
+    return EdgeInsets.fromLTRB(rect.left, rect.top, map.width - rect.right, map.height - rect.bottom);
+  }
+
+  /// Fits [r] into view clear of what covers the map ([_fitPaddingFor]). The panel for this route is laid out in the next
+  /// frame, so what covers the map is read after that frame (not during this one, when the panel is still the last route's).
   void _fitRoute(MapRoute r) {
     final c = _controller;
     if (c == null || !_styleReady || r.points.length < 2) return;
     maps.setFollow(FollowMode.free); // GPS must not pull an exact preview out of view.
     _fitTouched = false;
-    _fitCovered = null;
+    _fitPad = null;
     WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteNow(c, r));
     WidgetsBinding.instance.ensureVisualUpdate();
   }
@@ -552,10 +666,7 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
     final b = r.bounds;
-    final screen = MediaQuery.sizeOf(context);
-    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
-    final covered = _fitCovered = _coveredFoot();
-    final pad = routeFitPadding(screen: screen, map: stack != null && stack.hasSize ? stack.size : screen, coveredFoot: covered, coveredLeft: _coveredLeft(), coveredRight: _coveredRight());
+    final pad = _fitPad = _fitPaddingFor(r);
     try {
       await c.animateCamera(
         CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
@@ -564,16 +675,18 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
   }
 
-  /// What covers the map's foot grew or shrank under a route already fitted into view (on a phone the panel, when its elevation
-  /// chart arrived) and no finger has moved the map since: the route is fitted again, above what is covered now.
+  /// What covers the map changed under a route already fitted into view (the panel grew when its elevation chart arrived, the
+  /// position chip appeared) and no finger has moved the map since: the route is fitted again, clear of what is there now.
   void _refitIfCoverChanged() {
     if (!mounted) return;
     final r = nav.route;
-    final was = _fitCovered;
+    final was = _fitPad;
     if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId) return;
     if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
-    final now = _coveredFoot();
-    if (now == null || (now - was).abs() < 1) return;
+    if (_refits >= kRouteRefits) return;
+    final now = _fitPaddingFor(r);
+    if ((now.left - was.left).abs() < 1 && (now.top - was.top).abs() < 1 && (now.right - was.right).abs() < 1 && (now.bottom - was.bottom).abs() < 1) return;
+    _refits++;
     _fitRoute(r);
   }
 
@@ -1271,7 +1384,7 @@ class _MapsScreenState extends State<MapsScreen> {
         _ensurePictures(_stackSize);
       });
     }
-    if (nav.phase == NavPhase.previewing && _fitCovered != null && !_fitTouched) {
+    if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
     }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
@@ -1382,14 +1495,14 @@ class _MapsScreenState extends State<MapsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Flexible(child: top),
+            Flexible(child: KeyedSubtree(key: _headerKey, child: top)),
             if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
             if (!searching) ...[
               const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (fix != null && !guiding) _coordsChip(context, fix),
+                  if (fix != null && !guiding) KeyedSubtree(key: _chipKey, child: _coordsChip(context, fix)),
                   const Spacer(),
                   _controls(context, fix, follow),
                 ],
@@ -1592,18 +1705,19 @@ class _MapsScreenState extends State<MapsScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
                     if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
                   ],
                 ),
                 // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                 const SizedBox(height: 6),
-                Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
+                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: AttributionChip(lines: maps.attributions, onTap: _showCredits))),
                 const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)
               if (panel != null && !searching)
                 SizedBox(
+                  key: _panelKey,
                   width: double.infinity,
                   child: Padding(padding: const EdgeInsets.only(bottom: 8), child: panel),
                 ),
