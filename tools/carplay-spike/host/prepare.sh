@@ -61,9 +61,9 @@ rest="${picked#*|}"
 note "device: $rest ($udid)"
 echo "SPIKE_UDID=$udid" >> "$GITHUB_ENV"
 echo "SPIKE_DEVICE=${rest%%|*}" >> "$GITHUB_ENV"
-# Extra options off for the first look; the capture step turns them on for the sizes.
-defaults delete com.apple.iphonesimulator CarPlayExtraOptions > /dev/null 2>&1 || true
 defaults read com.apple.iphonesimulator > "$OUT/ui/defaults-0-untouched.txt" 2>&1 || true
+# A process of the simulator that crashes puts a "quit unexpectedly" window on the Mac screen, over the CarPlay window: off.
+show defaults write com.apple.CrashReporter DialogType none
 show xcrun simctl boot "$udid"
 note "(the simulator finishes booting while the app builds)"
 exit 0

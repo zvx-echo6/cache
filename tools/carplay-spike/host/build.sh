@@ -1,12 +1,12 @@
 #!/bin/bash
-# CarPlay spike, step 2: makes the scratch Flutter app and builds it for the simulator twice, first without any entitlement,
-# then with the CarPlay navigation entitlement. No signing identity, no provisioning profile, no secret.
+# CarPlay spike, step 2: makes the scratch Flutter app and builds it for the simulator with the CarPlay navigation entitlement.
+# No signing identity, no provisioning profile, no secret.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$RUNNER_TEMP/spike-out"
 APPS="$RUNNER_TEMP/spike-apps"
 B="$RUNNER_TEMP/carspike"
-mkdir -p "$OUT" "$APPS/noent" "$APPS/ent"
+mkdir -p "$OUT" "$APPS/ent"
 began=$SECONDS
 {
   # CocoaPods for the scratch project, as the repository's other scratch iOS build (map-bench.yml).
@@ -35,22 +35,19 @@ began=$SECONDS
   awk -v pod="$POD" '{print} /flutter_install_all_ios_pods/{print pod}' ios/Podfile > "$RUNNER_TEMP/Podfile" && cp "$RUNNER_TEMP/Podfile" ios/Podfile
   cat ios/Podfile
 
-  echo "--- build 1: no entitlement ($((SECONDS - began)) s so far)"
-  flutter build ios --simulator --debug
-  cp -R build/ios/iphonesimulator/Runner.app "$APPS/noent/"
-
-  echo "--- build 2: the CarPlay navigation entitlement, through the Runner target's Debug.xcconfig ($((SECONDS - began)) s so far)"
+  # Round 1 built it without the entitlement too (the app then does not appear in CarPlay); from round 2 on only the entitled app.
+  echo "--- build: the CarPlay navigation entitlement, through the Runner target's Debug.xcconfig ($((SECONDS - began)) s so far)"
   printf '\nCODE_SIGN_ENTITLEMENTS = Runner/CarSpike.entitlements\n' >> ios/Flutter/Debug.xcconfig
   cat ios/Flutter/Debug.xcconfig
   flutter build ios --simulator --debug
   cp -R build/ios/iphonesimulator/Runner.app "$APPS/ent/"
-  echo "--- both builds done after $((SECONDS - began)) s"
+  echo "--- build done after $((SECONDS - began)) s"
 } 2>&1 | tee "$OUT/build.log"
 
 set +e
 {
   echo "--- what each built app carries"
-  for v in noent ent; do
+  for v in ent; do
     app="$APPS/$v/Runner.app"
     echo "== $v"
     echo "bundle id: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"

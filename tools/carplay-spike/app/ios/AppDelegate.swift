@@ -166,6 +166,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var navigationSession: CPNavigationSession?
   private var modeTimer: Timer?
   private var appliedMode: String?
+  private var startWords: [String] = []
+  private var guideImages = "symbols"
 
   func templateApplicationScene(
     _ templateApplicationScene: CPTemplateApplicationScene,
@@ -184,28 +186,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     facts.append("scenes=\(app.sceneSummary())")
     SpikeLog.write("carplay didConnect " + facts.joined(separator: " "))
     self.interfaceController = interfaceController
-
-    // The engine first: its plugins are registered before the first map view exists.
+    startWords = readWords("spike-start.txt")
+    SpikeLog.write("start words: '\(startWords.joined(separator: " "))'")
     app.onDartHello = { [weak self] in self?.refreshBarButtons() }
-    _ = app.sharedEngine(startedBy: "car")
-    app.askDart("car connected")
 
-    let controller = CarMapViewController()
-    controller.carWindow = window
-    window.rootViewController = controller
-    mapController = controller
-
-    let template = CPMapTemplate()
-    template.mapDelegate = self
-    template.automaticallyHidesNavigationBar = false
-    template.mapButtons = [
-      mapButton("plus", "zoom in"), mapButton("minus", "zoom out"),
-      mapButton("arrow.up.and.down.and.arrow.left.and.right", "pan"), mapButton("location.fill", "recenter"),
-    ]
-    mapTemplate = template
-    refreshBarButtons()
-    interfaceController.setRootTemplate(template, animated: false) { done, error in
-      SpikeLog.write("map template set as root: done=\(done) error=\(String(describing: error))")
+    if startWords.contains("late") {
+      // As the first round had it: the engine (about a second on the main thread), the map, and only then the root template.
+      _ = app.sharedEngine(startedBy: "car")
+      app.askDart("car connected")
+      showBaseView(in: window)
+      showRootTemplate(on: interfaceController)
+    } else {
+      // The root template at once; then the engine, so its plugins are registered before the first map view exists; then the map.
+      showRootTemplate(on: interfaceController)
+      _ = app.sharedEngine(startedBy: "car")
+      app.askDart("car connected")
+      showBaseView(in: window)
     }
 
     modeTimer?.invalidate()
@@ -245,17 +241,98 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     SpikeLog.write("carplay content style changed to \(contentStyle.rawValue)")
   }
 
+  private func readWords(_ file: String) -> [String] {
+    let url = SpikeLog.directory.appendingPathComponent(file)
+    let read = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    return read.split(whereSeparator: { $0 == " " || $0 == "\n" }).map { String($0) }
+  }
+
+  /// The base view: the MapLibre map, or (start word "nomaplibre") a plain coloured view.
+  private func showBaseView(in window: CPWindow) {
+    if startWords.contains("nomaplibre") {
+      let plain = UIViewController()
+      plain.view.backgroundColor = UIColor(red: 0.90, green: 0.89, blue: 0.83, alpha: 1)
+      window.rootViewController = plain
+      SpikeLog.write("base view: a plain view, no map")
+      return
+    }
+    let controller = CarMapViewController()
+    controller.carWindow = window
+    window.rootViewController = controller
+    mapController = controller
+  }
+
+  /// The root template: the map template with its buttons, or (start word "list") a list template.
+  private func showRootTemplate(on interfaceController: CPInterfaceController) {
+    if startWords.contains("list") {
+      let items = ["First saved place", "Second saved place", "Third saved place"].map { name in
+        CPListItem(text: name, detailText: "19 mi")
+      }
+      let list = CPListTemplate(title: "Saved places", sections: [CPListSection(items: items)])
+      interfaceController.setRootTemplate(list, animated: false) { done, error in
+        SpikeLog.write("list template set as root: done=\(done) error=\(String(describing: error))")
+      }
+      return
+    }
+    let template = CPMapTemplate()
+    template.mapDelegate = self
+    template.automaticallyHidesNavigationBar = false
+    if !startWords.contains("nomapbuttons") {
+      template.mapButtons = [
+        mapButton("plus", "zoom in"), mapButton("minus", "zoom out"),
+        mapButton("arrow.up.and.down.and.arrow.left.and.right", "pan"), mapButton("location.fill", "recenter"),
+      ]
+    }
+    mapTemplate = template
+    refreshBarButtons()
+    interfaceController.setRootTemplate(template, animated: false) { done, error in
+      SpikeLog.write("map template set as root: done=\(done) error=\(String(describing: error))")
+    }
+  }
+
+  /// A picture drawn here (start word "drawn"), in place of a system symbol.
+  static func drawnImage(_ kind: String) -> UIImage {
+    let side: CGFloat = 40
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+    let image = renderer.image { context in
+      let c = context.cgContext
+      c.setStrokeColor(UIColor.black.cgColor)
+      c.setLineWidth(5)
+      c.setLineCap(.round)
+      c.move(to: CGPoint(x: 8, y: side / 2))
+      c.addLine(to: CGPoint(x: side - 8, y: side / 2))
+      if kind != "minus" {
+        c.move(to: CGPoint(x: side / 2, y: 8))
+        c.addLine(to: CGPoint(x: side / 2, y: side - 8))
+      }
+      if kind == "arrow" {
+        c.move(to: CGPoint(x: side - 8, y: side / 2))
+        c.addLine(to: CGPoint(x: side - 18, y: side / 2 - 10))
+      }
+      c.strokePath()
+    }
+    return image.withRenderingMode(.alwaysTemplate)
+  }
+
   private func mapButton(_ symbol: String, _ name: String) -> CPMapButton {
     let button = CPMapButton { _ in
       SpikeLog.write("map button pressed: \(name)")
     }
-    button.image = UIImage(systemName: symbol)
+    if startWords.contains("drawn") {
+      button.image = Self.drawnImage(symbol == "minus" ? "minus" : "plus")
+    } else {
+      button.image = UIImage(systemName: symbol)
+    }
     return button
   }
 
   /// The bar buttons carry what Dart sent over the channel: the proof, in the picture, that Dart ran.
   private func refreshBarButtons() {
     guard let template = mapTemplate, let app = UIApplication.shared.delegate as? AppDelegate else { return }
+    if startWords.contains("nobar") {
+      SpikeLog.write("bar buttons left out (start word nobar); Dart's value is '\(app.dartValue ?? "none yet")'")
+      return
+    }
     let value = app.dartValue ?? "no Dart"
     let sum = app.dartSum.map { "1..9=\($0)" } ?? "wait"
     let sumButton = CPBarButton(title: sum) { _ in
@@ -281,7 +358,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let words = mode.split(separator: " ").map { String($0) }
     mapController?.setDemoStyle(words.contains("demo"))
     mapController?.setOverlay(words.contains("overlay"))
-    if words.contains("guide") {
+    if words.contains("guide") || words.contains("guide-drawn") || words.contains("guide-noimage") {
+      guideImages = words.contains("guide-noimage") ? "none" : (words.contains("guide-drawn") ? "drawn" : "symbols")
       startGuidance()
     } else {
       stopGuidance()
@@ -303,14 +381,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let session = template.startNavigationSession(for: trip)
     let first = CPManeuver()
     first.instructionVariants = ["Turn right onto Second Street", "Turn right"]
-    first.symbolImage = UIImage(systemName: "arrow.turn.up.right")
+    if guideImages == "symbols" {
+      first.symbolImage = UIImage(systemName: "arrow.turn.up.right")
+    } else if guideImages == "drawn" {
+      first.symbolImage = Self.drawnImage("arrow")
+    }
     first.initialTravelEstimates = CPTravelEstimates(
       distanceRemaining: Measurement(value: 400, unit: UnitLength.meters),
       timeRemaining: 45
     )
     let second = CPManeuver()
     second.instructionVariants = ["Keep left"]
-    second.symbolImage = UIImage(systemName: "arrow.up.left")
+    if guideImages == "symbols" {
+      second.symbolImage = UIImage(systemName: "arrow.up.left")
+    } else if guideImages == "drawn" {
+      second.symbolImage = Self.drawnImage("arrow")
+    }
     second.initialTravelEstimates = CPTravelEstimates(
       distanceRemaining: Measurement(value: 1200, unit: UnitLength.meters),
       timeRemaining: 120
@@ -322,7 +408,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     )
     template.updateEstimates(whole, for: trip)
     navigationSession = session
-    SpikeLog.write("guidance started: two maneuvers and trip estimates given to the template")
+    SpikeLog.write("guidance started: two maneuvers (pictures: \(guideImages)) and trip estimates given to the template")
   }
 
   private func stopGuidance() {
@@ -345,6 +431,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate {
   private var demoStyle = false
   private var lastLayout = ""
   private var renders = 0
+  private var frames = 0
   private var loggedFull = false
 
   static let center = CLLocationCoordinate2D(latitude: 0.010, longitude: 0.015)
@@ -550,6 +637,18 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate {
     } else if renders <= 2 {
       SpikeLog.write("car map finished rendering map, fullyRendered=\(fullyRendered) (render callback \(renders))")
     }
+  }
+
+  func mapViewDidFinishRenderingFrame(_ mapView: MLNMapView, fullyRendered: Bool) {
+    guard mapView === self.mapView else { return }
+    frames += 1
+    if frames == 1 || frames == 10 || frames == 100 {
+      SpikeLog.write("car map drew frame \(frames), fullyRendered=\(fullyRendered)")
+    }
+  }
+
+  func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) {
+    SpikeLog.write("\(mapView === miniMap ? "second map" : "car map") finished loading map")
   }
 
   func mapViewDidFailLoadingMap(_ mapView: MLNMapView, withError error: Error) {

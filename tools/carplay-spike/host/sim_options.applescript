@@ -1,7 +1,6 @@
--- Fills the panel the Simulator shows for the CarPlay display when CarPlayExtraOptions is on: width, height and scale, then confirms.
--- Nothing documents that panel, so this looks for a sheet (or a window with at least two text boxes), reports everything it finds,
--- fills the text boxes in order (width, height, scale), picks the scale from a pop-up or radio buttons when there is no third box,
--- and presses the confirming button.
+-- Fills the window the Simulator shows for the CarPlay display when CarPlayExtraOptions is on ("TV Out Extended Setup": Width,
+-- Height, a Scale combo box, check boxes for the input kinds, Load, Save, Run): width, height and scale, then Run. It finds the
+-- window by its text boxes, reports what it finds, and fills the boxes in order (width, height, scale).
 on textOf(v)
 	try
 		if v is not missing value then return v as text
@@ -98,6 +97,18 @@ on run argv
 				try
 					set newText to my textOf(value of f)
 				end try
+				if newText is not (item i of wantList) then
+					-- a box that did not take the value (the Scale box is a combo box): typed in instead
+					try
+						set focused of f to true
+						delay 0.2
+						keystroke "a" using command down
+						keystroke (item i of wantList)
+						keystroke tab
+						delay 0.3
+						set newText to my textOf(value of f)
+					end try
+				end if
 				set outText to outText & "text box " & i & ": [" & oldText & "] -> [" & newText & "]" & linefeed
 			end repeat
 
@@ -149,7 +160,7 @@ on run argv
 				end if
 			end repeat
 
-			set confirmNames to {"OK", "Connect", "Open", "Done", "Apply", "Continue", "Save", "Show", "Create", "Start"}
+			set confirmNames to {"Run", "OK", "Connect", "Open", "Done", "Apply", "Continue", "Show", "Create", "Start"}
 			set btnTotal to count of btnList
 			set didConfirm to false
 			repeat with i from 1 to btnTotal

@@ -44,7 +44,7 @@ jobs:
           cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
       - name: Runner facts, helper tool, simulator boot
         run: bash tools/carplay-spike/host/prepare.sh
-      - name: Build the scratch app, without and with the CarPlay entitlement
+      - name: Build the scratch app with the CarPlay entitlement (no profile, no identity)
         run: bash tools/carplay-spike/host/build.sh
       - name: CarPlay display, start from the car side, pictures
         if: ${{ !cancelled() }}
