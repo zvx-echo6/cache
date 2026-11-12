@@ -269,7 +269,7 @@ class CarBridge {
   Future<Object?> _onCall(MethodCall call) async {
     final a = call.arguments is Map ? (call.arguments as Map).cast<String, Object?>() : const <String, Object?>{};
     logInfo('Car asks: ${call.method}');
-    if (const {'saved', 'search', 'directions', 'navigateTo', 'start'}.contains(call.method)) await _ready();
+    if (const {'saved', 'search', 'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
@@ -287,6 +287,14 @@ class CarBridge {
         if (p == null) return false;
         unawaited(nav.openDirections(p));
         return true;
+      case 'addStop':
+        // Add stop on the car: a place the car was shown joins the route. Before Start it is added as the phone's own Add
+        // stop adds it (after the stops there are); during the drive it becomes the next stop.
+        final p = _shown[a['id']];
+        if (p == null) return false;
+        final added = nav.guiding ? await nav.addStopWhileGuiding(p) : await nav.addStop(p);
+        if (added) await push();
+        return added;
       case 'selectRoute':
         nav.selectRoute((a['index'] as num?)?.toInt() ?? 0);
         return null;
