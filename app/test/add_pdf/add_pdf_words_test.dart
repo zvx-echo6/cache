@@ -143,6 +143,8 @@ void main() {
     await tester.pump();
     expect(find.text('Added to My books · 254 pieces searchable'), findsOneWidget, reason: 'no word index is pending: the done line straight away');
     expect(find.text('Paused · 1 PDF waiting'), findsNothing);
+    LinearProgressIndicator bar() => tester.widget<LinearProgressIndicator>(find.byKey(const ValueKey('index-overview-bar')));
+    expect(bar().value, 1, reason: 'all done: a full bar');
 
     // the words of the book are still being added
     pending = true;
@@ -150,6 +152,7 @@ void main() {
     await tester.pump();
     expect(find.text('Added to My books · Adding to search index'), findsOneWidget);
     expect(find.textContaining('pieces searchable'), findsNothing);
+    expect(bar().value, isNull, reason: 'its words are being added: a moving bar, not an empty one that reads as stuck');
 
     // a little later the paused PDF is the card again, so its Resume can be reached
     now = now.add(const Duration(seconds: 60));
