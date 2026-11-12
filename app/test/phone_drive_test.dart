@@ -429,19 +429,99 @@ void main() {
         }
       });
 
-      testWidgets('a wide route: the mini map across the full width, the elevation under it, both full width', (tester) async {
+      testWidgets('a wide route: the mini map across the full width, the elevation under it, both full width, at the planned heights', (tester) async {
         await show(tester, aspect: 3.0);
         expect(stackedNow(tester), isTrue);
         expect(box(tester, 'drive-mini-map').width, closeTo(366, 1));
         expect(box(tester, 'drive-elevation').width, closeTo(366, 1));
-        expect(box(tester, 'drive-elevation').height, greaterThanOrEqualTo(kDriveElevationMinHeight));
-        expect(box(tester, 'drive-mini-map').height, greaterThanOrEqualTo(kDriveMiniMinHeight));
         expect(find.byKey(const ValueKey('elevation-chart')), findsOneWidget);
         expect(find.byKey(const ValueKey('elevation-steep')), findsOneWidget);
-        // The list keeps its two thirds.
         final turns = tester.getSize(find.byType(DriveTurns)).height, extras = tester.getSize(find.byType(DriveExtras)).height;
-        expect(turns / (turns + extras), closeTo(kDriveTurnsShare, 0.005));
+        final plan = driveStackedPlan(room: turns + extras, width: 366, aspect: routeAspect(rig.nav.route!.points))!;
+        expect(turns, closeTo(plan.turnsH, 0.5));
+        expect(box(tester, 'drive-mini-map').height, closeTo(plan.miniH, 0.5));
+        expect(box(tester, 'drive-elevation').height, closeTo(plan.elevH, 0.5));
+        expect(box(tester, 'drive-elevation').height, greaterThanOrEqualTo(kDriveElevationMinHeight));
+        expect(box(tester, 'drive-mini-map').height, greaterThanOrEqualTo(kDriveMiniMinHeight));
       });
+
+      test('the stacked plan: the mini map follows the route\'s shape between its least and most, the elevation gets the rest of the half up to its most, then the list', () {
+        const room = 770.0, width = 366.0;
+        StackedPlan plan(double aspect, {double w = width, double r = room, double f = 1}) => driveStackedPlan(room: r, width: w, aspect: aspect, textScale: f)!;
+        final p3 = plan(3), p2 = plan(2), p16 = plan(1.6), p8 = plan(8), p15 = plan(1.5);
+        // The box height follows the shape: a very wide route a shorter box, a moderately wide one a taller box.
+        expect(p3.miniH, closeTo(miniFitHeight(width, 3), 0.01));
+        expect(p2.miniH, closeTo(miniFitHeight(width, 2), 0.01));
+        expect(p3.miniH, lessThan(p2.miniH));
+        expect(p2.miniH, lessThan(p16.miniH));
+        // The route fills the box with only the mini map's own padding (the route's height is the box's less twice the padding).
+        for (final (a, p) in [(3.0, p3), (2.0, p2)]) {
+          final sc = (p.miniH / RouteMiniMapPainter.fullHeight).clamp(0.5, 1.4);
+          final pad = 24 * sc;
+          expect((width - 2 * pad) / a + 2 * pad, closeTo(p.miniH, 1), reason: 'aspect $a');
+        }
+        // The least and the most.
+        expect(p8.miniH, kDriveMiniMinHeight);
+        expect(p15.miniH, kDriveMiniMaxHeight);
+        expect(plan(1.6).miniH, kDriveMiniMaxHeight);
+        // What the mini map does not use goes to the elevation first, up to its most, then to the list.
+        expect(p3.elevH, kDriveElevationMaxHeight);
+        expect(p3.turnsH, greaterThan(room / 2));
+        expect(p2.elevH, inInclusiveRange(kDriveElevationMinHeight, kDriveElevationMaxHeight));
+        expect(p2.turnsH, closeTo(room / 2, 0.5));
+        expect(p16.elevH, greaterThanOrEqualTo(kDriveElevationMinHeight));
+        expect(p16.turnsH, closeTo(room / 2, 0.5));
+        for (final p in [p3, p2, p16, p8, p15]) {
+          expect(p.turnsH + p.miniH + p.elevH + 16, closeTo(room, 0.01));
+        }
+        // 320 wide (a 296 wide box, its climb line wraps): the elevation needs 18 more, the mini map gives way to it.
+        final n = plan(3, w: 296, r: 520);
+        expect(n.elevH, kDriveElevationMinHeight + 18);
+        expect(n.miniH, greaterThanOrEqualTo(kDriveMiniMinHeight));
+        expect(n.turnsH + n.miniH + n.elevH + 16, closeTo(520, 0.01));
+        // No room for both: side by side.
+        expect(driveStackedPlan(room: 400, width: 296, aspect: 3), isNull, reason: 'a short 320 wide phone');
+        expect(driveStackedPlan(room: 500, width: 366, aspect: 3, textScale: 2), isNull, reason: 'large text');
+        expect(driveStackedPlan(room: 770, width: 366, aspect: 3, textScale: 2), isNotNull, reason: 'large text on a tall phone still stacks');
+      });
+
+      for (final width in [390.0, 320.0]) {
+        testWidgets('the half form scrolls by finger through every turn to the destination and back, at $width wide', (tester) async {
+          await show(tester, aspect: 3.0);
+          tester.view.physicalSize = Size(width, 844) * 3;
+          await tester.pumpWidget(MaterialApp(
+            theme: buildTheme(CacheThemeId.dark),
+            home: MediaQuery(
+              data: MediaQueryData(size: Size(width, 844)),
+              child: Scaffold(body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(CacheThemeId.dark), themeId: CacheThemeId.dark)),
+            ),
+          ));
+          await tester.pump();
+          expect(stackedNow(tester), isTrue);
+          final list = find.byKey(const ValueKey('drive-turns'));
+          final fade = find.byKey(const ValueKey('drive-turns-fade'));
+          expect(find.byKey(const ValueKey('drive-row-9')), findsNothing, reason: 'the destination is below the window');
+          expect(fade, findsOneWidget, reason: 'more rows lie below');
+          // To the end.
+          for (var i = 0; i < 6; i++) {
+            await tester.drag(list, const Offset(0, -400));
+            await tester.pumpAndSettle();
+          }
+          expect(find.byKey(const ValueKey('drive-row-9')), findsOneWidget, reason: 'the destination row');
+          expect(find.text('You have arrived at your destination'), findsOneWidget);
+          expect(fade, findsNothing, reason: 'nothing below: no fade');
+          // It stays where it was left (no return by itself).
+          await tester.pump(const Duration(seconds: 30));
+          expect(find.byKey(const ValueKey('drive-row-9')), findsOneWidget);
+          // And back to the first row after the next turn.
+          for (var i = 0; i < 6; i++) {
+            await tester.drag(list, const Offset(0, 400));
+            await tester.pumpAndSettle();
+          }
+          expect(find.byKey(const ValueKey('drive-row-2')), findsOneWidget);
+          expect(fade, findsOneWidget, reason: 'more rows lie below again');
+        });
+      }
 
       testWidgets('a tall route: side by side', (tester) async {
         await show(tester, aspect: 0.4);
@@ -495,9 +575,8 @@ void main() {
           ));
           await tester.pump();
           expect(tester.takeException(), isNull);
-          // At large text, or 320 wide (its climb line wraps), there is not room for both boxes at their least heights: they sit
-          // side by side.
-          expect(scale == 1 && w >= 390 ? stackedNow(tester) : sideBySideNow(tester), isTrue);
+          // Stacked where there is room for both boxes at their least heights, else side by side.
+          expect(stackedNow(tester) || sideBySideNow(tester), isTrue);
           expect(find.byKey(const ValueKey('elevation-chart')), findsOneWidget);
           expect(find.byKey(const ValueKey('elevation-steep')), findsOneWidget);
           expect(find.byKey(const ValueKey('guidance-end')), findsOneWidget);
