@@ -20,6 +20,26 @@ String protectCitations(String text) {
   return out.toString();
 }
 
+/// The answer as shown when it cites nothing (no sources): citation marks like [1], [1, 2], [1,2,3] or [1-3] are left out, with the
+/// space before each. Display only: the stored text and what the model reads are not changed. Other bracketed text stays, and so does
+/// text inside code. Sources are numbered from 1, so a bracket with a 0 in it ([0], [0, 1]) is never a citation and stays. A no-sources
+/// answer can still lose a bracket like "[1, 2]" written as an interval; that is accepted.
+String dropCitationMarks(String text) {
+  final code = RegExp(r'```[\s\S]*?(?:```|$)|`[^`\n]*`');
+  final mark = RegExp(r'[ \t]?\[\s*\d+(?:\s*[,\-\u2013]\s*\d+)*\s*\]');
+  // A mark with the number 0 in it is kept.
+  String cite(Match m) => RegExp(r'\d+').allMatches(m.group(0)!).any((n) => int.parse(n.group(0)!) == 0) ? m.group(0)! : '';
+  final out = StringBuffer();
+  var at = 0;
+  for (final m in code.allMatches(text)) {
+    out.write(text.substring(at, m.start).replaceAllMapped(mark, cite));
+    out.write(m.group(0));
+    at = m.end;
+  }
+  out.write(text.substring(at).replaceAllMapped(mark, cite));
+  return out.toString();
+}
+
 /// Style sheet built only from the theme tokens, so all themes read well.
 MarkdownStyleSheet answerStyle(CacheTokens k, {double text = 18, double line = 1.45}) {
   TextStyle body({double? size, FontWeight? weight, FontStyle? style, Color? color}) =>
@@ -60,14 +80,17 @@ MarkdownStyleSheet answerStyle(CacheTokens k, {double text = 18, double line = 1
 
 /// An assistant answer rendered as markdown. User messages stay plain text elsewhere.
 class AnswerMarkdown extends StatelessWidget {
-  const AnswerMarkdown(this.text, {super.key});
+  const AnswerMarkdown(this.text, {super.key, this.dropCitations = false});
 
   final String text;
+
+  /// The answer cites nothing: its citation marks are not shown ([dropCitationMarks]).
+  final bool dropCitations;
 
   @override
   Widget build(BuildContext context) {
     return MarkdownBody(
-      data: protectCitations(text),
+      data: protectCitations(dropCitations ? dropCitationMarks(text) : text),
       selectable: true,
       // The Linux desktop reads at 16 with 1.6 between lines.
       styleSheet: isLinuxDesktop(context) ? answerStyle(context.t, text: 16, line: 1.6) : answerStyle(context.t),
