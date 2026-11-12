@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// How a car screen stands to the two extras (the route mini map and the climb ahead), measured from the room CarPlay

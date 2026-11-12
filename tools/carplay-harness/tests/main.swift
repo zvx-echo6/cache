@@ -3,6 +3,7 @@
 // CarTrip.swift and CarLink.swift (app/ios/Runner/CarPlay), which need no Flutter for this.
 //
 //   swiftc CarTrip.swift CarLink.swift main.swift -o car-tests && ./car-tests <folder of recorded messages>
+import CoreGraphics
 import Foundation
 
 var failures = 0
