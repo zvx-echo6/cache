@@ -17,7 +17,6 @@ import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
-import 'car/car_support.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
