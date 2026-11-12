@@ -6,7 +6,7 @@
 // each scene with MapLibre GL JS (test_shots/guide_maps/<theme>/<scene>.png) and notes the scene's SHA-256 beside the pictures
 // (scenes.lock.json). Run again without the variable, the test shows each picture where the map is, and fails on a scene whose
 // picture is missing or was rendered from another scene. A scene says nothing about how it is rendered, so another renderer (the
-// phone's own, on an emulator) can read the same files.
+// phone's own, on an emulator) can read the same files. The place form's small map is drawn the same way (GuideFormMap).
 
 import 'dart:collection';
 import 'dart:convert';
@@ -20,6 +20,7 @@ import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -151,6 +152,35 @@ class GuideMapSurface extends NoSurface {
       );
 }
 
+/// The small map of the place form in a test (the app's PlaceMap is a platform view too): the picture of its scene, or the empty
+/// space the form had before while there is none.
+class GuideFormMap extends StatelessWidget {
+  const GuideFormMap(this.picture, {super.key});
+
+  final ValueListenable<ui.Image?> picture;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ui.Image?>(
+        valueListenable: picture,
+        builder: (context, image, _) => image == null ? const SizedBox.shrink() : RawImage(image: image, fit: BoxFit.fill),
+      );
+}
+
+bool _symbols = false;
+
+/// Material Symbols from the package's own font file (a test loads no font by itself): the icons of notebooks and places, on the
+/// ring's wedges and in the pins on the map. Loading is real work: call it inside tester.runAsync.
+Future<void> loadSymbolFont() async {
+  if (_symbols) return;
+  final cfg = jsonDecode(File('.dart_tool/package_config.json').readAsStringSync()) as Map;
+  final pkg = (cfg['packages'] as List).cast<Map>().firstWhere((p) => p['name'] == 'material_symbols_icons');
+  final root = Directory.current.uri.resolve('.dart_tool/').resolve('${pkg['rootUri']}/');
+  final bytes = File.fromUri(root.resolve('lib/fonts/MaterialSymbolsOutlined.ttf')).readAsBytesSync();
+  final loader = FontLoader('packages/material_symbols_icons/MaterialSymbolsOutlined')..addFont(Future.value(Uint8List.fromList(bytes).buffer.asByteData()));
+  await loader.load();
+  _symbols = true;
+}
+
 /// The whole-route picture in the corner while guiding (on a phone, MapLibre's offscreen snapshot): the screen asks for it with the
 /// style and camera it wants, which become the scene [scene]; it is given that scene's picture when there is one.
 class GuideSnapshotter implements RouteSnapshotter {
@@ -218,9 +248,15 @@ class GuideMaps {
   final Map<String, ui.Image> _pictures = {};
   Map<String, dynamic> _lock = const {};
   final Map<String, String> _written = {};
-  String get _writeDir => exporting ? scenesDir : '$scenesDir/drawn';
+  static String get _writeDir => exporting ? scenesDir : '$scenesDir/drawn';
   GuideCamera? _camera;
   int _camerasSeen = 0;
+
+  /// Before the first test of a run: the list of the run's scenes starts empty (each test with map pictures adds its own).
+  static void startRun() {
+    final f = File('$_writeDir/index.json');
+    if (f.existsSync()) f.deleteSync();
+  }
 
   /// Reads the rendered pictures and the note of which scene each was rendered from. Decoding is real work, so it runs outside the
   /// test's fake clock.
@@ -291,15 +327,19 @@ class GuideMaps {
     return _written[scene] = sha256.convert(utf8.encode(text)).toString();
   }
 
-  /// Writes the list of the scenes written in this run with their SHA-256 (the renderer checks each file against it).
+  /// Writes the list of the scenes written in this run with their SHA-256 (the renderer checks each file against it): the scenes
+  /// of this test are added to those the run's earlier tests listed (see [startRun]).
   void writeIndex() {
-    File('$_writeDir/index.json')
+    final f = File('$_writeDir/index.json');
+    final all = SplayTreeMap<String, String>();
+    if (f.existsSync()) all.addAll((jsonDecode(f.readAsStringSync()) as Map).cast<String, String>());
+    all.addAll(_written);
+    f
       ..createSync(recursive: true)
-      ..writeAsStringSync(const JsonEncoder.withIndent(' ').convert(SplayTreeMap<String, String>.of(_written)));
+      ..writeAsStringSync(const JsonEncoder.withIndent(' ').convert(all));
   }
 
-  /// Puts [scene]'s picture where the map is (the land colour while exporting, when it is not rendered yet). Null: no picture, for
-  /// the pictures that have no scene yet.
+  /// Puts [scene]'s picture where the map is (the land colour while exporting, when it is not rendered yet). Null: no picture.
   void show(String? scene) {
     if (scene != null) _check(scene);
     picture.value = scene == null ? null : _pictures[scene];

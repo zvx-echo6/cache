@@ -39,8 +39,8 @@ with `make_shots.py` and uploads them as the artifact `guide-shots-<sha>`; fetch
 
 ### The map pictures
 
-The map itself cannot be drawn by a test (MapLibre is a platform view), so the Maps pictures get a real map in three steps, all
-inside the same workflow run:
+The map itself cannot be drawn by a test (MapLibre is a platform view), so the Maps pictures and the place form get a real map in
+three steps, all inside the same workflow run:
 
 1. **Scenes.** The guide test runs with `GUIDE_MAPS=export` and writes one scene per map view to
    `app/test_shots/guide/scenes/<scene>.json`: the app's own style as the Maps screen holds it, the camera the screen asked for,
@@ -49,7 +49,8 @@ inside the same workflow run:
    view stays inside the park.
 2. **Render.** `node tools/guide/maps/render.mjs` draws each scene with MapLibre GL JS in the runner's headless Chrome and saves
    `app/test_shots/guide_maps/<theme>/<scene>.png`, with the scene's SHA-256 in `app/test_shots/guide_maps/scenes.lock.json`. A
-   scene whose picture is already there with the same SHA-256 is not rendered again. The style is used as it is; only the tile
+   scene whose picture is already there with the same SHA-256 is not rendered again: the map pictures and the lock file are
+   committed, so a run whose scenes have not changed asks for no tile at all. The style is used as it is; only the tile
    and font addresses are replaced. Fonts are the app's own (`app/assets/map/fonts`). Tiles come from the sources in
    `tools/guide/maps/sources.json`: the base map and public lands archives the app's published catalogue names, and the public
    elevation tiles the app's hillshade uses. The script prints the requests it made per host and fails above the ceilings in
@@ -62,7 +63,13 @@ phone. The map pictures and the scenes are in the artifact `guide-maps-<sha>`. M
 colours with dithering (see its header). The packages of the renderer are pinned in `tools/guide/maps/package-lock.json`
 (`npm ci`); nothing is installed outside the workflow's runner.
 
-Which pictures have a map so far: `maps-find-me`, `layers-sheet`, `place-card`, `directions-panel` and `guidance`. They are made
-for review and are not in the chapters or the app yet; the other Maps pictures are still drawn over the empty map area. The
-drive in the directions and guidance pictures was traced by hand along the base map's road lines
-(`app/test_shots/guide_data/drive_route.json`), not recorded from the core.
+The pictures with a map: `maps-find-me`, `maps-search`, `layers-sheet`, `place-card`, `directions-panel`,
+`directions-offroad`, `guidance`, `map-ring`, `map-notebook-ring`, `map-measure` and `places-edit` (the place form's small
+map). When a scene changes, commit the new map pictures and `scenes.lock.json` from the artifact `guide-maps-<sha>` along with
+the guide pictures cut from them.
+
+The routes in these pictures were made by hand along the base map's road and trail lines
+(`app/test_shots/guide_data/drive_route.json`, `offroad_route.json`), not recorded from the core. The heights of their
+elevation charts (`drive_elevation.json`, `offroad_elevation.json`) were read from the elevation tiles the map's hillshade is
+drawn from; each file says where its numbers came from. The off-road picture's view is set by the test, as a person drags the
+map: with Off-road chosen the panel is taller than the room the screen leaves under a route it fits into view.

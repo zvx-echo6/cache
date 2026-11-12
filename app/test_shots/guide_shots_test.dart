@@ -1,8 +1,8 @@
-// The Cache guide's screenshots: one picture per id in tools/guide/shots.txt, drawn by the app's own widgets with sample data (Twin
-// Falls, Idaho), in the light theme, on a 430 x 932 phone at 2x. Where a map is behind a panel the map is not drawn (MapLibre is a
-// platform view) by the test itself. The Maps pictures that have a scene (their sample place is Arches National Park,
-// guide_sample.dart) show the real map behind the screen, rendered from the scene this test writes (guide_map_kit.dart); the
-// others keep the empty map area, as the Maps tests do.
+// The Cache guide's screenshots: one picture per id in tools/guide/shots.txt, drawn by the app's own widgets with sample data, in
+// the light theme, on a 430 x 932 phone at 2x. The sample place of the maps, the saved places, the weather and the chats is Arches
+// National Park (guide_sample.dart); the region pictures keep their earlier sample region. A test cannot draw a map (MapLibre is
+// a platform view), so the Maps pictures and the place form show the real map behind the screen, rendered from the scene this
+// test writes (guide_map_kit.dart).
 // Made by the Renders workflow with guide=true (tools/guide/README.md, "Making the pictures"): it runs this test once with
 // GUIDE_MAPS=export to write the scenes, renders them, and runs it again to draw the pictures (pictures and crops.json in
 // test_shots/guide/). tools/guide/make_shots.py then resizes them into app/assets/guide/shots.
@@ -25,12 +25,15 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show CameraPosition, LatLng, MapLibreMap, MapLibrePlatform;
 import 'package:cache/maps/maps_state.dart' show FollowMode;
 import 'package:cache/maps/palette/map_palette.dart' show mapPaletteFor;
-import 'package:cache/maps/style/style_generator.dart' show kMeasureSource;
+import 'package:cache/maps/style/style_generator.dart' show kMeasureSource, kNotebookSource, kPinSource;
+import 'package:cache/nav/elevation/route_elevation.dart' show RouteElevation;
 import 'package:cache/nav/guidance_camera.dart' show guidanceAnchor;
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/catalogue_screen.dart';
+import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
+import 'package:cache/notebook/pin_image.dart' show PinImages;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
@@ -67,7 +70,7 @@ import 'package:cache/screens/ask_off.dart';
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/screens/model_search_screen.dart';
 import 'package:cache/screens/models_screen.dart';
-import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapRoute, MapSearchResponse, SearchResponse, VideoTarget;
+import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, GeoPoint, MapPlace, MapRoute, MapSearchResponse, SearchResponse, VideoTarget;
 import 'package:cache/layout/edit_home_screen.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
@@ -199,6 +202,7 @@ void main() {
     await loadShotFonts();
     await pdfiumForTests();
     openStorageForSpace = (_) {};
+    GuideMaps.startRun();
   });
 
   tearDownAll(() {
@@ -303,7 +307,7 @@ void main() {
   testWidgets('settings-assistant', (tester) async {
     final r = await _rig(tester);
     await _gemma(tester, r);
-    for (final t in ['Water from a stream', 'Treating burns', 'Route to Rock Creek']) {
+    for (final t in ['Water from a stream', 'Treating burns', 'Route to Delicate Arch']) {
       r.store.create(title: t);
     }
     r.chat.historyRevision.value++;
@@ -415,7 +419,7 @@ void main() {
       _Found('Library', Icons.menu_book_outlined, [('Water purification', 'Wikipedia', 0.9), ('Boiling water for safety', 'Survival manuals, p. 112', 0.7)]),
       _Found('Notebooks', Icons.book_outlined, [('Water cache restocked', 'Journal · Oct 27', 0.8)]),
       _Found('Places', Icons.place_outlined, [('Water tank', 'Saved place · 1.4 mi', 0.6)]),
-      _Found('Maps', Icons.map_outlined, [('Rock Creek Water Gap', 'Dam · 2.1 mi', 0.5)]),
+      _Found('Maps', Icons.map_outlined, [('Water point', 'Drinking water · 2.1 mi', 0.5)]),
     ]);
     Widget home() => HomeScreen(
       layout: h.layout,
@@ -684,11 +688,11 @@ void main() {
     final a = await askRig(tester);
     a.chat.messages
       ..clear()
-      ..add(ChatMessage.user('Take me to the Rock Creek trailhead.'))
+      ..add(ChatMessage.user('Take me to the Delicate Arch trailhead.'))
       ..add(ChatMessage.assistant()
         ..phase = TurnPhase.done
-        ..text = 'The Rock Creek trailhead is 15 miles east of you, about 24 minutes by road. The route is ready.'
-        ..navigationActions = [NavigationAction(address: 'nav:r1', route: MapRoute.fromJson(fakeRouteJson(id: 'r1', name: 'Rock Creek trailhead')))]);
+        ..text = 'The Delicate Arch trailhead is 2 miles east of you, about 4 minutes by road. The route is ready.'
+        ..navigationActions = [NavigationAction(address: 'nav:r1', route: MapRoute.fromJson(fakeRouteJson(id: 'r1', name: 'Delicate Arch trailhead')))]);
     await show(tester, askScreen(a), height: 520);
     await shot(tester, 'ask-open-navigation');
 
@@ -727,7 +731,7 @@ void main() {
     final pinned = chatAt('Water from a stream', now);
     chatAt('Treating burns', now);
     chatAt('Splinting a sprained ankle', now);
-    chatAt('Route to Rock Creek', now);
+    chatAt('Route to Delicate Arch', now);
     a.chat.setPinned(pinned, true);
     a.chat.historyRevision.value++;
     await show(tester, askScreen(a));
@@ -799,7 +803,7 @@ void main() {
       'age': '5 minutes old',
       'expired': false,
       'items': [
-        {'address': 'live:nws-alerts-point/x/1', 'label': 'Red flag warning', 'fields': {'Until': 'Mon 9 PM', 'Area': 'Twin Falls County'}},
+        {'address': 'live:nws-alerts-point/x/1', 'label': 'Red flag warning', 'fields': {'Until': 'Mon 9 PM', 'Area': 'Grand County'}},
       ],
     };
     r.liveCore.stored['wfigs-incidents-near'] = {
@@ -841,16 +845,16 @@ void main() {
       weather: off.weather,
       location: off.location,
       searchPlaces: (q) async => const [
-        MapPlace(id: 'place:osm:n1', type: 'place', name: 'Twin Falls', kind: 'City', address: 'Twin Falls County, ID', lat: 42.5629, lon: -114.4609),
-        MapPlace(id: 'place:osm:n2', type: 'place', name: 'Twin Lakes', kind: 'Town', address: 'Kootenai County, ID', lat: 47.9, lon: -116.8),
-        MapPlace(id: 'place:osm:n3', type: 'place', name: 'Twin Bridges', kind: 'Town', address: 'Madison County, MT', lat: 45.5, lon: -112.3),
+        MapPlace(id: 'place:osm:n1', type: 'place', name: 'Moab', kind: 'City', address: 'Grand County, UT', lat: 38.5733, lon: -109.5498),
+        MapPlace(id: 'place:osm:n2', type: 'place', name: 'Monticello', kind: 'City', address: 'San Juan County, UT', lat: 37.8714, lon: -109.3429),
+        MapPlace(id: 'place:osm:n3', type: 'place', name: 'Montrose', kind: 'City', address: 'Montrose County, CO', lat: 38.4783, lon: -107.8762),
       ],
       savePlace: (p) async {},
     )));
     await settle(tester, rounds: 10);
     await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
     await settle(tester);
-    await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'twin');
+    await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'mo');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await settle(tester);
     _ignoreDebugAsserts(tester);
@@ -859,30 +863,6 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await off.dispose(tester);
     await r.dispose(tester);
-  });
-
-  testWidgets('places-list, places-edit, place-alerts-sheet', (tester) async {
-    final n = _NbRig();
-    final book = await n.saved(tester);
-    await n.place(tester, book, 'Home', 42.5607, -114.4623, color: 'green');
-    await n.place(tester, book, 'Rally point 1', 42.5630, -114.4610, color: 'purple');
-    await n.place(tester, book, 'Shoshone Falls lot', 42.5944, -114.4003, color: 'yellow');
-    n.watched.add('place:home');
-    await show(tester, NotebookScreen(deps: n.deps, notebookId: book.id));
-    await tester.pumpAndSettle();
-    await shot(tester, 'places-list');
-
-    await tester.longPress(find.text('Home'));
-    await tester.pumpAndSettle();
-    await shot(tester, 'places-edit');
-
-    await tester.dragUntilVisible(find.byKey(const ValueKey('weather-gear')), find.byType(ListView).last, const Offset(0, -200));
-    await tester.tap(find.byKey(const ValueKey('weather-gear')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('alert-mode-custom')));
-    await tester.pumpAndSettle();
-    await shot(tester, 'place-alerts-sheet', crop: _sheet);
-    await tester.pumpWidget(const SizedBox());
   });
 
   // ---- Notebooks ------------------------------------------------------------------------------------------
@@ -926,7 +906,7 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'log-quick-add', crop: _sheet);
 
-    await tester.runAsync(() => n.nb.saveEntry(notebookId: g.id, occurredAt: '2026-10-26T10:00:00-06:00', values: {'f1': 25}, place: const NbPlace(lat: 42.5607, lon: -114.4623)));
+    await tester.runAsync(() => n.nb.saveEntry(notebookId: g.id, occurredAt: '2026-10-26T10:00:00-06:00', values: {'f1': 25}, place: NbPlace(lat: GuideSample.here.lat, lon: GuideSample.here.lon)));
     n.nb.privateSharing = _Included();
     await show(tester, NotebookEditor(notebook: n.nb, existing: g));
     await tester.pumpAndSettle();
@@ -1299,10 +1279,11 @@ void main() {
     m.r = await _rig(tester, publishedLayers: [m.sample.publicLands]);
     // Hillshade is on in the guide's map views (a new install draws only the base map until it is switched on).
     m.r.maps.setOn('hillshade', true);
-    m.backend = FakeBackend()
-      // The drive is the park's. The off-road picture has no map yet and keeps the made-up line.
-      ..onRoute = (to, mode, from) async =>
-          MapRoute.fromJson(mode.startsWith('offroad') ? fakeRouteJson(id: 'r-$mode', mode: 'walk', offroad: true, name: GuideSample.trailhead.name) : m.sample.driveRoute);
+    // The routes are the park's: the walk along a trail for the off-road modes, else the drive.
+    m.backend = FakeBackend()..onRoute = (to, mode, from) async => MapRoute.fromJson(m.sample.routeFor(mode));
+    // The heights along a route are read from the map's elevation tiles on a phone; here from the sample's files, read from the
+    // same tiles.
+    m.elevation = RouteElevation(loader: (route) async => m.sample.elevationOf(route));
     m.gps = FakeNavPosition();
     m.nav = NavState(
       backend: m.backend,
@@ -1369,6 +1350,7 @@ void main() {
       onNewEntryAt: m.notebooks == null ? null : (_, _) {},
       glyphsLoader: () async => mapGlyphs,
       snapshotter: m.kit.inset,
+      elevation: m.elevation,
     ));
     for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
@@ -1408,46 +1390,46 @@ void main() {
     m.kit.writeIndex();
     await tester.pumpWidget(const SizedBox());
     m.nav.dispose();
+    m.elevation.dispose();
     await m.r.dispose(tester);
     m.kit.dispose();
   }
 
-  // The search picture has no map yet and keeps its old sample.
-  const park = MapPlace(
-    id: 'place:osm:w7',
-    type: 'place',
-    name: 'Shoshone Falls Park',
-    kind: 'Park',
-    category: 'park',
-    address: '4155 Shoshone Falls Grade, Twin Falls, ID',
-    lat: 42.5944,
-    lon: -114.4003,
-    distanceM: 6400,
-    direction: 'E',
-    phone: '+1 208 555 0142',
-    hours: 'Dawn to dusk',
-    summary: 'A waterfall on the Snake River, often called the Niagara of the West.',
-    matched: 'name',
-  );
+  /// A press and hold on the map at [spot]: a real pointer goes down where the camera puts the spot (the screen opens the ring
+  /// around the finger), the map reports the long press there, as the platform view does, and the finger lifts.
+  Future<void> holdMap(WidgetTester tester, _MapRig m, GeoPoint spot) async {
+    final box = tester.getRect(find.byType(MapLibreMap));
+    final at = m.kit.cameraOf(mapOf(tester), box.size).project(spot.lat, spot.lon, box.size);
+    final finger = await tester.startGesture(box.topLeft + at);
+    mapOf(tester).onMapLongClick!(Point(at.dx, at.dy), LatLng(spot.lat, spot.lon));
+    await tester.pump();
+    await finger.up();
+    await settle(tester);
+    final ring = tester.getCenter(find.byKey(const ValueKey('ring-menu')));
+    expect((ring - (box.topLeft + at)).distance, lessThan(4), reason: 'the ring did not open around the finger');
+  }
+
+  /// A tap on the map at [spot], as the platform view reports it.
+  Future<void> tapMap(WidgetTester tester, _MapRig m, GeoPoint spot) async {
+    final size = tester.getSize(find.byType(MapLibreMap));
+    final at = m.kit.cameraOf(mapOf(tester), size).project(spot.lat, spot.lon, size);
+    mapOf(tester).onMapClick!(Point(at.dx, at.dy), LatLng(spot.lat, spot.lon));
+    await settle(tester);
+  }
 
   // One test for every Maps picture: the map screen is built once (a second one in the same run waits for its style for good).
-  // Five pictures have the real map behind them (mapShot); the others are still drawn over the empty map area.
+  // Every picture has the real map behind it (mapShot).
   testWidgets('the Maps pictures', (tester) async {
     // Over a map the round buttons and the panels cast real, soft shadows, as on a phone (a test otherwise draws a button's
     // shadow as a hard black ring). Put back before the test ends, which checks it.
     debugDisableShadows = false;
     addTearDown(() => debugDisableShadows = true);
+    // The notebooks' icons on the ring are Material Symbols. This is the last test but one of the file (the places test after it
+    // needs the font too), so no other picture changes with it.
+    await tester.runAsync(loadSymbolFont);
     final m = await mapRig(tester, notebooks: true);
     await showMap(tester, m);
     await mapShot(tester, m, 'maps-find-me', 'find-me');
-
-    // The same view with hillshade off, to choose between the two (not a guide picture: its id starts with "compare-", and
-    // make_shots.py keeps such pictures out of the guide's assets). To be taken out once the choice is made.
-    m.r.maps.setOn('hillshade', false);
-    await restyled(tester, m);
-    await mapShot(tester, m, 'compare-maps-find-me-no-hillshade', 'find-me-flat');
-    m.r.maps.setOn('hillshade', true);
-    await restyled(tester, m);
 
     // The layers sheet over the map, with public lands on as well: the whole screen, so the map shows above the sheet.
     m.r.maps.setOn(m.sample.publicLandsId, true);
@@ -1465,19 +1447,16 @@ void main() {
     await mapShot(tester, m, 'place-card', 'place-card');
     m.nav.clearSelection();
 
-    m.kit.show(null);
-    m.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [
-      park,
-      const MapPlace(id: 'place:osm:n8', type: 'place', name: 'Shoshone Falls Overlook', kind: 'Viewpoint', address: 'Twin Falls, ID', lat: 42.5951, lon: -114.4012, distanceM: 6500, direction: 'E', matched: 'name'),
-      const MapPlace(id: 'place:osm:n9', type: 'place', name: 'Shoshone', kind: 'City', address: 'Lincoln County, ID', lat: 42.9366, lon: -114.4084, distanceM: 38000, direction: 'N', matched: 'name'),
-    ]);
+    // A search, with the map where the place card left it: the park's arches, nearest to the phone first.
+    m.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: GuideSample.arches);
     await tester.tap(find.byKey(const ValueKey('map-search-field')));
     await tester.pump();
-    await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'shoshone');
+    await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'arch');
     await tester.pump(const Duration(milliseconds: 50));
     await settle(tester);
-    await shot(tester, 'maps-search');
+    await mapShot(tester, m, 'maps-search', 'search');
     m.nav.closeSearch();
+    m.backend.onSearch = null;
     await settle(tester);
 
     // Directions start where the phone is: it has moved on, to where the drive begins.
@@ -1487,12 +1466,22 @@ void main() {
     await settle(tester);
     await mapShot(tester, m, 'directions-panel', 'directions');
 
-    m.kit.show(null);
+    // Off-road, on foot: the phone is at the Windows parking, and the way to the arch of the place card is its trail. The screen
+    // fits the route into view; the map is then where a person drags it to see the whole trail (GuideSample.offroadView).
+    m.nav.cancelDirections();
+    final foot = m.sample.offroadStart;
+    m.r.location.publish(fixAt(foot.lat, foot.lon, heading: m.sample.offroadStartHeading));
     await tester.runAsync(() => m.nav.setMode('offroad_foot'));
+    await tester.runAsync(() => m.nav.openDirections(GuideSample.arch));
     await settle(tester);
-    await shot(tester, 'directions-offroad');
+    m.kit.movedTo(GuideCamera(lat: GuideSample.offroadView.lat, lon: GuideSample.offroadView.lon, zoom: GuideSample.offroadZoom));
+    await mapShot(tester, m, 'directions-offroad', 'offroad');
 
+    // The drive again, and guidance along it.
+    m.nav.cancelDirections();
+    m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
     await tester.runAsync(() => m.nav.setMode('drive'));
+    await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
     final fix = m.sample.guidanceFix;
     m.backend.onProgress = (r, lat, lon) async => m.sample.progress();
@@ -1510,42 +1499,111 @@ void main() {
     m.kit.inset.write();
     await mapShot(tester, m, 'guidance', 'guidance');
     await tester.runAsync(() async => m.nav.end());
-    // The pictures below have no map yet: as before, the map is north up, at the phone, and does not follow it.
-    m.kit.show(null);
     m.r.maps.setFollow(FollowMode.free);
-    final map = mapOf(tester);
-    final camera = GuideCamera(lat: fix.lat, lon: fix.lon, zoom: 14);
-    m.kit.movedTo(camera);
-    map.onCameraMove!(CameraPosition(target: LatLng(camera.lat, camera.lon), zoom: camera.zoom));
-    await settle(tester);
 
-    // The ring, with a route shown (so it offers Add stop), then the notebook ring after Save, then Measure.
+    // The ring, with a route shown (so it offers Add stop): the phone is where the drive begins again, the drive is asked for
+    // and the screen fits it into view, as in the directions picture. Then the notebook ring after Save.
+    m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
+    await settle(tester);
+    m.kit.movedTo(GuideCamera(lat: start.lat, lon: start.lon, zoom: 14));
     await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
-    map.onMapLongClick!(const Point(215.0, 466.0), const LatLng(42.57, -114.45));
-    await settle(tester);
-    await shot(tester, 'map-ring');
+    await holdMap(tester, m, GuideSample.ringSpot);
+    await mapShot(tester, m, 'map-ring', 'ring');
 
     RingMenu ring() => tester.widget<RingMenu>(find.byKey(const ValueKey('ring-menu')));
     ring().onPick(const RingItem(id: 'save', label: 'Save', icon: Icons.book_outlined));
     await settle(tester);
-    await shot(tester, 'map-notebook-ring');
+    await mapShot(tester, m, 'map-notebook-ring', 'notebook-ring');
 
+    // Measure: the route is put away, the map is moved to the place card's view, and three points are measured there.
     await tester.tapAt(const Offset(30, 200));
     await settle(tester);
     m.nav.cancelDirections();
+    m.nav.clearSelection();
     await settle(tester);
-    map.onMapLongClick!(const Point(215.0, 466.0), const LatLng(42.57, -114.45));
+    final view = GuideCamera(lat: GuideSample.arch.lat, lon: GuideSample.arch.lon, zoom: GuideSample.measureZoom);
+    m.kit.movedTo(view);
+    mapOf(tester).onCameraMove!(CameraPosition(target: LatLng(view.lat, view.lon), zoom: view.zoom));
     await settle(tester);
+    await holdMap(tester, m, GuideSample.measured.first);
     ring().onPick(const RingItem(id: 'measure', label: 'Measure', icon: Icons.straighten));
     await settle(tester);
-    for (final p in [const LatLng(42.572, -114.452), const LatLng(42.575, -114.447)]) {
-      map.onMapClick!(const Point(215.0, 400.0), p);
-      await settle(tester);
+    for (final p in GuideSample.measured.skip(1)) {
+      await tapMap(tester, m, p);
     }
-    await shot(tester, 'map-measure');
+    await mapShot(tester, m, 'map-measure', 'measure');
     await endMap(tester, m);
     debugDisableShadows = true;
+  });
+
+  // ---- Places (after the Maps pictures: the place form has a map too, and its pin is drawn in the icons' own font) --------
+
+  testWidgets('places-list, places-edit, place-alerts-sheet', (tester) async {
+    await tester.runAsync(loadSymbolFont);
+    final kit = GuideMaps();
+    await kit.load(tester);
+    final r = await _rig(tester);
+    // Hillshade is on, as in the Maps pictures.
+    r.maps.setOn('hillshade', true);
+    final n = _NbRig()..formMap = kit;
+    final book = await n.saved(tester);
+    await n.place(tester, book, 'Camp', 38.7755, -109.588, color: 'green');
+    await n.place(tester, book, GuideSample.trailhead.name, GuideSample.trailhead.lat, GuideSample.trailhead.lon, color: 'yellow');
+    await n.place(tester, book, 'Water', 38.6166, -109.6195, color: 'blue');
+    await n.place(tester, book, 'Meeting point', 38.7017, -109.5647, color: 'purple');
+    n.watched.add('place:trailhead');
+    await show(tester, NotebookScreen(deps: n.deps, notebookId: book.id));
+    await tester.pumpAndSettle();
+    await shot(tester, 'places-list');
+
+    await tester.longPress(find.text(GuideSample.trailhead.name));
+    await tester.pumpAndSettle();
+    // The form's small map. The app's PlaceMap is a platform view, so its scene is written here the way PlaceMap fills its map:
+    // the app's style with the same layers on, the place in the middle at zoom 14, and the place's pin drawn by the notebook
+    // pins' layer with the image PlaceMap adds for it. The rendered picture is then shown in the form.
+    final style = (await tester.runAsync(() => r.maps.styleJson(mapPaletteFor(CacheThemeId.light), mapGlyphs)))!;
+    final pin = n.mapPin!, look = n.mapLook!;
+    final images = <String, Uint8List>{};
+    final image = (await tester.runAsync(() => PinImages((name, png) async {
+      images[name] = png;
+    }, r.maps.pinStyle).ensure(look.icon.id, look.glyph, look.tint)))!;
+    Map<String, dynamic> points(List<Map<String, dynamic>> features) => {'type': 'FeatureCollection', 'features': features};
+    kit.writeScene(
+      'place-form',
+      style: style,
+      camera: GuideCamera(lat: pin.lat, lon: pin.lon, zoom: 14),
+      size: tester.getSize(find.byType(GuideFormMap)),
+      ratio: tester.view.devicePixelRatio,
+      sources: {
+        kPinSource: points(const []),
+        kNotebookSource: points([
+          {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [pin.lon, pin.lat],
+            },
+            'properties': {'pin': image, 'title': 'place'},
+          },
+        ]),
+      },
+      images: images,
+    );
+    kit.show('place-form');
+    await tester.pump();
+    await shot(tester, 'places-edit');
+
+    await tester.dragUntilVisible(find.byKey(const ValueKey('weather-gear')), find.byType(ListView).last, const Offset(0, -200));
+    await tester.tap(find.byKey(const ValueKey('weather-gear')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('alert-mode-custom')));
+    await tester.pumpAndSettle();
+    await shot(tester, 'place-alerts-sheet', crop: _sheet);
+    kit.writeIndex();
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+    kit.dispose();
   });
 }
 
@@ -1583,7 +1641,7 @@ class _GuideWeather extends WeatherState {
     age: '1 hour old',
     alertsKnown: true,
     alerts: [
-      HomeAlert(fire: false, label: 'Red flag warning', detail: 'Until 9 PM · Twin Falls County · National Weather Service'),
+      HomeAlert(fire: false, label: 'Red flag warning', detail: 'Until 9 PM · Grand County · National Weather Service'),
       HomeAlert(fire: true, label: 'East Fork fire', detail: '31 mi N · 266 acres · 60% contained'),
     ],
   );
@@ -1893,7 +1951,7 @@ final DateTime _now = DateTime(2026, 10, 29, 16, 12);
 Templates _templates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
 
 const PlaceChoices _places = PlaceChoices(here: _hereNow, saved: _savedNone);
-Future<({double lat, double lon})?> _hereNow() async => (lat: 42.5600, lon: -114.4600);
+Future<({double lat, double lon})?> _hereNow() async => (lat: GuideSample.here.lat, lon: GuideSample.here.lon);
 Future<List<NbPlace>> _savedNone() async => const [];
 
 class _NbRig {
@@ -1903,6 +1961,13 @@ class _NbRig {
   final PlaceAlerts alerts = PlaceAlerts.memory();
   final Set<String> watched = {'here'};
 
+  /// The pictures of the place form's small map (guide_map_kit.dart); null leaves its space empty.
+  GuideMaps? formMap;
+
+  /// What the place form last asked its map to show: the place and the look of its pin.
+  NbPlace? mapPin;
+  PinLook? mapLook;
+
   PlaceNotebookDeps get pd => PlaceNotebookDeps(
     watched: watched.contains,
     setWatched: (id, on) => on ? watched.add(id) : watched.remove(id),
@@ -1910,11 +1975,16 @@ class _NbRig {
     placesChanged: () async {},
     alertSetting: () => 'Serious only, from Notifications',
     alertKinds: () => const ['alerts', 'fire', 'earthquakes', 'hydrology'],
-    regions: () async => const [(id: 'region:Idaho', name: 'Idaho')],
+    regions: () async => const [(id: 'region:Utah', name: 'Utah')],
     hereOnMap: () => true,
     setHereOnMap: (_) {},
-    // The map is a platform view: the space is left empty, as in the Maps tests.
-    map: (context, pin, onPick, look) => const SizedBox.shrink(),
+    // The map is a platform view: the picture of its scene is shown in its place, or the space is left empty.
+    map: (context, pin, onPick, look) {
+      mapPin = pin;
+      mapLook = look;
+      final kit = formMap;
+      return kit == null ? const SizedBox.shrink() : GuideFormMap(kit.picture);
+    },
   );
 
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);
@@ -2011,6 +2081,7 @@ class _MapRig {
   late FakeBackend backend;
   late FakeNavPosition gps;
   late NavState nav;
+  late RouteElevation elevation;
   late _Regions regions;
   FakeNotebookBackend? store;
   NotebookState? notebooks;

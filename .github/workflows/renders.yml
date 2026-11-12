@@ -108,8 +108,8 @@ jobs:
           path: app/assets/guide/shots/*.png
           if-no-files-found: error
           retention-days: 14
-      # The rendered maps with their lock file, the scenes they were rendered from (and the renderer's report), and the
-      # pictures cut for comparing two versions of a view. Uploaded after a failure too, to see what the renderer made.
+      # The rendered maps with their lock file, and the scenes they were rendered from (with the renderer's report). Uploaded
+      # after a failure too, to see what the renderer made.
       - name: Upload the map pictures
         if: ${{ always() && github.event.inputs.guide == 'true' }}
         uses: actions/upload-artifact@v4
@@ -118,6 +118,5 @@ jobs:
           path: |
             app/test_shots/guide_maps/
             app/test_shots/guide/scenes/
-            app/test_shots/guide/compare/
           if-no-files-found: warn
           retention-days: 14

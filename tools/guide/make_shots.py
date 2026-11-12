@@ -8,13 +8,12 @@ Each picture is cut to the sheet or dialog it is about (test_shots/guide/crops.j
 room at the top and the empty page below the content; then it is resized to 645 px wide (LANCZOS), reduced to at most 128
 colours (no dither) and saved with optimize=True into app/assets/guide/shots/<id>.png. Needs Pillow.
 
-A picture with a real map behind the screen (MAPS) is reduced to 256 colours with dithering instead: shaded relief breaks into
-bands at 128 flat colours. Its palette is an octree one, which keeps the few strong colours of a map picture (the position dot,
-a pin, the route) that a median-cut palette gives up for more shades of the land; the picture's own large flat colours (a
-panel, a map with no relief) are then put into it exactly, so they stay flat instead of being dithered. Its line also says
-what the same picture would weigh in other forms, for choosing how map pictures ship. A picture whose id starts with "compare-" is not a guide
-picture (two versions of one view, to choose between): it is cut the same way but saved into app/test_shots/guide/compare/,
-outside the app's assets.
+A picture with a real map in it (MAPS) is reduced to 256 colours with dithering instead: shaded relief breaks into bands at 128
+flat colours. Its palette is an octree one, which keeps the few strong colours of a map picture (the position dot, a pin, the
+route) that a median-cut palette gives up for more shades of the land; the picture's own large flat colours (a panel, a page)
+are then put into it exactly, so they stay flat instead of being dithered. Its line also says what the same picture would
+weigh in other forms, for choosing how map pictures ship. Where the map fills the screen (every map picture but the place
+form, MAP_INSIDE) the picture is the whole screen less the status bar.
 """
 import io
 import json
@@ -25,13 +24,16 @@ from PIL import Image
 
 SRC = 'app/test_shots/guide'
 OUT = 'app/assets/guide/shots'
-COMPARE = 'compare-'
-OUT_COMPARE = 'app/test_shots/guide/compare'
 WIDTH = 645
 RATIO = 2  # the goldens are drawn at 2x
 STATUS = 54 * RATIO  # the room the test leaves for the phone's status bar
 KEEP = {'regions-sheet'}  # made by hand earlier; left as it is
-MAPS = {'maps-find-me', 'place-card', 'directions-panel', 'guidance', 'layers-sheet'}  # drawn over a rendered map
+# Drawn with a rendered map: the Maps screen over its map, and the place form with its small map.
+MAPS = {
+    'maps-find-me', 'maps-search', 'place-card', 'directions-panel', 'directions-offroad', 'guidance', 'layers-sheet',
+    'map-ring', 'map-notebook-ring', 'map-measure', 'places-edit',
+}
+MAP_INSIDE = {'places-edit'}  # the map is a part of the page: cut like any other page
 
 
 def trim_bottom(im, bg):
@@ -97,7 +99,7 @@ def main():
         if i in KEEP:
             continue
         im = Image.open(f'{SRC}/{name}').convert('RGB')
-        if i in MAPS or i.startswith(COMPARE):
+        if i in MAPS and i not in MAP_INSIDE:
             # A map fills the screen to its foot: the whole screen less the status bar, nothing below the content to cut.
             im = im.crop((0, STATUS, im.width, im.height))
         elif i in crops:
@@ -112,17 +114,13 @@ def main():
             im = body.crop((0, 0, body.width, min(h, body.height)))
         h = round(im.height * WIDTH / im.width)
         im = im.resize((WIDTH, h), Image.LANCZOS)
-        out = OUT
-        if i.startswith(COMPARE):
-            out = OUT_COMPARE
-            os.makedirs(out, exist_ok=True)
-        if i in MAPS or i.startswith(COMPARE):
-            dithered(im).save(f'{out}/{i}.png', optimize=True)
-            print(i, im.size, os.path.getsize(f'{out}/{i}.png'), '(256 colours dithered; otherwise:', weights(im) + ')')
+        if i in MAPS:
+            dithered(im).save(f'{OUT}/{i}.png', optimize=True)
+            print(i, im.size, os.path.getsize(f'{OUT}/{i}.png'), '(256 colours dithered; otherwise:', weights(im) + ')')
         else:
             im = im.quantize(colors=128, dither=Image.Dither.NONE)
-            im.save(f'{out}/{i}.png', optimize=True)
-            print(i, im.size, os.path.getsize(f'{out}/{i}.png'))
+            im.save(f'{OUT}/{i}.png', optimize=True)
+            print(i, im.size, os.path.getsize(f'{OUT}/{i}.png'))
 
 
 if __name__ == '__main__':

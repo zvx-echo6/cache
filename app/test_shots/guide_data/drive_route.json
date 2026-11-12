@@ -1,5 +1,5 @@
 {
- "_comment": "The guide pictures' drive in Arches National Park: east on Main Park Road, then left onto Delicate Arch Road to the trail's parking. Traced by hand along the road lines of the app's own base map tiles (zoom 14, protomaps-planet-20261103), in the shape of a cs_map_route answer; times are worked out from the lengths. To be replaced by an answer recorded from the core.",
+ "_comment": "The guide pictures' drive in Arches National Park: east on Main Park Road, then left onto Delicate Arch Road to the trail's parking. Traced by hand along the road lines of the app's own base map tiles (zoom 14, protomaps-planet-20261103), in the shape of a cs_map_route answer; times are worked out from the lengths. It stays the guide's drive: an answer recorded from the core is not needed for these pictures (one would replace this file as it is).",
  "ok": true,
  "route_id": "guide-drive",
  "mode": "drive",
