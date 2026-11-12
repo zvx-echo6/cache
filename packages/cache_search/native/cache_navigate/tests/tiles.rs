@@ -46,8 +46,9 @@ struct Stream {
 }
 
 impl TileStream for Stream {
-    fn prepare(&self, _points: &[(f64, f64)]) {
+    fn prepare(&self, _points: &[(f64, f64)]) -> cache_navigate::TilePrep {
         *self.calls.lock().unwrap() += 1;
+        cache_navigate::TilePrep::default()
     }
     fn tile_dir(&self) -> Option<PathBuf> {
         self.dir.clone()
@@ -62,11 +63,13 @@ fn a_folder_of_tiles_is_a_tile_dir_and_a_tar_a_tile_extract() {
     assert_eq!(c["mjolnir"]["tile_dir"], &*dir.to_string_lossy());
     assert!(c["mjolnir"].get("tile_extract").is_none(), "a folder has no tile_extract");
     assert_eq!(c["mjolnir"]["hierarchy"], true, "the rest of the template is kept");
+    assert_eq!(c["loki"]["use_connectivity"], false, "tiles fetched after the router started must not be blocked by its connectivity map");
     let tar = t.0.join("tiles.tar");
     std::fs::write(&tar, b"").unwrap();
     let c: Value = serde_json::from_str(&valhalla_config(&tar)).unwrap();
     assert_eq!(c["mjolnir"]["tile_extract"], &*tar.to_string_lossy());
     assert!(c["mjolnir"].get("tile_dir").is_none());
+    assert_eq!(c["loki"]["use_connectivity"], true, "a tiles.tar holds its whole region: its config is unchanged");
 }
 
 #[test]
