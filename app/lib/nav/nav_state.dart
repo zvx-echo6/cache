@@ -227,6 +227,12 @@ class NavState extends ChangeNotifier {
             if (!_passedStops.contains(i)) s,
         ];
 
+  /// The stops the route being followed goes through, in its order, each with its number in [stops] (1 is the first stop).
+  List<(int, MapPlace)> get routeStopsInOrder => [
+        for (final i in _routeStops)
+          if (i < stops.length) (i + 1, stops[i]),
+      ];
+
   /// The places in [stops] that are not passed, in order: what a route from here goes through.
   List<int> _aheadIndexes() => [
         for (var i = 0; i < stops.length; i++)

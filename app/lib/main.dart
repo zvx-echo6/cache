@@ -855,7 +855,7 @@ class _CacheAppState extends State<CacheApp> {
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
   // Whether the phone's drive screen is showing to a person; the car is told (car/phone_drive.dart).
-  final PhoneDriveSignal _phoneDrive = PhoneDriveSignal();
+  final PhoneDrive _phoneDrive = PhoneDrive();
   // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
   late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
   CacheThemeId _applied = CacheThemeId.dark;
@@ -1133,8 +1133,8 @@ class _CacheAppState extends State<CacheApp> {
         drive: carDrive,
         elevation: routeElevation,
         theme: () => app.theme,
-        overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.value),
-        phoneDrive: _phoneDrive,
+        overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.signal.value),
+        phoneDrive: _phoneDrive.signal,
         settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
@@ -1151,6 +1151,7 @@ class _CacheAppState extends State<CacheApp> {
 
   void _onCarScreen() {
     final attached = _car?.connected.value ?? false;
+    _phoneDrive.carConnected.value = attached;
     location.carScreen(attached);
     if (!attached) _carLeft();
   }
@@ -1404,6 +1405,7 @@ class _CacheAppState extends State<CacheApp> {
           browse: browse,
           nav: nav,
           elevation: routeElevation,
+          phoneDrive: _phoneDrive,
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,
