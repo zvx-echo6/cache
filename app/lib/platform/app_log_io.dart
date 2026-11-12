@@ -12,6 +12,7 @@ import '../maps/ui/format.dart' show formatBytes;
 import '../platform.dart' as plat;
 import '../version.dart';
 import 'app_log.dart';
+import 'exit_reasons.dart';
 import 'memory.dart';
 
 /// Opens the app's log in the app's own folder and writes what happened since the last start: Cache stopped while it was
@@ -23,7 +24,18 @@ Future<void> openAppLog() async {
     final dir = Directory('${await appSupportPath()}/logs');
     await appLog.open(dir);
     final running = File('${dir.path}/running');
-    if (running.existsSync()) logError('Cache stopped unexpectedly the last time it was open');
+    final exits = await _readExits();
+    if (running.existsSync()) {
+      DateTime? marked;
+      try {
+        marked = DateTime.tryParse(running.readAsStringSync().trim());
+      } catch (_) {}
+      if (stoppedUnexpectedly(marked, exits)) {
+        logError('Cache stopped unexpectedly the last time it was open');
+      } else {
+        logInfo('Cache was ended by the system or the user the last time it was open (an update, or stopped from Settings or Recents)');
+      }
+    }
     _mark(running, true);
     AppLifecycleListener(
       onResume: () => _mark(running, true),
@@ -31,7 +43,7 @@ Future<void> openAppLog() async {
       onDetach: () => _mark(running, false),
     );
     logInfo('Cache $kAppVersion ($kAppBuild) starts; log level ${logLevelTitle(appLog.level)}; ${memoryNow()}');
-    await _exitReasons(dir);
+    await _exitReasons(dir, exits);
   } catch (e) {
     debugPrint('The log could not be opened: $e');
   }
@@ -62,8 +74,19 @@ void _mark(File running, bool on) {
 
 const MethodChannel _memory = kMemoryChannel;
 
-/// Android 11 and later: why the app's process ended, the times since the last start (crash, native crash, low memory).
-Future<void> _exitReasons(Directory dir) async {
+/// Android 11 and later: the system's records of why the app's process ended.
+Future<List<Map<Object?, Object?>>> _readExits() async {
+  if (!Platform.isAndroid) return const [];
+  try {
+    final list = await _memory.invokeListMethod<Object?>('exits');
+    return [for (final e in list ?? const []) if (e is Map) e.cast<Object?, Object?>()];
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// Writes the records since the last start (crash, native crash, low memory).
+Future<void> _exitReasons(Directory dir, List<Map<Object?, Object?>> list) async {
   if (!Platform.isAndroid) return;
   final seenFile = File('${dir.path}/exits-seen');
   var seen = 0;
@@ -71,10 +94,8 @@ Future<void> _exitReasons(Directory dir) async {
     seen = int.parse(seenFile.readAsStringSync().trim());
   } catch (_) {}
   try {
-    final list = await _memory.invokeListMethod<Object?>('exits');
     var newest = seen;
-    for (final e in list ?? const []) {
-      if (e is! Map) continue;
+    for (final e in list) {
       final t = (e['time'] as num?)?.toInt() ?? 0;
       if (t <= seen) continue;
       if (t > newest) newest = t;

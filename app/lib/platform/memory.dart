@@ -188,8 +188,18 @@ void listenMemoryTrim(MemoryTrim onTrim, {void Function()? onWarning}) {
 
 /// Whether the model should be let go on this onTrimMemory: Android says memory runs low while Cache is in front (older
 /// Androids), or Cache went to the back and what is free is under a gigabyte above where Android starts killing apps.
+///
+/// This is the search model's rule. The chat model uses [releaseChatModelNowOn] and the grace period ([BackgroundModelRelease]).
 bool releaseModelOn(int level, MemoryReading? r) {
   if (level >= kTrimRunningLow && level < kTrimUiHidden) return true;
   if (level >= kTrimUiHidden) return r != null && (r.low || r.room < (1 << 30));
   return false;
 }
+
+/// Whether the chat model is let go at once on this onTrimMemory: levels 10 to 19 (running low or critical in front), which
+/// only older Androids send (Android 14 and later no longer notify apps of them). Going to the back is handled by
+/// [BackgroundModelRelease], which waits out a grace period and an answer being written.
+bool releaseChatModelNowOn(int level) => level >= kTrimRunningLow && level < kTrimUiHidden;
+
+/// Whether this onTrimMemory level means Cache's screen is hidden or Cache is in the background.
+bool trimMeansBackground(int level) => level >= kTrimUiHidden;
