@@ -41,12 +41,15 @@ void main() {
         await snap(tester, _out, '$name-$t');
       }
 
+      // ignore: invalid_use_of_visible_for_testing_member
       w.state.debugSet([paused, added]);
       await show('1-added-adding-to-search-index');
       pending = false;
+      // ignore: invalid_use_of_visible_for_testing_member
       w.state.debugSet([paused, added]);
       await show('2-added-pieces-searchable');
       now = now.add(const Duration(seconds: 60));
+      // ignore: invalid_use_of_visible_for_testing_member
       w.state.debugSet([paused, added]);
       await show('3-paused-waiting');
       await tester.pumpWidget(const SizedBox());
