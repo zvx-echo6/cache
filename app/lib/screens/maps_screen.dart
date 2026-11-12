@@ -58,6 +58,10 @@ const double kRouteFitSide = 48;
 /// The room left between a fitted route and what covers the map's foot or one of its sides.
 const double kRouteFitGap = 16;
 
+/// The room left between a fitted route and a bare edge of the map on a phone (an edge with nothing over the map beside it):
+/// wider than beside a cover, so the dots at the route's ends are not hard against the edge of the screen.
+const double kRouteFitBareEdge = 32;
+
 /// The least height or width a fitted route is given: a larger cover would leave the map no room (it then does not move at
 /// all), so the route's end goes under the cover instead.
 const double kRouteFitLeast = 48;
@@ -95,7 +99,8 @@ class MapCovers {
   bool get isEmpty => header == null && chip == null && buttons == null && scale == null && credits == null && panel == null;
 }
 
-/// The two free rectangles of a [map] on a phone with [covers] over it, each less [kRouteFitGap] on every side:
+/// The two free rectangles of a [map] on a phone with [covers] over it, each less [kRouteFitGap] on a side where something is
+/// over the map and [kRouteFitBareEdge] on a side that is the map's own bare edge:
 /// - the strip: the map's whole width, below the position chip and the buttons (below the header when neither is shown) and
 ///   above the scale, the credits and the panel;
 /// - the column: between the chip's right edge and the buttons' left edge, from the header's lower edge down to what is at the
@@ -121,10 +126,18 @@ class MapCovers {
     return y;
   }
 
+  // A rectangle less the room kept on each side: the gap beside a cover, more at the map's own edge.
+  Rect within(Rect r) => Rect.fromLTRB(
+        r.left + (r.left > 0 ? kRouteFitGap : kRouteFitBareEdge),
+        r.top + (r.top > 0 ? kRouteFitGap : kRouteFitBareEdge),
+        r.right - (r.right < map.width ? kRouteFitGap : kRouteFitBareEdge),
+        r.bottom - (r.bottom < map.height ? kRouteFitGap : kRouteFitBareEdge),
+      );
+
   final strip = Rect.fromLTRB(0, lowest([covers.chip, covers.buttons]) ?? headerFoot, map.width, footTop((_) => true));
   final left = covers.chip?.right ?? 0.0, right = covers.buttons?.left ?? map.width;
   final column = Rect.fromLTRB(left, headerFoot, right, footTop((b) => b.right + kRouteFitGap > left && b.left - kRouteFitGap < right));
-  return (strip.deflate(kRouteFitGap), column.deflate(kRouteFitGap));
+  return (within(strip), within(column));
 }
 
 /// The rectangle of a [map] on a phone that a route is fitted into: the one of the two free rectangles ([freeMapRects]) that

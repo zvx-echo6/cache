@@ -309,9 +309,11 @@ void main() {
       panel: Rect.fromLTRB(12, 513, 418, 932),
     );
     // The strip: the whole width under the chip and the buttons, above the scale. The column: between the chip and the
-    // buttons, from the header down to the credits (the scale is beside it, not under it). Each with the gap all round.
-    expect(freeMapRects(map, drive), (const Rect.fromLTRB(16, 248, 414, 414), const Rect.fromLTRB(208, 130, 354, 461)));
-    expect(routeFitRect(map: map, covers: drive, spanX: 3, spanY: 1), const Rect.fromLTRB(16, 248, 414, 414), reason: 'a wide route takes the strip');
+    // buttons, from the header down to the credits (the scale is beside it, not under it). Each less the gap beside a cover
+    // (16) and the wider room at a bare edge of the map (32: the strip's two sides).
+    expect((kRouteFitGap, kRouteFitBareEdge), (16.0, 32.0));
+    expect(freeMapRects(map, drive), (const Rect.fromLTRB(32, 248, 398, 414), const Rect.fromLTRB(208, 130, 354, 461)));
+    expect(routeFitRect(map: map, covers: drive, spanX: 3, spanY: 1), const Rect.fromLTRB(32, 248, 398, 414), reason: 'a wide route takes the strip');
     expect(routeFitRect(map: map, covers: drive, spanX: 1, spanY: 3), const Rect.fromLTRB(208, 130, 354, 461), reason: 'a tall route takes the column');
     // Off-road: the panel is taller, and the strip between the buttons and the scale has no room left (its top is under its
     // foot). Every route goes into the column, which still has its room.
@@ -323,18 +325,20 @@ void main() {
       credits: Rect.fromLTRB(12, 304, 335, 332),
       panel: Rect.fromLTRB(12, 340, 418, 932),
     );
-    expect(freeMapRects(map, offroad), (const Rect.fromLTRB(16, 248, 414, 241), const Rect.fromLTRB(208, 130, 354, 288)));
+    expect(freeMapRects(map, offroad), (const Rect.fromLTRB(32, 248, 398, 241), const Rect.fromLTRB(208, 130, 354, 288)));
     expect(routeFitRect(map: map, covers: offroad, spanX: 1, spanY: 3), const Rect.fromLTRB(208, 130, 354, 288));
     expect(routeFitRect(map: map, covers: offroad, spanX: 3, spanY: 1), const Rect.fromLTRB(208, 130, 354, 288));
-    // A piece that is not shown takes no room. No position yet (no chip): the column starts at the map's left edge, where the
-    // scale is under it, and the strip starts under the buttons.
+    // A piece that is not shown takes no room. No position yet (no chip): the column starts at the map's left edge (a bare
+    // edge now), where the scale is under it, and the strip starts under the buttons.
     const noChip = MapCovers(header: header, buttons: buttons, scale: Rect.fromLTRB(12, 430, 120, 471), credits: Rect.fromLTRB(12, 477, 335, 505), panel: Rect.fromLTRB(12, 513, 418, 932));
-    expect(freeMapRects(map, noChip), (const Rect.fromLTRB(16, 248, 414, 414), const Rect.fromLTRB(16, 130, 354, 414)));
-    // Neither chip nor buttons: both start under the header.
-    expect(freeMapRects(map, const MapCovers(header: header, panel: Rect.fromLTRB(12, 513, 418, 932))), (const Rect.fromLTRB(16, 130, 414, 497), const Rect.fromLTRB(16, 130, 414, 497)));
+    expect(freeMapRects(map, noChip), (const Rect.fromLTRB(32, 248, 398, 414), const Rect.fromLTRB(32, 130, 354, 414)));
+    // Neither chip nor buttons: both start under the header and run from one bare edge to the other.
+    expect(freeMapRects(map, const MapCovers(header: header, panel: Rect.fromLTRB(12, 513, 418, 932))), (const Rect.fromLTRB(32, 130, 398, 497), const Rect.fromLTRB(32, 130, 398, 497)));
     // No scale and no credits: down to the panel. Nothing at the foot: down to the map's foot.
     expect(freeMapRects(map, const MapCovers(header: header, chip: chip, buttons: buttons, panel: Rect.fromLTRB(12, 513, 418, 932))).$2, const Rect.fromLTRB(208, 130, 354, 497));
-    expect(freeMapRects(map, const MapCovers(header: header, chip: chip, buttons: buttons)), (const Rect.fromLTRB(16, 248, 414, 916), const Rect.fromLTRB(208, 130, 354, 916)));
+    expect(freeMapRects(map, const MapCovers(header: header, chip: chip, buttons: buttons)), (const Rect.fromLTRB(32, 248, 398, 900), const Rect.fromLTRB(208, 130, 354, 900)));
+    // Nothing over the map at all: the wider room on every side.
+    expect(freeMapRects(map, const MapCovers()), (const Rect.fromLTRB(32, 32, 398, 900), const Rect.fromLTRB(32, 32, 398, 900)));
     // Credits that do not reach across to the column are beside it too: it goes down to the panel.
     expect(freeMapRects(map, const MapCovers(header: header, chip: chip, buttons: buttons, scale: Rect.fromLTRB(12, 430, 120, 471), credits: Rect.fromLTRB(12, 477, 47, 505), panel: Rect.fromLTRB(12, 513, 418, 932))).$2,
         const Rect.fromLTRB(208, 130, 354, 497));
@@ -376,9 +380,9 @@ void main() {
       // The scale is the top of what covers the map's foot: under it the credits and the panel.
       final covered = map.height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
       expect(covered, greaterThan(420), reason: 'with Off-road chosen the panel covers more than the room the fit used to leave');
-      // No position, so no chip: nothing is on the left, and the route starts the gap in from the map's edge.
+      // No position, so no chip: nothing is on the left, a bare edge of the map, and the route keeps the wider room from it.
       expect(bottom, greaterThanOrEqualTo(covered), reason: 'the route\'s lower end is under the panel or the credits');
-      expect(_fitPad(fit, 11), kRouteFitGap);
+      expect(_fitPad(fit, 11), kRouteFitBareEdge);
       expect(_fitPad(fit, 13), greaterThanOrEqualTo(kRouteFitGap));
       expect(_fitPad(fit, 12) + bottom, lessThan(map.height), reason: 'the fit leaves the map no room');
     });
@@ -420,9 +424,11 @@ void main() {
           expect(box.top, lessThan(chip.bottom), reason: 'the tall route is not in the column');
           expect(box.height, greaterThan(over['the scale']!.top - findMe.bottom), reason: 'the column does not show the tall route larger than the strip would');
         } else {
-          // Under the chip and the buttons, wider than the column is.
+          // Under the chip and the buttons, wider than the column is, and the wider room in from the map's two bare edges.
           expect(box.top, greaterThanOrEqualTo(math.max(chip.bottom, findMe.bottom)));
           expect(box.width, greaterThan(layers.left - chip.right), reason: 'the wide route is not in the strip');
+          expect(box.left, closeTo(kRouteFitBareEdge, 0.01), reason: 'the route\'s west end is not the bare-edge room in from the screen\'s side');
+          expect(map.width - box.right, closeTo(kRouteFitBareEdge, 0.01), reason: 'the route\'s east end is not the bare-edge room in from the screen\'s side');
         }
       });
     });
