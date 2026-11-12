@@ -45,7 +45,7 @@ library-own | Library > Add to Library > Your own library: "From a file on this 
 log-editor | New Log notebook: name, "Add field" with a number field "Run time" (unit min) and a yes/no field, "Due again" and "Create"
 log-quick-add | The quick add form of the Generator test log with last values filled and "Save"
 map-measure | The map measuring: dashed line with three points, the running total bar, "Undo" and "Done"
-map-notebook-ring | The map ring after Save: the notebook ring with Places, Journal and log wedges and "More"
+map-notebook-ring | The map ring after Save: the notebook ring with five notebooks, most used first, and "More"
 maps-find-me | Maps with the user's position shown on the map of a national park, and the locate ("Find me") button
 maps-search | Maps: "Search places or coordinates" with a few results
 markdown-cheatsheet | The Markdown cheat sheet opened from "?" in an entry

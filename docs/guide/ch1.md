@@ -392,6 +392,8 @@ To fix it:
 
 The map has its own location controls.
 
+![The Maps screen](shot:maps-find-me)
+
 1. Open "Maps" and tap the locate button ("Find me").
 2. When Cache asks "Use your location?", tap "Continue".
 3. Allow it in your device's prompt.

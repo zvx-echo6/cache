@@ -1508,19 +1508,21 @@ void main() {
     m.r.maps.setFollow(FollowMode.free);
 
     // The ring, with a route shown (so it offers Add stop): the phone is where the drive begins again, the drive is asked for
-    // and the screen fits it into view, as in the directions picture. Then the notebook ring after Save.
+    // and the screen fits it into view. The map then shows what it shows in the directions picture, so these two pictures are
+    // drawn over that scene (if the map ever differs here, its picture no longer matches the scene and the test says so). Then
+    // the notebook ring after Save.
     m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
     await settle(tester);
     m.kit.movedTo(GuideCamera(lat: start.lat, lon: start.lon, zoom: 14));
     await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
     await holdMap(tester, m, GuideSample.ringSpot);
-    await mapShot(tester, m, 'map-ring', 'ring');
+    await mapShot(tester, m, 'map-ring', 'directions');
 
     RingMenu ring() => tester.widget<RingMenu>(find.byKey(const ValueKey('ring-menu')));
     ring().onPick(const RingItem(id: 'save', label: 'Save', icon: Icons.book_outlined));
     await settle(tester);
-    await mapShot(tester, m, 'map-notebook-ring', 'notebook-ring');
+    await mapShot(tester, m, 'map-notebook-ring', 'directions');
 
     // Measure: the route is put away, the map is moved to the place card's view, and three points are measured there.
     await tester.tapAt(const Offset(30, 200));
