@@ -523,6 +523,74 @@ class CarOverlayTest {
     }
 
     @Test
+    fun eachPieceIsShownAsSoonAsItsOwnDataArrives() {
+        // After Start the first guiding trip carries no route shape yet; the mini map's data comes a moment later and the
+        // climb's (the elevation) after that. Neither waits for the three-second step.
+        val bare = CarTrip.from(mapOf("phase" to "guiding", "units" to "imperial"))
+        val miniOnly = CarTrip.from(mapOf("phase" to "guiding", "units" to "imperial", "overview" to sampleOverview(), "palette" to palette("dark")))
+        assertEquals(0, CarOverlayView.pieces(bare))
+        assertEquals(CarOverlayView.PIECE_MINI_MAP, CarOverlayView.pieces(miniOnly))
+        assertEquals(CarOverlayView.PIECE_MINI_MAP or CarOverlayView.PIECE_CLIMB, CarOverlayView.pieces(trip("dark")))
+        assertEquals(CarOverlayView.PIECE_MINI_MAP, CarOverlayView.pieces(trip("dark").copy(arrived = true)))
+        assertEquals(CarOverlayView.PIECE_CLIMB, CarOverlayView.pieces(trip("dark", mini = false)))
+        assertEquals(0, CarOverlayView.pieces(CarTrip.from(mapOf("phase" to "previewing", "overview" to sampleOverview()))))
+
+        val v = overlayView()
+        v.setTrip(bare, dark = true, now = false)
+        assertTrue(shot(v).all { it == 0 })
+        v.setTrip(miniOnly, dark = true, now = false)
+        assertEquals(Pair(false, true), painted(v))
+        val before = shot(v)
+        v.setTrip(trip("dark"), dark = true, now = false)
+        assertEquals(Pair(true, true), painted(v))
+        // The mini map did not move or change when the climb arrived under it (down to the rounded bottom it had alone).
+        val after = shot(v)
+        val mini = layout(1280, 720, main, main).mini!!
+        for (y in mini.top.toInt() until mini.bottom.toInt() - 24) for (x in mini.left.toInt() until mini.right.toInt()) {
+            if (before[y * 1280 + x] != after[y * 1280 + x]) throw AssertionError("the mini map changed at $x, $y")
+        }
+        // New figures for pieces already showing still wait for their step.
+        v.setTrip(CarTrip.from(mapOf(
+            "phase" to "guiding", "units" to "imperial", "climb" to sampleClimb(), "palette" to palette("dark"),
+            "overview" to (sampleOverview() + ("drivenFraction" to 0.8)),
+        )), dark = true, now = false)
+        assertTrue(shot(v).contentEquals(after))
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.MIN_STEP_MS))
+        assertFalse(shot(v).contentEquals(after))
+    }
+
+    @Test
+    fun theOneLineCardsShapeKeepsOffTheCardsCornerAndIsALineWithoutAFill() {
+        val r = layout(1280, 500, wide, wide).climb!!
+        val withShape = drawn(1280, 500, wide, trip("light"))
+        // The same card with no grade to show has no shape (the figure alone, which starts 16 from the edge).
+        val noShape = drawn(1280, 500, wide, CarTrip.from(mapOf(
+            "phase" to "guiding", "units" to "imperial", "overview" to sampleOverview(), "climb" to (sampleClimb() + ("gradePct" to null)),
+        )))
+        // The card's first 16 px, its rounded corners among them, hold nothing of the shape: the same pixels with and without.
+        for (x in r.left.toInt() until r.left.toInt() + 16) for (y in r.top.toInt() until r.bottom.toInt()) {
+            if (withShape.getPixel(x, y) != noShape.getPixel(x, y)) throw AssertionError("the shape reaches the card's edge at $x, $y")
+        }
+        assertTrue(CarOverlayPainter.LINE_SHAPE_INSET - 6f >= CarOverlayPainter.HOST_CARD_RADIUS)
+        // The shape is there, from 28 px in: its line in the route's color.
+        val x0 = r.left.toInt() + 28
+        assertTrue((x0 until x0 + 84).any { x -> (r.top.toInt() until r.bottom.toInt()).any { y -> withShape.getPixel(x, y) == CarOverlayPainter.ON_DARK_ROUTE } })
+        // No fill under the line: just above the shape's bottom edge, right of the start dot, is the plain card. (With the
+        // fill, the same spot is not.)
+        val spotX = x0 + 12
+        val spotY = r.centerY().toInt() + 25
+        assertFalse(CarOverlayPainter.LINE_SHAPE_FILLED)
+        assertEquals(CarOverlayPainter.HOST_CARD_FILL, withShape.getPixel(spotX, spotY))
+        val filled = Bitmap.createBitmap(1280, 500, Bitmap.Config.ARGB_8888)
+        CarOverlayPainter.draw(Canvas(filled), trip("light"), width = 1280, height = 500, visible = wide, density = 1f, stable = wide, lineShapeFilled = true)
+        assertFalse(filled.getPixel(spotX, spotY) == CarOverlayPainter.HOST_CARD_FILL)
+        // The box's own shape (1280 x 720) keeps its fill.
+        val box = Bitmap.createBitmap(196, 52, Bitmap.Config.ARGB_8888)
+        CarOverlayPainter.drawShape(Canvas(box), RectF(0f, 0f, 196f, 52f), trip("light").climb!!, CarOverlayPainter.HOST_STYLE, 1f)
+        assertFalse(box.getPixel(30, 50) == 0)
+    }
+
+    @Test
     fun theClimbIsNotDrawnOnArrival() {
         // Arrived, and the trip still carries a climb: what is painted is exactly the mini map alone, in both layouts.
         for ((w, h, area) in listOf(Triple(1280, 720, main), Triple(800, 480, small))) {
@@ -636,10 +704,11 @@ class CarOverlayTest {
     @Test
     fun theOneLineCardDropsTheShapeFirstThenTheDistance() {
         val f = CarOverlayPainter.LineForm.FIGURE
-        // A figure 100 wide, "11% in 23.0 mi" 160 wide, "11%" 45 wide, gaps of 12, a shape of at least 60.
+        // A figure 100 wide, "11% in 23.0 mi" 160 wide, "11%" 45 wide, gaps of 12, a shape of at least 60 that starts 12
+        // further in than the text would.
         fun form(avail: Float, gradeDistance: Float? = 160f, grade: Float? = 45f) = CarOverlayPainter.lineForm(avail, 100f, gradeDistance, grade, 1f)
-        assertEquals(CarOverlayPainter.LineForm.SHAPE_FIGURE_GRADE_DISTANCE, form(344f))
-        assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE_DISTANCE, form(343f))
+        assertEquals(CarOverlayPainter.LineForm.SHAPE_FIGURE_GRADE_DISTANCE, form(356f))
+        assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE_DISTANCE, form(355f))
         assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE_DISTANCE, form(272f))
         assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE, form(271f))
         assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE, form(157f))
@@ -647,8 +716,8 @@ class CarOverlayTest {
         // No grade to show: the figure alone.
         assertEquals(f, form(400f, gradeDistance = null, grade = null))
         // Twice the density: twice the gaps and the shape.
-        assertEquals(CarOverlayPainter.LineForm.SHAPE_FIGURE_GRADE_DISTANCE, CarOverlayPainter.lineForm(688f, 200f, 320f, 90f, 2f))
-        assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE_DISTANCE, CarOverlayPainter.lineForm(687f, 200f, 320f, 90f, 2f))
+        assertEquals(CarOverlayPainter.LineForm.SHAPE_FIGURE_GRADE_DISTANCE, CarOverlayPainter.lineForm(712f, 200f, 320f, 90f, 2f))
+        assertEquals(CarOverlayPainter.LineForm.FIGURE_GRADE_DISTANCE, CarOverlayPainter.lineForm(711f, 200f, 320f, 90f, 2f))
         // The real texts at the real sizes always leave at least the figure and the grade on the narrowest host card (320).
         val fp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.LINE_FIGURE_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 700, false) }
         val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = CarOverlayPainter.LINE_TEXT_SIZE; typeface = Typeface.create(Typeface.DEFAULT, 400, false) }
@@ -728,6 +797,41 @@ class CarOverlayTest {
     }
 
     // ---- the main map's grade badge -------------------------------------------------------------------------------------
+
+    @Test
+    fun theGradeBadgeMovesUpOffTheDestinationAndTheRoutesEnd() {
+        // A badge 80 wide (and 36 high) at its point; the destination marker is 12 in radius and wants 4 of free map.
+        fun off(steep: PointF, vararg ends: PointF, d: Float = 1f, w: Float = 80f) = CarOverlayPainter.badgeOffset(steep, ends.toList(), w, d)
+        fun covers(steep: PointF, o: PointF, end: PointF, d: Float = 1f, w: Float = 80f): Boolean {
+            val badge = RectF(steep.x + o.x - w / 2, steep.y + o.y - 18f * d, steep.x + o.x + w / 2, steep.y + o.y + 18f * d)
+            return RectF.intersects(badge, RectF(end.x - 12f * d, end.y - 12f * d, end.x + 12f * d, end.y + 12f * d))
+        }
+        // The steepest spot at the destination (the route overview's case): the badge was on the dot; it goes straight up,
+        // 16 + 18 px, and no longer touches it.
+        val p = PointF(600f, 300f)
+        assertTrue(covers(p, PointF(0f, 0f), p))
+        val up = off(p, PointF(600f, 300f))
+        assertEquals(0f, up.x, 0f)
+        assertEquals(-34f, up.y, 0.01f)
+        assertFalse(covers(p, up, p))
+        // Far from the destination and the route's end: where it was.
+        assertEquals(0f, off(p, PointF(900f, 300f), PointF(600f, 500f)).y, 0f)
+        assertEquals(0f, off(p).y, 0f)
+        // Just clear sideways (40 + 16) and just clear below (18 + 16): not moved. One pixel nearer: moved.
+        assertEquals(0f, off(p, PointF(656f, 300f)).y, 0f)
+        assertFalse(off(p, PointF(655f, 300f)).y == 0f)
+        assertEquals(0f, off(p, PointF(600f, 334f)).y, 0f)
+        assertFalse(off(p, PointF(600f, 333f)).y == 0f)
+        // The destination marker and the route's end a little apart, one above the other: clear of both.
+        val dest = PointF(610f, 310f)
+        val end = PointF(596f, 270f)
+        val both = off(p, dest, end)
+        assertFalse(covers(p, both, dest) || covers(p, both, end))
+        assertEquals(270f - 16f - 18f - 300f, both.y, 0.01f)
+        // Twice the density: twice the sizes.
+        val up2 = off(PointF(1200f, 600f), PointF(1200f, 600f), d = 2f, w = 160f)
+        assertEquals(-68f, up2.y, 0.01f)
+    }
 
     @Test
     fun theGradeOnTheMapBadgeIsNoSmallerThanTheHostsSmallestLineAndThePillHoldsIt() {
@@ -1124,7 +1228,10 @@ class CarOverlayTest {
     /** A picture of the overlay on a flat map with stand-ins for the host's parts (plain shapes at the measured places, in
      * the host's card colors; not the host's drawing) and the vehicle where the camera puts it. The pieces themselves are
      * the real painter. Written as PNG for the owner to look at; the CI workflow uploads the folder. */
-    private fun picture(sc: Screen, buttons: Boolean, climb: Boolean, mini: Boolean = true): Bitmap {
+    private fun picture(
+        sc: Screen, buttons: Boolean, climb: Boolean, mini: Boolean = true,
+        shapeFilled: Boolean = CarOverlayPainter.LINE_SHAPE_FILLED, shapeInset: Float = CarOverlayPainter.LINE_SHAPE_INSET,
+    ): Bitmap {
         val bmp = Bitmap.createBitmap(sc.w, sc.h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         canvas.drawColor(0xFFF7F4EE.toInt())
@@ -1135,7 +1242,10 @@ class CarOverlayTest {
         CarOverlayPainter.drawArrow(canvas, v.x, v.y, 0xFF1F6FA8.toInt(), 0xFFFFFFFF.toInt(), 1f)
         // Cache's pieces (under the host's parts, as on the car).
         val t = trip("light", climb = climb, mini = mini)
-        CarOverlayPainter.draw(canvas, t, width = sc.w, height = sc.h, visible = if (buttons) sc.shown else sc.hidden, density = 1f, stable = sc.shown)
+        CarOverlayPainter.draw(
+            canvas, t, width = sc.w, height = sc.h, visible = if (buttons) sc.shown else sc.hidden, density = 1f, stable = sc.shown,
+            lineShapeFilled = shapeFilled, lineShapeInset = shapeInset,
+        )
         // The host's parts.
         val card = fill(CarOverlayPainter.HOST_CARD_FILL)
         val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = CarOverlayPainter.HOST_CARD_EDGE; style = Paint.Style.STROKE; strokeWidth = 2f }
@@ -1170,6 +1280,12 @@ class CarOverlayTest {
             save(picture(sc, buttons = false, climb = true), "${sc.name}-buttons-hidden.png")
             save(picture(sc, buttons = true, climb = false), "${sc.name}-no-climb.png")
             save(picture(sc, buttons = true, climb = true, mini = false), "${sc.name}-mini-map-off.png")
+            // The one-line card's shape, the two ways it was tidied (the first is what the car draws) and as it was.
+            if (sc.name.startsWith("1280x500")) {
+                save(picture(sc, buttons = true, climb = true, shapeFilled = false, shapeInset = 28f), "${sc.name}-shape-line-only.png")
+                save(picture(sc, buttons = true, climb = true, shapeFilled = true, shapeInset = 28f), "${sc.name}-shape-filled-more-padding.png")
+                save(picture(sc, buttons = true, climb = true, shapeFilled = true, shapeInset = 16f), "${sc.name}-shape-as-it-was.png")
+            }
             // The picture really holds the pieces: the card fill at a spot inside each.
             val p = picture(sc, buttons = true, climb = true)
             for (piece in listOfNotNull(l.climb, l.mini)) {

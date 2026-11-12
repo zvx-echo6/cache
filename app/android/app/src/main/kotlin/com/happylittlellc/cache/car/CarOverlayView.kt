@@ -12,7 +12,8 @@ import android.view.View
  * The View that lays Cache's pieces (the route mini map and the climb) over the car map (see CarMapRenderer's header). It paints
  * [CarOverlayPainter] and does nothing else: no touch, no animation. New figures are shown in steps, at most once every
  * [MIN_STEP_MS], so the pieces never flicker or tween while the car moves. The route overview screen hides them, and they
- * are there only while the trip is guiding: when it stops they go at once, without waiting for the next step.
+ * are there only while the trip is guiding: when it stops they go at once, without waiting for the next step. A piece
+ * also appears at once when its data first arrives; only the figures of a piece already showing wait for the step.
  */
 class CarOverlayView(context: Context, private val density: Float) : View(context) {
     private val main = Handler(Looper.getMainLooper())
@@ -71,7 +72,10 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
             return
         }
         val elapsed = SystemClock.elapsedRealtime() - lastStepAt
-        if (now || mode || elapsed >= MIN_STEP_MS) {
+        // A piece whose data has just arrived is shown at once, not at the next step: after Start the first guiding trip
+        // carries no route shape yet, and holding the one that does for a step left the pieces out for about three seconds.
+        val appears = pieces(t) and pieces(shown).inv() != 0
+        if (now || mode || appears || elapsed >= MIN_STEP_MS) {
             main.removeCallbacks(flush)
             pending = t
             flush.run()
@@ -98,5 +102,16 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     companion object {
         /** The most often the pieces change. */
         const val MIN_STEP_MS = 3000L
+
+        const val PIECE_MINI_MAP = 1
+        const val PIECE_CLIMB = 2
+
+        /** Which pieces [t] has the data and the switches for (as CarOverlayPainter.draw decides), as bits. */
+        fun pieces(t: CarTrip): Int {
+            if (!t.guiding) return 0
+            val mini = if (t.overlay.miniMap && t.overview != null) PIECE_MINI_MAP else 0
+            val climb = if (t.overlay.climb && t.climb != null && !t.arrived) PIECE_CLIMB else 0
+            return mini or climb
+        }
     }
 }
