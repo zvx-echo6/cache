@@ -7,9 +7,7 @@ import 'package:cache/car/phone_drive.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
-import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/drive_screen.dart';
-import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
@@ -19,7 +17,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'location_service_test.dart' show FakeSource;
-import 'nav_fakes.dart';
 import 'navigation_camera_test.dart' show CameraController, NoSurface;
 import 'support/drive_rig.dart';
 import 'support/lane_rig.dart' show laneJson;
@@ -269,7 +266,7 @@ void main() {
       expect(find.text('Merge onto Route 9'), findsOneWidget);
       expect(find.text('You have arrived at your destination'), findsOneWidget);
       // The stop sits between the turn before it and the turn after it.
-      final y = (String t) => tester.getTopLeft(find.text(t)).dy;
+      double y(String t) => tester.getTopLeft(find.text(t)).dy;
       expect(y('Turn right onto Birch Hollow Road') < y('Stop 1: Corner Market'), isTrue);
       expect(y('Stop 1: Corner Market') < y('Merge onto Route 9'), isTrue);
       // The bottom bar is the phone's own.
