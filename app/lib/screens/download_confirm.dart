@@ -72,6 +72,10 @@ Future<DownloadChoice> confirmDownload(
 @visibleForTesting
 Space Function(String dir) downloadSpaceOf = Space.of;
 
+/// The storage of [dir] as the download pop-up reads it ([downloadSpaceOf]): a check made outside the pop-up (a region's, before
+/// any of its parts starts) reads the same storage, so the two never disagree.
+Space downloadSpace(String dir) => downloadSpaceOf(dir);
+
 /// [confirmDownload] with the storage of [dir] and the mobile-data rule read now.
 Future<DownloadChoice> askToDownload(
   BuildContext context, {

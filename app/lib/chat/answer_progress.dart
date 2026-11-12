@@ -18,6 +18,7 @@ class AnswerProgress extends StatefulWidget {
     this.text = '',
     this.failed = false,
     this.queuePosition,
+    this.dropCitations = false,
   });
 
   final TurnPhase phase;
@@ -34,6 +35,9 @@ class AnswerProgress extends StatefulWidget {
 
   /// How many answers are ahead of this one on the server (1 is next); null when it runs or does not wait.
   final int? queuePosition;
+
+  /// The answer cites nothing (it is done, with no sources): its citation marks are not shown.
+  final bool dropCitations;
 
   @override
   State<AnswerProgress> createState() => _AnswerProgressState();
@@ -162,7 +166,7 @@ class _AnswerProgressState extends State<AnswerProgress> {
               ],
             ),
           ),
-        if (visible.isNotEmpty) AnswerMarkdown(visible),
+        if (visible.isNotEmpty) AnswerMarkdown(visible, dropCitations: widget.dropCitations),
       ],
     );
   }

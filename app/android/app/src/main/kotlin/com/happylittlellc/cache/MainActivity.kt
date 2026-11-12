@@ -28,10 +28,16 @@ class MainActivity : FlutterActivity() {
     // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
     // build nothing is read and the channel answers zeros.
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+    private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
+    private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
+    private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+        if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
+        if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
+        if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -163,6 +169,12 @@ class MainActivity : FlutterActivity() {
                         val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
                         val mbps = benchPrereadMbps
                         if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        val days = benchDateOffsetDays
+                        if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
+                        val ub = benchUbatch
+                        if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
+                        val et = benchEmbedThreads
+                        if (BuildConfig.TEST_APK && et != null) out["cache_embed_threads"] = et
                         result.success(out)
                     }
                     else -> result.notImplemented()
@@ -202,9 +214,13 @@ class MainActivity : FlutterActivity() {
                     android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
                     android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
                     android.app.ApplicationExitInfo.REASON_OTHER -> "other"
+                    // numbers from the ApplicationExitInfo reference (these two are API 34; the app's compileSdk may predate them)
+                    8 -> "permission changed"
+                    15 -> "app changed"
+                    16 -> "app updated"
                     else -> "reason ${e.reason}"
                 }
-                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
+                mapOf("time" to e.timestamp, "reason" to reason, "code" to e.reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
             }
         } catch (e: Exception) {
             emptyList()

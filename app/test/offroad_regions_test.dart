@@ -91,16 +91,99 @@ void main() {
       expect(() => parseOffroadCatalogue('{"component":"routing"}'), throwsFormatException);
     });
 
-    test('the smallest pack that holds the region; across a border, every pack it meets; none near, none', () {
+    test('a box alone (no state known): the pack that holds it; across a border, every pack it meets; none near, none', () {
       List<String> ids(GeoBounds b) => [for (final p in packsCovering(packs, b)) p.id];
-      // Twin Falls County: inside Idaho's box, and inside Nevada's and Utah's (their boxes reach 42.5): the smallest holds it
+      // Twin Falls County: Idaho's box holds all of it; Utah's and Nevada's reach only its south (they end at 42.5)
       expect(ids(const GeoBounds(south: 41.99, west: -115.04, north: 42.92, east: -114.0)), ['idaho']);
-      // Utah and Nevada both hold this box; Utah's is smaller
+      // Utah's and Nevada's boxes both hold this box in western Utah: it lies deeper in Utah's (Nevada's edge is 0.2 degrees off)
       expect(ids(const GeoBounds(south: 40.0, west: -114.0, north: 41.0, east: -113.5)), ['utah']);
       // the Pacific Northwest: no pack holds it, so the packs it meets
       expect(ids(const GeoBounds(south: 42.0, west: -125.0, north: 49.0, east: -111.0)), ['idaho', 'utah', 'nevada']);
       expect(ids(const GeoBounds(south: 25.0, west: -82.0, north: 31.0, east: -80.0)), isEmpty);
     });
+
+    test('a county on a state line gets its own state\'s pack, not the neighbour whose box also holds it', () {
+      // The published boxes of two neighbouring states. Each is the state plus about 50 km, so Oregon's reaches into Idaho.
+      final line = parseOffroadCatalogue(_catalogue([
+        _pack('idaho', 'Idaho', [-118.0, 41.5, -110.3, 49.5], 300 << 20),
+        _pack('oregon', 'Oregon', [-125.3, 41.5, -115.8, 46.8], 250 << 20),
+      ]));
+      // An Idaho county by the Oregon line. Both boxes hold all of it and Oregon's is the smaller box, so the smallest box that
+      // held a region gave it Oregon's pack (the region list was sized by the same rule and still names Oregon's for it).
+      const county = GeoBounds(south: 43.11, west: -116.51, north: 43.81, east: -115.97);
+      const idaho = RegionRecord(id: 'us-id', name: 'Idaho', kind: 'region', country: 'US');
+      const oregon = RegionRecord(id: 'us-or', name: 'Oregon', kind: 'region', country: 'US');
+      List<String> ids(GeoBounds b, [List<RegionRecord> states = const []]) => [for (final p in packsCovering(line, b, states: states)) p.id];
+      expect(ids(county, [idaho]), ['idaho'], reason: 'the state the region list says it is in');
+      expect(ids(county), ['idaho'], reason: 'with no state known, the box it lies deepest in');
+      // a county on the Oregon side of the line, in both boxes too, gets Oregon's
+      const across = GeoBounds(south: 43.6, west: -117.6, north: 44.3, east: -117.0);
+      expect(ids(across, [oregon]), ['oregon']);
+      expect(ids(across), ['oregon']);
+      // a metro area across the line is in both states: one pack each
+      expect(ids(const GeoBounds(south: 43.6, west: -117.3, north: 44.2, east: -116.6), [idaho, oregon]), ['idaho', 'oregon']);
+      // a state with no pack of its own: by the boxes
+      const other = RegionRecord(id: 'us-xx', name: 'Elsewhere', kind: 'region', country: 'US');
+      expect(ids(county, [other]), ['idaho']);
+      // a state of the same name in another country is not this pack's
+      const abroad = RegionRecord(id: 'xx-id', name: 'Idaho', kind: 'region', country: 'XX');
+      expect(ids(across, [abroad]), ['oregon']);
+    });
+
+    test('the region list says which state a region is in', () {
+      final us = RegionShard.parse('us', File('test/fixtures/regions_us.json').readAsStringSync()).records;
+      List<String> states(String id) => [for (final r in statesIn(us, id)) r.id];
+      expect(states('us-id'), ['us-id'], reason: 'a state is its own');
+      expect(states('us-id-twin-falls-county'), ['us-id'], reason: 'a county, through its parents');
+      expect(states('us-id-twin-falls'), ['us-id'], reason: 'a city, through its county');
+      expect(states('us-metro-twin-falls-id'), ['us-id']);
+      expect(states('us-id-magic-valley'), ['us-id']);
+      // a region larger than a state is in none: its packs go by their boxes, as they did
+      expect(states('us-pacific-northwest'), isEmpty);
+      expect(states('us-intermountain-west'), isEmpty);
+      expect(states('us'), isEmpty);
+      expect(states('nowhere'), isEmpty);
+    });
+  });
+
+  testWidgets('a region near a state line is planned with its own state\'s pack, not the smaller neighbouring box that also holds it', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    // A neighbouring state's pack whose box (the state plus its margin) also holds Twin Falls County and is smaller than Idaho's:
+    // what Oregon's published box is to the Idaho counties on its line.
+    final neighbour = _pack('utah', 'Utah', [-115.2, 36.5, -108.3, 43.0], 200 << 20);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho, neighbour]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: _Packs(),
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    // The case is the one that went wrong: both boxes hold the county, and the neighbour's is the smaller.
+    final both = parseOffroadCatalogue(_catalogue([_idaho, neighbour]));
+    final b = county.bounds!;
+    expect(both.every((p) => p.bbox[0] <= b.west && p.bbox[1] <= b.south && p.bbox[2] >= b.east && p.bbox[3] >= b.north), isTrue);
+    double area(OffroadPack p) => (p.bbox[2] - p.bbox[0]) * (p.bbox[3] - p.bbox[1]);
+    expect(area(both.last), lessThan(area(both.first)), reason: 'the smallest box that holds it is the neighbour\'s: what was picked');
+    final states = (await tester.runAsync(() => regions.statesOf(county)))!;
+    expect(states.map((r) => r.id), ['us-id'], reason: 'the region list says the county is in Idaho');
+    final plan = (await tester.runAsync(() => regions.plan(county)))!;
+    expect(plan.offroad!.packs.map((p) => p.pack.id), ['idaho']);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
   });
 
   testWidgets('a region download includes its off-road pack (checked) and terrain heights; the row is there only when a pack covers it', (tester) async {

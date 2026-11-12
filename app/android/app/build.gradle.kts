@@ -102,8 +102,9 @@ flutter {
 }
 
 // Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
-// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. The release on Play stays out of
-// Android Auto until it ships together with CarPlay (owner, 2026-11-08); the test APK and the car tests turn it on.
+// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. Play builds leave Android Auto out
+// unless the store workflow's android_auto input is on (.github/workflows/android-play.yml), which is for closed testing only;
+// the test APK and the car tests turn it on.
 val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
 if (androidAuto) {
     androidComponents {

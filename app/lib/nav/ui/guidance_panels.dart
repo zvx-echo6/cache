@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../guidance.dart';
 import '../nav_state.dart';
 import '../units.dart';
+import 'lane_strip.dart';
 
 IconData iconForTurn(TurnIcon t) => switch (t) {
       TurnIcon.start => Icons.navigation,
@@ -42,6 +43,7 @@ class GuidanceBanner extends StatelessWidget {
     final k = context.t;
     final p = nav.progress;
     Widget body;
+    List<Lane> lanes = const [];
     if (nav.arrived) {
       body = _row(context, icon: Icons.flag, big: 'You have arrived', small: nav.route?.destinationName ?? '');
     } else if (nav.rerouting) {
@@ -56,6 +58,9 @@ class GuidanceBanner extends StatelessWidget {
         body = _row(context, icon: Icons.flag, big: 'Arriving', small: nav.route?.destinationName ?? '');
       } else {
         final icon = turnIconFor(next.type, offroad: next.isOffroad);
+        // The lanes show once the turn is as close as the first voice prompt (800 m by car), read from the engine for the way of travel.
+        final far = nav.farStageM;
+        if (next.lanes.isNotEmpty && !next.isOffroad && !next.isArrival && far != null && next.distanceM <= far) lanes = next.lanes;
         body = _row(
           context,
           icon: iconForTurn(icon),
@@ -75,7 +80,7 @@ class GuidanceBanner extends StatelessWidget {
       // Compact, so more of the map shows: how far and the turn on one line. The type stays large enough to read from the
       // dashboard and grows with the phone's text size. Solid surface and text colours, so it holds its contrast in sunlight.
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-      child: body,
+      child: lanes.isEmpty ? body : Column(mainAxisSize: MainAxisSize.min, children: [body, const SizedBox(height: 6), LaneStrip(lanes: lanes)]),
     );
   }
 
