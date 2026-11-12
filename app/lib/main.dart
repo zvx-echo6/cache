@@ -311,7 +311,7 @@ class _CacheAppState extends State<CacheApp> {
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
       notShared: const {'library': kZimNotShared, 'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
-      list: () => BrowseScreen(browse: browse, active: true, layout: layout),
+      list: () => BrowseScreen.inHub(browse: browse, active: true, layout: layout, hub: hub),
       items: () => libraryItems(sources, libraries),
       remoteItem: libraryRemoteItem,
       alongside: libraryAlongside,
