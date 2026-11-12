@@ -324,9 +324,10 @@ object CarOverlayPainter {
 
     // ---- the screen's class: whether the two extras are drawn at all -------------------------------------------------
 
-    /** The most of the free map the two extras may take on a screen that always carries them (the owner's "about a
-     * quarter", 2026-11-12). Above it the screen is in-between. Change it here and nowhere else. */
-    const val EXTRAS_BIG_MAX_SHARE = 0.25f
+    /** The most of the free map the two extras may take on a screen that always carries them: at or below 15 % the screen
+     * is big, above it in-between (set 2026-11-12 so that the wide, short screens are the in-between ones: 1280 x 500
+     * measures 16.9 %, 1280 x 720 measures 11.7 %). Change it here and nowhere else. */
+    const val EXTRAS_BIG_MAX_SHARE = 0.15f
 
     /** What [extrasMeasure] found: the class, whether both extras fit at full size, the pixels they take and the pixels of
      * free map. */

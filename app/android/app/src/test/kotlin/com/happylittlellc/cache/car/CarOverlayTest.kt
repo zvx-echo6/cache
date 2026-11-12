@@ -649,12 +649,12 @@ class CarOverlayTest {
     private fun idle(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(ms))
 
     /** A 1280 x 720 car whose stable area is narrower than the usual one: the one box sits where it always does, but takes
-     * more than a quarter of the free map. */
+     * more of the free map than a big screen's extras may (26.8 %). */
     private val inBetween = Rect(505, 91, 650, 697)
 
     @Test
     fun theScreensClassIsMeasuredFromTheRoomTheCarReports() {
-        assertEquals(0.25f, CarOverlayPainter.EXTRAS_BIG_MAX_SHARE, 0f)
+        assertEquals(0.15f, CarOverlayPainter.EXTRAS_BIG_MAX_SHARE, 0f)
         fun m(w: Int, h: Int, stable: Rect, visible: Rect = stable, d: Float = 1f) = CarOverlayPainter.extrasMeasure(w, h, visible, d, stable)
         // 1280 x 720: the whole box fits; it takes 66,560 px of 568,032 px of free map (the stable area and the gap in the
         // host's left column), about 12 %: big.
@@ -666,10 +666,12 @@ class CarOverlayTest {
         assertEquals(0.117f, big.share, 0.001f)
         // The host's buttons hiding widens the visible area only: the same measure, the same class, for the whole drive.
         assertEquals(big, m(1280, 720, main, visible = mainHidden))
-        // 1280 x 500 (wide and short): the one-line climb card and the full-size tile fit, about 17 %: big.
+        // 1280 x 500 (wide and short): the one-line climb card and the full-size tile fit, and take about 17 %: in-between.
         val short = m(1280, 500, wide)
-        assertEquals(CarExtrasClass.BIG, short.cls)
+        assertEquals(CarExtrasClass.IN_BETWEEN, short.cls)
+        assertTrue(short.fits)
         assertEquals(56_400f, short.extrasPx, 1f)
+        assertEquals(333_264f, short.freePx, 1f)
         assertEquals(0.169f, short.share, 0.001f)
         // 800 x 480: only the smaller tile clears the vehicle, so the two do not fit at full size: small, whatever the share.
         val little = m(800, 480, small)
@@ -678,19 +680,20 @@ class CarOverlayTest {
         // No left column at all (the 410 px pane, or another of the host's screens over guidance): no room for the climb: small.
         assertEquals(CarExtrasClass.SMALL, m(410, 700, Rect(12, 84, 398, 613)).cls)
         assertEquals(CarExtrasClass.SMALL, m(1280, 720, Rect(92, 91, 1177, 697)).cls)
-        // The boundary, both sides: the same box in a stable area that ends at x 680 takes 24.9 % (big), at 678 it takes
-        // 25.1 % (in-between).
-        val under = m(1280, 720, Rect(505, 91, 680, 697))
-        val over = m(1280, 720, Rect(505, 91, 678, 697))
+        // The boundary at 15 %, both sides: the same box in a stable area that ends at x 974 takes 14.96 % (big), at 970 it
+        // takes 15.04 % (in-between).
+        val under = m(1280, 720, Rect(505, 91, 974, 697))
+        val over = m(1280, 720, Rect(505, 91, 970, 697))
         assertTrue(under.fits && over.fits)
-        assertTrue("${under.share}", under.share < 0.25f && under.share > 0.249f)
-        assertTrue("${over.share}", over.share > 0.25f && over.share < 0.251f)
+        assertTrue("${under.share}", under.share < 0.15f && under.share > 0.149f)
+        assertTrue("${over.share}", over.share > 0.15f && over.share < 0.151f)
         assertEquals(CarExtrasClass.BIG, under.cls)
         assertEquals(CarExtrasClass.IN_BETWEEN, over.cls)
         assertEquals(CarExtrasClass.IN_BETWEEN, m(1280, 720, inBetween).cls)
-        // The rule on its two figures: exactly a quarter is still big; fitting comes first.
-        assertEquals(CarExtrasClass.BIG, CarOverlayPainter.extrasClass(true, 25f, 100f))
-        assertEquals(CarExtrasClass.IN_BETWEEN, CarOverlayPainter.extrasClass(true, 25.1f, 100f))
+        // The rule on its two figures: exactly 15 % is still big, just above it is in-between; fitting comes first.
+        assertEquals(CarExtrasClass.BIG, CarOverlayPainter.extrasClass(true, 15f, 100f))
+        assertEquals(CarExtrasClass.IN_BETWEEN, CarOverlayPainter.extrasClass(true, 15.1f, 100f))
+        assertEquals(CarExtrasClass.BIG, CarOverlayPainter.extrasClass(true, 14.9f, 100f))
         assertEquals(CarExtrasClass.SMALL, CarOverlayPainter.extrasClass(false, 1f, 100f))
         assertEquals(CarExtrasClass.SMALL, CarOverlayPainter.extrasClass(true, 1f, 0f))
         // Twice the density on twice the pixels is the same screen: the same class and share.
