@@ -439,7 +439,7 @@ class _OffroadNote extends StatelessWidget {
     final k = context.t;
     final t = route.totals;
     final parts = <String>[
-      'Part of this route has no road: ${fmt.distance(t.offroadM)} over open ground, shown dashed.',
+      'Part of this route is off-road: ${fmt.distance(t.offroadM)}, shown dashed.',
       if (t.ascentM > 0 || t.descentM > 0) 'Climb ${fmt.height(t.ascentM)}, descent ${fmt.height(t.descentM)}.',
     ];
     return Padding(

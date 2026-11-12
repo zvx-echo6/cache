@@ -309,7 +309,15 @@ void main() {
         expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
         expect(find.textContaining('off-road'), findsWidgets);
         expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
-        expect(find.textContaining('shown dashed'), findsOneWidget);
+        // The note says "off-road" (a part that follows a trail is off-road too, not "open ground"), then the climb and descent.
+        final totals = nav.route!.totals;
+        expect(
+          tester.widget<Text>(find.byKey(const ValueKey('offroad-note'))).data,
+          'Part of this route is off-road: ${fmt.distance(totals.offroadM)}, shown dashed. Climb ${fmt.height(totals.ascentM)}, descent ${fmt.height(totals.descentM)}.',
+        );
+        expect(fmt.distance(totals.offroadM), '3.8 mi');
+        expect(find.textContaining('no road'), findsNothing);
+        expect(find.textContaining('open ground'), findsNothing);
         expect(find.text('Start'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('route-card-1')));
         await tester.pump();
