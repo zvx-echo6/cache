@@ -26,7 +26,7 @@ import com.happylittlellc.cache.BuildConfig
 object SharedEngine {
     const val ID = "cache_main"
 
-    private val life = EngineLife<FlutterEngine>(make = { start(it) }, screenGone = { sayNoScreen(it) })
+    private val life = EngineLife<FlutterEngine>(make = { start(it) })
 
     /** The engine for a phone screen: made and started on first use. Main thread only. */
     fun obtain(context: Context): FlutterEngine = life.obtain(context)
@@ -53,18 +53,6 @@ object SharedEngine {
     }
 
     /**
-     * Tells the running app that nothing shows it any more, as an activity that goes away does (inactive, paused, detached):
-     * the app then goes to the back as it does when the phone screen is closed (index work stops, the models are let go, the
-     * mark that says Cache is open is taken away).
-     */
-    private fun sayNoScreen(engine: FlutterEngine) {
-        val lifecycle = engine.lifecycleChannel
-        lifecycle.appIsInactive()
-        lifecycle.appIsPaused()
-        lifecycle.appIsDetached()
-    }
-
-    /**
      * What this build was made with, on the `cache/build` channel (lib/car/car_support.dart: Settings shows its Car group only
      * when androidAuto is true). Dart asks once, at start, so the answer is set on the engine as it is made and needs no
      * activity: when the car starts the app there is none, and the question used to go unanswered.
@@ -83,17 +71,18 @@ object SharedEngine {
  * The life of the app's engine: made once, by whoever needs it first, and kept until the process ends. Nothing here destroys
  * it or lets go of it.
  *
- * [make] makes and starts the engine. [screenGone] tells the running app that nothing shows it any more. A phone screen says
- * that itself as it closes (Flutter's activity does), so it is only needed for the one case with no phone screen at all: the
- * car started Cache with the phone app closed, and the car has left. Without it the app would go on as if it were open (it
- * takes a start with no word from a screen as being in front). It is said once: after it the app knows it has no screen, and
- * only a phone screen changes that.
+ * [make] makes and starts the engine; the tests give a stand-in (a real engine needs Flutter's native library).
  *
- * The tests give stand-ins for both (a real engine needs Flutter's native library).
+ * Nothing here speaks to the running app about its screens. A phone screen does that itself (Flutter's activity says resumed,
+ * inactive, paused and detached as it comes and goes), and the car session says "connected" on its own channel ([CarLink]).
+ * The car side must never use the engine's lifecycle channel for a session that has no phone screen: on Android an engine
+ * starts in the state "detached", and whatever is sent after that, Flutter first reports as "resumed", which the app reads as
+ * a phone screen coming to the front. (It was tried: "inactive, paused, detached" when the car that had started Cache left
+ * made the app load its chat model.) What the app does when the car leaves and no phone screen is open is its own
+ * (lib/main.dart).
  */
 internal class EngineLife<E : Any>(
     private val make: (Context) -> E,
-    private val screenGone: (E) -> Unit,
 ) {
     /** The engine, once made. */
     var engine: E? = null
@@ -105,10 +94,6 @@ internal class EngineLife<E : Any>(
 
     private var activities = 0
     private var carSessions = 0
-
-    /** A phone screen has been made on the engine at some time: from then on the app hears about its screen from the phone. */
-    private var phoneScreenSeen = false
-    private var saidNoScreen = false
 
     fun obtain(context: Context): E = get(context, "the phone screen")
 
@@ -123,7 +108,6 @@ internal class EngineLife<E : Any>(
 
     fun activityStarted() {
         activities++
-        phoneScreenSeen = true
     }
 
     fun activityEnded() {
@@ -140,11 +124,6 @@ internal class EngineLife<E : Any>(
     fun carEnded() {
         carSessions = (carSessions - 1).coerceAtLeast(0)
         Log.i(TAG, "a car session ended: the app engine stays (phone screens $activities, car sessions $carSessions)")
-        if (carSessions > 0 || phoneScreenSeen || saidNoScreen) return
-        val e = engine ?: return
-        saidNoScreen = true
-        Log.i(TAG, "no screen shows the app: it is told to go to the back")
-        screenGone(e)
     }
 
     private companion object {

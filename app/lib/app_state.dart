@@ -615,7 +615,18 @@ class AppState extends ChangeNotifier {
   /// The phone's screen has appeared. The chosen model that a start with no phone screen left out loads now, as it would have
   /// at start: when it fits the memory free now ([wake]). Anything else (a model already loaded, loading or let go for memory;
   /// a later screen) changes nothing here.
+  ///
+  /// It loads only through the memory gate. On Android the memory reading is the phone screen's own (its activity answers
+  /// it), so with no reading there is no phone screen, whatever said there was: nothing is loaded and the model goes on
+  /// waiting for a screen. (Flutter reports "resumed" before any other state that follows "detached", the state an Android
+  /// engine starts in: the car side once told an app with no phone screen that it was in the back, and that read as a screen
+  /// in front and loaded the model into whatever memory there was.)
   Future<void> phoneScreenAppeared() async {
+    if (!_waitsForPhoneScreen) return;
+    if (await memory() == null) {
+      logInfo('Model not loaded: no phone screen answers for the free memory; it waits for one');
+      return;
+    }
     if (!_waitsForPhoneScreen) return;
     _waitsForPhoneScreen = false;
     await wake();

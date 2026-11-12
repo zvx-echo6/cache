@@ -175,19 +175,49 @@ void main() {
     expect(log, ['made 1']);
   });
 
-  // The car started the app with the phone app closed and has left: the car side says inactive, paused and detached, never
-  // resumed (android/.../car/SharedEngine.kt). The first phone screen after that is a new screen like any other.
-  testWidgets('after the car that started the app has left, the first phone screen gets the interface built from the start', (tester) async {
+  // Android Auto starts the app with the phone app closed: an Android engine starts in the state detached, and nothing changes
+  // that until an activity comes. The first phone screen takes the interface that was built at the start.
+  testWidgets('an app started with no screen gets its first phone screen without a rebuild, and is told of it once', (tester) async {
+    _go(tester, [AppLifecycleState.detached]);
     await tester.pumpWidget(scope());
-    _go(tester, _closing);
+    // An app's first frame is drawn whatever the lifecycle says (runApp's own); with frames off a test has to ask for it.
+    tester.binding.scheduleForcedFrame();
     await tester.pump();
-    expect(screens, 0);
     expect(log, ['made 1']);
+    expect(screens, 0);
     _go(tester, [AppLifecycleState.resumed]);
     expect(screens, 1);
     await tester.pump();
     await tester.pump();
+    expect(log, ['made 1']);
+    // That screen closed and another opened: now it is built anew.
+    _go(tester, _closing);
+    _go(tester, [AppLifecycleState.resumed]);
+    expect(screens, 2);
+    await tester.pump();
+    await tester.pump();
     expect(log, ['made 1', 'gone 1', 'made 2']);
+  });
+
+  test('no phone screen: the state an Android engine starts in, and the state after a screen closed', () {
+    expect(noPhoneScreen(null), isTrue);
+    expect(noPhoneScreen(AppLifecycleState.detached), isTrue);
+    for (final s in [AppLifecycleState.resumed, AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      expect(noPhoneScreen(s), isFalse, reason: '$s: an activity is there');
+    }
+  });
+
+  // When the car has left: the app goes to the back by itself only where no phone screen can ever tell it to.
+  test('nothing shows the app only when it still takes itself to be in front and no phone screen is there', () {
+    // Android Auto started it with the phone app closed, and the car has left.
+    expect(nothingShowsTheApp(inFront: true, screen: AppLifecycleState.detached), isTrue);
+    expect(nothingShowsTheApp(inFront: true, screen: null), isTrue);
+    // It has gone to the back already (by itself after an earlier car session, or when the phone's screen was hidden or closed).
+    expect(nothingShowsTheApp(inFront: false, screen: AppLifecycleState.detached), isFalse);
+    expect(nothingShowsTheApp(inFront: false, screen: AppLifecycleState.paused), isFalse);
+    // The phone's screen is in front, or just covered: the car leaving changes nothing for it.
+    expect(nothingShowsTheApp(inFront: true, screen: AppLifecycleState.resumed), isFalse);
+    expect(nothingShowsTheApp(inFront: true, screen: AppLifecycleState.inactive), isFalse);
   });
 
   testWidgets('a screen that goes again before its interface was built still ends with one interface, for the last screen', (tester) async {

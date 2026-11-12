@@ -57,8 +57,8 @@ class _PhoneScreenScopeState extends State<PhoneScreenScope> {
       _gone = true;
       return;
     }
-    // Only a screen in front counts: the car side says inactive, paused and detached when the car that started Cache leaves
-    // with no phone screen open, and never resumed.
+    // Only a screen in front counts. An Android engine starts in the state detached, also when the car starts Cache with the
+    // phone app closed, and only an activity changes it: the car side never speaks of the lifecycle (car/SharedEngine.kt).
     if (state != AppLifecycleState.resumed) return;
     if (_seen && !_gone) return; // the same screen, back in front
     final again = _gone;
@@ -84,3 +84,15 @@ class _PhoneScreenScopeState extends State<PhoneScreenScope> {
   @override
   Widget build(BuildContext context) => _up ? KeyedSubtree(key: ValueKey<int>(_screen), child: widget.builder(context)) : widget.placeholder;
 }
+
+/// Whether no phone screen is there, going by the lifecycle state [screen]. An Android engine starts in the state detached and
+/// stays in it until an activity comes: with the phone app closed and the car starting Cache, for as long as the app runs.
+/// (Null: the platform has said nothing yet.) A phone screen that was open and has been closed reads the same.
+bool noPhoneScreen(AppLifecycleState? screen) => screen == null || screen == AppLifecycleState.detached;
+
+/// Whether nothing shows the app after the car has left: it still takes itself to be in front ([inFront]: true from its start
+/// until the phone's screen is hidden), and no phone screen is there to ever say otherwise ([screen], see [noPhoneScreen]).
+///
+/// That is the one case of Android Auto starting Cache with the phone app closed: the app then goes to the back by itself
+/// (main.dart). With a phone screen in front it stays as it is; with one in the back or closed it already went to the back.
+bool nothingShowsTheApp({required bool inFront, required AppLifecycleState? screen}) => inFront && noPhoneScreen(screen);

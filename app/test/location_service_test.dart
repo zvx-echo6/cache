@@ -444,6 +444,42 @@ void main() {
       expect(s.controller.hasListener, isFalse);
     });
 
+    // Android Auto started Cache with the phone app closed, and the car has left: no phone screen ever says the app is not in
+    // front, so the app says it (main.dart).
+    test('when the car that started the app has left and no phone screen is open, the stream stops and the last fix stays', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.carScreen(true);
+      expect(await l.request(explain: () async => false), isTrue);
+      l.carScreen(false);
+      expect(s.controller.hasListener, isTrue, reason: 'a start counts as in front until something says otherwise');
+      l.noScreen();
+      expect(s.controller.hasListener, isFalse);
+      expect(l.streamHealthy, isFalse);
+      expect(l.fix, same(s.next));
+      // The car connects again: the position comes again, and stops when it leaves.
+      l.carScreen(true);
+      expect(s.controller.hasListener, isTrue);
+      l.carScreen(false);
+      expect(s.controller.hasListener, isFalse);
+      // The phone's screen comes to the front for the first time: rechecked and read as at any return to the front.
+      l.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(Duration.zero);
+      expect(s.controller.hasListener, isTrue);
+      expect(s.prompts, 0);
+    });
+
+    test('told there is no screen while a car screen is attached, the stream goes on until the car leaves', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.carScreen(true);
+      l.noScreen();
+      expect(s.controller.hasListener, isTrue);
+      expect(s.streamStarts, 1);
+      l.carScreen(false);
+      expect(s.controller.hasListener, isFalse);
+    });
+
     test('nothing is asked for and nothing starts without the permission', () async {
       final s = FakeSource();
       final l = await make(s);

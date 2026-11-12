@@ -164,14 +164,10 @@ class CacheApp extends StatefulWidget {
 
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState(
-    // No word from a phone screen by the time the start would load the chat model (or only that there is none: the car has
-    // already left): on Android that is a start by the car with the phone app closed. An activity says it is in front as it
-    // opens; the car side never does. The model then waits for the phone's screen ([_onPhoneScreen]).
-    startedWithNoPhoneScreen: () {
-      if (!plat.isAndroid) return false;
-      final screen = WidgetsBinding.instance.lifecycleState;
-      return screen == null || screen == AppLifecycleState.detached;
-    },
+    // No phone screen by the time the start would load the chat model: on Android that is a start by the car with the phone
+    // app closed (the engine starts with no screen and only an activity says otherwise). The model then waits for the
+    // phone's screen ([_onPhoneScreen]).
+    startedWithNoPhoneScreen: () => plat.isAndroid && noPhoneScreen(WidgetsBinding.instance.lifecycleState),
   );
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
@@ -1149,7 +1145,30 @@ class _CacheAppState extends State<CacheApp> {
     _openHistory();
   }
 
-  void _onCarScreen() => location.carScreen(_car?.connected.value ?? false);
+  void _onCarScreen() {
+    final attached = _car?.connected.value ?? false;
+    location.carScreen(attached);
+    if (!attached) _carLeft();
+  }
+
+  /// The car has left. When Android Auto started Cache with the phone app closed, nothing shows Cache now and nothing will say
+  /// so: a start counts as in front, and only a phone screen's lifecycle ends that (before the engine was kept for the life of
+  /// the process, the run simply ended here). So Cache goes to the back by itself, as it does when the phone's screen is
+  /// hidden: index work stops and is handed to the background, the models are let go after their usual wait, the position
+  /// stream stops and the "running" mark is taken away. Nothing is loaded or started. The phone's screen coming to the front
+  /// brings it all back the usual way ([_backToFront] and the lifecycle listeners).
+  void _carLeft() {
+    if (!nothingShowsTheApp(inFront: _atFront, screen: WidgetsBinding.instance.lifecycleState)) return;
+    logInfo('The car has left and the phone screen is not open: Cache goes to the back');
+    searchModel.onLifecycle(AppLifecycleState.paused);
+    promptReadAhead.toBackground();
+    _modelRelease.toBackground();
+    _foregroundUpdates.back();
+    indexing.setOpen(false);
+    _toBack();
+    location.noScreen();
+    markAppNotOpen();
+  }
 
   /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
   Future<void> _soft(String what, Future<void> Function() step) async {

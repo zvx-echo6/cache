@@ -56,9 +56,8 @@ class SharedEngineTest {
     /** Stands in for the Flutter engine: a real one needs Flutter's native library, which a JVM test does not have. */
     private class Engine
 
-    /** Every engine made, and every time the app was told that no screen shows it. */
+    /** Every engine made. */
     private val made = mutableListOf<Engine>()
-    private val toldNoScreen = mutableListOf<Engine>()
     private lateinit var life: EngineLife<Engine>
     private lateinit var app: Context
 
@@ -68,8 +67,7 @@ class SharedEngineTest {
         CarLink.dartForTests = { _, _, done -> done(null) }
         app = RuntimeEnvironment.getApplication()
         made.clear()
-        toldNoScreen.clear()
-        life = EngineLife(make = { Engine().also { e -> made += e } }, screenGone = { toldNoScreen += it })
+        life = EngineLife(make = { Engine().also { e -> made += e } })
     }
 
     @After
@@ -199,57 +197,26 @@ class SharedEngineTest {
         assertEquals(1, life.made)
     }
 
-    // The app takes a start with no word from a screen as being in front. When the car started it and the car has left, with no
-    // phone screen ever open, nothing else would tell it that it has no screen (before, its engine was destroyed there).
     @Test
-    fun whenTheCarThatStartedCacheLeavesTheAppIsToldOnceThatNoScreenShowsIt() {
-        val c1 = carConnects()
-        assertTrue(toldNoScreen.isEmpty())
-        carLeaves(c1)
-        assertEquals(listOf(life.engine), toldNoScreen)
-        // It knows now. A second car session with no phone screen changes nothing, coming or going.
-        val c2 = carConnects()
-        carLeaves(c2)
-        assertEquals(1, toldNoScreen.size)
-        assertEquals(1, life.made)
-    }
-
-    @Test
-    fun withTwoCarSessionsTheAppIsToldWhenTheLastOneLeaves() {
+    fun twoCarSessionsAtOnceUseOneEngine() {
         val first = life.carStarted(app)
         assertSame(first, life.carStarted(app))
         life.carEnded()
-        assertTrue(toldNoScreen.isEmpty())
+        assertSame(first, life.engine)
         life.carEnded()
-        assertEquals(listOf(first), toldNoScreen)
-        assertEquals(1, life.made)
-    }
-
-    // A phone screen tells the app about itself (Flutter's activity does, as it resumes, pauses and goes): the car side adds
-    // nothing then, whether the phone screen is still open when the car leaves or closed long before.
-    @Test
-    fun onceAPhoneScreenHasBeenOpenTheCarLeavingTellsTheAppNothing() {
-        val c1 = carConnects()
-        phoneOpens()
-        carLeaves(c1)
-        assertTrue(toldNoScreen.isEmpty())
-        phoneCloses()
-        val c2 = carConnects()
-        carLeaves(c2)
-        assertTrue(toldNoScreen.isEmpty())
+        assertSame(first, life.engine)
         assertEquals(1, life.made)
     }
 
     @Test
     fun aCarSessionWhoseEngineCouldNotBeMadeEndsWithoutOne() {
-        val failing = EngineLife<Engine>(make = { throw IllegalStateException("no engine") }, screenGone = { toldNoScreen += it })
+        val failing = EngineLife<Engine>(make = { throw IllegalStateException("no engine") })
         // The session itself still comes up (it logs that the engine could not start) and goes as usual.
         val c = carConnects(failing)
         assertTrue(CarLink.carConnected)
         carLeaves(c)
         assertNull(failing.engine)
         assertEquals(0, failing.made)
-        assertTrue(toldNoScreen.isEmpty())
     }
 
     // What made Flutter destroy the engine with the activity: the activity said yes when asked.

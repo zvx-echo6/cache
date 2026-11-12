@@ -273,6 +273,17 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Nothing shows the position: the phone's screen has not been in front in this run (Android Auto started Cache with the
+  /// phone app closed) and the car has left. A start counts as in front until the app's lifecycle says otherwise, and with
+  /// no phone screen it never does, so the app says it here (main.dart). As when the phone's screen leaves the front: the
+  /// stream stops and the last fix stays. The phone's screen coming to the front, or a car screen, starts it again.
+  void noScreen() {
+    if (_disposed) return;
+    _invalidateResume();
+    _foreground = false;
+    if (!_carScreen) _unlisten();
+  }
+
   void _unlisten() {
     _sub?.cancel();
     _sub = null;
