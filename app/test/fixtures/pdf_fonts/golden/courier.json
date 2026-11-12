@@ -5,7 +5,8 @@
       "text": "The quick brown fox jumps over the lazy dog. Water purification in the field.\r\nBoil it for one minute; at altitude, three minutes. 1,234 liters (about 326 gallons) -- state-of-the-art.\r\nDon’t store treated water for more than six months, e.g. COVID-19 U.S. FEMA-IS513.",
       "label": null,
       "png_sha256": {
-        "windows": "75094a94a075c81a1845cabce496f15ff96e5ecfef75092ee382fcf8571687d4"
+        "windows": "75094a94a075c81a1845cabce496f15ff96e5ecfef75092ee382fcf8571687d4",
+        "linux": "75094a94a075c81a1845cabce496f15ff96e5ecfef75092ee382fcf8571687d4"
       },
       "width": 612,
       "height": 792,
