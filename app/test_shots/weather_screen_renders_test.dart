@@ -60,9 +60,10 @@ Future<void> _snap(WidgetTester tester, String name) async {
   await snap(tester, _out, name);
 }
 
+/// Taps, and waits until the tap's ripple has gone (it would be in the picture).
 Future<void> _tap(WidgetTester tester, Finder what) async {
   await tester.tap(what);
-  await _settle(tester);
+  await _settle(tester, 20);
 }
 
 void main() {

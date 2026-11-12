@@ -344,9 +344,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Places'), findsOneWidget);
     // where the phone is: the most serious event first, and how many more are ranked
-    final worst = _in('weather-place-here', find.text('Evacuation order for the Tamber Flat area · +4 more'));
+    final worst = _in('weather-place-here', find.text('Evacuation order for the Tamber Flat area'));
     expect(worst, findsOneWidget);
     expect(tester.widget<Text>(worst).style?.color, _dark.emergency);
+    expect(_in('weather-place-here', find.text(' · +4 more')), findsOneWidget, reason: 'the count stays whole when the name is cut');
     expect(_in('weather-place-here', find.text('58 °F')), findsOneWidget);
     expect(_in('weather-place-here', find.byIcon(Icons.check)), findsOneWidget, reason: 'the place on screen is marked');
     // an alert that is not serious

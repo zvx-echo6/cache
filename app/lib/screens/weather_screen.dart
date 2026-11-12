@@ -780,7 +780,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
     final k = context.t;
     final i = e.item;
     final small = TextStyle(fontSize: 13, height: 1.35, color: k.secondary);
-    final strong = e.serious ? TextStyle(color: k.emergency) : null;
+    // how serious, in the emergency colour and a heavier weight: a sign that does not rest on the colour alone
+    final strong = e.serious ? TextStyle(color: k.emergency, fontWeight: FontWeight.w600) : null;
     final lines = <Widget>[];
     final rest = [?i.distance, if (i.summary.isNotEmpty) i.summary].join(' · ');
     switch (e.kind) {
@@ -926,7 +927,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
     final cap = TextStyle(fontSize: 12, color: k.secondary);
     // a narrow phone keeps every column and gives the conditions' words what is left
     final narrow = MediaQuery.sizeOf(context).width < 380;
-    final nameWidth = narrow ? 84.0 : 98.0, rainWidth = narrow ? 40.0 : 44.0, tempWidth = narrow ? 50.0 : 58.0;
+    const rainWidth = 40.0;
+    final nameWidth = narrow ? 84.0 : 94.0, tempWidth = narrow ? 50.0 : 54.0;
     Widget cell(String? value, double width, TextStyle style) => SizedBox(width: width, child: Text(value ?? '–', textAlign: TextAlign.right, maxLines: 1, style: style));
     return _section(context, 'Forecast', [
       Material(
@@ -957,7 +959,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(minHeight: 40),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
                     child: Row(
                       children: [
                         SizedBox(
@@ -967,7 +969,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
                         if (conditionsOf(i) case final c?) ...[
                           Icon(weatherIcon(c), size: 22, color: k.text),
                           const SizedBox(width: 8),
-                          Expanded(child: Text(lineStart(c), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
+                          // "Thunderstorm with heavy hail" takes two lines; one line would cut it
+                          Expanded(child: Text(lineStart(c), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.25, color: k.secondary))),
                         ] else
                           const Spacer(),
                         if (rain) cell(rainOf(i), rainWidth, TextStyle(fontSize: 13, color: k.secondary)),
@@ -1014,11 +1017,17 @@ class _WeatherScreenState extends State<WeatherScreen> {
   /// One small line crediting every source whose data is shown, as the map credits its own; it opens the credits in full.
   Widget? _credits(BuildContext context, PlaceSummary s) {
     final k = context.t;
-    final sources = [for (final v in s.views) if (!v.missing && v.source.attribution.isNotEmpty) v.source];
-    if (sources.isEmpty) return null;
+    final shown = [for (final v in s.views) if (!v.missing && v.source.attribution.isNotEmpty) v.source];
+    if (shown.isEmpty) return null;
+    // the forecast of the top card first: its data leads the page, and its license asks for the credit
+    final main = s.forecast?.source;
+    final sources = [
+      for (final c in shown) if (identical(c, main)) c,
+      for (final c in shown) if (!identical(c, main)) c,
+    ];
     final lines = <String>[];
     for (final c in sources) {
-      final line = shortAttribution(c.attribution);
+      final line = _shortCredit(c.attribution);
       if (!lines.contains(line)) lines.add(line);
     }
     return Semantics(
@@ -1041,6 +1050,15 @@ class _WeatherScreenState extends State<WeatherScreen> {
         ),
       ),
     );
+  }
+
+  /// A credit in the map's short form ([shortAttribution]: its first sentence, at most 80 characters). Where that cut a long
+  /// sentence inside a word, the cut moves back to the end of the word before.
+  static String _shortCredit(String credit) {
+    final short = shortAttribution(credit);
+    if (!short.endsWith('…')) return short;
+    final space = short.lastIndexOf(' ');
+    return space < 40 ? short : '${short.substring(0, space)}…';
   }
 
   void _openCredits(BuildContext context, List<Connector> sources) {
@@ -1129,17 +1147,18 @@ class _WeatherScreenState extends State<WeatherScreen> {
     if (mounted) _load();
   }
 
-  /// The worst thing happening at a place, in one line, and whether it is serious; or what is known when nothing is listed.
-  (String, bool) _worst(PlaceSummary s) {
+  /// The worst thing happening at a place, in one line: its name, how many more are ranked after it (" · +4 more", or null),
+  /// and whether it is serious. When nothing is listed, what is known instead.
+  (String, String?, bool) _worst(PlaceSummary s) {
     final ranked = s.nearby.ranked;
     final first = ranked.firstOrNull;
-    if (first != null) return (ranked.length == 1 ? first.item.label : '${first.item.label} · +${ranked.length - 1} more', first.serious);
+    if (first != null) return (first.item.label, ranked.length == 1 ? null : ' · +${ranked.length - 1} more', first.serious);
     // nothing kept and no answer yet is not known, which is not "nothing downloaded"
-    if (!s.anyStored) return (s.pending ? kWeatherStarting : 'Nothing downloaded yet', false);
-    if (s.tooOld) return (_tooOldWords(s), false);
-    if (s.calm) return (_calmWords(s), false);
-    if (!s.alertsOn) return ('Alerts and fires are not switched on', false);
-    return (s.pending ? kWeatherStarting : 'Not checked yet', false);
+    if (!s.anyStored) return (s.pending ? kWeatherStarting : 'Nothing downloaded yet', null, false);
+    if (s.tooOld) return (_tooOldWords(s), null, false);
+    if (s.calm) return (_calmWords(s), null, false);
+    if (!s.alertsOn) return ('Alerts and fires are not switched on', null, false);
+    return (s.pending ? kWeatherStarting : 'Not checked yet', null, false);
   }
 
   Widget _placeRow(BuildContext ctx, WatchPlace p) {
@@ -1147,7 +1166,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
     final s = _summary(p);
     final conditions = conditionsOf(s.reading) ?? conditionsOf(s.now);
     final temperature = s.reading?.fields['Temperature'];
-    final (line, serious) = _worst(s);
+    final (line, more, serious) = _worst(s);
+    final worst = TextStyle(fontSize: 13, height: 1.35, color: serious ? k.emergency : k.secondary);
     return InkWell(
       key: ValueKey('weather-place-${p.id}'),
       borderRadius: BorderRadius.circular(12),
@@ -1176,7 +1196,13 @@ class _WeatherScreenState extends State<WeatherScreen> {
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(line, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, color: serious ? k.emergency : k.secondary)),
+                    // a long name gives way; how many more there are stays in sight
+                    Row(
+                      children: [
+                        Flexible(child: Text(line, maxLines: 1, overflow: TextOverflow.ellipsis, style: worst)),
+                        if (more != null) Text(more, maxLines: 1, style: worst),
+                      ],
+                    ),
                   ],
                 ),
               ),
