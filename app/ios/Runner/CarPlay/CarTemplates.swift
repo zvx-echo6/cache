@@ -369,10 +369,12 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     let origin = MKMapItem(placemark: MKPlacemark(coordinate: begin))
     var choices: [CPRouteChoice] = []
     for route in routes {
-      // As the Android rows: the time and the distance, and under them the road the route takes.
+      // As the Android rows: the time and the distance, and under them the road the route takes. CarPlay shows the first and
+      // the third of these texts as the two lines of a row in its list of routes, and the second on the panel's first view,
+      // under the place's name (where it writes the time and distance itself, from numbers).
       let title = route.title(imperial: t.imperial)
       let via: [String] = route.via.map { [$0] } ?? []
-      let choice = CPRouteChoice(summaryVariants: [title], additionalInformationVariants: via, selectionSummaryVariants: [title])
+      let choice = CPRouteChoice(summaryVariants: [title], additionalInformationVariants: via, selectionSummaryVariants: via)
       choice.userInfo = route.index
       choices.append(choice)
     }

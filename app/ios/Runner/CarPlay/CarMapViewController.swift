@@ -413,9 +413,13 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
         flat.heading = 0
         flat.pitch = 0
         map.setCamera(flat, animated: false)
+        // Android's margin of 40 around the route, or less where CarPlay's panels leave little room for the map (beside the
+        // route panel, and most of all on a portrait screen, where 40 on each side would leave none).
+        let free = map.bounds.inset(by: map.contentInset)
+        let margin = max(4, min(40, min(free.width, free.height) * 0.15))
         map.setVisibleCoordinateBounds(
-          MLNCoordinateBounds(sw: southWest, ne: northEast), edgePadding: UIEdgeInsets(top: 40, left: 40, bottom: 40, right: 40),
-          animated: false, completionHandler: nil)
+          MLNCoordinateBounds(sw: southWest, ne: northEast),
+          edgePadding: UIEdgeInsets(top: margin, left: margin, bottom: margin, right: margin), animated: false, completionHandler: nil)
       } else if let lat = t.destinationLat, let lon = t.destinationLon {
         place(lat, lon, zoom: 13, heading: 0, pitch: 0, extraTop: 0, seconds: 0)
       }

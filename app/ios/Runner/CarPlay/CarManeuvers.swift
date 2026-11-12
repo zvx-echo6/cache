@@ -108,6 +108,8 @@ final class CarGuidance: CarLinkListener {
     }
     if t.arrived {
       wasArrived = true
+      // Nothing is left: said to CarPlay too, or its line of what is left would keep the last numbers of the drive.
+      showLeft(t, map, trip)
       say(session, .arrived, Self.arrived, state: "arrived")
       return
     }

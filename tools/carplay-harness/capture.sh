@@ -265,13 +265,22 @@ write_carplay_config() {  # write_carplay_config <width> <height> <scale>: what 
 }
 
 open_carplay() {  # boots the simulator, starts the Simulator app and waits for the CarPlay window; says how it came up
-  local end shown=0 menu=0 w
+  local end began shown=0 menu=0 w
   OPENED_HOW="from the saved defaults alone, with no click"
   RUN_LINES=4 run xcrun simctl bootstatus "$UDID" -b
   run open -a "$SIMAPP" --args -CurrentDeviceUDID "$UDID"
+  began=$SECONDS
   end=$((SECONDS + 200))
   while [ "$SECONDS" -lt "$end" ]; do
     w=$(sim_windows)
+    # Now and then the Simulator stops answering questions about its windows (seen with a CarPlay display that stayed black).
+    # The Mac's own window list still has the Simulator's two windows then (the phone and the CarPlay display): that is
+    # enough to go on, and the black display is found by the look that follows and booted again.
+    if [ -z "$w" ] && [ $((SECONDS - began)) -ge 45 ] && [ -x "$TOOL" ] \
+        && [ "$("$TOOL" windows 2> /dev/null | awk '/\[Simulator\]/ && $4 == 0 && $7 > 100 {n++} END{print n + 0}')" -ge 2 ]; then
+      say "the CarPlay window is in the Mac's window list, but the Simulator does not answer about its windows ($OPENED_HOW)"
+      return 0
+    fi
     case "$w" in
       *CarPlay*)
         sleep 6
@@ -823,14 +832,14 @@ bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulato
   CAR_W=$1
   CAR_H=$2
   CAR_S=$3
-  for try in 1 2; do
+  for try in 1 2 3; do
     stop_stream
     quit_simulator
     ANCHOR=""
     write_carplay_config "$1" "$2" "$3"
     run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
     if ! open_carplay; then
-      [ "$try" = 2 ] && return 1
+      [ "$try" = 3 ] && return 1
       # Seen once: after a boot the Simulator had its windows, but nothing answered questions about them for minutes, and the
       # simulator itself had become slow. The simulator service is started afresh, and the size gets one more boot.
       say "the CarPlay window was not found at $1x$2 (boot $try): the simulator service is started afresh, then one more boot"
