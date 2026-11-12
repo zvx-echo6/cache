@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
@@ -98,8 +100,9 @@ int _kvBytes(GgufHeader h, int nCtx) {
 /// ([MemoryNeed.fromHeader] false). Null when neither the header nor a size can be had.
 Future<MemoryNeed?> memoryNeedForFile(String path, {int nCtx = 8192, int? fallbackBytes}) async {
   try {
-    final h = readGgufHeader(path);
-    if (h != null) return memoryNeedFromHeader(h, nCtx: nCtx);
+    // The header read (about 16 MB and a long skip) runs off the UI isolate: on a phone it took 64 to 128 ms, a few dropped frames.
+    final need = await memoryNeedRunner(() => _needFromHeaderFile(path, nCtx));
+    if (need != null) return need;
   } catch (_) {}
   try {
     final size = fallbackBytes ?? await File(path).length();
@@ -107,4 +110,14 @@ Future<MemoryNeed?> memoryNeedForFile(String path, {int nCtx = 8192, int? fallba
   } catch (_) {
     return null;
   }
+}
+
+/// Runs the header read off the UI isolate ([Isolate.run]); a test hook: a test counts the calls or checks where it runs.
+@visibleForTesting
+Future<R> Function<R>(FutureOr<R> Function() computation) memoryNeedRunner = Isolate.run;
+
+/// The need from the header of the file at [path], or null when it is not a readable GGUF (the caller falls back to the size).
+MemoryNeed? _needFromHeaderFile(String path, int nCtx) {
+  final h = readGgufHeader(path);
+  return h == null ? null : memoryNeedFromHeader(h, nCtx: nCtx);
 }
