@@ -844,7 +844,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
-  late final RouteElevation routeElevation = RouteElevation(loader: tileServerElevationLoader(maps.engine));
+  late final RouteElevation routeElevation = RouteElevation(start: tileServerElevationJobs(maps.engine));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
