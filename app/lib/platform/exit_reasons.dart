@@ -33,3 +33,21 @@ bool stoppedUnexpectedly(DateTime? marked, List<Map<Object?, Object?>> exits) {
   if (ended == null) return true;
   return !isBenignExitReason((ended['code'] as num?)?.toInt());
 }
+
+/// What a "running" mark left from the last run says.
+enum LastRun {
+  /// Ended with a screen in front for no reason the system gives as benign: written as an error.
+  unexpected,
+
+  /// The system or the person ended it (an update, a stop): written as information.
+  ended,
+
+  /// The system's reasons could not be read (no phone screen asked), so nothing says it was a crash: written as information.
+  reasonUnknown,
+}
+
+/// Judges a mark left behind. [exits] is null when the system's records could not be read at all, which says nothing either way.
+LastRun lastRunEnd(DateTime? marked, List<Map<Object?, Object?>>? exits) {
+  if (exits == null) return LastRun.reasonUnknown;
+  return stoppedUnexpectedly(marked, exits) ? LastRun.unexpected : LastRun.ended;
+}

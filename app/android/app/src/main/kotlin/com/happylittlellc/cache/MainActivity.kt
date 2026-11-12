@@ -187,18 +187,9 @@ class MainActivity : FlutterActivity() {
             }
         // The device's free memory (lib/platform/memory.dart): the model loads only when it fits what is free now, and is let go
         // when Android says memory is low.
-        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/memory").also {
-            it.setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "read" -> result.success(memory())
-                    // The log's header: the phone's maker and model.
-                    "device" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
-                    // The log: why the app's process ended the last times (Android 11 and later).
-                    "exits" -> result.success(exits())
-                    else -> result.notImplemented()
-                }
-            }
-        }
+        // The memory channel is answered by the engine (MemoryAnswers, set in car/SharedEngine.kt); this screen only sends the
+        // system's "trim" on it.
+        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MemoryAnswers.CHANNEL)
         // The bench's options (test APK only; nothing in the release build).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
             .setMethodCallHandler { call, result ->
@@ -229,7 +220,6 @@ class MainActivity : FlutterActivity() {
         window.decorView.removeCallbacks(restoreSystemBars)
         systemUiChannel?.setMethodCallHandler(null)
         systemUiChannel = null
-        memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
         // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
         linkChannel?.setMethodCallHandler(null)
@@ -242,46 +232,11 @@ class MainActivity : FlutterActivity() {
         SharedEngine.activityEnded()
     }
 
-    private fun exits(): List<Map<String, Any>> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyList()
-        return try {
-            am.getHistoricalProcessExitReasons(packageName, 0, 8).map { e ->
-                val reason = when (e.reason) {
-                    android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
-                    android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native crash"
-                    android.app.ApplicationExitInfo.REASON_ANR -> "not responding"
-                    android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low memory"
-                    android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "closed itself"
-                    android.app.ApplicationExitInfo.REASON_SIGNALED -> "stopped by a signal"
-                    android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
-                    android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
-                    android.app.ApplicationExitInfo.REASON_OTHER -> "other"
-                    // numbers from the ApplicationExitInfo reference (these two are API 34; the app's compileSdk may predate them)
-                    8 -> "permission changed"
-                    15 -> "app changed"
-                    16 -> "app updated"
-                    else -> "reason ${e.reason}"
-                }
-                mapOf("time" to e.timestamp, "reason" to reason, "code" to e.reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun memory(): Map<String, Any> {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyMap()
-        val info = ActivityManager.MemoryInfo()
-        am.getMemoryInfo(info)
-        return mapOf("avail" to info.availMem, "total" to info.totalMem, "threshold" to info.threshold, "low" to info.lowMemory)
-    }
-
     // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not
     // the one killed. Delivered on top of what Flutter does with it.
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + memory())
+        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + MemoryAnswers.memory(this))
     }
 
     // Battery and heat (co.cache/battery) are answered by the cache_device plugin, in every engine.
