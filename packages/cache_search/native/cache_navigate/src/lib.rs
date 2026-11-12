@@ -72,6 +72,9 @@ pub struct TilePrep {
     pub state: FetchState,
     /// Tiles the trip is likely to need that are still not on the device (0 when not known).
     pub missing: usize,
+    /// Whether the build's tile index is known, so `missing` and `lacking` can be trusted (false: not known; with the fetch not
+    /// done, nothing is known about the tiles between the stops).
+    pub index_known: bool,
     pub lacking: Vec<usize>,
 }
 
@@ -387,7 +390,7 @@ impl NavCore {
         if self.tiles_path().map(|t| Path::new(&t).is_file()).unwrap_or(false) {
             return TilePrep::default();
         }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.prepare(points))).unwrap_or(TilePrep { state: FetchState::Failed, missing: 0, lacking: Vec::new() })
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.prepare(points))).unwrap_or(TilePrep { state: FetchState::Failed, missing: 0, index_known: false, lacking: Vec::new() })
     }
 
     pub(crate) fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {

@@ -441,6 +441,7 @@ fn prepare_says_how_the_fetch_ended_and_which_points_still_have_no_tile() {
     // online: the tiles near the point come, nothing is lacking
     let p = e.prepare(&[(42.6, -113.9)]);
     assert_eq!((p.outcome, p.lacking.clone(), p.missing), (PrepareOutcome::Done, vec![], 0));
+    assert!(p.index_known, "the index was fetched with the tiles");
     // offline: only what is on the device; the second point (far away) has no tile
     call(&e, "set_policy", json!({"network": false}));
     let p = e.prepare(&[(42.6, -113.9), (40.1, -100.15)]);

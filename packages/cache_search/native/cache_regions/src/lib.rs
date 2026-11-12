@@ -46,6 +46,8 @@ pub struct Prepared {
     /// Tiles the route is likely to need that are still not on the device.
     pub missing: usize,
     pub outcome: PrepareOutcome,
+    /// Whether the index of the device's build is known (on the device or fetched): what `missing` and `lacking` rest on.
+    pub index_known: bool,
     /// The points (by position in the list given) whose level 2 tile the build has (when its index is known) and the device does
     /// not, afterwards.
     pub lacking: Vec<usize>,
@@ -1296,7 +1298,7 @@ impl Inner {
                 .collect()
         };
         let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-        let prepared = Prepared { fetched: n("fetched"), missing: n("missing"), outcome, lacking };
+        let prepared = Prepared { fetched: n("fetched"), missing: n("missing"), outcome, lacking, index_known: index.is_some() };
         (v, prepared)
     }
 

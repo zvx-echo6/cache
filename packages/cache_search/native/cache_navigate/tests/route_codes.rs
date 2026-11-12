@@ -52,11 +52,11 @@ fn told(code: i64, prep: TilePrep, via: Vec<MapEnd>) -> (String, Option<String>)
 }
 
 fn prep(state: FetchState, lacking: &[usize]) -> TilePrep {
-    TilePrep { state, missing: 0, lacking: lacking.to_vec() }
+    TilePrep { state, missing: 0, index_known: true, lacking: lacking.to_vec() }
 }
 
 fn prep_missing(state: FetchState, missing: usize, lacking: &[usize]) -> TilePrep {
-    TilePrep { state, missing, lacking: lacking.to_vec() }
+    TilePrep { state, missing, index_known: true, lacking: lacking.to_vec() }
 }
 
 fn err(code: &str, vcode: i64) -> DirectionsError {
@@ -135,6 +135,23 @@ fn tiles_missing_between_the_ends_is_no_road_data_without_an_end() {
 }
 
 #[test]
+fn a_fetch_that_did_not_finish_with_no_index_known_is_no_road_data() {
+    let unknown = |state| TilePrep { state, missing: 0, index_known: false, lacking: vec![] };
+    for state in [FetchState::Offline, FetchState::Failed, FetchState::TimedOut] {
+        for code in [170, 171, 442, 443] {
+            assert_eq!(app_error(&err("no_route", code), &unknown(state), (0, 1), 1), ("no_road_data".into(), None), "{state:?} {code}");
+        }
+        // with the index known and nothing missing, it is no_route; out_of_coverage and 154 are as they were
+        let known = TilePrep { index_known: true, ..unknown(state) };
+        assert_eq!(app_error(&err("no_route", 442), &known, (0, 1), 1), ("no_route".into(), None), "{state:?}");
+        assert_eq!(app_error(&err("out_of_coverage", 170), &unknown(state), (0, 1), 1), ("out_of_coverage".into(), None));
+        assert_eq!(app_error(&err("too_far", 154), &unknown(state), (0, 1), 1), ("too_far".into(), None));
+    }
+    // fetch Done: no_route, as before
+    assert_eq!(app_error(&err("no_route", 442), &unknown(FetchState::Done), (0, 1), 1), ("no_route".into(), None));
+}
+
+#[test]
 fn a_crashing_fetch_does_not_fail_the_route() {
     struct Crash;
     impl TileStream for Crash {
@@ -147,6 +164,8 @@ fn a_crashing_fetch_does_not_fail_the_route() {
     c.set_stream(Some(s));
     let p = c.prepare_tiles(&[(42.5, -113.8)]);
     assert_eq!(p.state, FetchState::Failed);
+    // the route still runs; nothing is known about the tiles, so the failure is told as missing road data
     let (out, _) = route(&c, &req(vec![])).unwrap();
-    assert_eq!(out["errors"][0]["code"], "no_route");
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["errors"][0]["code"], "no_road_data");
 }

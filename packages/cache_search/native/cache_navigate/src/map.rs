@@ -306,7 +306,9 @@ pub fn app_error(e: &cache_offroad::directions::DirectionsError, prep: &crate::T
                 let end = if i == 0 { "from" } else if i == last { "to" } else { "via" };
                 return ("no_road_data".into(), Some(end));
             }
-            if prep.missing > 0 {
+            // tiles missing between the stops; or the fetch did not finish and the index is not known, so nothing is known
+            // about them
+            if prep.missing > 0 || (prep.state != crate::FetchState::Done && !prep.index_known) {
                 return ("no_road_data".into(), None);
             }
             ("no_route".into(), None)
