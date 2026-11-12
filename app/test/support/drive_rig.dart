@@ -136,6 +136,9 @@ class DriveRig {
   late Map<String, dynamic> route;
   late RouteElevation elevation;
 
+  /// The profile the elevation loader gives (the sample one; a picture or test may give one with no data).
+  ElevationProfile Function() profile = driveProfile;
+
   Future<void> setUp() async {
     dir = Directory.systemTemp.createTempSync('drive');
     location = LocationService(source: _NoSource(), settingsDirOverride: dir);
@@ -143,7 +146,7 @@ class DriveRig {
     location.publish(fixAt(42.5, -113.8));
     backend = FakeBackend();
     nav = DriveNav(backend, location);
-    elevation = RouteElevation(loader: (r) async => driveProfile());
+    elevation = RouteElevation(loader: (r) async => profile());
   }
 
   void tearDown() {

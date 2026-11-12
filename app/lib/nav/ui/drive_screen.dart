@@ -15,12 +15,9 @@ import 'elevation_panel.dart';
 import 'guidance_panels.dart';
 
 /// How much of the room between the top of the screen and the bottom bar the list of turns takes while the phone carries the route
-/// mini map and the elevation too; they share the rest. The owner picks the split from pictures of both (one half and two thirds);
-/// change it here and nowhere else. When the car carries the two (a big car screen) the list has the whole room.
-const double kDriveTurnsShare = 1 / 2;
-
-/// Under this much room for the mini map and the elevation they sit side by side instead of one over the other.
-const double kDriveSideBySideBelow = 260;
+/// mini map and the elevation too; they share the rest, side by side. The owner chose two thirds from pictures (2026-11-12); change
+/// it here and nowhere else. When the car carries the two (a big car screen) the list has the whole room.
+const double kDriveTurnsShare = 2 / 3;
 
 /// The phone's drive screen: what the Maps tab shows while a car screen is connected and guiding. The next turn first (the
 /// phone's own turn banner, with its lane arrows when it has them), then the turns after it with the stops where they come, and
@@ -34,7 +31,6 @@ class DriveScreen extends StatelessWidget {
     required this.palette,
     required this.themeId,
     this.extras = CarExtras.never,
-    this.turnsShare = kDriveTurnsShare,
   });
 
   final NavState nav;
@@ -44,9 +40,6 @@ class DriveScreen extends StatelessWidget {
 
   /// Where the car carries the mini map and the elevation. On this screen they are drawn unless the car always carries them.
   final CarExtras extras;
-
-  /// The share of the room the list of turns takes while the extras are drawn ([kDriveTurnsShare]).
-  final double turnsShare;
 
   /// The mini map and the elevation are on the phone's screen (this screen is showing, so [CarExtras.unlessPhoneShows] counts).
   bool get showsExtras => extras != CarExtras.always;
@@ -67,7 +60,7 @@ class DriveScreen extends StatelessWidget {
                 builder: (context, _) => LayoutBuilder(
                   builder: (context, box) {
                     final room = box.maxHeight;
-                    final turnsH = showsExtras ? room * turnsShare.clamp(0.2, 0.9) : room;
+                    final turnsH = showsExtras ? room * kDriveTurnsShare : room;
                     return Column(
                       children: [
                         SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
@@ -247,7 +240,7 @@ class DriveRow {
   }
 }
 
-/// The route mini map and the elevation: one over the other, or side by side when the room is low.
+/// The route mini map and the elevation, side by side.
 class DriveExtras extends StatelessWidget {
   const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId});
 
@@ -264,36 +257,18 @@ class DriveExtras extends StatelessWidget {
     final overview = r == null
         ? null
         : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
-    final mini = overview == null ? null : DriveMiniMap(overview: overview, themeId: themeId);
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
-    return LayoutBuilder(
-      builder: (context, box) {
-        final side = box.maxHeight < kDriveSideBySideBelow;
-        const pad = EdgeInsets.fromLTRB(12, 4, 12, 4);
-        if (mini == null) return Padding(padding: pad, child: chart);
-        if (side) {
-          return Padding(
-            padding: pad,
-            child: Row(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: overview == null
+          ? chart
+          : Row(
               children: [
-                Expanded(flex: 4, child: mini),
+                Expanded(flex: 4, child: DriveMiniMap(overview: overview, themeId: themeId)),
                 const SizedBox(width: 8),
                 Expanded(flex: 6, child: chart),
               ],
             ),
-          );
-        }
-        return Padding(
-          padding: pad,
-          child: Column(
-            children: [
-              Expanded(flex: 10, child: mini),
-              const SizedBox(height: 8),
-              Expanded(flex: 10, child: chart),
-            ],
-          ),
-        );
-      },
     );
   }
 }

@@ -233,7 +233,7 @@ void main() {
     });
     tearDown(() => rig.tearDown());
 
-    Future<void> show(WidgetTester tester, {CarExtras extras = CarExtras.never, double? share, CacheThemeId theme = CacheThemeId.dark}) async {
+    Future<void> show(WidgetTester tester, {CarExtras extras = CarExtras.never, CacheThemeId theme = CacheThemeId.dark}) async {
       tester.view.physicalSize = const Size(390, 844) * 3;
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
@@ -246,7 +246,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(theme),
         home: Scaffold(
-          body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras, turnsShare: share ?? kDriveTurnsShare),
+          body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
         ),
       ));
       await tester.pump();
@@ -362,16 +362,18 @@ void main() {
       expect(find.byKey(const ValueKey('guidance-bar')), findsOneWidget);
     });
 
-    for (final share in [1 / 2, 2 / 3]) {
-      testWidgets('the split is one constant: the list takes ${share.toStringAsFixed(2)} of the room, the extras the rest', (tester) async {
-        await show(tester, share: share);
-        final turns = tester.getSize(find.byType(DriveTurns)).height;
-        final extras = tester.getSize(find.byType(DriveExtras)).height;
-        expect(turns / (turns + extras), closeTo(share, 0.005));
-        expect(find.byKey(const ValueKey('guidance-bar')), findsOneWidget);
-      });
-    }
+    testWidgets('the split is one constant: the list takes two thirds of the room, the extras the rest, side by side', (tester) async {
+      await show(tester);
+      final turns = tester.getSize(find.byType(DriveTurns)).height;
+      final extras = tester.getSize(find.byType(DriveExtras)).height;
+      expect(turns / (turns + extras), closeTo(kDriveTurnsShare, 0.005));
+      expect(find.byKey(const ValueKey('guidance-bar')), findsOneWidget);
+      final mini = tester.getRect(find.byKey(const ValueKey('drive-mini-map')));
+      final elev = tester.getRect(find.byKey(const ValueKey('drive-elevation')));
+      expect(mini.right, lessThan(elev.left));
+      expect(mini.top, closeTo(elev.top, 0.5));
+    });
 
-    test('the default split is one half', () => expect(kDriveTurnsShare, 0.5));
+    test('the split is two thirds', () => expect(kDriveTurnsShare, 2 / 3));
   });
 }
