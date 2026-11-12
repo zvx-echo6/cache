@@ -83,9 +83,10 @@ class GuideSample {
   /// The heights along that trail.
   final Map<String, dynamic> offroadElevation;
 
-  /// The spot pressed for the ring, with the drive in view: open ground north of the turn, where the ring is clear of the
-  /// position chip and the scale.
-  static const GeoPoint ringSpot = GeoPoint(38.73236, -109.53624);
+  /// The spot pressed for the ring, with the drive in view (as the screen fits it: above its panel, clear of the map's buttons):
+  /// open ground just south of the road, east of the turn, where the ring is clear of the position chip, the map's buttons and
+  /// the scale.
+  static const GeoPoint ringSpot = GeoPoint(38.72849, -109.53274);
 
   /// The three points measured, in the place card's view ([arch] in the middle, zoom 14): where the trail leaves the parking,
   /// the arch, and the end of the viewpoint trail west of the parking.
