@@ -21,6 +21,7 @@ release notes).
 - Weather: the status line in Settings > Weather and alerts no longer turns into a warning only because the last update was more than 15 minutes ago; it warns when the data is more than three hours old, there is no connection or an update failed
 - Home: on narrow phones the weather card's conditions with the high and low take a second line instead of being cut off
 - Home: "No alerts known, data expired" is marked with a warning sign, not a green tick
+- Library: going to Home and coming back while a PDF is being added no longer makes the app start and stop that PDF's work over and over (it filled the log with thousands of lines and kept the phone busy)
 - Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are
