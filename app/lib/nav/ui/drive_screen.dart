@@ -280,7 +280,7 @@ double routeAspect(List<GeoPoint> points) {
 
 /// The least height the elevation box gets when it is under the mini map: its title, a chart you can read, the climb line and its
 /// padding at the normal text size (a narrow phone, whose climb line wraps, and larger text, add to it).
-const double kDriveElevationMinHeight = 104;
+const double kDriveElevationMinHeight = 120;
 
 /// The least height the mini map gets when it is stacked above the elevation.
 const double kDriveMiniMinHeight = 56;
@@ -414,25 +414,33 @@ class DriveElevation extends StatelessWidget {
               Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3))),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('Steepest climb ahead', maxLines: 1, style: TextStyle(fontSize: 14, height: 1.15, color: k.secondary))),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text.rich(
-                        TextSpan(children: [
-                          // While the chunks are still coming and none holds a climb yet, no value (not "None", not a message).
-                          TextSpan(text: steep == null ? (elevation.loading ? ' ' : 'None') : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
-                          if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
-                        ]),
-                        maxLines: 1,
-                        style: TextStyle(fontSize: 14, height: 1.15, color: k.text),
-                      ),
-                    ),
-                  ],
+                child: LayoutBuilder(
+                  builder: (context, line) {
+                    // While the chunks are still coming and none holds a climb yet, no value (not "None", not a message).
+                    final value = [
+                      TextSpan(text: steep == null ? (elevation.loading ? ' ' : 'None') : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
+                    ];
+                    final label = TextSpan(text: 'Steepest climb ahead', style: TextStyle(color: k.secondary));
+                    const base = TextStyle(fontSize: 14, height: 1.15);
+                    // Where the box is wide (stacked under the mini map) the label and the figures share one line; where it is
+                    // narrow they are two lines.
+                    if (line.maxWidth >= 260) {
+                      return FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text.rich(TextSpan(style: TextStyle(color: k.text), children: [label, const TextSpan(text: '  '), ...value]), maxLines: 1, style: base),
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text.rich(label, maxLines: 1, style: base)),
+                        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text.rich(TextSpan(style: TextStyle(color: k.text), children: value), maxLines: 1, style: base)),
+                      ],
+                    );
+                  },
                 ),
               ),
             ],

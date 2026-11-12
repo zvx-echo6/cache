@@ -479,8 +479,9 @@ void main() {
           ));
           await tester.pump();
           expect(tester.takeException(), isNull);
-          // At large text there is not room for both boxes at their least heights: they sit side by side.
-          expect(scale == 1 ? stackedNow(tester) : sideBySideNow(tester), isTrue);
+          // At large text, or 320 wide (its climb line wraps), there is not room for both boxes at their least heights: they sit
+          // side by side.
+          expect(scale == 1 && w >= 390 ? stackedNow(tester) : sideBySideNow(tester), isTrue);
           expect(find.byKey(const ValueKey('elevation-chart')), findsOneWidget);
           expect(find.byKey(const ValueKey('elevation-steep')), findsOneWidget);
           expect(find.byKey(const ValueKey('guidance-end')), findsOneWidget);
