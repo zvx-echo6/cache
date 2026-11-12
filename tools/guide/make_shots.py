@@ -10,8 +10,9 @@ colours (no dither) and saved with optimize=True into app/assets/guide/shots/<id
 
 A picture with a real map behind the screen (MAPS) is reduced to 256 colours with dithering instead: shaded relief breaks into
 bands at 128 flat colours. Its palette is an octree one, which keeps the few strong colours of a map picture (the position dot,
-a pin, the route) that a median-cut palette gives up for more shades of the land. Its line also says what the same picture
-would weigh in other forms, for choosing how map pictures ship. A picture whose id starts with "compare-" is not a guide
+a pin, the route) that a median-cut palette gives up for more shades of the land; the picture's own large flat colours (a
+panel, a map with no relief) are then put into it exactly, so they stay flat instead of being dithered. Its line also says
+what the same picture would weigh in other forms, for choosing how map pictures ship. A picture whose id starts with "compare-" is not a guide
 picture (two versions of one view, to choose between): it is cut the same way but saved into app/test_shots/guide/compare/,
 outside the app's assets.
 """
@@ -44,9 +45,26 @@ def trim_bottom(im, bg):
     return h
 
 
-def dithered(im, colours=256):
-    """[im] in an octree palette of [colours] colours, with Floyd-Steinberg dithering (quantize() alone does not dither)."""
-    return im.quantize(palette=im.quantize(colors=colours, method=Image.Quantize.FASTOCTREE), dither=Image.Dither.FLOYDSTEINBERG)
+def map_palette(im, colours=256, flats=8, share=0.02):
+    """A palette for a map picture: an octree palette of [colours] colours, in which the palette colour nearest to each of the
+    picture's large flat colours (up to [flats] of them, each at least [share] of the picture) is replaced by that colour."""
+    pal = im.quantize(colors=colours, method=Image.Quantize.FASTOCTREE).getpalette()[:colours * 3]
+    pal += [0] * (colours * 3 - len(pal))
+    taken = set()
+    for n, colour in sorted(im.getcolors(im.width * im.height), reverse=True)[:flats]:
+        if n < share * im.width * im.height:
+            break
+        nearest = min((i for i in range(colours) if i not in taken), key=lambda i: sum((pal[i * 3 + k] - colour[k]) ** 2 for k in range(3)))
+        pal[nearest * 3:nearest * 3 + 3] = colour
+        taken.add(nearest)
+    out = Image.new('P', (1, 1))
+    out.putpalette(pal)
+    return out
+
+
+def dithered(im):
+    """[im] in its map palette, with Floyd-Steinberg dithering (quantize() alone does not dither)."""
+    return im.quantize(palette=map_palette(im), dither=Image.Dither.FLOYDSTEINBERG)
 
 
 def weights(im):
