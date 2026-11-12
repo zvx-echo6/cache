@@ -26,6 +26,11 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../test/navigation_camera_test.dart' show CameraController, NoSurface;
 
+/// The screen the map pictures stand for: a 3x phone, whatever scale the test draws at. The renderer draws the images the screen
+/// adds to its map at this many pixels per point, as that phone's map does (IMAGE_PIXEL_RATIO in tools/guide/maps/render.mjs), so
+/// the screen is told to draw its pin images for that phone (MapsScreen.imagePixelRatio), and the place form's pin is drawn for it.
+const double kGuidePhoneScale = 3;
+
 /// Where a camera update of the map package keeps its numbers, read from the package's own encoding of a known update (so this file
 /// does not depend on their order).
 final List<dynamic> _fitProbe = _fitUpdate(0, 1);

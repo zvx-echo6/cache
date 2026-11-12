@@ -384,6 +384,42 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('directions: a bar beside the choices shows while there is more of them than fits, and only then', (tester) async {
+        // A phone's width, so the off-road choices take the rows they take on a phone.
+        tester.view.physicalSize = const Size(360, 700);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final color = routeChoicesBarColor(cacheTokens[theme]!).toARGB32();
+        bool bar(Symbol method, List<dynamic> args) => method == #drawRRect && args.length == 2 && args[1] is Paint && (args[1] as Paint).color.toARGB32() == color;
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: mode.startsWith('offroad'), mode: mode));
+        await nav.openDirections(hospital);
+        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
+        Future<void> settle() async {
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 400));
+          await tester.pump(const Duration(milliseconds: 400));
+        }
+
+        final choices = find.byKey(const ValueKey('route-choices-bar'));
+        ScrollPosition position() => Scrollable.of(tester.element(find.byKey(const ValueKey('mode-drive')))).position;
+        // Drive, one route: everything fits, and no bar is drawn.
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
+        // Off-road: its choices and the off-road note are more than half the window holds.
+        await nav.setMode('offroad_foot');
+        await settle();
+        expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
+        expect(position().maxScrollExtent, greaterThan(0));
+        expect(choices, paints..something(bar));
+        // Back to what fits: the bar goes.
+        await nav.setMode('drive');
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('directions: finding the way, and an error with Start switched off', (tester) async {
         nav.routing = true;
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));

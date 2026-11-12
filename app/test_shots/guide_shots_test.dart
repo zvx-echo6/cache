@@ -34,7 +34,7 @@ import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
-import 'package:cache/notebook/pin_image.dart' show PinImages, PinStyle;
+import 'package:cache/notebook/pin_image.dart' show PinImages, PinStyle, pinImageRatio;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
@@ -1346,6 +1346,8 @@ void main() {
       glyphsLoader: () async => mapGlyphs,
       snapshotter: m.kit.inset,
       elevation: m.elevation,
+      // The pictures stand for a 3x phone: its pins are drawn for that screen, as the renderer shows them.
+      imagePixelRatio: kGuidePhoneScale,
     ));
     for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
@@ -1462,14 +1464,14 @@ void main() {
     await mapShot(tester, m, 'directions-panel', 'directions');
 
     // Off-road, on foot: the phone is at the Windows parking, and the way to the arch of the place card is its trail. The screen
-    // fits the route into view; the map is then where a person drags it to see the whole trail (GuideSample.offroadView).
+    // fits the route into the free part of the map (with Off-road chosen: the column between the position chip and the map's
+    // buttons), and the picture shows that view.
     m.nav.cancelDirections();
     final foot = m.sample.offroadStart;
     m.r.location.publish(fixAt(foot.lat, foot.lon, heading: m.sample.offroadStartHeading));
     await tester.runAsync(() => m.nav.setMode('offroad_foot'));
     await tester.runAsync(() => m.nav.openDirections(GuideSample.arch));
     await settle(tester);
-    m.kit.movedTo(GuideCamera(lat: GuideSample.offroadView.lat, lon: GuideSample.offroadView.lon, zoom: GuideSample.offroadZoom));
     await mapShot(tester, m, 'directions-offroad', 'offroad');
 
     // The drive again, and guidance along it.
@@ -1503,6 +1505,10 @@ void main() {
     m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
     await settle(tester);
     m.kit.movedTo(GuideCamera(lat: start.lat, lon: start.lon, zoom: 14));
+    // The screen is told where the map is, as the map tells it: north up again after the guidance. Its North up button goes, so
+    // the map's buttons take the room they take in the directions picture and the drive is fitted the same.
+    mapOf(tester).onCameraMove!(CameraPosition(target: LatLng(start.lat, start.lon), zoom: 14));
+    await settle(tester);
     await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
     await settle(tester);
     await holdMap(tester, m, GuideSample.ringSpot);
@@ -1566,7 +1572,7 @@ void main() {
     final images = <String, Uint8List>{};
     final image = (await tester.runAsync(() => PinImages((name, png) async {
       images[name] = png;
-    }, pins).ensure(look.icon.id, look.glyph, look.tint)))!;
+    }, pins, ratio: pinImageRatio(kGuidePhoneScale)).ensure(look.icon.id, look.glyph, look.tint)))!;
     Map<String, dynamic> points(List<Map<String, dynamic>> features) => {'type': 'FeatureCollection', 'features': features};
     kit.writeScene(
       'place-form',
