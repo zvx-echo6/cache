@@ -90,7 +90,7 @@ impl Env {
         let ctx = ToolCtx { location: None, places: &self.places, now: NOW, geocoder: None, live_fetcher: None };
         match t.run(&ctx, &json!({"source": "alerts", "place": "33.36,-105.68"})).unwrap() {
             ToolOutput::Json(v) => v.to_string(),
-            ToolOutput::Text(_) => panic!("text"),
+            ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("text"),
         }
     }
 }
@@ -189,7 +189,7 @@ fn a_distance_field_also_comes_as_a_number_for_the_app_and_inside_the_area_is_ze
     let ctx = ToolCtx { location: None, places: &env.places, now, geocoder: None, live_fetcher: None };
     let text = match t.run(&ctx, &json!({"source": "alerts", "place": "42.536,-113.792"})).unwrap() {
         ToolOutput::Json(v) => v.to_string(),
-        ToolOutput::Text(_) => panic!("text"),
+        ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("text"),
     };
     assert!(text.contains("\"Distance\":\"inside the area\"") && text.contains("\"Distance\":\"11 mi N\""), "{text}");
     assert!(!text.contains("distances") && !text.contains("\"inside\""), "{text}");
