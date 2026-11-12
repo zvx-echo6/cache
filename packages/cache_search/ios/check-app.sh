@@ -36,6 +36,13 @@ flag=$(plist CacheCarPlay 2>/dev/null || true)
 if [[ ${EXPECT_CARPLAY:-false} == true ]]; then
   [[ $carplay == true ]] || fail 'the car screen is on for this build, but the signed app has no CarPlay entitlement'
   [[ $flag == YES ]] || fail 'the car screen is on for this build, but Info.plist does not say so (CacheCarPlay)'
+  # The car screen is used with the phone locked in a pocket: the position and the spoken prompts then need their background
+  # modes. And the car scene is declared in code, not in Info.plist, so its class has to be in the app for CarPlay to open it.
+  modes=$(plist UIBackgroundModes 2>/dev/null || true)
+  for mode in location audio; do
+    grep -qw "$mode" <<< "$modes" || fail "the car screen is on for this build, but the background mode '$mode' is not declared"
+  done
+  LC_ALL=C grep -q -a 'CarPlaySceneDelegate' "$bin" || fail 'the car screen is on for this build, but the car scene (CarPlaySceneDelegate) is not in the app'
 else
   [[ -z $carplay ]] || fail 'the signed app carries the CarPlay entitlement, but the car screen is off for this build'
   [[ $flag == NO ]] || fail 'the car screen is off for this build, but Info.plist says otherwise (CacheCarPlay)'
