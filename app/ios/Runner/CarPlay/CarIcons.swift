@@ -42,13 +42,15 @@ enum CarIcons {
   }
 
   /// The grade marker for the map: a pill with a slope triangle and the grade, in the phone's colours for it (the Android
-  /// car's badge, its sizes).
+  /// car's badge, its sizes at CarExtras.scale: one point for two Android pixels, as the extras, so it takes the same share
+  /// of the screen as on the Android car).
   static func gradeBadge(_ percent: String, colors: CarBadgeColors) -> UIImage {
-    let font = UIFont.systemFont(ofSize: 24, weight: .bold)
+    let s = CGFloat(CarExtras.scale)
+    let font = UIFont.systemFont(ofSize: 24 * s, weight: .bold)
     let glyph = color(colors.glyph)
     let words = NSAttributedString(string: percent, attributes: [.font: font, .foregroundColor: glyph])
-    let height: CGFloat = 36
-    let width = 34 + 12 + ceil(words.size().width)
+    let height: CGFloat = 36 * s
+    let width = (34 + 12) * s + ceil(words.size().width)
     let size = CGSize(width: width + 4, height: height + 4)
     return UIGraphicsImageRenderer(size: size).image { _ in
       let box = CGRect(x: 2, y: 2, width: width, height: height)
@@ -56,18 +58,18 @@ enum CarIcons {
       color(colors.badge).setFill()
       pill.fill()
       color(colors.edge).setStroke()
-      pill.lineWidth = 1.5
+      pill.lineWidth = 1.5 * s
       pill.stroke()
       let cy = box.midY
-      let left = box.minX + 12
+      let left = box.minX + 12 * s
       let slope = UIBezierPath()
-      slope.move(to: CGPoint(x: left, y: cy + 8))
-      slope.addLine(to: CGPoint(x: left + 16, y: cy - 8))
-      slope.addLine(to: CGPoint(x: left + 16, y: cy + 8))
+      slope.move(to: CGPoint(x: left, y: cy + 8 * s))
+      slope.addLine(to: CGPoint(x: left + 16 * s, y: cy - 8 * s))
+      slope.addLine(to: CGPoint(x: left + 16 * s, y: cy + 8 * s))
       slope.close()
       glyph.setFill()
       slope.fill()
-      words.draw(at: CGPoint(x: box.minX + 34, y: cy - words.size().height / 2))
+      words.draw(at: CGPoint(x: box.minX + 34 * s, y: cy - words.size().height / 2))
     }
   }
 

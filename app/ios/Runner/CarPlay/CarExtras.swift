@@ -64,10 +64,10 @@ enum CarExtras {
   static let lineHeight: Double = 64 * scale
   static let lineMinWidth: Double = 200 * scale
   static let lineMaxWidth: Double = 400 * scale
-  /// The vehicle's marker (the arrow, 30 points wide, reaching 15 below the position) and the free map kept on each side
-  /// of it and of the road ahead.
-  static let markerHalf: Double = 15
-  static let markerBelow: Double = 15
+  /// The vehicle's marker (the arrow, Android's 30 pixels wide, reaching 15 below the position, at this scale) and the free
+  /// map kept on each side of it and of the road ahead.
+  static let markerHalf: Double = 15 * scale
+  static let markerBelow: Double = 15 * scale
   static let vehicleSide: Double = 16 * scale
   /// The guidance camera leaves this share of the free map's height above the position (CarMapViewController.placeCamera).
   static let topShare: Double = 0.35

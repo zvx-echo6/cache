@@ -311,13 +311,13 @@ check(wide640.words == "IN_BETWEEN (they fit; 16640 pt of 64092 pt free map, 26 
 check(high640.mode == .oneBox && high640.words == "IN_BETWEEN (they fit; 16640 pt of 103332 pt free map, 16 %; one box)", "640 x 360: the one box, in-between")
 check(short640.mode == .split && short640.fits, "640 x 200 (not run by the harness): too low for the box with its cushions: split")
 check(short640.mini == CGRect(x: 490, y: 122, width: 110, height: 70), "split: the tile in the bottom trailing corner, on the free map's trailing edge")
-check(short640.climb == CGRect(x: 281, y: 160, width: 132.5, height: 32), "split: the one-line card from the leading edge to the vehicle's column")
-check(short640.words == "IN_BETWEEN (they fit; 11940 pt of 51012 pt free map, 23 %; split)", "split: the measure in words")
+check(short640.climb == CGRect(x: 281, y: 160, width: 140, height: 32), "split: the one-line card from the leading edge to the vehicle's column")
+check(short640.words == "IN_BETWEEN (they fit; 12180 pt of 51012 pt free map, 24 %; split)", "split: the measure in words")
 check(CarExtras.bigMaxShare == 0.15, "the one number: 15 % of the free map")
 if let tile = wide640.mini, let card = wide640.climb {
   let keep = CarExtras.keepClear(freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
   check(!tile.intersects(keep) && !card.intersects(keep), "neither piece is over the vehicle or the road ahead")
-  check(keep.minX == 413.5 && keep.maxX == 459.5 && keep.minY == 44, "the vehicle's column: the marker and free map each side, up to the top")
+  check(keep.minX == 421 && keep.maxX == 452 && keep.minY == 44, "the vehicle's column: the marker and free map each side, up to the top")
 }
 let vehicle = CarExtras.vehiclePoint(freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
 check(vehicle.x == 436.5 && near(Double(vehicle.y), 44 + 196 * 0.675, 1e-9), "the vehicle is where the guidance camera draws it")

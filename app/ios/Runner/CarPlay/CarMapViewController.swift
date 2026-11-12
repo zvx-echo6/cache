@@ -436,13 +436,15 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   }
 
   /// The arrowhead pointing up, the position at the picture's middle (which is what the map puts on the position and turns
-  /// the picture about): a pointed chevron with a notch at the back, in the Android car's sizes.
+  /// the picture about): a pointed chevron with a notch at the back, in the Android car's sizes at CarExtras.scale (one point
+  /// for two Android pixels, as the extras), so it takes the same share of the screen as on the Android car.
   private static func arrowPicture(fill: UIColor, outline: UIColor) -> UIImage {
-    let width: CGFloat = 30
-    let ahead: CGFloat = 19
-    let below: CGFloat = 15
-    let notch: CGFloat = 8.5
-    let edge: CGFloat = 3
+    let s = CGFloat(CarExtras.scale)
+    let width: CGFloat = 30 * s
+    let ahead: CGFloat = 19 * s
+    let below: CGFloat = 15 * s
+    let notch: CGFloat = 8.5 * s
+    let edge: CGFloat = 3 * s
     let pad: CGFloat = 2
     let size = CGSize(width: width + 2 * pad, height: 2 * ahead + 2 * pad)
     return UIGraphicsImageRenderer(size: size).image { _ in
