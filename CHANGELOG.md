@@ -24,6 +24,8 @@ release notes).
 - Notebooks: a new place no longer gets a color of its own; it follows its notebook's color, and hiding a place on the map no longer gives it one. A place has its own color only when you pick one that differs from its notebook's
 - Notebooks: changing a notebook's color asks, when some of its places have a color of their own, whether to change all of them (Change all) or keep their colors; the Pin color line now says its places use the notebook's color unless you give one its own
 - Library: the main page of a ZIM shows the ZIM's own title at the top, not the title the page carries (a Wikipedia ZIM's main page said just "Wikipedia")
+- Home search: words said in videos and passages of EPUB books are now listed, and a PDF passage opens with the passage marked
+- Library: a passage on a page numbered with letters, such as iv or A-3, now opens and shows that page
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 
