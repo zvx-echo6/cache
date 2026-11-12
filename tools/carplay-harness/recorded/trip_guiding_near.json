@@ -1,0 +1,23 @@
+{
+  "phase": "guiding",
+  "available": true,
+  "units": "imperial",
+  "routing": false,
+  "error": null,
+  "destination": {"name": "Regional Hospital", "address": "1501 Example Ave", "lat": 10.56, "lon": 20.28},
+  "routes": [
+    {"index": 0, "distanceM": 25400.5, "durationS": 1260, "via": "Via Road 0"}
+  ],
+  "routeIndex": 0,
+  "routeId": "route-0",
+  "voiceOn": true,
+  "arrived": false,
+  "rerouting": false,
+  "position": {"lat": 10.5, "lon": 20.2322, "heading": 90.0},
+  "step": {"turn": "left", "type": "left", "cue": "Turn left onto Road 1.", "road": "Road 1", "distanceM": 90.0},
+  "then": {"turn": "right", "type": "right", "cue": "Turn right onto Road 2.", "road": "Road 2", "distanceM": 2150.0},
+  "currentRoad": "Road 0",
+  "remainingM": 22630.0,
+  "remainingS": 1122,
+  "etaMs": 1794168000000
+}

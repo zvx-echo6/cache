@@ -3,7 +3,8 @@
 # harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
 # up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
 # light one, the panning state and the map's buttons at work, the two lists (Saved places, Search) with the stand-in's
-# recorded places, and the routes to a place chosen there. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
+# recorded places, the routes to a place chosen there, and turn by turn along the stand-in's recorded drive. Then the phone's
+# window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
 #   HARNESS_SIZES   the screens to draw, "WIDTHxHEIGHT@SCALE" in pixels, space separated
@@ -759,8 +760,66 @@ route_pictures() {  # route_pictures <label>: the routes to a place chosen in Sa
   ROUTES="$ROUTES; Start (tap at pixel $at) began the phone's guidance; the free area with the panel: top $nt left $nl bottom $nb right $nr"
 }
 
+GUIDE=""
+GUIDE_MISSING=""
+
+guide_step() {  # guide_step <notification> <log text to wait for, or ""> <picture>: one step, and a picture after it
+  local before=0
+  [ -n "$2" ] && before=$(log_count "$2")
+  notify "$1"
+  if [ -n "$2" ] && ! wait_more "$2" "$before" 12; then
+    GUIDE_MISSING="$GUIDE_MISSING [$1: no new line '$2']"
+  fi
+  sleep 3
+  shot_ext "$3"
+}
+
+guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
+  local label="$1" at before
+  local edge=$((CAR_W - 27 * CAR_S)) bar=$((28 * CAR_S))
+  GUIDE=""
+  GUIDE_MISSING=""
+  # CarPlay's guidance panel: the next turn, the one after, and what is left of the trip.
+  wait_log 'car guidance: turn shown, 2 maneuvers' 12 || GUIDE_MISSING=" [the app did not say the turn is shown]"
+  sleep 3
+  shot_ext "$label-guide"
+  # Nearer the turn (only the distance changes), then past it (the next turn, and arriving after it).
+  guide_step drive "" "$label-guide-near"
+  guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
+  # The voice switch, at the bar's trailing edge: off, and on again. The phone's trip says which way it is.
+  if at=$(tap_until 'car guidance: voice asked off' 3 "$edge" "$bar" $((edge - 8 * CAR_S)) "$bar"); then
+    sleep 3
+    shot_ext "$label-guide-voice-off"
+    GUIDE="the voice switch (tap at pixel $at) asked the phone for silence and shows it"
+    tap_until 'car guidance: voice asked on' 3 "${at%,*}" "${at#*,}" > /dev/null || GUIDE_MISSING="$GUIDE_MISSING [the voice switch did not turn the voice on again]"
+    sleep 2
+  else
+    shot_ext "$label-guide-no-voice-switch"
+    GUIDE_MISSING="$GUIDE_MISSING [the voice switch did not answer a tap at the bar's trailing edge]"
+  fi
+  # The same in the light setting (told by the harness, as for the map), and dark again.
+  guide_step day 'car map: style loaded, light' "$label-guide-light-told-by-harness"
+  before=$(log_count 'car map: style loaded, dark')
+  notify night
+  wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [night: the dark style did not come back]"
+  # Off the route (the phone looks for a new one), then arrived.
+  guide_step drive 'car guidance: rerouting' "$label-guide-rerouting"
+  guide_step drive 'car guidance: arrived' "$label-guide-arrived"
+  # End route, the bar's text button beside the voice switch.
+  before=$(log_count 'car link: trip browsing')
+  if at=$(tap_until 'car guidance: End route pressed' 2 $((CAR_W - 85 * CAR_S)) "$bar" $((CAR_W - 105 * CAR_S)) "$bar" $((CAR_W - 68 * CAR_S)) "$bar" $((CAR_W - 125 * CAR_S)) "$bar" $((CAR_W - 145 * CAR_S)) "$bar"); then
+    wait_more 'car link: trip browsing' "$before" 8 || GUIDE_MISSING="$GUIDE_MISSING [the phone was not asked to end its guidance]"
+    sleep 3
+    shot_ext "$label-guide-ended"
+    GUIDE="$GUIDE; End route (tap at pixel $at) ended it on the car and on the phone"
+  else
+    shot_ext "$label-guide-not-ended"
+    GUIDE_MISSING="$GUIDE_MISSING [End route did not answer taps in the bar]"
+  fi
+}
+
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
-  local try lit
+  local try lit=""
   CAR_W=$1
   CAR_H=$2
   CAR_S=$3
@@ -770,7 +829,19 @@ bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulato
     ANCHOR=""
     write_carplay_config "$1" "$2" "$3"
     run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
-    open_carplay || return 1
+    if ! open_carplay; then
+      [ "$try" = 2 ] && return 1
+      # Seen once: after a boot the Simulator had its windows, but nothing answered questions about them for minutes, and the
+      # simulator itself had become slow. The simulator service is started afresh, and the size gets one more boot.
+      say "the CarPlay window was not found at $1x$2 (boot $try): the simulator service is started afresh, then one more boot"
+      shot_host "no-window-$4-boot$try"
+      killall Simulator > /dev/null 2>&1
+      xcrun simctl shutdown all > /dev/null 2>&1
+      killall -9 com.apple.CoreSimulator.CoreSimulatorService > /dev/null 2>&1
+      killall "System Events" > /dev/null 2>&1
+      sleep 10
+      continue
+    fi
     # A boot whose CarPlay display stays black happens now and then: looked for, waited for, and booted again once.
     for lit in 1 2 3 4; do
       xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.lit.png" > /dev/null 2>&1
@@ -878,6 +949,16 @@ for size in $SIZES; do
               result "FAILED $label routes:$ROUTES_MISSING; $ROUTES"
             else
               result "OK $label routes: $ROUTES; shots/$label-{routes,routes-left,routes-error,routes-error-left,routes-again,routes-more,routes-other,routes-started}.png"
+              # Turn by turn, from the Start just pressed.
+              guide_pictures "$label"
+              if grep -q 'car scene disconnected' "$STREAM"; then
+                result "FAILED $label guidance: the car scene was disconnected while guidance was pictured; $GUIDE"
+                host_crash=1
+              elif [ -n "$GUIDE_MISSING" ]; then
+                result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
+              else
+                result "OK $label guidance: the next turn, nearer it, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+              fi
             fi
           fi
         fi

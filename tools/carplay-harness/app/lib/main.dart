@@ -18,6 +18,8 @@ const MethodChannel _build = MethodChannel('cache/build');
 const MethodChannel _car = MethodChannel('co.cache/car');
 const MethodChannel _steps = MethodChannel('harness/steps');
 const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
+// The recorded drive, moved along by the job while guiding.
+const List<String> _drive = <String>['trip_guiding', 'trip_guiding_near', 'trip_guiding_next', 'trip_rerouting', 'trip_arrived'];
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,6 +39,8 @@ class _HarnessAppState extends State<HarnessApp> {
   int _pushed = 0;
   int _phase = 0;
   bool _noSaved = false;
+  int _frame = 0;
+  bool _voiceOn = true;
 
   @override
   void initState() {
@@ -66,6 +70,11 @@ class _HarnessAppState extends State<HarnessApp> {
         case 'next':
           _phase = (_phase + 1) % _phases.length;
           await _push();
+        case 'drive':
+          if (_phase == 2) {
+            _frame = (_frame + 1) % _drive.length;
+            await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
+          }
         case 'nosaved':
         case 'saved':
           // The phone's saved places changed: none are left, or the recorded ones are back.
@@ -123,12 +132,20 @@ class _HarnessAppState extends State<HarnessApp> {
         return null;
       case 'start':
         _phase = 2;
+        _frame = 0;
         await _push();
         return true;
       case 'cancel':
+      case 'stop':
         _phase = 0;
         await _push();
         return null;
+      case 'voice':
+        // The phone's voice switch: the trip says which way it is.
+        final Object? wanted = call.arguments;
+        _voiceOn = wanted is Map && wanted['on'] == true;
+        if (_phase == 2) await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
+        return _voiceOn;
       case 'style':
         // As car_bridge.dart answers: the style as text, and the colours of what the car draws on top.
         final Object? asked = call.arguments;
@@ -139,7 +156,9 @@ class _HarnessAppState extends State<HarnessApp> {
   }
 
   Future<void> _pushRaw(String trip, String route) async {
-    await _car.invokeMethod<void>('trip', jsonDecode(trip));
+    final Map<String, dynamic> message = jsonDecode(trip) as Map<String, dynamic>;
+    message['voiceOn'] = _voiceOn;
+    await _car.invokeMethod<void>('trip', message);
     _pushed++;
     await _car.invokeMethod<void>('route', jsonDecode(route));
   }
@@ -147,9 +166,8 @@ class _HarnessAppState extends State<HarnessApp> {
   /// The trip of the phase and then its route line, in the order car_bridge.dart pushes them.
   Future<void> _push() async {
     final String phase = _phases[_phase];
-    await _car.invokeMethod<void>('trip', jsonDecode(recorded['trip_$phase']!));
-    _pushed++;
-    await _car.invokeMethod<void>('route', jsonDecode(recorded[phase == 'browsing' ? 'route_none' : 'route_$phase']!));
+    if (phase == 'guiding') _frame = 0;
+    await _pushRaw(recorded['trip_$phase']!, recorded[phase == 'browsing' ? 'route_none' : 'route_$phase']!);
     _say('A car is connected: $_pushed recorded trips pushed to it, the last one $phase.');
   }
 

@@ -9,6 +9,8 @@ import UIKit
 /// harness app alone. The job asks with a Darwin notification (`xcrun simctl spawn <device> notifyutil -p <name>`):
 ///
 /// - `org.example.carharness.next`: the stand-in Dart side moves on to its next recorded trip (channel `harness/steps`).
+/// - `org.example.carharness.drive`: while guiding, the stand-in Dart side moves on along its recorded drive (nearer the
+///   turn, the next turn, looking for a new route, arrived, and round again).
 /// - `org.example.carharness.nosaved` and `.saved`: the stand-in Dart side has no saved places, or has its recorded ones
 ///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
@@ -17,7 +19,7 @@ import UIKit
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
-  private static let toDart: [String] = ["next", "nosaved", "saved"]
+  private static let toDart: [String] = ["next", "nosaved", "saved", "drive"]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     channel = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())

@@ -18,7 +18,8 @@ enum CarPlayBuild {
 /// position from it; the turn, the distances and the arrival time are not shown yet.
 ///
 /// While the routes to a place are up (CarTemplates) the bar holds Back in place of the two buttons, and CarPlay's own route
-/// panel is on the map.
+/// panel is on the map. While the phone guides (CarGuidance) the bar holds End route and the voice switch, as on the Android
+/// guidance screen, and CarPlay's own guidance panel is on the map.
 ///
 /// The map's buttons, as on the Android car screen: Pan, Recenter (only after the map was moved), Zoom in, Zoom out. CarPlay
 /// gives no way out of its panning arrows and shows at most two map buttons with them: while panning the two are Zoom in and
@@ -30,6 +31,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var mapTemplate: CPMapTemplate?
   private var mapController: CarMapViewController?
   private var templates: CarTemplates?
+  private var guidance: CarGuidance?
   private var panning = false
   private var heldPan: Timer?
   private var lastStep: TimeInterval = 0
@@ -38,6 +40,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private lazy var savedButton = barButton("bookmark") { [weak self] in self?.templates?.openSaved() }
   private lazy var backButton = barButton("chevron.backward") { [weak self] in self?.templates?.leaveRoutes() }
   private lazy var doneButton = CPBarButton(title: "Done") { [weak self] _ in self?.endPanning() }
+  private lazy var endRouteButton = CPBarButton(title: CarGuidance.endRoute) { [weak self] _ in self?.guidance?.endRoutePressed() }
+  private lazy var voiceOnButton = barButton("speaker.wave.2.fill") { [weak self] in self?.guidance?.voicePressed() }
+  private lazy var voiceOffButton = barButton("speaker.slash.fill") { [weak self] in self?.guidance?.voicePressed() }
   private lazy var panButton = mapButton("arrow.up.and.down.and.arrow.left.and.right") { [weak self] in self?.beginPanning() }
   private lazy var recenterButton = mapButton("location.fill") { [weak self] in self?.mapController?.recenter() }
   private lazy var zoomInButton = mapButton("plus") { [weak self] in self?.mapController?.zoomIn() }
@@ -70,6 +75,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let template = CPMapTemplate()
     template.mapDelegate = self
     lists.mapTemplate = template
+    // Guidance after the lists: when the phone begins to guide, the route panel has gone before the guidance panel comes.
+    let turns = CarGuidance(mapTemplate: template)
+    turns.onChanged = { [weak self] in self?.showButtons() }
+    guidance = turns
     // The buttons stay: by default the bar hides after a while with no touch.
     template.automaticallyHidesNavigationBar = false
     mapTemplate = template
@@ -106,6 +115,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   ) {
     stopHeldPan()
     panning = false
+    guidance?.close()
+    guidance = nil
     templates?.close()
     templates = nil
     mapController?.release()
@@ -172,6 +183,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     buttons.append(zoomInButton)
     buttons.append(zoomOutButton)
     template.mapButtons = buttons
+    if let turns = guidance, turns.guiding {
+      // End route and, at the edge, the voice switch (the trailing buttons are laid out from the edge inwards).
+      template.leadingNavigationBarButtons = []
+      template.trailingNavigationBarButtons = [turns.voiceOn ? voiceOnButton : voiceOffButton, endRouteButton]
+      return
+    }
     if let lists = templates, lists.previewing {
       // The routes to a place are up: Back leaves them, as on the Android route screen.
       template.leadingNavigationBarButtons = [backButton]
@@ -202,6 +219,18 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
   func mapTemplate(_ mapTemplate: CPMapTemplate, startedTrip trip: CPTrip, using routeChoice: CPRouteChoice) {
     templates?.startPressed(routeChoice)
+  }
+
+  // ---- guidance (CarGuidance has the rest) ---------------------------------------------------------------------------------
+
+  /// The car's own navigation, or another app's, took guidance over.
+  func mapTemplateDidCancelNavigation(_ mapTemplate: CPMapTemplate) {
+    guidance?.takenOver()
+  }
+
+  /// While another app is in front on the car screen, CarPlay shows the next turn as a banner.
+  func mapTemplate(_ mapTemplate: CPMapTemplate, shouldShowNotificationFor maneuver: CPManeuver) -> Bool {
+    true
   }
 
   // ---- panning -------------------------------------------------------------------------------------------------------------

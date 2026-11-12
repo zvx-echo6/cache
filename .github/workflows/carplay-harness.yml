@@ -47,7 +47,7 @@ env:
 jobs:
   pictures:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 85
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -60,7 +60,7 @@ jobs:
       - name: Build the harness app from the product's iOS sources
         run: bash tools/carplay-harness/build.sh
       - name: CarPlay pictures
-        timeout-minutes: 40
+        timeout-minutes: 65
         run: bash tools/carplay-harness/capture.sh
       - name: Results
         if: ${{ !cancelled() }}
