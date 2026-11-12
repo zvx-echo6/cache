@@ -243,6 +243,14 @@ class NavState extends ChangeNotifier {
     return out;
   }
 
+  /// The stops the route being followed goes through, in its order, each with the number [numberedStopsAhead] gives it (its place
+  /// among that route's stops, the number the turn banner says), passed ones included: the n-th stop maneuver of the route is
+  /// the n-th of these. The drive screen's list reads its stop rows from here.
+  List<(int, MapPlace)> get routeStopsInOrder => [
+        for (final (k, i) in _routeStops.indexed)
+          if (i < stops.length) (k + 1, stops[i]),
+      ];
+
   /// The places in [stops] that are not passed, in order: what a route from here goes through.
   List<int> _aheadIndexes() => [
         for (var i = 0; i < stops.length; i++)

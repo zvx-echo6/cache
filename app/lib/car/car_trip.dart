@@ -18,7 +18,7 @@ import 'car_overlay.dart';
 /// [elevation] is the current route's profile (null: none yet), [theme] the phone's chosen theme, and [overlay] the two switches
 /// of the climb card and the route mini map (see car_overlay.dart): the car paints those from the `climb`, `overview` and
 /// `palette` blocks while guiding.
-Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading, ElevationProfile? elevation, CacheThemeId theme = CacheThemeId.dark, Map<String, bool>? overlay}) {
+Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading, ElevationProfile? elevation, Climb? Function(double posM)? climbAhead, CacheThemeId theme = CacheThemeId.dark, Map<String, bool>? overlay}) {
   final p = nav.progress;
   final r = nav.route;
   final dest = nav.selected;
@@ -57,8 +57,8 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
       'palette': carOverlayPalette(theme),
       if (r != null) ...{
         // Never on arrival: there is no climb ahead of a vehicle that is there.
-        'climb': ?(nav.arrived ? null : carClimb(elevation, distanceAlongM: p.distanceAlongM, routeM: r.distanceM)),
-        'overview': ?carOverview(r, distanceAlongM: p.distanceAlongM, profile: elevation, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon)),
+        'climb': ?(nav.arrived ? null : carClimb(elevation, distanceAlongM: p.distanceAlongM, routeM: r.distanceM, climbAhead: climbAhead)),
+        'overview': ?carOverview(r, distanceAlongM: p.distanceAlongM, profile: elevation, climbAhead: climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon)),
       },
     },
   };

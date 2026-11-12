@@ -29,6 +29,8 @@ import '../nav/elevation/route_elevation.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
+import '../car/phone_drive.dart';
+import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
 import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
@@ -248,12 +250,20 @@ const int kRouteRefits = 4;
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true});
 
   /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
   /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
   @visibleForTesting
   final double? imagePixelRatio;
+
+  /// The car link of the drive screen: while a car screen is connected and guiding, this tab shows the drive screen (the list of
+  /// turns, the route mini map and the elevation) instead of the map, and tells the car so ([PhoneDriveSignal]). Null: no car
+  /// screen on this platform, the tab is always the map.
+  final PhoneDrive? drive;
+
+  /// This tab is the one on screen (the app's Maps tab is selected). The drive screen counts as showing only then.
+  final bool active;
 
   /// The route's elevation profile; null: worked out from the layer engine's elevation tiles (tests give their own).
   final RouteElevation? elevation;
@@ -365,7 +375,41 @@ class _MapsScreenState extends State<MapsScreen> {
 
   /// Drawing an area to download as a region.
   bool _drawing = false;
-  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork(), onStateChange: _onLifecycle);
+
+  // ---- the drive screen (a car screen is connected and guiding) ----
+
+  /// Cache is in front and the phone is unlocked (the app is resumed; a locked or backgrounded phone is not).
+  bool _inFront = (WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed) == AppLifecycleState.resumed;
+
+  /// The last build drew the drive screen, and this screen is in front of the route it is on.
+  bool _driveBuilt = false;
+  bool _routeCurrent = true;
+
+  /// The drive screen replaces the map while a car screen is connected and guiding.
+  bool get _driveOn => widget.drive != null && widget.drive!.carConnected.value && nav.guiding;
+
+  void _onLifecycle(AppLifecycleState s) {
+    _inFront = s == AppLifecycleState.resumed;
+    _reportDrive();
+  }
+
+  void _onCarLink() {
+    if (!mounted) return;
+    if (!_driveOn) _driveBuilt = false;
+    _reportDrive();
+    setState(() {});
+  }
+
+  /// Tells the car the truth at once: the drive screen is showing to a person only when it is built, Cache is in front and
+  /// unlocked, the Maps tab is selected and this page is the one on top. Every way it stops showing comes through here the
+  /// moment it happens, not at the next frame.
+  void _reportDrive() {
+    final d = widget.drive;
+    if (d == null) return;
+    final on = _driveOn && _driveBuilt && _inFront && widget.active && _routeCurrent;
+    if (d.signal.value != on) d.signal.value = on;
+  }
 
   MapsState get maps => widget.maps;
   NavState get nav => widget.nav;
@@ -387,6 +431,7 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
     _elevation.addListener(_onElevation);
+    widget.drive?.carConnected.addListener(_onCarLink);
     _lifecycle;
     // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
     // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
@@ -416,6 +461,11 @@ class _MapsScreenState extends State<MapsScreen> {
   void didUpdateWidget(MapsScreen old) {
     super.didUpdateWidget(old);
     if (old.themeId != widget.themeId) _scheduleRestyle();
+    if (old.drive != widget.drive) {
+      old.drive?.carConnected.removeListener(_onCarLink);
+      widget.drive?.carConnected.addListener(_onCarLink);
+    }
+    if (old.active != widget.active) _reportDrive();
   }
 
   @override
@@ -423,6 +473,9 @@ class _MapsScreenState extends State<MapsScreen> {
     final c = _controller;
     if (c != null) phoneMapRest.remove(c);
     _lifecycle.dispose();
+    _driveBuilt = false;
+    _reportDrive();
+    widget.drive?.carConnected.removeListener(_onCarLink);
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
     nav.removeListener(_onNav);
@@ -666,8 +719,12 @@ class _MapsScreenState extends State<MapsScreen> {
 
   void _onNav() {
     if (!mounted) return;
+    if (!_driveOn) {
+      _driveBuilt = false;
+      _reportDrive();
+    }
     _pushNav();
-    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
     if (!nav.guiding || nav.arrived) {
       _swapped = false;
       if (!nav.guiding) _elevation.setOpen(false);
@@ -1457,9 +1514,34 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final style = _initialStyle;
-    return Scaffold(
+    final map = Scaffold(
       resizeToAvoidBottomInset: false,
       body: style == null ? _waiting(context) : _mapStack(context, style, k),
+    );
+    final drive = widget.drive;
+    if (drive == null) return map;
+    // While a car screen is connected and guiding the drive screen is what shows; the map is kept (not drawn) so it is there at
+    // once when the car goes or guidance ends. With no car it is exactly the map screen.
+    _routeCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    final on = _driveOn;
+    if (on) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_driveOn) return;
+        _driveBuilt = true;
+        _reportDrive();
+      });
+    } else {
+      _driveBuilt = false;
+    }
+    _reportDrive();
+    return Stack(
+      children: [
+        Positioned.fill(child: Offstage(offstage: on, child: TickerMode(enabled: !on, child: map))),
+        if (on)
+          Positioned.fill(
+            child: DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId),
+          ),
+      ],
     );
   }
 
