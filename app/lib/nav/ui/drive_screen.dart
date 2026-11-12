@@ -19,11 +19,16 @@ import 'guidance_panels.dart';
 /// it here and nowhere else. When the car carries the two (a big car screen) the list has the whole room.
 const double kDriveTurnsShare = 2 / 3;
 
+/// The other form, for a wide route only (the owner is choosing between them from pictures): the list takes half of the room and
+/// the stacked boxes the other half, each at a proper height. Off until he chooses; one constant switches it for everyone.
+const bool kDriveWideHalf = false;
+const double kDriveWideTurnsShare = 1 / 2;
+
 /// The phone's drive screen: what the Maps tab shows while a car screen is connected and guiding. The next turn first (the
 /// phone's own turn banner, with its lane arrows when it has them), then the turns after it with the stops where they come, and
 /// under them the route mini map and the elevation, which the car's screen does not carry (see [CarExtras]). The guidance bar at
 /// the foot is the phone's own, with the same voice switch and End.
-class DriveScreen extends StatelessWidget {
+class DriveScreen extends StatefulWidget {
   const DriveScreen({
     super.key,
     required this.nav,
@@ -31,12 +36,21 @@ class DriveScreen extends StatelessWidget {
     required this.palette,
     required this.themeId,
     this.extras = CarExtras.never,
+    this.wideHalf = kDriveWideHalf,
+    this.sideBySideOnly = false,
   });
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
+
+  /// For a wide route the list takes [kDriveWideTurnsShare] of the room instead of [kDriveTurnsShare] ([kDriveWideHalf]).
+  final bool wideHalf;
+
+  /// Pictures only: every route is shown side by side, whatever its shape.
+  @visibleForTesting
+  final bool sideBySideOnly;
 
   /// Where the car carries the mini map and the elevation. On this screen they are drawn unless the car always carries them.
   final CarExtras extras;
@@ -45,8 +59,31 @@ class DriveScreen extends StatelessWidget {
   bool get showsExtras => extras != CarExtras.always;
 
   @override
+  State<DriveScreen> createState() => _DriveScreenState();
+}
+
+class _DriveScreenState extends State<DriveScreen> {
+  NavState get nav => widget.nav;
+  RouteElevation get elevation => widget.elevation;
+
+  String? _forRoute;
+  bool? _stacked;
+
+  /// Whether the route's two boxes stack: chosen when the route changes (the first route, or a re-route), not at each update.
+  bool _stackedNow() {
+    final r = nav.route;
+    if (r == null || widget.sideBySideOnly) return false;
+    if (_forRoute != r.routeId) {
+      _forRoute = r.routeId;
+      _stacked = driveStacked(routeAspect(r.points), previous: _stacked);
+    }
+    return _stacked ?? false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final themeId = widget.themeId, palette = widget.palette;
     return Material(
       key: const ValueKey('drive-screen'),
       color: k.background,
@@ -60,13 +97,15 @@ class DriveScreen extends StatelessWidget {
                 builder: (context, _) => LayoutBuilder(
                   builder: (context, box) {
                     final room = box.maxHeight;
-                    final turnsH = showsExtras ? room * kDriveTurnsShare : room;
+                    final stacked = widget.showsExtras && _stackedNow();
+                    final share = stacked && widget.wideHalf ? kDriveWideTurnsShare : kDriveTurnsShare;
+                    final turnsH = widget.showsExtras ? room * share : room;
                     return Column(
                       children: [
                         SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
-                        if (showsExtras)
+                        if (widget.showsExtras)
                           Expanded(
-                            child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId),
+                            child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, stacked: stacked),
                           ),
                       ],
                     );
@@ -288,23 +327,16 @@ const double kDriveMiniMinHeight = 56;
 /// The route mini map and the elevation. Which way they sit is chosen once for a route, by its shape ([driveStacked]):
 /// a wide route stacks (the mini map across the full width, short; the elevation under it, full width), any other sits side by
 /// side (the mini map left, the elevation right). A re-route may change it only when its shape is clearly the other kind.
-class DriveExtras extends StatefulWidget {
-  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId});
+class DriveExtras extends StatelessWidget {
+  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.stacked = false});
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
 
-  @override
-  State<DriveExtras> createState() => _DriveExtrasState();
-}
-
-class _DriveExtrasState extends State<DriveExtras> {
-  String? _forRoute;
-  bool? _stacked;
-
-  NavState get nav => widget.nav;
+  /// The route's boxes stack (see [driveStacked]); the screen decides it once for each route.
+  final bool stacked;
 
   @override
   Widget build(BuildContext context) {
@@ -313,16 +345,10 @@ class _DriveExtrasState extends State<DriveExtras> {
     final dest = nav.selected;
     final overview = r == null
         ? null
-        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: widget.elevation.profile, climbAhead: widget.elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
-    final chart = DriveElevation(nav: nav, elevation: widget.elevation, palette: widget.palette);
+        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, climbAhead: elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
+    final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
     if (overview == null) return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: chart);
-    // Chosen when the route changes (the first route, or a re-route), not at each update.
-    if (_forRoute != r!.routeId) {
-      _forRoute = r.routeId;
-      _stacked = driveStacked(routeAspect(r.points), previous: _stacked);
-    }
-    final mini = DriveMiniMap(overview: overview, themeId: widget.themeId);
-    final stacked = _stacked ?? false;
+    final mini = DriveMiniMap(overview: overview, themeId: themeId);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       child: LayoutBuilder(
@@ -343,7 +369,7 @@ class _DriveExtrasState extends State<DriveExtras> {
               ],
             );
           }
-          final natural = (box.maxWidth - 48) / math.min(routeAspect(r.points), 8) + 48;
+          final natural = (box.maxWidth - 48) / math.min(routeAspect(r!.points), 8) + 48;
           final miniH = math.max(kDriveMiniMinHeight, math.min(natural, avail - elevMin));
           return Column(
             children: [

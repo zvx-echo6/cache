@@ -515,7 +515,7 @@ void main() {
     });
 
     testWidgets('the split is one constant: the list takes two thirds of the room, the extras the rest, side by side', (tester) async {
-      await show(tester);
+      await show(tester, aspect: 1.0);
       final turns = tester.getSize(find.byType(DriveTurns)).height;
       final extras = tester.getSize(find.byType(DriveExtras)).height;
       expect(turns / (turns + extras), closeTo(kDriveTurnsShare, 0.005));

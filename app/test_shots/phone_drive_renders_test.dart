@@ -47,6 +47,8 @@ void main() {
     bool shortClimbEnd = false,
     double? partial,
     double? aspect,
+    bool wideHalf = false,
+    bool sideBySideOnly = false,
     bool noElevation = false,
     ElevationProfile Function()? profile,
     Size size = const Size(390, 844),
@@ -104,7 +106,7 @@ void main() {
         builder: (context) => MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
           child: Scaffold(
-            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
+            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras, wideHalf: wideHalf, sideBySideOnly: sideBySideOnly),
             bottomNavigationBar: NavigationBar(
               selectedIndex: 2,
               destinations: const [
@@ -145,6 +147,11 @@ void main() {
   testWidgets('18 a near-square route', (t) => draw(t, '18-near-square', aspect: 1.1));
   testWidgets('19 a wide route, stacked, 320 wide', (t) => draw(t, '19-stacked-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('20 a wide route, stacked, large text', (t) => draw(t, '20-stacked-large-text', stop: true, lanes: true, textScale: 2));
+  testWidgets('21 a wide route (3.5:1), the list half, the boxes stacked in the other half', (t) => draw(t, '21-a-wide-half', aspect: 3.5, wideHalf: true));
+  testWidgets('22 the same route, the list two thirds, the boxes stacked', (t) => draw(t, '22-b-wide-two-thirds-stacked', aspect: 3.5));
+  testWidgets('23 the same route, the list two thirds, side by side', (t) => draw(t, '23-c-wide-two-thirds-side-by-side', aspect: 3.5, sideBySideOnly: true));
+  testWidgets('24 the half form at 320 wide', (t) => draw(t, '24-d-wide-half-320', aspect: 3.5, wideHalf: true, stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
+  testWidgets('25 the half form at large text', (t) => draw(t, '25-e-wide-half-large-text', aspect: 3.5, wideHalf: true, stop: true, lanes: true, textScale: 2));
   testWidgets('10 a 320 point wide phone', (t) => draw(t, '10-small-phone-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('11 large text (2x)', (t) => draw(t, '11-large-text', stop: true, lanes: true, textScale: 2));
 }
