@@ -953,11 +953,10 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
       EXTRAS_SAYS="$EXTRAS: both are drawn; the phone was told '$told'"
       # The phone's drive screen comes up for a second and goes again: inside the pause, so nothing changes on the car.
       before=$(log_count 'car extras: fading')
-      notify phoneon
-      sleep 1
-      notify phoneoff
-      sleep 3
-      [ "$(log_count 'car extras: fading')" = "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [a one-second flip of the phone's screen started a fade]"
+      notify phoneflip
+      sleep 6
+      flip=$(grep 'harness steps: phone drive screen' "$STREAM" | tail -n 2 | cut -c12-23 | tr '\n' ' ')
+      [ "$(log_count 'car extras: fading')" = "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [a one-second flip of the phone's screen started a fade (on and off at $flip)]"
       # It comes up and stays.
       notify phoneon
       case "$EXTRAS" in

@@ -136,6 +136,17 @@ class _HarnessAppState extends State<HarnessApp> {
           final String? route = _lastRoute;
           if (_phase == 2 && last != null && route != null) await _pushRaw(last, route);
           await _steps.invokeMethod<void>('say', 'phone drive screen $_phoneDrive');
+        case 'phoneflip':
+          // The phone's drive screen comes up for one second and goes again, timed here: the job's notifications each take
+          // a second or more to arrive on a busy runner, which made a flip from the job longer than the car's pause.
+          for (final bool on in <bool>[true, false]) {
+            _phoneDrive = on;
+            final String? last = _lastTrip;
+            final String? route = _lastRoute;
+            if (_phase == 2 && last != null && route != null) await _pushRaw(last, route);
+            await _steps.invokeMethod<void>('say', 'phone drive screen $_phoneDrive');
+            if (on) await Future<void>.delayed(const Duration(seconds: 1));
+          }
         case 'prompt':
           // As the phone's voice before each prompt (CarAwareSpeaker): how may it be given at this moment?
           final Object? how = await _car.invokeMethod<Object?>('prompt', <String, Object?>{'text': 'Turn left.'});
