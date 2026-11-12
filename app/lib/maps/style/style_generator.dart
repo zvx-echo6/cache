@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
-import '../../notebook/pin_image.dart' show PinStyle;
+import '../../notebook/pin_image.dart' show PinStyle, pinIconSize;
 import '../../theme.dart' show CacheThemeId;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
@@ -54,9 +54,6 @@ const String kMeasureLine = 'measure-line';
 const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
-
-/// Pixels per point of the pin images (renderPinPng): the symbol layer draws them this much smaller.
-const double kPinImageRatio = 3;
 
 /// The name of the heading marker image the screen adds to the style.
 const String kHeadingImage = 'position-heading';
@@ -468,7 +465,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['==', ['geometry-type'], 'Point'],
           'layout': {
             'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical),
-            'icon-size': 1 / kPinImageRatio,
+            'icon-size': pinIconSize(),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -489,7 +486,8 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         }
       else
         // A notebook's places with their icon: one image per style, icon and colour (named in the feature's `pin`, see
-        // notebook_map.dart), drawn at 1/kPinImageRatio of its pixels. The teardrop's point is the bottom of its image.
+        // notebook_map.dart), drawn at the size that makes it its points on this kind of map (pinIconSize, pin_image.dart). The
+        // teardrop's point is the bottom of its image.
         {
           'id': kNotebookPins,
           'type': 'symbol',
@@ -497,7 +495,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['has', 'pin'],
           'layout': {
             'icon-image': ['get', 'pin'],
-            'icon-size': 1 / kPinImageRatio,
+            'icon-size': pinIconSize(),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,

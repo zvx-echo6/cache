@@ -1,6 +1,7 @@
 package com.happylittlellc.cache.car
 
 import android.content.Context
+import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
@@ -9,22 +10,40 @@ import io.flutter.plugin.common.MethodChannel
 import com.happylittlellc.cache.BuildConfig
 
 /**
- * The app's one Flutter engine, shared by the phone screen (MainActivity) and the car screen (CacheCarAppService).
+ * The app's one Flutter engine, shared by the phone screen (MainActivity) and the car screen (CacheCarAppService) and kept for
+ * the life of the process.
  *
- * Guidance lives in Dart (NavState), once. When the car starts Cache with the phone app closed, the car session starts the
- * engine here and runs the app's normal `main`; when the phone app opens later it attaches to that same engine. When the phone
- * app opens first, the car uses its engine. Without a car the phone behaves exactly as before: the engine goes when the activity
- * goes ([releaseFromActivity] says so).
+ * Guidance lives in Dart (NavState), once. Whoever needs the engine first makes it and runs the app's normal `main`: the phone
+ * screen, or the car session when the car starts Cache with the phone app closed. Every phone screen and car session after
+ * that attaches to the same engine and the same running app.
+ *
+ * The engine is never destroyed: not when a car session ends, and not when the phone's activity goes. Destroying it ended only
+ * Dart's main isolate. The app's worker isolates, the search core with its router and tile server threads, the sync engine, a
+ * loaded model and the engine's graphics memory all stayed, and the next car session or phone screen made a new engine and ran
+ * `main` again beside them: more memory with every car session, several sync engines working on the same folders, and a
+ * "stopped unexpectedly" line in the log at every start. See [EngineLife].
  */
 object SharedEngine {
     const val ID = "cache_main"
 
-    private var activityAttached = false
-    private var carSessions = 0
+    private val life = EngineLife<FlutterEngine>(make = { start(it) })
 
-    /** The engine, made and started on first use. Main thread only. */
-    fun obtain(context: Context): FlutterEngine {
-        FlutterEngineCache.getInstance().get(ID)?.let { return it }
+    /** The engine for a phone screen: made and started on first use. Main thread only. */
+    fun obtain(context: Context): FlutterEngine = life.obtain(context)
+
+    /** A phone screen (activity) is being made on the engine. */
+    fun activityStarted() = life.activityStarted()
+
+    /** A phone screen has let go of the engine (it was closed, or another took its place). The engine stays. */
+    fun activityEnded() = life.activityEnded()
+
+    /** A car session starts: it gets the engine, made and started now when nothing made it before. Main thread only. */
+    fun carStarted(context: Context): FlutterEngine = life.carStarted(context)
+
+    /** A car session ended. The engine stays. */
+    fun carEnded() = life.carEnded()
+
+    private fun start(context: Context): FlutterEngine {
         val engine = FlutterEngine(context.applicationContext)
         engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ID, engine)
@@ -46,44 +65,68 @@ object SharedEngine {
             }
         }
     }
+}
+
+/**
+ * The life of the app's engine: made once, by whoever needs it first, and kept until the process ends. Nothing here destroys
+ * it or lets go of it.
+ *
+ * [make] makes and starts the engine; the tests give a stand-in (a real engine needs Flutter's native library).
+ *
+ * Nothing here speaks to the running app about its screens. A phone screen does that itself (Flutter's activity says resumed,
+ * inactive, paused and detached as it comes and goes), and the car session says "connected" on its own channel ([CarLink]).
+ * The car side must never use the engine's lifecycle channel for a session that has no phone screen: on Android an engine
+ * starts in the state "detached", and whatever is sent after that, Flutter first reports as "resumed", which the app reads as
+ * a phone screen coming to the front. (It was tried: "inactive, paused, detached" when the car that had started Cache left
+ * made the app load its chat model.) What the app does when the car leaves and no phone screen is open is its own
+ * (lib/main.dart).
+ */
+internal class EngineLife<E : Any>(
+    private val make: (Context) -> E,
+) {
+    /** The engine, once made. */
+    var engine: E? = null
+        private set
+
+    /** How many engines this process has made: none, then one for the rest of its life. */
+    var made = 0
+        private set
+
+    private var activities = 0
+    private var carSessions = 0
+
+    fun obtain(context: Context): E = get(context, "the phone screen")
+
+    private fun get(context: Context, who: String): E {
+        engine?.let { return it }
+        val e = make(context)
+        engine = e
+        made++
+        Log.i(TAG, "the app engine was made for $who ($made in this process)")
+        return e
+    }
 
     fun activityStarted() {
-        activityAttached = true
+        activities++
     }
 
-    /**
-     * The activity is going. True when the engine should go with it (no car session needs it): it is then taken out of the
-     * cache, and the activity destroys it as it always did.
-     */
-    fun releaseFromActivity(): Boolean {
-        activityAttached = false
-        if (carSessions > 0) return false
-        drop()
-        return true
+    fun activityEnded() {
+        activities = (activities - 1).coerceAtLeast(0)
+        Log.i(TAG, "a phone screen closed: the app engine stays (phone screens $activities, car sessions $carSessions)")
     }
 
-    fun carStarted() {
+    fun carStarted(context: Context): E {
+        val e = get(context, "the car")
         carSessions++
+        return e
     }
 
-    /**
-     * A car session ended: with no activity either, nothing needs the engine any more, unless [keep] says the phone is still
-     * guiding (a real drive the car left; see CarSession.tearDown). A kept engine goes with the next activity or car session
-     * that ends without guidance, or with the process.
-     */
-    fun carEnded(keep: Boolean = false) {
+    fun carEnded() {
         carSessions = (carSessions - 1).coerceAtLeast(0)
-        if (carSessions == 0 && !activityAttached && !keep) {
-            val engine = FlutterEngineCache.getInstance().get(ID)
-            drop()
-            engine?.destroy()
-        }
+        Log.i(TAG, "a car session ended: the app engine stays (phone screens $activities, car sessions $carSessions)")
     }
 
-    val carInUse: Boolean get() = carSessions > 0
-
-    private fun drop() {
-        FlutterEngineCache.getInstance().remove(ID)
-        CarLink.detach()
+    private companion object {
+        const val TAG = "CacheEngine"
     }
 }

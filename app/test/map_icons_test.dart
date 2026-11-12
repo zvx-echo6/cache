@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
@@ -122,7 +123,7 @@ void main() {
 
     test('each image is drawn and added once', () async {
       final added = <String>[];
-      final images = PinImages((name, png) async => added.add(name), PinStyle.badge);
+      final images = PinImages((name, png) async => added.add(name), PinStyle.badge, ratio: 3);
       final a = await images.ensure('water', mapIcon('water').icon, markerColor('teal').color);
       final b = await images.ensure('water', mapIcon('water').icon, markerColor('teal').color);
       await images.ensure('camp', mapIcon('camp').icon, markerColor('teal').color);
@@ -131,6 +132,44 @@ void main() {
       images.reset();
       await images.ensure('water', mapIcon('water').icon, markerColor('teal').color);
       expect(added.length, 3);
+    });
+
+    test('a pin is its 30 points, in an image of 45, on a 2x and a 3x phone and in a browser', () async {
+      // What the map does with an image the app adds, from the map plugin's own code (maplibre_gl 0.27.1): a phone's map reads it
+      // at the screen's scale (iOS: UIImage(data:scale:) with the screen's scale; Android: the bitmap's density over 160), and a
+      // browser's map reads one pixel as one point (addImage with pixelRatio 1).
+      double mapPixelsPerPoint(double screen, {required bool web}) => web ? 1 : screen;
+      // The width in pixels of a PNG (its header).
+      int widthOf(Uint8List png) => ByteData.sublistView(png).getUint32(16);
+      Future<double> shownPoints(double screen, {required bool web, double? drawnAt, double? iconSize}) async {
+        final png = await renderPinPng(mapIcon('water').icon, markerColor('teal').color, PinStyle.badge, ratio: drawnAt ?? pinImageRatio(screen, web: web));
+        return widthOf(png) / mapPixelsPerPoint(screen, web: web) * (iconSize ?? pinIconSize(web: web));
+      }
+
+      // Phones: the image is drawn at the screen's own scale and shown as it is.
+      expect(pinImageRatio(2, web: false), 2);
+      expect(pinImageRatio(3, web: false), 3);
+      expect(pinIconSize(web: false), 1);
+      expect(await shownPoints(2, web: false), closeTo(45, 0.5));
+      expect(await shownPoints(3, web: false), closeTo(45, 0.5));
+      expect(await shownPoints(2.625, web: false), closeTo(45, 0.5), reason: 'an Android screen between the two');
+      // A browser, whatever the screen: 3 pixels per point, shown at a third.
+      expect(pinImageRatio(2, web: true), kPinImageRatio);
+      expect(pinIconSize(web: true), closeTo(1 / 3, 1e-9));
+      expect(await shownPoints(1, web: true), closeTo(45, 0.5));
+      expect(await shownPoints(2, web: true), closeTo(45, 0.5));
+      // What it was on phones (3 pixels per point, shown at a third): a third of the size on a 3x screen, half on a 2x one.
+      expect(await shownPoints(3, web: false, drawnAt: 3, iconSize: 1 / 3), closeTo(15, 0.5));
+      expect(await shownPoints(2, web: false, drawnAt: 3, iconSize: 1 / 3), closeTo(22.5, 0.5));
+    });
+
+    test('the images are drawn at the pixels per point they are made for', () async {
+      final widths = <int>[];
+      for (final ratio in [2.0, 3.0]) {
+        final images = PinImages((name, png) async => widths.add(ByteData.sublistView(png).getUint32(16)), PinStyle.teardrop, ratio: ratio);
+        await images.ensure('water', mapIcon('water').icon, markerColor('teal').color);
+      }
+      expect(widths, [90, 135]);
     });
 
     test('the pins carry the image name, and only for a pin that has one', () {
@@ -164,6 +203,13 @@ void main() {
       expect(icon['layout']['icon-anchor'], 'center');
       expect(pinsLayer(PinStyle.teardrop)['layout']['icon-anchor'], 'bottom');
       expect(pinsLayer(PinStyle.badge)['layout']['icon-anchor'], 'center');
+    });
+
+    test('the pins and the repeaters are drawn at the size their images are made for: as they are, on a phone', () {
+      // (This test runs as the phone app does, not in a browser; a browser's size is in the pin images' tests.)
+      expect(pinsLayer(PinStyle.icon)['layout']['icon-size'], pinIconSize(web: false));
+      expect(pinsLayer(PinStyle.teardrop)['layout']['icon-size'], 1);
+      expect(pinsLayer(PinStyle.badge, id: kUserRepeaters)['layout']['icon-size'], 1);
     });
 
     test('repeaters are radio towers in the same style, red in Tactical', () {
