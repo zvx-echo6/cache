@@ -27,7 +27,7 @@ import kotlin.math.sqrt
  * drive):
  *  - one box, on a screen whose left column has a tall enough gap between the host's turn card and its arrival card: the
  *    mini map on top and the climb under it (label, figure, grade line, shape), on the host cards' left edge, centred in the
- *    gap. With no climb to show it is the mini map alone, in the same place; with the mini map switched off, the climb
+ *    gap. With no climb to show it is the mini map alone, in the same place; with no route shape to show, the climb
  *    alone, where the box's lower part is.
  *  - split, everywhere else: the climb is a one-line card in that gap, as wide as the host's cards; the mini map is a tile in
  *    the bottom right corner of the visible area, full size or two thirds, whichever keeps clear of the vehicle.
@@ -322,7 +322,66 @@ object CarOverlayPainter {
         return Layout(mode, mini, climb)
     }
 
-    /** The pieces for [trip] (the switches are the trip's). Nothing is drawn unless the trip is guiding, and nothing while
+    // ---- the screen's class: whether the two extras are drawn at all -------------------------------------------------
+
+    /** The most of the free map the two extras may take on a screen that always carries them: at or below 15 % the screen
+     * is big, above it in-between (set 2026-11-12 so that the wide, short screens are the in-between ones: 1280 x 500
+     * measures 16.9 %, 1280 x 720 measures 11.7 %). Change it here and nowhere else. */
+    const val EXTRAS_BIG_MAX_SHARE = 0.15f
+
+    /** What [extrasMeasure] found: the class, whether both extras fit at full size, the pixels they take and the pixels of
+     * free map. */
+    data class ExtrasMeasure(val cls: CarExtrasClass, val fits: Boolean, val extrasPx: Float, val freePx: Float) {
+        val share: Float get() = if (freePx > 0f) extrasPx / freePx else 1f
+    }
+
+    /** The class from the two figures of the measure. */
+    fun extrasClass(fits: Boolean, extrasPx: Float, freePx: Float): CarExtrasClass = when {
+        !fits || freePx <= 0f -> CarExtrasClass.SMALL
+        extrasPx > EXTRAS_BIG_MAX_SHARE * freePx -> CarExtrasClass.IN_BETWEEN
+        else -> CarExtrasClass.BIG
+    }
+
+    /**
+     * How the two extras fit this screen, from the room the car reports. The stable area decides (falling back as in
+     * [layout]); the visible area's right edge moves when the host shows and hides its buttons and plays no part, so the
+     * class holds for the whole drive.
+     *
+     * They FIT when [layout] places both of them, with both asked for, at their full size and clear of the vehicle and the
+     * road ahead: the whole box (one-box layout), or the one-line climb card and the full-size corner tile (split layout).
+     * A screen that only has room for the smaller tile, or for one of the two, does not fit them.
+     *
+     * The FREE MAP is the map the host leaves uncovered: the stable area (the car's free room, already less the host's
+     * cards and its buttons) and the gap in the host's left column between its turn card and its arrival card
+     * ([column], [columnGap]), where the map also shows.
+     *
+     * The extras TAKE the area of the pieces as placed. Small: they do not fit. In-between: they take more than
+     * [EXTRAS_BIG_MAX_SHARE] of the free map. Big: otherwise.
+     */
+    fun extrasMeasure(width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null): ExtrasMeasure {
+        val full = Rect(0, 0, width, height)
+        val cam = Rect(stable ?: visible ?: full)
+        val d = density
+        val l = layout(width, height, cam, d, showClimb = true, showMini = true, stable = cam)
+        val mini = l.mini
+        val climb = l.climb
+        val fullSize = mini != null && (l.mode == CarOverlayMode.ONE_BOX || mini.height() >= MINI_H * d - 1f)
+        val fits = climb != null && fullSize
+        val box = l.box
+        val extras = when {
+            box != null -> box.width() * box.height()
+            else -> (mini?.let { it.width() * it.height() } ?: 0f) + (climb?.let { it.width() * it.height() } ?: 0f)
+        }
+        val inside = Rect(cam).also { if (!it.intersect(full)) it.setEmpty() }
+        val (gapTop, gapBottom) = columnGap(cam, d)
+        val (colLeft, colRight) = column(cam, d)
+        val gap = max(0f, colRight - colLeft) * max(0f, gapBottom - gapTop)
+        val free = inside.width().toFloat() * inside.height().toFloat() + gap
+        return ExtrasMeasure(extrasClass(fits, extras, free), fits, extras, free)
+    }
+
+    /** The pieces for [trip], each where it has its data. Whether they are drawn at all on this screen, and how opaque, is
+     * the view's (the screen's class and the fade, CarOverlayView). Nothing is drawn unless the trip is guiding, and nothing while
      * the route overview screen is up ([overview]): the mini map would repeat what that screen's map already shows. The
      * climb is never drawn on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
     fun draw(
@@ -330,8 +389,8 @@ object CarOverlayPainter {
         lineShapeFilled: Boolean = LINE_SHAPE_FILLED, lineShapeInset: Float = LINE_SHAPE_INSET,
     ) {
         if (!trip.guiding || overview) return
-        val climb = if (trip.overlay.climb && !trip.arrived) trip.climb else null
-        val ov = if (trip.overlay.miniMap) trip.overview else null
+        val climb = if (!trip.arrived) trip.climb else null
+        val ov = trip.overview
         val l = layout(width, height, visible, density, showClimb = climb != null, showMini = ov != null, stable = stable)
         val d = density
         val box = l.box
