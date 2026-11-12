@@ -15,11 +15,13 @@
 #   - on the iOS 26.5 simulator every map template crashes the simulator's CarPlayTemplateUIHost
 #     ('-[CPSTemplateInstance vehicleSupportsDestinationSharing]: unrecognized selector', in its map template's viewDidLoad).
 #
-#   R  which installed iOS runtime's template host survives a map template (oldest first)
-#   A  on that runtime, 800 x 480 at 2x: the map, the bar buttons with Dart's value, a tap on a template button, guidance,
+#   - (round 3) the iOS 26.2 simulator's template host shows the map template; 26.4 crashes like 26.5.
+#
+#   R  the first installed iOS runtime whose template host survives a map template (oldest first; 26.2 in round 3)
+#   A  on that runtime, 800 x 480 at 2x: the map, the bar buttons with Dart's value, taps on template buttons, guidance,
 #      the drawn pieces in the base view, the search template, the phone joining the engine the car started
 #   B  the other three test sizes, each from a fresh boot of the simulator
-#   Z  a short look at the next runtime, for the record
+#   C  the CarPlay scene declared in code instead of the Info.plist manifest
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$RUNNER_TEMP/spike-out"
@@ -38,6 +40,9 @@ ICON_Y=0
 HOST_FOUND=""
 ANCHOR=""
 OPENED_HOW=""
+CAR_W=800
+CAR_H=480
+CAR_S=2
 
 say() { printf '[%4ds] %s\n' "$((SECONDS - T0))" "$*" | tee -a "$LOG"; }
 
@@ -163,9 +168,14 @@ find_icon_on_host() {  # the app's icon inside the CarPlay window, on a picture 
   HOST_FOUND=""
   case "$found" in
     found*)
-      HOST_FOUND="$found"
       # shellcheck disable=SC2086
       set -- $found
+      # The dock at the side shows a small icon of the last app (about 800 pixels of it here); the grid's icon is about 3300.
+      if [ "${4#count=}" -lt 1800 ]; then
+        say "  that is the small icon in the dock, not the app grid"
+        return 1
+      fi
+      HOST_FOUND="$found"
       ICON_X="$2"
       ICON_Y="$3"
       return 0
@@ -184,6 +194,11 @@ find_icon_by_geometry() {  # the same from the CarPlay display's own picture, pl
   case "$found" in found*) ;; *) return 1 ;; esac
   # shellcheck disable=SC2086
   set -- $found $win
+  # The grid's icon is 60 points wide, the dock's 29.
+  if [ "$(echo "$5" | cut -d, -f3)" -lt $((45 * CAR_S)) ]; then
+    say "  that is the small icon in the dock, not the app grid"
+    return 1
+  fi
   place=$(python3 -I -c '
 import sys
 px, py = float(sys.argv[1]), float(sys.argv[2])
@@ -203,21 +218,23 @@ print("%.1f %.1f" % (wx + px / W * ww, wy + top + py / H * ch))
   return 0
 }
 
-toggle_home() {  # the bottom-left corner of the CarPlay screen switches between the dashboard and the app grid
+go_home() {  # the dock's last button (bottom left in both layouts, 26 points in from each edge) shows the app grid
+  if [ -n "$ANCHOR" ]; then
+    tap_carplay $((26 * CAR_S)) $((CAR_H - 26 * CAR_S))
+    sleep 3
+    return 0
+  fi
   local win x y
   win=$(carplay_window)
   [ -n "$win" ] || return 1
   # shellcheck disable=SC2086
   set -- $win
-  if [ "${3%.*}" -ge "${4%.*}" ]; then
-    x=$((${1%.*} + ${3%.*} * 5 / 100))
-    y=$((${2%.*} + ${4%.*} * 91 / 100))
-  else
-    x=$((${1%.*} + ${3%.*} * 8 / 100))
-    y=$((${2%.*} + ${4%.*} * 96 / 100))
-  fi
-  say "  clicking the corner of the CarPlay window ($x,$y), in case it is not showing the app grid"
-  click_at "$x" "$y" "${WAYS%% *}"
+  # without an anchor: by the window, whose screen starts about 27 points in and ends about 25 points above its bottom edge
+  x=$((${1%.*} + 27 + 26 * ${3%.*} / (CAR_W / CAR_S + 54)))
+  y=$((${2%.*} + ${4%.*} - 25 - 26 * ${3%.*} / (CAR_W / CAR_S + 54)))
+  say "  clicking the dock's last button by the window's place ($x,$y)"
+  click_at "$x" "$y" "${WAYS%% *}" > /dev/null
+  sleep 3
 }
 
 icon_in_carplay() {  # icon_in_carplay <picture name>: 0 when the icon is on the CarPlay display's own picture
@@ -248,9 +265,8 @@ car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay scree
       say "no CarPlay scene 20 s after the click ($label, way $way)"
       shot_ext "$label-after-click$way"
     else
-      say "the icon was not found ($label, try $way)"
-      toggle_home
-      sleep 4
+      say "the app grid's icon was not found ($label, try $way): the dock's last button, then again"
+      go_home
     fi
   done
   shot_host "$label-launch-failed"
@@ -384,8 +400,7 @@ print("%.1f %.1f" % (hx + (x - ex) * k, hy + (y - ey) * k))
 try_variant() {  # try_variant <name> <start words>: 0 when the CarPlay scene was still connected 10 s after it connected
   local name="$1" words="$2"
   say "-- variant $name: start words '$words'"
-  xcrun simctl terminate "$UDID" "$BID" > /dev/null 2>&1
-  sleep 1
+  end_app
   drop_applog
   set_start "$words"
   set_mode ""
@@ -402,13 +417,21 @@ try_variant() {  # try_variant <name> <start words>: 0 when the CarPlay scene wa
     return 1
   fi
   say "RESULT variant $name [$words]: the CarPlay scene STAYED connected for 10 s"
-  keep_applog "V-$name"
+  say "app log so far (V-$name; the app stays on the screen and its log goes on):"
+  sed 's/^/        /' "$(applog)" | tee -a "$LOG"
   return 0
 }
 
-start_best() {  # a cold start from the car side with the content that survives
+end_app() {  # ends the app's process; when it is on the CarPlay screen, the app grid first, so its icon can be clicked again
+  if [ -n "$ANCHOR" ] && [ -n "$(xcrun simctl spawn "$UDID" launchctl list 2> /dev/null | grep "UIKitApplication:$BID")" ]; then
+    go_home
+  fi
   xcrun simctl terminate "$UDID" "$BID" > /dev/null 2>&1
-  sleep 1
+  sleep 2
+}
+
+start_best() {  # a cold start from the car side with the content that survives
+  end_app
   drop_applog
   set_start "$BEST"
   set_mode ""
@@ -458,10 +481,29 @@ use_device() {  # use_device <runtime>: switches to that runtime's simulator (th
 }
 
 bring_up() {  # bring_up <W> <H> <S>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
-  quit_simulator
-  write_carplay_config "$1" "$2" "$3"
-  run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
-  open_carplay || return 1
+  local try lit
+  CAR_W=$1
+  CAR_H=$2
+  CAR_S=$3
+  for try in 1 2; do
+    quit_simulator
+    ANCHOR=""
+    write_carplay_config "$1" "$2" "$3"
+    run defaults write com.apple.iphonesimulator DevicePreferences -dict "$UDID" '<dict><key>SimulatorExternalDisplay</key><integer>2714</integer></dict>'
+    open_carplay || return 1
+    # Round 3 had one boot whose CarPlay display stayed black: looked for, waited for, and booted again once.
+    for lit in 1 2 3 4; do
+      xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.lit.png" > /dev/null 2>&1
+      case "$(python3 -I "$HERE/find_icon.py" lit "$OUT/.lit.png" 2> /dev/null)" in
+        "lit 0.0"|"") say "  the CarPlay display is black (look $lit)"; sleep 8 ;;
+        *) lit=ok; break ;;
+      esac
+    done
+    [ "$lit" = ok ] && break
+    say "RESULT black: the CarPlay display stayed black after boot $try at $1x$2"
+    shot_host "black-$1x$2-boot$try"
+  done
+  [ "$lit" = ok ] || return 1
   if [ -n "$BID" ] && [ -z "$(container)" ]; then
     run xcrun simctl install "$UDID" "$APPS/ent/Runner.app"
     sleep 8
@@ -513,25 +555,43 @@ if [ "$A_OK" = 0 ] && [ -n "$BID" ] && [ -n "$UDID" ]; then
   BEST="list nomaplibre"
 fi
 
+pictures() {  # pictures <label>: what every size gets once the app is on the CarPlay screen
+  local label="$1"
+  shot_ext "$label-map"
+  say "RESULT start $label: cold start from the car side; $(grep 'carplay didConnect' "$(applog)" 2> /dev/null | head -n 1 | sed 's/.*didConnect //; s/ contentStyle.*//'); $(grep 'layout bounds' "$(applog)" 2> /dev/null | tail -n 1 | sed 's/.*layout //')"
+  if [ -n "$GUIDE" ]; then
+    set_mode "$GUIDE"
+    sleep 6
+    shot_ext "$label-guide"
+    set_mode "overlay $GUIDE"
+    sleep 6
+    shot_ext "$label-overlay-guide"
+  fi
+  set_mode "overlay"
+  sleep 5
+  shot_ext "$label-overlay"
+  set_mode ""
+  sleep 2
+  say "RESULT start $label: $(disconnects) disconnects; map frames: $(grep -c 'car map drew frame' "$(applog)" 2> /dev/null) lines, $(grep -c 'fully rendered' "$(applog)" 2> /dev/null) full renders"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------------
 if [ "$A_OK" = 1 ]; then
-  say "== A. $RUNTIME, 800 x 480 at 2x: the map, Dart's value, a tap, guidance, drawn pieces, search, the phone joining"
-  if start_best A-800x480; then
+  say "== A. $RUNTIME, 800 x 480 at 2x: the map, Dart's value, taps, guidance, drawn pieces, search, the phone joining"
+  # The app is on the CarPlay screen from its cold start in R; its log still holds that start.
+  if wait_log 'dart hello' 30; then
+    wait_log 'fully rendered' 15 || say "no full-render line from the map yet"
     shot_ext 800x480-2x-map
     shot_phone 800x480-2x-phone-while-only-the-car-scene-runs
     shot_host A2-app-on-carplay
     say "RESULT car-first: scenes when Dart said hello: $(grep 'dart hello' "$(applog)" 2> /dev/null | head -n 1 | sed 's/.*scenes=//'); phone-scene lines in the log: $(grep -c 'phone scene' "$(applog)" 2> /dev/null)"
     say "RESULT map: $(grep -c 'car map drew frame' "$(applog)" 2> /dev/null) frame lines; $(grep 'layout bounds' "$(applog)" 2> /dev/null | tail -n 1 | sed 's/.*layout //')"
-    # a tap on a template button: along the top of the screen, right to left, until the app says a bar button was pressed
-    for fx in 93 87 81 75 69 63 57; do
-      tap_carplay $((800 * fx / 100)) 44 || break
-      sleep 2
-      if grep -q 'bar button pressed' "$(applog)" 2> /dev/null; then
-        say "RESULT tap: a click on the CarPlay window reached the app's bar button: $(grep 'bar button pressed' "$(applog)" | head -n 1 | sed 's/.*SPIKE //')"
-        break
-      fi
-    done
-    grep -q 'bar button pressed' "$(applog)" 2> /dev/null || say "RESULT tap: no bar button press seen after clicks along the top"
+    # taps on template buttons: the trailing bar button (it carries Dart's value) and the first map button
+    tap_carplay 688 45
+    sleep 2
+    tap_carplay 756 172
+    sleep 2
+    say "RESULT tap: the app logged: $(grep -E 'bar button pressed|map button pressed' "$(applog)" 2> /dev/null | sed 's/.*SPIKE //' | tr '\n' ';')"
     # guidance: which pictures on a maneuver the template host survives
     for g in guide-noimage guide-drawn guide; do
       before=$(disconnects)
@@ -576,10 +636,12 @@ if [ "$A_OK" = 1 ]; then
     shot_phone 800x480-2x-phone-joined-the-engine
     shot_ext 800x480-2x-map-after-phone-joined
     if grep -q 'engine joined by phone' "$(applog)" 2> /dev/null; then
-      say "RESULT phone-joins: the phone window attached to the engine the car side had started, in the same process"
+      say "RESULT phone-joins: the phone window attached to the engine the car side had started, in the same process: $(grep -E 'engine joined by phone|phone scene connected' "$(applog)" | sed 's/.*SPIKE //' | tr '\n' ';')"
     else
       say "RESULT phone-joins: no 'engine joined by phone' line"
     fi
+  else
+    say "RESULT car-first: no hello from Dart at 800 x 480"
   fi
   keep_applog A-800x480
 fi
@@ -603,21 +665,7 @@ if [ -n "$UDID" ]; then
     size_check "$label" "$W" "$H"
     [ -n "$BID" ] || continue
     if start_best "B-$label"; then
-      shot_ext "$label-map"
-      say "RESULT start $label: cold start from the car side; $(grep 'carplay didConnect' "$(applog)" 2> /dev/null | head -n 1 | sed 's/.*didConnect //; s/ contentStyle.*//'); $(grep 'layout bounds' "$(applog)" 2> /dev/null | tail -n 1 | sed 's/.*layout //')"
-      if [ -n "$GUIDE" ]; then
-        set_mode "$GUIDE"
-        sleep 6
-        shot_ext "$label-guide"
-        set_mode "overlay $GUIDE"
-        sleep 6
-        shot_ext "$label-overlay-guide"
-      fi
-      set_mode "overlay"
-      sleep 5
-      shot_ext "$label-overlay"
-      set_mode ""
-      say "RESULT start $label: $(disconnects) disconnects"
+      pictures "$label"
     else
       say "RESULT start $label: the app's CarPlay scene did not connect"
     fi
@@ -628,18 +676,28 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
 if [ "$A_OK" = 1 ] && [ -n "$BID" ]; then
-  for rt in $(cut -d'|' -f1 "$OUT/devices.txt"); do
-    case " $TRIED " in *" $rt "*) continue ;; esac
-    [ "$rt" = "iOS-26-5" ] && continue
-    say "== Z. for the record: the map template on $rt"
-    use_device "$rt" || continue
-    if bring_up 800 480 2 && try_variant "$rt-map" ""; then
-      say "RESULT runtime $rt: the map template is showing; the template host survives it"
+  say "== C. the CarPlay scene declared in code: a copy of the app with no CarPlay entry in its Info.plist manifest"
+  end_app
+  make_variant dynamic 'Delete :UIApplicationSceneManifest:UISceneConfigurations:CPTemplateApplicationSceneSessionRoleApplication'
+  run /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest' "$APPS/dynamic/Runner.app/Info.plist"
+  run xcrun simctl install "$UDID" "$APPS/dynamic/Runner.app"
+  sleep 8
+  drop_applog
+  set_start ""
+  set_mode ""
+  if car_launch C-scene-in-code; then
+    wait_log 'dart hello' 45
+    sleep 6
+    shot_ext scene-in-code-map
+    if grep -q 'made in code' "$(applog)" 2> /dev/null && [ "$(disconnects)" = 0 ]; then
+      say "RESULT scene-in-code: with no CarPlay scene in the manifest the scene connected from a configuration made in application(_:configurationForConnecting:options:), and the map template is showing"
     else
-      say "RESULT runtime $rt: no map template (the display did not come up, or the template host crashed)"
-      host_crash_reports
+      say "RESULT scene-in-code: connected, but 'made in code' lines: $(grep -c 'made in code' "$(applog)" 2> /dev/null), disconnects: $(disconnects)"
     fi
-  done
+  else
+    say "RESULT scene-in-code: the CarPlay scene did not connect"
+  fi
+  keep_applog C-scene-in-code
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -651,5 +709,5 @@ say "pictures:"
 ls -l "$OUT/shots" | sed 's/^/        /' | tee -a "$LOG"
 grep 'RESULT' "$LOG" | sed 's/^\[[ 0-9]*s\] //' > "$OUT/results.txt"
 say "capture took $((SECONDS - T0)) s"
-rm -f "$OUT/.last" "$OUT/.anchor.png"
+rm -f "$OUT/.last" "$OUT/.anchor.png" "$OUT/.lit.png"
 exit 0

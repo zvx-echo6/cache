@@ -2,6 +2,7 @@
 """Finds the scratch app's icon (one flat magenta square) in a picture, for the CarPlay spike.
 
     find_icon.py ext  <png>                        -> the whole picture, answer in picture pixels
+    find_icon.py lit  <png>                        -> "lit <percent>": how much of the picture is not black
     find_icon.py host <png> <screen width in points> <x> <y> <w> <h>
                                                    -> only inside that window (points), answer in screen points
 
@@ -95,8 +96,24 @@ def magenta_patch(width, height, rows, bpp, step, x0, y0, x1, y1):
     return best
 
 
+def lit_percent(width, height, rows, bpp, step):
+    """How much of the picture is not black: sampled every 6th pixel of every 6th row."""
+    seen = lit = 0
+    for y in range(0, height, 6):
+        line = rows[y]
+        for x in range(0, width, 6):
+            i = x * bpp
+            seen += 1
+            if line[i] > 40 or line[i + step] > 40 or line[i + 2 * step] > 40:
+                lit += 1
+    return 100.0 * lit / max(1, seen)
+
+
 def main():
     mode, path = sys.argv[1], sys.argv[2]
+    if mode == "lit":
+        print("lit %.1f" % lit_percent(*read_png(path)))
+        return 0
     scale, rect, last_row = 1.0, None, None
     if mode == "host":
         # The picture's width comes from its header, so only the rows down to the window's bottom edge are decoded.
