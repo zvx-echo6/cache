@@ -227,10 +227,28 @@ class NavState extends ChangeNotifier {
             if (!_passedStops.contains(i)) s,
         ];
 
-  /// The stops the route being followed goes through, in its order, each with its number in [stops] (1 is the first stop).
+  /// The stops still ahead with the number each has in the route being followed: the number the turn banner says when the
+  /// stop is reached ("Stop 2 reached"), which is its place among the stops that route was made with. A stop keeps that number
+  /// when the ones before it are passed. Before the drive it is its place among all the stops.
+  List<(int, MapPlace)> get numberedStopsAhead {
+    if (!guiding) return [for (final (i, s) in stops.indexed) (i + 1, s)];
+    final out = <(int, MapPlace)>[];
+    for (final (k, i) in _routeStops.indexed) {
+      if (i < stops.length && !_passedStops.contains(i)) out.add((k + 1, stops[i]));
+    }
+    // A stop the route was not made with (there should be none) still shows, after the others.
+    for (final i in _aheadIndexes()) {
+      if (!_routeStops.contains(i)) out.add((out.length + 1, stops[i]));
+    }
+    return out;
+  }
+
+  /// The stops the route being followed goes through, in its order, each with the number [numberedStopsAhead] gives it (its place
+  /// among that route's stops, the number the turn banner says), passed ones included: the n-th stop maneuver of the route is
+  /// the n-th of these. The drive screen's list reads its stop rows from here.
   List<(int, MapPlace)> get routeStopsInOrder => [
-        for (final i in _routeStops)
-          if (i < stops.length) (i + 1, stops[i]),
+        for (final (k, i) in _routeStops.indexed)
+          if (i < stops.length) (k + 1, stops[i]),
       ];
 
   /// The places in [stops] that are not passed, in order: what a route from here goes through.

@@ -164,7 +164,10 @@ class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer, private val
             content.setLoading(true)
         } else {
             val items = ItemList.Builder().setNoItemsMessage("No saved places yet. Search for a place to go.")
-            for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
+            // Add stop during a drive: the host draws its turn strip where this screen's Search button is, so the list's first
+            // row opens the search instead (the search box's own words). The saved places take the five rows left.
+            if (overGuidance) items.addItem(Row.Builder().setTitle("Search for a place").setImage(CarIcons.search).setOnClickListener { search() }.build())
+            for (p in list.take(if (overGuidance) MAX_ROWS - 1 else MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
             content.setSingleList(items.build())
         }
         return MapWithContentTemplate.Builder()
@@ -331,13 +334,29 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
             t.previewing && !t.routing && t.error != null ->
                 MessageTemplate.Builder(t.error).setHeader(header).build()
             !ready -> ListTemplate.Builder().setHeader(header).setLoading(true).build()
+            // A route with stops is the only route there is (the router gives other routes only without stops), so there is
+            // nothing to choose: the route's row, then a row for each stop, named as the phone's route panel names them. One
+            // line under the route held all the stops and was cut after the first name.
+            t.stops.isNotEmpty() && t.routes.size == 1 -> {
+                val items = ItemList.Builder()
+                val r = t.routes[0]
+                val route = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
+                r.via?.let { route.addText(it) }
+                items.addItem(route.build())
+                for (s in t.stops.take(SavedPlacesScreen.MAX_ROWS - 1)) {
+                    val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
+                    s.address?.let { row.addText(it) }
+                    items.addItem(row.build())
+                }
+                ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build()
+            }
             else -> {
                 val items = ItemList.Builder()
                 for (r in t.routes) {
                     val row = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
                     r.via?.let { row.addText(it) }
                     // The stops on the way, named as the phone's route panel names them.
-                    if (t.stops.isNotEmpty()) row.addText(t.stops.withIndex().joinToString(" · ") { (i, s) -> "Stop ${i + 1}: ${s.name}" })
+                    if (t.stops.isNotEmpty()) row.addText(t.stops.joinToString(" · ") { s -> "Stop ${s.number}: ${s.name}" })
                     items.addItem(row.build())
                 }
                 items.setOnSelectedListener { i -> CarLink.call("selectRoute", mapOf("index" to i)) }
@@ -450,8 +469,8 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
         // The stops still ahead, in order, then the destination. The list holds six rows: the destination and the routes keep
         // theirs, the stops take what is left.
         val routeRows = if (t.routes.size > 1) t.routes.size else 0
-        for ((i, s) in t.stops.withIndex().take((SavedPlacesScreen.MAX_ROWS - 1 - routeRows).coerceAtLeast(0))) {
-            val row = Row.Builder().setTitle("Stop ${i + 1}: ${s.name}")
+        for (s in t.stops.take((SavedPlacesScreen.MAX_ROWS - 1 - routeRows).coerceAtLeast(0))) {
+            val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
             s.address?.let { row.addText(it) }
             items.addItem(row.build())
         }

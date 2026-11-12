@@ -35,6 +35,10 @@ String everyWords(int minutes) {
   return 'every ${(minutes / 60).toStringAsFixed(1)} hours';
 }
 
+/// [words] as one piece of a line: each space in it is a no-break space, so a line that takes a second line never breaks inside
+/// it ("High 52 °F" keeps "High" with its number and the number with its unit). It reads the same.
+String unbroken(String words) => words.replaceAll(' ', '\u00A0');
+
 /// [line] with its first letter in capitals, for a line of the screen that starts with a value as the source words it ("rain ·
 /// High 61 °F" reads "Rain · High 61 °F"). Only the screen: what the model reads keeps the source's words.
 String lineStart(String line) {

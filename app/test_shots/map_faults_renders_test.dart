@@ -1,14 +1,17 @@
 // Two faults of the map screens after their fixes, at a phone's width (390 x 844), light and dark, for review:
 //   offroad-fit-390-*        Off-road chosen: the route as the screen fitted it into view, in the free column between the
 //                            position chip and the map's buttons, with nothing of it under the header, the chip, the buttons,
-//                            the scale, the credits or the panel; and the bar beside the panel's choices, which shows while
+//                            the scale, the credits or the panel, and the whole of the position dot at its start and of the
+//                            pin at its end in that column too; and the bar beside the panel's choices, which shows while
 //                            there is more of them than fits
 //   offroad-panel-end-390-*  the same screen with the panel's choices scrolled to their end: the off-road note in full above Start
 //   measure-bar-390-*        the measuring bar with its hint in full
 //
 // The live map is a platform view and is not drawn in a test. In its place a stand-in is drawn from the camera the screen asked
-// for (the land colour, the route and its ends) with the same web-mercator fit the map makes (GuideCamera, guide_map_kit.dart), so
-// where the fitted route falls on the screen can be seen. The guide's own pictures have the real map (tools/guide/README.md).
+// for (the land colour, the route, and at its ends the position dot with its heading marker and the destination's pin, at the
+// sizes the map's style draws them on this 3x phone) with the same web-mercator fit the map makes (GuideCamera,
+// guide_map_kit.dart), so where the fitted route falls on the screen can be seen. The guide's own pictures have the real map
+// (tools/guide/README.md).
 // flutter test test_shots/map_faults_renders_test.dart --update-goldens  (pictures in test_shots/map_faults/)
 
 import 'dart:io';
@@ -17,6 +20,8 @@ import 'dart:math' as math;
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
+import 'package:cache/maps/style/style_generator.dart' show kPinSelectedEdge, kPinSelectedRadius, kPinSelectedReach, kPositionDotEdge, kPositionDotRadius;
+import 'package:cache/maps/ui/map_assets.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/elevation/route_elevation.dart';
@@ -98,20 +103,36 @@ class _RoutePainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 6
           ..strokeCap = StrokeCap.round);
-    canvas.drawCircle(pts.first, 7, Paint()..color = palette['land']);
-    canvas.drawCircle(
-        pts.first,
-        7,
+    // The ends as the map's style draws them. The destination: the chosen place's pin, with its edge around it.
+    canvas.drawCircle(pts.last, kPinSelectedRadius + kPinSelectedEdge + 0.0, Paint()..color = palette['routeCasing']);
+    canvas.drawCircle(pts.last, kPinSelectedRadius + 0.0, Paint()..color = palette['pin']);
+    // The start: the position dot with its ring, and over it the heading marker (the phone heads north), whose image is
+    // _kHeadingPoints square on this phone (MapAssets.headingMarker draws the same triangle).
+    canvas.drawCircle(pts.first, kPositionDotRadius + kPositionDotEdge + 0.0, Paint()..color = palette['positionRing']);
+    canvas.drawCircle(pts.first, kPositionDotRadius + 0.0, Paint()..color = palette['position']);
+    const s = _kHeadingPoints;
+    final corner = pts.first - const Offset(s / 2, s / 2);
+    final arrow = Path()
+      ..moveTo(corner.dx + s / 2, corner.dy + s * 0.04)
+      ..lineTo(corner.dx + s / 2 + s * 0.13, corner.dy + s * 0.2)
+      ..lineTo(corner.dx + s / 2 - s * 0.13, corner.dy + s * 0.2)
+      ..close();
+    canvas.drawPath(
+        arrow,
         Paint()
-          ..color = palette['route']
+          ..color = palette['positionRing']
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5);
-    canvas.drawCircle(pts.last, 9, Paint()..color = palette['pin']);
+          ..strokeWidth = s * 0.05
+          ..strokeJoin = StrokeJoin.round);
+    canvas.drawPath(arrow, Paint()..color = palette['position']);
   }
 
   @override
   bool shouldRepaint(_RoutePainter old) => old.view != view;
 }
+
+/// The screen of these pictures has 3 pixels per point: the heading marker's image is this many points square on it.
+const double _kHeadingPoints = MapAssets.headingMarkerSize / 3;
 
 /// The Maps screen with Off-road chosen and a route on foot, its elevation read: first as the screen fitted the route into view,
 /// then with the panel's choices scrolled to their end.
@@ -201,6 +222,19 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
       expect(rect.overlaps(box.inflate(1)), isFalse, reason: 'part of the route ($box) is under $what ($rect)');
     }
     expect(box.left >= chip.right && box.right <= buttons.left && box.top < chip.bottom, isTrue, reason: 'the tall route is not in the column between the chip and the buttons: $box');
+    // What is drawn at the route's ends is wholly on the map and clear of everything over it too: the position dot with its
+    // heading marker at the start (the foot of the column) and the destination's pin at the end (its top, under the header).
+    final ends = {
+      'the position dot with its heading marker': Rect.fromCircle(center: on.first, radius: MapAssets.headingMarkerReach(3)),
+      'the destination\'s pin': Rect.fromCircle(center: on.last, radius: kPinSelectedReach),
+    };
+    for (final MapEntry(key: end, value: disc) in ends.entries) {
+      expect(disc.left >= 0 && disc.top >= 0 && disc.right <= size.width && disc.bottom <= size.height, isTrue, reason: '$end is not wholly on the map: $disc');
+      for (final MapEntry(key: what, value: rect) in over.entries) {
+        expect(rect.overlaps(disc.inflate(1)), isFalse, reason: 'part of $end ($disc) is under $what ($rect)');
+      }
+    }
+    expect(ends.values.last.top, greaterThanOrEqualTo(over['the header']!.bottom + kRouteFitGap - 0.5), reason: 'the pin is nearer to the header than the gap a fitted route keeps');
     await snap(tester, _out, 'offroad-fit-390-$name');
 
     // The panel's choices scroll: at their end the off-road note is in full, above Start.
