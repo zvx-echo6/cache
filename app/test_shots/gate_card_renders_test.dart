@@ -1,6 +1,7 @@
 // The Ask "not loaded" card when the memory gate holds the model back (the real card), in the four themes, and the no-model card once.
 // flutter test test_shots/gate_card_renders_test.dart --update-goldens  (pictures in test_shots/gate_card/)
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
@@ -29,8 +30,16 @@ void main() {
     app.models = [ModelEntry(path: file.path, size: 16)];
     app.started = true;
     if (held) {
-      app.resting = app.models.first;
-      await app.wake(); // the gate holds it back: heldForMemory
+      // A model with a label in its display name, as a load leaves it in the settings; the start gate holds it back.
+      final named = File('${dir.path}/Gemma-4-E2B-it-Q4_K_M.gguf')..writeAsBytesSync(List.filled(16, 0));
+      file.deleteSync();
+      final key = '${named.uri.pathSegments.last}|16';
+      File('${dir.path}/settings.json').writeAsStringSync(jsonEncode({
+        'lastModel': named.uri.pathSegments.last,
+        'names': {key: 'Gemma 4 E2B · Q4_K_M'},
+        'plainNames': {key: 'Gemma 4 E2B'},
+      }));
+      await tester.runAsync(app.init);
       expect(app.heldForMemory, isTrue);
     }
     final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
