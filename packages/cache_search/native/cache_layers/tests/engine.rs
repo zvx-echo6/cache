@@ -20,6 +20,16 @@ fn xyz_def(id: &str, port: u16, extra: Value) -> String {
     d.to_string()
 }
 
+/// `xyz_def` as a layer of raster tiles. They are stored as the source sends them, so "the source has no tile here" is an
+/// empty row, as it is for every tile read from a PMTiles archive. (A vector layer fetched tile by tile is stored gzipped,
+/// an empty answer too: 20 bytes, served as an empty tile.)
+fn raster_def(id: &str, port: u16, extra: Value) -> String {
+    let mut d: Value = serde_json::from_str(&xyz_def(id, port, extra)).unwrap();
+    d["kind"] = json!("raster");
+    d["source"]["tile_format"] = json!("png");
+    d.to_string()
+}
+
 fn tile_body(z: u8, x: u32, y: u32) -> Vec<u8> {
     format!("tile-{z}-{x}-{y}-{}", "abc".repeat(((x + y) % 5) as usize + 1)).into_bytes()
 }
@@ -399,7 +409,7 @@ fn a_refused_tile_fails_the_download_and_is_never_stored_as_empty() {
         Some((z, x, y)) => (200, tile_body(z, x, y)),
     });
     let inner = engine(&sc);
-    inner.save_user_def(&xyz_def("refused", host.port, json!({"offline": {"allowed": true, "max_parallel": 2}}))).unwrap();
+    inner.save_user_def(&raster_def("refused", host.port, json!({"offline": {"allowed": true, "max_parallel": 2}}))).unwrap();
     // The size estimate has run by the first progress report: the refusals start with the download itself.
     let r = inner.run_download(&areq, &|_, _, _| refusing.store(true, Ordering::SeqCst), &|| false);
     let e = r.err().expect("a download with a refused tile does not finish");
@@ -417,7 +427,7 @@ fn a_refused_tile_fails_the_download_and_is_never_stored_as_empty() {
     let (r, _) = run(&inner, &req, None);
     assert!(matches!(r.unwrap(), Done::Finished));
     assert!(inner.areas("refused").iter().all(|a| a.state == "complete"));
-    assert_eq!(gunzip(&st.get(bad.1, bad.2, bad.3).unwrap().expect("the tile that was refused")), tile_body(bad.1, bad.2, bad.3));
+    assert_eq!(st.get(bad.1, bad.2, bad.3).unwrap().expect("the tile that was refused"), tile_body(bad.1, bad.2, bad.3));
     // a real "no such tile" answer (404) is still kept as empty
     assert_eq!(st.info(none.1, none.2, none.3).unwrap().map(|i| i.0), Some(0));
 }
@@ -454,7 +464,7 @@ fn a_downloaded_empty_tile_is_empty_for_good_and_not_asked_for_again() {
     });
     let layers = Layers::new(cache_layers::LayersCfg { dir: sc.path("l").to_string_lossy().into_owned(), defs_dirs: vec![], catalogue_urls: vec![], cache_max_bytes: 1 << 24, online: true }).unwrap();
     let inner = &layers.inner;
-    inner.save_user_def(&xyz_def("storedempty", host.port, json!({"offline": {"allowed": true}}))).unwrap();
+    inner.save_user_def(&raster_def("storedempty", host.port, json!({"offline": {"allowed": true}}))).unwrap();
     let req = format!(r#"{{"layer":"storedempty","area":"e","name":"E",{SMALL}}}"#);
     let (r, _) = run(inner, &req, None);
     assert!(matches!(r.unwrap(), Done::Finished));

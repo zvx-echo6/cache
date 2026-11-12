@@ -113,7 +113,7 @@ HTTP to sources: `User-Agent: Cache/<version>`, 4 attempts with exponential back
 
 Regions overlap heavily (a city inside a county inside a state), so downloads never duplicate tiles. Each layer has **one local tile store**, a SQLite file `<dir>/store/<layer>.sqlite`, with:
 
-- `tiles(z, x, y, data, ver)`: every tile downloaded for the layer, once. `ver` is the layer version the tile was fetched at; empty `data` means "the source has no tile here": the tile server answers it as an empty tile (204) with or without a connection, and the source is not asked again. Vector tiles are kept as the source sent them (gzip), other tiles as sent.
+- `tiles(z, x, y, data, ver)`: every tile downloaded for the layer, once. `ver` is the layer version the tile was fetched at; empty `data` means "the source has no tile here": the tile server answers it as an empty tile (204) with or without a connection, and the source is not asked again (a vector layer fetched tile by tile keeps such an answer gzipped like its other tiles, 20 bytes, and serves it as an empty tile). Vector tiles are kept as the source sent them (gzip), other tiles as sent.
 - `areas(id, state, meta)`: what was asked for: id, name, box or polygon, zoom range, layer version, tiles requested and present, bytes, date, and a state, `complete` or `partial`. The tiles an area needs are **computed from its shape** (polygon or box, at every zoom of its range: a tile counts if it touches the shape), never stored per area, so there is no reference table to drift out of step.
 - `staging(z, x, y, data, ver)`: tiles of an update that has not been swapped in yet.
 
