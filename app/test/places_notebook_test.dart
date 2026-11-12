@@ -7,6 +7,8 @@ import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/place_style.dart';
 import 'package:cache/notebook/places.dart';
+import 'package:cache/screens/notebooks/icon_picker.dart' show MapIconSetup;
+import 'package:cache/screens/notebooks/notebook_editor.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/search/notebook_search_providers.dart';
@@ -229,6 +231,69 @@ void main() {
       final book = await colourBook(r, color: 'blue');
       final props = await addNamed(tester, r, book, pick: 'blue');
       expect(props.containsKey('color'), isFalse);
+    });
+
+    group('changing the notebook color', () {
+      Future<(_Rig, Notebook)> world({int own = 2, int plain = 1}) async {
+        final r = _Rig();
+        final book = await colourBook(r, color: 'blue');
+        for (var i = 0; i < own; i++) {
+          await r.place(book, 'Own $i', 42.5 + i / 100, -114.4, color: 'green');
+        }
+        for (var i = 0; i < plain; i++) {
+          await r.place(book, 'Plain $i', 42.6 + i / 100, -114.4);
+        }
+        return (r, book);
+      }
+
+      Future<void> editColour(WidgetTester tester, _Rig r, Notebook book, String pick) async {
+        await r.pump(tester, NotebookEditor(notebook: r.nb, existing: book, icons: MapIconSetup.fixed()));
+        await tester.ensureVisible(find.byKey(ValueKey('nb-color-$pick')));
+        await tester.tap(find.byKey(ValueKey('nb-color-$pick')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('notebook-save')));
+        await tester.pumpAndSettle();
+      }
+
+      Map<String, Object?> propsOf(_Rig r, String title) => (r.store.entries.firstWhere((e) => e['title'] == title)['props'] as Map).cast<String, Object?>();
+
+      testWidgets('asks with the new color, the count and the notebook; Change all clears their colors and writes none', (tester) async {
+        final (r, book) = await world();
+        await editColour(tester, r, book, 'purple');
+        expect(find.text('Change all its places to Purple?'), findsOneWidget);
+        expect(find.bySemanticsLabel('Purple'), findsOneWidget, reason: 'the name is the swatch label');
+        expect(find.text('2 places in Trail log have their own color.'), findsOneWidget);
+        expect(find.text('Keep their colors'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('colour-ask-change')));
+        await tester.pumpAndSettle();
+        expect(propsOf(r, 'Own 0').containsKey('color'), isFalse);
+        expect(propsOf(r, 'Own 1').containsKey('color'), isFalse);
+        expect(propsOf(r, 'Own 0')['on_map'], isTrue, reason: 'the rest of the place is kept');
+        expect(r.nb.notebooks.firstWhere((n) => n.id == book.id).def.color, 'purple');
+      });
+
+      testWidgets('Keep their colors changes only the notebook', (tester) async {
+        final (r, book) = await world();
+        await editColour(tester, r, book, 'purple');
+        await tester.tap(find.byKey(const ValueKey('colour-ask-keep')));
+        await tester.pumpAndSettle();
+        expect(propsOf(r, 'Own 0')['color'], 'green');
+        expect(propsOf(r, 'Own 1')['color'], 'green');
+        expect(r.nb.notebooks.firstWhere((n) => n.id == book.id).def.color, 'purple');
+      });
+
+      testWidgets('one place: singular wording', (tester) async {
+        final (r, book) = await world(own: 1);
+        await editColour(tester, r, book, 'purple');
+        expect(find.text('1 place in Trail log has its own color.'), findsOneWidget);
+      });
+
+      testWidgets('no place with its own color: no dialog, the notebook changes', (tester) async {
+        final (r, book) = await world(own: 0, plain: 2);
+        await editColour(tester, r, book, 'purple');
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(r.nb.notebooks.firstWhere((n) => n.id == book.id).def.color, 'purple');
+      });
     });
 
     testWidgets('the hide toggle on the map stores no colour', (tester) async {
