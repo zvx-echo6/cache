@@ -467,21 +467,21 @@ void main() {
     });
   });
 
-  test('the car switches default to the constants and are kept with the app settings', () async {
+  test('an old settings file that still has the two removed car switches loads, and does not write them back', () async {
     final d = Directory.systemTemp.createTempSync('carset');
     addTearDown(() => d.deleteSync(recursive: true));
+    final file = File('${d.path}/settings.json');
+    file.writeAsStringSync(jsonEncode({'theme': 'light', 'moduleIcons': 'large', 'carClimbAhead': false, 'carRouteMiniMap': false}));
     final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
     await a.init();
-    expect(a.carClimbAhead, kCarClimbAheadDefault);
-    expect(a.carRouteMiniMap, kCarRouteMiniMapDefault);
-    await a.setCarClimbAhead(false);
-    await a.setCarRouteMiniMap(false);
-    final b = AppState(settingsDirOverride: d, modelsDirOverride: d);
-    await b.init();
-    expect(b.carClimbAhead, isFalse);
-    expect(b.carRouteMiniMap, isFalse);
+    expect(a.theme, CacheThemeId.light);
+    expect(a.largeModuleIcons, isTrue);
+    await a.setTheme(CacheThemeId.dark); // any change writes the file again
+    final written = jsonDecode(file.readAsStringSync()) as Map;
+    expect(written['theme'], 'dark');
+    expect(written.containsKey('carClimbAhead'), isFalse);
+    expect(written.containsKey('carRouteMiniMap'), isFalse);
     a.dispose();
-    b.dispose();
   });
 
   group('CarBridge over the platform channel', () {

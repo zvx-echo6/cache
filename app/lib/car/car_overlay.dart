@@ -12,10 +12,6 @@ import '../theme.dart';
 ///
 /// Whether the car draws them is the car's own rule (by the size of its screen), told one fact by the phone: `overlay:
 /// {phoneDrive: bool}` ([carOverlaySwitches]).
-///
-/// These two defaults belong to the removed Settings switches and are no longer sent; they go with the switches' settings.
-const bool kCarClimbAheadDefault = true;
-const bool kCarRouteMiniMapDefault = true;
 
 /// The owner's number (2026-11-11): the least grade (rise over run, 0.03 is 3%) a climb ahead must have for the car to show it.
 /// With no such climb ahead there is no climb card, no grade badge on the car's map and no grade pill on its mini map. The
