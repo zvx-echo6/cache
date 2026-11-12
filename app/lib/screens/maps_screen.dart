@@ -116,7 +116,7 @@ class _MapsScreenState extends State<MapsScreen> {
 
   // ---- guidance: the elevation panel and the route mini map ----
 
-  late final RouteElevation _elevation = widget.elevation ?? RouteElevation(loader: tileServerElevationLoader(maps.engine));
+  late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
   RouteSnapshotter get _snapshotter => widget.snapshotter ?? const ChannelRouteSnapshotter();
 
   /// The style the live map has (the whole-route picture is rendered from it).
