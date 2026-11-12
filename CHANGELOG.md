@@ -15,6 +15,12 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight
+- Weather: when the app is opened, or comes back to the screen, hours after the last update, Home no longer shows the earlier temperature, or yesterday's high and low, as the weather now; a reading counts for three hours, as on the Weather screen, and after that Home shows today's forecast
+- Weather: a source whose first download failed says why on the Weather screen, instead of "Not downloaded yet. Update now to get it."
+- Weather: the status line in Settings > Weather and alerts no longer turns into a warning only because the last update was more than 15 minutes ago; it warns when the data is more than three hours old, there is no connection or an update failed
+- Home: on narrow phones the weather card's conditions with the high and low take a second line instead of being cut off
+- Home: "No alerts known, data expired" is marked with a warning sign, not a green tick
 - Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are

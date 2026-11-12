@@ -781,7 +781,7 @@ void main() {
   });
 
   group('the status line', () {
-    test('nothing on, never updated, fresh, and stale for each reason', () async {
+    test('nothing on, never updated, fresh, and old by the rule a reading goes by', () async {
       h = await Harness.create();
       expect(h.weather.status().headline, 'Nothing switched on yet');
       await h.weather.setRowOn(row('Weather alerts'), true);
@@ -792,10 +792,18 @@ void main() {
       expect(h.weather.status().tone, StatusTone.ok);
       h.clock = h.clock.add(const Duration(minutes: 12));
       expect(h.weather.status().headline, 'Updated 12 min ago');
-      // past the source's refresh time (15 min): old, so the line turns into a warning
+      // Past the source's refresh time (15 min): the line used to turn into a warning here, between two updates that come
+      // about every half hour. The data is fresh for as long as a reading stands (three hours).
       h.clock = h.clock.add(const Duration(minutes: 20));
       expect(h.weather.status().headline, 'Updated 32 min ago');
-      expect(h.weather.status().tone, StatusTone.warn);
+      expect(h.weather.status().tone, StatusTone.ok);
+      h.clock = h.clock.add(const Duration(hours: 2, minutes: 28));
+      expect((h.weather.status().headline, h.weather.status().tone), ('Updated 3 hours ago', StatusTone.ok), reason: 'three hours to the minute: still fresh');
+      // older than that: old, and the line (and the whole-page states' dot) says so as a warning, in the same words
+      h.clock = h.clock.add(const Duration(minutes: 1));
+      expect((h.weather.status().headline, h.weather.status().tone), ('Updated 3 hours ago', StatusTone.warn));
+      // The Weather screen's own line shows the age and the connection; the screen shows old data in its own ways.
+      expect((h.weather.freshness().headline, h.weather.freshness().tone), ('Updated 3 hours ago', StatusTone.ok));
     });
 
     test('offline since Friday is the reason beside the age; mobile data never pauses updates', () async {
@@ -806,6 +814,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       h.clock = DateTime(2026, 10, 26, 9);
       expect(h.weather.status().headline, 'Updated 3 days ago · No connection since Friday');
+      expect(h.weather.status().tone, StatusTone.warn);
       // back online on mobile data: no reason, just old
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -883,6 +892,11 @@ void main() {
   });
 
   group('what the Weather screen and Home show', () {
+    // 12:00 at the place of [forecast] (its times are written at -06:00), one hour after it was downloaded, whatever this
+    // machine's zone. A test that reads "Now" from it takes this as its clock: a reading stands for three hours, and the
+    // default clock is noon on this machine's own clock.
+    final noon = DateTime.utc(2026, 10, 26, 18);
+
     Map<String, dynamic> forecast() => {
       'fetched_at': '2026-10-26T11:00:00-06:00',
       'age': '1 hour old',
@@ -936,7 +950,7 @@ void main() {
     });
 
     test('Home weather: now, today and the place, with the age', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
@@ -1080,8 +1094,166 @@ void main() {
       expect((await h.weather.homeCard()).period, 'Tonight');
     });
 
+    // Found by reading (weather-screen rebuild): Home took any item of a weather source that has "Temperature" as a reading.
+    // NWS by point writes its forecast in 12-hour periods, each with a "Temperature", so with no "Now" from Open-Meteo Home
+    // showed tonight's forecast low as the temperature now.
+    test('Home weather: a forecast period\'s temperature is never the temperature now', () async {
+      // 19:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(serve: false, clock: DateTime.utc(2026, 10, 27, 1));
+      h.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+        entry('nws-forecast-point', 'weather', 'Weather forecast (NWS, by point)', provider: 'NWS', refresh: 60),
+      ]));
+      await h.weather.refreshCatalogues();
+      await h.weather.setSourcesOn([h.weather.sourceById('openmeteo-forecast')!, h.weather.sourceById('nws-forecast-point')!], true);
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Temperature': '31 °F', 'Wind': '5 mph W', 'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/2', 'label': 'Tuesday', 'time': '2026-10-27T06:00-06:00', 'fields': {'Temperature': '58 °F', 'Wind': '10 mph SW', 'Summary': 'Sunny'}},
+          {'address': 'live:nws-forecast-point/x/3', 'label': 'Tuesday Night', 'time': '2026-10-27T18:00-06:00', 'fields': {'Temperature': '40 °F', 'Wind': '5 mph S', 'Summary': 'Partly Cloudy'}},
+        ],
+      };
+      // nothing from Open-Meteo: the periods are all there is, and none of them is a reading
+      final only = await h.weather.homeCard();
+      expect(only.temperature, isNull, reason: 'tonight\'s forecast low is not the temperature now');
+      // Open-Meteo's "Now" has ended and its days are stored: today's forecast under its own label, as with Open-Meteo alone
+      h.core.stored['openmeteo-forecast'] = afterNow();
+      final both = await h.weather.homeCard();
+      expect(both.temperature, isNull, reason: 'no source holds a reading');
+      expect((both.period, both.conditions, both.high, both.low, both.age), ('Mon Oct 26', 'overcast', '52 °F', '30 °F', '4 hours old'));
+      // with a "Now" from Open-Meteo, that is the reading
+      final f = afterNow();
+      (f['items'] as List).insert(0, {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T18:45:00-06:00', 'fields': {'Temperature': '45 °F', 'Conditions': 'clear sky'}});
+      h.core.stored['openmeteo-forecast'] = f;
+      final read = await h.weather.homeCard();
+      expect((read.temperature, read.conditions, read.period), ('45 °F', 'clear sky', null));
+    });
+
+    // With NWS by point as the only forecast, Home said "no forecast yet" with a week of forecast stored: it read a period's
+    // conditions only under "Conditions", and that source calls them "Summary". A named period carries no end, so it is
+    // taken only from a copy no older than one period (12 hours); past that the stored forecast has run out.
+    test('Home weather: a forecast in named periods alone shows the period that covers now, from a copy no older than one period', () async {
+      // 19:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(serve: false, clock: DateTime.utc(2026, 10, 27, 1));
+      h.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-forecast-point', 'weather', 'Weather forecast (NWS, by point)', provider: 'NWS', refresh: 60),
+      ]));
+      await h.weather.refreshCatalogues();
+      await h.weather.setSourcesOn([h.weather.sourceById('nws-forecast-point')!], true);
+      // downloaded at 18:40
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Temperature': '31 °F', 'Wind': '5 mph W', 'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/2', 'label': 'Tuesday', 'time': '2026-10-27T06:00-06:00', 'fields': {'Temperature': '58 °F', 'Wind': '10 mph SW', 'Summary': 'Sunny'}},
+          {'address': 'live:nws-forecast-point/x/3', 'label': 'Tuesday Night', 'time': '2026-10-27T18:00-06:00', 'fields': {'Temperature': '40 °F', 'Wind': '5 mph S', 'Summary': 'Partly Cloudy'}},
+        ],
+      };
+      final tonight = await h.weather.homeCard();
+      expect((tonight.period, tonight.conditions, tonight.temperature, tonight.age), ('Tonight', 'Mostly Clear', null, '20 minutes old'));
+      expect((tonight.forecastMissing, tonight.expired), (false, false));
+      // 06:30 the next morning, the copy 11 hours 50 minutes old: the period that has started since
+      h.clock = DateTime.utc(2026, 10, 27, 12, 30);
+      final morning = await h.weather.homeCard();
+      expect((morning.period, morning.conditions, morning.temperature, morning.expired), ('Tuesday', 'Sunny', null, false));
+      // 06:40, the copy exactly one period old: still shown
+      h.clock = DateTime.utc(2026, 10, 27, 12, 40);
+      expect((await h.weather.homeCard()).period, 'Tuesday');
+      // 06:41, older than one period: no named period is shown from it, and the stored forecast has run out
+      h.clock = DateTime.utc(2026, 10, 27, 12, 41);
+      final ranOut = await h.weather.homeCard();
+      expect((ranOut.period, ranOut.conditions, ranOut.temperature), (null, null, null));
+      expect(ranOut.expired, isTrue, reason: '"forecast expired, needs a connection", as when every stored day has passed');
+      // a day by its date is not a named period: today's day is shown from a copy of any age
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '12 hours old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/d', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Summary': 'Sunny', 'High': '58 °F', 'Low': '31 °F'}},
+        ],
+      };
+      final day = await h.weather.homeCard();
+      expect((day.period, day.conditions, day.high, day.low, day.expired), ('Tue Oct 27', 'Sunny', '58 °F', '31 °F', false));
+    });
+
+    // Found by reading (weather-screen rebuild): what the app kept of the core's last answer was shown as it was. Updated at
+    // 9 PM and opened at 7 AM, Home showed last night's temperature, and that day's high and low, as the weather now until
+    // the core answered. A reading stands for three hours (the Weather screen's rule, readingOf), in a kept copy too.
+    test('Home weather: a kept "Now" from last night is not the temperature this morning, nor yesterday\'s high and low today\'s', () async {
+      // 21:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 3));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T21:00:00-06:00',
+        'age': 'less than a minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T21:00:00-06:00', 'fields': {'Temperature': '41 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/tonight', 'label': 'Tonight (Mon Oct 26)', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Overnight low': '30 °F', 'Worst conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'light rain'}},
+        ],
+      };
+      final evening = await h.weather.homeCard();
+      expect((evening.temperature, evening.conditions, evening.period, evening.high, evening.low), ('41 °F', 'clear sky', null, '52 °F', '30 °F'));
+      // still the reading two hours later, from what the app kept
+      h.clock = DateTime.utc(2026, 10, 27, 5);
+      expect(h.weather.homeCardNow()?.temperature, '41 °F', reason: 'two hours old: it stands');
+      // the next start is at 07:00 at the place; the core has not answered yet, so Home has what the app kept
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 27, 13));
+      h.core.busy = Completer<void>();
+      final morning = h.weather.homeCardNow()!;
+      expect(morning.temperature, isNull, reason: 'last night\'s reading is ten hours old');
+      expect((morning.period, morning.conditions, morning.high, morning.low), ('Tue Oct 27', 'light rain', '60 °F', '41 °F'), reason: 'today\'s forecast under its own label, not yesterday\'s high and low');
+      expect(morning.age, '10 hours old');
+      expect((morning.forecastMissing, morning.expired), (false, false));
+      h.core.busy!.complete();
+    });
+
+    // The same fault by another path: the app stays in memory overnight, and Home's card keeps the answer of last night
+    // while the next one is awaited. The card is worked out again from that answer for the moment it is shown.
+    test('Home weather: a card given last night is worked out again for the morning it is shown in', () async {
+      // 21:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 3));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T21:00:00-06:00',
+        'age': 'less than a minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T21:00:00-06:00', 'fields': {'Temperature': '41 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'light rain'}},
+        ],
+      };
+      h.core.stored['nws-alerts-point'] = {'fetched_at': '2026-10-26T21:00:00-06:00', 'valid_until': '2026-10-27T03:00:00-06:00', 'age': 'less than a minute old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      final evening = await h.weather.homeCard();
+      expect((evening.temperature, evening.high, evening.low, evening.age, evening.alertsExpired), ('41 °F', '52 °F', '30 °F', 'less than a minute old', false));
+      // shown again a moment later: the same card
+      final again = h.weather.homeCardAsOfNow(evening);
+      expect((again.temperature, again.conditions, again.high, again.low, again.alertsExpired), ('41 °F', 'clear sky', '52 °F', '30 °F', false));
+      // 07:00 the next morning, no new answer yet
+      h.clock = DateTime.utc(2026, 10, 27, 13);
+      final morning = h.weather.homeCardAsOfNow(evening);
+      expect(morning.temperature, isNull, reason: 'the 9 PM reading is not the temperature at 7 AM');
+      expect((morning.period, morning.conditions, morning.high, morning.low, morning.age), ('Tue Oct 27', 'light rain', '60 °F', '41 °F', '10 hours old'));
+      expect(morning.alertsExpired, isTrue, reason: 'the check of last night no longer speaks for now');
+      // words in place of a card are as they were
+      const words = HomeWeather(message: 'Not set up yet');
+      expect(identical(h.weather.homeCardAsOfNow(words), words), isTrue);
+    });
+
     test('what is kept for Home is not wiped by a later answer with no items', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), contains('45 °F'));
@@ -1106,6 +1278,23 @@ void main() {
       expect((fires.missing, fires.error), (true, null));
       await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, 'made-up-key-for-a-test');
       final after = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).firstWhere((v) => v.source.id == 'firms-viirs-near');
+      expect((after.missing, after.error), (true, null));
+    });
+
+    // Found by reading (weather-screen rebuild): right after an update had failed for a source with nothing downloaded, the
+    // Weather screen's row for it still said "Not downloaded yet. Update now to get it.".
+    test('a source whose first download failed says why, not that an update will get it', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
+      final r = await h.weather.updateNow();
+      expect(r.failures, hasLength(1));
+      final failed = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).single;
+      expect((failed.missing, failed.error), (true, 'the service answered HTTP 500'));
+      // the next update gets through without bringing anything for the place yet: nothing failed, so it says nothing
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      final after = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).single;
       expect((after.missing, after.error), (true, null));
     });
 
@@ -1211,7 +1400,7 @@ void main() {
     });
 
     test('Home weather: the field names the definition uses now', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       final f = forecast();
       (f['items'] as List)[1] = {
@@ -1258,14 +1447,16 @@ void main() {
     // build 46: at start Home's card and the Weather screen waited 10-15 s for the core (busy listing PDFs) for data the app
     // already had.
     test('after a restart Home and the Weather screen have the last data and the saved places before the core answers', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
       expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Where I am', 'Cabin']));
 
-      h = await h.restart();
+      // the settled end of a restart, at the same moment
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: noon);
       // The new core has nothing yet and is busy: nothing it says arrives.
       h.core.busy = Completer<void>();
       expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Where I am', 'Cabin']));
