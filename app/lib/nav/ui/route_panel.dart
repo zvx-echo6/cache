@@ -271,6 +271,9 @@ class _ChoicesScrollState extends State<_ChoicesScroll> {
       radius: const Radius.circular(2),
       crossAxisMargin: 6,
       mainAxisMargin: 2,
+      // The bar runs the whole height of the choices: they are inside the panel, not under the status bar (whose room the bar
+      // would otherwise leave free at its top).
+      padding: EdgeInsets.zero,
       // A computer's window would add a bar of its own to the scroll view: this one is the only one.
       child: ScrollConfiguration(
         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
