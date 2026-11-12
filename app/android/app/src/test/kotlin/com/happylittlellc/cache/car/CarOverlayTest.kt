@@ -882,6 +882,83 @@ class CarOverlayTest {
     }
 
     @Test
+    fun thePhoneIsToldHowTheCarCarriesTheExtrasOncePerChange() {
+        // The three words.
+        assertEquals("never", CarExtrasClass.SMALL.carries)
+        assertEquals("unlessPhone", CarExtrasClass.IN_BETWEEN.carries)
+        assertEquals("always", CarExtrasClass.BIG.carries)
+        val told = mutableListOf<String>()
+        val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f)
+        v.onCarries = { told += it }
+        v.setSurfaceSize(1280, 720)
+        // Nothing before a class exists: no areas, then the visible area alone, with a drive already running.
+        v.setAreas(null, null)
+        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setAreas(Rect(0, 0, 1280, 720), null)
+        idle(1000)
+        assertEquals(emptyList<String>(), told)
+        // The stable area arrives: the class is measured, and said once.
+        v.setAreas(Rect(0, 0, 1280, 720), main)
+        assertEquals(listOf("always"), told)
+        // Not again for trip updates, redraws, the host's buttons hiding, or the phone's drive screen showing.
+        for (i in 1..5) {
+            v.setTrip(phone(i % 2 == 0), dark = true, now = false)
+            shot(v)
+            idle(1000)
+        }
+        v.setAreas(mainHidden, main)
+        v.setAreas(main, main)
+        assertEquals(listOf("always"), told)
+        // The class changes (the free room narrows, the box stays where it is): said again, once.
+        v.setAreas(inBetween, inBetween)
+        assertEquals(listOf("always", "unlessPhone"), told)
+        idle(5000)
+        shot(v)
+        assertEquals(listOf("always", "unlessPhone"), told)
+        // The room changes to one with no left column and stays: small, said when the new areas are taken (after the settle
+        // time and the fade out), once.
+        v.setTrip(phone(false), dark = true, now = false)
+        idle(5000)
+        v.setAreas(Rect(92, 91, 1177, 697), Rect(92, 91, 1177, 697))
+        assertEquals(listOf("always", "unlessPhone"), told)
+        idle(CarOverlayView.AREA_SETTLE_MS + CarExtrasFade.FADE_MS + 200)
+        assertEquals(listOf("always", "unlessPhone", "never"), told)
+        idle(5000)
+        assertEquals(listOf("always", "unlessPhone", "never"), told)
+        // The drive ends: nothing is sent. The next drive says its class anew, once.
+        v.setTrip(CarTrip.from(mapOf("phase" to "browsing")), dark = true, now = false)
+        idle(1000)
+        assertEquals(3, told.size)
+        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), dark = true, now = false)
+        assertEquals(listOf("always", "unlessPhone", "never", "never"), told)
+
+        // With areas already there and no drive: nothing until guidance starts.
+        val told2 = mutableListOf<String>()
+        val w = overlayView()
+        w.onCarries = { told2 += it }
+        w.setAreas(mainHidden, main)
+        idle(1000)
+        assertEquals(emptyList<String>(), told2)
+        w.setTrip(trip("dark"), dark = true, now = true)
+        assertEquals(listOf("always"), told2)
+
+        // On the car channel it is the method "extras" with the one argument "carries".
+        val sent = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            sent += method to args
+            done(null)
+        }
+        try {
+            CarLink.extras(CarExtrasClass.IN_BETWEEN.carries)
+            idle(10)
+            assertEquals(listOf<Pair<String, Any?>>("extras" to mapOf("carries" to "unlessPhone")), sent)
+        } finally {
+            CarLink.dartForTests = null
+        }
+    }
+
+    @Test
     fun theFirstLayoutOfACarSessionDoesNotWait() {
         // As the renderer sets a new surface up: no areas yet, then the visible area, then the stable one.
         val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f)

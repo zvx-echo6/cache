@@ -48,6 +48,20 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private val fade = CarExtrasFade()
     private var said = false
 
+    /** Called with the class's word for the phone ([CarExtrasClass.carries]) when the car's areas first give a class during
+     * a drive, and again when the class changes; once for each, never for a frame or a trip update. Each drive says it anew. */
+    var onCarries: ((String) -> Unit)? = null
+    private var toldCarries: String? = null
+
+    private fun tellCarries() {
+        // A class exists once the car has reported its stable area; before that there is nothing to say.
+        if (!guidingNow || stable == null) return
+        val word = extras.carries
+        if (word == toldCarries) return
+        toldCarries = word
+        onCarries?.invoke(word)
+    }
+
     /** Areas that change the layout or take the pieces away, waiting for the pieces to have faded out where they are. */
     private var swapping = false
     private var swapVisible: Rect? = null
@@ -104,6 +118,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
             Log.i(TAG, "car extras: ${m.cls} (they ${if (m.fits) "fit" else "do not fit"}; ${m.extrasPx.roundToInt()} px of ${m.freePx.roundToInt()} px free map, ${(m.share * 100).roundToInt()} %)")
         }
         extras = m.cls
+        tellCarries()
         invalidate()
     }
 
@@ -196,6 +211,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         val started = t.guiding && !guidingNow
         guidingNow = t.guiding
         phoneDrive = t.overlay.phoneDrive
+        if (!t.guiding) toldCarries = null else tellCarries()
         if (started) {
             fade.snap(extras.onCar(phoneDrive))
         } else if (t.guiding && !swapping) {

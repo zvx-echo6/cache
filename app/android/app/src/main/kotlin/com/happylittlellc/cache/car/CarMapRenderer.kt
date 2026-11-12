@@ -232,6 +232,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             frame.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
             ov.setSurfaceSize(width, height)
+            ov.onCarries = { word -> CarLink.extras(word) }
             ov.setAreas(visible, stable)
             ov.setOverview(overview)
             ov.setTrip(CarLink.trip, dark, now = true)

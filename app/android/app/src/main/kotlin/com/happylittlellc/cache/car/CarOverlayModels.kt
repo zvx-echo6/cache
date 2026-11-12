@@ -148,6 +148,15 @@ enum class CarExtrasClass {
     /** They fit and leave most of the free map: always drawn. */
     BIG;
 
+    /** The word the phone is told for this class, so it knows whether to show the extras itself (the car channel's `extras`
+     * method, `carries`): never on the car, on the car unless the phone's drive screen shows, always on the car. */
+    val carries: String
+        get() = when (this) {
+            SMALL -> "never"
+            IN_BETWEEN -> "unlessPhone"
+            BIG -> "always"
+        }
+
     /** Whether the extras are on the car, given whether the phone's drive screen is showing. */
     fun onCar(phoneDrive: Boolean): Boolean = when (this) {
         SMALL -> false
