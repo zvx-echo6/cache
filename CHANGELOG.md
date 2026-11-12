@@ -13,6 +13,7 @@ release notes).
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+- Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
 - Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight

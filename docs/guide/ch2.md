@@ -542,6 +542,8 @@ This page says what Cache is and what it is built on.
 
 If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
 
+The maps in this guide's pictures are drawn from these sources. Base map: (c) OpenStreetMap contributors · Protomaps. Public lands: USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS). Hillshade: © Mapterhorn.
+
 ## The reader
 
 The reader opens a Library item.
