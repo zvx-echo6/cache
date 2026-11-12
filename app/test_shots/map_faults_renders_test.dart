@@ -1,5 +1,6 @@
 // Two faults of the map screens after their fixes, at a phone's width (390 x 844), light and dark, for review:
-//   offroad-fit-390-*        Off-road chosen: the route the screen fitted into view ends above the scale, the credits and the panel
+//   offroad-fit-390-*        Off-road chosen: the route the screen fitted into view ends above the scale, the credits and the
+//                            panel; and the bar beside the panel's choices, which shows while there is more of them than fits
 //   offroad-panel-end-390-*  the same screen with the panel's choices scrolled to their end: the off-road note in full above Start
 //   measure-bar-390-*        the measuring bar with its hint in full
 //
@@ -176,6 +177,8 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     // The screen is told the camera the map has, as the map tells it (the scale bar follows it).
     map.onCameraMove!(CameraPosition(target: LatLng(cam.lat, cam.lon), zoom: cam.zoom));
     await tester.pump();
+    // The bar beside the choices has come in fully.
+    await tester.pump(const Duration(milliseconds: 400));
     // Both ends of the route are on the map above the scale (under the scale: the credits and the panel).
     final coverTop = tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
     for (final p in [route.points.first, route.points.last]) {
@@ -188,6 +191,7 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     // The panel's choices scroll: at their end the off-road note is in full, above Start.
     await tester.ensureVisible(find.byKey(const ValueKey('offroad-note')));
     await settle();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(
       tester.getBottomLeft(find.byKey(const ValueKey('offroad-note'))).dy,
       lessThanOrEqualTo(tester.getTopLeft(find.byKey(const ValueKey('route-start'))).dy),

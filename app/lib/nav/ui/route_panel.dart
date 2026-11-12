@@ -91,17 +91,19 @@ class RoutePanel extends StatelessWidget {
     final k = context.t;
     return Container(
       decoration: mapPanel(context, radius: 20, alpha: 0.98),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+      // The room on the right (16, as on the left) is inside the choices and beside Start, so the choices' scroll bar is in it.
+      padding: const EdgeInsets.fromLTRB(16, 12, 0, 14),
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices).
+            // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices),
+            // and a bar at its right edge shows while there is more than fits.
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxHeight == null ? MediaQuery.sizeOf(context).height * 0.5 : (maxHeight! - 82).clamp(120.0, double.infinity)),
-              child: SingleChildScrollView(
+              child: _ChoicesScroll(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -219,13 +221,63 @@ class RoutePanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            FilledButton.icon(
-              key: const ValueKey('route-start'),
-              onPressed: nav.route == null || nav.routing ? null : nav.start,
-              icon: const Icon(Icons.navigation),
-              label: const Text('Start'),
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: FilledButton.icon(
+                key: const ValueKey('route-start'),
+                onPressed: nav.route == null || nav.routing ? null : nav.start,
+                icon: const Icon(Icons.navigation),
+                label: const Text('Start'),
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The colour of the bar beside the choices while there is more of them than fits (see [_ChoicesScroll]).
+Color routeChoicesBarColor(CacheTokens k) => k.secondary.withValues(alpha: 0.6);
+
+/// The panel's choices above Start: they scroll when taller than their room, and a thin bar at the right edge, in the panel's
+/// own margin, shows for as long as there is more than fits (nothing is drawn when everything fits).
+class _ChoicesScroll extends StatefulWidget {
+  const _ChoicesScroll({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_ChoicesScroll> createState() => _ChoicesScrollState();
+}
+
+class _ChoicesScrollState extends State<_ChoicesScroll> {
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RawScrollbar(
+      key: const ValueKey('route-choices-bar'),
+      controller: _scroll,
+      thumbVisibility: true,
+      thumbColor: routeChoicesBarColor(context.t),
+      thickness: 4,
+      radius: const Radius.circular(2),
+      crossAxisMargin: 6,
+      mainAxisMargin: 2,
+      // A computer's window would add a bar of its own to the scroll view: this one is the only one.
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: SingleChildScrollView(
+          controller: _scroll,
+          padding: const EdgeInsets.only(right: 16),
+          child: widget.child,
         ),
       ),
     );

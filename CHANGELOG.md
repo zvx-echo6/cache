@@ -15,6 +15,8 @@ release notes).
 
 ### Fixed
 - Maps: with Off-road chosen, a route shown before you start sits above the directions panel, not partly under it; the map fits the route above what the panel really covers, and fits it again when the panel grows
+- Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
+- Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
 - Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
 - Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory

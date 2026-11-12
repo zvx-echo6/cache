@@ -52,19 +52,26 @@ import '../theme.dart';
 /// The room left above a route fitted into view (the search bar or the directions header, and the position under it).
 const double kRouteFitTop = 120;
 
-/// The room left between a fitted route and what covers the map's foot.
+/// The room left between a fitted route and an edge of the map that nothing covers.
+const double kRouteFitSide = 48;
+
+/// The room left between a fitted route and what covers the map's foot or its left side.
 const double kRouteFitGap = 16;
 
-/// The least height a fitted route is given: a taller cover would leave the map no room (it then does not move at all), so the
-/// route's lower end goes under the cover instead.
+/// The least height or width a fitted route is given: a larger cover would leave the map no room (it then does not move at
+/// all), so the route's end goes under the cover instead.
 const double kRouteFitLeast = 48;
 
-/// The room to leave under a route fitted into view on a map [map] tall. [covered] is what the scale, the credits and the
-/// panel really cover of the map's foot, as laid out (with Off-road chosen the panel is taller than with Drive); the route ends
-/// above it. Null (the panel is in the side column, or nothing is laid out yet): half the [screen], at most 420.
-double routeFitBottom({required double screen, required double map, required double? covered}) {
-  if (covered == null) return math.min(screen * 0.5, 420);
-  return math.max(0.0, math.min(covered + kRouteFitGap, map - kRouteFitTop - kRouteFitLeast));
+/// The room to leave around a route fitted into view on a map of [map] points, so that the route ends clear of what covers the
+/// map, as laid out:
+/// - [coveredFoot]: what the scale, the credits and, on a phone, the panel cover of the map's foot (with Off-road chosen the
+///   panel is taller than with Drive). Null (they are not shown, or not laid out yet): half the [screen], at most 420.
+/// - [coveredLeft]: how far the column on the left reaches (from [kSideCardWidth] wide the panel is there, not at the foot).
+///   Null: there is no such column.
+EdgeInsets routeFitPadding({required Size screen, required Size map, double? coveredFoot, double? coveredLeft}) {
+  final left = coveredLeft == null ? kRouteFitSide : math.max(kRouteFitSide, math.min(coveredLeft + kRouteFitGap, map.width - kRouteFitSide - kRouteFitLeast));
+  final bottom = coveredFoot == null ? math.min(screen.height * 0.5, 420.0) : math.max(0.0, math.min(coveredFoot + kRouteFitGap, map.height - kRouteFitTop - kRouteFitLeast));
+  return EdgeInsets.fromLTRB(left, kRouteFitTop, kRouteFitSide, bottom);
 }
 
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
@@ -156,8 +163,10 @@ class _MapsScreenState extends State<MapsScreen> {
   final GlobalKey _stackKey = GlobalKey();
   final GlobalKey _insetKey = GlobalKey();
 
-  /// The scale, the credits and the panel over the map's foot on a phone (see [_coveredFoot]).
+  /// The scale and the credits over the map's foot, with the panel under them on a phone (see [_coveredFoot]); and the column
+  /// on the left from [kSideCardWidth] wide (see [_coveredLeft]).
   final GlobalKey _bottomKey = GlobalKey();
+  final GlobalKey _sideKey = GlobalKey();
 
   /// What covered the map's foot when the route was last fitted into view (null: not fitted, or not measured), and whether a
   /// finger has been on the map since (the view is then the person's, and is left alone).
@@ -490,8 +499,8 @@ class _MapsScreenState extends State<MapsScreen> {
     setState(() {});
   }
 
-  /// How much of the map's foot the scale, the credits and the panel cover, from where they were laid out; null when they are
-  /// not over the map's foot (the side column from [kSideCardWidth] wide) or not laid out yet.
+  /// How much of the map's foot the scale and the credits cover (with the panel under them on a phone), from where they were
+  /// laid out; null when they are not shown or not laid out yet.
   double? _coveredFoot() {
     final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     final box = _bottomKey.currentContext?.findRenderObject() as RenderBox?;
@@ -499,8 +508,17 @@ class _MapsScreenState extends State<MapsScreen> {
     return stack.size.height - box.localToGlobal(Offset.zero, ancestor: stack).dy;
   }
 
-  /// Fits [r] into view above what covers the map's foot. The panel for this route is laid out in the next frame, so what it
-  /// covers is read after that frame (not during this one, when the panel is still the last route's).
+  /// How far over the map the column on the left reaches (the header and the panel, from [kSideCardWidth] wide), from where it
+  /// was laid out; null when there is no such column (a phone) or it is not laid out yet.
+  double? _coveredLeft() {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = _sideKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stack == null || box == null || !stack.hasSize || !box.hasSize) return null;
+    return box.localToGlobal(Offset(box.size.width, 0), ancestor: stack).dx;
+  }
+
+  /// Fits [r] into view clear of what covers the map (routeFitPadding). The panel for this route is laid out in the next frame,
+  /// so what it covers is read after that frame (not during this one, when the panel is still the last route's).
   void _fitRoute(MapRoute r) {
     final c = _controller;
     if (c == null || !_styleReady || r.points.length < 2) return;
@@ -515,20 +533,20 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
     final b = r.bounds;
-    final screen = MediaQuery.sizeOf(context).height;
+    final screen = MediaQuery.sizeOf(context);
     final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     final covered = _fitCovered = _coveredFoot();
-    final bottom = routeFitBottom(screen: screen, map: stack != null && stack.hasSize ? stack.size.height : screen, covered: covered);
+    final pad = routeFitPadding(screen: screen, map: stack != null && stack.hasSize ? stack.size : screen, coveredFoot: covered, coveredLeft: _coveredLeft());
     try {
       await c.animateCamera(
-        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: 48, right: 48, top: kRouteFitTop, bottom: bottom),
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
         duration: const Duration(milliseconds: 600),
       );
     } catch (_) {}
   }
 
-  /// The panel grew or shrank under a route already fitted into view (its elevation chart arrived) and no finger has moved the
-  /// map since: the route is fitted again, above what the panel covers now.
+  /// What covers the map's foot grew or shrank under a route already fitted into view (on a phone the panel, when its elevation
+  /// chart arrived) and no finger has moved the map since: the route is fitted again, above what is covered now.
   void _refitIfCoverChanged() {
     if (!mounted) return;
     final r = nav.route;
@@ -1436,6 +1454,7 @@ class _MapsScreenState extends State<MapsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
+              key: _sideKey,
               width: kMapSideWidth,
               child: LayoutBuilder(
                 builder: (context, c) => Column(
@@ -1477,18 +1496,25 @@ class _MapsScreenState extends State<MapsScreen> {
                     Center(child: NoticePill(text: maps.notice!)),
                     const SizedBox(height: 8),
                   ],
-                  if (!searching) ...[
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                  if (!searching)
+                    // One box, so what the scale and the credits cover of the map's foot can be read (see _coveredFoot).
+                    Column(
+                      key: _bottomKey,
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
-                        if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
+                            if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                          ],
+                        ),
+                        // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
+                        const SizedBox(height: 6),
+                        Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
                       ],
                     ),
-                    // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
-                    const SizedBox(height: 6),
-                    Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
-                  ],
                 ],
               ),
             ),

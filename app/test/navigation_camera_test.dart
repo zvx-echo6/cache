@@ -4,6 +4,7 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show ScaleBarWidget;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/route_panel.dart' show DirectionsHeader, RoutePanel;
 import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
@@ -56,6 +57,17 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
+/// Where the map package keeps the paddings of a fit, read from its own encoding of a known one (left 11, top 12, right 13,
+/// bottom 14), so the tests do not depend on their order.
+final List<dynamic> _fitProbe =
+    CameraUpdate.newLatLngBounds(LatLngBounds(southwest: const LatLng(0, 0), northeast: const LatLng(1, 1)), left: 11, top: 12, right: 13, bottom: 14).toJson() as List<dynamic>;
+
+/// The padding of the fit [u] (a recorded camera update) that the known fit has as [probe].
+double _fitPad(List<dynamic> u, double probe) => (u[_fitProbe.indexOf(probe)] as num).toDouble();
+
+/// The fits among the camera moves the screen asked for, in order.
+List<List<dynamic>> _fitsOf(CameraController camera) => camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newLatLngBounds').toList();
 
 void main() {
   testWidgets(
@@ -132,16 +144,20 @@ void main() {
           await tester.pump();
         }
         final bounds = snapshot.bounds;
+        // The window is 800 wide: the header and the panel are in the column on the left, and the scale and the credits are
+        // all that covers the map's foot. The route is fitted clear of both.
+        final sideRight = tester.getRect(find.byType(DirectionsHeader)).right;
+        final foot = tester.getSize(find.byType(MapLibreMap)).height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
         expect(camera.cameras, [
           CameraUpdate.newLatLngBounds(
             LatLngBounds(
               southwest: LatLng(bounds[0], bounds[1]),
               northeast: LatLng(bounds[2], bounds[3]),
             ),
-            left: 48,
+            left: sideRight + kRouteFitGap,
             right: 48,
             top: 120,
-            bottom: 300,
+            bottom: foot + kRouteFitGap,
           ).toJson(),
         ]);
         expect(maps.follow, FollowMode.free);
@@ -175,17 +191,95 @@ void main() {
     },
   );
 
-  test('the room under a fitted route is what covers the map\'s foot, and the map keeps room for the route', () {
-    // The panel in the side column (nothing covers the map's foot): half the screen, at most 420, as before.
-    expect(routeFitBottom(screen: 600, map: 600, covered: null), 300);
-    expect(routeFitBottom(screen: 1200, map: 1200, covered: null), 420);
-    // On a phone: what the scale, the credits and the panel cover, and a gap.
-    expect(routeFitBottom(screen: 844, map: 844, covered: 380), 380 + kRouteFitGap);
-    expect(routeFitBottom(screen: 844, map: 844, covered: 582), 582 + kRouteFitGap);
+  test('the room around a fitted route follows what covers the map, and the map keeps room for the route', () {
+    const phone = Size(390, 844);
+    // A phone: at the foot what the scale, the credits and the panel cover, and a gap; the other edges as they are.
+    expect(routeFitPadding(screen: phone, map: phone, coveredFoot: 380), const EdgeInsets.fromLTRB(48, 120, 48, 396));
+    expect(routeFitPadding(screen: phone, map: phone, coveredFoot: 582).bottom, 582 + kRouteFitGap);
     // A cover that leaves no room: the map keeps the least room for the route (with no room at all it would not move).
-    expect(routeFitBottom(screen: 400, map: 400, covered: 390), 400 - kRouteFitTop - kRouteFitLeast);
-    expect(kRouteFitTop + routeFitBottom(screen: 400, map: 400, covered: 390), lessThan(400));
-    expect(routeFitBottom(screen: 100, map: 100, covered: 90), 0);
+    const low = Size(700, 400);
+    expect(routeFitPadding(screen: low, map: low, coveredFoot: 390).bottom, 400 - kRouteFitTop - kRouteFitLeast);
+    expect(kRouteFitTop + routeFitPadding(screen: low, map: low, coveredFoot: 390).bottom, lessThan(400));
+    expect(routeFitPadding(screen: const Size(700, 100), map: const Size(700, 100), coveredFoot: 90).bottom, 0);
+    // From 800 wide: clear of the column on the left, and at the foot only what the scale and the credits cover.
+    const wide = Size(1200, 800);
+    expect(routeFitPadding(screen: wide, map: wide, coveredFoot: 74, coveredLeft: 392), const EdgeInsets.fromLTRB(408, 120, 48, 90));
+    // A column that leaves no room beside it: the map keeps the least room there too.
+    const narrow = Size(480, 800);
+    expect(routeFitPadding(screen: narrow, map: narrow, coveredFoot: 74, coveredLeft: 392).left, 480 - kRouteFitSide - kRouteFitLeast);
+    // Nothing shown at the foot to read: half the screen, at most 420, as before.
+    expect(routeFitPadding(screen: const Size(800, 600), map: const Size(800, 600)).bottom, 300);
+    expect(routeFitPadding(screen: const Size(1600, 1200), map: const Size(1600, 1200)).bottom, 420);
+  });
+
+  testWidgets('from 800 wide the route is fitted clear of the column on the left, with no more room at the foot than is covered', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    // The style template is read afresh (see the phone test below).
+    rootBundle.clear();
+    final dir = Directory.systemTemp.createTempSync('route-fit-wide-');
+    final originalPlatform = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => NoSurface();
+    final location = LocationService(source: FakeSource(), settingsDirOverride: dir);
+    final engine = TestLayerEngine();
+    final maps = MapsState(engine: engine, settingsDirOverride: dir);
+    final nav = NavState(backend: FakeBackend(), location: location, speaker: FakeSpeaker(), positionSource: FakeNavPosition(), fmt: const Fmt(UnitSystem.imperial));
+    final camera = CameraController();
+    try {
+      await tester.runAsync(() async {
+        await location.init();
+        await engine.start();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          home: MapsScreen(location: location, maps: maps, nav: nav, themeId: CacheThemeId.light, glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf'),
+        ),
+      );
+      for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump();
+      }
+      expect(find.byType(MapLibreMap), findsOneWidget, reason: 'the map did not appear');
+      final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+      map.onMapCreated!(camera);
+      map.onStyleLoadedCallback!();
+      await tester.pump();
+      expect(nav.previewSnapshot(MapRoute.fromJson(fakeRouteJson(id: 'fit-wide'))), isTrue);
+      for (var i = 0; i < 100 && _fitsOf(camera).isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump();
+      }
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      final fits = _fitsOf(camera);
+      expect(fits, isNotEmpty, reason: 'the route was not fitted into view');
+      final size = tester.getSize(find.byType(MapLibreMap));
+      // The column on the left: the header, and under it the panel.
+      final sideRight = tester.getRect(find.byType(DirectionsHeader)).right;
+      expect(tester.getRect(find.byType(RoutePanel)).right, sideRight);
+      expect(sideRight, greaterThan(300), reason: 'the panel is not in a column on the left');
+      expect(_fitPad(fits.last, 11), greaterThanOrEqualTo(sideRight), reason: 'the route may be under the column on the left');
+      expect(_fitPad(fits.last, 11), sideRight + kRouteFitGap);
+      // The foot: only the scale and the credits are there, so no more room is left than they cover (it used to be half the
+      // window, as if the panel were at the foot).
+      final covered = size.height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
+      expect(covered, lessThan(200));
+      expect(_fitPad(fits.last, 14), covered + kRouteFitGap);
+      expect(_fitPad(fits.last, 13), kRouteFitSide);
+      expect(_fitPad(fits.last, 12), kRouteFitTop);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      MapLibrePlatform.createInstance = originalPlatform;
+      camera.dispose();
+      nav.dispose();
+      maps.dispose();
+      location.dispose();
+      await tester.runAsync(() => dir.delete(recursive: true));
+    }
   });
 
   testWidgets('on a phone with Off-road chosen the route is fitted above the panel, the scale and the credits', (tester) async {
@@ -203,9 +297,6 @@ void main() {
     final maps = MapsState(engine: engine, settingsDirOverride: dir);
     final nav = NavState(backend: FakeBackend(), location: location, speaker: FakeSpeaker(), positionSource: FakeNavPosition(), fmt: const Fmt(UnitSystem.imperial));
     final camera = CameraController();
-    // Where the map package keeps the bottom padding of a fit, read from its own encoding of a known one.
-    final bottomAt = (CameraUpdate.newLatLngBounds(LatLngBounds(southwest: const LatLng(0, 0), northeast: const LatLng(1, 1)), left: 11, top: 12, right: 13, bottom: 14).toJson() as List<dynamic>).indexOf(14.0);
-    expect(bottomAt, greaterThan(0));
     try {
       await tester.runAsync(() async {
         await location.init();
@@ -228,8 +319,7 @@ void main() {
       await tester.pump();
       // An off-road route on foot, with a stretch of open ground: the panel has the off-road choices and the off-road note.
       expect(nav.previewSnapshot(MapRoute.fromJson(fakeRouteJson(id: 'fit-offroad', offroad: true, mode: 'offroad_foot'))), isTrue);
-      List<List<dynamic>> fitsOf() => camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newLatLngBounds').toList();
-      for (var i = 0; i < 100 && fitsOf().isEmpty; i++) {
+      for (var i = 0; i < 100 && _fitsOf(camera).isEmpty; i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
         await tester.pump();
       }
@@ -240,9 +330,11 @@ void main() {
       }
       expect(nav.phase, NavPhase.previewing);
       expect(find.byKey(const ValueKey('land-strict')), findsOneWidget, reason: 'Off-road is not chosen');
-      final fits = fitsOf();
+      final fits = _fitsOf(camera);
       expect(fits, isNotEmpty, reason: 'the route was not fitted into view');
-      final bottom = (fits.last[bottomAt] as num).toDouble();
+      final bottom = _fitPad(fits.last, 14);
+      // No column on the left on a phone: the sides are as they were.
+      expect((_fitPad(fits.last, 11), _fitPad(fits.last, 13)), (kRouteFitSide, kRouteFitSide));
       final height = tester.getSize(find.byType(MapLibreMap)).height;
       // The scale is the top of what covers the map's foot: under it the credits and the panel.
       final covered = height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
