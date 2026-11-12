@@ -374,6 +374,23 @@ void main() {
       expect(mini.top, closeTo(elev.top, 0.5));
     });
 
+    testWidgets('a 320 point wide phone and the largest text size lay out without overflow', (tester) async {
+      await show(tester);
+      for (final (w, scale) in [(320.0, 1.0), (390.0, 2.0), (320.0, 2.0)]) {
+        tester.view.physicalSize = Size(w, 700) * 3;
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.dark),
+          home: MediaQuery(
+            data: MediaQueryData(size: Size(w, 700), textScaler: TextScaler.linear(scale)),
+            child: Scaffold(body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(CacheThemeId.dark), themeId: CacheThemeId.dark)),
+          ),
+        ));
+        await tester.pump();
+        expect(tester.takeException(), isNull, reason: 'width $w, text x$scale');
+        expect(find.byKey(const ValueKey('guidance-end')), findsOneWidget);
+      }
+    });
+
     test('the split is two thirds', () => expect(kDriveTurnsShare, 2 / 3));
   });
 }

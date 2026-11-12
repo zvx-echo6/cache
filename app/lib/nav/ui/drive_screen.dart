@@ -142,11 +142,13 @@ class DriveTurns extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, box) {
                 // A list longer than its room fades out at its lower edge, so it reads as scrolling and never ends in a cut row.
-                final overflows = rows.length * rowHeight + 4 > box.maxHeight;
+                // The rows grow with the text size (two lines of larger text still fit a row).
+                final extent = rowHeight * math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
+                final overflows = rows.length * extent + 4 > box.maxHeight;
                 final list = ListView.builder(
                   key: const ValueKey('drive-turns'),
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                  itemExtent: rowHeight,
+                  itemExtent: extent,
                   itemCount: rows.length,
                   itemBuilder: (context, i) => _row(context, k, rows[i]),
                 );
@@ -333,15 +335,24 @@ class DriveElevation extends StatelessWidget {
               Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3))),
               const SizedBox(width: 8),
               Expanded(
-                child: Text.rich(
-                  TextSpan(children: [
-                    TextSpan(text: 'Steepest climb ahead  ', style: TextStyle(color: k.secondary)),
-                    TextSpan(text: steep == null ? 'None' : '${(steep.grade * 100).round()}%', style: TextStyle(fontWeight: FontWeight.w700, color: k.text)),
-                    if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where', style: TextStyle(color: k.text)),
-                  ]),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 14, height: 1.15),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Steepest climb ahead', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, height: 1.15, color: k.secondary)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: steep == null ? 'None' : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
+                          if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
+                        ]),
+                        maxLines: 1,
+                        style: TextStyle(fontSize: 14, height: 1.15, color: k.text),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -360,7 +371,8 @@ class DriveElevation extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Expanded(child: Text('Elevation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: k.text))),
+              Flexible(child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('Elevation', maxLines: 1, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: k.text)))),
+              const SizedBox(width: 8),
               if (prof != null && prof.hasData) Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Whole route, ${routeLengthText(fmt, prof.totalM)}', maxLines: 1, style: TextStyle(fontSize: 13, color: k.secondary)))),
             ],
           ),
