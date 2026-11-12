@@ -109,13 +109,67 @@ pub fn check_url(url: &str) -> Result<()> {
 
 /// The client of one request: `timeout` seconds in all. It carries the public-address guard when the Linux server's helper
 /// installed it (cache_netguard), so a source or a redirect cannot reach a LAN or metadata address there; on a phone it is the
-/// plain client it always was.
+/// plain client it always was. It follows no redirect by itself: the client's own following keeps every header but
+/// `Authorization` and `Cookie` (so a key in any other header went to whatever host the redirect named) and goes from https to
+/// plain http. `send` follows redirects itself, one checked hop at a time (`redirect_target`).
 pub fn agent(timeout: u64) -> ureq::Agent {
     cache_netguard::guarded(ureq::AgentBuilder::new())
         .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(timeout))
+        .redirects(0)
         .user_agent(&user_agent())
         .build()
+}
+
+/// The redirects one request follows.
+pub const MAX_REDIRECTS: usize = 5;
+
+/// `scheme:rest` when `s` starts with a scheme (`https://h/x`, `ftp://h`, `mailto:x`).
+fn scheme_of(s: &str) -> Option<(&str, &str)> {
+    let (a, b) = s.split_once(':')?;
+    let ok = a.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) && a.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c));
+    ok.then_some((a, b))
+}
+
+/// Where a redirect leads, or why it is not followed. `from` is the address just asked and `location` the answer's `Location`
+/// (absolute, or relative to `from`). The rules the first address of a request passes hold for every hop: https only (plain http
+/// only to this machine, and never from an https address), and a request that carries a key or a login (`keyed`) goes on only
+/// to the host it was just sent to or to one the definition names (`named`).
+pub fn redirect_target(from: &str, location: &str, keyed: bool, named: &[String]) -> Result<String> {
+    let loc = location.trim().split('#').next().unwrap_or("");
+    let Some((scheme, rest)) = from.split_once("://") else { return Err(Error::fetch_failed("a redirect from an address without a scheme")) };
+    if loc.is_empty() || loc.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(Error::fetch_failed("a redirect without a usable address"));
+    }
+    let origin_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let origin = format!("{scheme}://{}", &rest[..origin_end]);
+    let path = rest[origin_end..].split(['?', '#']).next().unwrap_or("");
+    let next = if let Some((s, r)) = scheme_of(loc) {
+        format!("{}:{r}", s.to_ascii_lowercase())
+    } else if loc.starts_with("//") {
+        format!("{scheme}:{loc}")
+    } else if loc.starts_with('/') {
+        format!("{origin}{loc}")
+    } else if loc.starts_with('?') {
+        format!("{origin}{}{loc}", if path.is_empty() { "/" } else { path })
+    } else {
+        let dir = match path.rfind('/') {
+            Some(i) => &path[..=i],
+            None => "/",
+        };
+        format!("{origin}{dir}{loc}")
+    };
+    if (from.starts_with("https://") && !next.starts_with("https://")) || check_url(&next).is_err() {
+        return Err(Error::fetch_failed("a redirect pointed at an address that is not https; not followed"));
+    }
+    let host = host_of(&next);
+    if host.is_empty() {
+        return Err(Error::fetch_failed("a redirect without a usable address"));
+    }
+    if keyed && host != host_of(from) && !named.contains(&host) {
+        return Err(Error::fetch_failed(format!("a redirect pointed at {host}, which the definition does not name; not followed with the key")));
+    }
+    Ok(next)
 }
 
 fn host_of(url: &str) -> String {
@@ -686,44 +740,76 @@ impl<'a, 'g> Runner<'a, 'g> {
         let method = r.method.as_deref().unwrap_or("GET");
         let timeout = r.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_S) as u64;
         let max = r.max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
-        let agent = agent(timeout);
         let has = |n: &str| headers.keys().any(|k| k.eq_ignore_ascii_case(n));
+        // a key in the address or a header, or a login: its redirects stay with the hosts the definition names
+        let keyed = def.api_key.is_some() || def.basic_auth.is_some() || !self.scrub.is_empty();
         let mut attempt = 0;
         loop {
             attempt += 1;
-            (self.gate)()?;
-            let t0 = Instant::now();
-            let mut req = agent.request(method, url);
-            for (k, v) in headers {
-                req = req.set(k, v);
-            }
-            if !has("accept-encoding") {
-                req = req.set("Accept-Encoding", "gzip");
-            }
-            if !has("authorization") {
-                if let Some(b) = &def.basic_auth {
-                    let (u, p) = (self.rc.secrets.by_alias.get(&b.user_alias), self.rc.secrets.by_alias.get(&b.password_alias));
-                    match (u, p) {
-                        (Some(u), Some(p)) => {
-                            req = req.set("Authorization", &format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"))));
+            // `timeout` seconds for the request and its redirects together, as before
+            let started = Instant::now();
+            // One request and the redirects it leads through, each hop checked before it is asked (`redirect_target`) and counted
+            // against the quota like any other request. As the client did when it followed them itself: 301, 302 and 303 are
+            // asked again with GET and no body, 307 and 308 only for a GET, and `Authorization` and `Cookie` are not sent on.
+            let (mut at, mut verb, mut hops) = (url.to_string(), method, 0usize);
+            let (result, shown, elapsed) = loop {
+                (self.gate)()?;
+                let t0 = Instant::now();
+                let left = timeout.saturating_sub(started.elapsed().as_secs()).max(1);
+                let mut req = agent(left).request(verb, &at);
+                for (k, v) in headers {
+                    if hops > 0 && (k.eq_ignore_ascii_case("authorization") || k.eq_ignore_ascii_case("cookie")) {
+                        continue;
+                    }
+                    req = req.set(k, v);
+                }
+                if !has("accept-encoding") {
+                    req = req.set("Accept-Encoding", "gzip");
+                }
+                if hops == 0 && !has("authorization") {
+                    if let Some(b) = &def.basic_auth {
+                        let (u, p) = (self.rc.secrets.by_alias.get(&b.user_alias), self.rc.secrets.by_alias.get(&b.password_alias));
+                        match (u, p) {
+                            (Some(u), Some(p)) => {
+                                req = req.set("Authorization", &format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"))));
+                            }
+                            _ if b.required => return Err(Error::key_missing(format!("this source needs the login ({} and {})", b.user_alias, b.password_alias))),
+                            _ => {}
                         }
-                        _ if b.required => return Err(Error::key_missing(format!("this source needs the login ({} and {})", b.user_alias, b.password_alias))),
-                        _ => {}
                     }
                 }
-            }
-            let result = match (method, body) {
-                ("POST", Some((ct, bytes))) => {
-                    if !has("content-type") {
-                        req = req.set("Content-Type", ct);
+                let result = match (verb, body) {
+                    ("POST", Some((ct, bytes))) => {
+                        if !has("content-type") {
+                            req = req.set("Content-Type", ct);
+                        }
+                        req.send_bytes(bytes)
                     }
-                    req.send_bytes(bytes)
+                    ("POST", None) => req.send_bytes(&[]),
+                    _ => req.call(),
+                };
+                let elapsed = t0.elapsed().as_millis() as u64;
+                let shown = scrub(at.clone(), &self.scrub);
+                let next = match &result {
+                    Ok(resp) => {
+                        let follows = match resp.status() {
+                            301..=303 => true,
+                            307 | 308 => verb == "GET",
+                            _ => false,
+                        };
+                        resp.header("location").filter(|_| follows).map(|l| (resp.status(), l.to_string()))
+                    }
+                    Err(_) => None,
+                };
+                let Some((code, location)) = next else { break (result, shown, elapsed) };
+                self.log.push(ReqLog { step: step.into(), method: verb.into(), url: shown, status: code, bytes: 0, ms: elapsed });
+                if hops >= MAX_REDIRECTS {
+                    return Err(Error::fetch_failed(format!("more than {MAX_REDIRECTS} redirects")));
                 }
-                ("POST", None) => req.send_bytes(&[]),
-                _ => req.call(),
+                at = redirect_target(&at, &location, keyed, &self.static_hosts).map_err(|e| Error::fetch_failed(scrub(e.message, &self.scrub)))?;
+                verb = "GET";
+                hops += 1;
             };
-            let elapsed = t0.elapsed().as_millis() as u64;
-            let shown = scrub(url.to_string(), &self.scrub);
             match result {
                 Ok(resp) => {
                     let status = resp.status();
@@ -736,11 +822,11 @@ impl<'a, 'g> Runner<'a, 'g> {
                         return Err(Error::bad_response(format!("the response is larger than {} MB (set request.max_bytes higher, up to 32 MB)", max / (1024 * 1024))));
                     }
                     let buf = gunzip_if_needed(buf, max)?;
-                    self.log.push(ReqLog { step: step.into(), method: method.into(), url: shown, status, bytes: buf.len(), ms: elapsed });
+                    self.log.push(ReqLog { step: step.into(), method: verb.into(), url: shown, status, bytes: buf.len(), ms: elapsed });
                     return Ok(buf);
                 }
                 Err(ureq::Error::Status(code, resp)) => {
-                    self.log.push(ReqLog { step: step.into(), method: method.into(), url: shown, status: code, bytes: 0, ms: elapsed });
+                    self.log.push(ReqLog { step: step.into(), method: verb.into(), url: shown, status: code, bytes: 0, ms: elapsed });
                     let retry_after = resp.header("retry-after").and_then(parse_retry_after);
                     let mut buf = Vec::new();
                     let _ = resp.into_reader().take(8192).read_to_end(&mut buf);
@@ -927,6 +1013,44 @@ mod tests {
         assert_eq!(set_query_param("https://h/p?a=1&off=5&b=2#f", "off", "10"), "https://h/p?a=1&b=2&off=10#f");
         assert_eq!(set_query_param("https://h/p", "page", "2"), "https://h/p?page=2");
         assert_eq!(host_of("https://User@Api.Example.com:8080/x?y"), "api.example.com:8080");
+    }
+
+    #[test]
+    fn a_redirect_keeps_the_rules_of_the_first_address() {
+        let named = vec!["api.example.org".to_string(), "files.example.org".to_string()];
+        let to = |from: &str, loc: &str, keyed: bool| redirect_target(from, loc, keyed, &named).map_err(|e| (e.code, e.message));
+        // relative and absolute addresses, resolved against the one just asked
+        assert_eq!(to("https://api.example.org/v1/a?x=1", "/v2/a?x=1", true).unwrap(), "https://api.example.org/v2/a?x=1");
+        assert_eq!(to("https://api.example.org/v1/a?x=1", "b?y=2", true).unwrap(), "https://api.example.org/v1/b?y=2");
+        assert_eq!(to("https://api.example.org/v1/a?x=1", "?x=2", true).unwrap(), "https://api.example.org/v1/a?x=2");
+        assert_eq!(to("https://api.example.org", "next", false).unwrap(), "https://api.example.org/next");
+        assert_eq!(to("https://api.example.org/a", "//files.example.org/b#top", true).unwrap(), "https://files.example.org/b");
+        assert_eq!(to("https://api.example.org/a", "HTTPS://files.example.org/b", true).unwrap(), "https://files.example.org/b");
+        // https never becomes http, with a key or without, to another host, the same host or this machine
+        for keyed in [true, false] {
+            for loc in ["http://api.example.org/a", "http://other.example.net/a", "http://127.0.0.1:8080/a", "//api.example.org/a", "ftp://api.example.org/a", "file:///etc/hosts"] {
+                let from = if loc.starts_with("//") { "http://127.0.0.1:1/a" } else { "https://api.example.org/a" };
+                let e = to(from, loc, keyed).unwrap_err();
+                assert_eq!(e.0, "fetch_failed", "{loc}");
+                assert!(e.1.contains("not https"), "{loc}: {}", e.1);
+            }
+        }
+        // plain http stays possible on this machine alone (tests and a local server)
+        assert_eq!(to("http://127.0.0.1:8080/a", "http://localhost:8081/b", false).unwrap(), "http://localhost:8081/b");
+        assert_eq!(to("http://127.0.0.1:8080/a", "https://api.example.org/b", false).unwrap(), "https://api.example.org/b");
+        // with a key or a login: only the host just asked, or one the definition names
+        assert_eq!(to("https://api.example.org/a", "https://files.example.org/b", true).unwrap(), "https://files.example.org/b");
+        let e = to("https://api.example.org/a", "https://other.example.net/b", true).unwrap_err();
+        assert_eq!(e, ("fetch_failed", "a redirect pointed at other.example.net, which the definition does not name; not followed with the key".to_string()));
+        assert!(to("https://api.example.org/a", "https://api.example.org:8443/b", true).is_err(), "another port is another host");
+        assert!(to("http://127.0.0.1:8080/a", "http://127.0.0.1:8081/b", true).is_err());
+        assert_eq!(to("https://cdn.example.net/a", "/b", true).unwrap(), "https://cdn.example.net/b", "the host just asked");
+        // without one: any https host
+        assert_eq!(to("https://api.example.org/a", "https://other.example.net/b", false).unwrap(), "https://other.example.net/b");
+        // nothing to follow
+        for loc in ["", "  ", "#top", "https://a b/c", "https:///x"] {
+            assert_eq!(to("https://api.example.org/a", loc, false).unwrap_err().0, "fetch_failed", "{loc:?}");
+        }
     }
 
     #[test]

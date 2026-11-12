@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:pdfrx/pdfrx.dart';
 
 import '../platform/app_log.dart' show logError;
@@ -68,6 +69,9 @@ bool pdfiumLockRequired = true;
 /// PDFium call, so the viewer and the core never use PDFium at the same moment. When the core's lock cannot be had (asked three times)
 /// this fails, loudly, and starts nothing: PDFium is never used without the lock for the life of the process.
 Future<void> initPdfium() async {
+  // A browser has no process PDFium, font mapper or core lock (and `Platform` throws there): it only starts pdfrx, and never needs the
+  // lock (the web's PdfiumLock is a stub that does nothing).
+  if (kIsWeb) return pdfrxFlutterInitialize();
   if (PdfiumLock.functions == null) {
     final fns = await _coreLockFunctions();
     if (fns == null) {

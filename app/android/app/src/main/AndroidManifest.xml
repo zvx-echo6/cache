@@ -39,6 +39,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. MainActivity reads
+                 the link itself and passes it to Dart on the co.cache/link channel; Flutter deep linking is off (the meta-data
+                 below), so the link never becomes a Flutter route. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="cachelink"/>
+            </intent-filter>
         </activity>
         <!-- Android Auto is declared in src/car/AndroidManifest.xml, merged only when the build has -PcacheAndroidAuto=true
              (build.gradle.kts): release builds leave it out until it ships with CarPlay. -->

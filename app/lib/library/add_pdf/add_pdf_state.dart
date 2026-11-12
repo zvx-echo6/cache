@@ -14,6 +14,7 @@ import '../../notebook/sync/folder_access.dart' show openSyncFolder;
 import '../../notebook/sync/saf_stream_shim.dart';
 import '../../platform/app_log.dart';
 import '../../platform/battery.dart';
+import '../../platform/proc_diag.dart';
 import '../../search/index_scheduler.dart';
 import '../../search/index_throttle.dart';
 import '../../sources/libraries_state.dart';
@@ -129,6 +130,17 @@ class AddPdfJob {
   int pagesDone = 0;
   int pieces = 0;
   int piecesDone = 0;
+
+  /// When the book was saved, in this run (null for a job read from disk): the Library's overview card says "Added to ..." for a while.
+  DateTime? finishedAt;
+
+  /// The book is in and the library's index status has been read again since (see [AddPdfState.wordsPending]): until then the card
+  /// says only where the book went. True for a job read from disk.
+  bool wordsChecked = true;
+
+  /// Diagnostic only: wall and CPU time of the core's step now, and of the pieces since the last batch (logged by [_status]).
+  StepClock? stepClock;
+  StepClock? pieceClock;
 
   /// Scanned pages asked for so far, and read and handed back; [scanInBatch] are read in the batch now being read.
   int scans = 0;
@@ -323,6 +335,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.ocrEngine,
     this.battery,
     this.onDone,
+    this.wordsPending,
     this.permit,
     this.copyIn,
     this.stepBudgetMs = 400,
@@ -359,6 +372,29 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// After a book is saved: the Library and Bookshelves read again.
   final Future<void> Function(AddPdfJob job)? onDone;
 
+  /// Whether the library at a path has points its keyword index lacks (their words are not searchable yet): true, false, or null
+  /// when not known. The app's reads the libraries' index status.
+  bool? Function(String libraryPath)? wordsPending;
+
+  /// The finished book's card is still waiting for its words (see [wordsPending]) once the status has been read again.
+  bool wordsPendingFor(AddPdfJob job) => job.wordsChecked && wordsPending?.call(job.libraryPath) == true;
+
+  /// Books made in this run whose words were not searchable when they were saved, by copy key, with their library's path: their rows say so
+  /// until the keyword index has them.
+  final Map<String, String> _awaitingWords = {};
+
+  @visibleForTesting
+  void debugAwaitWords(String copy, String libraryPath) => _awaitingWords[copy] = libraryPath;
+
+  /// True while the book [copy] made in this run waits for its words to be searchable. It lets go once the index has them.
+  bool awaitsWords(String copy) {
+    final path = _awaitingWords[copy];
+    if (path == null) return false;
+    if (wordsPending?.call(path) == true) return true;
+    _awaitingWords.remove(copy);
+    return false;
+  }
+
   /// Awaited before each step and between OCR pages; the app's throttle by default.
   final Future<void> Function(AddPdfJob job)? permit;
 
@@ -379,6 +415,24 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// Every job, newest first: being added, then stopped, then added.
   List<AddPdfJob> get jobs => List.unmodifiable(_jobs);
   List<AddPdfJob> get active => [for (final j in _jobs) if (j.status == AddPdfStatus.active) j];
+  /// Whether [libraryPath] is the default own library (My books, made by `_makeOwn`, whose settings say `own_default`): found by that, not
+  /// by its title. A book added to it is said to have gone onto "Bookshelves".
+  bool isDefaultLibrary(String libraryPath) => libraries?.defaultOwnLibrary?.path == libraryPath;
+
+  /// How long the Library's overview card keeps saying a PDF was added.
+  static const Duration kDoneLineFor = Duration(seconds: 45);
+
+  /// The newest PDF saved within [kDoneLineFor] before [now] and not put away (null for none): the overview card says it was added.
+  AddPdfJob? justFinished(DateTime now) {
+    AddPdfJob? best;
+    for (final j in _jobs) {
+      final at = j.finishedAt;
+      if (j.status != AddPdfStatus.done || at == null || now.difference(at) >= kDoneLineFor) continue;
+      if (best == null || at.isAfter(best.finishedAt!)) best = j;
+    }
+    return best;
+  }
+
   List<AddPdfJob> get failed => [for (final j in _jobs) if (j.status == AddPdfStatus.failed) j];
 
   /// Being added (shown on Bookshelves' row: "1 being added").
@@ -571,16 +625,39 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
             pulse: () => (j.state, j.pagesDone, j.piecesDone, j.scansDone, j.scanInBatch, j.busy, _beat),
             step: () => j.stepWords,
             // a run of this job still stopping (Cache went to the back and came back) is let finish first: never two at once
-            start: () async {
-              final old = _runs[j.id];
-              if (old != null) {
-                logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
-                await old.stop();
-              }
-              return _runs[j.id] = AddPdfRun(this, j);
-            },
+            start: () => _startRun(j),
           ),
     ];
+  }
+
+  /// The one start in flight for each job: every caller gets the same run, never one run each.
+  final Map<String, Future<AddPdfRun>> _starting = {};
+
+  Future<AddPdfRun> _startRun(AddPdfJob j) {
+    // (the callback must not return remove's value: whenComplete would wait for that very future)
+    return _starting[j.id] ??= _startRunOnce(j).whenComplete(() {
+      _starting.remove(j.id);
+    });
+  }
+
+  Future<AddPdfRun> _startRunOnce(AddPdfJob j) async {
+    var said = false;
+    for (;;) {
+      final old = _runs[j.id];
+      if (old == null) break;
+      // said once, and the wait is on the earlier run's end (its finished future), never a poll
+      if (!said) {
+        said = true;
+        logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
+      }
+      await old.stop();
+      // its end took its own entry away; one that is still there is dropped, never waited on again
+      if (identical(_runs[j.id], old)) _runs.remove(j.id);
+    }
+    final run = AddPdfRun(this, j);
+    // a run of a job that is not active any more has ended already, and left nothing behind
+    if (!run._done.isCompleted) _runs[j.id] = run;
+    return run;
   }
 
   Future<void> _permitFor(AddPdfJob job, {bool Function()? stop}) async {
@@ -773,6 +850,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   void _status(AddPdfJob job, Map<String, dynamic> s) {
     final before = job.state;
+    final piecesBefore = job.piecesDone;
     job.state = (s['state'] ?? job.state) as String;
     final p = (s['progress'] as Map?)?.cast<String, dynamic>();
     if (p != null) {
@@ -788,7 +866,16 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
         if (page != null && job._scanPages.add(page)) job.scans++;
       }
     }
+    final clock = job.stepClock ??= StepClock();
+    if (before == job.state && job.state == 'embedding' && job.piecesDone != piecesBefore) {
+      logInfo('Add PDF timing: pieces ${job.piecesDone} of ${job.pieces} embedded, last batch ${(job.pieceClock ?? clock).took()}', job: job.key);
+      job.pieceClock = StepClock();
+    }
     if (before != job.state) {
+      logInfo('Add PDF timing: step $before took ${clock.took()}', job: job.key);
+      job
+        ..stepClock = StepClock()
+        ..pieceClock = StepClock();
       logInfo('Add PDF: ${job.state} (pages ${job.pagesDone} of ${job.pages}, pieces ${job.piecesDone} of ${job.pieces})', job: job.key);
       unawaited(save());
     }
@@ -797,6 +884,8 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   Future<void> _done(AddPdfJob job, Map<String, dynamic>? result) async {
     job
+      ..wordsChecked = false
+      ..finishedAt = _clock()
       ..status = AddPdfStatus.done
       ..state = 'done'
       ..coreJob = null
@@ -840,6 +929,11 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     } catch (e) {
       logError('Add PDF: the Library could not be read again', error: e, job: job.key);
     }
+    // the status has been read again: now the card knows whether the book's words are searchable yet
+    job.wordsChecked = true;
+    final done = result?['copy'] as String?;
+    if (done != null && wordsPending?.call(job.libraryPath) == true) _awaitingWords[done] = job.libraryPath;
+    _changed();
   }
 
   void _failed(AddPdfJob job, String code, String message, {int? needed}) {
@@ -930,11 +1024,23 @@ class AddPdfRun implements IndexRun {
   @override
   void setDuty(IndexDuty duty) {}
 
+  /// Still work to do: not done, failed, put away or held by the person.
+  bool get _live => job.status == AddPdfStatus.active && !job.pausedByPerson && state._jobs.contains(job);
+
   Future<void> _go() async {
     final calls = state.calls;
+    // a stray run (a start that was queued while the job finished) never starts a finished job again
+    if (!_live) {
+      _finish(false);
+      return;
+    }
     try {
       // a number kept on disk is confirmed by starting from the job folder first (a stale one is never stepped)
       if (job.coreJob == null || job.coreFromDisk) await _startWaiting();
+      if (!_live) {
+        _finish(false);
+        return;
+      }
       while (!_stop) {
         await _orStop(state._permitFor(job, stop: () => _stop));
         if (_stop) break;
@@ -955,6 +1061,7 @@ class AddPdfRun implements IndexRun {
             continue;
           }
           if (e.code == 'not_found') {
+            if (!_live) break;
             // the core no longer has this job (it was started in an earlier run of Cache): it carries on from its folder
             await state._startCore(job);
             continue;
@@ -999,6 +1106,7 @@ class AddPdfRun implements IndexRun {
   /// stopping), it waits and tries again, then leaves the job for later ([_Held]). Never a failure.
   Future<void> _startWaiting() async {
     for (var i = 0;; i++) {
+      if (!_live) return;
       try {
         await state._startCore(job);
         return;
