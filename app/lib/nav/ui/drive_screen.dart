@@ -242,8 +242,53 @@ class DriveRow {
   }
 }
 
-/// The route mini map and the elevation, side by side.
-class DriveExtras extends StatelessWidget {
+/// The route's shape (its width over its height as the mini map draws it, east-west over north-south, north up) at which the two
+/// boxes stack, the mini map across the full width and the elevation under it, instead of sitting side by side. The natural line
+/// is the side-by-side mini map box's own proportions: about 140 wide and 195 high at 390 points (a width over height of about
+/// 0.75). A route fills that box to its full height only up to that shape; at twice it (1.5) the route fills half the box's height
+/// and the rest is blank, so from there the wide box serves it better.
+const double kDriveStackAspect = 1.5;
+
+/// The margin a re-route must clear to change the arrangement: a stacked one goes back to side by side only below
+/// [kDriveStackAspect] over this (1.2), a side-by-side one stacks only above [kDriveStackAspect] times this (1.875). A nearly
+/// square route, or one a little either side of the line, never flips back and forth.
+const double kDriveStackMargin = 1.25;
+
+/// Whether a route of [aspect] (width over height) is shown stacked. The first route of a drive is decided by the line alone;
+/// after that [previous] is kept unless the new route is clearly the other kind (the margin).
+bool driveStacked(double aspect, {bool? previous}) {
+  if (previous == null) return aspect >= kDriveStackAspect;
+  return previous ? aspect > kDriveStackAspect / kDriveStackMargin : aspect >= kDriveStackAspect * kDriveStackMargin;
+}
+
+/// The shape of [points] as the mini map draws it (the same projection: longitude scaled by the cosine of the mean latitude, north
+/// up): its width over its height.
+double routeAspect(List<GeoPoint> points) {
+  if (points.length < 2) return 1;
+  var minLat = points.first.lat, maxLat = minLat, minLon = points.first.lon, maxLon = minLon, sumLat = 0.0;
+  for (final p in points) {
+    minLat = math.min(minLat, p.lat);
+    maxLat = math.max(maxLat, p.lat);
+    minLon = math.min(minLon, p.lon);
+    maxLon = math.max(maxLon, p.lon);
+    sumLat += p.lat;
+  }
+  final w = (maxLon - minLon) * math.cos(sumLat / points.length * math.pi / 180);
+  final h = maxLat - minLat;
+  return h <= 1e-9 ? 1e9 : w / h;
+}
+
+/// The least height the elevation box gets when it is under the mini map: its title, a chart you can read, the climb line and its
+/// padding at the normal text size (a narrow phone, whose climb line wraps, and larger text, add to it).
+const double kDriveElevationMinHeight = 104;
+
+/// The least height the mini map gets when it is stacked above the elevation.
+const double kDriveMiniMinHeight = 56;
+
+/// The route mini map and the elevation. Which way they sit is chosen once for a route, by its shape ([driveStacked]):
+/// a wide route stacks (the mini map across the full width, short; the elevation under it, full width), any other sits side by
+/// side (the mini map left, the elevation right). A re-route may change it only when its shape is clearly the other kind.
+class DriveExtras extends StatefulWidget {
   const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId});
 
   final NavState nav;
@@ -252,25 +297,63 @@ class DriveExtras extends StatelessWidget {
   final CacheThemeId themeId;
 
   @override
+  State<DriveExtras> createState() => _DriveExtrasState();
+}
+
+class _DriveExtrasState extends State<DriveExtras> {
+  String? _forRoute;
+  bool? _stacked;
+
+  NavState get nav => widget.nav;
+
+  @override
   Widget build(BuildContext context) {
     final r = nav.route;
     final p = nav.progress;
     final dest = nav.selected;
     final overview = r == null
         ? null
-        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, climbAhead: elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
-    final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
+        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: widget.elevation.profile, climbAhead: widget.elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
+    final chart = DriveElevation(nav: nav, elevation: widget.elevation, palette: widget.palette);
+    if (overview == null) return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: chart);
+    // Chosen when the route changes (the first route, or a re-route), not at each update.
+    if (_forRoute != r!.routeId) {
+      _forRoute = r.routeId;
+      _stacked = driveStacked(routeAspect(r.points), previous: _stacked);
+    }
+    final mini = DriveMiniMap(overview: overview, themeId: widget.themeId);
+    final stacked = _stacked ?? false;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: overview == null
-          ? chart
-          : Row(
+      child: LayoutBuilder(
+        builder: (context, box) {
+          // The mini map takes the height its route needs across the full width (the route fitted with the box's padding), but
+          // never so much that the elevation under it has less than it needs; the elevation takes the rest. Where there is not
+          // room for both at those least heights (a short phone, large text) the two sit side by side, as they do for other routes.
+          final f = math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
+          final narrow = box.maxWidth < 330;
+          final elevMin = kDriveElevationMinHeight * f + (narrow ? 18 : 0);
+          final avail = box.maxHeight - 8;
+          if (!stacked || avail < elevMin + kDriveMiniMinHeight) {
+            return Row(
               children: [
-                Expanded(flex: 4, child: DriveMiniMap(overview: overview, themeId: themeId)),
+                Expanded(flex: 4, child: mini),
                 const SizedBox(width: 8),
                 Expanded(flex: 6, child: chart),
               ],
-            ),
+            );
+          }
+          final natural = (box.maxWidth - 48) / math.min(routeAspect(r.points), 8) + 48;
+          final miniH = math.max(kDriveMiniMinHeight, math.min(natural, avail - elevMin));
+          return Column(
+            children: [
+              SizedBox(height: miniH, child: mini),
+              const SizedBox(height: 8),
+              Expanded(child: chart),
+            ],
+          );
+        },
+      ),
     );
   }
 }

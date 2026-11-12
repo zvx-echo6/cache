@@ -231,12 +231,12 @@ void main() {
     });
     tearDown(() => rig.tearDown());
 
-    Future<void> show(WidgetTester tester, {CarExtras extras = CarExtras.never, CacheThemeId theme = CacheThemeId.dark}) async {
+    Future<void> show(WidgetTester tester, {CarExtras extras = CarExtras.never, CacheThemeId theme = CacheThemeId.dark, double? aspect}) async {
       tester.view.physicalSize = const Size(390, 844) * 3;
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await tester.runAsync(() async {
-        await rig.guide();
+        await rig.guide(aspect: aspect);
         rig.elevation.request(rig.nav.route);
         await Future<void>.delayed(const Duration(milliseconds: 20));
       });
@@ -366,6 +366,126 @@ void main() {
       expect(find.text('No elevation data for this route.'), findsOneWidget);
       expect(find.textContaining('Whole route'), findsNothing);
       expect(find.byKey(const ValueKey('elevation-chart')), findsNothing);
+    });
+
+    group('the two boxes follow the route\'s shape', () {
+      Rect box(WidgetTester t, String key) => t.getRect(find.byKey(ValueKey(key)));
+      bool stackedNow(WidgetTester t) {
+        final m = box(t, 'drive-mini-map'), e = box(t, 'drive-elevation');
+        return m.bottom <= e.top && (m.left - e.left).abs() < 1 && (m.width - e.width).abs() < 1;
+      }
+
+      bool sideBySideNow(WidgetTester t) {
+        final m = box(t, 'drive-mini-map'), e = box(t, 'drive-elevation');
+        return m.right < e.left && (m.top - e.top).abs() < 1;
+      }
+
+      test('the shape of a route is its width over its height as the mini map draws it', () {
+        GeoPoint g(double lat, double lon) => GeoPoint(lat, lon);
+        expect(routeAspect([g(42.5, -113.8), g(42.5, -113.5)]), greaterThan(100), reason: 'flat east-west');
+        expect(routeAspect([g(42.5, -113.8), g(42.8, -113.8)]), 0, reason: 'straight north-south');
+        final square = routeAspect([g(42.5, -113.8), g(42.6, -113.8 + 0.1 / 0.7373)]);
+        expect(square, closeTo(1, 0.02), reason: 'the longitude is scaled by the cosine of the latitude, so a degree east is shorter');
+        expect(routeAspect([g(42.5, -113.8)]), 1);
+      });
+
+      test('the line, its margin and the name of each', () {
+        expect(kDriveStackAspect, 1.5);
+        expect(kDriveStackMargin, 1.25);
+        // The first route is decided by the line alone: wide stacks, tall and neither do not.
+        expect(driveStacked(3.0), isTrue, reason: 'wide');
+        expect(driveStacked(0.4), isFalse, reason: 'tall');
+        expect(driveStacked(1.0), isFalse, reason: 'neither');
+        expect(driveStacked(1.49), isFalse);
+        expect(driveStacked(1.5), isTrue);
+        // After that the margin: stacked goes back only below 1.2, side by side stacks only from 1.875.
+        expect(driveStacked(1.3, previous: true), isTrue);
+        expect(driveStacked(1.21, previous: true), isTrue);
+        expect(driveStacked(1.19, previous: true), isFalse);
+        expect(driveStacked(1.7, previous: false), isFalse);
+        expect(driveStacked(1.87, previous: false), isFalse);
+        expect(driveStacked(1.88, previous: false), isTrue);
+        // A route that wanders around the line never flips back and forth.
+        var state = driveStacked(1.55);
+        for (final a in [1.45, 1.55, 1.4, 1.6, 1.3, 1.7]) {
+          expect(driveStacked(a, previous: state), state, reason: 'aspect $a');
+          state = driveStacked(a, previous: state);
+        }
+      });
+
+      testWidgets('a wide route: the mini map across the full width, the elevation under it, both full width', (tester) async {
+        await show(tester, aspect: 3.0);
+        expect(stackedNow(tester), isTrue);
+        expect(box(tester, 'drive-mini-map').width, closeTo(366, 1));
+        expect(box(tester, 'drive-elevation').width, closeTo(366, 1));
+        expect(box(tester, 'drive-elevation').height, greaterThanOrEqualTo(kDriveElevationMinHeight));
+        expect(box(tester, 'drive-mini-map').height, greaterThanOrEqualTo(kDriveMiniMinHeight));
+        expect(find.byKey(const ValueKey('elevation-chart')), findsOneWidget);
+        expect(find.byKey(const ValueKey('elevation-steep')), findsOneWidget);
+        // The list keeps its two thirds.
+        final turns = tester.getSize(find.byType(DriveTurns)).height, extras = tester.getSize(find.byType(DriveExtras)).height;
+        expect(turns / (turns + extras), closeTo(kDriveTurnsShare, 0.005));
+      });
+
+      testWidgets('a tall route: side by side', (tester) async {
+        await show(tester, aspect: 0.4);
+        expect(sideBySideNow(tester), isTrue);
+      });
+
+      testWidgets('a route that is neither: side by side', (tester) async {
+        await show(tester, aspect: 1.0);
+        expect(sideBySideNow(tester), isTrue);
+      });
+
+      testWidgets('the arrangement does not change during a drive (progress updates, turns)', (tester) async {
+        await show(tester, aspect: 3.0);
+        for (final (next, m) in [(1, 300.0), (2, 900.0), (3, 150.0), (5, 700.0)]) {
+          rig.at(next, m);
+          await tester.pump();
+          expect(stackedNow(tester), isTrue, reason: 'next $next');
+        }
+      });
+
+      Future<void> reroute(WidgetTester tester, double aspect) async {
+        rig.route = driveRouteJson(withStop: false, id: 'r${aspect.toString()}', aspect: aspect);
+        rig.nav.routes = [MapRoute.fromJson(rig.route)];
+        rig.at(1, 300);
+        await tester.pump();
+      }
+
+      testWidgets('a re-route to a clearly different shape changes it; one near the line does not', (tester) async {
+        await show(tester, aspect: 3.0);
+        expect(stackedNow(tester), isTrue);
+        await reroute(tester, 1.5); // about 1.4 as drawn: inside the margin
+        expect(stackedNow(tester), isTrue, reason: 'near the line: kept');
+        await reroute(tester, 1.0); // clearly neither
+        expect(sideBySideNow(tester), isTrue, reason: 'clearly the other kind: changed');
+        await reroute(tester, 1.9); // about 1.8: inside the margin on the other side
+        expect(sideBySideNow(tester), isTrue, reason: 'near the line: kept');
+        await reroute(tester, 3.5);
+        expect(stackedNow(tester), isTrue, reason: 'clearly wide: changed');
+      });
+
+      for (final (w, scale) in [(390.0, 1.0), (320.0, 1.0), (390.0, 2.0), (320.0, 2.0)]) {
+        testWidgets('at $w wide, text x$scale: lays out without overflow and keeps the chart and the climb line', (tester) async {
+          await show(tester, aspect: 3.0);
+          tester.view.physicalSize = Size(w, 844) * 3;
+          await tester.pumpWidget(MaterialApp(
+            theme: buildTheme(CacheThemeId.dark),
+            home: MediaQuery(
+              data: MediaQueryData(size: Size(w, 844), textScaler: TextScaler.linear(scale)),
+              child: Scaffold(body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(CacheThemeId.dark), themeId: CacheThemeId.dark)),
+            ),
+          ));
+          await tester.pump();
+          expect(tester.takeException(), isNull);
+          // At large text there is not room for both boxes at their least heights: they sit side by side.
+          expect(scale == 1 ? stackedNow(tester) : sideBySideNow(tester), isTrue);
+          expect(find.byKey(const ValueKey('elevation-chart')), findsOneWidget);
+          expect(find.byKey(const ValueKey('elevation-steep')), findsOneWidget);
+          expect(find.byKey(const ValueKey('guidance-end')), findsOneWidget);
+        });
+      }
     });
 
     testWidgets('where the extras are, case 1: a small car screen never carries them, so the phone draws the mini map and the elevation', (tester) async {

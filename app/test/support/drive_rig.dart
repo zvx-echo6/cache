@@ -49,10 +49,17 @@ const driveStop = MapPlace(id: 'place:test:market', type: 'place', name: 'Corner
 /// The made-up sample route of the drive screen's pictures and tests: east along 42.5N, 40 points, with these maneuvers (index:
 /// type, words): 0 start, 1 left onto Alder Street, 2 right onto Birch Hollow Road, 3 the stop (only when [withStop]),
 /// then a merge onto Route 9, Willow Drive, an exit onto Quarry Lane, Orchard Road, a left onto Fernwood Lane, and the arrival.
-Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1'}) {
+Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1', double? aspect}) {
   const n = 40;
   // East, wandering: the line has a shape, so the mini map has something to draw.
-  final pts = [for (var i = 0; i <= n; i++) GeoPoint(42.5 + 0.03 * math.sin(i / n * 2.6 * math.pi) * (0.4 + i / n), -113.8 + 0.3 * i / n)];
+  // With [aspect] (width over height as the mini map draws it) the route has that shape: 0.2 degrees of longitude wide and as high
+  // as the shape asks, with a small wander.
+  final pts = aspect == null
+      ? [for (var i = 0; i <= n; i++) GeoPoint(42.5 + 0.03 * math.sin(i / n * 2.6 * math.pi) * (0.4 + i / n), -113.8 + 0.3 * i / n)]
+      : [
+          for (var i = 0; i <= n; i++)
+            GeoPoint(42.5 + (0.2 * math.cos(42.5 * math.pi / 180) / aspect) * (i / n + 0.05 * math.sin(i / n * 2.6 * math.pi)), -113.8 + 0.2 * i / n),
+        ];
   var total = 0.0;
   for (var i = 1; i < pts.length; i++) {
     total += metersBetween(pts[i - 1], pts[i]);
@@ -157,8 +164,8 @@ class DriveRig {
   }
 
   /// Guidance has started on the sample route, [withStop] with a stop on it, and no position yet.
-  Future<void> guide({bool withStop = true}) async {
-    route = driveRouteJson(withStop: withStop);
+  Future<void> guide({bool withStop = true, double? aspect}) async {
+    route = driveRouteJson(withStop: withStop, aspect: aspect);
     backend.onRoute = (to, m, from) async => MapRoute.fromJson(route);
     backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(driveProgressJson(route, 1, 400));
     await nav.openDirections(driveDestination);
