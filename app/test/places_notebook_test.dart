@@ -127,7 +127,7 @@ void main() {
       expect(find.byKey(const ValueKey('place-delete')), findsOneWidget);
     });
 
-    testWidgets('Add place: the colour nobody uses yet, weather on with its gear, a custom alert rule, then Save', (tester) async {
+    testWidgets('Add place: no colour of its own, weather on with its gear, a custom alert rule, then Save', (tester) async {
       final r = _Rig();
       final book = await r.saved();
       await r.place(book, 'Home', 42.5607, -114.4623, color: 'orange');
@@ -144,7 +144,7 @@ void main() {
       expect(find.textContaining('42.59440, -114.40030'), findsOneWidget);
       await tester.enterText(find.byKey(const ValueKey('place-name')), 'Shoshone Falls Lot');
       await tester.pumpAndSettle();
-      expect(find.bySemanticsLabel('Yellow'), findsOneWidget);
+      expect(find.bySemanticsLabel('Orange'), findsOneWidget);
       // weather is on for a new saved place, so its gear shows; switched off, the gear goes
       expect(find.byKey(const ValueKey('weather-gear')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('weather-switch')));
@@ -168,7 +168,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('place-save')));
       await tester.pumpAndSettle();
       final saved = r.store.entries.firstWhere((e) => e['title'] == 'Shoshone Falls Lot');
-      expect(saved['props'], {'color': 'yellow', 'on_map': true});
+      expect(saved['props'], {'on_map': true}, reason: 'a new place stores no colour unless one is picked');
       expect(saved['place'], {'lat': 42.5944, 'lon': -114.4003, 'key': 'shoshone-falls-lot'});
       expect(r.watched, contains('place:shoshone-falls-lot'));
       expect(r.changed, 1);
@@ -176,6 +176,64 @@ void main() {
       expect(rule.mode, PlaceAlertMode.custom);
       expect(rule.kinds, {'alerts', 'fire', 'earthquakes'});
       expect(find.text('Shoshone Falls Lot'), findsOneWidget);
+    });
+
+    Future<Notebook> colourBook(_Rig r, {String? color}) async {
+      await r.nb.start();
+      return r.nb.saveNotebook(template: 'places', def: NotebookDef(name: 'Trail log', fields: const [], sort: NotebookSort.distance, color: color));
+    }
+
+    Future<Map<String, Object?>> addNamed(WidgetTester tester, _Rig r, Notebook book, {String? pick}) async {
+      await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
+      await tester.tap(find.byKey(const ValueKey('add-place')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('place-name')), 'Spring');
+      await tester.pumpAndSettle();
+      if (pick != null) {
+        await tester.ensureVisible(find.byKey(ValueKey('swatch-$pick')));
+        await tester.tap(find.byKey(ValueKey('swatch-$pick')));
+        await tester.pumpAndSettle();
+      }
+      await tester.dragUntilVisible(find.byKey(const ValueKey('place-save')), find.byType(ListView), const Offset(0, -300));
+      await tester.tap(find.byKey(const ValueKey('place-save')));
+      await tester.pumpAndSettle();
+      return (r.store.entries.firstWhere((e) => e['title'] == 'Spring')['props'] as Map).cast<String, Object?>();
+    }
+
+    testWidgets('a new place in a coloured notebook stores no colour and shows the notebook colour', (tester) async {
+      final r = _Rig();
+      final book = await colourBook(r, color: 'blue');
+      final props = await addNamed(tester, r, book);
+      expect(props.containsKey('color'), isFalse);
+      final marker = tester.widget<PlaceMarker>(find.byType(PlaceMarker).first);
+      expect(marker.color.id, 'blue');
+    });
+
+    testWidgets('a new place in a notebook with no colour stores no colour and shows the default', (tester) async {
+      final r = _Rig();
+      final book = await colourBook(r);
+      final props = await addNamed(tester, r, book);
+      expect(props.containsKey('color'), isFalse);
+      expect(tester.widget<PlaceMarker>(find.byType(PlaceMarker).first).color.id, markerColor(null).id);
+    });
+
+    testWidgets('a colour the person picks is stored', (tester) async {
+      final r = _Rig();
+      final book = await colourBook(r, color: 'blue');
+      final props = await addNamed(tester, r, book, pick: 'purple');
+      expect(props['color'], 'purple');
+    });
+
+    testWidgets('the hide toggle on the map stores no colour', (tester) async {
+      final r = _Rig();
+      final book = await colourBook(r);
+      final e = await r.place(book, 'Spring', 42.55, -114.45);
+      await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
+      await tester.tap(find.byKey(ValueKey('marker-${e.id}')));
+      await tester.pumpAndSettle();
+      final props = (r.store.entries.firstWhere((x) => x['id'] == e.id)['props'] as Map).cast<String, Object?>();
+      expect(props.containsKey('color'), isFalse);
+      expect(props['on_map'], isFalse);
     });
 
     testWidgets('Delete place asks first, then the place, its weather switch and its alert rule go', (tester) async {
@@ -231,16 +289,13 @@ void main() {
   });
 
   group('marker colours', () {
-    test('seven colours, no red, each with a spoken name; a new place gets the least used', () {
+    test('seven colours, no red, each with a spoken name; a colour with no name is the first', () {
       expect(kMarkerColors.length, 7);
       expect(kMarkerColors.map((c) => c.id), isNot(contains('red')));
       for (final c in kMarkerColors) {
         expect(c.spoken, isNotEmpty);
         expect(c.color.r > 0.8 && c.color.g < 0.3 && c.color.b < 0.3, isFalse, reason: '${c.id} is not red');
       }
-      NbEntry e(String? c) => NbEntry(id: 'x', notebookId: 'n', occurredAt: '2026-10-27T10:00:00-06:00', props: {'color': ?c});
-      expect(defaultMarkerColor(const []).id, 'orange');
-      expect(defaultMarkerColor([e('orange'), e('yellow'), e(null)]).id, 'green');
       expect(markerColor('nope').id, 'orange');
       expect(markerColor('teal').hex, '#3fbfae');
     });
