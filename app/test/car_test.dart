@@ -330,6 +330,22 @@ void main() {
       await settle();
     }
 
+    // The iPhone car side's tests read a recorded trip with a climb ahead (tools/carplay-harness/recorded): held here to the
+    // shape of what the phone sends for one.
+    test('the trip recorded with a climb for the iPhone car tests has the shape of what the phone sends', () async {
+      final total = (routeJson['distance_m'] as num).toDouble();
+      await guide(0.1);
+      final sent = carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90, elevation: profile(total));
+      final recorded =
+          jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_climb.json').readAsStringSync()) as Map<String, dynamic>;
+      expect(sent['climb'], isNotNull);
+      expect(recorded.keys.toSet(), sent.keys.toSet());
+      expect((recorded['climb'] as Map).keys.toSet(), (sent['climb'] as Map).keys.toSet());
+      final steep = (sent['overview'] as Map)['steep'];
+      expect(steep, isNotNull);
+      expect(((recorded['overview'] as Map)['steep'] as Map).keys.toSet(), (steep as Map).keys.toSet());
+    });
+
     test('no elevation data: no climb block, but the mini map and palette still go', () async {
       await guide(0.1);
       final t = carTrip(nav);

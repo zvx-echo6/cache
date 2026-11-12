@@ -901,6 +901,20 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   else
     GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
   fi
+  # A climb ahead: CarPlay's own alert with Android's words and the road's shape. Then, once the alert has gone, the bar's
+  # Overview button: the whole route north up, with the grade marker at the steepest point; and back.
+  guide_step climb 'car guidance: climb alert shown' "$label-guide-climb"
+  sleep 9
+  if at=$(tap_until 'car map: route overview on' 3 $(( (FREE_LEFT + 22) * CAR_S )) "$bar" $(( (FREE_LEFT + 36) * CAR_S )) "$bar" $(( (FREE_LEFT + 14) * CAR_S )) "$bar"); then
+    sleep 3
+    shot_ext "$label-guide-overview"
+    GUIDE="$GUIDE; a climb ahead was told in CarPlay's alert; Overview (tap at pixel $at) showed the whole route with the grade marker"
+    tap_until 'car map: route overview off' 3 "${at%,*}" "${at#*,}" > /dev/null || GUIDE_MISSING="$GUIDE_MISSING [Overview did not go back to the position]"
+    sleep 2
+  else
+    shot_ext "$label-guide-no-overview"
+    GUIDE_MISSING="$GUIDE_MISSING [the Overview button did not answer taps at the bar's leading end]"
+  fi
   # Nearer the turn (only the distance changes), then past it (the next turn, and arriving after it).
   guide_step drive "" "$label-guide-near"
   guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
@@ -1098,7 +1112,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: the next turn, nearer it, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: the next turn, nearer it, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi

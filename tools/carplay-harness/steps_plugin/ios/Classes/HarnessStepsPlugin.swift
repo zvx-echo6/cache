@@ -13,6 +13,7 @@ import UIKit
 ///   turn, the next turn, looking for a new route, arrived, and round again).
 /// - `org.example.carharness.roll`: while guiding, five positions a second apart along the road, as a moving vehicle
 ///   gives them, so the marker's glide can be seen.
+/// - `org.example.carharness.climb`: while guiding, the recorded trip that has a climb ahead.
 /// - `org.example.carharness.nosaved` and `.saved`: the stand-in Dart side has no saved places, or has its recorded ones
 ///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
@@ -21,7 +22,7 @@ import UIKit
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
-  private static let toDart: [String] = ["next", "nosaved", "saved", "drive", "roll"]
+  private static let toDart: [String] = ["next", "nosaved", "saved", "drive", "roll", "climb"]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let steps = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())

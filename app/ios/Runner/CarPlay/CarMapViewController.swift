@@ -18,6 +18,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private static let routeSource = "car-route-src"
   private static let destinationSource = "car-dest-src"
   private static let positionSource = "car-pos-src"
+  private static let badgeSource = "car-badge-src"
+  private static let badgeImage = "car-grade-badge-img"
   /// The colours of what the car adds on top of the style, until Dart sends the palette's with the style.
   private static let defaultColors: [String: String] = [
     "route": "#2f7df6", "routeCasing": "#0b3a8a", "routeOffroad": "#d9822b", "routeAlternate": "#8aa4c8",
@@ -69,6 +71,11 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private var glideBegan: Int64 = 0
   private var glideLasts: Int64 = 0
   private var lastFrameAt: Int64 = 0
+  /// What the grade marker's picture was last made for (the grade, day or night, the colours).
+  private var badgeKey: String?
+
+  /// The whole route is in view instead of the position (the bar's Overview button while guiding).
+  private(set) var overview = false
 
   /// The camera keeps the position in view (the Recenter button turns it back on after the map was moved).
   private(set) var following = true
@@ -208,6 +215,18 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     follow(force: true)
   }
 
+  /// The whole route in view, north up and flat (the Overview button), and back to following the position when it goes.
+  func setOverview(_ on: Bool) {
+    if overview == on { return }
+    overview = on
+    Self.log.info("car map: route overview \(on ? "on" : "off", privacy: .public)")
+    let was = following
+    following = true
+    lastCameraPhase = nil
+    if !was { onFollowingChanged?() }
+    follow(force: true)
+  }
+
   /// How far one press of a panning arrow moves the map, in points: a quarter of the free area's shorter side.
   var panStep: CGFloat {
     guard let map = mapView else { return 0 }
@@ -328,6 +347,16 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     pin.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
     pin.circleStrokeWidth = NSExpression(forConstantValue: 3)
     style.addLayer(pin)
+
+    // The grade marker at the steepest point of a climb ahead (applyBadge): part of the map, tied to its place like a sign.
+    let badgePoint = MLNShapeSource(identifier: Self.badgeSource, shape: nil, options: nil)
+    style.addSource(badgePoint)
+    let badge = MLNSymbolStyleLayer(identifier: "car-grade-badge", source: badgePoint)
+    badge.iconImageName = NSExpression(forConstantValue: Self.badgeImage)
+    badge.iconAllowsOverlap = NSExpression(forConstantValue: true)
+    badge.iconIgnoresPlacement = NSExpression(forConstantValue: true)
+    style.addLayer(badge)
+    badgeKey = nil
 
     // The vehicle's marker: the dot and the two arrows on the one position, all hidden until a position is drawn (showHeading
     // shows the one that applies). The arrow's picture is made here, so each style (day and night) has it in its own colours.
@@ -462,7 +491,28 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     source(Self.routeSource)?.shape = Self.shape(geojson)
   }
 
+  /// The grade marker: while guiding, with the phone's climb switch on, at the steepest point of the climb ahead, in the
+  /// phone's colours for the car's day or night. Its picture is made again only when what it shows changes.
+  private func applyBadge(_ t: CarTrip) {
+    guard let style = mapView?.style, let point = source(Self.badgeSource) else { return }
+    let colors = dark ? t.badgeNight : t.badgeDay
+    guard t.guiding, t.showClimb, let colors = colors, let grade = t.steepGradePct, let lat = t.steepLat, let lon = t.steepLon else {
+      point.shape = Self.shape(CarLink.emptyGeoJSON)
+      return
+    }
+    let words = CarText.grade(grade)
+    let key = "\(words)|\(dark)|\(colors.badge)|\(colors.glyph)|\(colors.edge)"
+    if key != badgeKey {
+      badgeKey = key
+      style.setImage(CarIcons.gradeBadge(words, colors: colors), forName: Self.badgeImage)
+    }
+    let place = MLNPointFeature()
+    place.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    point.shape = place
+  }
+
   private func applyTrip(_ t: CarTrip) {
+    applyBadge(t)
     let showDestination = t.phase != "browsing"
     let destination = showDestination ? Self.point(t.destinationLat, t.destinationLon) : CarLink.emptyGeoJSON
     source(Self.destinationSource)?.shape = Self.shape(destination)
@@ -476,7 +526,11 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   func carLinkTrip(_ trip: CarTrip) {
     applyTrip(trip)
-    let force = trip.phase != lastCameraPhase
+    // The overview is of a route being driven: it goes when guidance does.
+    if overview && !trip.guiding {
+      overview = false
+    }
+    let force = (overview ? "overview" : trip.phase) != lastCameraPhase
     // While the driver has moved the map away the camera does not move, so its phase is not kept up: that must not make the
     // marker jump each second.
     let snapped = moveMarker(trip, force: force && following)
@@ -656,8 +710,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   /// not while a route is chosen (the camera shows the whole route there, and only the marker glides).
   private func glideCamera() {
     guard let map = mapView, following else { return }
-    let phase = CarLink.shared.trip.phase
-    if phase == "previewing" { return }
+    let phase = overview ? "overview" : CarLink.shared.trip.phase
+    if phase == "previewing" || phase == "overview" { return }
     placeCamera(map, drawnLat, drawnLon, drawnHeading, guiding: phase == "guiding", resetZoom: false)
   }
 
@@ -701,8 +755,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private func follow(force: Bool, snapped: Bool = false, keepZoom: Bool = false) {
     guard let map = mapView, following else { return }
     let t = CarLink.shared.trip
-    let phase = t.phase
-    if phase == "previewing" {
+    let phase = overview ? "overview" : t.phase
+    if phase == "previewing" || phase == "overview" {
       if !force && lastCameraPhase == phase { return }
       lastCameraPhase = phase
       if let b = CarLink.shared.routeBounds, b.count == 4 {

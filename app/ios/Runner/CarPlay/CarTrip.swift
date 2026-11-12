@@ -42,6 +42,17 @@ struct CarTrip: Equatable {
   let remainingM: Double?
   let remainingS: Int64?
   let etaMs: Int64?
+  /// The climb ahead, while guiding and one of at least the phone's least grade lies ahead; nil otherwise.
+  let climb: CarClimb?
+  /// The steepest point of that climb on the map, and its grade in percent.
+  let steepLat: Double?
+  let steepLon: Double?
+  let steepGradePct: Double?
+  /// The phone's switch for showing a climb ahead on the car screen (on unless the trip says false).
+  let showClimb: Bool
+  /// The grade marker's colours for the car's day and night (the phone's palette), or nil before the palette has come.
+  let badgeDay: CarBadgeColors?
+  let badgeNight: CarBadgeColors?
 
   var guiding: Bool { phase == "guiding" }
   var previewing: Bool { phase == "previewing" }
@@ -50,13 +61,16 @@ struct CarTrip: Equatable {
     phase: "browsing", available: false, imperial: false, routing: false, error: nil, destinationName: nil,
     destinationAddress: nil, destinationLat: nil, destinationLon: nil, routes: [], routeIndex: 0, routeId: nil, voiceOn: true,
     arrived: false, rerouting: false, lat: nil, lon: nil, heading: nil, step: nil, then: nil, currentRoad: nil,
-    remainingM: nil, remainingS: nil, etaMs: nil
+    remainingM: nil, remainingS: nil, etaMs: nil, climb: nil, steepLat: nil, steepLon: nil, steepGradePct: nil,
+    showClimb: true, badgeDay: nil, badgeNight: nil
   )
 
   /// From the channel's plain map. What is missing or of another kind takes the same default as on Android.
   static func from(_ m: [String: Any]) -> CarTrip {
     let dest = CarValue.map(m["destination"])
     let pos = CarValue.map(m["position"])
+    let steep = CarValue.map(CarValue.map(m["overview"])?["steep"])
+    let palette = CarValue.map(m["palette"])
     var routes: [CarRoute] = []
     for item in (m["routes"] as? [Any]) ?? [] {
       guard let x = CarValue.map(item) else { continue }
@@ -91,7 +105,14 @@ struct CarTrip: Equatable {
       currentRoad: m["currentRoad"] as? String,
       remainingM: CarValue.double(m["remainingM"]),
       remainingS: CarValue.number(m["remainingS"])?.int64Value,
-      etaMs: CarValue.number(m["etaMs"])?.int64Value
+      etaMs: CarValue.number(m["etaMs"])?.int64Value,
+      climb: CarClimb.from(m["climb"]),
+      steepLat: CarValue.double(steep?["lat"]),
+      steepLon: CarValue.double(steep?["lon"]),
+      steepGradePct: CarValue.double(steep?["gradePct"]),
+      showClimb: !CarValue.isFalse(CarValue.map(m["overlay"])?["climb"]),
+      badgeDay: CarBadgeColors.from(palette?["day"]),
+      badgeNight: CarBadgeColors.from(palette?["night"])
     )
   }
 
@@ -104,6 +125,48 @@ struct CarTrip: Equatable {
       road: CarValue.text(s["road"]),
       distanceM: CarValue.double(s["distanceM"]) ?? 0
     )
+  }
+}
+
+/// A climb ahead, as Dart sends it with the trip (lib/car/car_overlay.dart, carClimb): how much is climbed, the steepest
+/// grade and how far off it is, and the heights of the road ahead with the steep stretch's place among them. The twin of the
+/// Android car's CarClimb.
+struct CarClimb: Equatable {
+  let climbAheadM: Double
+  let gradePct: Double?
+  let steepestInM: Double?
+  let heightsM: [Double]
+  let steepFrom: Int?
+  let steepTo: Int?
+  let windowM: Double
+
+  /// Nil for anything that is not a climb with at least two heights.
+  static func from(_ v: Any?) -> CarClimb? {
+    guard let m = CarValue.map(v) else { return nil }
+    let heights: [Double] = ((m["heightsM"] as? [Any]) ?? []).compactMap { CarValue.double($0) }
+    if heights.count < 2 { return nil }
+    return CarClimb(
+      climbAheadM: CarValue.double(m["climbAheadM"]) ?? 0,
+      gradePct: CarValue.double(m["gradePct"]),
+      steepestInM: CarValue.double(m["steepestInM"]),
+      heightsM: heights,
+      steepFrom: CarValue.number(m["steepFrom"])?.intValue,
+      steepTo: CarValue.number(m["steepTo"])?.intValue,
+      windowM: CarValue.double(m["windowM"]) ?? 0
+    )
+  }
+}
+
+/// The grade marker's three colours, as Dart writes colours ("#rrggbb").
+struct CarBadgeColors: Equatable {
+  let badge: String
+  let glyph: String
+  let edge: String
+
+  static func from(_ v: Any?) -> CarBadgeColors? {
+    guard let m = CarValue.map(v), let badge = m["badge"] as? String, let glyph = m["badgeGlyph"] as? String,
+          let edge = m["badgeEdge"] as? String else { return nil }
+    return CarBadgeColors(badge: badge, glyph: glyph, edge: edge)
   }
 }
 
@@ -179,6 +242,35 @@ enum CarText {
     case "km": return Measurement(value: m.value, unit: UnitLength.kilometers)
     default: return Measurement(value: m.value, unit: UnitLength.meters)
     }
+  }
+
+  /// How much is climbed, as the Android car writes it: to the nearest ten, "1,230 ft" or "380 m".
+  static func climb(_ meters: Double, imperial: Bool) -> String {
+    let value = imperial ? meters * 3.28084 : meters
+    let tens = Int((value / 10).rounded()) * 10
+    var digits = String(abs(tens))
+    var grouped = ""
+    while digits.count > 3 {
+      grouped = "," + String(digits.suffix(3)) + grouped
+      digits = String(digits.dropLast(3))
+    }
+    return "\(tens < 0 ? "-" : "")\(digits)\(grouped) \(imperial ? "ft" : "m")"
+  }
+
+  /// How far off the steepest part is, as the Android car writes it: "2.3 mi" or "400 ft"; "3.5 km" or "800 m".
+  static func ahead(_ meters: Double, imperial: Bool) -> String {
+    if imperial {
+      let mi = meters / 1609.344
+      if mi >= 0.1 { return "\(String(format: "%.1f", mi)) mi" }
+      return "\(Int((meters * 3.28084 / 50).rounded()) * 50) ft"
+    }
+    if meters >= 1000 { return "\(String(format: "%.1f", meters / 1000)) km" }
+    return "\(Int((meters / 50).rounded()) * 50) m"
+  }
+
+  /// A grade as the Android car writes it: "6%".
+  static func grade(_ percent: Double) -> String {
+    "\(Int(percent.rounded()))%"
   }
 
   /// "5 min", "1 h 25 min", "2 d 3 h": a time in the phone's words (Fmt.duration).

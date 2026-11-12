@@ -38,6 +38,11 @@ func isWhole(_ a: Int64?, _ b: Int64) -> Bool {
   a == b
 }
 
+func near(_ a: Double?, _ b: Double, _ within: Double = 1e-9) -> Bool {
+  guard let a = a else { return false }
+  return abs(a - b) <= within
+}
+
 /// Lets what was put on the main queue run (the link answers there when Dart is not ready).
 func turn() {
   RunLoop.current.run(until: Date().addingTimeInterval(0.05))
@@ -183,6 +188,26 @@ let arrivedMessage: [String: Any] = ["phase": "guiding", "remainingS": 0, "remai
 check(CarTrip.from(lastStretch).leftSeconds == 60, "under a minute left reads as one minute")
 check(CarTrip.from(arrivedMessage).leftSeconds == 0, "arrived: no time left")
 check(CarTrip.from([:]).leftSeconds == nil, "no time left known")
+// ---- a climb ahead ------------------------------------------------------------------------------------------------
+
+let uphill = CarTrip.from(map("trip_guiding_climb.json"))
+check(uphill.climb?.climbAheadM == 148 && uphill.climb?.heightsM.count == 40, "a climb ahead: how much, and the heights of the road")
+check(uphill.climb?.steepFrom == 20 && uphill.climb?.steepTo == 32, "a climb ahead: where the steep stretch is among the heights")
+check(near(uphill.steepLat, 10.52) && near(uphill.steepLon, 20.26) && near(uphill.steepGradePct, 6.2), "the steepest point and its grade")
+check(uphill.showClimb, "the phone's switch for the climb is on")
+check(uphill.badgeDay?.badge == "#1f6fa8" && uphill.badgeNight?.glyph == "#0f1115", "the grade marker's colours for day and night")
+check(guiding.climb == nil && guiding.steepGradePct == nil, "no climb ahead: none")
+let climbOff: [String: Any] = ["climb": false, "miniMap": true]
+let switchedOff: [String: Any] = ["phase": "guiding", "overlay": climbOff]
+check(!CarTrip.from(switchedOff).showClimb, "the phone's switch turned off")
+let oneHeight: [String: Any] = ["climbAheadM": 10.0, "heightsM": [1000.0]]
+check(CarClimb.from(oneHeight) == nil && CarClimb.from(nil) == nil, "a climb needs at least two heights")
+check(CarText.climb(148, imperial: true) == "490 ft" && CarText.climb(375, imperial: true) == "1,230 ft", "how much is climbed, in feet to the nearest ten")
+check(CarText.climb(148, imperial: false) == "150 m" && CarText.climb(1234.4, imperial: false) == "1,230 m", "and in metres")
+check(CarText.ahead(3250, imperial: true) == "2.0 mi" && CarText.ahead(100, imperial: true) == "350 ft", "how far off the steepest part is")
+check(CarText.ahead(3400, imperial: false) == "3.4 km" && CarText.ahead(810, imperial: false) == "800 m", "and in metric")
+check(CarText.grade(6.2) == "6%" && CarText.grade(6.5) == "7%", "a grade in whole percent")
+
 // the recorded drive
 let nearer = CarTrip.from(map("trip_guiding_near.json"))
 check(nearer.step?.distanceM == 90, "nearer the turn: closer")
@@ -228,11 +253,6 @@ for text in notColours {
 }
 
 // ---- the marker's motion (the Android car's CarMarkerMotion tests) -------------------------------------------------
-
-func near(_ a: Double?, _ b: Double, _ within: Double = 1e-9) -> Bool {
-  guard let a = a else { return false }
-  return abs(a - b) <= within
-}
 
 typealias Motion = CarMarkerMotion
 check(near(Motion.heading(reported: 45, last: 90), 45) && near(Motion.heading(reported: 45, last: nil), 45), "a reported heading is shown")

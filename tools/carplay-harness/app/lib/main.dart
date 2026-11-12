@@ -94,6 +94,8 @@ class _HarnessAppState extends State<HarnessApp> {
             _frame = (_frame + 1) % _drive.length;
             await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
           }
+        case 'climb':
+          if (_phase == 2) await _pushRaw(recorded['trip_guiding_climb']!, recorded['route_guiding']!);
         case 'roll':
           // A moving vehicle: five positions a second apart along the road (about 80 km/h), the turn that much nearer.
           if (_phase == 2) {

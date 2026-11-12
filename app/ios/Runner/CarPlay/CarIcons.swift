@@ -1,8 +1,9 @@
 import UIKit
 
-/// The car screen's turn pictures, drawn in code as on the Android car (CarIcons.kt, shape for shape): plain shapes with no
-/// colour of their own, which CarPlay tints for its light and dark cards, so no picture files are added. One for each of the
-/// phone's turn names (CarStep.turn).
+/// The car screen's pictures, drawn in code as on the Android car (CarIcons.kt and CarOverlayPainter.kt, shape for shape), so
+/// no picture files are added: a turn picture for each of the phone's turn names (CarStep.turn), the route overview
+/// button's, and the climb alert's shape, all plain shapes with no colour of their own, which CarPlay tints for its light and
+/// dark cards; and the grade marker for the map, in the phone's own colours.
 enum CarIcons {
   /// CarPlay shows a maneuver's picture at 50 x 50 points at most.
   private static let side: CGFloat = 50
@@ -26,7 +27,90 @@ enum CarIcons {
     }
   }
 
-  private static func picture(_ key: String, _ draw: (CGFloat) -> Void) -> UIImage {
+  /// The route overview button's picture: a winding line between two dots, as the Android car's.
+  static var overview: UIImage {
+    picture("overview", side: 24) { s in
+      let path = UIBezierPath()
+      path.move(to: CGPoint(x: s * 0.26, y: s * 0.76))
+      path.addCurve(
+        to: CGPoint(x: s * 0.7, y: s * 0.3), controlPoint1: CGPoint(x: s * 0.26, y: s * 0.5), controlPoint2: CGPoint(x: s * 0.7, y: s * 0.62))
+      stroke(path, s * 0.08)
+      UIBezierPath(arcCenter: CGPoint(x: s * 0.26, y: s * 0.76), radius: s * 0.09, startAngle: 0, endAngle: 2 * .pi, clockwise: true).fill()
+      UIBezierPath(arcCenter: CGPoint(x: s * 0.7, y: s * 0.26), radius: s * 0.09, startAngle: 0, endAngle: 2 * .pi, clockwise: true).fill()
+    }
+  }
+
+  /// The shape of the road ahead for the climb alert: the heights as a line with what is under it filled lightly, and the
+  /// steep stretch filled fully (the Android climb card's shape, in one colour that CarPlay tints).
+  static func climbShape(_ climb: CarClimb) -> UIImage {
+    let heights = climb.heightsM
+    let size = CGSize(width: side, height: side)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 3
+    format.opaque = false
+    let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      guard heights.count >= 2, let low = heights.min(), let high = heights.max() else { return }
+      let top: CGFloat = 6
+      let bottom: CGFloat = size.height - 8
+      let span = max(high - low, 1)
+      func x(_ i: Int) -> CGFloat { size.width * CGFloat(i) / CGFloat(heights.count - 1) }
+      func y(_ i: Int) -> CGFloat { bottom - (bottom - top) * CGFloat((heights[i] - low) / span) }
+      func area(_ from: Int, _ to: Int) -> UIBezierPath {
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: x(from), y: y(from)))
+        for i in (from + 1)...to { path.addLine(to: CGPoint(x: x(i), y: y(i))) }
+        path.addLine(to: CGPoint(x: x(to), y: size.height))
+        path.addLine(to: CGPoint(x: x(from), y: size.height))
+        path.close()
+        return path
+      }
+      UIColor.white.withAlphaComponent(0.35).setFill()
+      area(0, heights.count - 1).fill()
+      if let from = climb.steepFrom, let to = climb.steepTo, from >= 0, to > from, to < heights.count {
+        UIColor.white.setFill()
+        area(from, to).fill()
+      }
+    }
+    return drawn.withRenderingMode(.alwaysTemplate)
+  }
+
+  /// The grade marker for the map: a pill with a slope triangle and the grade, in the phone's colours for it (the Android
+  /// car's badge, its sizes).
+  static func gradeBadge(_ percent: String, colors: CarBadgeColors) -> UIImage {
+    let font = UIFont.systemFont(ofSize: 24, weight: .bold)
+    let glyph = color(colors.glyph)
+    let words = NSAttributedString(string: percent, attributes: [.font: font, .foregroundColor: glyph])
+    let height: CGFloat = 36
+    let width = 34 + 12 + ceil(words.size().width)
+    let size = CGSize(width: width + 4, height: height + 4)
+    return UIGraphicsImageRenderer(size: size).image { _ in
+      let box = CGRect(x: 2, y: 2, width: width, height: height)
+      let pill = UIBezierPath(roundedRect: box, cornerRadius: height / 2)
+      color(colors.badge).setFill()
+      pill.fill()
+      color(colors.edge).setStroke()
+      pill.lineWidth = 1.5
+      pill.stroke()
+      let cy = box.midY
+      let left = box.minX + 12
+      let slope = UIBezierPath()
+      slope.move(to: CGPoint(x: left, y: cy + 8))
+      slope.addLine(to: CGPoint(x: left + 16, y: cy - 8))
+      slope.addLine(to: CGPoint(x: left + 16, y: cy + 8))
+      slope.close()
+      glyph.setFill()
+      slope.fill()
+      words.draw(at: CGPoint(x: box.minX + 34, y: cy - words.size().height / 2))
+    }
+  }
+
+  /// A colour as Dart writes it ("#rrggbb"); black for anything else.
+  static func color(_ css: String) -> UIColor {
+    let c: [Double] = CarValue.rgba(css) ?? [0, 0, 0, 1]
+    return UIColor(red: CGFloat(c[0]), green: CGFloat(c[1]), blue: CGFloat(c[2]), alpha: CGFloat(c[3]))
+  }
+
+  private static func picture(_ key: String, side: CGFloat = CarIcons.side, _ draw: (CGFloat) -> Void) -> UIImage {
     if let image = made[key] { return image }
     let format = UIGraphicsImageRendererFormat()
     format.scale = 3
