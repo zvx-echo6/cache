@@ -17,10 +17,17 @@ enum CarScreenClass: String {
 /// The two extras on the car's map: where they go, which class a screen is in, and when they fade. Pure sums; the drawing is
 /// CarExtrasView's. The Android car draws the same two pieces (CarOverlayPainter.kt); the sizes here are its sizes.
 ///
-/// Where they go: inside the free map (what CarPlay's bar, panel, buttons and dock leave), along its bottom edge, the climb
-/// in the leading corner and the mini map in the trailing one, each beside the vehicle's column and never in it. The
-/// vehicle is where the guidance camera draws it (the middle of the free map sideways, low in it), and its column is the
-/// marker with a little free map on each side, up to the top: the road ahead.
+/// Where they go: inside the free map (what CarPlay's bar, panel, buttons and dock leave), never in the vehicle's column.
+/// The Android car's two layouts (CarOverlayPainter.modeFor), placed where CarPlay leaves room: Android puts its pieces in
+/// the host's left column, between its turn card and its arrival card; on CarPlay that column is Apple's panel, so the
+/// pieces sit at the bottom of the free map instead, right beside Apple's estimates and level with their bottom.
+///  - One box, where the free map beside the vehicle's column is wide enough for the box and high enough for it with the
+///    Android cushion above and below: the mini map on top and the climb under it (label, figure, grade line, shape) in one
+///    card, at the free map's bottom leading corner.
+///  - Split, everywhere else: the climb as the one-line card in that corner, and the mini map as a tile in the bottom
+///    trailing corner, its right edge on the free map's (beside CarPlay's map buttons), as Android's tile is.
+/// The vehicle is where the guidance camera draws it (the middle of the free map sideways, low in it), and its column is
+/// the marker with a little free map on each side, up to the top: the road ahead.
 enum CarExtras {
   /// THE ONE PLACE that takes the mini map and the climb off CarPlay's map: false here, and nothing of them is drawn on
   /// any car screen (the grade marker on the route, which is map content, stays).
@@ -36,6 +43,23 @@ enum CarExtras {
   /// The mini map's tile, at its one size.
   static let miniWidth: Double = 220 * scale
   static let miniHeight: Double = 140 * scale
+  /// The one box (Android's BOX_W, MINI_H over BOX_CLIMB_H), and the least free map kept above and below it for the box
+  /// to be used (BOX_CUSHION_MIN): with less, the split layout.
+  static let boxWidth: Double = 260 * scale
+  static let boxClimbHeight: Double = 116 * scale
+  static let boxCushion: Double = 40 * scale
+  /// The climb in the box: its padding, the gap before the shape, and the shape's height; the label, the figure (bold) and
+  /// the grade line (semibold); from the label's baseline to the figure's, and from the figure's to the grade line's.
+  static let boxPadX: Double = 14 * scale
+  static let boxPadTop: Double = 10 * scale
+  static let climbGap: Double = 12 * scale
+  static let shapeHeight: Double = 52 * scale
+  static let shapeMinWidth: Double = 60 * scale
+  static let climbLabelSize: Double = 24 * scale
+  static let climbFigureSize: Double = 34 * scale
+  static let climbGradeSize: Double = 24 * scale
+  static let climbFigureDrop: Double = 37 * scale
+  static let climbGradeDrop: Double = 29 * scale
   /// The climb's one-line card: its height, and the least and the most it is wide.
   static let lineHeight: Double = 64 * scale
   static let lineMinWidth: Double = 200 * scale
@@ -56,8 +80,13 @@ enum CarExtras {
 
   // ---- where they go, and the screen's class ------------------------------------------------------------------------
 
+  /// The Android car's two layouts (CarOverlayMode).
+  enum Mode: String { case oneBox = "one box", split = "split" }
+
   struct Layout: Equatable {
-    /// The mini map's tile and the climb's card in the car window's points; both nil where the two do not both fit.
+    let mode: Mode
+    /// The mini map and the climb in the car window's points. In the one box they are its upper and lower part (each keeps
+    /// its place when the other is not drawn); split, the tile and the one-line card. Both nil where the two do not both fit.
     let mini: CGRect?
     let climb: CGRect?
     /// Whether both fit at full size, clear of the vehicle and the road ahead.
@@ -70,9 +99,9 @@ enum CarExtras {
     /// The share of the free map the pieces take.
     var share: Double { freeArea > 0 ? extrasArea / freeArea : 1 }
 
-    /// The measure in a line, in the shape the Android car logs it.
+    /// The measure in a line, in the shape the Android car logs it, with the layout.
     var words: String {
-      "\(screenClass.rawValue) (they \(fits ? "fit" : "do not fit"); \(Int(extrasArea.rounded())) pt of \(Int(freeArea.rounded())) pt free map, \(Int((share * 100).rounded())) %)"
+      "\(screenClass.rawValue) (they \(fits ? "fit" : "do not fit"); \(Int(extrasArea.rounded())) pt of \(Int(freeArea.rounded())) pt free map, \(Int((share * 100).rounded())) %; \(mode.rawValue))"
     }
   }
 
@@ -88,19 +117,45 @@ enum CarExtras {
     return CGRect(x: v.x - half, y: free.minY, width: 2 * half, height: v.y + CGFloat(markerBelow) - free.minY)
   }
 
+  /// The one box's place: its leading edge `margin` in from the free map's, its bottom `margin` above the free map's (level
+  /// with Apple's estimates beside it).
+  static func boxPlace(_ free: CGRect) -> CGRect {
+    let h = CGFloat(miniHeight + boxClimbHeight)
+    return CGRect(x: free.minX + CGFloat(margin), y: free.maxY - CGFloat(margin) - h, width: CGFloat(boxWidth), height: h)
+  }
+
+  /// Which layout this free map gets (Android's modeFor): the one box when it lies clear of the vehicle's column and the
+  /// free map is as high as the box with `boxCushion` above and below; split otherwise. From the room alone, so it holds for
+  /// the drive whether a climb is there or not.
+  static func mode(free: CGRect) -> Mode {
+    let box = boxPlace(free)
+    let wide = box.maxX <= keepClear(free).minX
+    let high = Double(free.height) >= miniHeight + boxClimbHeight + 2 * boxCushion
+    return wide && high ? .oneBox : .split
+  }
+
   /// The two pieces in `free` (the free map while guiding: the room CarPlay leaves the map, its safe area), and the
-  /// screen's class from them. The mini map is its full size in the trailing bottom corner, beside the vehicle's column; the
-  /// climb's card runs from the leading edge to the column, no wider than its most. They FIT when both can be placed so.
-  /// They TAKE the area of the pieces as placed. Small: they do not fit. In-between: they take more than `bigMaxShare` of
-  /// the free map. Big: otherwise.
+  /// screen's class from them. They FIT when both can be placed at full size clear of the vehicle and the road ahead: the
+  /// whole box, or the one-line card and the full tile. They TAKE the area of the pieces as placed (the whole box). Small:
+  /// they do not fit. In-between: they take more than `bigMaxShare` of the free map. Big: otherwise. Android's measure.
   static func layout(free: CGRect) -> Layout {
     let freeArea = Double(max(0, free.width) * max(0, free.height))
-    if freeArea <= 0 { return Layout(mini: nil, climb: nil, fits: false, extrasArea: 0, freeArea: 0, screenClass: .small) }
+    if freeArea <= 0 { return Layout(mode: .split, mini: nil, climb: nil, fits: false, extrasArea: 0, freeArea: 0, screenClass: .small) }
     let keep = keepClear(free)
     let edge = CGFloat(margin)
+    let chosen = mode(free: free)
+    if chosen == .oneBox {
+      let box = boxPlace(free)
+      let split = box.minY + CGFloat(miniHeight)
+      let mini = CGRect(x: box.minX, y: box.minY, width: box.width, height: CGFloat(miniHeight))
+      let climb = CGRect(x: box.minX, y: split, width: box.width, height: box.maxY - split)
+      let area = Double(box.width * box.height)
+      let screen: CarScreenClass = area > bigMaxShare * freeArea ? .between : .big
+      return Layout(mode: chosen, mini: mini, climb: climb, fits: true, extrasArea: area, freeArea: freeArea, screenClass: screen)
+    }
     var mini: CGRect?
     let tile = CGRect(
-      x: free.maxX - edge - CGFloat(miniWidth), y: free.maxY - edge - CGFloat(miniHeight), width: CGFloat(miniWidth), height: CGFloat(miniHeight))
+      x: free.maxX - CGFloat(miniWidth), y: free.maxY - edge - CGFloat(miniHeight), width: CGFloat(miniWidth), height: CGFloat(miniHeight))
     if tile.minX >= keep.maxX && tile.minY >= free.minY + edge {
       mini = tile
     }
@@ -116,7 +171,8 @@ enum CarExtras {
     if let a = mini { extras += Double(a.width * a.height) }
     if let b = climb { extras += Double(b.width * b.height) }
     let screen: CarScreenClass = !fits ? .small : (extras > bigMaxShare * freeArea ? .between : .big)
-    return Layout(mini: fits ? mini : nil, climb: fits ? climb : nil, fits: fits, extrasArea: extras, freeArea: freeArea, screenClass: screen)
+    return Layout(
+      mode: chosen, mini: fits ? mini : nil, climb: fits ? climb : nil, fits: fits, extrasArea: extras, freeArea: freeArea, screenClass: screen)
   }
 
   /// How a screen of this class carries the two, in the word the car side tells the phone (the method `extras` on the car

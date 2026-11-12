@@ -20,6 +20,9 @@ final class CarExtrasView: UIView {
   private static let pill = UIColor(red: 0xF4 / 255.0, green: 0xF6 / 255.0, blue: 0xF8 / 255.0, alpha: 1)
   private static let pillGlyph = UIColor(red: 0x16 / 255.0, green: 0x1B / 255.0, blue: 0x20 / 255.0, alpha: 1)
 
+  /// The box's climb label: the Android car's words for it (CarOverlayPainter.drawClimbPart).
+  private static let climbLabel = "Climb ahead"
+
   /// One CarPlay point for two of the Android painter's pixels.
   private static let k = CGFloat(CarExtras.scale)
 
@@ -60,12 +63,71 @@ final class CarExtrasView: UIView {
 
   override func draw(_ rect: CGRect) {
     guard let layout = layout, let context = UIGraphicsGetCurrentContext() else { return }
+    if layout.mode == .oneBox {
+      drawOneBox(layout, context)
+      return
+    }
     if let box = layout.climb, let climb = climb {
       drawClimbLine(box, climb, context)
     }
     if let box = layout.mini, points.count >= 2 {
       drawMiniMap(box, context)
     }
+  }
+
+  /// The one box (Android's ONE_BOX): one card, the mini map in its upper part, a thin divider, the climb in its lower part.
+  /// Each part keeps its place when the other has nothing to show; the card is then that part alone.
+  private func drawOneBox(_ layout: CarExtras.Layout, _ context: CGContext) {
+    let mini: CGRect? = points.count >= 2 ? layout.mini : nil
+    let part: CGRect? = climb != nil ? layout.climb : nil
+    guard let box = mini.map({ m in part.map { m.union($0) } ?? m }) ?? part else { return }
+    Self.cardFill.setFill()
+    card(box).fill()
+    context.saveGState()
+    card(box).addClip()
+    if let m = mini {
+      context.saveGState()
+      context.clip(to: m)
+      drawMiniContent(m, context)
+      context.restoreGState()
+    }
+    if let r = part, let c = climb {
+      drawClimbPart(r, c, context)
+      if mini != nil {
+        Self.cardEdge.setFill()
+        UIRectFill(CGRect(x: r.minX, y: r.minY, width: r.width, height: Self.k))
+      }
+    }
+    context.restoreGState()
+    drawEdge(box)
+  }
+
+  /// The climb in the box's lower part (no card of its own), as Android's drawClimbPart: the label, the figure in bold and
+  /// the grade line in semibold one under the other, and the shape right of the label and the figure. The shape takes what
+  /// those two leave and is left out when that is under half of its least width.
+  private func drawClimbPart(_ r: CGRect, _ c: CarClimb, _ context: CGContext) {
+    let x0 = r.minX + CGFloat(CarExtras.boxPadX)
+    let labelFont = UIFont.systemFont(ofSize: CGFloat(CarExtras.climbLabelSize), weight: .regular)
+    let figureFont = UIFont.systemFont(ofSize: CGFloat(CarExtras.climbFigureSize), weight: .bold)
+    let gradeFont = UIFont.systemFont(ofSize: CGFloat(CarExtras.climbGradeSize), weight: .semibold)
+    let label = NSAttributedString(string: Self.climbLabel, attributes: [.font: labelFont, .foregroundColor: Self.secondary])
+    let figure = NSAttributedString(string: CarText.climb(c.climbAheadM, imperial: imperial), attributes: [.font: figureFont, .foregroundColor: Self.text])
+    let labelY = r.minY + CGFloat(CarExtras.boxPadTop + CarExtras.climbLabelSize)
+    let figureY = labelY + CGFloat(CarExtras.climbFigureDrop)
+    label.draw(at: CGPoint(x: x0, y: labelY - labelFont.ascender))
+    figure.draw(at: CGPoint(x: x0, y: figureY - figureFont.ascender))
+    if let g = c.gradePct, let into = c.steepestInM {
+      let line = NSAttributedString(
+        string: "\(CarText.grade(g)) in \(CarText.ahead(into, imperial: imperial))", attributes: [.font: gradeFont, .foregroundColor: Self.text])
+      line.draw(at: CGPoint(x: x0, y: figureY + CGFloat(CarExtras.climbGradeDrop) - gradeFont.ascender))
+    }
+    let shapeRight = r.maxX - CGFloat(CarExtras.boxPadX)
+    let shapeLeft = x0 + max(ceil(label.size().width), ceil(figure.size().width)) + CGFloat(CarExtras.climbGap)
+    if shapeRight - shapeLeft < CGFloat(CarExtras.shapeMinWidth) * 0.5 { return }
+    // Level with the label and the figure: from the label's top to the figure's baseline, the shape in the middle.
+    let mid = (r.minY + CGFloat(CarExtras.boxPadTop) + figureY) / 2
+    let h = CGFloat(CarExtras.shapeHeight)
+    drawShape(CGRect(x: shapeLeft, y: mid - h / 2, width: shapeRight - shapeLeft, height: h), c, filled: true, context)
   }
 
   // ---- a card like the Android host's ---------------------------------------------------------------------------------
@@ -186,12 +248,20 @@ final class CarExtrasView: UIView {
 
   // ---- the route mini map -----------------------------------------------------------------------------------------------
 
+  /// The mini map as a tile of its own: the card, the content, the outline.
   private func drawMiniMap(_ r: CGRect, _ context: CGContext) {
-    let k = Self.k
     Self.cardFill.setFill()
     card(r).fill()
     context.saveGState()
     card(r).addClip()
+    drawMiniContent(r, context)
+    context.restoreGState()
+    drawEdge(r)
+  }
+
+  /// The route, the driven part, the grade pill and the three dots in `r`; the caller clips.
+  private func drawMiniContent(_ r: CGRect, _ context: CGContext) {
+    let k = Self.k
     // The steepest point is placed with the route, so it shares its frame.
     var all = points
     if let steep = steep { all.append(steep) }
@@ -207,7 +277,7 @@ final class CarExtrasView: UIView {
         let shape = UIBezierPath(roundedRect: box, cornerRadius: 10 * k)
         Self.pill.setFill()
         shape.fill()
-        shape.lineWidth = max(1, 1.5 * k)
+        shape.lineWidth = 1.5 * k  // Android: max(1, 1.5) pixels at density 1
         Self.cardFill.setStroke()
         shape.stroke()
         let slope = UIBezierPath()
@@ -222,8 +292,6 @@ final class CarExtrasView: UIView {
       dot(end, 6 * k, Self.text, ring: nil, 0)
       dot(done.last ?? start, 8 * k, Self.text, ring: Self.route, 3 * k)
     }
-    context.restoreGState()
-    drawEdge(r)
   }
 
   private func stroke(_ points: [CGPoint], _ color: UIColor, _ width: CGFloat) {

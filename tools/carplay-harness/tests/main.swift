@@ -289,8 +289,8 @@ let onePoint: [String: Any] = ["points": [[10.5, 20.2]], "drivenFraction": 7.0]
 let shortRoute: [String: Any] = ["phase": "guiding", "overview": onePoint]
 check(CarTrip.from(shortRoute).overviewPoints.isEmpty && CarTrip.from(shortRoute).drivenFraction == 1, "one point is no route, and a share is kept between 0 and 1")
 
-// The measure at the four screens the harness runs: the room CarPlay reported while guiding (what its parts take from each
-// edge), the free map that leaves, and the class. The same measure and number as the Android car's.
+// The measure at the five screens the harness runs: the room CarPlay reported while guiding (what its parts take from each
+// edge), the free map that leaves, the layout and the class. The same layouts, measure and number as the Android car's.
 func freeMap(_ width: Double, _ height: Double, top: Double, left: Double, bottom: Double, right: Double) -> CGRect {
   CGRect(x: left, y: top, width: width - left - right, height: height - top - bottom)
 }
@@ -299,15 +299,20 @@ let small400 = CarExtras.layout(free: freeMap(400, 240, top: 44, left: 225, bott
 let wide640 = CarExtras.layout(free: freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
 let upright = CarExtras.layout(free: freeMap(300, 400, top: 44, left: 176, bottom: 49, right: 40))
 let high640 = CarExtras.layout(free: freeMap(640, 360, top: 44, left: 273, bottom: 0, right: 40))
+let short640 = CarExtras.layout(free: freeMap(640, 200, top: 44, left: 273, bottom: 0, right: 40))
 check(small374.screenClass == .small && !small374.fits && small374.mini == nil && small374.climb == nil, "374 x 228: the two do not fit beside the vehicle: small")
-check(small374.words == "SMALL (they do not fit; 0 pt of 20056 pt free map, 0 %)", "374 x 228: the measure in words")
-check(small400.screenClass == .small && small400.freeArea == 26460, "400 x 240: small, of a free map 135 x 196")
+check(small374.words == "SMALL (they do not fit; 0 pt of 20056 pt free map, 0 %; split)", "374 x 228: the measure in words")
+check(small400.screenClass == .small && small400.freeArea == 26460 && small400.mode == .split, "400 x 240: small, of a free map 135 x 196")
 check(upright.screenClass == .small && upright.freeArea == 25788, "300 x 400: small, the free map CarPlay reports is 84 wide")
-check(wide640.screenClass == .between && wide640.fits, "640 x 240: they fit and take more than 15 %: in-between")
-check(wide640.mini == CGRect(x: 482, y: 162, width: 110, height: 70), "640 x 240: the mini map in the trailing bottom corner, full size")
-check(wide640.climb == CGRect(x: 281, y: 200, width: 132.5, height: 32), "640 x 240: the climb's card from the leading edge to the vehicle's column")
-check(wide640.words == "IN_BETWEEN (they fit; 11940 pt of 64092 pt free map, 19 %)", "640 x 240: the measure in words")
-check(high640.screenClass == .big && high640.words == "BIG (they fit; 11940 pt of 103332 pt free map, 12 %)", "640 x 360 (not run by the harness): big")
+check(wide640.mode == .oneBox && wide640.screenClass == .between && wide640.fits, "640 x 240: the one box fits beside the vehicle and takes more than 15 %: in-between")
+check(wide640.mini == CGRect(x: 281, y: 104, width: 130, height: 70), "640 x 240: the mini map, the box's upper part, at the free map's bottom leading corner")
+check(wide640.climb == CGRect(x: 281, y: 174, width: 130, height: 58), "640 x 240: the climb, the box's lower part, its bottom 8 above the free map's")
+check(wide640.words == "IN_BETWEEN (they fit; 16640 pt of 64092 pt free map, 26 %; one box)", "640 x 240: the measure in words")
+check(high640.mode == .oneBox && high640.words == "IN_BETWEEN (they fit; 16640 pt of 103332 pt free map, 16 %; one box)", "640 x 360: the one box, in-between")
+check(short640.mode == .split && short640.fits, "640 x 200 (not run by the harness): too low for the box with its cushions: split")
+check(short640.mini == CGRect(x: 490, y: 122, width: 110, height: 70), "split: the tile in the bottom trailing corner, on the free map's trailing edge")
+check(short640.climb == CGRect(x: 281, y: 160, width: 132.5, height: 32), "split: the one-line card from the leading edge to the vehicle's column")
+check(short640.words == "IN_BETWEEN (they fit; 11940 pt of 51012 pt free map, 23 %; split)", "split: the measure in words")
 check(CarExtras.bigMaxShare == 0.15, "the one number: 15 % of the free map")
 if let tile = wide640.mini, let card = wide640.climb {
   let keep = CarExtras.keepClear(freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
