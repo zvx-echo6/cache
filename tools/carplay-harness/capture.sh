@@ -82,6 +82,93 @@ shot_ext() {  # the CarPlay display, straight from the simulator
   return 1
 }
 
+phone_window() {  # "x y w h" of the phone's own window in screen points, or nothing
+  local hit=""
+  if [ -x "$TOOL" ]; then
+    hit=$("$TOOL" windows 2> /dev/null | awk '/\[Simulator\]/ && $4 == 0 && $7 > 100 && tolower($0) ~ /ios/ && tolower($0) !~ /carplay/ {print $5, $6, $7, $8; exit}')
+  fi
+  if [ -z "$hit" ]; then
+    hit=$(sim_windows | awk -F'|' 'tolower($1) ~ /ios/ && tolower($1) !~ /carplay/ && $4 > 0 {print $2, $3, $4, $5; exit}')
+  fi
+  printf '%s' "$hit"
+}
+
+question_on_phone() {  # the Open button of the question iOS asks on the phone, in a small copy of the phone's picture: "found <x> <y> ... image=<w>x<h> ..." or "none ..."
+  rm -f "$OUT/.phone.png" "$OUT/.phone-small.png"
+  xcrun simctl io "$UDID" screenshot --type=png --display=internal "$OUT/.phone.png" > /dev/null 2>&1
+  sips -Z 1024 "$OUT/.phone.png" --out "$OUT/.phone-small.png" > /dev/null 2>&1
+  python3 -I "$HERE/find_icon.py" blue "$OUT/.phone-small.png" 2>> "$LOG" | tail -n 1
+}
+
+# A link opened from outside the app (simctl openurl here; a link in a message or a browser on a real phone) makes iOS ask on
+# the phone "Open in "Cache"?" the first time after an install. The answer is a press on its Open, which only a click in the
+# phone's window on the Mac screen can give: the window is brought to the front by a click on its title (which shows above
+# the CarPlay window's), and the button is found on a picture of the Mac screen by its blue, or else by where the phone's
+# screen sits in its window (measured on this Simulator's window: 18 of 299 points in from the left, 263 of 299 wide, its
+# bottom 12.5 of 681 points above the window's).
+answer_open() {  # answer_open <link lines in the log before> <picture name>: 0 when the link reached Dart
+  local before="$1" name="$2" try found="" win host at places place
+  for try in 1 2 3 4 5 6; do
+    sleep 2
+    [ "$(log_count 'harness steps: link')" -gt "$before" ] && { say "  the link reached Dart with no question asked"; return 0; }
+    found=$(question_on_phone)
+    case "$found" in found*) break ;; esac
+  done
+  case "$found" in
+    found*) ;;
+    *) say "  the phone shows no question and Dart has no link: $found"; return 1 ;;
+  esac
+  say "  iOS asks on the phone whether to open the link; its Open button in the phone's picture: $found"
+  shot_phone "$name-question"
+  win=$(phone_window)
+  [ -n "$win" ] || { say "  the phone's window was not found on the Mac screen"; return 1; }
+  # shellcheck disable=SC2086
+  set -- $win
+  click_at "$(($1 + $3 / 2))" "$(($2 + 14))" "${WAYS%% *}" > /dev/null
+  say "  the phone's window ($win) brought to the front by a click on its title"
+  sleep 2
+  rm -f "$OUT/.host.png"
+  screencapture -x "$OUT/.host.png" 2>> "$LOG"
+  # shellcheck disable=SC2086
+  host=$(python3 -I "$HERE/find_icon.py" blue "$OUT/.host.png" "$SCREEN_W" $win 2>> "$LOG" | tail -n 1)
+  sips -s format jpeg -s formatOptions 60 "$OUT/.host.png" --out "$OUT/host/$name-question.jpg" > /dev/null 2>&1
+  say "  the Open button on the Mac screen, inside the phone's window: $host"
+  places=""
+  case "$host" in
+    found*)
+      # shellcheck disable=SC2086
+      set -- $host
+      places="$2,$3"
+      ;;
+  esac
+  # shellcheck disable=SC2086
+  at=$(python3 -I -c '
+import sys
+f = sys.argv[1].split()
+size = [v for v in f if v.startswith("image=")][0][6:].split("x")
+fx, fy = float(f[1]) / float(size[0]), float(f[2]) / float(size[1])
+wx, wy, ww, wh = [float(v) for v in sys.argv[2:6]]
+sw = ww * 263.0 / 299.0
+sh = sw * float(size[1]) / float(size[0])
+print("%.1f,%.1f" % (wx + ww * 18.0 / 299.0 + fx * sw, wy + wh - wh * 12.5 / 681.0 - sh + fy * sh))
+' "$found" $win 2>> "$LOG")
+  places="$places $at"
+  for place in $places; do
+    click_at "${place%,*}" "${place#*,}" "${WAYS%% *}" > /dev/null
+    say "  clicked Open at Mac screen $place"
+    if wait_more 'harness steps: link' "$before" 20; then
+      say "  the link reached Dart after the press on Open"
+      return 0
+    fi
+    case "$(question_on_phone)" in
+      found*) ;;
+      *) say "  the question has gone, but Dart has no link"; return 1 ;;
+    esac
+  done
+  say "  the question is still on the phone after the clicks"
+  return 1
+}
+
 shot_phone() {  # the phone's own screen
   local f="$OUT/shots/$1.png"
   rm -f "$f"
@@ -983,8 +1070,10 @@ for size in $SIZES; do
     PHONE_DONE=1
     say "-- the phone's window, opened by a cachelink: link while the car scene runs"
     shot_phone "$label-phone-before"
+    before=$(log_count 'harness steps: link')
     run xcrun simctl openurl "$UDID" "cachelink://harness.example/opened-while-the-car-runs"
-    sleep 10
+    answer_open "$before" "$label-phone"
+    sleep 5
     shot_phone "$label-phone-window"
     shot_ext "$label-car-after-phone"
     engines=$(grep -c 'The Flutter engine was started' "$STREAM")
@@ -1034,7 +1123,8 @@ if [ -n "$STREAM" ] && [ -d "$APPS/car/Runner.app" ]; then
   sleep 5
   # Opened by a cachelink: link with nothing running: the phone scene starts the engine, and Dart takes the link when it is up.
   run xcrun simctl openurl "$UDID" "cachelink://harness.example/opened-with-nothing-running"
-  sleep 12
+  answer_open 0 update-2
+  sleep 6
   shot_phone update-2-after-the-update
   came=$(grep -c "came with the storyboard" "$STREAM")
   engines=$(grep -c 'The Flutter engine was started' "$STREAM")

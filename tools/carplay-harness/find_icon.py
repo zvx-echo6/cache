@@ -8,6 +8,11 @@
     find_icon.py button <png> <x0> <y0> <x1> <y1> [<sx0> <sy0> <sx1> <sy1>]
                                                    -> the largest patch of any strong colour (a filled button) inside the
                                                       first box and outside the second, answer in picture pixels
+    find_icon.py blue <png> [<screen width in points> <x> <y> <w> <h>]
+                                                   -> the filled blue button of a question iOS asks (its "Open"): the
+                                                      largest patch of that blue that is shaped like a button, in the whole
+                                                      picture (answer in picture pixels) or only inside that window of a
+                                                      picture of the Mac screen (answer in screen points)
 
 Prints one line: "found <x> <y> count=<n> box=<x>,<y>,<w>,<h> image=<w>x<h>" or "none image=<w>x<h> most=<n>".
 The answer is the middle of the largest connected patch of magenta pixels. Standard library only: the PNG is decoded here.
@@ -130,6 +135,38 @@ def colour_patch(width, height, rows, bpp, step, box, skip):
     return best
 
 
+def blue_button(width, height, rows, bpp, step, box):
+    """The largest patch of iOS's button blue inside `box` that is shaped like a button: wider than high, and mostly filled."""
+    x0, y0, x1, y1 = max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3])
+    hits = set()
+    for y in range(y0, y1):
+        line = rows[y]
+        r = line[x0 * bpp:x1 * bpp:bpp]
+        g = line[x0 * bpp + step:x1 * bpp:bpp]
+        b = line[x0 * bpp + 2 * step:x1 * bpp:bpp]
+        for i in range(len(r)):
+            if b[i] >= 205 and r[i] <= 90 and 85 <= g[i] <= 175:
+                hits.add((x0 + i, y))
+    best, left = [], hits
+    while left:
+        seed = left.pop()
+        patch, stack = [seed], [seed]
+        while stack:
+            x, y = stack.pop()
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if n in left:
+                    left.remove(n)
+                    patch.append(n)
+                    stack.append(n)
+        if len(patch) <= len(best) or len(patch) < 300:
+            continue
+        xs, ys = [p[0] for p in patch], [p[1] for p in patch]
+        bw, bh = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+        if bw >= 1.8 * bh and len(patch) >= 0.7 * bw * bh:
+            best = patch
+    return best
+
+
 def lit_percent(width, height, rows, bpp, step):
     """How much of the picture is not black: sampled every 6th pixel of every 6th row."""
     seen = lit = 0
@@ -160,6 +197,24 @@ def main():
         xs, ys = [p[0] for p in patch], [p[1] for p in patch]
         bx, by, bw, bh = min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
         print("found %.1f %.1f count=%d box=%d,%d,%d,%d image=%dx%d" % (bx + bw / 2.0, by + bh / 2.0, len(patch), bx, by, bw, bh, width, height))
+        return 0
+    if mode == "blue":
+        scale, box, last_row = 1.0, None, None
+        if len(sys.argv) >= 8:
+            width = struct.unpack(">I", open(path, "rb").read(24)[16:20])[0]
+            scale = width / float(sys.argv[3])
+            x, y, w, h = [float(v) for v in sys.argv[4:8]]
+            box = (int(x * scale), int(y * scale), int((x + w) * scale), int((y + h) * scale))
+            last_row = box[3]
+        width, height, rows, bpp, step = read_png(path, last_row)
+        patch = blue_button(width, height, rows, bpp, step, box or (0, 0, width, height))
+        if not patch:
+            print("none image=%dx%d" % (width, height))
+            return 1
+        xs, ys = [p[0] for p in patch], [p[1] for p in patch]
+        bx, by, bw, bh = min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+        cx, cy = bx + bw / 2.0, by + bh / 2.0
+        print("found %.1f %.1f count=%d box=%d,%d,%d,%d image=%dx%d scale=%.2f" % (cx / scale, cy / scale, len(patch), bx, by, bw, bh, width, height, scale))
         return 0
     scale, rect, last_row = 1.0, None, None
     if mode == "host":
