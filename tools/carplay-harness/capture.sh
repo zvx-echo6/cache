@@ -881,14 +881,35 @@ guide_step() {  # guide_step <notification> <log text to wait for, or ""> <pictu
 }
 
 guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
-  local label="$1" at before
+  local label="$1" at before got
   local edge=$((CAR_W - 27 * CAR_S)) bar=$((28 * CAR_S))
+  PROMPTS=""
+  TONE=""
   GUIDE=""
   GUIDE_MISSING=""
   # CarPlay's guidance panel: the next turn, the one after, and what is left of the trip.
   wait_log 'car guidance: turn shown, 2 maneuvers' 12 || GUIDE_MISSING=" [the app did not say the turn is shown]"
   sleep 3
   shot_ext "$label-guide"
+  # How a spoken prompt may be given. The stand-in Dart side asks as the phone's voice does before each prompt: first with
+  # the car side told to answer as iOS does during a call (a short prompt: the tone) and while Siri listens (none), then
+  # with the system's own style here. Nothing can be heard on a runner: the answers and the app's own lines are the check.
+  for at in short none normal; do
+    before=$(log_count 'harness steps: prompt answered')
+    notify "prompt$at"
+    if wait_more 'harness steps: prompt answered' "$before" 8; then
+      got=$(grep 'harness steps: prompt answered' "$STREAM" | tail -n 1 | sed 's/.*prompt answered //')
+      case "$at" in
+        normal) PROMPTS="the system's own style here answers '$got'" ;;
+        *) [ "$got" = "$at" ] || GUIDE_MISSING="$GUIDE_MISSING [a prompt with the style told as $at was answered '$got']" ;;
+      esac
+    else
+      GUIDE_MISSING="$GUIDE_MISSING [prompt $at: the stand-in Dart side got no answer]"
+    fi
+    sleep 1
+  done
+  grep -q "car prompts: ready, the system's three style codes are the known ones: true" "$STREAM" || GUIDE_MISSING="$GUIDE_MISSING [the prompt style codes were not confirmed at start]"
+  TONE=$(grep 'car prompts: the tone' "$STREAM" | sed 's/.*car prompts: //' | tr '\n' ';')
   # A moving vehicle: five positions a second apart. The marker glides between them and the camera goes with it; a picture
   # is taken as fast as they come while it does.
   before=$(log_count 'car map: the marker glides')
@@ -897,7 +918,7 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   sleep 2
   at=$(( $(log_count 'car map: the marker glides') - before ))
   if [ "$at" -ge 3 ]; then
-    GUIDE="the marker glided between $at of five positions a second apart"
+    GUIDE="prompts: a short one and none were answered as told, $PROMPTS (the tone on this runner: ${TONE:-no line}); the marker glided between $at of five positions a second apart"
   else
     GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
   fi

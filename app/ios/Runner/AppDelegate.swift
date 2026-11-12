@@ -114,6 +114,8 @@ import workmanager_apple
     // hello is answered whichever scene started it. Only in a build with the car screen.
     if CarPlayBuild.isOn {
       CarLink.shared.attach(messenger: messenger)
+      // Before each spoken prompt Dart asks the car side how iOS wants it given (Runner/CarPlay/CarPrompts.swift).
+      CarPrompts.shared.start()
     }
     // A cachelink: link from outside (see LinkBridge in SceneDelegate.swift). Set where the engine is made, so a link reaches
     // Dart whichever scene started the engine.

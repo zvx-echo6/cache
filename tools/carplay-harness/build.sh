@@ -26,7 +26,7 @@ version() { awk -v p="  $1:" '$0==p{f=1;next} f&&/version:/{gsub(/"/,"",$2);prin
   # The car link's rules on recorded messages, on the Mac: the product's CarTrip.swift and CarLink.swift need no Flutter.
   echo "--- car link tests on the recorded messages"
   xcrun --sdk macosx swiftc "$ROOT/app/ios/Runner/CarPlay/CarTrip.swift" "$ROOT/app/ios/Runner/CarPlay/CarLink.swift" \
-    "$ROOT/app/ios/Runner/CarPlay/CarMarkerMotion.swift" "$HERE/tests/main.swift" -o "$RUNNER_TEMP/car-link-tests"
+    "$ROOT/app/ios/Runner/CarPlay/CarMarkerMotion.swift" "$ROOT/app/ios/Runner/CarPlay/CarPrompts.swift" "$HERE/tests/main.swift" -o "$RUNNER_TEMP/car-link-tests"
   "$RUNNER_TEMP/car-link-tests" "$HERE/recorded"
   # CocoaPods for the scratch project, as the repository's other scratch iOS build (map-bench.yml).
   flutter config --no-enable-swift-package-manager

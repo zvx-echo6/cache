@@ -188,6 +188,32 @@ let arrivedMessage: [String: Any] = ["phase": "guiding", "remainingS": 0, "remai
 check(CarTrip.from(lastStretch).leftSeconds == 60, "under a minute left reads as one minute")
 check(CarTrip.from(arrivedMessage).leftSeconds == 0, "arrived: no time left")
 check(CarTrip.from([:]).leftSeconds == nil, "no time left known")
+// ---- how a prompt may be given --------------------------------------------------------------------------------------
+
+for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
+  guard let row = item as? [String: Any], let code = (row["code"] as? NSNumber)?.uintValue, let state = row["state"] as? String else {
+    check(false, "a recorded prompt state reads")
+    continue
+  }
+  let style = CarPromptStyle(code: code)
+  check(style.answer == row["answer"] as? String, "prompts while \(state): the answer to Dart")
+  check((style == .tone) == (row["tone"] as? Bool ?? false), "prompts while \(state): the tone only when a short prompt is asked for")
+  check((style == .spoken) == (row["phoneSpeaks"] as? Bool ?? false), "prompts while \(state): the phone speaks only when a spoken prompt is fine")
+  if let letters = row["fourCC"] as? String, letters.count == 4 {
+    var number: UInt = 0
+    for byte in Array(letters.utf8) { number = number << 8 | UInt(byte) }
+    check(number == code, "prompts while \(state): the code is the four letters \(letters)")
+  }
+}
+check(((recorded("prompt_styles.json") as? [Any]) ?? []).count >= 4, "the recorded prompt states are there")
+let tone: [Int16] = CarPromptTone.samples()
+check(tone.count == Int(44100 * 0.28), "the tone is 0.28 s long")
+check(tone.first == 0 && abs(Int(tone.last ?? 99)) < 40, "the tone starts and ends without a click")
+let loudest: Int = tone.map { abs(Int($0)) }.max() ?? 0
+check(loudest > 8000 && loudest < 15000, "the tone is soft: well under half of full scale")
+let wav = CarPromptTone.wav()
+check(wav.count == 44 + tone.count * 2 && Array(wav.prefix(4)) == Array("RIFF".utf8), "the tone as a WAV file: a header and the samples")
+
 // ---- lanes ----------------------------------------------------------------------------------------------------------
 
 let laned = CarTrip.from(map("trip_guiding_near.json"))
@@ -399,12 +425,17 @@ link.handle(method: "styleChanged", arguments: nil, reply: { _ in })
 check(heard.saved == 1 && heard.styles == 1, "saved places changed, the map style changed")
 var prompts: [String] = []
 var stops = 0
-link.onPrompt = { prompts.append($0) }
+link.onPrompt = {
+  prompts.append($0)
+  return "short"
+}
 link.onPromptStop = { stops += 1 }
 reply = []
 let promptText: [String: Any] = ["text": "Turn left"]
 let promptKnown = link.handle(method: "prompt", arguments: promptText, reply: { reply.append($0) })
 check(promptKnown && reply.count == 1, "a prompt is answered")
+let promptAnswer: String? = (reply.first ?? nil) as? String
+check(promptAnswer == "short", "a prompt is answered with what the hook says about prompts at this moment")
 let stopKnown = link.handle(method: "promptStop", arguments: nil, reply: { reply.append($0) })
 check(stopKnown && reply.count == 2, "the end of a prompt is answered")
 check(prompts == ["Turn left"] && stops == 1, "the prompt and its end reach the audio hook")

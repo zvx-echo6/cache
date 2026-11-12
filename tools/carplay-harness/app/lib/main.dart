@@ -108,6 +108,10 @@ class _HarnessAppState extends State<HarnessApp> {
               await _pushRaw(jsonEncode(trip), recorded['route_guiding']!);
             }
           }
+        case 'prompt':
+          // As the phone's voice before each prompt (CarAwareSpeaker): how may it be given at this moment?
+          final Object? how = await _car.invokeMethod<Object?>('prompt', <String, Object?>{'text': 'Turn left.'});
+          await _steps.invokeMethod<void>('say', 'prompt answered $how');
         case 'nosaved':
         case 'saved':
           // The phone's saved places changed: none are left, or the recorded ones are back.

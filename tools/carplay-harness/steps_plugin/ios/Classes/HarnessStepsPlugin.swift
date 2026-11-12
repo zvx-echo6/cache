@@ -14,6 +14,10 @@ import UIKit
 /// - `org.example.carharness.roll`: while guiding, five positions a second apart along the road, as a moving vehicle
 ///   gives them, so the marker's glide can be seen.
 /// - `org.example.carharness.climb`: while guiding, the recorded trip that has a climb ahead.
+/// - `org.example.carharness.promptshort`, `.promptnone` and `.promptnormal`: the stand-in Dart side asks the car side how a
+///   spoken prompt may be given, as the phone's voice does before each prompt, and says the answer. For the first two the
+///   car side is first told to answer as iOS would during a call, or while Siri listens (no call can be made in the
+///   Simulator); for the last it reads the system's own style again.
 /// - `org.example.carharness.nosaved` and `.saved`: the stand-in Dart side has no saved places, or has its recorded ones
 ///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
@@ -35,7 +39,7 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
     }
     channel = steps
     let center = CFNotificationCenterGetDarwinNotifyCenter()
-    let names: [String] = (toDart + ["day", "night"]).map { "org.example.carharness." + $0 }
+    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys)).map { "org.example.carharness." + $0 }
     for name in names {
       CFNotificationCenterAddObserver(
         center, nil,
@@ -48,8 +52,20 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
     NSLog("%@", "harness steps: listening for the job's notifications")
   }
 
+  /// The audio session's codes for a short prompt and for none ('shrt', 'none'); nothing for the system's own.
+  private static let promptCodes: [String: UInt?] = ["promptshort": 0x7368_7274, "promptnone": 0x6E6F_6E65, "promptnormal": nil]
+
   private static func told(_ name: String) {
     let word: String = name.components(separatedBy: ".").last ?? ""
+    if let code = promptCodes[word] {
+      // The product's CarPrompts, reached by its Objective-C name: this plugin is not part of the app's module.
+      let prompts: NSObjectProtocol? = NSClassFromString("CarPrompts").flatMap { ($0 as AnyObject) as? NSObjectProtocol }
+      let shared = prompts?.perform(NSSelectorFromString("shared"))?.takeUnretainedValue() as? NSObject
+      shared?.setValue(code.map { NSNumber(value: $0) }, forKey: "codeForTests")
+      NSLog("%@", "harness steps: the car side answers prompts with \(code == nil ? "the system's own style" : "the style the job named") (\(shared == nil ? "CarPrompts not found" : "set"))")
+      channel?.invokeMethod("prompt", arguments: nil)
+      return
+    }
     if toDart.contains(word) {
       channel?.invokeMethod(word, arguments: nil)
       return

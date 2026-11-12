@@ -16,6 +16,7 @@
 		CA0C0DE12F1B2C3D00CA7006 /* CarTrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */; };
 		CA0C0DE12F1B2C3D00CA7004 /* CarLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */; };
 		CA0C0DE12F1B2C3D00CA7010 /* CarMarkerMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA700F /* CarMarkerMotion.swift */; };
+		CA0C0DE12F1B2C3D00CA7012 /* CarPrompts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7011 /* CarPrompts.swift */; };
 		CA0C0DE12F1B2C3D00CA700C /* CarIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA700B /* CarIcons.swift */; };
 		CA0C0DE12F1B2C3D00CA700E /* CarManeuvers.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA700D /* CarManeuvers.swift */; };
 		CA0C0DE12F1B2C3D00CA700A /* CarTemplates.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */; };
@@ -62,6 +63,7 @@
 		CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarTrip.swift; path = CarPlay/CarTrip.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarLink.swift; path = CarPlay/CarLink.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA700F /* CarMarkerMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarMarkerMotion.swift; path = CarPlay/CarMarkerMotion.swift; sourceTree = "<group>"; };
+		CA0C0DE12F1B2C3D00CA7011 /* CarPrompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarPrompts.swift; path = CarPlay/CarPrompts.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA700B /* CarIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarIcons.swift; path = CarPlay/CarIcons.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA700D /* CarManeuvers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarManeuvers.swift; path = CarPlay/CarManeuvers.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarTemplates.swift; path = CarPlay/CarTemplates.swift; sourceTree = "<group>"; };
@@ -143,6 +145,7 @@
 				CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */,
 				CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */,
 				CA0C0DE12F1B2C3D00CA700F /* CarMarkerMotion.swift */,
+				CA0C0DE12F1B2C3D00CA7011 /* CarPrompts.swift */,
 				CA0C0DE12F1B2C3D00CA700B /* CarIcons.swift */,
 				CA0C0DE12F1B2C3D00CA700D /* CarManeuvers.swift */,
 				CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */,
@@ -312,6 +315,7 @@
 				CA0C0DE12F1B2C3D00CA7006 /* CarTrip.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA7004 /* CarLink.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA7010 /* CarMarkerMotion.swift in Sources */,
+				CA0C0DE12F1B2C3D00CA7012 /* CarPrompts.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA700C /* CarIcons.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA700E /* CarManeuvers.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA700A /* CarTemplates.swift in Sources */,

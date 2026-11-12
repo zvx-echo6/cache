@@ -44,8 +44,9 @@ final class CarLink {
   private(set) var routeGeoJson: String?
   private(set) var routeBounds: [Double]?
 
-  /// A spoken prompt is about to play, or has ended. Set by the car scene when it handles the audio session.
-  var onPrompt: ((String) -> Void)?
+  /// A spoken prompt is about to play: the answer is how it may be given at this moment (CarPromptStyle's answers; nil with
+  /// no hook, and the phone then speaks as it would with no car). And a prompt was stopped. Set by CarPrompts.
+  var onPrompt: ((String) -> String?)?
   var onPromptStop: (() -> Void)?
 
   /// For the tests: answers in place of Dart (a car scene with no Flutter engine).
@@ -139,8 +140,7 @@ final class CarLink {
         each { $0.carLinkNotice(text) }
       }
     case "prompt":
-      onPrompt?(args?["text"] as? String ?? "")
-      reply(nil)
+      reply(onPrompt?(args?["text"] as? String ?? ""))
     case "promptStop":
       onPromptStop?()
       reply(nil)

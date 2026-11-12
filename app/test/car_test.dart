@@ -686,6 +686,8 @@ void main() {
     late MapsState maps;
     late List<MethodCall> toCar;
     late CarBridge bridge;
+    // What the car side answers to a prompt (the iPhone's says how iOS wants it given; Android's says nothing).
+    Object? promptAnswer;
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
     Future<Object?> fromCar(String method, [Object? args]) async {
@@ -699,9 +701,11 @@ void main() {
     setUp(() async {
       maps = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir);
       toCar = [];
+      promptAnswer = null;
       messenger.setMockMethodCallHandler(channel, (call) async {
         toCar.add(call);
         if (call.method == 'hello') return {'connected': true};
+        if (call.method == 'prompt') return promptAnswer;
         return null;
       });
       bridge = CarBridge(nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'file:///g/{fontstack}/{range}.pbf');
@@ -1074,6 +1078,35 @@ void main() {
       await s.speak('Turn right.');
       expect(toCar.where((c) => c.method == 'prompt'), hasLength(1));
       expect(speaker.said, ['Turn left.', 'Turn right.']);
+    });
+
+    test('the iPhone car side says how a prompt may be given: spoken, or not by the phone voice', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      // The states recorded for the iPhone car tests (tools/carplay-harness/recorded): what the system says, what the car side
+      // answers, and whether the phone's voice then speaks.
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/prompt_styles.json').readAsStringSync()) as List;
+      expect(rows, hasLength(greaterThanOrEqualTo(3)));
+      expect({for (final r in rows) (r as Map)['answer']}, containsAll([kPromptNormal, kPromptShort, kPromptNone]));
+      var asked = 0;
+      for (final r in rows) {
+        final row = r as Map;
+        speaker.said.clear();
+        promptAnswer = row['answer'];
+        await s.speak('Turn left.');
+        asked++;
+        expect(toCar.where((c) => c.method == 'prompt'), hasLength(asked), reason: 'the car side is asked before every prompt');
+        expect(speaker.said, row['phoneSpeaks'] == true ? ['Turn left.'] : isEmpty, reason: '${row['state']}');
+      }
+      // An answer that is not one of the three, and no answer (the Android car side), are spoken.
+      for (final other in <Object?>[null, 'loud', 3, true]) {
+        speaker.said.clear();
+        promptAnswer = other;
+        await s.speak('Turn right.');
+        expect(speaker.said, ['Turn right.'], reason: '$other');
+      }
+      expect(await bridge.prompt('x'), isNull);
+      promptAnswer = kPromptShort;
+      expect(await bridge.prompt('x'), kPromptShort);
     });
   });
 }
