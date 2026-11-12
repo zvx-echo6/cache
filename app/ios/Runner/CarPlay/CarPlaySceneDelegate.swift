@@ -243,6 +243,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     guidance?.alertGone()
   }
 
+  /// How the panel's second maneuver is laid out: the lanes as a picture across the panel and nothing else (Apple's form for
+  /// lane guidance); the turn after next in CarPlay's usual way.
+  func mapTemplate(_ mapTemplate: CPMapTemplate, displayStyleFor maneuver: CPManeuver) -> CPManeuverDisplayStyle {
+    if CarGuidance.isLanes(maneuver) {
+      Self.log.info("car guidance: the lanes are laid out as a picture")
+      return .symbolOnly
+    }
+    return []
+  }
+
   /// While another app is in front on the car screen, CarPlay shows the next turn as a banner.
   func mapTemplate(_ mapTemplate: CPMapTemplate, shouldShowNotificationFor maneuver: CPManeuver) -> Bool {
     true

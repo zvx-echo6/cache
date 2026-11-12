@@ -923,7 +923,9 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   fi
   # Nearer the turn: the phone now shows lanes for it, and they take the panel's second place. Then past it (the next turn,
   # and arriving after it).
+  before=$(log_count 'car guidance: the lanes are laid out as a picture')
   guide_step drive 'car guidance: lanes shown, 4 lanes' "$label-guide-near"
+  [ "$(log_count 'car guidance: the lanes are laid out as a picture')" -gt "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [CarPlay did not ask how to lay the lanes out]"
   guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
   # The voice switch, at the bar's trailing edge: off, and on again. The phone's trip says which way it is.
   if at=$(tap_until 'car guidance: voice asked off' 3 "$edge" "$bar" $((edge - 8 * CAR_S)) "$bar"); then

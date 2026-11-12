@@ -2,8 +2,9 @@ import UIKit
 
 /// The car screen's pictures, drawn in code as on the Android car (CarIcons.kt and CarOverlayPainter.kt, shape for shape), so
 /// no picture files are added: a turn picture for each of the phone's turn names (CarStep.turn), the route overview
-/// button's, the climb alert's shape and the lane strip, all plain shapes with no colour of their own, which CarPlay tints for
-/// its light and dark cards; and the grade marker for the map, in the phone's own colours.
+/// button's and the climb alert's shape, all plain shapes with no colour of their own, which CarPlay tints for its light and
+/// dark cards; the lane strip, in white and in black for CarPlay's dark and light panels; and the grade marker for the map,
+/// in the phone's own colours.
 enum CarIcons {
   /// CarPlay shows a maneuver's picture at 50 x 50 points at most.
   private static let side: CGFloat = 50
@@ -105,11 +106,20 @@ enum CarIcons {
   }
 
   /// The lanes of the road at the next maneuver, for CarPlay's place for them (the second maneuver, a picture only, 120 by 18
-  /// points at most): the phone's lane strip (lane_strip.dart), arrow for arrow. One colour, which CarPlay tints, so the
-  /// phone's tones are strengths of it: the arrow to take on the lane to be in is full, with a faint plate behind its lane;
-  /// the other arrows of that lane and the lanes that also work are lighter; lanes that do not work are the phone's 38%.
-  /// With no lane marked every lane is full.
+  /// points at most): the phone's lane strip (lane_strip.dart), arrow for arrow. One ink, so the phone's tones are strengths
+  /// of it: the arrow to take on the lane to be in is full, with a faint plate behind its lane; the other arrows of that lane
+  /// and the lanes that also work are lighter; lanes that do not work are the phone's 38%. With no lane marked every lane is
+  /// full. Apple asks for a dark and a light picture: white ink for a dark panel and black for a light one, and CarPlay
+  /// takes the one for the car's setting.
   static func laneStrip(_ lanes: [CarLane]) -> UIImage {
+    let dark = UITraitCollection(userInterfaceStyle: .dark)
+    let asset = UIImageAsset()
+    asset.register(laneStrip(lanes, ink: .white), with: dark)
+    asset.register(laneStrip(lanes, ink: .black), with: UITraitCollection(userInterfaceStyle: .light))
+    return asset.image(with: dark)
+  }
+
+  private static func laneStrip(_ lanes: [CarLane], ink: UIColor) -> UIImage {
     let count = max(1, lanes.count)
     let height: CGFloat = 18
     let cell: CGFloat = min(22, ((120 - CGFloat(count - 1)) / CGFloat(count)).rounded(.down))
@@ -123,11 +133,11 @@ enum CarIcons {
         let x = CGFloat(i) * (cell + 1)
         let active = lane.role == "active"
         if i > 0 && !active && lanes[i - 1].role != "active" {
-          UIColor.white.withAlphaComponent(0.25).setFill()
-          UIRectFill(CGRect(x: x - 1, y: (height - glyph * 0.8) / 2, width: 1, height: glyph * 0.8))
+          ink.withAlphaComponent(0.25).setFill()
+          UIRectFillUsingBlendMode(CGRect(x: x - 1, y: (height - glyph * 0.8) / 2, width: 1, height: glyph * 0.8), .normal)
         }
         if active {
-          UIColor.white.withAlphaComponent(0.18).setFill()
+          ink.withAlphaComponent(0.18).setFill()
           UIBezierPath(roundedRect: CGRect(x: x, y: 0, width: cell, height: height), cornerRadius: 4).fill()
         }
         let tone: CGFloat = lane.role == "dim" ? 0.38 : (lane.role == "plain" ? 1 : 0.62)
@@ -135,14 +145,14 @@ enum CarIcons {
         let lit: String? = active ? (lane.take ?? "through") : nil
         // The arrow to take is drawn last, over the others.
         for direction in lane.directions where direction != lit {
-          laneArrow(direction, in: box, color: UIColor.white.withAlphaComponent(tone), context: context.cgContext)
+          laneArrow(direction, in: box, color: ink.withAlphaComponent(tone), context: context.cgContext)
         }
         if let lit = lit {
-          laneArrow(lit, in: box, color: .white, context: context.cgContext)
+          laneArrow(lit, in: box, color: ink, context: context.cgContext)
         }
       }
     }
-    return drawn.withRenderingMode(.alwaysTemplate)
+    return drawn.withRenderingMode(.alwaysOriginal)
   }
 
   /// One lane arrow in a square, the phone's shapes in a unit square (LaneGlyphPainter): a stem from the foot that bends to

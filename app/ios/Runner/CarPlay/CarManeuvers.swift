@@ -309,12 +309,22 @@ final class CarGuidance: CarLinkListener {
     map.updateEstimates(CPTravelEstimates(distanceRemaining: CarText.length(meters, imperial: t.imperial), timeRemaining: TimeInterval(seconds)), for: trip)
   }
 
-  /// The lanes in CarPlay's form for them: a maneuver in the panel's second place that is a picture and no words.
+  /// The lanes in CarPlay's form for them: a maneuver in the panel's second place that is a picture and no words. CarPlay
+  /// lays it out as a picture across the panel only when its delegate says so for this maneuver (isLanes, asked by the car
+  /// scene); without that it leaves the place empty.
   private static func laneManeuver(_ lanes: [CarLane]) -> CPManeuver {
     let maneuver = CPManeuver()
     maneuver.instructionVariants = []
     maneuver.symbolImage = CarIcons.laneStrip(lanes)
+    maneuver.userInfo = lanesMark
     return maneuver
+  }
+
+  private static let lanesMark = "lanes"
+
+  /// Whether a maneuver is the lanes' picture (CarPlay asks how to lay each second maneuver out).
+  static func isLanes(_ maneuver: CPManeuver) -> Bool {
+    (maneuver.userInfo as? String) == lanesMark
   }
 
   /// The lanes as CarPlay's lane data (iOS 17.4), which is for the vehicle's own displays and goes nowhere unless the app
