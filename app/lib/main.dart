@@ -857,7 +857,7 @@ class _CacheAppState extends State<CacheApp> {
   // Whether the phone's drive screen is showing to a person; the car is told (car/phone_drive.dart).
   final PhoneDrive _phoneDrive = PhoneDrive();
   // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
-  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
+  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav, drive: _phoneDrive);
   CacheThemeId _applied = CacheThemeId.dark;
 
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
