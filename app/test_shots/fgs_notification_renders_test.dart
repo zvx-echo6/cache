@@ -140,7 +140,7 @@ class _Page extends StatelessWidget {
 }
 
 const _adding = _Note(
-  title: 'Adding PDFs to My books',
+  title: 'Adding PDFs to Bookshelves',
   text: '2 of 5 PDFs · Radio field manual',
   subText: '12 min left',
   progress: 0.36,
@@ -156,8 +156,9 @@ final _addingOpen = _Note(
   actions: const ['Pause'],
 );
 
-const _added = _Note(title: 'Added 5 PDFs to My books', text: 'Adding to search index');
-const _addedSome = _Note(title: 'Added 4 of 5 PDFs to My books', text: '1 could not be added · tap to see');
+const _added = _Note(title: 'Added 5 PDFs to Bookshelves', text: 'Adding to search index');
+const _addedNamed = _Note(title: 'Added 3 PDFs to Field guides', text: 'Adding to search index');
+const _addedSome = _Note(title: 'Added 4 of 5 PDFs to Bookshelves', text: '1 could not be added · tap to see');
 const _failed = _Note(title: 'This PDF could not be added', text: 'Radio field manual · Nothing was added. Your PDF was not changed.');
 const _pausedYou = _Note(title: 'Paused · 2 of 5 PDFs', text: 'Paused by you', progress: 0.36, expanded: true, actions: ['Resume']);
 const _pausedBattery = _Note(title: 'Paused · 2 of 5 PDFs', text: 'Battery low (12%) · plug in to continue', progress: 0.36, expanded: true, actions: ['Resume anyway']);
@@ -189,7 +190,7 @@ void main() {
       await draw(tester, '1-adding', 480, [('while adding · collapsed (the actions show when it is opened out)', _adding), ('while adding · opened out', _addingOpen)]);
     });
     testWidgets('2 ended, $name', (tester) async {
-      await draw(tester, '2-ended', 520, [('finished', _added), ('finished, one could not be added', _addedSome), ('one PDF could not be added', _failed)]);
+      await draw(tester, '2-ended', 660, [('finished', _added), ('finished, a library the person named keeps its name', _addedNamed), ('finished, one could not be added', _addedSome), ('one PDF could not be added', _failed)]);
     });
     testWidgets('3 paused, $name', (tester) async {
       await draw(tester, '3-paused', 640, [('paused by you', _pausedYou), ('paused: battery low', _pausedBattery), ('paused: the time limit', _pausedLimit)]);
