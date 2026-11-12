@@ -128,6 +128,39 @@ struct CarPlace: Equatable {
   static func list(_ v: Any?) -> [CarPlace] {
     ((v as? [Any]) ?? []).compactMap { from($0) }
   }
+
+  /// The line under the place's name in a list, as the Android car's rows have it: "16 mi · 1501 Example Ave", the distance
+  /// alone, the address alone, or nothing.
+  func detail(imperial: Bool) -> String? {
+    let distance: String? = distanceM.map { CarText.distance($0, imperial: imperial) }
+    if let distance = distance, let address = address { return "\(distance) · \(address)" }
+    return distance ?? address
+  }
+}
+
+/// Words the car side has to write itself. On Android the car's host writes a distance from a number; CarPlay's lists take
+/// plain text, so the distance is written here, in the phone's own words and rounding (lib/nav/units.dart, Fmt.distance; the
+/// Android car's CarModels.distance rounds the same way).
+enum CarText {
+  /// "300 ft", "0.5 mi", "12 mi", "350 m", "1.2 km".
+  static func distance(_ meters: Double, imperial: Bool) -> String {
+    let m = max(0, meters)
+    if imperial {
+      let ft = m * 3.28084
+      let mi = m / 1609.344
+      if ft < 528 { return "\(step(ft, ft < 100 ? 10 : 50)) ft" }
+      if mi < 10 { return String(format: "%.1f mi", (mi * 10).rounded() / 10) }
+      return "\(Int(mi.rounded())) mi"
+    }
+    if m < 1000 { return "\(step(m, m < 100 ? 10 : 50)) m" }
+    let km = m / 1000
+    if km < 10 { return String(format: "%.1f km", (km * 10).rounded() / 10) }
+    return "\(Int(km.rounded())) km"
+  }
+
+  private static func step(_ value: Double, _ by: Double) -> Int {
+    Int((value / by).rounded() * by)
+  }
 }
 
 /// Reading the channel's plain values the way the Android side does: a boolean is not a number, a number is not a boolean,

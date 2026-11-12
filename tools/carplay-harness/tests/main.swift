@@ -119,6 +119,35 @@ let notPlaces: [Any] = [noLongitude, noId, "text"]
 check(CarPlace.list(notPlaces).isEmpty, "a place needs an id, a latitude and a longitude")
 check(CarPlace.list(NSNull()).isEmpty && CarPlace.list(nil).isEmpty, "no list is an empty list")
 
+// ---- the words of a list row: the distance as the phone writes it, and the line under a place's name ---------------
+
+let distanceRows: [Any] = recorded("distances.json") as? [Any] ?? []
+check(distanceRows.count > 10, "the table of distances is there")
+for entry in distanceRows {
+  let row: [String: Any] = entry as? [String: Any] ?? [:]
+  let meters: Double = CarValue.double(row["meters"]) ?? -1
+  let imperial: Bool = CarValue.isTrue(row["imperial"])
+  let want: String = row["text"] as? String ?? "?"
+  let got: String = CarText.distance(meters, imperial: imperial)
+  check(got == want, "the distance \(meters) m, imperial \(imperial): '\(got)', wanted '\(want)'")
+}
+check(CarText.distance(-5, imperial: false) == "0 m", "a distance below nothing is nothing")
+if places.count == 3 {
+  let both: String? = places[0].detail(imperial: true)
+  let bothMetric: String? = places[0].detail(imperial: false)
+  let addressOnly: String? = places[1].detail(imperial: true)
+  let distanceOnly: String? = places[2].detail(imperial: true)
+  check(both == "16 mi · 1501 Example Ave", "a place's line: the distance and the address")
+  check(bothMetric == "25 km · 1501 Example Ave", "a place's line in kilometres")
+  check(addressOnly == "Saved place", "a place's line: the address alone")
+  check(distanceOnly == "38 mi", "a place's line: the distance alone")
+}
+let bare = CarPlace(id: "x", name: "Somewhere", address: nil, lat: 1, lon: 2, distanceM: nil)
+check(bare.detail(imperial: true) == nil, "a place with no distance and no address has no line")
+let found: [CarPlace] = CarPlace.list(recorded("search.json"))
+check(found.count == 3, "three places found")
+check(found.first?.name == "Coffee House", "the places found keep their order")
+
 // ---- colours as Dart writes them for the map -----------------------------------------------------------------------
 
 let blue: [Double] = CarValue.rgba("#1f6fa8") ?? []

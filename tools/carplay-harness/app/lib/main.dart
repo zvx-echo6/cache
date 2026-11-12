@@ -4,8 +4,8 @@
 // (lib/car/car_support.dart), sets its side of the car channel and says hello (lib/car/car_bridge.dart). When a car is
 // connected it pushes the first recorded trip of tools/carplay-harness/recorded (looking at the map), and it answers the
 // car's questions from the recorded messages; the map style it answers with is the stand-in of stand_in_style.py, light or
-// dark as the car asks. The job on the Mac moves it on to the next trip (choosing a route, guiding, and round again) through
-// the harness's own plugin (steps_plugin).
+// dark as the car asks. The job on the Mac moves it on to the next trip (choosing a route, guiding, and round again), and
+// takes its saved places away and gives them back, through the harness's own plugin (steps_plugin).
 import 'dart:async';
 import 'dart:convert';
 
@@ -36,6 +36,7 @@ class _HarnessAppState extends State<HarnessApp> {
   bool _connected = false;
   int _pushed = 0;
   int _phase = 0;
+  bool _noSaved = false;
 
   @override
   void initState() {
@@ -60,9 +61,16 @@ class _HarnessAppState extends State<HarnessApp> {
     }
     _car.setMethodCallHandler(_onCall);
     _steps.setMethodCallHandler((MethodCall call) async {
-      if (call.method == 'next' && _connected) {
-        _phase = (_phase + 1) % _phases.length;
-        await _push();
+      if (!_connected) return null;
+      switch (call.method) {
+        case 'next':
+          _phase = (_phase + 1) % _phases.length;
+          await _push();
+        case 'nosaved':
+        case 'saved':
+          // The phone's saved places changed: none are left, or the recorded ones are back.
+          _noSaved = call.method == 'nosaved';
+          await _car.invokeMethod<void>('savedChanged');
       }
       return null;
     });
@@ -82,7 +90,12 @@ class _HarnessAppState extends State<HarnessApp> {
         await _carConnected(a is Map && a['on'] == true);
         return null;
       case 'saved':
-        return jsonDecode(recorded['saved']!);
+        return _noSaved ? <Object?>[] : jsonDecode(recorded['saved']!);
+      case 'search':
+        // One typed character finds the recorded places; more find nothing (the job types one, then another).
+        final Object? typed = call.arguments;
+        final String query = typed is Map && typed['query'] is String ? typed['query'] as String : '';
+        return query.trim().length == 1 ? jsonDecode(recorded['search']!) : <Object?>[];
       case 'snapshot':
         return jsonDecode(recorded['trip_${_phases[_phase]}']!);
       case 'style':

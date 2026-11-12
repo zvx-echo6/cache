@@ -15,6 +15,7 @@
 		CA0C0DE12F1B2C3D00CA7002 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7001 /* CarPlaySceneDelegate.swift */; };
 		CA0C0DE12F1B2C3D00CA7006 /* CarTrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */; };
 		CA0C0DE12F1B2C3D00CA7004 /* CarLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */; };
+		CA0C0DE12F1B2C3D00CA700A /* CarTemplates.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */; };
 		CA0C0DE12F1B2C3D00CA7008 /* CarMapViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0C0DE12F1B2C3D00CA7007 /* CarMapViewController.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
@@ -57,6 +58,7 @@
 		CA0C0DE12F1B2C3D00CA7001 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarPlaySceneDelegate.swift; path = CarPlay/CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarTrip.swift; path = CarPlay/CarTrip.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarLink.swift; path = CarPlay/CarLink.swift; sourceTree = "<group>"; };
+		CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarTemplates.swift; path = CarPlay/CarTemplates.swift; sourceTree = "<group>"; };
 		CA0C0DE12F1B2C3D00CA7007 /* CarMapViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarMapViewController.swift; path = CarPlay/CarMapViewController.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 				CA0C0DE12F1B2C3D00CA7001 /* CarPlaySceneDelegate.swift */,
 				CA0C0DE12F1B2C3D00CA7005 /* CarTrip.swift */,
 				CA0C0DE12F1B2C3D00CA7003 /* CarLink.swift */,
+				CA0C0DE12F1B2C3D00CA7009 /* CarTemplates.swift */,
 				CA0C0DE12F1B2C3D00CA7007 /* CarMapViewController.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
@@ -299,6 +302,7 @@
 				CA0C0DE12F1B2C3D00CA7002 /* CarPlaySceneDelegate.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA7006 /* CarTrip.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA7004 /* CarLink.swift in Sources */,
+				CA0C0DE12F1B2C3D00CA700A /* CarTemplates.swift in Sources */,
 				CA0C0DE12F1B2C3D00CA7008 /* CarMapViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

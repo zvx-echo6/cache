@@ -2,7 +2,8 @@
 # CarPlay harness, step 3: for each size asked for, the Simulator's CarPlay display at that size (from a fresh boot), the
 # harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
 # up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
-# light one, and the panning state. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
+# light one, the panning state and the map's buttons at work, and the two lists (Saved places, Search) with the stand-in's
+# recorded places. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
 #   HARNESS_SIZES   the screens to draw, "WIDTHxHEIGHT@SCALE" in pixels, space separated
@@ -405,6 +406,7 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, dark and 
   # of the free area from its top until the app says the camera stopped following the position.
   free=$(grep 'car map: the bars and buttons take' "$STREAM" | tail -n 1 | sed -E 's/.*take top ([0-9]+) left ([0-9]+) bottom ([0-9]+) right ([0-9]+) of.*/\1 \2 \3 \4/')
   read -r ft fl fb fr <<< "$free"
+  FREE_LEFT=${fl:-0}
   case "$ft$fl$fb$fr" in
     *[!0-9]*|"") BUTTONS_MISSING="$BUTTONS_MISSING [the free area was not said in the log: no tap for a panning arrow]"; return 0 ;;
   esac
@@ -454,6 +456,118 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, dark and 
   tap_carplay "$rx" $((ry + 44 * CAR_S))
   sleep 2
   shot_ext "$label-map-zoomed-in"
+}
+
+LISTS=""
+LISTS_MISSING=""
+FREE_LEFT=0
+
+tap_until() {  # tap_until <log text> <seconds a try> <x> <y> [<x> <y>...]: taps each place in turn until the app's log has a new line with the text; prints the place that did it
+  local text="$1" each="$2" before
+  shift 2
+  before=$(log_count "$text")
+  while [ $# -ge 2 ]; do
+    tap_carplay "$1" "$2" > /dev/null
+    if wait_more "$text" "$before" "$each"; then echo "$1,$2"; return 0; fi
+    shift 2
+  done
+  return 1
+}
+
+list_pictures() {  # list_pictures <label>: Saved places and Search, opened by their buttons, with the stand-in's recorded places
+  local label="$1" at key before
+  local right=$((CAR_W - 27 * CAR_S)) top=$((28 * CAR_S))
+  LISTS=""
+  LISTS_MISSING=""
+  # Saved places: the bar's trailing button on the map.
+  before=$(log_count 'car lists: saved places shown, 3 rows')
+  if ! at=$(tap_until 'car lists: saved places opened' 3 "$right" "$top"); then
+    shot_ext "$label-lists-no-saved-button"
+    LISTS_MISSING=" [Saved places did not open by a tap at pixel $right,$top]"
+    return 0
+  fi
+  if wait_more 'car lists: saved places shown, 3 rows' "$before" 12; then
+    sleep 2
+    shot_ext "$label-saved"
+    LISTS="Saved places opened by its button and listed the three recorded places"
+  else
+    shot_ext "$label-saved"
+    LISTS_MISSING="$LISTS_MISSING [the saved places list did not say it shows 3 rows]"
+  fi
+  # The phone has no saved places: the list's own words for that.
+  before=$(log_count 'car lists: saved places shown, 0 rows')
+  notify nosaved
+  if wait_more 'car lists: saved places shown, 0 rows' "$before" 12; then
+    sleep 2
+    shot_ext "$label-saved-none"
+    LISTS="$LISTS; with none saved it says so"
+  else
+    LISTS_MISSING="$LISTS_MISSING [the list did not empty when the saved places went]"
+  fi
+  before=$(log_count 'car lists: saved places shown, 3 rows')
+  notify saved
+  wait_more 'car lists: saved places shown, 3 rows' "$before" 12 || LISTS_MISSING="$LISTS_MISSING [the list did not fill again when the saved places came back]"
+  # Search, from the list's own button (the bar's trailing end again, give or take).
+  before=$(log_count 'car lists: search shown, 3 saved places under the empty box')
+  if ! at=$(tap_until 'car lists: search opened' 3 "$right" "$top" $((right - 14 * CAR_S)) "$top" $((right + 8 * CAR_S)) "$top"); then
+    shot_ext "$label-lists-no-search-button"
+    LISTS_MISSING="$LISTS_MISSING [Search did not open from the list by taps near pixel $right,$top]"
+    return 0
+  fi
+  if wait_more 'car lists: search shown, 3 saved places under the empty box' "$before" 10; then
+    sleep 2
+    shot_ext "$label-search-empty"
+    LISTS="$LISTS; Search opened from the list (tap at pixel $at) with the saved places under its empty box"
+  else
+    shot_ext "$label-search-empty"
+    LISTS_MISSING="$LISTS_MISSING [Search did not say it shows the 3 saved places under its empty box]"
+  fi
+  # One key of CarPlay's keyboard, any letter: a few places over the keyboard are tried until the app says one character
+  # was typed. The stand-in finds the recorded places for one character and nothing for more.
+  before=$(log_count 'car lists: search shown, 3 places')
+  if ! key=$(tap_until 'car lists: search asked, 1 characters' 2 \
+      $((CAR_W * 50 / 100)) $((CAR_H * 65 / 100)) $((CAR_W * 44 / 100)) $((CAR_H * 65 / 100)) $((CAR_W * 56 / 100)) $((CAR_H * 53 / 100)) \
+      $((CAR_W * 50 / 100)) $((CAR_H * 79 / 100)) $((CAR_W * 38 / 100)) $((CAR_H * 60 / 100)) $((CAR_W * 62 / 100)) $((CAR_H * 72 / 100))); then
+    shot_ext "$label-search-no-key"
+    LISTS_MISSING="$LISTS_MISSING [no key of the keyboard answered the taps]"
+    return 0
+  fi
+  if wait_more 'car lists: search shown, 3 places' "$before" 8; then
+    sleep 1
+    shot_ext "$label-search-found"
+    LISTS="$LISTS; a typed letter (tap at pixel $key) found the three recorded places"
+  else
+    shot_ext "$label-search-found"
+    LISTS_MISSING="$LISTS_MISSING [Search did not say it shows the 3 places found]"
+  fi
+  before=$(log_count 'car lists: search shown, no places found')
+  tap_carplay "${key%,*}" "${key#*,}"
+  if wait_more 'car lists: search shown, no places found' "$before" 8; then
+    sleep 1
+    shot_ext "$label-search-none"
+    LISTS="$LISTS; a second letter found nothing and it says so"
+  else
+    shot_ext "$label-search-none"
+    LISTS_MISSING="$LISTS_MISSING [Search did not say that nothing was found]"
+  fi
+  # Out again: CarPlay's close button of the search screen, then the list's Back.
+  if at=$(tap_until 'car lists: search closed' 4 "$right" $((22 * CAR_S)) "$right" "$top"); then
+    sleep 2
+    shot_ext "$label-after-search"
+    LISTS="$LISTS; the close button left Search"
+  else
+    shot_ext "$label-search-not-closed"
+    LISTS_MISSING="$LISTS_MISSING [Search did not close by a tap on its close button]"
+    return 0
+  fi
+  if at=$(tap_until 'car lists: saved places closed' 3 $(( (FREE_LEFT + 18) * CAR_S )) $((22 * CAR_S)) $(( (FREE_LEFT + 32) * CAR_S )) $((22 * CAR_S)) $(( (FREE_LEFT + 46) * CAR_S )) $((22 * CAR_S)) $(( (FREE_LEFT + 24) * CAR_S )) $((30 * CAR_S))); then
+    sleep 2
+    shot_ext "$label-after-lists"
+    LISTS="$LISTS; Back (tap at pixel $at) left the list for the map"
+  else
+    shot_ext "$label-saved-not-closed"
+    LISTS_MISSING="$LISTS_MISSING [the list's Back did not answer taps at the bar's leading end]"
+  fi
 }
 
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
@@ -557,6 +671,16 @@ for size in $SIZES; do
           result "FAILED $label buttons:$BUTTONS_MISSING; $BUTTONS"
         else
           result "OK $label buttons: $BUTTONS; shots/$label-map-{panned,after-done,recentered,zoomed-in}.png"
+          # The lists behind the two bar buttons.
+          list_pictures "$label"
+          if grep -q 'car scene disconnected' "$STREAM"; then
+            result "FAILED $label lists: the car scene was disconnected while the lists were pictured; $LISTS"
+            host_crash=1
+          elif [ -n "$LISTS_MISSING" ]; then
+            result "FAILED $label lists:$LISTS_MISSING; $LISTS"
+          else
+            result "OK $label lists: $LISTS; shots/$label-{saved,saved-none,search-empty,search-found,search-none,after-search,after-lists}.png"
+          fi
         fi
       fi
     fi

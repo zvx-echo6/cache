@@ -9,16 +9,20 @@ import UIKit
 /// harness app alone. The job asks with a Darwin notification (`xcrun simctl spawn <device> notifyutil -p <name>`):
 ///
 /// - `org.example.carharness.next`: the stand-in Dart side moves on to its next recorded trip (channel `harness/steps`).
+/// - `org.example.carharness.nosaved` and `.saved`: the stand-in Dart side has no saved places, or has its recorded ones
+///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
 ///   the call CarPlay itself makes (`contentStyleDidChange`). The Simulator's car sits in its dark setting and has no switch a
 ///   script can reach; the app's reaction to the call is the product's own. Apple's bars and buttons do not change with it.
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
+  /// What is passed on to the stand-in Dart side as it is.
+  private static let toDart: [String] = ["next", "nosaved", "saved"]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     channel = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())
     let center = CFNotificationCenterGetDarwinNotifyCenter()
-    let names: [String] = ["org.example.carharness.next", "org.example.carharness.day", "org.example.carharness.night"]
+    let names: [String] = (toDart + ["day", "night"]).map { "org.example.carharness." + $0 }
     for name in names {
       CFNotificationCenterAddObserver(
         center, nil,
@@ -32,8 +36,9 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   }
 
   private static func told(_ name: String) {
-    if name.hasSuffix(".next") {
-      channel?.invokeMethod("next", arguments: nil)
+    let word: String = name.components(separatedBy: ".").last ?? ""
+    if toDart.contains(word) {
+      channel?.invokeMethod(word, arguments: nil)
       return
     }
     let style: UIUserInterfaceStyle = name.hasSuffix(".day") ? .light : .dark

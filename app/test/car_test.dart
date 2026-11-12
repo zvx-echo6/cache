@@ -202,6 +202,18 @@ void main() {
       expect(jsonDecode(none['geojson'] as String), routeGeoJson(const [], 0));
     });
 
+    // The iPhone car side writes distances itself (app/ios/Runner/CarPlay/CarTrip.swift, CarText.distance), in the phone's
+    // words: CarPlay's lists take plain text. Its tests and this one read one table, so the two cannot drift apart.
+    test('the distances recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/distances.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        final fmt = Fmt(r['imperial'] == true ? UnitSystem.imperial : UnitSystem.metric);
+        expect(fmt.distance((r['meters'] as num).toDouble()), r['text'], reason: '${r['meters']} m');
+      }
+    });
+
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {
       final m = ProgressManeuver.fromJson({
         'index': 3, 'kind': 'offroad', 'type': 'none', 'instruction': 'Off-road E 0.1 mi', 'street_names': const [], 'lat': 42.5,

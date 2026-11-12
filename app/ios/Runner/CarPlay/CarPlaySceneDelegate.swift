@@ -10,7 +10,7 @@ enum CarPlayBuild {
 }
 
 /// The car screen: a map template over Cache's own map (CarMapViewController), with the two buttons of the car design, Search
-/// and Saved places, which do nothing yet, and the map's own buttons. The scene is declared in code (AppDelegate,
+/// and Saved places (CarTemplates), and the map's own buttons. The scene is declared in code (AppDelegate,
 /// configurationForConnecting), not in Info.plist.
 ///
 /// It is linked to the phone's guidance (CarLink): when CarPlay opens the app, with or without the phone app open, the app's
@@ -26,12 +26,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var carWindow: CPWindow?
   private var mapTemplate: CPMapTemplate?
   private var mapController: CarMapViewController?
+  private var templates: CarTemplates?
   private var panning = false
   private var heldPan: Timer?
   private var lastStep: TimeInterval = 0
 
-  private lazy var searchButton = barButton("magnifyingglass", "Search")
-  private lazy var savedButton = barButton("bookmark", "Saved places")
+  private lazy var searchButton = barButton("magnifyingglass") { [weak self] in self?.templates?.openSearch() }
+  private lazy var savedButton = barButton("bookmark") { [weak self] in self?.templates?.openSaved() }
   private lazy var doneButton = CPBarButton(title: "Done") { [weak self] _ in self?.endPanning() }
   private lazy var panButton = mapButton("arrow.up.and.down.and.arrow.left.and.right") { [weak self] in self?.beginPanning() }
   private lazy var recenterButton = mapButton("location.fill") { [weak self] in self?.mapController?.recenter() }
@@ -51,6 +52,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     controller.onFollowingChanged = { [weak self] in self?.showButtons() }
     window.rootViewController = controller
     mapController = controller
+
+    // The lists behind the two bar buttons. Search is greyed while the car does not allow its keyboard.
+    let lists = CarTemplates(interface: interfaceController)
+    lists.onSearchAllowedChanged = { [weak self] in
+      guard let self = self, let lists = self.templates else { return }
+      self.searchButton.isEnabled = lists.searchAllowed
+    }
+    templates = lists
+    searchButton.isEnabled = lists.searchAllowed
 
     let template = CPMapTemplate()
     template.mapDelegate = self
@@ -90,6 +100,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   ) {
     stopHeldPan()
     panning = false
+    templates?.close()
+    templates = nil
     mapController?.release()
     mapController = nil
     mapTemplate = nil
@@ -158,10 +170,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     template.trailingNavigationBarButtons = [savedButton, searchButton]
   }
 
-  private func barButton(_ symbol: String, _ name: String) -> CPBarButton {
-    CPBarButton(image: UIImage(systemName: symbol) ?? UIImage()) { _ in
-      Self.log.info("car button pressed, nothing behind it yet: \(name, privacy: .public)")
-    }
+  private func barButton(_ symbol: String, _ pressed: @escaping () -> Void) -> CPBarButton {
+    CPBarButton(image: UIImage(systemName: symbol) ?? UIImage()) { _ in pressed() }
   }
 
   private func mapButton(_ symbol: String, _ pressed: @escaping () -> Void) -> CPMapButton {
