@@ -14,6 +14,7 @@ release notes).
 
 ### Fixed
 - Places: the map when adding a place always opens close in on where you are
+- Library: adding a PDF, going to Home and coming back no longer adds the PDF twice or fills the log with "waiting for the earlier run" lines; one run handles each PDF
 - Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
 - Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share

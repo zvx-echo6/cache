@@ -571,16 +571,39 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
             pulse: () => (j.state, j.pagesDone, j.piecesDone, j.scansDone, j.scanInBatch, j.busy, _beat),
             step: () => j.stepWords,
             // a run of this job still stopping (Cache went to the back and came back) is let finish first: never two at once
-            start: () async {
-              final old = _runs[j.id];
-              if (old != null) {
-                logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
-                await old.stop();
-              }
-              return _runs[j.id] = AddPdfRun(this, j);
-            },
+            start: () => _startRun(j),
           ),
     ];
+  }
+
+  /// The one start in flight for each job: every caller gets the same run, never one run each.
+  final Map<String, Future<AddPdfRun>> _starting = {};
+
+  Future<AddPdfRun> _startRun(AddPdfJob j) {
+    // (the callback must not return remove's value: whenComplete would wait for that very future)
+    return _starting[j.id] ??= _startRunOnce(j).whenComplete(() {
+      _starting.remove(j.id);
+    });
+  }
+
+  Future<AddPdfRun> _startRunOnce(AddPdfJob j) async {
+    var said = false;
+    for (;;) {
+      final old = _runs[j.id];
+      if (old == null) break;
+      // said once, and the wait is on the earlier run's end (its finished future), never a poll
+      if (!said) {
+        said = true;
+        logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
+      }
+      await old.stop();
+      // its end took its own entry away; one that is still there is dropped, never waited on again
+      if (identical(_runs[j.id], old)) _runs.remove(j.id);
+    }
+    final run = AddPdfRun(this, j);
+    // a run of a job that is not active any more has ended already, and left nothing behind
+    if (!run._done.isCompleted) _runs[j.id] = run;
+    return run;
   }
 
   Future<void> _permitFor(AddPdfJob job, {bool Function()? stop}) async {
@@ -930,11 +953,23 @@ class AddPdfRun implements IndexRun {
   @override
   void setDuty(IndexDuty duty) {}
 
+  /// Still work to do: not done, failed, put away or held by the person.
+  bool get _live => job.status == AddPdfStatus.active && !job.pausedByPerson && state._jobs.contains(job);
+
   Future<void> _go() async {
     final calls = state.calls;
+    // a stray run (a start that was queued while the job finished) never starts a finished job again
+    if (!_live) {
+      _finish(false);
+      return;
+    }
     try {
       // a number kept on disk is confirmed by starting from the job folder first (a stale one is never stepped)
       if (job.coreJob == null || job.coreFromDisk) await _startWaiting();
+      if (!_live) {
+        _finish(false);
+        return;
+      }
       while (!_stop) {
         await _orStop(state._permitFor(job, stop: () => _stop));
         if (_stop) break;
@@ -955,6 +990,7 @@ class AddPdfRun implements IndexRun {
             continue;
           }
           if (e.code == 'not_found') {
+            if (!_live) break;
             // the core no longer has this job (it was started in an earlier run of Cache): it carries on from its folder
             await state._startCore(job);
             continue;
@@ -999,6 +1035,7 @@ class AddPdfRun implements IndexRun {
   /// stopping), it waits and tries again, then leaves the job for later ([_Held]). Never a failure.
   Future<void> _startWaiting() async {
     for (var i = 0;; i++) {
+      if (!_live) return;
       try {
         await state._startCore(job);
         return;
