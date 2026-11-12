@@ -1,6 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'harness.dart';
+
+part 'scenarios_more.dart';
 
 const portA = 47101, portB = 47102, portC = 47103;
 
@@ -9,6 +12,14 @@ final Map<String, Future<void> Function(Harness)> scenarios = {
   'swap': swap,
   'N1': n1,
   'roll': rollProbe,
+  'stale': stale,
+  'resurrect': resurrect,
+  'three': three,
+  'concurrent': concurrent,
+  'fields': fields,
+  'removal': removal,
+  'crash': crash,
+  'oldfolder': oldfolder,
 };
 
 Map<String, dynamic> stage1Shape = {}, stage1ShapeB = {};
@@ -20,7 +31,7 @@ final Map<String, String> ids = {};
 /// Why live: with relay, dht, mdns and lookup off a device learns another's address only from a connection, and keeps it in memory
 /// only (sync.json holds none). Two devices stopped together cannot find each other again. A restarted device is found again at its
 /// fixed port by the one that stayed up. So every restart in this harness is a ROLLING one: one device at a time, the other up.
-Future<void> ensureStage1(Harness h) => h.runStage1();
+Future<void> ensureStage1(Harness h, {bool withC = false}) => h.runStage1(withC: withC);
 
 /// Stops [d], copies its data dir to evidence (the other device stays up and keeps the address), starts it again on [build].
 Future<void> roll(Harness h, Device d, String build, {String? snapshotAs}) async {
@@ -28,6 +39,11 @@ Future<void> roll(Harness h, Device d, String build, {String? snapshotAs}) async
   if (snapshotAs != null) await h.snapshot(h.scn, snapshotAs, [d.name]);
   await d.start(build);
   // The device that stayed up finds the restarted one at its port and dials it; only then does the restarted one know the other.
+  await reconnect(h, d);
+}
+
+/// The devices that stayed up sync (they dial the restarted one at its port), then the restarted one.
+Future<void> reconnect(Harness h, Device d) async {
   final others = [for (final o in h.devices.values) if (o != d && o.proc != null) o];
   for (var i = 0; i < 2; i++) {
     for (final o in others) {
@@ -38,7 +54,7 @@ Future<void> roll(Harness h, Device d, String build, {String? snapshotAs}) async
 }
 
 extension Stage1 on Harness {
-  Future<void> runStage1() async {
+  Future<void> runStage1({bool withC = false}) async {
     for (final n in ['A', 'B', 'C']) {
       await wipe('$root/work/$n');
     }
@@ -53,6 +69,16 @@ extension Stage1 on Harness {
     say('B linked: $linked');
     await a.call('share_on');
     await b.call('share_on');
+    Device? c;
+    if (withC) {
+      // A third device on v1.0.30: it links to A and to B (each shows a code), and shares notebooks too.
+      c = dev('C', portC);
+      await c.start('legacy');
+      await c.call('sharing_setup');
+      await c.call('link', {'code': ((await a.call('link_code')) as Map)['code']});
+      await c.call('link', {'code': ((await b.call('link_code')) as Map)['code']});
+      await c.call('share_on');
+    }
     await a.call('nb_make', {
       'id': 'nb-trail',
       'name': 'Trail Log',
@@ -66,11 +92,11 @@ extension Stage1 on Harness {
     await a.call('entry_add', {'id': 'trail-2', 'notebook': 'Trail Log', 'title': 'Creek walk', 'body': 'Easy and flat', 'values': {'Miles': 2, 'Weather': 'sunny', 'Hard': false}});
     await a.call('nb_make', {'id': 'nb-gear', 'name': 'Gear', 'fields': <Object>[]});
     await a.call('entry_add', {'id': 'gear-1', 'notebook': 'Gear', 'title': 'Tent', 'body': 'Two person'});
-    await rounds([a, b], n: 3);
+    await rounds([a, b, ?c], n: 3);
     // B makes an entry of its own in the shared notebook, which goes to A.
     await b.call('entry_add', {'id': 'trail-3', 'notebook': 'Trail Log', 'title': 'Lake', 'body': 'Cold water'});
     // (v1.0.30 syncs no field definitions: B's copy of Trail Log arrives with no fields, so B's entry carries no values.)
-    await rounds([a, b], n: 3);
+    await rounds([a, b, ?c], n: 3);
     final da = await a.dump(), db = await b.dump();
     final sa = Harness.shape(da), sb = Harness.shape(db);
     writeJson('dumps', 'dump-A', da, scn: scn + '/stage1');
@@ -94,11 +120,19 @@ extension Stage1 on Harness {
     stage1ShapeB = sb;
     say('stage 1 peer info A: ${(stA['peers'] as List)}');
     // The stage-1 evidence: each data dir copied while stopped, one at a time (the other stays up), then started again on the legacy build.
+    if (c != null) {
+      final sc = Harness.shape(await c.dump());
+      writeJson('dumps', 'dump-C', await c.dump(), scn: scn + '/stage1');
+      check('stage1: C has the same entries as A, by id, title and body', idtb((sc['Trail Log'] as Map?)?['entries'] as Map?) == idtb(trailA), '${(sc['Trail Log'] as Map?)?['entries']?.keys}');
+      ids['C'] = '${(await c.status())['id']}';
+      await roll(this, c, 'legacy', snapshotAs: 'stage1/data');
+      await rounds([a, b, c], n: 2);
+    }
     // B first: B linked by A's code, so A (which showed it) knows B from B's connection, and finds a restarted B at its fixed port.
     await roll(this, b, 'legacy', snapshotAs: 'stage1/data');
     await rounds([a, b], n: 2);
     await roll(this, a, 'legacy', snapshotAs: 'stage1/data');
-    await rounds([b, a], n: 2);
+    await rounds([b, a, ?c], n: 2);
   }
 }
 

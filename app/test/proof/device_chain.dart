@@ -1,5 +1,6 @@
 // A device on the CHAIN build (fix/notebook-ids-v2): wired the way main.dart wires it. Run: flutter test --timeout none test/proof/device_chain.dart
 // Environment: PROOF_DIR (this device's folder; its app data is PROOF_DIR/data), PROOF_PORT (its fixed sync port), PROOF_NAME.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/notebook/notebook_state.dart';
@@ -51,7 +52,25 @@ void main() {
     await notebooks.start();
     await connections.captureUpgrade();
     sharing.kindWarning = (id) => id == 'notebooks' ? connections.sharingNote : null;
+    // WORKAROUND (harness only; remove once the product fix fix/sharing-enabled-upgrade is in the chain): SharingState.init() writes
+    // sharing.json with enabled:false when it has no ask_since (a file from v1.0.30), so the NEXT start has sharing off. The harness puts
+    // enabled:true back and says so (workaround.flag, which the runner reads and records in checks.json).
+    final flagFile = File('${support.path}/sharing.json');
+    bool enabledOnDisk() {
+      try {
+        return (jsonDecode(flagFile.readAsStringSync()) as Map)['enabled'] == true;
+      } catch (_) {
+        return false;
+      }
+    }
+    final wasOn = enabledOnDisk();
     await sharing.init();
+    if (wasOn && !enabledOnDisk() && env['PROOF_WORKAROUND'] != '0') {
+      final j = jsonDecode(flagFile.readAsStringSync()) as Map;
+      j['enabled'] = true;
+      flagFile.writeAsStringSync(jsonEncode(j));
+      File('${root.path}/workaround.flag').writeAsStringSync('applied');
+    }
 
     final agent = Agent(
       dir: root,

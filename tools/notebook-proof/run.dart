@@ -25,6 +25,10 @@ Future<void> main(List<String> args) async {
   for (final f in ['agent.dart', 'device_legacy.dart']) {
     File('$root/wt-chain/app/test/proof/$f').copySync('${legacyProof.path}/$f');
   }
+  for (final w in ['wt-legacy', 'wt-chain']) {
+    final r = await Process.run('git', ['-C', '$root/$w', 'log', '--oneline', '-3']);
+    h.say('$w: ${'${r.stdout}'.trim().replaceAll('\n', ' | ')}');
+  }
   h.say('run $run scenarios $names evidence ${h.evidence.path}');
   final results = <String, Object?>{};
   try {

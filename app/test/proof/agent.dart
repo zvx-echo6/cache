@@ -190,6 +190,9 @@ class Agent {
       case 'share_on':
         await sharing.setShared(sharing.kinds.firstWhere((k) => k.id == 'notebooks'), true);
         return {'shares': sharing.shares.map((s) => s['id']).toList()};
+      case 'share_off':
+        await sharing.setShared(sharing.kinds.firstWhere((k) => k.id == 'notebooks'), false);
+        return {'shares': sharing.shares.map((s) => s['id']).toList()};
       case 'status':
         return status();
       case 'sync':

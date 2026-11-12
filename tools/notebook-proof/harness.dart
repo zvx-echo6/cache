@@ -46,6 +46,8 @@ class Device {
     }
     final ready = File('${dir.path}/ready.json');
     if (ready.existsSync()) ready.deleteSync();
+    final wfOld = File('${dir.path}/workaround.flag');
+    if (wfOld.existsSync()) wfOld.deleteSync();
     dir.createSync(recursive: true);
     final wt = build == 'legacy' ? 'wt-legacy' : 'wt-chain';
     final dll = '${h.root}/dll/$build';
@@ -81,6 +83,11 @@ class Device {
     }
     testerPid = (jsonDecode(ready.readAsStringSync()) as Map)['pid'] as int?;
     if (testerPid != null) h.started.add(testerPid!);
+    final wf = File('${dir.path}/workaround.flag');
+    if (wf.existsSync()) {
+      wf.deleteSync();
+      h.note('workaround: sharing.json enabled flipped to false by SharingState.init', '$name, start #$_starts on $build; the harness put enabled:true back');
+    }
     h.say('$name ready (tool pid ${proc!.pid}, device pid $testerPid)');
   }
 
@@ -97,6 +104,12 @@ class Device {
     final j = jsonDecode(await _readRetry(res)) as Map;
     if (j['ok'] != true) throw Fail('$name $op failed: ${j['error']}');
     return j['result'];
+  }
+
+  /// Sends a command and does not wait for it (a crash test kills the process while it runs).
+  void send(String op, [Map<String, Object?> args = const {}]) {
+    final n = (++_seq).toString().padLeft(4, '0');
+    File('${dir.path}/cmd/$n.json').writeAsStringSync(jsonEncode({'op': op, 'args': args}));
   }
 
   /// Windows may hold a just-renamed file for a moment (scanners, indexers): read again.
