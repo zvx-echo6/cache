@@ -1,3 +1,4 @@
+import CarPlay
 import Flutter
 import Darwin
 import MapLibre
@@ -63,6 +64,35 @@ import workmanager_apple
     _ = super.application(UIApplication.shared, didFinishLaunchingWithOptions: [:])
     os_log("The Flutter engine was started for the first scene", type: .info)
     return engine
+  }
+
+  /// CarPlay's scene is declared here, not in Info.plist, so a build with the car screen off has nothing of it in its manifest.
+  /// iOS asks only when CarPlay starts the app on the car's screen, which needs the CarPlay entitlement. Every other scene
+  /// gets what Info.plist declares for it (the phone's is "flutter"), as if this method were not here.
+  override func application(
+    _ application: UIApplication,
+    configurationForConnecting connectingSceneSession: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    let role = connectingSceneSession.role
+    if role == UISceneSession.Role.carTemplateApplication {
+      let configuration = UISceneConfiguration(name: nil, sessionRole: role)
+      configuration.sceneClass = CPTemplateApplicationScene.self
+      configuration.delegateClass = CarPlaySceneDelegate.self
+      return configuration
+    }
+    let manifest = Bundle.main.object(forInfoDictionaryKey: "UIApplicationSceneManifest") as? [String: Any]
+    let declared = (manifest?["UISceneConfigurations"] as? [String: Any])?[role.rawValue] as? [[String: Any]]
+    return UISceneConfiguration(name: declared?.first?["UISceneConfigurationName"] as? String, sessionRole: role)
+  }
+
+  /// A build with the car screen off does not have the method above as far as iOS can tell: it goes on taking every scene
+  /// from Info.plist, exactly as before.
+  override func responds(to aSelector: Selector!) -> Bool {
+    if aSelector == #selector(application(_:configurationForConnecting:options:)) {
+      return CarPlayBuild.isOn
+    }
+    return super.responds(to: aSelector)
   }
 
   /// The plugins and the app's own channels, once, on the engine obtainFlutterEngine made.

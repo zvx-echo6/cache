@@ -1,0 +1,84 @@
+# The CarPlay harness: how the car screens are seen with no Mac on a desk. On a macOS runner it builds a scratch app from the
+# product's own iOS sources (the app delegate, the scene delegate, every file in app/ios/Runner/CarPlay, Info.plist and the
+# CarPlay entitlements file) with a stand-in Dart side, opens the iOS Simulator's CarPlay display at each size asked for,
+# starts the app from the car side, and returns pictures of the CarPlay display with a log of every command.
+#
+# How it works, and why (measured in the spike on carplay/spike, tools/carplay-spike):
+#   - The Simulator's CarPlay display is asked for by writing its defaults before the simulator boots (CarPlayConfig: width,
+#     height, scale; and SimulatorExternalDisplay = 2714 for the device). `xcrun simctl io <device> screenshot
+#     --display=external` photographs it. Each size needs its own boot: CarPlay keeps the first layout it saw.
+#   - The app is started by a mouse click on its icon in the Simulator's CarPlay window (found by colour: the harness app's
+#     icon is flat magenta). A simulator build needs the CarPlay entitlement to appear there, and no provisioning profile.
+#   - It is pinned to the iOS 26.2 simulator: the template host of the 26.4 and 26.5 simulators crashes on every map template.
+#   - The Mac's crash windows are switched off (they cover the CarPlay window), and a display that stays black after a boot is
+#     booted once more.
+#
+# No secret, no signing identity. Runs on a push to a carplay/ branch that touches the iOS sources or the harness, and by hand
+# (once this file is on the default branch) with the sizes to draw.
+name: CarPlay harness
+
+on:
+  push:
+    branches: ['carplay/**']
+    paths:
+      - 'app/ios/Runner/**'
+      - 'tools/carplay-harness/**'
+      - '.github/workflows/carplay-harness.yml'
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: 'The CarPlay screens to draw, as WIDTHxHEIGHT@SCALE in pixels, space separated'
+        type: string
+        default: '748x456@2 800x480@2 1920x720@3 900x1200@3'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carplay-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+  # Apple's four test sizes (CarPlay Developer Guide, "Test showing map in center display").
+  HARNESS_SIZES: ${{ inputs.sizes || '748x456@2 800x480@2 1920x720@3 900x1200@3' }}
+  HARNESS_RUNTIME: iOS-26-2
+
+jobs:
+  pictures:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - name: Helper tool and the pinned simulator
+        run: bash tools/carplay-harness/prepare.sh
+      - name: Build the harness app from the product's iOS sources
+        run: bash tools/carplay-harness/build.sh
+      - name: CarPlay pictures
+        timeout-minutes: 25
+        run: bash tools/carplay-harness/capture.sh
+      - name: Results
+        if: ${{ !cancelled() }}
+        run: |
+          OUT="$RUNNER_TEMP/harness-out"
+          {
+            echo '### CarPlay harness'
+            echo '```'
+            cat "$OUT/results.txt" 2>/dev/null || echo 'no results'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/results.txt" 2>/dev/null || true
+          # The job fails when a size asked for has no picture of the app on the car screen.
+          if grep -q '^FAILED' "$OUT/results.txt" 2>/dev/null || [ ! -s "$OUT/results.txt" ]; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carplay-harness-${{ github.run_number }}
+          path: ${{ runner.temp }}/harness-out
+          if-no-files-found: warn
+          retention-days: 14

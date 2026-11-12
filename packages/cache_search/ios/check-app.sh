@@ -29,4 +29,15 @@ for entitlement in com.apple.developer.kernel.increased-memory-limit com.apple.d
   [[ $(/usr/libexec/PlistBuddy -c "Print :$entitlement" "$work/entitlements.plist") == true ]] || fail "missing entitlement: $entitlement"
 done
 [[ $(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$work/entitlements.plist") == "$TEAM_ID.$BUNDLE_ID" ]] || fail 'signed application identity mismatch'
-echo 'PASS: signed app architecture, minimum OS, version/build, native symbols, identity and all required entitlements'
+# The car screen (CarPlay). Its entitlement puts the app's icon on every user's CarPlay screen, so it is in the signed app
+# exactly when the build was made with it on (EXPECT_CARPLAY=true, the build setting CACHE_CARPLAY=YES) and never otherwise.
+carplay=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.carplay-maps' "$work/entitlements.plist" 2>/dev/null || true)
+flag=$(plist CacheCarPlay 2>/dev/null || true)
+if [[ ${EXPECT_CARPLAY:-false} == true ]]; then
+  [[ $carplay == true ]] || fail 'the car screen is on for this build, but the signed app has no CarPlay entitlement'
+  [[ $flag == YES ]] || fail 'the car screen is on for this build, but Info.plist does not say so (CacheCarPlay)'
+else
+  [[ -z $carplay ]] || fail 'the signed app carries the CarPlay entitlement, but the car screen is off for this build'
+  [[ $flag == NO ]] || fail 'the car screen is off for this build, but Info.plist says otherwise (CacheCarPlay)'
+fi
+echo "PASS: signed app architecture, minimum OS, version/build, native symbols, identity, all required entitlements, car screen ${flag}"
