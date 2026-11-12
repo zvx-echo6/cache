@@ -12,6 +12,9 @@ data class CarStep(
     val distanceM: Double,
 )
 
+/** A stop still ahead on the route (the phone's Add stop, or the car's). */
+data class CarStop(val name: String, val address: String?)
+
 data class CarRoute(val index: Int, val distanceM: Double, val durationS: Long, val via: String?)
 
 data class CarTrip(
@@ -43,6 +46,7 @@ data class CarTrip(
     val climb: CarClimb? = null,
     val overview: CarOverview? = null,
     val palette: CarOverlayPalette? = null,
+    val stops: List<CarStop> = emptyList(),
 ) {
     val guiding: Boolean get() = phase == "guiding"
     val previewing: Boolean get() = phase == "previewing"
@@ -55,7 +59,7 @@ data class CarTrip(
     fun ended(): CarTrip = copy(
         phase = "browsing", routing = false, error = null, routes = emptyList(), routeIndex = 0, routeId = null, arrived = false,
         rerouting = false, step = null, then = null, currentRoad = null, remainingM = null, remainingS = null, etaMs = null,
-        climb = null, overview = null,
+        climb = null, overview = null, stops = emptyList(),
     )
 
     companion object {
@@ -106,6 +110,10 @@ data class CarTrip(
                 climb = CarClimb.from(m["climb"]),
                 overview = CarOverview.from(m["overview"]),
                 palette = CarOverlayPalette.from(m["palette"]),
+                stops = (m["stops"] as? List<*>).orEmpty().mapNotNull { s ->
+                    val x = s.asMap() ?: return@mapNotNull null
+                    CarStop(name = x["name"] as? String ?: return@mapNotNull null, address = (x["address"] as? String)?.takeIf { it.isNotBlank() })
+                },
             )
         }
 

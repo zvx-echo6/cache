@@ -171,7 +171,7 @@ class CarSession(
                 }
                 notifications?.show(trip)
             }
-            if (screenManager.top !is NavigationScreen && screenManager.top !is RouteOverviewScreen) {
+            if (screenManager.top !is NavigationScreen && !isOverGuidance(screenManager.top)) {
                 screenManager.popToRoot()
                 screenManager.push(NavigationScreen(carContext, renderer))
             }
@@ -185,7 +185,7 @@ class CarSession(
                 }
             }
             notifications?.cancel()
-            if (screenManager.top is NavigationScreen || screenManager.top is RouteOverviewScreen) screenManager.popToRoot()
+            if (screenManager.top is NavigationScreen || isOverGuidance(screenManager.top)) screenManager.popToRoot()
         }
     }
 
