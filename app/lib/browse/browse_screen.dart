@@ -736,7 +736,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
         LibraryRow(
           key: ValueKey('built-${l.id}'),
           title: l.title,
-          detail: builtLibraryLine(l, b.device!.items.where((i) => i.kind == 'library' && i.name == l.id).firstOrNull?.bytes),
+          detail: builtLibraryLine(l, bc.freesOf(l.id)),
           badge: switch (buildBadge(bc, l)) {
             final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
             _ => null,

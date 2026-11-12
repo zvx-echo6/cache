@@ -1688,12 +1688,11 @@ impl BuildService {
             + uploads.iter().map(|p| file(p.as_path())).sum::<u64>()
     }
 
-    /// What removing book `b` frees, in bytes: the files [`BuildService::delete_book`] deletes, its stored PDF and its pack. The
-    /// book's share of the shard and of the keyword index shrinks when the library is published again; it cannot be measured, so it is
-    /// not counted.
-    pub(crate) fn book_bytes(&self, lib: &str, b: &Book) -> u64 {
-        let file = |p: PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-        file(self.source_of(lib, b)) + file(self.packs_dir(lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version)))
+    /// The two files removing book `b` deletes: its stored PDF and its pack. Does not touch the disk, so it is fine under the state
+    /// lock; the sizes are read after the lock is let go. The book's share of the shard and of the keyword index shrinks when the
+    /// library is published again; it cannot be measured, so it is not counted.
+    pub(crate) fn book_files(&self, lib: &str, b: &Book) -> (PathBuf, PathBuf) {
+        (self.source_of(lib, b), self.packs_dir(lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version)))
     }
 
     fn item_view(it: &Item, position: Option<usize>) -> Value {

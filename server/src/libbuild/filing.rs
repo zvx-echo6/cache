@@ -62,6 +62,8 @@ impl BuildService {
         let class = crate::fetch::query_param(query, "class");
         let by_call = crate::fetch::query_param(query, "sort").as_deref() == Some("call");
         let cls = self.classes();
+        // The state is held only to read the books and collect the paths; the disk is read after it is let go.
+        let rows: Vec<(Value, PathBuf, PathBuf)> = {
         let st = lock(&self.st);
         let m = st.libs.iter().find(|l| l.id == id).ok_or_else(|| err(404, "not_found", "no such library"))?;
         let in_class: Option<Vec<&str>> = class.as_deref().map(|c| cls.find_class(c).map(|k| k.divisions.iter().map(|d| d.number.as_str()).collect()).unwrap_or_default());
@@ -83,13 +85,21 @@ impl BuildService {
         } else {
             books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.doc_id.cmp(&b.doc_id)));
         }
+        let out: Vec<(Value, PathBuf, PathBuf)> = books
+            .into_iter()
+            .map(|b| {
+                let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
+                let (pdf, pack) = self.book_files(id, b);
+                (self.book_json(&cls, b, replacing), pdf, pack)
+            })
+            .collect();
+        out
+        };
+        let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         Ok(Value::Array(
-            books
-                .into_iter()
-                .map(|b| {
-                    let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
-                    let mut v = self.book_json(&cls, b, replacing);
-                    v["bytes"] = json!(self.book_bytes(id, b));
+            rows.into_iter()
+                .map(|(mut v, pdf, pack)| {
+                    v["bytes"] = json!(len(pdf.as_path()) + len(pack.as_path()));
                     v
                 })
                 .collect(),

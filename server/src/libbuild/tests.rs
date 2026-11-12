@@ -2244,8 +2244,19 @@ fn the_frees_figures_are_what_deleting_removes() {
         + std::fs::metadata(svc.meta_path(&lib)).unwrap().len();
     assert_eq!(svc.libraries()[0]["bytes"].as_u64().unwrap(), want_lib);
     assert!(want_lib >= want_book);
+    // a second book: both figures grow by what the new files weigh
+    let a2 = add(&svc, &lib, "tanks.pdf", &book("tank", 6, Some("Tanks")));
+    drain(&svc);
+    assert_eq!(state(&svc, &a2), S::Done, "{:?}", item(&svc, &a2).error);
+    let listed = svc.books_q(&lib, "").unwrap();
+    let sum: u64 = listed.as_array().unwrap().iter().map(|v| v["bytes"].as_u64().unwrap()).sum();
+    assert!(sum > want_book && listed.as_array().unwrap().len() == 2);
+    assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() >= sum);
     // after the book is removed the files that were counted are gone, and the emptied library still takes space
     svc.delete_book(&lib, &b.doc_id).unwrap();
     assert!(!pack.exists() && !svc.source_of(&lib, &b).exists());
+    let left = svc.books_q(&lib, "").unwrap();
+    assert_eq!(left.as_array().unwrap().len(), 1);
+    assert!(left[0]["bytes"].as_u64().unwrap() < sum, "the figures follow the removal");
     assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() > 0);
 }

@@ -506,6 +506,16 @@ void main() {
       expect(find.text('Uploading 1 PDF. Keep this tab open.'), findsNothing);
     });
 
+    testWidgets('the facts card and the delete menu show the same figure', (tester) async {
+      api.libs = [BuildLibrary(id: 'lib1', title: 'Hunting and field guides', books: 2, passages: 10, bytes: 70 << 20)];
+      c.sizeOf = (_) => 66 << 20;
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      expect(find.text('70.0 MB'), findsOneWidget, reason: 'Size on this device');
+      await tester.tap(find.byKey(const ValueKey('library-menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete · frees 70.0 MB'), findsOneWidget);
+    });
+
     testWidgets('an emptied library says what deleting it frees, from the device\'s figure, never 0 B while it takes space', (tester) async {
       // no books, so no search folder in the device\'s item list (sizeOf has nothing), but the library still takes 70 MB on disk
       api.libs = [BuildLibrary(id: 'lib1', title: 'Hunting and field guides', bytes: 70 << 20)];
