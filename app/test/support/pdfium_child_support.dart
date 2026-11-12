@@ -33,10 +33,25 @@ Map<String, dynamic>? core(String pdfium, [Map<String, dynamic> extra = const {}
   }
 }
 
+/// The lock functions the core answered with (see `core`), or null.
+PdfiumLockFunctions? lockFunctionsOf(Map<String, dynamic>? reply) {
+  final f = reply?['lock_fns'];
+  if (f is! Map) return null;
+  return (acquire: f['acquire'] as int, release: f['release'] as int, dropOwner: f['drop_owner'] as int, finalize: f['finalize'] as int);
+}
+
 Future<void> initChildPdfium(String lib) async {
   Pdfrx.pdfiumModulePath = lib;
-  final f = core(lib)?['lock_fns'];
-  if (f is Map && Platform.environment['CACHE_NO_PDFIUM_LOCK'] != '1') PdfiumLock.functions = (lock: f['lock'] as int, unlock: f['unlock'] as int);
+  final reply = core(lib);
+  // the core's native font mapper must be the one PDFium has: without the core, or with a mapper that was not installed, the test is
+  // not testing what the app runs
+  final fonts = reply?['fonts'];
+  if (fonts is! Map || fonts['installed'] != true) {
+    stderr.writeln('the core did not install its native font mapper: $reply');
+    exit(11);
+  }
+  final fns = lockFunctionsOf(reply);
+  if (fns != null && Platform.environment['CACHE_NO_PDFIUM_LOCK'] != '1') PdfiumLock.functions = fns;
   await pdfrxInitialize(tmpPath: Directory.systemTemp.createTempSync('pdfrx-child').path);
 }
 

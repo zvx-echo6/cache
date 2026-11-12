@@ -5,7 +5,8 @@
       "text": "The quick brown fox jumps over the lazy dog. Water purification in the field.\r\nBoil it for one minute; at altitude, three minutes. 1,234 liters (about 326 gallons) -- state-of-the-art.\r\nDon't store treated water for more than six months, e.g. COVID-19 U.S. FEMA-IS513.",
       "label": null,
       "png_sha256": {
-        "windows": "92b471ab0be62dd0dd24f0b14189428086c4eb3952f181e61a604ddd51933873"
+        "windows": "92b471ab0be62dd0dd24f0b14189428086c4eb3952f181e61a604ddd51933873",
+        "linux": "92b471ab0be62dd0dd24f0b14189428086c4eb3952f181e61a604ddd51933873"
       },
       "width": 612,
       "height": 792,
@@ -15,7 +16,8 @@
       "text": "The quick brown fox jumps over the lazy dog. Water purification in the field.\r\nBoil it for one minute; at altitude, three minutes. 1,234 liters (about 326 gallons) -- state-of-the-art.\r\nDon't store treated water for more than six months, e.g. COVID-19 U.S. FEMA-IS513.",
       "label": null,
       "png_sha256": {
-        "windows": "dfc5af9ee7817bd04121cf3119af38de92d0bd418c0887fc0f7516bc831581a0"
+        "windows": "dfc5af9ee7817bd04121cf3119af38de92d0bd418c0887fc0f7516bc831581a0",
+        "linux": "dfc5af9ee7817bd04121cf3119af38de92d0bd418c0887fc0f7516bc831581a0"
       },
       "width": 612,
       "height": 792,

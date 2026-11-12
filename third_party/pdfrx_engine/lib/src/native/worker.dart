@@ -21,13 +21,25 @@ class BackgroundWorker {
   SendPort? _sendPort;
   Isolate? _isolate;
 
+  /// The worker's owner number for the PDFium lock (0: no lock), and the port its exit is reported on.
+  int _owner = 0;
+  ReceivePort? _exitPort;
+
   /// Ensures that the worker isolate is initialized, and returns its [SendPort].
   Future<SendPort> _ensureInit() async {
     if (_sendPort != null) return _sendPort!;
     await synchronized(() async {
       if (_sendPort != null) return;
       final receivePort = ReceivePort();
-      _isolate = await Isolate.spawn(_workerEntry, receivePort.sendPort, debugName: debugName);
+      // CACHE PATCH: the worker is an owner of the process's one PDFium lock; when it exits (killed with its engine, or stopped) the
+      // core is told, so a hold it never got to let go of does not stay for ever
+      _exitPort?.close();
+      final exitPort = _exitPort = ReceivePort();
+      final owner = _owner = PdfiumLock.functions == null ? 0 : PdfiumLock.newOwnerId();
+      exitPort.listen((_) {
+        if (owner != 0) PdfiumLock.dropOwner(owner);
+      });
+      _isolate = await Isolate.spawn(_workerEntry, receivePort.sendPort, debugName: debugName, onExit: exitPort.sendPort);
       _sendPort = await receivePort.first as SendPort;
 
       // propagate the pdfium module path to the worker
@@ -35,7 +47,8 @@ class BackgroundWorker {
         Pdfrx.pdfiumModulePath = params.modulePath;
         Pdfrx.pdfiumNativeBindings = params.bindings;
         PdfiumLock.functions = params.lock; // CACHE PATCH: the process's one PDFium lock
-      }, (modulePath: Pdfrx.pdfiumModulePath, bindings: Pdfrx.pdfiumNativeBindings, lock: PdfiumLock.functions), lockPdfium: false);
+        if (params.lock != null && params.owner != 0) PdfiumLock.become(params.owner);
+      }, (modulePath: Pdfrx.pdfiumModulePath, bindings: Pdfrx.pdfiumNativeBindings, lock: PdfiumLock.functions, owner: owner), lockPdfium: false);
     });
     return _sendPort!;
   }
