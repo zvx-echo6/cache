@@ -71,5 +71,9 @@ the guide pictures cut from them.
 The routes in these pictures were made by hand along the base map's road and trail lines
 (`app/test_shots/guide_data/drive_route.json`, `offroad_route.json`), not recorded from the core. The heights of their
 elevation charts (`drive_elevation.json`, `offroad_elevation.json`) were read from the elevation tiles the map's hillshade is
-drawn from; each file says where its numbers came from. The off-road picture's view is set by the test, as a person drags the
-map: with Off-road chosen the panel is taller than the room the screen leaves under a route it fits into view.
+drawn from; each file says where its numbers came from. The view of every route picture is the screen's own: it fits the
+route into view above what its panel, the credits and the scale cover (more with Off-road chosen, so the trail is smaller there).
+
+The pins on these maps are drawn for a 3x phone, whatever scale the test draws at: the guide test tells the screen that scale
+(`kGuidePhoneScale` in `app/test_shots/guide_map_kit.dart`) and the renderer shows an added image at that many pixels per point
+(`IMAGE_PIXEL_RATIO` in `maps/render.mjs`), as that phone's map does. Change the two together.

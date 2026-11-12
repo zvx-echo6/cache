@@ -1464,14 +1464,13 @@ void main() {
     await mapShot(tester, m, 'directions-panel', 'directions');
 
     // Off-road, on foot: the phone is at the Windows parking, and the way to the arch of the place card is its trail. The screen
-    // fits the route into view; the map is then where a person drags it to see the whole trail (GuideSample.offroadView).
+    // fits the route into view above what its panel covers (more with Off-road chosen), and the picture shows that view.
     m.nav.cancelDirections();
     final foot = m.sample.offroadStart;
     m.r.location.publish(fixAt(foot.lat, foot.lon, heading: m.sample.offroadStartHeading));
     await tester.runAsync(() => m.nav.setMode('offroad_foot'));
     await tester.runAsync(() => m.nav.openDirections(GuideSample.arch));
     await settle(tester);
-    m.kit.movedTo(GuideCamera(lat: GuideSample.offroadView.lat, lon: GuideSample.offroadView.lon, zoom: GuideSample.offroadZoom));
     await mapShot(tester, m, 'directions-offroad', 'offroad');
 
     // The drive again, and guidance along it.

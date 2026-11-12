@@ -83,12 +83,6 @@ class GuideSample {
   /// The heights along that trail.
   final Map<String, dynamic> offroadElevation;
 
-  /// The off-road picture's view. With Off-road chosen the panel is taller than the room the screen leaves under a route when it
-  /// fits one into view, so on a phone part of the route is under the panel; this is the map after a person has dragged it so the
-  /// whole trail shows, between the header and the credits.
-  static const GeoPoint offroadView = GeoPoint(38.684038, -109.541865);
-  static const double offroadZoom = 14.5;
-
   /// The spot pressed for the ring, with the drive in view: open ground north of the turn, where the ring is clear of the
   /// position chip and the scale.
   static const GeoPoint ringSpot = GeoPoint(38.73236, -109.53624);
