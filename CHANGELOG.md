@@ -17,8 +17,13 @@ release notes).
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+- Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
+- Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
+- Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
+- Maps: the note on a route with an off-road part reads "Part of this route is off-road", with the distance; it said "has no road" and "over open ground" even where that part follows a trail
 - Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
 - Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
 - Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left

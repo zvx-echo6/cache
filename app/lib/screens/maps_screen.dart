@@ -158,6 +158,81 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
   return Rect.fromLTRB(left, top, math.min(map.width, math.max(best.right, left + kRouteFitLeast)), math.min(map.height, math.max(best.bottom, top + kRouteFitLeast)));
 }
 
+/// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
+/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, with its heading marker).
+class RouteEndMark {
+  const RouteEndMark({required this.lat, required this.lon, required this.reach});
+
+  final double lat;
+  final double lon;
+  final double reach;
+}
+
+/// What the map is asked to fit so that a route with [bounds] (south, west, north, east) and the [marks] drawn at its ends
+/// are wholly inside the free rectangle of a [map], which is the map less [room] on each side: the box to fit (the route's,
+/// grown to hold the middle of each mark) and the room to leave around it ([room], and on each side as much more as a mark
+/// reaches past that side of the box). The map fits the box itself, so with [room] alone a mark at an end of the route is half
+/// outside the rectangle, under what is over the map there.
+///
+/// A mark counts when the route's own fit shows its middle on the map. One that is not there (a position far from the route,
+/// a place far from where its route ends) is left out: the route is not made smaller to bring it in.
+///
+/// In a rectangle with too little room for the marks (as the least a panel leaves: [kRouteFitLeast]) they give way: the box
+/// keeps half of [kRouteFitLeast] each way, so the map has something to fit, and what does not fit of a mark goes under what
+/// is there, as the route's end does then.
+///
+/// How far a mark reaches past a side depends on the scale the fit comes to, and that scale on the room. The room is worked
+/// out at the smallest scale the fit can come to (each way the rectangle less the widest mark twice, or what the box always
+/// keeps), where a mark reaches furthest, so no mark is cut short. A mark on the box's edge, as one at an end of a route
+/// mostly is, gets exactly its reach.
+({List<double> bounds, EdgeInsets padding}) routeFitWithMarks({required Size map, required EdgeInsets room, required List<double> bounds, required List<RouteEndMark> marks}) {
+  final wide = math.max(0.0, map.width - room.horizontal), high = math.max(0.0, map.height - room.vertical);
+  // Web mercator, the world one unit wide and one high.
+  double mx(double lon) => lon / 360;
+  final rx0 = mx(bounds[1]), rx1 = mx(bounds[3]), ry0 = _mercatorY(bounds[2]), ry1 = _mercatorY(bounds[0]);
+  // The route's own fit: its box as large as the free rectangle shows it, in the rectangle's middle.
+  final own = math.min(wide / math.max(rx1 - rx0, 1e-12), high / math.max(ry1 - ry0, 1e-12));
+  bool shown(RouteEndMark m) {
+    final x = room.left + wide / 2 + (mx(m.lon) - (rx0 + rx1) / 2) * own, y = room.top + high / 2 + (_mercatorY(m.lat) - (ry0 + ry1) / 2) * own;
+    return x >= 0 && x <= map.width && y >= 0 && y <= map.height;
+  }
+
+  final counted = [for (final m in marks) if (shown(m)) m];
+  if (counted.isEmpty) return (bounds: bounds, padding: room);
+  var south = bounds[0], west = bounds[1], north = bounds[2], east = bounds[3];
+  for (final m in counted) {
+    south = math.min(south, m.lat);
+    north = math.max(north, m.lat);
+    west = math.min(west, m.lon);
+    east = math.max(east, m.lon);
+  }
+  final x0 = mx(west), x1 = mx(east), y0 = _mercatorY(north), y1 = _mercatorY(south);
+  final most = counted.map((m) => m.reach).reduce(math.max);
+  // The least the box is given each way, whatever the marks take.
+  double kept(double length) => math.max(length - 2 * most, math.min(length, kRouteFitLeast / 2));
+  final least = math.min(kept(wide) / math.max(x1 - x0, 1e-12), kept(high) / math.max(y1 - y0, 1e-12));
+  var left = 0.0, top = 0.0, right = 0.0, bottom = 0.0;
+  for (final m in counted) {
+    final x = mx(m.lon), y = _mercatorY(m.lat);
+    left = math.max(left, m.reach - (x - x0) * least);
+    right = math.max(right, m.reach - (x1 - x) * least);
+    top = math.max(top, m.reach - (y - y0) * least);
+    bottom = math.max(bottom, m.reach - (y1 - y) * least);
+  }
+  final across = wide - kept(wide), down = high - kept(high);
+  if (left + right > across) {
+    final part = across / (left + right);
+    left *= part;
+    right *= part;
+  }
+  if (top + bottom > down) {
+    final part = down / (top + bottom);
+    top *= part;
+    bottom *= part;
+  }
+  return (bounds: [south, west, north, east], padding: EdgeInsets.fromLTRB(room.left + left, room.top + top, room.right + right, room.bottom + bottom));
+}
+
 /// Where [lat] falls between the top of the world (0) and its foot (1) in web mercator.
 double _mercatorY(double lat) {
   final l = math.max(-85.0511287798, math.min(85.0511287798, lat)) * math.pi / 180;
@@ -651,16 +726,46 @@ class _MapsScreenState extends State<MapsScreen> {
   /// column on the left ([routeFitPadding]).
   EdgeInsets _fitPaddingFor(MapRoute r) {
     final screen = MediaQuery.sizeOf(context);
-    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
-    final map = stack != null && stack.hasSize ? stack.size : screen;
-    final side = _coveredLeft();
-    final covers = MapCovers(header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), scale: _boxOf(_scaleKey), credits: _boxOf(_creditsKey), panel: _boxOf(_panelKey));
-    if (side != null || covers.isEmpty) {
-      return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: side, coveredRight: _coveredRight());
+    final map = _fitMapSize();
+    final covers = _phoneCovers();
+    if (covers == null) {
+      return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: _coveredLeft(), coveredRight: _coveredRight());
     }
     final b = r.bounds;
     final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]));
     return EdgeInsets.fromLTRB(rect.left, rect.top, map.width - rect.right, map.height - rect.bottom);
+  }
+
+  /// The size of the map a route is fitted on: the stack's, as laid out (the screen's before that).
+  Size _fitMapSize() {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    return stack != null && stack.hasSize ? stack.size : MediaQuery.sizeOf(context);
+  }
+
+  /// The pieces laid out over the map on a phone; null from [kSideCardWidth] wide (the panel is in the column on the left)
+  /// and when nothing has been laid out yet.
+  MapCovers? _phoneCovers() {
+    if (_coveredLeft() != null) return null;
+    final covers = MapCovers(header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), scale: _boxOf(_scaleKey), credits: _boxOf(_creditsKey), panel: _boxOf(_panelKey));
+    return covers.isEmpty ? null : covers;
+  }
+
+  /// What the map draws at the ends of the route shown before starting, at the sizes it draws them: the chosen place's pin
+  /// where the route goes to and, when directions start from the phone (not From here), the position dot, with its heading
+  /// marker when the heading is known.
+  List<RouteEndMark> _routeEndMarks() {
+    final to = nav.selected, fix = location.fix;
+    return [
+      if (to != null) RouteEndMark(lat: to.lat, lon: to.lon, reach: kPinSelectedReach),
+      if (fix != null && nav.fromPlace == null)
+        RouteEndMark(
+          lat: fix.lat,
+          lon: fix.lon,
+          reach: (fix.heading ?? _lastHeading) == null
+              ? kPositionDotReach
+              : math.max(kPositionDotReach, MapAssets.headingMarkerReach(widget.imagePixelRatio ?? MediaQuery.devicePixelRatioOf(context))),
+        ),
+    ];
   }
 
   /// Fits [r] into view clear of what covers the map ([_fitPaddingFor]). The panel for this route is laid out in the next
@@ -678,8 +783,11 @@ class _MapsScreenState extends State<MapsScreen> {
   Future<void> _fitRouteNow(MapLibreMapController c, MapRoute r) async {
     if (!mounted) return;
     if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
-    final b = r.bounds;
-    final pad = _fitPad = _fitPaddingFor(r);
+    // The room what covers the map leaves ([_fitPad]: a change of it fits the route again). On a phone the pin and the
+    // position dot at the route's ends are fitted into that free rectangle too, whole.
+    final room = _fitPad = _fitPaddingFor(r);
+    final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: r.bounds, marks: _phoneCovers() == null ? const [] : _routeEndMarks());
+    final b = fit.bounds, pad = fit.padding;
     try {
       await c.animateCamera(
         CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),

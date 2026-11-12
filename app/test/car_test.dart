@@ -761,10 +761,15 @@ void main() {
       await settle();
       expect(named(), ['Juniper Diner', 'Quartz Fuel']);
       // The route's first stop is reached (the core says so): it is no longer listed. Then the second.
+      List<Object?> numbers() => [for (final s in lastTrip()['stops'] as List) (s as Map)['number']];
+      expect(numbers(), [1, 2]);
       reached = 1;
       gps.controller.add(fixAt(42.5, -113.75, heading: 90));
       await settle();
       expect(named(), ['Quartz Fuel']);
+      // The stop that is left keeps its number: it is the route's second stop, and the turn card will say "Stop 2 reached"
+      // for it (the car's overview called it Stop 1).
+      expect(numbers(), [2]);
       reached = 2;
       gps.controller.add(fixAt(42.5, -113.75, heading: 90));
       await settle();
