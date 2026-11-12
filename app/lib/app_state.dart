@@ -67,10 +67,20 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench, LlamaSession? session})
+  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench, LlamaSession? session, bool Function()? startedWithNoPhoneScreen})
       : memory = memory ?? readMemory,
         session = session ?? LlamaSession(),
-        _bench = bench ?? readBenchOptions;
+        _bench = bench ?? readBenchOptions,
+        _startedWithNoPhoneScreen = startedWithNoPhoneScreen ?? _never;
+
+  static bool _never() => false;
+
+  /// Whether Cache is starting with no phone screen: Android Auto started it with the phone app closed. Asked once, when the start
+  /// would load the chosen model. Never true unless the app says so (tests and every platform but Android: never).
+  final bool Function() _startedWithNoPhoneScreen;
+
+  /// The chosen model was left out of a start with no phone screen and waits for one ([phoneScreenAppeared]).
+  bool _waitsForPhoneScreen = false;
 
   /// The bench's launch options (test APK only; off everywhere else), read at each model load.
   final Future<BenchOptions> Function() _bench;
@@ -228,6 +238,16 @@ class AppState extends ChangeNotifier {
     if (last != null) {
       for (final e in models) {
         if (e.fileName == last && !isUnsupported(e)) {
+          // The car started Cache and the phone's screen is not open: the car never asks the chat model anything, so it is
+          // not loaded for it. It rests, still the chosen model, and loads when the phone's screen first appears
+          // ([phoneScreenAppeared]) or when Ask needs it ([wake]), under the same memory gate as below.
+          if (_startedWithNoPhoneScreen()) {
+            logInfo('Model not loaded at start: the car started Cache and the phone screen is not open');
+            resting = e;
+            _waitsForPhoneScreen = true;
+            notifyListeners();
+            break;
+          }
           // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
@@ -590,6 +610,15 @@ class AppState extends ChangeNotifier {
       if (resting != r || active != null || loading != null) return;
     }
     await activate(r);
+  }
+
+  /// The phone's screen has appeared. The chosen model that a start with no phone screen left out loads now, as it would have
+  /// at start: when it fits the memory free now ([wake]). Anything else (a model already loaded, loading or let go for memory;
+  /// a later screen) changes nothing here.
+  Future<void> phoneScreenAppeared() async {
+    if (!_waitsForPhoneScreen) return;
+    _waitsForPhoneScreen = false;
+    await wake();
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.

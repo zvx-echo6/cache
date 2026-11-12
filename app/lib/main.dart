@@ -163,7 +163,16 @@ class CacheApp extends StatefulWidget {
 }
 
 class _CacheAppState extends State<CacheApp> {
-  late final AppState app = AppState();
+  late final AppState app = AppState(
+    // No word from a phone screen by the time the start would load the chat model (or only that there is none: the car has
+    // already left): on Android that is a start by the car with the phone app closed. An activity says it is in front as it
+    // opens; the car side never does. The model then waits for the phone's screen ([_onPhoneScreen]).
+    startedWithNoPhoneScreen: () {
+      if (!plat.isAndroid) return false;
+      final screen = WidgetsBinding.instance.lifecycleState;
+      return screen == null || screen == AppLifecycleState.detached;
+    },
+  );
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
   // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
@@ -1301,6 +1310,8 @@ class _CacheAppState extends State<CacheApp> {
   void _onPhoneScreen() {
     // The system bars are the screen's own (MainActivity): a new screen has not been told how to show them.
     applySystemUi(_applied);
+    // The chat model a start by the car left out loads now, as it would have at a start with the phone's screen.
+    unawaited(app.phoneScreenAppeared());
   }
 
   @override
