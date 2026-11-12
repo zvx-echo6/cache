@@ -141,6 +141,58 @@ void main() {
         expect(find.text('Pharmacy'), findsNothing, reason: 'the list is gone; the field shows the choice');
       });
 
+      // After a place was chosen the box shows its name. Tapping the box again left the cursor after the name, so what was
+      // typed next was added to it (the name, then "b": a search for "Cassia Regional Hospitalb").
+      testWidgets('search: entering the box again selects the chosen place\'s name, so typing replaces it', (tester) async {
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [hospital]);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        final field = find.byKey(const ValueKey('map-search-field'));
+        TextEditingController box() => tester.widget<TextField>(field).controller!;
+        // What the keyboard does when a letter is typed: it goes in place of the selection (at the cursor when nothing is selected).
+        Future<void> type(String letter) async {
+          tester.testTextInput.updateEditingValue(box().value.replaced(box().selection, letter));
+          await tester.pump();
+        }
+
+        // Words the person typed are theirs: leaving the box and entering it again selects nothing, and typing adds to them.
+        await tester.enterText(field, 'hosp');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pump();
+        await tester.tap(field);
+        await tester.pump();
+        expect(box().selection.isCollapsed, isTrue, reason: 'typed words were selected');
+        box().selection = const TextSelection.collapsed(offset: 4);
+        await type('i');
+        expect(nav.query, 'hospi');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+
+        // A place is chosen: the box shows its name and the search is closed.
+        await tester.tap(find.text(hospital.name));
+        await tester.pump();
+        expect(nav.selected!.id, hospital.id);
+        expect(nav.searchOpen, isFalse);
+        expect(box().text, hospital.name);
+        // Long enough after the last tap that the next one is a tap of its own, not the second of a double tap.
+        await tester.pump(const Duration(seconds: 1));
+
+        // The box is entered again: the search opens with the whole name selected, and a letter typed takes its place.
+        await tester.tap(field);
+        await tester.pump();
+        expect(nav.searchOpen, isTrue);
+        expect(box().text, hospital.name);
+        expect(box().selection, TextSelection(baseOffset: 0, extentOffset: hospital.name.length), reason: 'the chosen place\'s name is not selected');
+        await type('b');
+        expect(box().text, 'b');
+        expect(nav.query, 'b', reason: 'what was typed was added to the chosen place\'s name');
+        // the search for it runs
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('search: nothing found, a note about words only, and the clear and back buttons', (tester) async {
         backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'no_embedder', results: const []);
         await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
