@@ -112,6 +112,14 @@ object CarOverlayPainter {
     /** The widest the shape is drawn in the one-line card. */
     const val LINE_SHAPE_W = 84f
 
+    /** Where the shape starts from the card's left edge: past the rounded corner ([HOST_CARD_RADIUS]) with room for its start
+     * dot, so the dot does not sit on the corner. (It started at [LINE_PAD_X], on the corner.) */
+    const val LINE_SHAPE_INSET = 28f
+
+    /** The shape in the one-line card is the line alone, without the fill under it: in a card 64 high the fill was a block
+     * against the card's edge. (The box's shape keeps its fill.) */
+    const val LINE_SHAPE_FILLED = false
+
     /** The least free space above and below the one-line card in the gap. With less, no climb is drawn. */
     const val LINE_CUSHION_MIN = 12f
 
@@ -317,7 +325,10 @@ object CarOverlayPainter {
     /** The pieces for [trip] (the switches are the trip's). Nothing is drawn unless the trip is guiding, and nothing while
      * the route overview screen is up ([overview]): the mini map would repeat what that screen's map already shows. The
      * climb is never drawn on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
-    fun draw(canvas: Canvas, trip: CarTrip, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false) {
+    fun draw(
+        canvas: Canvas, trip: CarTrip, width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null, overview: Boolean = false,
+        lineShapeFilled: Boolean = LINE_SHAPE_FILLED, lineShapeInset: Float = LINE_SHAPE_INSET,
+    ) {
         if (!trip.guiding || overview) return
         val climb = if (trip.overlay.climb && !trip.arrived) trip.climb else null
         val ov = if (trip.overlay.miniMap) trip.overview else null
@@ -343,7 +354,7 @@ object CarOverlayPainter {
             drawCardEdge(canvas, box, d)
             return
         }
-        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d)
+        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d, lineShapeFilled, lineShapeInset)
         if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, HOST_STYLE, d, scale = l.mini.height() / (MINI_H * d))
     }
 
@@ -432,7 +443,9 @@ object CarOverlayPainter {
     fun lineForm(avail: Float, figureW: Float, gradeDistanceW: Float?, gradeW: Float?, d: Float): LineForm {
         val gap = LINE_GAP * d
         if (gradeDistanceW != null) {
-            if (SHAPE_MIN_W * d + gap + figureW + gap + gradeDistanceW <= avail) return LineForm.SHAPE_FIGURE_GRADE_DISTANCE
+            // The shape starts further in than the text would ([LINE_SHAPE_INSET]), which is that much less room.
+            val inset = (LINE_SHAPE_INSET - LINE_PAD_X) * d
+            if (inset + SHAPE_MIN_W * d + gap + figureW + gap + gradeDistanceW <= avail) return LineForm.SHAPE_FIGURE_GRADE_DISTANCE
             if (figureW + gap + gradeDistanceW <= avail) return LineForm.FIGURE_GRADE_DISTANCE
         }
         if (gradeW != null && figureW + gap + gradeW <= avail) return LineForm.FIGURE_GRADE
@@ -440,8 +453,13 @@ object CarOverlayPainter {
     }
 
     /** The climb as a one-line card [r] in the host's style: the shape, the figure in bold, then the grade and how far, in
-     * the same words and number formats as the box ("2,130 ft", "11% in 23.0 mi", or "11%" alone). See [lineForm]. */
-    fun drawClimbLine(canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float) {
+     * the same words and number formats as the box ("2,130 ft", "11% in 23.0 mi", or "11%" alone). See [lineForm].
+     * [shapeFilled] and [shapeInset] are the shape's look and where it starts; the defaults are what the car draws (the
+     * tests paint the other choice beside it). */
+    fun drawClimbLine(
+        canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float,
+        shapeFilled: Boolean = LINE_SHAPE_FILLED, shapeInset: Float = LINE_SHAPE_INSET,
+    ) {
         drawCard(canvas, r, d)
         val figurePaint = text(pal.cardText, LINE_FIGURE_SIZE * d, 700)
         val textPaint = text(pal.cardSecondary, LINE_TEXT_SIZE * d, 400)
@@ -461,8 +479,9 @@ object CarOverlayPainter {
         var x = r.left + LINE_PAD_X * d
         val gap = LINE_GAP * d
         if (form == LineForm.SHAPE_FIGURE_GRADE_DISTANCE && second != null) {
-            val w = min(LINE_SHAPE_W * d, avail - figureW - textPaint.measureText(second) - 2 * gap)
-            drawShape(canvas, RectF(x, r.centerY() - SHAPE_H * d / 2, x + w, r.centerY() + SHAPE_H * d / 2), c, pal, d)
+            x = r.left + shapeInset * d
+            val w = min(LINE_SHAPE_W * d, r.right - LINE_PAD_X * d - x - figureW - textPaint.measureText(second) - 2 * gap)
+            drawShape(canvas, RectF(x, r.centerY() - SHAPE_H * d / 2, x + w, r.centerY() + SHAPE_H * d / 2), c, pal, d, filled = shapeFilled)
             x += w + gap
         }
         // Both texts on one baseline: half the figure's digit height (about 0.71 of its size) under the middle.
@@ -480,8 +499,9 @@ object CarOverlayPainter {
         return (top + bottom) / 2f - (((heightM - (lo + hi) / 2.0) / span) * (bottom - top)).toFloat()
     }
 
-    /** The shape of the road ahead, no axes: lightly filled under a line, a dot at the start, the steepest stretch hatched. */
-    fun drawShape(canvas: Canvas, box: RectF, c: CarClimb, pal: CarOverlayColors, d: Float) {
+    /** The shape of the road ahead, no axes: lightly filled under a line ([filled]; without it the line alone), a dot at the
+     * start, the steepest stretch hatched. */
+    fun drawShape(canvas: Canvas, box: RectF, c: CarClimb, pal: CarOverlayColors, d: Float, filled: Boolean = true) {
         val n = c.heightsM.size
         val lo = c.heightsM.min()
         val hi = c.heightsM.max()
@@ -499,7 +519,7 @@ object CarOverlayPainter {
             lineTo(xAt(0), box.bottom)
             close()
         }
-        canvas.drawPath(area, fill(withAlpha(pal.route, 0.22f)))
+        if (filled) canvas.drawPath(area, fill(withAlpha(pal.route, 0.22f)))
         val from = c.steepFrom
         val to = c.steepTo
         if (from != null && to != null && to > from) {
@@ -562,6 +582,31 @@ object CarOverlayPainter {
             tri.moveTo(tx, cy + 5f * d); tri.lineTo(tx + 10f * d, cy - 5f * d); tri.lineTo(tx + 10f * d, cy + 5f * d); tri.close()
             canvas.drawPath(tri, fill(pal.badgeGlyph))
         }
+    }
+
+    /** The main map's destination marker (the car-dest layer: a dot of radius 9 with a ring of 3), and the least free map
+     * between it, or the route's end, and the grade badge. */
+    const val DEST_MARKER_R = 12f
+    const val BADGE_CLEAR = 4f
+
+    /**
+     * How far the main map's grade badge is moved from its point so it does not cover the destination: (0, 0) when it is
+     * clear, else straight up the screen until it is. [steep] is the badge's point and [ends] the destination marker and the
+     * route's end, all in screen pixels; [badgeW] is the badge's width in pixels. The badge covered the destination dot
+     * whenever the steepest stretch was at the end of the route, most plainly on the route overview.
+     */
+    fun badgeOffset(steep: PointF, ends: List<PointF>, badgeW: Float, d: Float): PointF {
+        val halfW = badgeW / 2f
+        val halfH = BADGE_H * d / 2f
+        val reach = (DEST_MARKER_R + BADGE_CLEAR) * d
+        var cy = steep.y
+        // Each pass lifts the badge clear of what it touches; what it cleared stays clear, so one pass per end is enough.
+        repeat(ends.size) {
+            val hit = ends.filter { abs(it.x - steep.x) < halfW + reach && abs(it.y - cy) < halfH + reach }
+            if (hit.isEmpty()) return PointF(0f, cy - steep.y)
+            cy = hit.minOf { it.y } - reach - halfH
+        }
+        return PointF(0f, cy - steep.y)
     }
 
     /** The main map's badge as a picture (a MapLibre symbol image). The picture says it is drawn at [d], as the arrow's does:

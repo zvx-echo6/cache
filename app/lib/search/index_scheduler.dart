@@ -581,7 +581,9 @@ class IndexScheduler extends ChangeNotifier {
       final d = throttle?.duty;
       if (d != null) run.setDuty(d);
       unawaited(run.finished.then((ok) {
-        if (_current?.key != t.key) return;
+        // This run's end only: an earlier run of the same work (the app went to the back and came again while it was stopping)
+        // ending later must not clear the run that has taken its place, or the work is started again and again.
+        if (!identical(_run, run)) return;
         if (ok) {
           _done.add(t.key);
           _order = [for (final k in _order) if (k != t.key) k];

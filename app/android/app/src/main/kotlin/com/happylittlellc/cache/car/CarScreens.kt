@@ -2,6 +2,7 @@ package com.happylittlellc.cache.car
 
 import android.os.Handler
 import android.os.Looper
+import androidx.activity.OnBackPressedCallback
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
@@ -323,6 +324,21 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
 
 /** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
 class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+    init {
+        // The car's Back key while guiding. Left to the library it popped this screen: the home screen showed (its Search and
+        // Saved places buttons, no turn card, no arrival card, the map's free area changed under the overlay) until the next
+        // trip update, up to a second later, when the session pushed a new guidance screen. Guidance is left with End route,
+        // so Back does nothing here while the trip is guiding. The callback is this screen's: it holds only while the screen
+        // is the one showing, so Back on the route overview still closes the overview.
+        carContext.onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (!CarLink.trip.guiding) screenManager.pop()
+                }
+            },
+        )
+    }
 
     override fun onGetTemplate(): Template {
         val t = CarLink.trip

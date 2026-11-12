@@ -611,7 +611,13 @@ class _WeatherCard extends StatelessWidget {
         future: _read(w),
         builder: (context, snap) {
           // Until the core answers: what was last shown for the place, at once (build 46: 13-20 s of "…" at start).
-          final h = snap.data?.$1 ?? w.homeCardNow() ?? const HomeWeather(message: '…');
+          // The last card stays while the next one is awaited, and that can be hours after it was made (the app left in
+          // memory overnight): it is worked out again for the time it is shown, so last night's reading is not this
+          // morning's.
+          final earlier = snap.data?.$1;
+          final h = earlier == null
+              ? (w.homeCardNow() ?? const HomeWeather(message: '…'))
+              : (snap.connectionState == ConnectionState.done ? earlier : w.homeCardAsOfNow(earlier));
           final Widget? action;
           if (h.off && onOpenSettings != null) {
             action = Align(
@@ -665,7 +671,8 @@ class _WeatherCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (cond.isNotEmpty) Text(cond, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
+                // two lines: at a phone's width the day's high and low were cut off beside a temperature ("… low 31 …")
+                if (cond.isNotEmpty) Text(cond, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
                 Text(where, maxLines: 1, overflow: TextOverflow.ellipsis, style: small),
               ],
             ),
@@ -711,7 +718,11 @@ class _WeatherCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(
                   children: [
-                    Icon(Icons.check_circle_outline, size: 18, color: k.ok),
+                    // A check too old to speak for now is not a tick: the mark the Weather screen has for the same state.
+                    if (h.alertsExpired)
+                      Icon(Icons.warning_amber_rounded, key: const ValueKey('home-alerts-expired'), size: 18, color: k.warning)
+                    else
+                      Icon(Icons.check_circle_outline, size: 18, color: k.ok),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
