@@ -1433,6 +1433,10 @@ void main() {
   // One test for every Maps picture: the map screen is built once (a second one in the same run waits for its style for good).
   // Five pictures have the real map behind them (mapShot); the others are still drawn over the empty map area.
   testWidgets('the Maps pictures', (tester) async {
+    // Over a map the round buttons and the panels cast real, soft shadows, as on a phone (a test otherwise draws a button's
+    // shadow as a hard black ring). Put back before the test ends, which checks it.
+    debugDisableShadows = false;
+    addTearDown(() => debugDisableShadows = true);
     final m = await mapRig(tester, notebooks: true);
     await showMap(tester, m);
     await mapShot(tester, m, 'maps-find-me', 'find-me');
@@ -1476,7 +1480,7 @@ void main() {
     m.nav.closeSearch();
     await settle(tester);
 
-    // Directions start where the phone is: it has moved up the road to where the drive begins.
+    // Directions start where the phone is: it has moved on, to where the drive begins.
     final start = m.sample.routeStart;
     m.r.location.publish(fixAt(start.lat, start.lon, heading: m.sample.routeStartHeading));
     await tester.runAsync(() => m.nav.openDirections(GuideSample.trailhead));
@@ -1541,6 +1545,7 @@ void main() {
     }
     await shot(tester, 'map-measure');
     await endMap(tester, m);
+    debugDisableShadows = true;
   });
 }
 

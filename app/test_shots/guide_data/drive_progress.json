@@ -1,57 +1,57 @@
 {
- "_comment": "The cs_map_progress answer for the guidance picture: on the guide drive, 0.4 mi before the right turn. Written by hand with the route (see drive_route.json); the phone's clock reads 12:00 in the pictures.",
+ "_comment": "The cs_map_progress answer for the guidance picture: on the guide drive, 0.1 mi before the left turn. Written by hand with the route (see drive_route.json); the phone's clock reads 12:00 in the pictures.",
  "route_id": "guide-drive",
  "fix": 1,
  "matched": {
-  "lat": 38.723927,
-  "lon": -109.542485,
-  "distance_along_m": 909.0,
+  "lat": 38.729167,
+  "lon": -109.541443,
+  "distance_along_m": 1070.8,
   "offset_m": 0.0,
   "segment": 0,
-  "route_bearing_deg": 66
+  "route_bearing_deg": 143
  },
  "on_route": true,
  "off_route": false,
  "off_route_count": 0,
  "arrived": false,
- "progress": 0.2586,
+ "progress": 0.3333,
  "remaining": {
-  "distance_m": 2606.0,
-  "duration_s": 187,
-  "eta": "2026-10-26T12:03:07"
+  "distance_m": 2142.0,
+  "duration_s": 161,
+  "eta": "2026-10-26T12:02:41"
  },
  "total": {
-  "distance_m": 3515.0,
-  "duration_s": 237
+  "distance_m": 3212.8,
+  "duration_s": 220
  },
  "current": {
   "index": 0,
   "kind": "road",
   "type": "start",
-  "instruction": "Drive northeast on Main Park Road.",
+  "instruction": "Drive east on Main Park Road.",
   "street_names": [
    "Main Park Road"
   ],
   "travel": "drive",
-  "lat": 38.721864,
-  "lon": -109.552472,
+  "lat": 38.732477,
+  "lon": -109.552016,
   "distance_m": 0.0,
-  "length_m": 1553.0,
-  "cardinal": "NE",
-  "bearing_deg": 52
+  "length_m": 1250.8,
+  "cardinal": "E",
+  "bearing_deg": 92
  },
  "next": {
   "index": 1,
   "kind": "road",
-  "type": "right",
-  "instruction": "Turn right onto Delicate Arch Road.",
+  "type": "left",
+  "instruction": "Turn left onto Delicate Arch Road.",
   "street_names": [
    "Delicate Arch Road"
   ],
   "travel": "drive",
   "lat": 38.728031,
   "lon": -109.539964,
-  "distance_m": 644.0,
+  "distance_m": 180.0,
   "length_m": 1962.0,
   "cardinal": "NE",
   "bearing_deg": 42

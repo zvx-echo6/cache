@@ -45,10 +45,11 @@ class GuideSample {
   /// notebook's place into a destination.
   static const MapPlace trailhead = MapPlace(id: 'notebook:trailhead', type: 'place', name: 'Trailhead', kind: 'Places', lat: 38.73562, lon: -109.52059);
 
-  /// The drive from the phone to [trailhead]: Main Park Road, then right onto Delicate Arch Road.
+  /// The drive from the phone to [trailhead]: east on Main Park Road, then left onto Delicate Arch Road. It comes from the
+  /// north-west so that both of its ends are clear of the buttons and chips when the screen fits it into view.
   final Map<String, dynamic> driveRoute;
 
-  /// Where the phone is on that drive in the guidance picture: 0.4 mi before the right turn.
+  /// Where the phone is on that drive in the guidance picture: 0.1 mi before the left turn, so the junction is in view.
   final Map<String, dynamic> driveProgress;
 
   /// The public lands layer as the published catalogue defines it (read 2026-11-11), so the layers sheet lists it and the style

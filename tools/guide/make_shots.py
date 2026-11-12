@@ -9,9 +9,11 @@ room at the top and the empty page below the content; then it is resized to 645 
 colours (no dither) and saved with optimize=True into app/assets/guide/shots/<id>.png. Needs Pillow.
 
 A picture with a real map behind the screen (MAPS) is reduced to 256 colours with dithering instead: shaded relief breaks into
-bands at 128 flat colours. Its line also says what the same picture would weigh in other forms, for choosing how map pictures
-ship. A picture whose id starts with "compare-" is not a guide picture (two versions of one view, to choose between): it is cut
-the same way but saved into app/test_shots/guide/compare/, outside the app's assets.
+bands at 128 flat colours. Its palette is an octree one, which keeps the few strong colours of a map picture (the position dot,
+a pin, the route) that a median-cut palette gives up for more shades of the land. Its line also says what the same picture
+would weigh in other forms, for choosing how map pictures ship. A picture whose id starts with "compare-" is not a guide
+picture (two versions of one view, to choose between): it is cut the same way but saved into app/test_shots/guide/compare/,
+outside the app's assets.
 """
 import io
 import json
@@ -43,8 +45,8 @@ def trim_bottom(im, bg):
 
 
 def dithered(im, colours=256):
-    """[im] in an adaptive palette of [colours] colours, with Floyd-Steinberg dithering (quantize() alone does not dither)."""
-    return im.quantize(palette=im.quantize(colors=colours), dither=Image.Dither.FLOYDSTEINBERG)
+    """[im] in an octree palette of [colours] colours, with Floyd-Steinberg dithering (quantize() alone does not dither)."""
+    return im.quantize(palette=im.quantize(colors=colours, method=Image.Quantize.FASTOCTREE), dither=Image.Dither.FLOYDSTEINBERG)
 
 
 def weights(im):
