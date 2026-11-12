@@ -734,6 +734,7 @@ class CarSessionTest {
         val saved = screens.top as SavedPlacesScreen
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("Add stop", savedList(saved).header!!.title.toString())
+        // Before Start this screen's Search button shows, so the list is the saved places only (no search row).
         assertEquals(listOf("Place 1", "Place 2"), savedList(saved).singleList!!.items.map { (it as Row).title.toString() })
         // The phone says no (it gives the reason in a notice): the list stays for another choice.
         answer = false
@@ -753,8 +754,15 @@ class CarSessionTest {
         assertEquals(2, CarLink.trip.stops.size)
         assertNull(CarLink.trip.stops[0].address)
         assertEquals("9 Road 3", CarLink.trip.stops[1].address)
-        val row = ((templateOf(route) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items[0] as Row
-        assertTrue(row.texts.map { it.toString() }.toString(), row.texts.any { it.toString() == "Stop 1: Place 2 · Stop 2: Place 1" })
+        // The route's row, then a row for each stop: both names can be read (one line under the route was cut after the first).
+        val rows = ((templateOf(route) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals(3, rows.size)
+        assertEquals("Via Road 0", rows[0].texts[0].toString())
+        assertEquals(listOf("Stop 1: Place 2", "Stop 2: Place 1"), rows.drop(1).map { it.title.toString() })
+        assertEquals(0, rows[1].texts.size)
+        assertEquals("9 Road 3", rows[2].texts[0].toString())
+        // Start and Add stop are still there.
+        assertEquals(listOf("Start", "Add stop"), (templateOf(route) as MapWithContentTemplate).actionStrip!!.actions.map { it.title.toString() })
         // Its Search button searches for a stop too.
         route.addStop()
         (screens.top as SavedPlacesScreen).search()
@@ -787,6 +795,11 @@ class CarSessionTest {
         val saved = screens.top as SavedPlacesScreen
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("Add stop", savedList(saved).header!!.title.toString())
+        // During a drive the host's turn strip covers this screen's Search button: the first row opens the search, in the
+        // search box's own words, and the saved places follow.
+        val picks = savedList(saved).singleList!!.items.map { it as Row }
+        assertEquals(listOf("Search for a place", "Place 1", "Place 2"), picks.map { it.title.toString() })
+        assertNotNull(picks[0].onClickDelegate)
         // Trip updates come every second while driving: the list stays up (it was thrown away for a new guidance screen).
         push("trip", trip("guiding", guiding))
         assertTrue(screens.top === saved)
@@ -801,11 +814,17 @@ class CarSessionTest {
         assertTrue(screens.top === guidance)
         assertEquals(1, nav.navigationStartedCount)
         // The route overview lists the stops still ahead, in order, then the destination.
-        val stops = listOf(mapOf("name" to "Place 2", "address" to "12 Road 4"), mapOf("name" to "Place 1", "address" to ""))
+        val stops = listOf(mapOf("number" to 1, "name" to "Place 2", "address" to "12 Road 4"), mapOf("number" to 2, "name" to "Place 1", "address" to ""))
         push("trip", trip("guiding", guiding + mapOf("stops" to stops)))
         guidance.openOverview()
         val rows = ((templateOf(screens.top) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
         assertEquals(listOf("Stop 1: Place 2", "Stop 2: Place 1", "Cassia Regional Hospital"), rows.map { it.title.toString() })
+        // The first stop is passed: the one that is left keeps its number, the one the turn card says ("Stop 2 reached"). It
+        // was listed as Stop 1.
+        push("trip", trip("guiding", guiding + mapOf("stops" to stops.drop(1))))
+        val left = ((templateOf(screens.top) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals(listOf("Stop 2: Place 1", "Cassia Regional Hospital"), left.map { it.title.toString() })
+        push("trip", trip("guiding", guiding + mapOf("stops" to stops)))
         assertEquals("12 Road 4", rows[0].texts[0].toString())
         screens.pop()
         assertTrue(screens.top === guidance)
