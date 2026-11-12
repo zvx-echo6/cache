@@ -550,11 +550,12 @@ list_pictures() {  # list_pictures <label>: Saved places and Search, opened by t
     shot_ext "$label-search-none"
     LISTS_MISSING="$LISTS_MISSING [Search did not say that nothing was found]"
   fi
-  # Out again: CarPlay's close button of the search screen, then the list's Back.
-  if at=$(tap_until 'car lists: search closed' 4 "$right" $((22 * CAR_S)) "$right" "$top"); then
+  # Out again: CarPlay's close button of the search screen, then the list's Back. On a wide screen the search screen does not
+  # reach the trailing edge, so its close button stands further in: three places are tried, from the edge inwards.
+  if at=$(tap_until 'car lists: search closed' 4 "$right" $((24 * CAR_S)) $((CAR_W - 47 * CAR_S)) $((26 * CAR_S)) $((CAR_W - 67 * CAR_S)) $((26 * CAR_S))); then
     sleep 2
     shot_ext "$label-after-search"
-    LISTS="$LISTS; the close button left Search"
+    LISTS="$LISTS; the close button (tap at pixel $at) left Search"
   else
     shot_ext "$label-search-not-closed"
     LISTS_MISSING="$LISTS_MISSING [Search did not close by a tap on its close button]"
