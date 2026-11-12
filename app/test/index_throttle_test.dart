@@ -40,6 +40,21 @@ void main() {
     return t.duty;
   }
 
+  group('hot (the heat signal the prompt read ahead reads)', () {
+    test('severe or critical is hot, and it stays hot until the heat has fallen below the resume point', () async {
+      expect(t.hot, isFalse);
+      await at(_r(thermal: Thermal.moderate));
+      expect(t.hot, isFalse, reason: 'moderate only slows work');
+      await at(_r(thermal: Thermal.severe));
+      expect(t.hot, isTrue);
+      expect(t.duty.paused, isTrue);
+      await at(_r(thermal: Thermal.moderate));
+      expect(t.hot, isTrue, reason: 'smoothed: one cooler reading is still above kHeatResume');
+      await at(_r(thermal: Thermal.nominal));
+      expect(t.hot, isFalse, reason: 'below kHeatResume it is cool again');
+    });
+  });
+
   group('the curve', () {
     test('heat from the thermal status, or from the headroom where the phone gives one', () {
       expect(heatOf(null), 0);
