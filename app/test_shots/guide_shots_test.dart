@@ -33,7 +33,7 @@ import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_map.dart' show PinLook;
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
-import 'package:cache/notebook/pin_image.dart' show PinImages;
+import 'package:cache/notebook/pin_image.dart' show PinImages, PinStyle;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
@@ -138,6 +138,12 @@ const _ratio = 2.0;
 
 /// The part of the screen a picture is cut to (logical points: left, top, right, bottom), by id; written to crops.json.
 final Map<String, List<double>> _crops = {};
+
+/// What the place form's small map takes from the app's one map state: the style, with the guide's layers on, and the pin style.
+/// The Maps test keeps them for the places test after it: a second map state in the same run would wait for its style for good
+/// (the style's templates are read once, in the first test that asks for them).
+String? _formMapStyle;
+PinStyle? _formPinStyle;
 
 /// The settings rig, with the app set to the light theme (the pictures are drawn in it, and Appearance says so).
 Future<SettingsRig> _rig(
@@ -1533,6 +1539,9 @@ void main() {
       await tapMap(tester, m, p);
     }
     await mapShot(tester, m, 'map-measure', 'measure');
+    // The place form's small map has this style on a phone too (see _formMapStyle).
+    _formMapStyle = m.kit.style;
+    _formPinStyle = m.r.maps.pinStyle;
     await endMap(tester, m);
     debugDisableShadows = true;
   });
@@ -1543,9 +1552,6 @@ void main() {
     await tester.runAsync(loadSymbolFont);
     final kit = GuideMaps();
     await kit.load(tester);
-    final r = await _rig(tester);
-    // Hillshade is on, as in the Maps pictures.
-    r.maps.setOn('hillshade', true);
     final n = _NbRig()..formMap = kit;
     final book = await n.saved(tester);
     await n.place(tester, book, 'Camp', 38.7755, -109.588, color: 'green');
@@ -1560,14 +1566,16 @@ void main() {
     await tester.longPress(find.text(GuideSample.trailhead.name));
     await tester.pumpAndSettle();
     // The form's small map. The app's PlaceMap is a platform view, so its scene is written here the way PlaceMap fills its map:
-    // the app's style with the same layers on, the place in the middle at zoom 14, and the place's pin drawn by the notebook
-    // pins' layer with the image PlaceMap adds for it. The rendered picture is then shown in the form.
-    final style = (await tester.runAsync(() => r.maps.styleJson(mapPaletteFor(CacheThemeId.light), mapGlyphs)))!;
+    // the app's style with the same layers on (the Maps test's, as the app has one map state), the place in the middle at zoom
+    // 14, and the place's pin drawn by the notebook pins' layer with the image PlaceMap adds for it. The rendered picture is
+    // then shown in the form.
+    final style = _formMapStyle, pins = _formPinStyle;
+    if (style == null || pins == null) fail('The place form needs the map style the Maps test keeps: run the whole file');
     final pin = n.mapPin!, look = n.mapLook!;
     final images = <String, Uint8List>{};
     final image = (await tester.runAsync(() => PinImages((name, png) async {
       images[name] = png;
-    }, r.maps.pinStyle).ensure(look.icon.id, look.glyph, look.tint)))!;
+    }, pins).ensure(look.icon.id, look.glyph, look.tint)))!;
     Map<String, dynamic> points(List<Map<String, dynamic>> features) => {'type': 'FeatureCollection', 'features': features};
     kit.writeScene(
       'place-form',
@@ -1602,7 +1610,6 @@ void main() {
     await shot(tester, 'place-alerts-sheet', crop: _sheet);
     kit.writeIndex();
     await tester.pumpWidget(const SizedBox());
-    await r.dispose(tester);
     kit.dispose();
   });
 }
