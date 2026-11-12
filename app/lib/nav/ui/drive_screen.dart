@@ -4,7 +4,6 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
 import '../../car/car_overlay.dart';
-import '../../car/phone_drive.dart';
 import '../../maps/palette/map_palette.dart';
 import '../../theme.dart';
 import '../elevation/route_elevation.dart';
@@ -16,21 +15,27 @@ import 'guidance_panels.dart';
 
 /// How much of the room between the top of the screen and the bottom bar the list of turns takes while the phone carries the route
 /// mini map and the elevation too; they share the rest, side by side. The owner chose two thirds from pictures (2026-11-12); change
-/// it here and nowhere else. When the car carries the two (a big car screen) the list has the whole room.
+/// it here and nowhere else. 
 const double kDriveTurnsShare = 2 / 3;
+
+/// The other form, for a wide route only (the owner is choosing between them from pictures): the list takes half of the room and
+/// the stacked boxes the other half, each at a proper height. Off until he chooses; one constant switches it for everyone.
+const bool kDriveWideHalf = false;
+const double kDriveWideTurnsShare = 1 / 2;
 
 /// The phone's drive screen: what the Maps tab shows while a car screen is connected and guiding. The next turn first (the
 /// phone's own turn banner, with its lane arrows when it has them), then the turns after it with the stops where they come, and
-/// under them the route mini map and the elevation, which the car's screen does not carry (see [CarExtras]). The guidance bar at
+/// under them the route mini map and the elevation, always, whatever the car's screen shows. The guidance bar at
 /// the foot is the phone's own, with the same voice switch and End.
-class DriveScreen extends StatelessWidget {
+class DriveScreen extends StatefulWidget {
   const DriveScreen({
     super.key,
     required this.nav,
     required this.elevation,
     required this.palette,
     required this.themeId,
-    this.extras = CarExtras.never,
+    this.wideHalf = kDriveWideHalf,
+    this.sideBySideOnly = false,
   });
 
   final NavState nav;
@@ -38,15 +43,39 @@ class DriveScreen extends StatelessWidget {
   final MapPalette palette;
   final CacheThemeId themeId;
 
-  /// Where the car carries the mini map and the elevation. On this screen they are drawn unless the car always carries them.
-  final CarExtras extras;
+  /// For a wide route the list takes [kDriveWideTurnsShare] of the room instead of [kDriveTurnsShare] ([kDriveWideHalf]).
+  final bool wideHalf;
 
-  /// The mini map and the elevation are on the phone's screen (this screen is showing, so [CarExtras.unlessPhoneShows] counts).
-  bool get showsExtras => extras != CarExtras.always;
+  /// Pictures only: every route is shown side by side, whatever its shape.
+  @visibleForTesting
+  final bool sideBySideOnly;
+
+  @override
+  State<DriveScreen> createState() => _DriveScreenState();
+}
+
+class _DriveScreenState extends State<DriveScreen> {
+  NavState get nav => widget.nav;
+  RouteElevation get elevation => widget.elevation;
+
+  String? _forRoute;
+  bool? _stacked;
+
+  /// Whether the route's two boxes stack: chosen when the route changes (the first route, or a re-route), not at each update.
+  bool _stackedNow() {
+    final r = nav.route;
+    if (r == null || widget.sideBySideOnly) return false;
+    if (_forRoute != r.routeId) {
+      _forRoute = r.routeId;
+      _stacked = driveStacked(routeAspect(r.points), previous: _stacked);
+    }
+    return _stacked ?? false;
+  }
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final themeId = widget.themeId, palette = widget.palette;
     return Material(
       key: const ValueKey('drive-screen'),
       color: k.background,
@@ -60,14 +89,15 @@ class DriveScreen extends StatelessWidget {
                 builder: (context, _) => LayoutBuilder(
                   builder: (context, box) {
                     final room = box.maxHeight;
-                    final turnsH = showsExtras ? room * kDriveTurnsShare : room;
+                    final stacked = _stackedNow();
+                    final share = stacked && widget.wideHalf ? kDriveWideTurnsShare : kDriveTurnsShare;
+                    final turnsH = room * share;
                     return Column(
                       children: [
                         SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
-                        if (showsExtras)
-                          Expanded(
-                            child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId),
-                          ),
+                        Expanded(
+                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, stacked: stacked),
+                        ),
                       ],
                     );
                   },
@@ -242,14 +272,62 @@ class DriveRow {
   }
 }
 
-/// The route mini map and the elevation, side by side.
+/// The route's shape (its width over its height as the mini map draws it, east-west over north-south, north up) at which the two
+/// boxes stack, the mini map across the full width and the elevation under it, instead of sitting side by side. The natural line
+/// is the side-by-side mini map box's own proportions: about 140 wide and 195 high at 390 points (a width over height of about
+/// 0.75). A route fills that box to its full height only up to that shape; at twice it (1.5) the route fills half the box's height
+/// and the rest is blank, so from there the wide box serves it better.
+const double kDriveStackAspect = 1.5;
+
+/// The margin a re-route must clear to change the arrangement: a stacked one goes back to side by side only below
+/// [kDriveStackAspect] over this (1.2), a side-by-side one stacks only above [kDriveStackAspect] times this (1.875). A nearly
+/// square route, or one a little either side of the line, never flips back and forth.
+const double kDriveStackMargin = 1.25;
+
+/// Whether a route of [aspect] (width over height) is shown stacked. The first route of a drive is decided by the line alone;
+/// after that [previous] is kept unless the new route is clearly the other kind (the margin).
+bool driveStacked(double aspect, {bool? previous}) {
+  if (previous == null) return aspect >= kDriveStackAspect;
+  return previous ? aspect > kDriveStackAspect / kDriveStackMargin : aspect >= kDriveStackAspect * kDriveStackMargin;
+}
+
+/// The shape of [points] as the mini map draws it (the same projection: longitude scaled by the cosine of the mean latitude, north
+/// up): its width over its height.
+double routeAspect(List<GeoPoint> points) {
+  if (points.length < 2) return 1;
+  var minLat = points.first.lat, maxLat = minLat, minLon = points.first.lon, maxLon = minLon, sumLat = 0.0;
+  for (final p in points) {
+    minLat = math.min(minLat, p.lat);
+    maxLat = math.max(maxLat, p.lat);
+    minLon = math.min(minLon, p.lon);
+    maxLon = math.max(maxLon, p.lon);
+    sumLat += p.lat;
+  }
+  final w = (maxLon - minLon) * math.cos(sumLat / points.length * math.pi / 180);
+  final h = maxLat - minLat;
+  return h <= 1e-9 ? 1e9 : w / h;
+}
+
+/// The least height the elevation box gets when it is under the mini map: its title, a chart you can read, the climb line and its
+/// padding at the normal text size (a narrow phone, whose climb line wraps, and larger text, add to it).
+const double kDriveElevationMinHeight = 120;
+
+/// The least height the mini map gets when it is stacked above the elevation.
+const double kDriveMiniMinHeight = 56;
+
+/// The route mini map and the elevation. Which way they sit is chosen once for a route, by its shape ([driveStacked]):
+/// a wide route stacks (the mini map across the full width, short; the elevation under it, full width), any other sits side by
+/// side (the mini map left, the elevation right). A re-route may change it only when its shape is clearly the other kind.
 class DriveExtras extends StatelessWidget {
-  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId});
+  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.stacked = false});
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
+
+  /// The route's boxes stack (see [driveStacked]); the screen decides it once for each route.
+  final bool stacked;
 
   @override
   Widget build(BuildContext context) {
@@ -260,17 +338,39 @@ class DriveExtras extends StatelessWidget {
         ? null
         : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, climbAhead: elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
+    if (overview == null) return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: chart);
+    final mini = DriveMiniMap(overview: overview, themeId: themeId);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: overview == null
-          ? chart
-          : Row(
+      child: LayoutBuilder(
+        builder: (context, box) {
+          // The mini map takes the height its route needs across the full width (the route fitted with the box's padding), but
+          // never so much that the elevation under it has less than it needs; the elevation takes the rest. Where there is not
+          // room for both at those least heights (a short phone, large text) the two sit side by side, as they do for other routes.
+          final f = math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
+          final narrow = box.maxWidth < 330;
+          final elevMin = kDriveElevationMinHeight * f + (narrow ? 18 : 0);
+          final avail = box.maxHeight - 8;
+          if (!stacked || avail < elevMin + kDriveMiniMinHeight) {
+            return Row(
               children: [
-                Expanded(flex: 4, child: DriveMiniMap(overview: overview, themeId: themeId)),
+                Expanded(flex: 4, child: mini),
                 const SizedBox(width: 8),
                 Expanded(flex: 6, child: chart),
               ],
-            ),
+            );
+          }
+          final natural = (box.maxWidth - 48) / math.min(routeAspect(r!.points), 8) + 48;
+          final miniH = math.max(kDriveMiniMinHeight, math.min(natural, avail - elevMin));
+          return Column(
+            children: [
+              SizedBox(height: miniH, child: mini),
+              const SizedBox(height: 8),
+              Expanded(child: chart),
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -331,25 +431,33 @@ class DriveElevation extends StatelessWidget {
               Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3))),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('Steepest climb ahead', maxLines: 1, style: TextStyle(fontSize: 14, height: 1.15, color: k.secondary))),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text.rich(
-                        TextSpan(children: [
-                          // While the chunks are still coming and none holds a climb yet, no value (not "None", not a message).
-                          TextSpan(text: steep == null ? (elevation.loading ? ' ' : 'None') : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
-                          if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
-                        ]),
-                        maxLines: 1,
-                        style: TextStyle(fontSize: 14, height: 1.15, color: k.text),
-                      ),
-                    ),
-                  ],
+                child: LayoutBuilder(
+                  builder: (context, line) {
+                    // While the chunks are still coming and none holds a climb yet, no value (not "None", not a message).
+                    final value = [
+                      TextSpan(text: steep == null ? (elevation.loading ? ' ' : 'None') : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
+                    ];
+                    final label = TextSpan(text: 'Steepest climb ahead', style: TextStyle(color: k.secondary));
+                    const base = TextStyle(fontSize: 14, height: 1.15);
+                    // Where the box is wide (stacked under the mini map) the label and the figures share one line; where it is
+                    // narrow they are two lines.
+                    if (line.maxWidth >= 260) {
+                      return FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text.rich(TextSpan(style: TextStyle(color: k.text), children: [label, const TextSpan(text: '  '), ...value]), maxLines: 1, style: base),
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text.rich(label, maxLines: 1, style: base)),
+                        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text.rich(TextSpan(style: TextStyle(color: k.text), children: value), maxLines: 1, style: base)),
+                      ],
+                    );
+                  },
                 ),
               ),
             ],

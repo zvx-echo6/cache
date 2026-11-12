@@ -1532,10 +1532,7 @@ class _MapsScreenState extends State<MapsScreen> {
         Positioned.fill(child: Offstage(offstage: on, child: TickerMode(enabled: !on, child: map))),
         if (on)
           Positioned.fill(
-            child: ValueListenableBuilder<CarExtras>(
-              valueListenable: drive.extras,
-              builder: (context, extras, _) => DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId, extras: extras),
-            ),
+            child: DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId),
           ),
       ],
     );

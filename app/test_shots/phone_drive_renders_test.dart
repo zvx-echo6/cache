@@ -1,11 +1,10 @@
 // The phone's drive screen (what the Maps tab shows while a car screen is connected and guiding), the layout the owner chose: the list
 // of turns two thirds, the mini map and the elevation side by side under it. Four themes, the stop and lane arrows case, the car
-// carrying the extras (turns only), rerouting, arrival, a route with no elevation data, and the stress cases (a 320 point wide phone
+// rerouting, arrival, a route with no elevation data, and the stress cases (a 320 point wide phone
 // and a large text size). The route is made up (test/support/drive_rig.dart). The tab bar under the screen is a stand-in for the app's
 // own; the bar above it is the phone's own guidance bar.
 // flutter test test_shots/phone_drive_renders_test.dart --update-goldens  (pictures in test_shots/phone_drive/)
 
-import 'package:cache/car/phone_drive.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'dart:async';
 
@@ -39,13 +38,15 @@ void main() {
     WidgetTester tester,
     String name, {
     CacheThemeId theme = CacheThemeId.dark,
-    CarExtras extras = CarExtras.never,
     bool stop = false,
     bool lanes = false,
     bool rerouting = false,
     bool arrived = false,
     bool shortClimbEnd = false,
     double? partial,
+    double? aspect,
+    bool wideHalf = false,
+    bool sideBySideOnly = false,
     bool noElevation = false,
     ElevationProfile Function()? profile,
     Size size = const Size(390, 844),
@@ -56,7 +57,7 @@ void main() {
     if (noElevation) rig.profile = () => ElevationProfile.none(24600);
     if (profile != null) rig.profile = profile;
     await tester.runAsync(() async {
-      await rig.guide(withStop: stop);
+      await rig.guide(withStop: stop, aspect: aspect);
       rig.elevation.request(rig.nav.route);
       await Future<void>.delayed(const Duration(milliseconds: 30));
     });
@@ -103,7 +104,7 @@ void main() {
         builder: (context) => MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
           child: Scaffold(
-            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
+            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, wideHalf: wideHalf, sideBySideOnly: sideBySideOnly),
             bottomNavigationBar: NavigationBar(
               selectedIndex: 2,
               destinations: const [
@@ -131,7 +132,6 @@ void main() {
   testWidgets('3 Tactical', (t) => draw(t, '3-tactical', theme: CacheThemeId.tactical));
   testWidgets('4 Parchment', (t) => draw(t, '4-parchment', theme: CacheThemeId.parchment));
   testWidgets('5 a stop in the list and lane arrows on the next turn', (t) => draw(t, '5-stop-and-lanes', stop: true, lanes: true));
-  testWidgets('6 the car carries the extras: turns only', (t) => draw(t, '6-car-carries', extras: CarExtras.always));
   testWidgets('7 rerouting', (t) => draw(t, '7-rerouting', rerouting: true));
   testWidgets('8 arrival', (t) => draw(t, '8-arrival', arrived: true));
   testWidgets('9 no elevation data for the route', (t) => draw(t, '9-no-elevation', noElevation: true));
@@ -139,6 +139,16 @@ void main() {
   testWidgets('13 a route a few feet long: the elevation box says there is nothing to chart', (t) => draw(t, '13-tiny-route', profile: driveTinyProfile));
   testWidgets('14 the read has got a quarter of the way along', (t) => draw(t, '14-chunks-quarter', partial: 0.25));
   testWidgets('15 the read has got two thirds of the way along', (t) => draw(t, '15-chunks-two-thirds', partial: 0.66));
+  testWidgets('16 a wide route: stacked', (t) => draw(t, '16-wide-stacked'));
+  testWidgets('17 a tall route: side by side', (t) => draw(t, '17-tall-side-by-side', aspect: 0.5));
+  testWidgets('18 a near-square route', (t) => draw(t, '18-near-square', aspect: 1.1));
+  testWidgets('19 a wide route, stacked, 320 wide', (t) => draw(t, '19-stacked-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
+  testWidgets('20 a wide route, stacked, large text', (t) => draw(t, '20-stacked-large-text', stop: true, lanes: true, textScale: 2));
+  testWidgets('21 a wide route (3.5:1), the list half, the boxes stacked in the other half', (t) => draw(t, '21-a-wide-half', aspect: 3.5, wideHalf: true));
+  testWidgets('22 the same route, the list two thirds, the boxes stacked', (t) => draw(t, '22-b-wide-two-thirds-stacked', aspect: 3.5));
+  testWidgets('23 the same route, the list two thirds, side by side', (t) => draw(t, '23-c-wide-two-thirds-side-by-side', aspect: 3.5, sideBySideOnly: true));
+  testWidgets('24 the half form at 320 wide', (t) => draw(t, '24-d-wide-half-320', aspect: 3.5, wideHalf: true, stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
+  testWidgets('25 the half form at large text', (t) => draw(t, '25-e-wide-half-large-text', aspect: 3.5, wideHalf: true, stop: true, lanes: true, textScale: 2));
   testWidgets('10 a 320 point wide phone', (t) => draw(t, '10-small-phone-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('11 large text (2x)', (t) => draw(t, '11-large-text', stop: true, lanes: true, textScale: 2));
 }
