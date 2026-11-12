@@ -342,10 +342,34 @@ object CarOverlayPainter {
         else -> CarExtrasClass.BIG
     }
 
+    /** The host's band of buttons along the top of the guidance screen (End route and the others): the stable area starts
+     * this far below the surface's top while they show. Measured on the car simulator: 91 at 1280 x 720 (2026-11) and on all
+     * three surfaces of session 95 (1190 x 480, 1190 x 700, 1816 x 1056). */
+    const val HOST_TOP_BAND = 91f
+
+    /** The host's column of map buttons on the right (zoom in and out): the stable area ends at least this far from the
+     * surface's right edge while they show. Measured: 103 at 1280 x 720, 106 on the three surfaces of session 95. */
+    const val HOST_RIGHT_BAND = 103f
+
     /**
-     * How the two extras fit this screen, from the room the car reports. The stable area decides (falling back as in
-     * [layout]); the visible area's right edge moves when the host shows and hides its buttons and plays no part, so the
-     * class holds for the whole drive.
+     * The room the screen's class is measured on: the stable area (falling back as in [layout]), never reaching into the
+     * host's top band ([HOST_TOP_BAND]) or its map buttons' column ([HOST_RIGHT_BAND]). The host takes those buttons away
+     * after a few seconds without a touch and brings them back with a new screen (a re-route, a new instruction), and it
+     * reports a larger stable area while they are away: on the car simulator the 1190 x 480 surface's stable area grew from
+     * 658 x 376 to 658 x 440 and back every few seconds of a drive. Measured on the room as it is with the buttons showing,
+     * the class is the same in both states, so it holds for the whole drive.
+     */
+    fun steadyArea(width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null): Rect {
+        val r = Rect(stable ?: visible ?: Rect(0, 0, width, height))
+        r.top = max(r.top, (HOST_TOP_BAND * density).roundToInt())
+        r.right = min(r.right, width - (HOST_RIGHT_BAND * density).roundToInt())
+        return r
+    }
+
+    /**
+     * How the two extras fit this screen, from the room the car reports: [steadyArea], the stable area as it is with the
+     * host's buttons showing. The visible area's right edge moves when the host shows and hides its buttons and plays no
+     * part, and neither does the stable area's growing while they are away, so the class holds for the whole drive.
      *
      * They FIT when [layout] places both of them, with both asked for, at their full size and clear of the vehicle and the
      * road ahead: the whole box (one-box layout), or the one-line climb card and the full-size corner tile (split layout).
@@ -360,7 +384,7 @@ object CarOverlayPainter {
      */
     fun extrasMeasure(width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null): ExtrasMeasure {
         val full = Rect(0, 0, width, height)
-        val cam = Rect(stable ?: visible ?: full)
+        val cam = steadyArea(width, height, visible, density, stable)
         val d = density
         val l = layout(width, height, cam, d, showClimb = true, showMini = true, stable = cam)
         val mini = l.mini

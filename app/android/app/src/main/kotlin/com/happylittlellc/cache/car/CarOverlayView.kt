@@ -22,8 +22,13 @@ import kotlin.math.roundToInt
  * ([CarOverlayPainter.extrasMeasure]): never on a small screen, always on a big one, and on an in-between one except while
  * the phone's drive screen is showing (the trip's `overlay.phoneDrive`). The one thing here that moves is that change: both
  * pieces fade together, after one pause ([CarExtrasFade]). On the first frame of a drive, and with the first areas of a car
- * session, the pieces are simply there or not. When the car's free room changes so that the pieces would move or go, they
- * fade out where they are, and fade in at the new place if the new room carries them.
+ * session, the pieces are simply there or not, with one exception: on an in-between screen they are held back for
+ * [DRIVE_START_SETTLE_MS] after a drive starts, until the phone has said whether its drive screen is showing, and then fade
+ * in (no pause) only if it is not. When the car's free room changes so that the pieces would move or go, they fade out
+ * where they are, and fade in at the new place if the new room carries them.
+ *
+ * The class is measured once for each steady area ([CarOverlayPainter.steadyArea]) and kept while that stays the same:
+ * the host's buttons hiding and showing during a drive change the stable area it reports, but not the steady one.
  */
 class CarOverlayView(context: Context, private val density: Float) : View(context) {
     private val main = Handler(Looper.getMainLooper())
@@ -47,6 +52,28 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private var phoneDrive = false
     private val fade = CarExtrasFade()
     private var said = false
+
+    /** The steady area and the surface the class was last measured on: the class is kept while they stay the same. */
+    private var measuredOn: Rect? = null
+    private var measuredW = 0
+    private var measuredH = 0
+
+    /** True for [DRIVE_START_SETTLE_MS] after a drive starts: on an in-between screen the pieces are held back meanwhile. */
+    private var startSettling = false
+
+    private val startSettled = Runnable {
+        startSettling = false
+        // Areas waiting to be taken, or to be taken once the pieces have faded out, set the pieces themselves then.
+        if (guidingNow && !waiting && !swapping) {
+            fade.want(onCar(), SystemClock.elapsedRealtime(), pause = false)
+            schedule()
+        }
+    }
+
+    /** Whether the pieces are wanted on the car now: the class and the phone's drive screen, except on an in-between screen
+     * in the first moment of a drive, when the phone's word on its drive screen may still be on its way. */
+    private fun onCar(): Boolean =
+        if (startSettling && extras == CarExtrasClass.IN_BETWEEN) false else extras.onCar(phoneDrive)
 
     /** Called with the class's word for the phone ([CarExtrasClass.carries]) when the car's areas first give a class during
      * a drive, and again when the class changes; once for each, never for a frame or a trip update. Each drive says it anew. */
@@ -80,7 +107,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
                 schedule()
             } else {
                 take(waitingVisible, waitingStable)
-                if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+                if (guidingNow) fade.want(onCar(), now, pause = false)
                 schedule()
             }
         }
@@ -105,19 +132,27 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         if (swapping && fade.alpha(now) <= 0f) {
             swapping = false
             take(swapVisible, swapStable)
-            if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+            if (guidingNow) fade.want(onCar(), now, pause = false)
         }
     }
 
     private fun take(v: Rect?, s: Rect?) {
         visible = v
         stable = s
-        val m = CarOverlayPainter.extrasMeasure(surfaceW(), surfaceH(), v, density, s)
-        if (m.cls != extras || (s != null && !said)) {
-            said = s != null
-            Log.i(TAG, "car extras: ${m.cls} (they ${if (m.fits) "fit" else "do not fit"}; ${m.extrasPx.roundToInt()} px of ${m.freePx.roundToInt()} px free map, ${(m.share * 100).roundToInt()} %)")
+        val w = surfaceW()
+        val h = surfaceH()
+        val steady = CarOverlayPainter.steadyArea(w, h, v, density, s)
+        if (steady != measuredOn || w != measuredW || h != measuredH) {
+            measuredOn = steady
+            measuredW = w
+            measuredH = h
+            val m = CarOverlayPainter.extrasMeasure(w, h, v, density, s)
+            if (m.cls != extras || (s != null && !said)) {
+                said = s != null
+                Log.i(TAG, "car extras: ${m.cls} (they ${if (m.fits) "fit" else "do not fit"}; ${m.extrasPx.roundToInt()} px of ${m.freePx.roundToInt()} px free map, ${(m.share * 100).roundToInt()} %; measured on ${steady.toShortString()}, stable area ${s?.toShortString()})")
+            }
+            extras = m.cls
         }
-        extras = m.cls
         tellCarries()
         invalidate()
     }
@@ -170,7 +205,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
             waitingStable = s
             waiting = true
             main.postDelayed(settle, AREA_SETTLE_MS)
-            if (guidingNow) fade.want(extras.onCar(phoneDrive), now, pause = false)
+            if (guidingNow) fade.want(onCar(), now, pause = false)
             schedule()
             return
         }
@@ -179,7 +214,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         if (guidingNow) {
             // The first areas of a car session: there or not, at once. Later ones that keep the layout: the class may have
             // gone between big and in-between, which is a change like the phone's and waits its pause.
-            if (first) fade.snap(extras.onCar(phoneDrive)) else fade.want(extras.onCar(phoneDrive), now, pause = !wasSwapping)
+            if (first) fade.snap(onCar()) else fade.want(onCar(), now, pause = !wasSwapping)
         }
         schedule()
     }
@@ -206,16 +241,25 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     fun setTrip(t: CarTrip, dark: Boolean, now: Boolean) {
         val mode = this.dark != dark
         this.dark = dark
-        // The phone's drive screen, and the drive itself. A drive's first frame has the pieces or has not; after that a
-        // change waits its pause and fades.
+        // The phone's drive screen, and the drive itself. A drive's first frame has the pieces or has not (on an in-between
+        // screen: not, for the first moment, see onCar); after that a change waits its pause and fades.
         val started = t.guiding && !guidingNow
         guidingNow = t.guiding
         phoneDrive = t.overlay.phoneDrive
+        if (!t.guiding) {
+            startSettling = false
+            main.removeCallbacks(startSettled)
+        }
         if (!t.guiding) toldCarries = null else tellCarries()
         if (started) {
-            fade.snap(extras.onCar(phoneDrive))
+            // The phone says its drive screen is showing only once guidance runs and that screen is built, a moment after
+            // the car's first guiding frame; the pieces must not show on an in-between screen and go again for that.
+            startSettling = true
+            main.removeCallbacks(startSettled)
+            main.postDelayed(startSettled, DRIVE_START_SETTLE_MS)
+            fade.snap(onCar())
         } else if (t.guiding && !swapping) {
-            fade.want(extras.onCar(phoneDrive), SystemClock.elapsedRealtime())
+            fade.want(onCar(), SystemClock.elapsedRealtime())
         }
         schedule()
         if (!t.guiding) {
@@ -245,6 +289,7 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         main.removeCallbacks(flush)
         main.removeCallbacks(settle)
         main.removeCallbacks(tick)
+        main.removeCallbacks(startSettled)
     }
 
     override fun onDraw(canvas: Canvas) = paint(canvas)
@@ -273,6 +318,12 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
          * another screen for 0.2 to 0.5 s when it swapped the guidance screen out and back; one second is twice the
          * longest of those, and short enough that a change that is meant (the host's split view) follows promptly. */
         const val AREA_SETTLE_MS = 1000L
+
+        /** How long the pieces are held back on an in-between screen after a drive starts, for the phone's first word on its
+         * drive screen to arrive (it comes once guidance runs and the phone's drive screen is built: on the car simulator
+         * within about a tenth of a second of the car's first guiding frame). If the phone says it is showing within this
+         * time the pieces never appear; otherwise they fade in, without the pause, when it ends. */
+        const val DRIVE_START_SETTLE_MS = 1000L
 
         /** Between two redraws of a fade: thirty a second, as the car's map is drawn. */
         const val FRAME_MS = 33L
