@@ -60,6 +60,8 @@ Future<(Dev, Dev, ShareLink, String)> drifted({bool extraSky = false}) async {
   final stateFile = File('${b.stateDir.path}/share2.json');
   final j = jsonDecode(await stateFile.readAsString()) as Map;
   ((j['items'] as Map)['e1'] as Map)['base'] = b.folder.text[path];
+  // (b wrote it, with its own name for the field)
+  ((j['items'] as Map)['e1'] as Map)['mine'] = true;
   await stateFile.writeAsString(jsonEncode(j));
   if (extraSky) {
     await a.editFields(id, (fs) => [...fs, txt('Sky')]);
@@ -834,6 +836,79 @@ void main() {
       await rounds([a, b], link, n: 5);
       for (final d in [a, b]) {
         expect(d.labels(id), ['Conditions', 'Notes'], reason: d.label);
+      }
+    });
+  });
+
+  group('third review', () {
+    test('N2. a note another device wrote is not written again by this one when its names change: it is read again, under the new names', () async {
+      final (a, b, link, id) = await drifted();
+      // the note is a's (it says `weather`, a's name for the field); b had read it under its own name for the field (`sky`), and that
+      // changes at the update: b does not write the note, it reads it again
+      final path = b.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.endsWith('.cnote'));
+      final asA = b.folder.text[path]!.replaceFirst('sky:', 'weather:');
+      for (final d in [a, b]) {
+        d.folder.text[path] = asA;
+      }
+      final stateFile = File('${b.stateDir.path}/share2.json');
+      final j = jsonDecode(await stateFile.readAsString()) as Map;
+      ((j['items'] as Map)['e1'] as Map)['base'] = asA;
+      ((j['items'] as Map)['e1'] as Map)['mine'] = false;
+      await stateFile.writeAsString(jsonEncode(j));
+      // (what b read of it under its own names: nothing for the field)
+      for (final e in b.store.entries) {
+        (e['values'] as Map).clear();
+      }
+      await b.nb.reload();
+      var writes = 0;
+      b.folder.onWrite = (p, t) {
+        if (p == path) writes++;
+      };
+      link.sync();
+      await rounds([a, b], link, n: 5);
+      expect(writes, 0, reason: 'b did not write the note: a did');
+      for (final d in [a, b]) {
+        expect((await valuesOf(d, id, 'e1'))['Weather'], 'Sun', reason: d.label);
+      }
+    });
+
+    test('N4. a field changed after a stopped migration and before its rerun is a change of that moment, not of the first try', () async {
+      var t = DateTime.utc(2026, 11, 12, 9);
+      final a = Dev('a', clock: () => t);
+      final b = Dev('b', clock: () => t);
+      await a.boot();
+      await b.boot();
+      final link = ShareLink(a.folder, b.folder);
+      final id = (await a.makeWith('Hikes', [txt('Weather'), txt('Notes')])).id;
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      t = t.add(const Duration(minutes: 1));
+      await a.sync();
+      link.sync();
+      t = t.add(const Duration(minutes: 1));
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Weather' ? f.copyWith(label: 'Sky') : f]);
+      await a.sync();
+      link.sync();
+      t = t.add(const Duration(minutes: 1));
+      await b.add(id, 'eb', 'Entry on b');
+      failOn(b, (p) => p.endsWith('.cnote'));
+      await syncQuiet(b);
+      b.folder.beforeWrite = null;
+      expect(b.labels(id), contains('Sky'), reason: 'b applied the record before it stopped');
+      t = t.add(const Duration(minutes: 1));
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Sky' ? f.copyWith(label: 'Conditions') : f]);
+      await a.sync();
+      link.sync();
+      t = t.add(const Duration(minutes: 1));
+      await b.editFields(id, (fs) => [for (final f in fs) f.label == 'Sky' ? f.copyWith(label: 'Mine') : f]);
+      t = t.add(const Duration(minutes: 1));
+      await rounds([a, b], link, n: 5);
+      for (final d in [a, b]) {
+        expect(d.labels(id), ['Mine', 'Notes'], reason: d.label);
       }
     });
   });

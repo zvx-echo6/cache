@@ -153,7 +153,7 @@ class FieldState {
 /// notebook's id changes ([forId] is no longer its id) they are dropped and the fields are matched to the record again. [pending]: the
 /// migration wrote the record and was setting the ids when the run stopped (or still is); the next run does it again from the start.
 class FieldSnap {
-  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}, Set<String>? derived, this.forId = '', this.pending = false, this.at = 0, this.assigned = const {}})
+  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}, Set<String>? derived, this.forId = '', this.pending = false, this.at = 0, this.assigned = const {}, this.quiet = const {}, this.held = const {}})
       : state = state ?? {},
         order = order ?? [],
         derived = derived ?? {};
@@ -169,6 +169,14 @@ class FieldSnap {
   final int at;
   final Map<String, String> assigned;
 
+  /// For a migration that did not finish: what each field was here before it began and what it was to be after (by id); a field that is
+  /// in neither when the run is repeated was changed by the person since the stop.
+  final Map<String, List<FieldState>> quiet;
+
+  /// A field whose type this device kept against the record (it holds values in it) and the type the record had then, by id: once said, it
+  /// is not said again for that type (two devices that each hold values under another type would correct each other for ever).
+  final Map<String, String> held;
+
   /// The device's own property names (`.cnote` keys) from before it took the record's, by that name to the field's local id: files
   /// that still use one are read as that field.
   final Map<String, String> pnames;
@@ -182,6 +190,8 @@ class FieldSnap {
         if (pending) 'pending': true,
         if (at != 0) 'at': at,
         if (assigned.isNotEmpty) 'assigned': assigned,
+        if (held.isNotEmpty) 'held': held,
+        if (quiet.isNotEmpty) 'quiet': {for (final e in quiet.entries) e.key: [for (final x in e.value) x.toJson()]},
       };
 
   static FieldSnap fromJson(Map j) => FieldSnap(
@@ -193,6 +203,8 @@ class FieldSnap {
         pending: j['pending'] == true,
         at: (j['at'] as num?)?.toInt() ?? 0,
         assigned: {for (final e in (j['assigned'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'},
+        held: {for (final e in (j['held'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'},
+        quiet: {for (final e in (j['quiet'] as Map? ?? const {}).entries) '${e.key}': [for (final x in e.value as List) FieldState.fromJson(x as Map)]},
       );
 }
 
@@ -423,6 +435,9 @@ class FieldPlan {
 
   /// The file key (`.cnote`) each field uses, by gid.
   final Map<String, String> pnames = {};
+
+  /// Types this device kept against the record in this run (see [FieldSnap.held]), by gid.
+  final Map<String, String> held = {};
 }
 
 /// One sync of a notebook's fields. [record] is the merged `fields` of the record; [local] the device's fields as the store has them;
@@ -440,17 +455,19 @@ FieldPlan reconcileFields({
   required int now,
   Map<String, String> props = const {},
   bool exact = false,
+  int? freshNow,
+  Map<String, List<FieldState>> quiet = const {},
 }) {
   final rec = <String, Map<String, dynamic>>{for (final f in record) f['gid'] as String: {...f}};
   final plan = FieldPlan([], []);
-  int bump(Map<String, dynamic> f, String p) => [now, _at(f, p) + 1].reduce((a, b) => a > b ? a : b);
+  int bump(Map<String, dynamic> f, String p, {bool fresh = false}) => [fresh ? (freshNow ?? now) : now, _at(f, p) + 1].reduce((a, b) => a > b ? a : b);
   // A change made here is stamped later than what the record has, so it wins. In an [exact] run (a migration, which a stopped run may
   // be repeating) it is stamped with [now] itself, and wins only against what is older than that: what another device did since the
   // first try stays. A correction that must beat what the record has ([force]) is always later.
   void set(Map<String, dynamic> f, String p, Object? v, {bool force = false}) {
     if (exact && !force && _at(f, p) >= now) return; // the record has something as late: it stays
     f[p] = v;
-    f['${p}_at'] = exact && !force ? now : bump(f, p);
+    f['${p}_at'] = exact && !force ? now : bump(f, p, fresh: force);
     plan.recordChanged = true;
   }
 
@@ -490,16 +507,19 @@ FieldPlan reconcileFields({
     if (s == null) continue; // never applied here yet: nothing it did can be told from what it was given
     final cur = FieldState.ofLocal(lf);
     if (cur == s) continue;
+    // A change the person made since a migration stopped (the field is in neither of the states that run had it in) is a change of
+    // this moment: it is stamped with the time it is found, not with the time of the first try, which would let an older change win.
+    final edited = exact && quiet.containsKey(g) && !quiet[g]!.contains(cur);
     if (lf.hidden && !s.removed) {
-      set(r, 'removed', true);
+      set(r, 'removed', true, force: edited);
       r.remove('inferred');
       continue;
     }
     if (lf.hidden) continue;
-    if (cur.name != s.name) set(r, 'name', cur.name);
-    if (cur.type != s.type) set(r, 'type', cur.type);
-    if (cur.unit != s.unit) set(r, 'unit', cur.unit);
-    if (_canon(cur.choices) != _canon(s.choices)) set(r, 'choices', cur.choices);
+    if (cur.name != s.name) set(r, 'name', cur.name, force: edited);
+    if (cur.type != s.type) set(r, 'type', cur.type, force: edited);
+    if (cur.unit != s.unit) set(r, 'unit', cur.unit, force: edited);
+    if (_canon(cur.choices) != _canon(s.choices)) set(r, 'choices', cur.choices, force: edited);
   }
   // a field the device had and no longer has: removed here
   for (final e in snap.state.entries) {
@@ -545,11 +565,16 @@ FieldPlan reconcileFields({
     var unit = r['unit'] as String?;
     var choices = r['choices'] is List ? [for (final c in r['choices'] as List) '$c'] : null;
     if (lf != null && lf.type != type && hasValues(lf.fid!)) {
-      // values beat shape: this device keeps its type and the record is corrected
+      // values beat shape: this device keeps its type and the record is corrected (once for each type the record has: two devices that
+      // each hold values under another type of one field would otherwise correct each other for ever)
+      final recType = '${r['type']}';
       type = lf.type;
       unit = lf.type == FieldType.number ? lf.unit : null;
       choices = lf.type == FieldType.choice ? lf.choices : null;
-      set(r, 'type', lf.type.wire, force: true);
+      if (snap.held[g] != recType) {
+        set(r, 'type', lf.type.wire, force: true);
+        plan.held[g] = recType;
+      }
       plan.log.add('Notebook fields: the type of "${lf.label}" changed on another device, but this one has values in it; it keeps its type');
     }
     desired.add(LogField(

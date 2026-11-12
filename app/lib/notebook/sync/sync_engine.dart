@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../files.dart';
@@ -69,7 +70,11 @@ class SyncReport {
 
 /// One entry's state at the last sync: where it is, the text it had there, and the entry's rev then.
 class _Item {
-  _Item(this.path, this.base, this.rev, {this.extra = const [], this.imp, this.w0, this.uk = const [], this.ht = false});
+  _Item(this.path, this.base, this.rev, {this.extra = const [], this.imp, this.w0, this.uk = const [], this.ht = false, this.mine = false});
+
+  /// This device wrote the file as it is (it did not read it from another device's write): only such a note is written again when the
+  /// names the notes use for a field change here, since only its writer knows which values were meant.
+  final bool mine;
 
   String path;
   String base;
@@ -91,10 +96,11 @@ class _Item {
   Map<String, dynamic> toJson() => {
         'path': path, 'base': base, 'rev': rev, if (extra.isNotEmpty) 'extra': extra, if (imp != null) 'imp': imp, if (w0 != null) 'w0': w0, if (uk.isNotEmpty) 'uk': uk,
         if (ht) 'ht': true,
+        if (mine) 'mine': true,
       };
 
   static _Item fromJson(Map j) => _Item('${j['path']}', '${j['base']}', (j['rev'] as num?)?.toInt() ?? 0,
-      extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true);
+      extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true, mine: j['mine'] == true);
 }
 
 /// A note the person made with the import tag and no Cache id, found by the scan.
@@ -193,6 +199,10 @@ class NotebookSync {
   /// The lines of a note that no field here holds (a value of a field this device does not have), as the old sync kept them in its
   /// own state file; the first writes of a note take them, so the update does not drop them.
   Map<String, List<String>> _extraSeed = {};
+
+  /// What each note said when the old sync last had it (a signature of its title, text, time, place, photos and lines no field holds),
+  /// from the old sync's own state file: the text the two copies of a note that differ come from, to tell which of them was changed.
+  Map<String, String> _legacySig = {};
   List<SyncConflict> _conflicts = [];
   final Set<String> _ignored = {};
 
@@ -246,6 +256,10 @@ class NotebookSync {
             final j = jsonDecode(await old.readAsString());
             if (j is Map) {
               _props = {for (final e in (j['props'] as Map? ?? const {}).entries) '${e.key}': (e.value as Map).cast<String, String>()};
+              _legacySig = {
+                for (final e in (j['items'] as Map? ?? const {}).entries)
+                  if ((e.value as Map)['base'] is String && _sig((e.value as Map)['base'] as String).isNotEmpty) '${e.key}': _sig((e.value as Map)['base'] as String),
+              };
               _extraSeed = {
                 for (final e in (j['items'] as Map? ?? const {}).entries)
                   if ((e.value as Map)['extra'] is List && ((e.value as Map)['extra'] as List).isNotEmpty) '${e.key}': [for (final x in (e.value as Map)['extra'] as List) '$x'],
@@ -266,6 +280,7 @@ class NotebookSync {
         ..clear()
         ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
       _extraSeed = {for (final e in (j['extra_seed'] as Map? ?? const {}).entries) '${e.key}': [for (final x in e.value as List) '$x']};
+      _legacySig = {for (final e in (j['legacy_sig'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _fieldSnap = {for (final e in (j['fields'] as Map? ?? const {}).entries) '${e.key}': FieldSnap.fromJson(e.value as Map)};
       _bookSnap = {for (final e in (j['book_snap'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'};
       _snap = {
@@ -296,6 +311,7 @@ class NotebookSync {
         if (_stopped.isNotEmpty) 'stopped': [..._stopped],
         if (_bookSnap.isNotEmpty) 'book_snap': _bookSnap,
         if (_extraSeed.isNotEmpty) 'extra_seed': _extraSeed,
+        if (_legacySig.isNotEmpty) 'legacy_sig': _legacySig,
         if (_fieldSnap.isNotEmpty) 'fields': {for (final e in _fieldSnap.entries) e.key: e.value.toJson()},
         if (_snap.isNotEmpty) 'snap': {
           for (final e in _snap.entries)
@@ -398,10 +414,10 @@ class NotebookSync {
   }
 
   /// Records entry [id]'s state, keeping what it is (imported or Cache's own).
-  void _rec(String id, String path, String base, int rev, {List<String>? extra}) {
+  void _rec(String id, String path, String base, int rev, {List<String>? extra, bool mine = false}) {
     final old = _items[id];
     final seeded = _extraSeed.remove(id);
-    _items[id] = _Item(path, base, rev, extra: extra ?? old?.extra ?? seeded ?? const [], imp: old?.imp, w0: old?.w0, uk: old?.uk ?? const [], ht: old?.ht ?? false);
+    _items[id] = _Item(path, base, rev, extra: extra ?? old?.extra ?? seeded ?? const [], imp: old?.imp, w0: old?.w0, uk: old?.uk ?? const [], ht: old?.ht ?? false, mine: mine);
   }
 
   String get _nowWall => wallTime(_now().toIso8601String());
@@ -841,7 +857,7 @@ class NotebookSync {
   }
 
   /// What a device remembers of a notebook's fields after a sync: each field's state by gid, and their order.
-  FieldSnap _snapOfFields(Notebook n, List<Map<String, dynamic>> record, {Map<String, String>? pnames, Set<String>? derived, bool pending = false}) {
+  FieldSnap _snapOfFields(Notebook n, List<Map<String, dynamic>> record, {Map<String, String>? pnames, Set<String>? derived, bool pending = false, Map<String, String> held = const {}}) {
     final recBy = {for (final r in record) '${r['gid']}': r};
     final state = <String, FieldState>{};
     for (final f in n.def.fields) {
@@ -864,6 +880,7 @@ class NotebookSync {
       derived: derived ?? prev?.derived,
       forId: n.id,
       pending: pending,
+      held: {...?prev?.held, ...held},
     );
   }
 
@@ -889,7 +906,9 @@ class NotebookSync {
     // a run that did not finish stamps with the time of the first try, and gives the ids it gave then (when the notebook is the same)
     final repeat = snap != null && snap.pending && snap.forId == n.id;
     final at = repeat && snap.at != 0 ? snap.at : now;
+    final prevQuiet = repeat ? snap.quiet : const <String, List<FieldState>>{};
     Set<String>? derived;
+    var assignedNow = <String, String>{};
     final values = <String>{};
     for (final e in await notebook.entries(n.id)) {
       for (final v in e.values.entries) {
@@ -914,6 +933,7 @@ class NotebookSync {
         logInfo(line, job: 'notebook sync');
       }
       derived = {...mig.derived, if (repeat) ...forget};
+      assignedNow = mig.gids;
       local = [for (final f in asked) (f.gid == null || f.gid!.isEmpty) && mig.gids[f.fid] != null ? f.withGid(mig.gids[f.fid]!) : f];
       // A field this device had at its last sync (before the notebook's id changed, say) and has not now was taken out here: that is a
       // removal made on purpose (the migration alone only infers one), and it goes into the record with the time of this run.
@@ -936,10 +956,6 @@ class NotebookSync {
       for (final f in local) {
         if (f.gid != null && f.gid!.isNotEmpty && snap.state[f.gid] == null) snap.state[f.gid!] = FieldState.ofLocal(f);
       }
-      // The ids given by rule are written down (with the id they depend on) before the notebook takes them: a run that stops after
-      // that is known, by the next one, to hold ids that are to be dropped if the notebook's id has changed.
-      _fieldSnap[n.id] = FieldSnap(state: const {}, derived: {...derived, ...forget}, forId: n.id, pending: true, pnames: _fieldSnap[n.id]?.pnames ?? const {}, at: at, assigned: mig.gids);
-      await _save();
     }
     final plan = reconcileFields(
       notebookId: n.id,
@@ -950,7 +966,20 @@ class NotebookSync {
       props: {...propsBefore},
       now: redo ? at : now,
       exact: redo,
+      freshNow: now,
+      quiet: prevQuiet,
     );
+    if (redo) {
+      // The ids given by rule are written down (with the id they depend on) before the notebook takes them: a run that stops after
+      // that is known, by the next one, to hold ids that are to be dropped if the notebook's id has changed. With them, what each field
+      // is now and is to be: a repeat of the run tells a change made since the stop from those.
+      final quiet = {for (final e in prevQuiet.entries) e.key: [...e.value]};
+      for (final f in [...local, ...plan.local]) {
+        if (f.gid != null && f.gid!.isNotEmpty) quiet.putIfAbsent(f.gid!, () => []).add(FieldState.ofLocal(f));
+      }
+      _fieldSnap[n.id] = FieldSnap(state: const {}, derived: {...?derived, ...forget}, forId: n.id, pending: true, pnames: _fieldSnap[n.id]?.pnames ?? const {}, at: at, assigned: assignedNow, quiet: quiet);
+      await _save();
+    }
     for (final line in plan.log) {
       logInfo(line, job: 'notebook sync');
     }
@@ -1015,11 +1044,17 @@ class NotebookSync {
         final it = _items[e.id];
         if (it == null) continue;
         final t = await folder.readText(it.path);
-        if (t == it.base) it.rev = -1;
+        if (t != it.base) continue;
+        if (it.mine) {
+          it.rev = -1;
+        } else {
+          // another device wrote it: it is read again under the names the notes use now (this device may have read it under its own)
+          it.base = '';
+        }
       }
       logInfo('Notebook fields: the name some fields use in the notes changed here; the notes are written again under the shared names', job: 'notebook sync');
     }
-    _fieldSnap[n.id] = _snapOfFields(book, plan.record, pnames: aliases, derived: redo ? (derived ?? <String>{}).intersection({for (final f in book.def.fields) ?f.gid}) : null);
+    _fieldSnap[n.id] = _snapOfFields(book, plan.record, held: plan.held, pnames: aliases, derived: redo ? (derived ?? <String>{}).intersection({for (final f in book.def.fields) ?f.gid}) : null);
     await _recoverExtras(book);
   }
 
@@ -1036,7 +1071,8 @@ class NotebookSync {
       // (a rev of -1 is this device asking for the note to be written again: it is not a change of the entry)
       if (it == null || it.extra.isEmpty || it.imp != null || (it.rev != e.rev && it.rev != -1)) continue;
       // only a note with a line under a name that is a field's here (the value of a field that was away when the note was read)
-      if (!it.extra.any((l) => toFid.keys.any((k) => l.startsWith('$k:')))) continue;
+      // (a place field is three lines: its name, `_lat` and `_lon`)
+      if (!it.extra.any((l) => toFid.keys.any((k) => l.startsWith('$k:') || l.startsWith('${k}_lat:') || l.startsWith('${k}_lon:')))) continue;
       final t = await folder.readText(it.path);
       if (t == null || t != it.base) continue;
       final doc = _parseAs(e.id, t, book, when: wallTime(e.occurredAt));
@@ -1048,7 +1084,7 @@ class NotebookSync {
       if (!lacking) continue;
       final again = it.rev == -1;
       final saved = await _apply(e.id, doc, byName, text: t);
-      _rec(e.id, it.path, t, saved.rev);
+      _rec(e.id, it.path, t, saved.rev, mine: it.mine);
       if (again) _items[e.id]?.rev = -1;
     }
   }
@@ -1156,9 +1192,10 @@ class NotebookSync {
         if (recs[h]?.kind != RecordKind.live) return;
         final hf = recs[h]!.body['fields'];
         final lr = recs[lo];
-        if (hf is List && lr != null && lr.kind == RecordKind.live) {
-          final merged = mergeFieldLists([lr.body['fields'], hf]);
-          final rec = NbRecord.live(lo, nameAt: lr.at, body: {...lr.body, 'fields': merged, 'fields_at': fieldsAt(merged)});
+        if (lr != null && lr.kind == RecordKind.live) {
+          // each property by its own time: the name, the icon, the colour and every field of the two records
+          final m = NbRecord.merge([lr, recs[h]!])!;
+          final rec = NbRecord.live(lo, nameAt: m.at, body: m.body);
           if (rec.text != lr.text) {
             await folder.writeText('$lo/$kRecordFile', rec.text);
             recs[lo] = rec;
@@ -1323,6 +1360,15 @@ class NotebookSync {
     }
   }
 
+  /// A note's content as a signature: what a person can change in it (title, text, time, place, photos, private, the lines no field
+  /// holds), not how it is written, so the old sync's note and the same note written by this one are alike.
+  static String _sig(String text) {
+    final d = parseObsidian(text, fallbackId: '', fallbackNotebook: '', fieldProps: const {});
+    if (d == null) return '';
+    final j = jsonEncode([d.title ?? '', d.body.trim(), d.when, d.place?.lat, d.place?.lon, d.place?.label, d.photos, d.private, [...d.extra]..sort()]);
+    return sha256.convert(utf8.encode(j)).toString();
+  }
+
   /// Format 2: the entries in the share, by their id.
   Future<Map<String, _Unit>> _scanIds(Map<String, _Unit> out, List<_Unit> newOutside, List<SyncConflict> unreadable, Map<String, (Notebook, NbEntry)> cache) async {
     final ignored = <(_Unit, _Unit)>[];
@@ -1337,14 +1383,35 @@ class NotebookSync {
         // that no two devices each take the other's copy away.
         final uOwn = _dirNb[_topDir(u.path)] == _topDir(u.path);
         final pOwn = _dirNb[_topDir(prev.path)] == _topDir(prev.path);
-        final _Unit keep = uOwn
+        _Unit keep = uOwn
             ? u
             : pOwn
                 ? prev
                 : (prev.path.compareTo(u.path) <= 0 ? prev : u);
+        // Two copies that say different things: the one that is not what the note was before (what the old sync had) is the change, and
+        // the other is the copy of the old text that a device wrote when it updated. Never by the folder. When both were changed, one
+        // stays the entry (by folder, the same on every device) and the other is kept as an entry of its own, not dropped.
+        var changedBoth = false;
+        if (u.text != prev.text) {
+          final anc = _legacySig[u.doc.id];
+          if (anc != null) {
+            final uSame = _sig(u.text) == anc, pSame = _sig(prev.text) == anc;
+            if (uSame && !pSame) {
+              keep = prev;
+            } else if (pSame && !uSame) {
+              keep = u;
+            } else if (!uSame && !pSame && _sig(u.text) != _sig(prev.text)) {
+              changedBoth = true;
+            }
+          }
+        }
         final other = identical(keep, u) ? prev : u;
         out[u.doc.id] = keep;
-        ignored.add((other, keep));
+        if (changedBoth) {
+          newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props)));
+        } else {
+          ignored.add((other, keep));
+        }
       } else {
         // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
@@ -1491,15 +1558,26 @@ class NotebookSync {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
         if (s == null && f == null) {
-          _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra);
+          _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra, mine: true);
           _extraSeed.remove(id);
           r.written++;
         } else if (s == null && f != null) {
           // Both have it and Cache has no record (a folder connected again, or a second device joining).
-          if (f.text != text) {
+          // What the note was before (what the old sync had) tells which of the two was changed: the copy of the old text loses to the other.
+          final anc = f.text != text && idLayout ? _legacySig[id] : null;
+          final cacheIsOld = anc != null && _sig(text) == anc, fileIsOld = anc != null && _sig(f.text) == anc;
+          if (f.text != text && fileIsOld && !cacheIsOld) {
+            _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra, mine: true);
+            _extraSeed.remove(id);
+            r.written++;
+          } else if (f.text != text && cacheIsOld && !fileIsOld) {
+            final saved = await _apply(id, f.doc, byName, text: f.text);
+            _rec(id, f.path, f.text, saved.rev);
+            r.read++;
+          } else if (f.text != text) {
             final m = merge3('', text, f.text);
             if (m.clean) {
-              _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra);
+              _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: doc.extra, mine: true);
               _extraSeed.remove(id);
               r.written++;
             } else {
@@ -1519,11 +1597,11 @@ class NotebookSync {
           } else {
             // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
             // file or block is written back and the entry stays.
-            _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+            _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra, mine: true);
             r.written++;
           }
         } else if (cacheChanged && !fileChanged) {
-          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const [], mine: true);
           r.written++;
         } else if (!cacheChanged && fileChanged) {
           final saved = await _apply(id, f.doc, byName, text: f.text);
@@ -1539,7 +1617,7 @@ class NotebookSync {
             }
             final saved = await _apply(id, mergedDoc, byName);
             final path = await _write(id, mergedDoc, c.$1, m.text);
-            _rec(id, path, m.text, saved.rev);
+            _rec(id, path, m.text, saved.rev, mine: true);
             r.merged.add(doc.title ?? doc.when);
           } else {
             conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
@@ -1592,7 +1670,7 @@ class NotebookSync {
         if (i >= 0) await folder.writeText(u.path, cur.replaceRange(i, i + u.text.length, text));
         _items[id] = _Item(u.path, text, saved.rev, extra: doc.extra);
       } else {
-        _items[id] = _Item(u.path, text, saved.rev, extra: doc.extra);
+        _items[id] = _Item(u.path, text, saved.rev, extra: doc.extra, mine: true);
         await folder.writeText(u.path, text);
       }
       r.read++;
@@ -1651,7 +1729,7 @@ class NotebookSync {
           final doc = _docOf(book, e);
           final text = _render(doc);
           _items.remove(c.entryId);
-          _items[c.entryId] = _Item(await _write(c.entryId, doc, book, text), text, e.rev, extra: doc.extra);
+          _items[c.entryId] = _Item(await _write(c.entryId, doc, book, text), text, e.rev, extra: doc.extra, mine: true);
         } else {
           if (e != null) await notebook.deleteEntry(c.entryId);
           _items.remove(c.entryId);
@@ -1662,7 +1740,7 @@ class NotebookSync {
         final text = _renderFor(c.entryId, doc);
         if (keepCache) {
           if (c.fileText != null) await _keepCopy(doc.title ?? doc.when, c.fileText!);
-          _rec(c.entryId, await _write(c.entryId, doc, book, text), text, e.rev, extra: _items[c.entryId]?.extra ?? const []);
+          _rec(c.entryId, await _write(c.entryId, doc, book, text), text, e.rev, extra: _items[c.entryId]?.extra ?? const [], mine: true);
         } else {
           await _keepCopy(doc.title ?? doc.when, text);
           final fileDoc = c.fileText == null ? null : _parseAs(c.entryId, c.fileText!, book, when: doc.when);
@@ -1695,7 +1773,11 @@ class NotebookSync {
     return made;
   }
 
-  static final Random _rnd = Random.secure();
+  static Random _rnd = Random.secure();
+
+  /// The ids made from now on come from this seed (a test that wants the same ids every run).
+  @visibleForTesting
+  static void seedIds(int seed) => _rnd = Random(seed);
 
   String _freshId() {
     String hex(int n) => [for (var i = 0; i < n; i++) _rnd.nextInt(16).toRadixString(16)].join();

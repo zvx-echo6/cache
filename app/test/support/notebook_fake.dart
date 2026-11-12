@@ -26,9 +26,20 @@ class FakeNotebookBackend implements NotebookBackend {
   /// Makes the next call of this op fail (code `io`): a kill at a known step.
   String? failOpNext;
 
+  /// Makes the call after this many calls fail (code `io`), whatever it is.
+  int? failAfterCalls;
+
   @override
   Future<Map<String, dynamic>> call(String op, [Map<String, dynamic> args = const {}]) async {
     calls.add(op);
+    // a kill at any call: after this many calls the next one fails (null: never)
+    if (failAfterCalls != null) {
+      if (failAfterCalls! <= 0) {
+        failAfterCalls = null;
+        throw CacheSearchException('io', 'the store stopped');
+      }
+      failAfterCalls = failAfterCalls! - 1;
+    }
     if (failOpNext == op) {
       failOpNext = null;
       throw CacheSearchException('io', 'failed');
@@ -215,7 +226,10 @@ class FakeNotebookBackend implements NotebookBackend {
     return n;
   }
 
-  static final Random _rnd = Random.secure();
+  static Random _rnd = Random.secure();
+
+  /// The field ids made from now on come from this seed (a test that wants the same ids every run).
+  static void reseed(int seed) => _rnd = Random(seed);
   static String _gid() => List.generate(32, (_) => _rnd.nextInt(16).toRadixString(16)).join();
 
   Map<String, dynamic> _deleteNb(String id) {

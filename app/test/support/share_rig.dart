@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cache/notebook/notebook_model.dart';
+import 'package:flutter_test/flutter_test.dart' show addTearDown;
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/folder.dart';
@@ -14,7 +15,11 @@ import 'notebook_fake.dart';
 class MemFolder implements SyncFolder {
   final Map<String, String> text = {};
   final Map<String, Uint8List> bytes = {};
+  final Map<String, int> mtimes = {};
   bool up = true;
+
+  /// One counter for every folder of a test: the time a file was written, the same every run.
+  static int tick = 0;
 
   /// A kill during removals: after this many deletes the next one throws (null: never).
   int? failAfterDeletes;
@@ -28,7 +33,7 @@ class MemFolder implements SyncFolder {
   @override
   Future<List<FolderFile>> list(String dir) async => [
         for (final p in ({...text.keys, ...bytes.keys}.toList()..sort()))
-          if (dir.isEmpty || p.startsWith('$dir/')) FolderFile(p, 0, (text[p] ?? '').length),
+          if (dir.isEmpty || p.startsWith('$dir/')) FolderFile(p, mtimes[p] ?? 0, (text[p] ?? '').length),
       ];
 
   @override
@@ -42,6 +47,7 @@ class MemFolder implements SyncFolder {
     final h = beforeWrite;
     if (h != null) await h(path);
     text[path] = t;
+    mtimes[path] = ++tick;
     onWrite?.call(path, t);
   }
 
@@ -61,6 +67,7 @@ class MemFolder implements SyncFolder {
       failAfterDeletes = failAfterDeletes! - 1;
     }
     text.remove(path);
+    mtimes.remove(path);
     bytes.remove(path);
   }
 
@@ -113,11 +120,14 @@ class ShareLink {
         } else {
           win = x ?? y;
         }
+        final from = win == x ? a : b;
         for (final f in [a, b]) {
           if (win == null) {
             f.text.remove(p);
+            f.mtimes.remove(p);
           } else {
             f.text[p] = win;
+            f.mtimes[p] = from.mtimes[p] ?? 0;
           }
         }
       }
@@ -139,6 +149,9 @@ class ShareLink {
 class Dev {
   Dev(this.label, {this.old = false, this.autoUpgrade = true, this.clock, this.gateFn}) {
     _wire();
+    try {
+      addTearDown(dispose);
+    } catch (_) {}
   }
 
   final String label;
@@ -155,6 +168,13 @@ class Dev {
   bool autoUpgrade;
 
   void restart() => _wire();
+
+  /// Takes the device's folder of state away (a test that made it does not leave it behind).
+  void dispose() {
+    try {
+      stateDir.deleteSync(recursive: true);
+    } catch (_) {}
+  }
 
   /// The update: the app starts again, as the new version, on the same notebooks, share folder and files.
   Future<void> updateCache() async {
