@@ -7,6 +7,7 @@ import 'package:cache/car/phone_drive.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
+import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/ui/drive_screen.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
@@ -330,6 +331,41 @@ void main() {
       expect(find.text('You have arrived'), findsWidgets);
       expect(rowIndexes(tester), isEmpty);
       expect(find.byKey(const ValueKey('guidance-done')), findsOneWidget);
+    });
+
+    test('the mini map\'s grade pill follows the car\'s rule: left out where it would lie under the destination dot', () {
+      const end = Offset(300, 40);
+      expect(RouteMiniMapPainter.pillFits(const Offset(150, 100), end, 1), isTrue);
+      expect(RouteMiniMapPainter.pillFits(end, end, 1), isFalse, reason: 'a climb at the destination end');
+      expect(RouteMiniMapPainter.pillFits(const Offset(310, 45), end, 1), isFalse);
+      expect(RouteMiniMapPainter.pillFits(const Offset(300 - 22, 40), end, 1), isTrue, reason: 'the edge: 14 + 6 + 2 apart');
+      expect(RouteMiniMapPainter.pillFits(const Offset(300 - 21, 40), end, 1), isFalse);
+      expect(RouteMiniMapPainter.pillFits(const Offset(300, 40 + 18), end, 1), isTrue);
+    });
+
+    test('a route too short to chart is not charted', () {
+      expect(driveTinyProfile().chartable, isFalse);
+      expect(driveProfile().chartable, isTrue);
+      expect(ElevationProfile.none(24600).chartable, isFalse);
+      expect(ElevationProfile.fromSamples([for (var x = 0.0; x <= 160; x += 40) x], [for (var x = 0.0; x <= 160; x += 40) 1000 + x], totalM: 160).chartable, isFalse);
+    });
+
+    testWidgets('on a route a few feet long the elevation box shows the panel\'s own no-data line, never a length or an axis', (tester) async {
+      await tester.runAsync(() async {
+        rig.profile = driveTinyProfile;
+        await rig.guide();
+        rig.elevation.request(rig.nav.route);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      rig.at(1, 400);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: Scaffold(body: SizedBox(width: 300, height: 220, child: DriveElevation(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(CacheThemeId.dark)))),
+      ));
+      await tester.pump();
+      expect(find.text('No elevation data for this route.'), findsOneWidget);
+      expect(find.textContaining('Whole route'), findsNothing);
+      expect(find.byKey(const ValueKey('elevation-chart')), findsNothing);
     });
 
     testWidgets('where the extras are, case 1: a small car screen never carries them, so the phone draws the mini map and the elevation', (tester) async {

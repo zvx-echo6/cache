@@ -7,7 +7,11 @@
 
 import 'package:cache/car/phone_drive.dart';
 import 'package:cache/maps/palette/map_palette.dart';
+import 'dart:async';
+
 import 'package:cache/nav/elevation/elevation_profile.dart';
+import 'package:cache/nav/elevation/route_elevation.dart';
+import 'package:cache/nav/elevation/route_sampler.dart';
 import 'package:cache/nav/ui/drive_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
@@ -40,13 +44,17 @@ void main() {
     bool lanes = false,
     bool rerouting = false,
     bool arrived = false,
+    bool shortClimbEnd = false,
+    double? partial,
     bool noElevation = false,
+    ElevationProfile Function()? profile,
     Size size = const Size(390, 844),
     EdgeInsets? insets,
     double textScale = 1,
   }) async {
     phone(tester, size: size, ratio: 3);
     if (noElevation) rig.profile = () => ElevationProfile.none(24600);
+    if (profile != null) rig.profile = profile;
     await tester.runAsync(() async {
       await rig.guide(withStop: stop);
       rig.elevation.request(rig.nav.route);
@@ -60,6 +68,8 @@ void main() {
         laneJson({D.through}),
         laneJson({D.through, D.right}),
       ]);
+    } else if (shortClimbEnd) {
+      rig.at(5, 500);
     } else if (arrived) {
       rig.at(8, 20);
       rig.nav.arrived = true;
@@ -71,12 +81,29 @@ void main() {
       rig.nav.rerouting = true;
       rig.nav.poke();
     }
+    // A read still going: the chunks so far cover [partial] of the route, from the start (where the driver is).
+    var elevation = rig.elevation;
+    if (partial != null) {
+      final chunks = StreamController<ElevationChunk>();
+      addTearDown(chunks.close);
+      elevation = RouteElevation(start: (r) => ElevationJob(Completer<ElevationProfile>().future, chunks: chunks.stream));
+      addTearDown(elevation.dispose);
+      elevation.request(rig.nav.route, following: true);
+      final samples = resampleRoute([for (final p in rig.nav.route!.points) (p.lat, p.lon)]);
+      final shape = driveProfile();
+      final upTo = (samples.length * partial).floor();
+      for (var a = 0; a < upTo; a += kElevationChunkSamples) {
+        final b = a + kElevationChunkSamples < upTo ? a + kElevationChunkSamples : upTo;
+        chunks.add((first: a, heights: [for (var i = a; i < b; i++) shape.elevationAt(samples[i].distM) ?? double.nan]));
+      }
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+    }
     await tester.pumpWidget(shotApp(
       Builder(
         builder: (context) => MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
           child: Scaffold(
-            body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
+            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
             bottomNavigationBar: NavigationBar(
               selectedIndex: 2,
               destinations: const [
@@ -108,6 +135,10 @@ void main() {
   testWidgets('7 rerouting', (t) => draw(t, '7-rerouting', rerouting: true));
   testWidgets('8 arrival', (t) => draw(t, '8-arrival', arrived: true));
   testWidgets('9 no elevation data for the route', (t) => draw(t, '9-no-elevation', noElevation: true));
+  testWidgets('12 a short steep climb at the destination end: no grade badge on the mini map, as on the car', (t) => draw(t, '12-short-climb-at-destination', shortClimbEnd: true, profile: driveEndClimbProfile));
+  testWidgets('13 a route a few feet long: the elevation box says there is nothing to chart', (t) => draw(t, '13-tiny-route', profile: driveTinyProfile));
+  testWidgets('14 the read has got a quarter of the way along', (t) => draw(t, '14-chunks-quarter', partial: 0.25));
+  testWidgets('15 the read has got two thirds of the way along', (t) => draw(t, '15-chunks-two-thirds', partial: 0.66));
   testWidgets('10 a 320 point wide phone', (t) => draw(t, '10-small-phone-320', stop: true, lanes: true, size: const Size(320, 640), insets: const EdgeInsets.only(top: 24, bottom: 16)));
   testWidgets('11 large text (2x)', (t) => draw(t, '11-large-text', stop: true, lanes: true, textScale: 2));
 }
