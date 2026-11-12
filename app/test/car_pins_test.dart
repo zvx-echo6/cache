@@ -20,7 +20,6 @@ import 'package:cache/notebook/pin_image.dart';
 import 'package:cache/notebook/place_style.dart' show markerColor;
 import 'package:cache/theme.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/painting.dart' show Color;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show IconData;
 import 'package:flutter_test/flutter_test.dart';
