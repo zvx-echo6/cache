@@ -72,7 +72,9 @@ The routes in these pictures were made by hand along the base map's road and tra
 (`app/test_shots/guide_data/drive_route.json`, `offroad_route.json`), not recorded from the core. The heights of their
 elevation charts (`drive_elevation.json`, `offroad_elevation.json`) were read from the elevation tiles the map's hillshade is
 drawn from; each file says where its numbers came from. The view of every route picture is the screen's own: it fits the
-route into view above what its panel, the credits and the scale cover (more with Off-road chosen, so the trail is smaller there).
+route into the free part of the map that shows it larger, with nothing of it under what is over the map. The drive is in the
+strip under the position chip and the map's buttons and above the scale; with Off-road chosen the panel leaves that strip no
+room, and the trail is in the column between the chip and the buttons.
 
 The pins on these maps are drawn for a 3x phone, whatever scale the test draws at: the guide test tells the screen that scale
 (`kGuidePhoneScale` in `app/test_shots/guide_map_kit.dart`) and the renderer shows an added image at that many pixels per point

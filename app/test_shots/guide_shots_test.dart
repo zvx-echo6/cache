@@ -1464,7 +1464,8 @@ void main() {
     await mapShot(tester, m, 'directions-panel', 'directions');
 
     // Off-road, on foot: the phone is at the Windows parking, and the way to the arch of the place card is its trail. The screen
-    // fits the route into view above what its panel covers (more with Off-road chosen), and the picture shows that view.
+    // fits the route into the free part of the map (with Off-road chosen: the column between the position chip and the map's
+    // buttons), and the picture shows that view.
     m.nav.cancelDirections();
     final foot = m.sample.offroadStart;
     m.r.location.publish(fixAt(foot.lat, foot.lon, heading: m.sample.offroadStartHeading));
