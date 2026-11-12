@@ -10,8 +10,10 @@ import '../theme.dart';
 /// The two Cache-drawn pieces on the car's map (the climb-ahead card and the route mini map), as plain data for the car side to
 /// paint (app/android/.../car/CarOverlayPainter.kt). Nothing here is drawn; the car works nothing out, it paints what it is sent.
 ///
-/// The defaults of the two switches are these constants, so turning a piece off for everyone is a one-line change. They reach the
-/// car in the trip as `overlay: {climb: .., miniMap: ..}`. (There is no car section in Settings yet, so no per-person switch.)
+/// Whether the car draws them is the car's own rule (by the size of its screen), told one fact by the phone: `overlay:
+/// {phoneDrive: bool}` ([carOverlaySwitches]).
+///
+/// These two defaults belong to the removed Settings switches and are no longer sent; they go with the switches' settings.
 const bool kCarClimbAheadDefault = true;
 const bool kCarRouteMiniMapDefault = true;
 
@@ -295,5 +297,8 @@ Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) {
   };
 }
 
-/// The `overlay` switches.
-Map<String, bool> carOverlaySwitches({bool climb = kCarClimbAheadDefault, bool miniMap = kCarRouteMiniMapDefault}) => {'climb': climb, 'miniMap': miniMap};
+/// The `overlay` part of the trip: the one fact the phone tells the car, `phoneDrive`. It is true only while the phone's drive
+/// screen is actually showing to a person (a car screen is guiding, the phone is unlocked with Cache in front, the Maps tab is
+/// selected and the drive screen is the thing on it), and false in every other case. The pause and the fade are the car's; the
+/// phone sends the plain truth at once. The old keys `climb` and `miniMap` are no longer sent.
+Map<String, bool> carOverlaySwitches({bool phoneDrive = false}) => {'phoneDrive': phoneDrive};

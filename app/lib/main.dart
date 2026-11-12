@@ -51,6 +51,7 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
+import 'car/phone_drive.dart';
 import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
@@ -853,6 +854,8 @@ class _CacheAppState extends State<CacheApp> {
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
+  // Whether the phone's drive screen is showing to a person; the car is told (car/phone_drive.dart).
+  final PhoneDriveSignal _phoneDrive = PhoneDriveSignal();
   // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
   late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
   CacheThemeId _applied = CacheThemeId.dark;
@@ -1130,7 +1133,8 @@ class _CacheAppState extends State<CacheApp> {
         drive: carDrive,
         elevation: routeElevation,
         theme: () => app.theme,
-        overlay: () => carOverlaySwitches(climb: app.carClimbAhead, miniMap: app.carRouteMiniMap),
+        overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.value),
+        phoneDrive: _phoneDrive,
         settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
@@ -1285,6 +1289,7 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     _car?.connected.removeListener(_onCarScreen);
     _car?.dispose();
+    _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);

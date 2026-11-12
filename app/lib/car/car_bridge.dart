@@ -35,6 +35,7 @@ class CarBridge {
     this.theme,
     this.overlay,
     this.settings,
+    this.phoneDrive,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -53,10 +54,15 @@ class CarBridge {
   /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
   final CacheThemeId Function()? theme;
 
-  /// The two car switches (Settings > Car); null: the defaults. [settings] tells the bridge when they may have changed, so the car
+  /// The `overlay` part of the trip ([carOverlaySwitches]); null: `phoneDrive` false. [settings] tells the bridge when they may have changed, so the car
   /// has the new trip within one update.
   final Map<String, bool> Function()? overlay;
   final Listenable? settings;
+
+  /// Changes when the phone's drive screen starts or stops showing to a person (the value itself goes out in [overlay], as
+  /// `phoneDrive`). The trip goes to the car at once on every change, with no throttle of its own: the pause and the fade
+  /// before the car acts on it are the car's.
+  final Listenable? phoneDrive;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -101,6 +107,7 @@ class CarBridge {
     nav.location.addListener(_onLocation);
     elevation?.addListener(_schedule);
     settings?.addListener(_onSettings);
+    phoneDrive?.addListener(_onPhoneDrive);
     _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
@@ -121,6 +128,7 @@ class CarBridge {
     if (_started) nav.location.removeListener(_onLocation);
     elevation?.removeListener(_schedule);
     settings?.removeListener(_onSettings);
+    phoneDrive?.removeListener(_onPhoneDrive);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -193,6 +201,14 @@ class CarBridge {
       if (connected.value) unawaited(_send('styleChanged', null));
     }
     _schedule();
+  }
+
+  /// The phone's drive screen started or stopped showing: the trip goes out now.
+  void _onPhoneDrive() {
+    if (!connected.value) return;
+    _pushTimer?.cancel();
+    _pushTimer = null;
+    unawaited(push());
   }
 
   void _onMaps() {
