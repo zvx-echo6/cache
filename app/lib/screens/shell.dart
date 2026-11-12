@@ -43,6 +43,7 @@ import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
 import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
@@ -101,6 +102,7 @@ class Shell extends StatefulWidget {
     required this.video,
     required this.browse,
     required this.nav,
+    this.elevation,
     required this.layout,
     required this.hub,
     this.notebooks,
@@ -130,6 +132,7 @@ class Shell extends StatefulWidget {
   final VideoState video;
   final BrowseState browse;
   final NavState nav;
+  final RouteElevation? elevation;
   final LayoutState layout;
   final SettingsHub hub;
 
@@ -817,7 +820,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),

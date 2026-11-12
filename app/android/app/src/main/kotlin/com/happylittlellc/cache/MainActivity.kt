@@ -14,6 +14,7 @@ import android.os.Build
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -40,12 +41,18 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onNewIntent(intent: Intent) {
+        // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
+        // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
+        // is dropped. Flutter never sees it: it would read the address as a page to open, and the app has no such pages.
+        if (NavIntent.fromPhone(intent)) return
         super.onNewIntent(intent)
         readBenchExtras(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
+        // The same when the request is what started this activity: the app opens as from its icon.
+        if (NavIntent.fromPhone(intent)) intent = NavIntent.plainLaunch(intent)
         super.onCreate(savedInstanceState)
         readBenchExtras(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
@@ -173,6 +180,8 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // What this build was made with (cache/build) is answered by the engine itself, with or without this activity
+        // (car/SharedEngine.kt).
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
     }

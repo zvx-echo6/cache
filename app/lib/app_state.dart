@@ -14,6 +14,7 @@ import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/bench_options.dart';
 import 'platform/memory.dart';
+import 'car/car_overlay.dart';
 import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
@@ -97,6 +98,10 @@ class AppState extends ChangeNotifier {
 
   /// Settings > Appearance > "Dark pages": PDF pages drawn light on dark in a dark theme (off: dimmed). Off by default.
   bool darkPdfPages = false;
+  /// Settings > Car: the climb-ahead card and the route mini map on the Android Auto screen. On by default (the constants are in
+  /// lib/car/car_overlay.dart); they reach the car in the trip's `overlay` block.
+  bool carClimbAhead = kCarClimbAheadDefault;
+  bool carRouteMiniMap = kCarRouteMiniMapDefault;
   Directory? modelsDir;
   /// The chat models in the models folder (a search model's file is not one: see [searchModel]).
   List<ModelEntry> models = [];
@@ -254,6 +259,8 @@ class AppState extends ChangeNotifier {
       largeModuleIcons = j['moduleIcons'] == 'large';
       darkPdfPages = j['pdfDarkPages'] == true;
       modelDeclined = j['modelDeclined'] == true;
+      carClimbAhead = j['carClimbAhead'] as bool? ?? kCarClimbAheadDefault;
+      carRouteMiniMap = j['carRouteMiniMap'] as bool? ?? kCarRouteMiniMapDefault;
       pdfDarkPages.value = darkPdfPages;
       _unsupported
         ..clear()
@@ -279,11 +286,25 @@ class AppState extends ChangeNotifier {
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'pdfDarkPages': darkPdfPages,
         'modelDeclined': modelDeclined,
+        'carClimbAhead': carClimbAhead,
+        'carRouteMiniMap': carRouteMiniMap,
         'unsupported': _unsupported.toList(),
         'names': _names,
         'plainNames': _plainNames,
       }));
     } catch (_) {}
+  }
+
+  Future<void> setCarClimbAhead(bool on) async {
+    carClimbAhead = on;
+    notifyListeners();
+    await _writeSettings();
+  }
+
+  Future<void> setCarRouteMiniMap(bool on) async {
+    carRouteMiniMap = on;
+    notifyListeners();
+    await _writeSettings();
   }
 
   Future<void> setTheme(CacheThemeId id) async {

@@ -49,7 +49,11 @@ import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
+import 'car/car_overlay.dart';
+import 'car/car_support.dart';
+import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
+import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
@@ -835,6 +839,8 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
+  late final RouteElevation routeElevation = RouteElevation(loader: tileServerElevationLoader(maps.engine));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
@@ -845,9 +851,13 @@ class _CacheAppState extends State<CacheApp> {
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
   bool _coreDone = false;
 
+  final IgnoreRoutePushes _noRoutePushes = IgnoreRoutePushes();
+
   @override
   void initState() {
     super.initState();
+    // Before the app's own navigator starts listening: a page address from the platform is never pushed as a route.
+    WidgetsBinding.instance.addObserver(_noRoutePushes);
     ModelDownloads.shared = modelDownloads;
     // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
     // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
@@ -1104,10 +1114,15 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
+      unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
       _car = CarBridge(
         nav: nav,
         maps: maps,
         drive: carDrive,
+        elevation: routeElevation,
+        theme: () => app.theme,
+        overlay: () => carOverlaySwitches(climb: app.carClimbAhead, miniMap: app.carRouteMiniMap),
+        settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
@@ -1219,6 +1234,7 @@ class _CacheAppState extends State<CacheApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_noRoutePushes);
     _lifecycle.dispose();
     _foregroundUpdates.dispose();
     _modelRelease.dispose();
@@ -1324,6 +1340,7 @@ class _CacheAppState extends State<CacheApp> {
           video: video,
           browse: browse,
           nav: nav,
+          elevation: routeElevation,
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,
