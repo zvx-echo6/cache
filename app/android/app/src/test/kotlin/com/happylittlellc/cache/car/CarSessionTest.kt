@@ -464,8 +464,8 @@ class CarSessionTest {
             asked += method
             done(null)
         }
-        val kept = mutableListOf<Boolean>()
-        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        var ended = 0
+        val c = start(session = CarSession(startEngine = {}, endEngine = { ended++ }))
         push("trip", trip("guiding", guiding))
         // As the library does it when the session is destroyed: its own stop first (the app's callback is posted), then the
         // session's teardown, then the callback.
@@ -474,8 +474,8 @@ class CarSessionTest {
         shadowOf(Looper.getMainLooper()).idle()
         assertFalse("stop" in asked)
         assertFalse(CarLink.carConnected)
-        // The engine guidance runs in stays for the phone.
-        assertEquals(listOf(true), kept)
+        // The session says it has ended, once. The engine guidance runs in is never destroyed (SharedEngineTest).
+        assertEquals(1, ended)
         // The car connects again; the phone, still guiding, pushes its trip.
         car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
         start()
@@ -487,18 +487,26 @@ class CarSessionTest {
     }
 
     @Test
-    fun nothingIsKeptForATestDriveOrWithNoGuidance() {
-        CarLink.dartForTests = { _, _, done -> done(null) }
-        val kept = mutableListOf<Boolean>()
+    fun aSessionSaysItHasEndedOnceWhateverWasOn() {
+        val asked = mutableListOf<String>()
+        CarLink.dartForTests = { method, _, done ->
+            asked += method
+            done(null)
+        }
+        var ended = 0
         // No guidance when the car leaves.
-        start(session = CarSession(startEngine = {}, endEngine = { kept += it })).moveToState(Lifecycle.State.DESTROYED)
-        // A test drive (the host switched it on): it ends with the car session.
+        start(session = CarSession(startEngine = {}, endEngine = { ended++ })).moveToState(Lifecycle.State.DESTROYED)
+        assertEquals(1, ended)
+        // A test drive (the host switched it on): the phone ends it when the car leaves (lib/car/car_bridge.dart), so the car
+        // side does not ask for a stop here either.
         car = TestCarContext.createCarContext(RuntimeEnvironment.getApplication())
-        val c = start(session = CarSession(startEngine = {}, endEngine = { kept += it }))
+        val c = start(session = CarSession(startEngine = {}, endEngine = { ended++ }))
         nav.navigationManagerCallback!!.onAutoDriveEnabled()
         push("trip", trip("guiding", guiding))
         c.moveToState(Lifecycle.State.DESTROYED)
-        assertEquals(listOf(false, false), kept)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(2, ended)
+        assertFalse("stop" in asked)
     }
 
     // Bug: a navigation request delivered to the phone's activity threw in Flutter and went nowhere.
