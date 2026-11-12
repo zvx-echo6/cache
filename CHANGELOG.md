@@ -29,6 +29,7 @@ release notes).
 - Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
 - Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
 - Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
+- Library: if the part of Cache that was reading a PDF is closed while it holds PDFium, the next PDF read no longer waits for ever
 - Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight
 - Weather: when the app is opened, or comes back to the screen, hours after the last update, Home no longer shows the earlier temperature, or yesterday's high and low, as the weather now; a reading counts for three hours, as on the Weather screen, and after that Home shows today's forecast
 - Weather: a source whose first download failed says why on the Weather screen, instead of "Not downloaded yet. Update now to get it."
