@@ -17,6 +17,7 @@ pub mod http;
 pub mod keys;
 pub mod library;
 pub mod llm;
+pub mod models;
 pub mod pages;
 pub mod tiles;
 pub mod tls;
