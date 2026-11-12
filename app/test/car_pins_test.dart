@@ -93,6 +93,8 @@ void main() {
   List<Map<String, dynamic>> features(Map<String, Object?> m) =>
       [for (final f in (jsonDecode(m['geojson'] as String) as Map)['features'] as List) (f as Map).cast<String, dynamic>()];
   List<List<num>> coords(Map<String, Object?> m) => [for (final f in features(m)) (f['geometry']['coordinates'] as List).cast<num>()];
+  // A pin's place as text: a list of lists matches an inner list by identity, not by its numbers.
+  List<String> at(Map<String, Object?> m) => [for (final c in coords(m)) '${c[0]},${c[1]}'];
   Map<String, Uint8List> images(Map<String, Object?> m) => (m['images'] as Map).cast<String, Uint8List>();
 
   Future<NbEntry> place(Notebook n, String title, double lat, double lon, {Map<String, dynamic> props = const {}}) =>
@@ -179,7 +181,7 @@ void main() {
       final e = await place(trails, 'Juniper Spring', 43.25, -115.15);
       await settle();
       expect(sent, hasLength(2));
-      expect(coords(sent.last), contains([-115.15, 43.25]));
+      expect(at(sent.last), contains('-115.15,43.25'));
       expect(images(sent.last), isEmpty, reason: 'same icon and colour: the car has the picture');
       expect(sent.last['reset'], isFalse);
       expect(renders, rendered);
@@ -187,13 +189,13 @@ void main() {
       await notebooks.saveEntry(id: e.id, notebookId: trails.id, occurredAt: e.occurredAt, title: e.title, place: const NbPlace(lat: 43.3, lon: -115.4));
       await settle();
       expect(sent, hasLength(3));
-      expect(coords(sent.last), contains([-115.4, 43.3]));
-      expect(coords(sent.last), isNot(contains([-115.15, 43.25])));
+      expect(at(sent.last), contains('-115.4,43.3'));
+      expect(at(sent.last), isNot(contains('-115.15,43.25')));
 
       await notebooks.deleteEntry(e.id);
       await settle();
       expect(sent, hasLength(4));
-      expect(coords(sent.last), isNot(contains([-115.4, 43.3])));
+      expect(at(sent.last), isNot(contains('-115.4,43.3')));
     });
 
     test('a renamed place changes nothing the car draws: nothing is sent', () async {
