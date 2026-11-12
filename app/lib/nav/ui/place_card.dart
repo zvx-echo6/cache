@@ -122,6 +122,8 @@ class PlaceCard extends StatelessWidget {
                         label: const Text('Directions'),
                       ),
                     ),
+                    // A place from a Places notebook is in that notebook already: no Save for it.
+                    if (!place.isNotebookPlace) ...[
                     const SizedBox(width: 8),
                     Expanded(
                       flex: 4,
@@ -139,6 +141,7 @@ class PlaceCard extends StatelessWidget {
                               child: const Text('Remove place'),
                             ),
                     ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 8),

@@ -230,6 +230,9 @@ class NavState extends ChangeNotifier {
   bool voiceOn = true;
   bool rerouting = false;
   bool arrived = false;
+
+  /// The last fix guidance was given. Kept only while guidance follows the phone: it is forgotten when guidance ends, so it
+  /// never stands in for the phone's position afterwards.
   Fix? lastFix;
   GuidanceEngine? _engine;
 
@@ -247,8 +250,12 @@ class NavState extends ChangeNotifier {
 
   Fix? get fix => location.fix;
 
-  /// The point directions start from: the phone's position.
-  GeoPoint? get here => (lastFix ?? location.fix) == null ? null : GeoPoint((lastFix ?? location.fix)!.lat, (lastFix ?? location.fix)!.lon);
+  /// The point directions start from: the phone's position. While guiding that is the fix guidance last had; at any other time
+  /// it is the position the phone has now, never the last fix of a trip that is over.
+  GeoPoint? get here {
+    final f = (guiding ? lastFix : null) ?? location.fix;
+    return f == null ? null : GeoPoint(f.lat, f.lon);
+  }
 
   // ---- search ------------------------------------------------------------------------------------------------
 
@@ -473,8 +480,11 @@ class NavState extends ChangeNotifier {
     return true;
   }
 
-  /// Directions from the phone's position to [to].
+  /// Directions from the phone's position to [to]. The app's own screens do not ask while guiding (they say to finish or end
+  /// the route first); if this is reached while guiding all the same, guidance is ended first, so its position service is
+  /// never left running behind a preview.
   Future<void> openDirections(MapPlace to) async {
+    if (guiding) await end();
     selected = to;
     phase = NavPhase.previewing;
     searchOpen = false;
@@ -556,6 +566,7 @@ class NavState extends ChangeNotifier {
       'no_route' => 'No way found between these places',
       'too_far' => 'These places are too far apart for one trip',
       'out_of_coverage' => 'One of these places is outside the downloaded maps',
+      'no_road_data' => "Road data for this trip isn't on this device yet. Connect and try again.",
       'route_too_long' => 'The off-road part of this trip is too long to work out',
       'upstream_timeout' => 'Working out the route took too long. Try again',
       'not_set_up' => 'Off-road needs off-road data for this area',
@@ -613,7 +624,7 @@ class NavState extends ChangeNotifier {
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
   Future<void> _handleFix(Fix f) async {
-    if (!guiding) return;
+    if (!guiding || arrived) return;
     lastFix = f;
     // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
     for (final (i, s) in stops.indexed) {
@@ -626,7 +637,7 @@ class NavState extends ChangeNotifier {
     _busyProgress = true;
     try {
       Fix? cur = f;
-      while (cur != null && guiding) {
+      while (cur != null && guiding && !arrived) {
         _pendingFix = null;
         await _progressFor(cur);
         cur = _pendingFix;
@@ -642,7 +653,7 @@ class NavState extends ChangeNotifier {
     try {
       final p = await backend.progress(r, lat: f.lat, lon: f.lon, accuracyM: f.accuracyM, now: _clock(), sendRoute: _sendRoute);
       _sendRoute = false;
-      if (!guiding || route?.routeId != r.routeId) return;
+      if (!guiding || arrived || route?.routeId != r.routeId) return;
       progress = p;
       if (!_routeStarted) {
         _routeStarted = true;
@@ -652,8 +663,11 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
+        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
+        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
         notifyListeners();
+        await _stopTracking();
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -707,13 +721,26 @@ class NavState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lets go of what guidance holds to follow the phone: its fixes, the position service (with its notification and wake
+  /// lock) and the hold on the map's own position stream. The guidance fix is forgotten with them, so [here] is the phone's
+  /// own position again. Calling it again is harmless.
+  Future<void> _stopTracking() async {
+    final sub = _fixSub;
+    _fixSub = null;
+    _pendingFix = null;
+    lastFix = null;
+    try {
+      await sub?.cancel();
+      await positionSource.stop();
+    } finally {
+      location.holdStream(false);
+    }
+  }
+
   /// End guidance: stop the position service and the voice, back to the map with the place still selected.
   Future<void> end() async {
     if (!guiding) return;
-    await _fixSub?.cancel();
-    _fixSub = null;
-    await positionSource.stop();
-    location.holdStream(false);
+    await _stopTracking();
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
@@ -722,6 +749,7 @@ class NavState extends ChangeNotifier {
     progress = null;
     arrived = false;
     rerouting = false;
+    lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
   }
@@ -745,6 +773,7 @@ class NavState extends ChangeNotifier {
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);
+    lastFix = null;
     _events.close();
     super.dispose();
   }

@@ -59,7 +59,24 @@ class _NotebookEditorState extends State<NotebookEditor> {
 
   bool get _taken => widget.notebook.nameTaken(_name.text, exceptId: widget.existing?.id);
 
+  /// The places of this notebook that hold a color of their own, when the color was changed (else none): the question is asked
+  /// about them.
+  Future<List<NbEntry>> _ownColored() async {
+    final e = widget.existing;
+    if (e == null || widget.icons == null || _color == null || _color == _start.color) return const [];
+    try {
+      return [for (final x in await widget.notebook.entries(e.id)) if (x.color != null) x];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> _save() async {
+    final own = await _ownColored();
+    if (!mounted) return;
+    // Asked once, before anything is saved: Change all lets those places follow the notebook again; anything else leaves them.
+    final changeAll = own.isNotEmpty && await askChangeAllPlaces(context, color: markerColor(_color).spoken, notebook: _name.text.trim(), places: own.length) == true;
+    if (!mounted) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -76,6 +93,23 @@ class _NotebookEditorState extends State<NotebookEditor> {
         map: _map,
         templateRef: e == null ? widget.template!.ref : null,
       );
+      if (changeAll) {
+        for (final x in own) {
+          await widget.notebook.saveEntry(
+            id: x.id,
+            notebookId: x.notebookId,
+            occurredAt: x.occurredAt,
+            title: x.title,
+            body: x.body,
+            values: x.values,
+            place: x.place,
+            photos: x.photos,
+            files: x.files,
+            private: x.private,
+            props: {...x.props}..remove('color'),
+          );
+        }
+      }
       final ps = widget.notebook.privateSharing;
       if (ps != null && ps.included(saved.id) != (_private && _shared)) await ps.setIncluded(saved.id, _private && _shared);
       if (mounted) Navigator.of(context).maybePop(true);
@@ -397,3 +431,18 @@ class _FieldSheetState extends State<_FieldSheet> {
     );
   }
 }
+
+
+/// Asked when a notebook's color is changed and some of its places hold a color of their own: true for Change all (they follow the
+/// notebook again), false or dismissed for Keep their colors (only the notebook changes).
+Future<bool?> askChangeAllPlaces(BuildContext context, {required String color, required String notebook, required int places}) => showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Change all its places to $color?'),
+        content: Text(places == 1 ? '1 place in $notebook has its own color.' : '$places places in $notebook have their own color.'),
+        actions: [
+          TextButton(key: const ValueKey('colour-ask-keep'), onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep their colors')),
+          TextButton(key: const ValueKey('colour-ask-change'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Change all')),
+        ],
+      ),
+    );

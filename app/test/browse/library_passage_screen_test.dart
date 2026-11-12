@@ -41,6 +41,21 @@ void main() {
     expect(source.addresses, ['lib:field/passage']);
   });
 
+  testWidgets('a page whose printed label is text is shown as that label; no page, no page line', (tester) async {
+    for (final label in ['iv', 'A-3']) {
+      final source = ReaderAccess((_) async => ReadPage(title: 'Field Manual', text: 'Saved text.', truncated: false, pageLabel: label));
+      await tester.pumpWidget(screen(source, 'lib:field/$label'));
+      await tester.pumpAndSettle();
+      expect(find.text('Page $label'), findsOneWidget);
+      expect(find.text('Saved text.'), findsOneWidget);
+    }
+    final none = ReaderAccess((_) async => const ReadPage(title: 'Field Manual', text: 'Saved text.', truncated: false));
+    await tester.pumpWidget(screen(none, 'lib:field/none'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved text.'), findsOneWidget);
+    expect(find.textContaining('Page '), findsNothing);
+  });
+
   testWidgets('a failed read can be retried', (tester) async {
     var tries = 0;
     final source = ReaderAccess((_) async {

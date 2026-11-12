@@ -315,6 +315,8 @@ To delete all chats, go to ["Settings" > "Cache model and web search" > "Delete 
 
 Search finds a place, town, address or coordinates.
 
+![Map search results](shot:maps-search)
+
 1. Open "Maps".
 2. Tap "Search places or coordinates" and type.
 3. Tap a result. The map moves there and the place card opens.
@@ -328,6 +330,8 @@ The locate button ("Find me") moves the map to you. Tap it again to turn the map
 ## The place card and saving a place
 
 Tap a search result or a place to open its card at the bottom of "Maps".
+
+![A place card](shot:place-card)
 
 The card has:
 - "Directions": a route from where you are;
@@ -347,6 +351,8 @@ Press and hold on the map for the ring menu. It has "Add stop" and "Measure". Se
 
 Directions plan a route from where you are to a place.
 
+![The directions panel](shot:directions-panel)
+
 1. In "Maps", open a place's card. Or press and hold the map and choose "To here".
 2. Tap "Directions".
 3. Choose "Drive", "Walk", "Bike" or "Off-road".
@@ -362,6 +368,8 @@ Road directions work offline if the region is downloaded.
 ## Off-road directions
 
 Off-road plans a route away from roads.
+
+![Off-road directions](shot:directions-offroad)
 
 1. Open a place's card and tap "Directions".
 2. Tap "Off-road".
@@ -382,6 +390,8 @@ Changing a choice plans the route again. Choices reset on restart: "Drive", then
 
 After "Start", Cache guides you turn by turn.
 
+![Following a route](shot:guidance)
+
 - The banner shows the next turn.
 - "Rerouting" means you left the route.
 - Near the end it says "Arriving", then "You have arrived".
@@ -396,6 +406,8 @@ Guidance keeps running with the screen locked. On Android a "Cache navigation" n
 ## Map layers and offline maps
 
 The "Layers" button on the right of "Maps" opens the layers sheet.
+
+![The layers sheet](shot:layers-sheet)
 
 - Switch a layer on or off. Its line says "Downloaded for offline", "Streams when online" or "Needs a connection".
 - Use "Opacity" for a layer laid over the map.
@@ -837,11 +849,11 @@ Without saved videos, tap "Remove".
 
 - What's already on the device shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
-- The box at the top says when data was last updated. Tap "Update now", or pull the screen down.
-- "Happening nearby" lists alerts, fires and other sources you switched on. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
-- With more than one place, tap a place's chip to switch.
+- The card at the top has one line that says when data was last updated, for example "Updated 12 min ago". Tap "Update now", or pull the screen down.
+- "Happening nearby" lists alerts, fires and other sources you switched on, the most serious first. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
+- Tap the place's name at the top to open "Places". With more than one place, tap a place there to switch.
 
-Tap any item for details. "Ask about this" starts a chat about what it means for you.
+Tap any item for details. Under "Forecast", tap a day for its details. "Ask about this" starts a chat about what it means for you.
 
 The tune button ("Weather and alerts settings") opens the source settings.
 

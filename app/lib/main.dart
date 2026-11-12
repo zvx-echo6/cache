@@ -99,6 +99,7 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/foreground_updates.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -461,6 +462,7 @@ class _CacheAppState extends State<CacheApp> {
     bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    wordsPending: (path) => libraries.wordsPendingAt(path),
   );
 
   /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.
@@ -783,6 +785,13 @@ class _CacheAppState extends State<CacheApp> {
   });
   // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
   // and directions.
+  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places, else a downloaded region's centre.
+  Future<({double lat, double lon, double zoom})?> _placeMapFallback() async {
+    final last = maps.savedCamera;
+    if (last != null && last.zoom >= 6) return placeFallbackCamera(last: last);
+    return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
+  }
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -802,11 +811,14 @@ class _CacheAppState extends State<CacheApp> {
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
     hereOnMap: () => location.enabled,
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
-    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look),
-    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false),
+    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
+    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
+      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
+      if (nav.guiding) return false;
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
+      return true;
     },
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
@@ -867,6 +879,7 @@ class _CacheAppState extends State<CacheApp> {
       onResume: () {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) unawaited(_backToFront());
       },
@@ -889,9 +902,12 @@ class _CacheAppState extends State<CacheApp> {
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
         if (!plat.isWeb) _toBack();
       },
+      // On the screen again (a desktop window shown without being clicked into does not "resume").
+      onShow: () => _foregroundUpdates.front(),
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
@@ -1004,6 +1020,9 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1116,6 +1135,15 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
+
+  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
+  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
+    every: kBackgroundEvery,
+    on: () => weather.enabledSources.isNotEmpty,
+    update: () => weather.updateNow(),
+    wanted: foregroundUpdatesWanted(),
+  );
   late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
     // A load in flight holds the release like an answer does: it never unloads a model the person just asked for, and when the
     // load ends with Cache still in the back, a new grace period starts.
@@ -1192,6 +1220,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _foregroundUpdates.dispose();
     _modelRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();

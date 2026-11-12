@@ -22,11 +22,12 @@ Future<void> openRegionPage(BuildContext context, RegionsState regions, String i
 /// The line under a region's name: "Ready · 1.8 GB" when all of it is here; otherwise only the parts that are not ready and where
 /// each stands ("Places 40% · Off-road waiting"), in the warning colour when something stopped and the danger colour when it failed.
 List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.phase) {
-  // Places not published for the area count as done; the row still says so, in the neutral colour with an info mark (a search that
-  // finds no places is then understood). On a narrow row the size goes before the note does.
+  // A part not published for the area (places, or directions where the published roads do not reach) counts as done; the row
+  // still says so, in the neutral colour with an info mark (a search that finds no places, or a route that cannot be worked out,
+  // is then understood). On a narrow row the size goes before the note does.
   RegionPhase.ready => [
     Part('${l.isArea ? 'Map ready' : 'Ready'} · ${formatBytes(l.bytes)}'),
-    if (l.placesNotAvailable) ...[const Part(' · '), const Part(kPlacesNotAvailableShort, Tone.quiet, Icons.info_outline)],
+    for (final note in l.notAvailableNotes) ...[const Part(' · '), Part(note, Tone.quiet, Icons.info_outline)],
   ],
   RegionPhase.downloading => [Part(l.partsLine)],
   RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
@@ -34,7 +35,8 @@ List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.p
   RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
 };
 
-/// "Places not available yet": a region's places not published for its area, on its row.
+/// "Places not available yet": a region's places not published for its area, on its row ([LocalRegion.notAvailableNotes] says the
+/// same of each part that is not published, in these words).
 const String kPlacesNotAvailableShort = 'Places not available yet';
 
 /// What the bar under a downloading region says: how far the whole region is and the part downloading now, "56% of 2.6 GB in all ·
@@ -69,7 +71,7 @@ class RegionRow extends StatelessWidget {
       state: s,
       actions: regionDlActions(context, regions, l),
       selected: isPaneSelected(context, 'region-${l.id}'),
-      doneLine: regionDoneLine(l, placesNote: kPlacesNotAvailableShort),
+      doneLine: regionDoneLine(l),
       doneAction: Icon(Icons.chevron_right, color: context.t.secondary),
       onOpen: () => openRegionPage(context, regions, l.id),
       onDoneHold: () => showRegionActions(context, regions, l),
