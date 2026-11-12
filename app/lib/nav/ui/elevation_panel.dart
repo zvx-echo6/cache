@@ -230,7 +230,7 @@ class ElevationChartPainter extends CustomPainter {
 
     // The steepest climb ahead.
     final s = steep;
-    if (full && s != null) {
+    if (s != null) {
       final ps = <Offset>[];
       for (var m = s.startM; m <= s.endM + 0.1; m += math.max(10, (s.endM - s.startM) / 40)) {
         final e = profile.elevationAt(math.min(m, s.endM));

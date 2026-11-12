@@ -263,6 +263,7 @@ void main() {
       expect(find.byKey(const ValueKey('lane-strip')), findsOneWidget);
       expect(find.textContaining('Alder Street'), findsOneWidget, reason: 'the next turn, in the banner');
       expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(find.byKey(const ValueKey('drive-turns-fade')), findsOneWidget, reason: 'the list is longer than its room: it fades at its lower edge');
       expect(find.text('Turn right onto Birch Hollow Road'), findsOneWidget);
       expect(find.text('Stop 1: Corner Market'), findsOneWidget);
       expect(find.text('Merge onto Route 9'), findsOneWidget);
@@ -357,6 +358,7 @@ void main() {
       expect(find.byType(DriveExtras), findsNothing);
       final turns = tester.getSize(find.byType(DriveTurns)).height;
       expect(turns, greaterThan(500), reason: 'the whole room between the top and the bar');
+      expect(find.byKey(const ValueKey('drive-turns-fade')), findsNothing, reason: 'the whole list fits: no fade');
       expect(find.byKey(const ValueKey('guidance-bar')), findsOneWidget);
     });
 

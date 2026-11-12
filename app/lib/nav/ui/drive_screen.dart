@@ -146,12 +146,31 @@ class DriveTurns extends StatelessWidget {
           child: Opacity(
             // The old list stays, dimmed, while a new route is worked out; it is replaced when the route lands.
             opacity: nav.rerouting ? 0.4 : 1,
-            child: ListView.builder(
-              key: const ValueKey('drive-turns'),
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-              itemExtent: rowHeight,
-              itemCount: rows.length,
-              itemBuilder: (context, i) => _row(context, k, rows[i]),
+            child: LayoutBuilder(
+              builder: (context, box) {
+                // A list longer than its room fades out at its lower edge, so it reads as scrolling and never ends in a cut row.
+                final overflows = rows.length * rowHeight + 4 > box.maxHeight;
+                final list = ListView.builder(
+                  key: const ValueKey('drive-turns'),
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                  itemExtent: rowHeight,
+                  itemCount: rows.length,
+                  itemBuilder: (context, i) => _row(context, k, rows[i]),
+                );
+                if (!overflows || box.maxHeight <= 0) return list;
+                final fade = math.min(40.0, box.maxHeight / 2) / box.maxHeight;
+                return ShaderMask(
+                  key: const ValueKey('drive-turns-fade'),
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (r) => LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0x00FFFFFF)],
+                    stops: [0, 1 - fade, 1],
+                  ).createShader(r),
+                  child: list,
+                );
+              },
             ),
           ),
         ),
@@ -327,8 +346,8 @@ class DriveElevation extends StatelessWidget {
                 height: math.max(24.0, box.maxHeight),
                 positionM: pos,
                 steep: steep,
-                // The labelled chart when it has the height; the compact one (the position and the line) when it is low.
-                full: box.maxHeight >= 110,
+                // The plain chart: the line, the position and the climb marked on it, with no point labels to run into each other.
+                full: false,
               ),
             ),
           ),
