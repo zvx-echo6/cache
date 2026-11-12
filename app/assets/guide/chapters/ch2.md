@@ -849,11 +849,11 @@ Without saved videos, tap "Remove".
 
 - What's already on the device shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
-- The box at the top says when data was last updated. Tap "Update now", or pull the screen down.
-- "Happening nearby" lists alerts, fires and other sources you switched on. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
-- With more than one place, tap a place's chip to switch.
+- The card at the top has one line that says when data was last updated, for example "Updated 12 min ago". Tap "Update now", or pull the screen down.
+- "Happening nearby" lists alerts, fires and other sources you switched on, the most serious first. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
+- Tap the place's name at the top to open "Places". With more than one place, tap a place there to switch.
 
-Tap any item for details. "Ask about this" starts a chat about what it means for you.
+Tap any item for details. Under "Forecast", tap a day for its details. "Ask about this" starts a chat about what it means for you.
 
 The tune button ("Weather and alerts settings") opens the source settings.
 

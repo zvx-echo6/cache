@@ -25,6 +25,7 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show CameraPosition, LatLng, MapLibreMap, MapLibrePlatform;
 import 'package:cache/maps/maps_state.dart' show FollowMode;
 import 'package:cache/maps/palette/map_palette.dart' show mapPaletteFor;
+import 'package:cache/maps/ui/place_map.dart' show kPlaceZoom;
 import 'package:cache/maps/style/style_generator.dart' show kMeasureSource, kNotebookSource, kPinSource;
 import 'package:cache/nav/elevation/route_elevation.dart' show RouteElevation;
 import 'package:cache/nav/guidance_camera.dart' show guidanceAnchor;
@@ -129,6 +130,7 @@ import '../test/support/regions_fake.dart';
 import '../test/support/sync_fake.dart' show FakeSync;
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
+import '../test/support/weather_screen_kit.dart' show dayItem, nowItem, nwsAlert, storedAnswer;
 import 'guide_map_kit.dart';
 import 'guide_sample.dart';
 import 'shot_kit.dart';
@@ -789,52 +791,37 @@ void main() {
 
   testWidgets('weather, weather-choose-place', (tester) async {
     final r = await _rig(tester);
+    // Monday noon in the park, updated twelve minutes ago: the forecast for sixteen days, one warning in force and one fire far
+    // off. Each item is written as its source lists it (the field names are the sources' own: weather_screen_kit.dart, which
+    // the Weather screen's own tests use). The warning and the fire are the ones on Home's card; the fire is made up.
+    final shown = r.clock, updated = shown.subtract(const Duration(minutes: 12));
+    r.clock = updated;
     await tester.runAsync(() async {
       for (final i in [0, 1, 2]) {
         await r.weather.setRowOn(kCurated[i], true);
       }
     });
-    final fetched = r.clock.subtract(const Duration(minutes: 50)).toIso8601String();
-    r.liveCore.stored['openmeteo-forecast'] = {
-      'fetched_at': fetched,
-      'age': '50 minutes old',
-      'expired': false,
-      'items': [
-        {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '50 °F', 'Conditions': 'partly cloudy', 'Wind': '8 mph NW'}},
-        {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon 26 Oct', 'fields': {'High': '58 °F', 'Low': '37 °F', 'Conditions': 'partly cloudy', 'Rain chance': '10%'}},
-        {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue 27 Oct', 'fields': {'High': '55 °F', 'Low': '34 °F', 'Conditions': 'light rain', 'Rain chance': '60%'}},
-        {'address': 'live:openmeteo-forecast/x/2026-10-28', 'label': 'Wed 28 Oct', 'fields': {'High': '49 °F', 'Low': '31 °F', 'Conditions': 'overcast', 'Rain chance': '20%'}},
-      ],
-    };
-    r.liveCore.stored['nws-alerts-point'] = {
-      'fetched_at': fetched,
-      'age': '5 minutes old',
-      'expired': false,
-      'items': [
-        {'address': 'live:nws-alerts-point/x/1', 'label': 'Red flag warning', 'fields': {'Until': 'Mon 9 PM', 'Area': 'Grand County'}},
-      ],
-    };
-    r.liveCore.stored['wfigs-incidents-near'] = {
-      'fetched_at': fetched,
-      'age': '20 minutes old',
-      'expired': false,
-      'items': [
-        {'address': 'live:wfigs-incidents-near/x/1', 'label': 'East Fork fire', 'fields': {'Size': '266 acres', 'Contained': '60%', 'From the place': '31 mi N'}},
-      ],
-    };
-    r.liveCore.stored['wfigs-perimeters-near'] = {
-      'fetched_at': fetched,
-      'age': '20 minutes old',
-      'expired': false,
-      'items': [
-        {'address': 'live:wfigs-perimeters-near/x/none', 'label': 'No active fires', 'none_active': true, 'fields': {}},
-      ],
-    };
-    await tester.runAsync(() async {
-      await r.weather.updateNow();
-      final here = (await r.weather.watchedPlaces()).first;
-      await r.weather.viewFor(here);
-    });
+    r.liveCore.stored['openmeteo-forecast'] = storedAnswer(shown, updated, [
+      nowItem(updated, temperature: 50, feels: 46, wind: '8 mph NW, gusts 15 mph', conditions: 'partly cloudy'),
+      for (final (n, (conditions, high, low, rain)) in _forecastDays.indexed)
+        dayItem(DateTime(updated.year, updated.month, updated.day + n), conditions, high, low, rain, precipitation: rain >= 45 ? '0.1 in over 5 h' : '0.0 in over 0 h', windMax: 9 + n),
+    ]);
+    r.liveCore.stored['nws-alerts-point'] = storedAnswer(shown, updated, [
+      nwsAlert('rf1', 'Red Flag Warning', 'severe', updated.subtract(const Duration(hours: 3)), DateTime(updated.year, updated.month, updated.day, 21), 'Grand County'),
+    ]);
+    r.liveCore.stored['wfigs-incidents-near'] = storedAnswer(shown, updated, [
+      {
+        'address': 'live:wfigs-incidents-near/x/f1',
+        'label': 'East Fork fire',
+        'fields': {'Size': '266 acres', 'Contained': '60%', 'From the place': '31 mi N', 'County': 'Grand'},
+        'distances': {
+          'From the place': {'km': 31 * 1.609344, 'inside': false},
+        },
+      },
+    ]);
+    r.liveCore.stored['wfigs-perimeters-near'] = storedAnswer(shown, updated, const []);
+    await tester.runAsync(() => r.weather.updateNow());
+    r.clock = shown;
     WeatherTurnOn turnOn(List<MapPlace> found) => WeatherTurnOn(
       weather: r.weather,
       location: r.location,
@@ -1570,9 +1557,9 @@ void main() {
     await tester.longPress(find.text(GuideSample.trailhead.name));
     await tester.pumpAndSettle();
     // The form's small map. The app's PlaceMap is a platform view, so its scene is written here the way PlaceMap fills its map:
-    // the app's style with the same layers on (the Maps test's, as the app has one map state), the place in the middle at zoom
-    // 14, and the place's pin drawn by the notebook pins' layer with the image PlaceMap adds for it. The rendered picture is
-    // then shown in the form.
+    // the app's style with the same layers on (the Maps test's, as the app has one map state), the place in the middle at the
+    // zoom PlaceMap opens a pinned place at, and the place's pin drawn by the notebook pins' layer with the image PlaceMap adds
+    // for it. The rendered picture is then shown in the form.
     final style = _formMapStyle, pins = _formPinStyle;
     if (style == null || pins == null) fail('The place form needs the map style the Maps test keeps: run the whole file');
     final pin = n.mapPin!, look = n.mapLook!;
@@ -1584,7 +1571,7 @@ void main() {
     kit.writeScene(
       'place-form',
       style: style,
-      camera: GuideCamera(lat: pin.lat, lon: pin.lon, zoom: 14),
+      camera: GuideCamera(lat: pin.lat, lon: pin.lon, zoom: kPlaceZoom),
       size: tester.getSize(find.byType(GuideFormMap)),
       ratio: tester.view.devicePixelRatio,
       sources: {
@@ -1960,6 +1947,27 @@ class _Hub extends HfHub {
 final DateTime _now = DateTime(2026, 10, 29, 16, 12);
 
 Templates _templates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
+
+/// The Weather picture's sixteen days from Monday, made up: conditions (in the forecast source's words), high, low and chance of
+/// rain. The first is the day on Home's card.
+const List<(String, int, int, int)> _forecastDays = [
+  ('partly cloudy', 58, 37, 10),
+  ('light rain', 55, 34, 60),
+  ('overcast', 49, 31, 20),
+  ('mainly clear', 54, 32, 5),
+  ('clear sky', 59, 35, 0),
+  ('clear sky', 62, 38, 0),
+  ('partly cloudy', 60, 39, 10),
+  ('light rain', 56, 38, 45),
+  ('overcast', 53, 35, 25),
+  ('mainly clear', 55, 33, 5),
+  ('clear sky', 58, 34, 0),
+  ('clear sky', 61, 36, 0),
+  ('partly cloudy', 60, 38, 10),
+  ('rain showers', 54, 37, 65),
+  ('partly cloudy', 52, 34, 20),
+  ('clear sky', 55, 32, 0),
+];
 
 const PlaceChoices _places = PlaceChoices(here: _hereNow, saved: _savedNone);
 Future<({double lat, double lon})?> _hereNow() async => (lat: GuideSample.here.lat, lon: GuideSample.here.lon);
