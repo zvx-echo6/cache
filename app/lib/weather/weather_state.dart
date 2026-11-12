@@ -1062,6 +1062,10 @@ class WeatherState extends ChangeNotifier {
   Timer? _hereTimer;
   DateTime? _hereFetchedAt;
 
+  /// When the sources were last fetched for "Where I am" alone, after it moved ([positionChanged]). That fetch changes no
+  /// update time, so the Weather screen reads this to know there is something new to show for the place.
+  DateTime? get hereFetchedAt => _hereFetchedAt;
+
   /// "Where I am" moved to a place nothing was downloaded for, so Home said "no forecast yet" until the next scheduled update
   /// (build 48). Once the key has settled ([hereSettle], restarted by each move) its sources are fetched for that place alone, at
   /// most once per [hereGap]. Like every update it uses any connection (mobile data too) and none while offline; the core's own

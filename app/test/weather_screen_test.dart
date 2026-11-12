@@ -405,6 +405,31 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('"Where I am" moved: once its sources are fetched for the new position, the page shows them', (tester) async {
+    final r = await _rig(tester);
+    await sceneQuietDay(tester, r);
+    await _open(tester, r);
+    expect(_textAt(tester, 'weather-temperature'), '45 °F');
+    // the phone moves about six kilometres: its data is kept under another key (what a fetch for it brings is put in the fake
+    // core here; the page must not read it before the app has fetched)
+    final updated = wednesday(14, 14), shown = wednesday(14, 26);
+    final there = [
+      nowItem(shown, temperature: 51, feels: 48, wind: '6 mph N, gusts 9 mph', conditions: 'clear sky'),
+      ...sixteenDays(updated),
+    ];
+    store(r, 'openmeteo-forecast', storedAnswer(shown, shown, there), placeKey: 'at:42.60,-113.79');
+    r.here = (lat: 42.60, lon: -113.79);
+    r.weather.positionChanged();
+    await tester.pumpAndSettle();
+    expect(_textAt(tester, 'weather-temperature'), '45 °F', reason: 'until the fetch for the new position, what was shown stays');
+    // the position has settled: the app fetches for it by itself, and the page reads the place again
+    await tester.pump(const Duration(seconds: 46));
+    await tester.pumpAndSettle();
+    expect(r.weather.hereFetchedAt, isNotNull);
+    expect(_textAt(tester, 'weather-temperature'), '51 °F');
+    await r.dispose(tester);
+  });
+
   testWidgets('a tapped alert pop-up opens its item; one that has ended says so', (tester) async {
     final r = await _rig(tester);
     await sceneSeriousDay(tester, r);

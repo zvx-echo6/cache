@@ -112,7 +112,9 @@ class _WeatherScreenState extends State<WeatherScreen> {
     m.showSnackBar(const SnackBar(content: Text('That alert has ended or is no longer in the data.')));
   }
 
-  int get _revision => Object.hash(w.lastOkAt, w.enabledSources.length, w.updating);
+  /// What the page was last read for: an update, a source switched, and the fetch made for "Where I am" alone after it moved
+  /// (that one changes no update time; without it the page kept saying nothing was downloaded for the new position).
+  int get _revision => Object.hash(w.lastOkAt, w.enabledSources.length, w.updating, w.hereFetchedAt);
 
   void _changed() {
     if (_revision != _seenRevision && !w.updating) _load();
@@ -759,7 +761,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(title, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, height: 1.25, color: titleColor ?? k.text)),
+                  // an emergency alert's name is its headline, up to 120 characters: four lines hold it whole on a phone
+                  Text(title, maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, height: 1.25, color: titleColor ?? k.text)),
                   for (final l in lines) Padding(padding: const EdgeInsets.only(top: 2), child: l),
                 ],
               ),
