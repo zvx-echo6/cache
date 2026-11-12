@@ -9,6 +9,7 @@ import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
 import '../maps/maps_state.dart';
+import '../platform/app_log.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
@@ -672,6 +673,7 @@ class NavState extends ChangeNotifier {
         arrived = true;
         notifyListeners();
         await _stopTracking();
+        logInfo('Guidance: arrived, the position service is let go');
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -745,6 +747,7 @@ class NavState extends ChangeNotifier {
   Future<void> end() async {
     if (!guiding) return;
     await _stopTracking();
+    logInfo('Guidance: ended, the position service is let go');
     if (_simulated) {
       // A simulated drive's fixes went to the location service as guidance fixes do ([_onFix]), so its last point was left
       // there as the phone's position: the map, "here" and the car's home map all showed it until something read a real

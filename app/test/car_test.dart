@@ -634,6 +634,28 @@ void main() {
       expect(nav.here!.lon, -113.8);
     });
 
+    test('a test drive that has not given its first fix yet does not put the car\'s marker on the phone\'s own position', () async {
+      await preview(); // the phone is at 42.5, -113.8
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.8);
+      // A drive that gives no fix for a long time: guidance has started, the vehicle is not known yet.
+      final slow = CarDriveSource(gps, route: () => nav.route, tick: const Duration(hours: 1));
+      slow.simulate = true;
+      final b = CarBridge(nav: nav, maps: maps, drive: slow, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      nav.phase = NavPhase.guiding;
+      expect(b.snapshot().containsKey('position'), isTrue, reason: 'no test drive is running: the phone\'s fix is the vehicle');
+      final sub = slow.start(title: '', text: '').listen((_) {});
+      expect(slow.simulating, isTrue);
+      expect(b.snapshot().containsKey('position'), isFalse);
+      // Guidance has a fix: that is the vehicle.
+      nav.lastFix = fixAt(42.5, -113.79, heading: 90);
+      expect((b.snapshot()['position'] as Map)['lon'], -113.79);
+      await sub.cancel();
+      await slow.stop();
+      nav.lastFix = null;
+      nav.phase = NavPhase.browsing;
+      b.dispose();
+    });
+
     test('a real drive that ends keeps the position it has', () async {
       await preview();
       backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.2)));

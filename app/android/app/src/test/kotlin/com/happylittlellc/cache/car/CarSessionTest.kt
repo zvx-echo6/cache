@@ -674,6 +674,33 @@ class CarSessionTest {
     }
 
     @Test
+    fun theCarsBackKeyDuringGuidanceLeavesTheGuidanceScreenUp() {
+        start()
+        push("trip", trip("guiding", guiding))
+        val guidance = screens.top as NavigationScreen
+        // Back on the guidance screen: the same screen stays (it was popped, and the home screen with Search and Saved places
+        // showed until the next trip update pushed a new guidance screen).
+        car.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(screens.top === guidance)
+        assertTrue(templateOf(screens.top) is NavigationTemplate)
+        assertNotNull((templateOf(screens.top) as NavigationTemplate).navigationInfo)
+        // Again, and after a trip update: still the one screen, never a new one.
+        car.onBackPressedDispatcher.onBackPressed()
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top === guidance)
+        // On the route overview Back still closes the overview and guidance is under it.
+        guidance.openOverview()
+        assertTrue(screens.top is RouteOverviewScreen)
+        car.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(screens.top === guidance)
+        // End route still leaves guidance.
+        push("trip", trip("browsing"))
+        assertTrue(screens.top is HomeScreen)
+    }
+
+    @Test
     fun routeOverviewShowsTheWholeRouteAndBackReturnsToGuidance() {
         start()
         val two = listOf(

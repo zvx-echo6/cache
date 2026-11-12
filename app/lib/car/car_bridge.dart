@@ -217,7 +217,9 @@ class CarBridge {
   /// The trip as it is now, and the route line when it changed.
   Map<String, dynamic> snapshot() {
     final p = nav.progress;
-    final f = nav.lastFix ?? nav.fix;
+    // A simulated test drive starts at the route's start, not where the phone is: until its first fix has come the phone's
+    // own fix is not the vehicle (the car drew its arrow there, beside the route, for the first frames of the drive).
+    final f = nav.lastFix ?? (nav.guiding && drive.simulating ? null : nav.fix);
     final onRoute = nav.guiding && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
