@@ -210,6 +210,22 @@ void main() {
       await finish(tester);
     });
 
+    testWidgets('whatever the car carries (each word, or none), the screen shows the list, the mini map and the elevation', (tester) async {
+      await pumpMaps(tester);
+      drive.carConnected.value = true;
+      await tester.pump();
+      for (final word in [null, CarExtras.never, CarExtras.unlessPhoneShows, CarExtras.always]) {
+        if (word != null) drive.extras.value = word;
+        await tester.pump();
+        expect(driveScreen(), findsOneWidget, reason: '$word');
+        expect(find.byType(DriveTurns), findsOneWidget, reason: '$word');
+        expect(find.byKey(const ValueKey('drive-mini-map')), findsOneWidget, reason: '$word');
+        expect(find.byKey(const ValueKey('drive-elevation')), findsOneWidget, reason: '$word');
+        expect(drive.signal.value, isTrue, reason: 'phoneDrive keeps its meaning');
+      }
+      await finish(tester);
+    });
+
     testWidgets('a car connected while nothing is guided changes nothing', (tester) async {
       await pumpMaps(tester);
       await tester.runAsync(() => nav.end());
@@ -231,7 +247,7 @@ void main() {
     });
     tearDown(() => rig.tearDown());
 
-    Future<void> show(WidgetTester tester, {CarExtras extras = CarExtras.never, CacheThemeId theme = CacheThemeId.dark, double? aspect}) async {
+    Future<void> show(WidgetTester tester, {CacheThemeId theme = CacheThemeId.dark, double? aspect}) async {
       tester.view.physicalSize = const Size(390, 844) * 3;
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
@@ -244,7 +260,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(theme),
         home: Scaffold(
-          body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras),
+          body: DriveScreen(nav: rig.nav, elevation: rig.elevation, palette: mapPaletteFor(theme), themeId: theme),
         ),
       ));
       await tester.pump();
@@ -489,29 +505,13 @@ void main() {
       }
     });
 
-    testWidgets('where the extras are, case 1: a small car screen never carries them, so the phone draws the mini map and the elevation', (tester) async {
-      await show(tester, extras: CarExtras.never);
+    testWidgets('the mini map and the elevation are on the screen with the list of turns', (tester) async {
+      await show(tester);
+      expect(find.byType(DriveTurns), findsOneWidget);
       expect(find.byKey(const ValueKey('drive-mini-map')), findsOneWidget);
       expect(find.byKey(const ValueKey('drive-elevation')), findsOneWidget);
       expect(find.text('Elevation'), findsOneWidget);
       expect(find.text('Steepest climb ahead'), findsOneWidget);
-    });
-
-    testWidgets('where the extras are, case 2: an in-between car screen carries them unless this screen shows; it shows, so the phone draws them', (tester) async {
-      await show(tester, extras: CarExtras.unlessPhoneShows);
-      expect(find.byKey(const ValueKey('drive-mini-map')), findsOneWidget);
-      expect(find.byKey(const ValueKey('drive-elevation')), findsOneWidget);
-    });
-
-    testWidgets('where the extras are, case 3: a big car screen always carries them; the list has the whole room', (tester) async {
-      await show(tester, extras: CarExtras.always);
-      expect(find.byKey(const ValueKey('drive-mini-map')), findsNothing);
-      expect(find.byKey(const ValueKey('drive-elevation')), findsNothing);
-      expect(find.byType(DriveExtras), findsNothing);
-      final turns = tester.getSize(find.byType(DriveTurns)).height;
-      expect(turns, greaterThan(500), reason: 'the whole room between the top and the bar');
-      expect(find.byKey(const ValueKey('drive-turns-fade')), findsNothing, reason: 'the whole list fits: no fade');
-      expect(find.byKey(const ValueKey('guidance-bar')), findsOneWidget);
     });
 
     testWidgets('the split is one constant: the list takes two thirds of the room, the extras the rest, side by side', (tester) async {

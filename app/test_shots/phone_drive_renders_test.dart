@@ -1,11 +1,10 @@
 // The phone's drive screen (what the Maps tab shows while a car screen is connected and guiding), the layout the owner chose: the list
 // of turns two thirds, the mini map and the elevation side by side under it. Four themes, the stop and lane arrows case, the car
-// carrying the extras (turns only), rerouting, arrival, a route with no elevation data, and the stress cases (a 320 point wide phone
+// rerouting, arrival, a route with no elevation data, and the stress cases (a 320 point wide phone
 // and a large text size). The route is made up (test/support/drive_rig.dart). The tab bar under the screen is a stand-in for the app's
 // own; the bar above it is the phone's own guidance bar.
 // flutter test test_shots/phone_drive_renders_test.dart --update-goldens  (pictures in test_shots/phone_drive/)
 
-import 'package:cache/car/phone_drive.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'dart:async';
 
@@ -39,7 +38,6 @@ void main() {
     WidgetTester tester,
     String name, {
     CacheThemeId theme = CacheThemeId.dark,
-    CarExtras extras = CarExtras.never,
     bool stop = false,
     bool lanes = false,
     bool rerouting = false,
@@ -106,7 +104,7 @@ void main() {
         builder: (context) => MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
           child: Scaffold(
-            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, extras: extras, wideHalf: wideHalf, sideBySideOnly: sideBySideOnly),
+            body: DriveScreen(nav: rig.nav, elevation: elevation, palette: mapPaletteFor(theme), themeId: theme, wideHalf: wideHalf, sideBySideOnly: sideBySideOnly),
             bottomNavigationBar: NavigationBar(
               selectedIndex: 2,
               destinations: const [
@@ -134,7 +132,6 @@ void main() {
   testWidgets('3 Tactical', (t) => draw(t, '3-tactical', theme: CacheThemeId.tactical));
   testWidgets('4 Parchment', (t) => draw(t, '4-parchment', theme: CacheThemeId.parchment));
   testWidgets('5 a stop in the list and lane arrows on the next turn', (t) => draw(t, '5-stop-and-lanes', stop: true, lanes: true));
-  testWidgets('6 the car carries the extras: turns only', (t) => draw(t, '6-car-carries', extras: CarExtras.always));
   testWidgets('7 rerouting', (t) => draw(t, '7-rerouting', rerouting: true));
   testWidgets('8 arrival', (t) => draw(t, '8-arrival', arrived: true));
   testWidgets('9 no elevation data for the route', (t) => draw(t, '9-no-elevation', noElevation: true));

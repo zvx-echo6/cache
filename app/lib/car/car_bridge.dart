@@ -302,6 +302,8 @@ class CarBridge {
         _setConnected(a['on'] == true);
         return null;
       case 'extras':
+        // Received and unused: the phone's drive screen always shows the mini map and the elevation, whatever the car carries. The
+        // call is still answered, for the car sides, pending a cleanup there.
         carries?.value = carExtrasFrom(a['carries']);
         return null;
       case 'snapshot':

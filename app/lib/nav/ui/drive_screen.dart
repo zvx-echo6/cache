@@ -4,7 +4,6 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
 import '../../car/car_overlay.dart';
-import '../../car/phone_drive.dart';
 import '../../maps/palette/map_palette.dart';
 import '../../theme.dart';
 import '../elevation/route_elevation.dart';
@@ -16,7 +15,7 @@ import 'guidance_panels.dart';
 
 /// How much of the room between the top of the screen and the bottom bar the list of turns takes while the phone carries the route
 /// mini map and the elevation too; they share the rest, side by side. The owner chose two thirds from pictures (2026-11-12); change
-/// it here and nowhere else. When the car carries the two (a big car screen) the list has the whole room.
+/// it here and nowhere else. 
 const double kDriveTurnsShare = 2 / 3;
 
 /// The other form, for a wide route only (the owner is choosing between them from pictures): the list takes half of the room and
@@ -26,7 +25,7 @@ const double kDriveWideTurnsShare = 1 / 2;
 
 /// The phone's drive screen: what the Maps tab shows while a car screen is connected and guiding. The next turn first (the
 /// phone's own turn banner, with its lane arrows when it has them), then the turns after it with the stops where they come, and
-/// under them the route mini map and the elevation, which the car's screen does not carry (see [CarExtras]). The guidance bar at
+/// under them the route mini map and the elevation, always, whatever the car's screen shows. The guidance bar at
 /// the foot is the phone's own, with the same voice switch and End.
 class DriveScreen extends StatefulWidget {
   const DriveScreen({
@@ -35,7 +34,6 @@ class DriveScreen extends StatefulWidget {
     required this.elevation,
     required this.palette,
     required this.themeId,
-    this.extras = CarExtras.never,
     this.wideHalf = kDriveWideHalf,
     this.sideBySideOnly = false,
   });
@@ -51,12 +49,6 @@ class DriveScreen extends StatefulWidget {
   /// Pictures only: every route is shown side by side, whatever its shape.
   @visibleForTesting
   final bool sideBySideOnly;
-
-  /// Where the car carries the mini map and the elevation. On this screen they are drawn unless the car always carries them.
-  final CarExtras extras;
-
-  /// The mini map and the elevation are on the phone's screen (this screen is showing, so [CarExtras.unlessPhoneShows] counts).
-  bool get showsExtras => extras != CarExtras.always;
 
   @override
   State<DriveScreen> createState() => _DriveScreenState();
@@ -97,16 +89,15 @@ class _DriveScreenState extends State<DriveScreen> {
                 builder: (context, _) => LayoutBuilder(
                   builder: (context, box) {
                     final room = box.maxHeight;
-                    final stacked = widget.showsExtras && _stackedNow();
+                    final stacked = _stackedNow();
                     final share = stacked && widget.wideHalf ? kDriveWideTurnsShare : kDriveTurnsShare;
-                    final turnsH = widget.showsExtras ? room * share : room;
+                    final turnsH = room * share;
                     return Column(
                       children: [
                         SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
-                        if (widget.showsExtras)
-                          Expanded(
-                            child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, stacked: stacked),
-                          ),
+                        Expanded(
+                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, stacked: stacked),
+                        ),
                       ],
                     );
                   },
