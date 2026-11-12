@@ -332,7 +332,7 @@ start_stream() {  # the app's own log lines (the car scene's, the engine's), int
   STREAM="$OUT/logs/app-$1.txt"
   : > "$STREAM"
   xcrun simctl spawn "$UDID" log stream --level info --style compact \
-    --predicate 'subsystem == "co.cache.car" OR (processImagePath ENDSWITH "Runner" AND eventMessage CONTAINS "Flutter engine")' \
+    --predicate 'subsystem == "co.cache.car" OR (processImagePath ENDSWITH "Runner" AND (eventMessage CONTAINS "Flutter engine" OR eventMessage CONTAINS "phone scene"))' \
     >> "$STREAM" 2>&1 &
   STREAM_PID=$!
   sleep 3
@@ -447,6 +447,53 @@ for size in $SIZES; do
   say "the app's log lines at this size:"
   sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 30 | tee -a "$LOG"
 done
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The update case, on the phone alone. Builds before the shared engine named the storyboard in the phone's scene, and iOS may
+# keep a scene session's configuration across an update. Two questions: does the app come up, with one engine, when its scene
+# does bring the storyboard's window (a copy of the harness app with the storyboard key put back answers that for certain);
+# and does iOS in fact bring it after that copy is replaced by the real build.
+if [ -n "$STREAM" ] && [ -d "$APPS/car/Runner.app" ]; then
+  say "== the update case: a scene that brings the storyboard's window"
+  xcrun simctl terminate "$UDID" "$BID" > /dev/null 2>&1
+  run xcrun simctl uninstall "$UDID" "$BID"
+  rm -rf "$APPS/old"
+  mkdir -p "$APPS/old"
+  cp -R "$APPS/car/Runner.app" "$APPS/old/"
+  run /usr/libexec/PlistBuddy -c 'Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneStoryboardFile string Main' "$APPS/old/Runner.app/Info.plist"
+  run codesign --force --sign - --preserve-metadata=entitlements,identifier,flags "$APPS/old/Runner.app"
+  ls "$APPS/old/Runner.app/Base.lproj" 2>&1 | sed 's/^/        /' | tee -a "$LOG"
+  : > "$STREAM"
+  run xcrun simctl install "$UDID" "$APPS/old/Runner.app"
+  sleep 5
+  run xcrun simctl launch "$UDID" "$BID"
+  sleep 10
+  shot_phone update-1-scene-with-the-storyboard
+  came=$(grep -c "came with the storyboard" "$STREAM")
+  engines=$(grep -c 'The Flutter engine was started' "$STREAM")
+  if [ "$came" = 1 ] && [ "$engines" = 1 ]; then
+    result "OK update-1: a scene that brings the storyboard's window gets the shared engine's view controller in it; one engine started (shots/update-1-scene-with-the-storyboard.png)"
+  else
+    result "FAILED update-1: storyboard-window lines $came (1 expected), engine-start lines $engines (1 expected)"
+  fi
+  xcrun simctl terminate "$UDID" "$BID" > /dev/null 2>&1
+  sleep 2
+  : > "$STREAM"
+  run xcrun simctl install "$UDID" "$APPS/car/Runner.app"
+  sleep 5
+  run xcrun simctl launch "$UDID" "$BID"
+  sleep 10
+  shot_phone update-2-after-the-update
+  came=$(grep -c "came with the storyboard" "$STREAM")
+  engines=$(grep -c 'The Flutter engine was started' "$STREAM")
+  if [ "$engines" = 1 ]; then
+    result "OK update-2: after the update the app came up with one engine; iOS brought the old storyboard window: $([ "$came" = 0 ] && echo no || echo yes) (shots/update-2-after-the-update.png)"
+  else
+    result "FAILED update-2: engine-start lines $engines (1 expected) after the update; storyboard-window lines $came"
+  fi
+  say "the app's log lines in the update case:"
+  sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 20 | tee -a "$LOG"
+fi
 
 stop_stream
 if [ "${host_crash:-0}" = 1 ]; then

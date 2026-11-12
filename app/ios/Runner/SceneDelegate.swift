@@ -1,4 +1,5 @@
 import Flutter
+import os
 import UIKit
 
 /// The phone's window, built here around the app's one Flutter engine (AppDelegate.obtainFlutterEngine) instead of by the
@@ -20,6 +21,9 @@ class SceneDelegate: FlutterSceneDelegate {
       controller.loadDefaultSplashScreenView()
       // A scene session iOS saved from a build whose scene still named the storyboard can bring the storyboard's window, with
       // a view controller and an engine of its own: that window is kept and given this view controller in its place.
+      if window != nil {
+        os_log("The phone scene came with the storyboard's window: its view controller is replaced", type: .info)
+      }
       let phoneWindow = window ?? UIWindow(windowScene: windowScene)
       phoneWindow.rootViewController = controller
       window = phoneWindow

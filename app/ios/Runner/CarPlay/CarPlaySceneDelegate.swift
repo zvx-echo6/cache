@@ -29,9 +29,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let template = CPMapTemplate()
     // The buttons stay: by default the bar hides after a while with no touch.
     template.automaticallyHidesNavigationBar = false
+    // Search on the left and Saved places on the right, as on the Android car screen: CarPlay lays the trailing buttons out
+    // from the edge inwards, so the one at the edge comes first.
     template.trailingNavigationBarButtons = [
+      barButton("bookmark", "Saved places"),
       barButton("magnifyingglass", "Search"),
-      barButton("bookmark.fill", "Saved places"),
     ]
     interfaceController.setRootTemplate(template, animated: false) { _, error in
       if let error = error {
