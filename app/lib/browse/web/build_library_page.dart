@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart' show isLinuxDesktop;
 import '../../screens/download_confirm.dart' show confirmDelete;
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
@@ -140,6 +141,10 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     final counts = n == 0 && !building ? 'No books yet' : '${bookCount(n)} · ${thousands(passages)} passages · built from your PDFs';
     final up = c.upload;
     final mine = up != null && up.libraryId == id;
+    final needsLook = c.itemsOf(id).any((i) => i.needsAttention || i.skipped);
+    // On the Linux desktop "Needs a look" is not put above the shelves: it can turn up while the page is open, and what is under the
+    // pointer must not move. It sits after them. (While a build runs the panel is the build's own and stays on top.)
+    final lateQueue = isLinuxDesktop(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -151,7 +156,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         const SizedBox(height: 10),
         if (c.notice != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(c.notice!, style: TextStyle(fontSize: 13, color: context.t.warning))),
         if (mine && up.running) _uploadCard(context, up),
-        if (building || c.itemsOf(id).any((i) => i.needsAttention || i.skipped)) _queue(context, lib) else if (n > 0) _facts(context, lib),
+        if (building || (!lateQueue && needsLook)) _queue(context, lib) else if (n > 0) _facts(context, lib),
         if (_classes != null) ...[
           const SizedBox(height: 16),
           BuildShelves(
@@ -168,6 +173,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
           TextButton(onPressed: _loadClasses, child: const Text('Try again')),
         ],
         if (lib.publishError != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(lib.publishError!, style: TextStyle(fontSize: 12, color: context.t.warning))),
+        if (lateQueue && !building && needsLook) Padding(padding: const EdgeInsets.only(top: 16), child: _queue(context, lib)),
       ],
     );
   }
