@@ -908,7 +908,7 @@ char *cs_live_preview(const char *request_json);
  *   Where a GPS fix is on a route from cs_map_route (found by route_id; after a restart send the route object as "route"
  *   and it is loaded again). Fixes are matched near the last match first, so a route that passes itself is not confused.
  *   Returns {"route_id","fix","matched":{lat,lon,distance_along_m,offset_m,segment,route_bearing_deg},"on_route","off_route",
- *   "off_route_count","arrived","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
+ *   "off_route_count","arrived","stops_reached","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
  *   "off_route" is true once the fix has been more than off_route_m from the route (or the GPS accuracy if larger; twice
  *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "current",
  *   "next" and "then" are maneuvers: {index,kind,type,instruction,street_names,travel,lat,lon,distance_m,length_m,cardinal,bearing_deg}

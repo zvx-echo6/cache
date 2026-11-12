@@ -378,15 +378,74 @@ fn a_drive_that_starts_where_the_route_goes_out_and_comes_back_is_on_the_way_out
     // and it stays on the way out as the drive goes on
     let next = prog(&route, (lat0 + 0.0236, lon0 + 2.0 * east));
     assert_eq!(next["current"]["index"], 0, "{next}");
-    // A route picked up again part of the way back (its first fix is nearer the way out by a metre) is on the way back by the
-    // second or third fix: the way out would mean going back along it.
+    // A route picked up again part of the way back has not seen its stop reached: its fixes stay before the stop (the app
+    // knows which stops are behind and asks for a new route without them when a fix is off the route).
     let again = Arc::new(ActiveRoute::from_json(&r).unwrap());
     let mut last = Value::Null;
     for k in 0..4 {
         last = prog(&again, (lat0 + 0.05 - 0.0003 * k as f64, lon0 + east));
     }
-    assert!(last["matched"]["distance_along_m"].as_f64().unwrap() > out_m, "{last}");
-    assert_eq!(last["current"]["index"], 1, "{last}");
+    assert!(last["matched"]["distance_along_m"].as_f64().unwrap() < out_m, "{last}");
+    assert_eq!(last["stops_reached"], 0, "{last}");
+}
+
+#[test]
+fn a_fix_is_never_matched_beyond_a_stop_that_has_not_been_reached() {
+    // Made-up roads: north out to a far stop and back (drawn 3 m beside), then east past the start to a nearer stop and on to
+    // the end. Stop 1 is the far one, Stop 2 the nearer one.
+    let east = 1.0 / (111_320.0 * 42.5_f64.to_radians().cos());
+    let (lat0, lon0) = (42.5, -113.8);
+    let mut pts: Vec<(f64, f64)> = (0..=10).map(|i| (lat0 + 0.01 * i as f64, lon0)).collect(); // 0..10, the far stop is 10
+    pts.extend((1..=10).map(|i| (lat0 + 0.01 * (10 - i) as f64, lon0 + 3.0 * east))); // 11..20, back at the start at 20
+    pts.extend((1..=8).map(|i| (lat0, lon0 + 3.0 * east + 0.005 * i as f64))); // 21..28, the nearer stop is 24
+    let man = |index: usize, kind: &str, text: &str, b: usize, e: usize| {
+        json!({"index": index, "kind": "road", "type": kind, "instruction": text, "street_names": [], "duration_s": 600, "begin_index": b, "end_index": e, "lat": pts[b].0, "lon": pts[b].1})
+    };
+    let r = json!({
+        "route_id": "far-then-near", "geometry": encode_polyline6(&pts), "duration_s": 2400,
+        "maneuvers": [
+            man(0, "start", "Drive north on Basalt Road.", 0, 10),
+            man(1, "via", "Stop 1 reached: Far Mesa.", 10, 20),
+            man(2, "left", "Turn left onto Ridge Street.", 20, 24),
+            man(3, "via", "Stop 2 reached: Near Depot.", 24, 28),
+            man(4, "destination", "You have arrived.", 28, 28)
+        ]
+    });
+    let street = |i: f64| (lat0, lon0 + 3.0 * east + 0.005 * i);
+    // The drive does not go out to the far stop: it goes straight east along the street the route only comes to later, up to
+    // the nearer stop and past it. Every fix lies exactly on that later part of the route.
+    let route = Arc::new(ActiveRoute::from_json(&r).unwrap());
+    let first = prog(&route, pts[0]);
+    assert_eq!((first["on_route"].clone(), first["current"]["index"].clone(), first["stops_reached"].clone()), (json!(true), json!(0), json!(0)), "{first}");
+    for (n, i) in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.9, 4.0, 4.2, 5.0].into_iter().enumerate() {
+        let v = prog(&route, street(i));
+        // off the route (after the usual three fixes in a row), still before Stop 1, no stop reached; never "Stop 2 reached"
+        assert_eq!(v["on_route"], false, "at {i}: {v}");
+        assert_eq!(v["off_route"], n >= 2, "at {i}: {v}");
+        assert_eq!(v["stops_reached"], 0, "at {i}: {v}");
+        assert_eq!(v["current"]["index"], 0, "at {i}: {v}");
+        assert_eq!(v["next"]["instruction"], "Stop 1 reached: Far Mesa.", "at {i}: {v}");
+        assert!(v["remaining"]["distance_m"].as_f64().unwrap() > 20_000.0, "at {i}: {v}");
+    }
+    // The same route driven as it goes: out to the far stop, back, then east. Each stop is reached in its turn, and only then
+    // is the route beyond it matched.
+    let route = Arc::new(ActiveRoute::from_json(&r).unwrap());
+    for k in 0..=10 {
+        let v = prog(&route, (lat0 + 0.01 * k as f64, lon0));
+        assert_eq!(v["on_route"], true, "out {k}: {v}");
+        assert_eq!(v["stops_reached"], if k == 10 { 1 } else { 0 }, "out {k}: {v}");
+    }
+    for k in 1..=9 {
+        let v = prog(&route, (lat0 + 0.01 * (10 - k) as f64, lon0 + 3.0 * east));
+        assert_eq!((v["on_route"].clone(), v["stops_reached"].clone(), v["current"]["index"].clone()), (json!(true), json!(1), json!(1)), "back {k}: {v}");
+    }
+    let near = prog(&route, street(2.0));
+    assert_eq!((near["on_route"].clone(), near["current"]["index"].clone(), near["stops_reached"].clone()), (json!(true), json!(2), json!(1)), "{near}");
+    assert_eq!(near["next"]["instruction"], "Stop 2 reached: Near Depot.", "{near}");
+    let at = prog(&route, street(4.0));
+    assert_eq!(at["stops_reached"], 2, "{at}");
+    let on = prog(&route, street(6.0));
+    assert_eq!((on["on_route"].clone(), on["current"]["index"].clone(), on["stops_reached"].clone()), (json!(true), json!(3), json!(2)), "{on}");
 }
 
 #[test]

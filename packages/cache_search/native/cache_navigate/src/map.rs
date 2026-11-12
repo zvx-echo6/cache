@@ -411,6 +411,8 @@ struct ProgState {
     last_m: f64,
     /// The furthest along the route a fix has matched (set back when the route is really driven back along).
     max_m: f64,
+    /// How many of the route's stops (its via points, in order) have been reached.
+    reached: usize,
     off_count: usize,
     fixes: usize,
 }
@@ -427,6 +429,8 @@ pub struct ActiveRoute {
     mans: Vec<Man>,
     total_m: f64,
     total_s: f64,
+    /// Where along the route each stop (via point) is, in order.
+    vias: Vec<f64>,
     state: Mutex<ProgState>,
 }
 
@@ -465,7 +469,8 @@ impl ActiveRoute {
         }
         let total_m = *cum.last().unwrap();
         let total_s = r["duration_s"].as_f64().unwrap_or_else(|| mans.iter().map(|m| m.duration_s).sum());
-        Ok(ActiveRoute { id, pts, cum, mans, total_m, total_s, state: Mutex::new(ProgState { last_m: 0.0, max_m: 0.0, off_count: 0, fixes: 0 }) })
+        let vias = mans.iter().filter(|m| m.json["type"] == "via").map(|m| m.begin_m).collect();
+        Ok(ActiveRoute { id, pts, cum, mans, total_m, total_s, vias, state: Mutex::new(ProgState { last_m: 0.0, max_m: 0.0, reached: 0, off_count: 0, fixes: 0 }) })
     }
 
     /// The maneuver a distance along the route falls in: the last one that has begun, leaving the final arrival (a point, not a
@@ -483,7 +488,7 @@ impl ActiveRoute {
     }
 
     /// The closest point to `p` of each segment whose start lies in `[lo_m, hi_m]` along the route, in route order, and
-    /// whether that point is inside the segment (not one of its ends).
+    /// whether that point is inside the segment (not one of its ends). A closest point further along than `hi_m` is left out.
     fn hits(&self, p: (f64, f64), lo_m: f64, hi_m: f64) -> Vec<(Hit, bool)> {
         let k = p.0.to_radians().cos();
         let xy = |q: (f64, f64)| ((q.1 - p.1) * k * 111_320.0, (q.0 - p.0) * 110_574.0);
@@ -499,6 +504,9 @@ impl ActiveRoute {
             let t = if n == 0.0 { 0.0 } else { (((0.0 - a.0) * dx + (0.0 - a.1) * dy) / n).clamp(0.0, 1.0) };
             let off = (a.0 + t * dx).hypot(a.1 + t * dy);
             let along = self.cum[i] + t * (self.cum[i + 1] - self.cum[i]);
+            if along > hi_m {
+                continue;
+            }
             let pt = (self.pts[i].0 + t * (self.pts[i + 1].0 - self.pts[i].0), self.pts[i].1 + t * (self.pts[i + 1].1 - self.pts[i].1));
             out.push(((i, along, off, pt), t > 0.0 && t < 1.0));
         }
@@ -557,7 +565,7 @@ impl ActiveRoute {
     pub fn progress(&self, q: &ProgressReq) -> Value {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if q.reset {
-            *st = ProgState { last_m: 0.0, max_m: 0.0, off_count: 0, fixes: 0 };
+            *st = ProgState { last_m: 0.0, max_m: 0.0, reached: 0, off_count: 0, fixes: 0 };
         }
         let p = (q.lat, q.lon);
         let acc = q.accuracy_m.unwrap_or(0.0).max(0.0);
@@ -572,15 +580,23 @@ impl ActiveRoute {
         // at the far end still ahead); and with nothing on the route that way (a fix off the route, a route driven back
         // along), the nearest point of the whole route
         let (margin, slack) = (PASS_MARGIN_M.max(acc).min(PASS_MARGIN_MAX_M), BACK_SLACK_M.max(acc).min(BACK_SLACK_MAX_M));
+        // Stops are visited in order: nothing is matched beyond the next stop that has not been reached (but for the
+        // arrival distance past it, where reaching it is seen). A fix that is only near a later part of the route is off the
+        // route, and the app's new route from there goes through every stop still ahead.
+        let cap = self.vias.get(st.reached).map_or(f64::MAX, |v| *v + q.arrive_m.max(0.0));
         let mut hit = None;
         if st.fixes > 0 {
-            let windowed = self.continuing(p, st.last_m - WINDOW_BACK_M, st.last_m + WINDOW_AHEAD_M, &st, margin, slack);
+            let windowed = self.continuing(p, st.last_m - WINDOW_BACK_M, (st.last_m + WINDOW_AHEAD_M).min(cap), &st, margin, slack);
             hit = windowed.filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
         }
         if hit.is_none() {
-            hit = self.continuing(p, 0.0, f64::MAX, &st, margin, slack).filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
+            hit = self.continuing(p, 0.0, cap, &st, margin, slack).filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
         }
         if hit.is_none() {
+            hit = self.nearest(p, 0.0, cap);
+        }
+        if hit.is_none() {
+            // nothing of the route lies before the stop (the stop is where the route begins)
             hit = self.nearest(p, 0.0, f64::MAX);
         }
         let (seg, along, offset, matched) = hit.expect("a route has segments");
@@ -590,12 +606,16 @@ impl ActiveRoute {
             st.off_count = 0;
             st.last_m = along;
             st.max_m = if along + slack < st.max_m { along } else { st.max_m.max(along) };
+            while st.reached < self.vias.len() && along >= self.vias[st.reached] - q.arrive_m.max(0.0) {
+                st.reached += 1;
+            }
         } else {
             st.off_count += 1;
         }
         let off_route = st.off_count >= q.off_route_fixes;
         let off_count = st.off_count;
         let fix_no = st.fixes;
+        let stops_reached = st.reached;
         drop(st);
 
         let remaining_m = (self.total_m - along).max(0.0);
@@ -664,6 +684,7 @@ impl ActiveRoute {
             "off_route": off_route,
             "off_route_count": off_count,
             "arrived": arrived,
+            "stops_reached": stops_reached,
             "progress": round_py(if self.total_m > 0.0 { along / self.total_m } else { 1.0 }, 4),
             "remaining": Value::Object(remaining),
             "total": {"distance_m": round_py(self.total_m, 1), "duration_s": self.total_s.round() as i64},
