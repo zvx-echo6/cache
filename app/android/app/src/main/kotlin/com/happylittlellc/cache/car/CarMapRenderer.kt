@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.graphics.Bitmap
+import android.graphics.PointF
 import android.graphics.Color
 import androidx.car.app.CarContext
 import androidx.car.app.SurfaceCallback
@@ -40,6 +41,7 @@ import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Point
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Draws Cache's map on the car's screen.
@@ -101,6 +103,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var overview = false
     private var routeCoords: List<DoubleArray> = emptyList()
     private var badgeKey: String? = null
+    private var badgeOffsetKey: String? = null
     private var routeColorKey: String? = null
 
     /** The map's pixels per density-independent pixel (the car surface's, which the map's own View has too). */
@@ -353,6 +356,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         m.uiSettings.isCompassEnabled = false
         m.setMinZoomPreference(2.0)
         m.setMaxZoomPreference(19.0)
+        // The grade badge keeps off the destination wherever the camera has come to rest (the overview, a zoom, a pan).
+        m.addOnCameraIdleListener { placeBadge(CarLink.trip) }
         val t = CarLink.trip
         val lat = t.lat ?: t.destinationLat
         val lon = t.lon ?: t.destinationLon
@@ -402,6 +407,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         st.addSource(GeoJsonSource(SRC_DRIVEN, CarLink.EMPTY_GEOJSON))
         st.addSource(GeoJsonSource(SRC_BADGE, CarLink.EMPTY_GEOJSON))
         badgeKey = null
+        badgeOffsetKey = null
         routeColorKey = null
         val isAlt = Expression.eq(Expression.get("alt"), Expression.literal(true))
         val isMain = Expression.eq(Expression.get("alt"), Expression.literal(false))
@@ -593,9 +599,34 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 st.addImage(BADGE_IMAGE, bmp)
             }
             st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(point(ov.steepLat, ov.steepLon))
+            placeBadge(t)
         } else {
             st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(CarLink.EMPTY_GEOJSON)
         }
+    }
+
+    /** Moves the grade badge off the destination marker and the route's end when, on the screen as the camera now shows
+     * it, the badge at its own point would cover them (CarOverlayPainter.badgeOffset): the steepest stretch is often the
+     * last one, and on the route overview the badge hid the destination dot. */
+    private fun placeBadge(t: CarTrip) {
+        val m = map ?: return
+        val st = style ?: return
+        val ov = t.overview ?: return
+        val lat = ov.steepLat ?: return
+        val lon = ov.steepLon ?: return
+        val g = ov.steepGradePct ?: return
+        val ends = mutableListOf<PointF>()
+        val destLat = t.destinationLat
+        val destLon = t.destinationLon
+        if (destLat != null && destLon != null) ends.add(m.projection.toScreenLocation(LatLng(destLat, destLon)))
+        routeCoords.lastOrNull()?.let { ends.add(m.projection.toScreenLocation(LatLng(it[1], it[0]))) }
+        val steep = m.projection.toScreenLocation(LatLng(lat, lon))
+        val off = CarOverlayPainter.badgeOffset(steep, ends, CarOverlayPainter.badgeWidth(CarOverlayPainter.gradeText(g), density), density)
+        val key = "${off.x.roundToInt()}|${off.y.roundToInt()}"
+        if (key == badgeOffsetKey) return
+        badgeOffsetKey = key
+        // The offset is in the style's own pixels, which the map scales by its density.
+        st.getLayer("car-grade-badge")?.setProperties(PropertyFactory.iconOffset(arrayOf(off.x / density, off.y / density)))
     }
 
     private fun applyTrip(t: CarTrip) {

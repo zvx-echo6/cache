@@ -9,11 +9,13 @@ release notes).
 ### New
 - Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
 - Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
+- Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are
 - Library: adding a PDF, going to Home and coming back no longer adds the PDF twice or fills the log with "waiting for the earlier run" lines; one run handles each PDF
@@ -48,6 +50,10 @@ release notes).
 - Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
 - Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
 - Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running
+
+## 1.1.0 (build 50, Android Auto test, Android only) - 2026-11-12
+
+- Android Auto is switched on in this build, which goes to the closed test group on Google Play so that Google's car review can start. It carries the changes listed under Unreleased as of this date. iPhone has no build 50; the next regular build, 51, goes to both stores
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 

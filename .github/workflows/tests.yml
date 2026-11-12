@@ -3,7 +3,8 @@
 #
 #   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
-#   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
+#   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), a browser
+#            compile of the app (flutter build web, the Linux build's web flags), then the
 #            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it), and cache_ocr's analyze
 #            and tests (a fake engine; the real engines run on an emulator and a simulator in ocr.yml)
 #   add-pdf-core  Add PDF end to end on the real core: the app's AddPdfState drives cs_ingest_* (a Linux libcache_search) with the
@@ -146,6 +147,11 @@ jobs:
           path: app/test/phone_guard/failures/
           if-no-files-found: ignore
           retention-days: 7
+      # The app compiles for a browser (the Linux server's web page), with the Linux build's web flags; code that only a
+      # browser build reaches fails here instead of in the Linux build.
+      - name: Web compile
+        working-directory: app
+        run: flutter build web --no-pub --release --no-tree-shake-icons --no-web-resources-cdn
       - name: Plugin tests (cache_search)
         working-directory: packages/cache_search
         run: |
