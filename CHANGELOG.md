@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
@@ -19,6 +20,18 @@ release notes).
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
 - Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+- Weather and alerts: a source that needs a key (satellite fire hotspots, or a source of your own with a key) now updates from Update now, in the background and when you move, not only when Ask looks it up
+- Home: the weather card no longer says "no forecast yet" while a forecast is stored; when the current reading is too old to show, it shows today's forecast under the day's name, with its age
+- Home and Weather: a warning that has ended no longer shows again for a moment each time Cache opens
+- Weather alerts: an alert no longer pops up twice when two updates or two checks run in the same moment, and a damaged record of what you were already told is read from a spare copy, so it no longer brings every alert back
+- Weather and alerts: a source's address can no longer be redirected from https to plain http, and a source's key is no longer sent on to a server the source does not name
+- Weather and alerts: with Cache left open on the screen, weather and alerts now keep updating every 30 minutes on iPhone and on Linux (before, only when Cache was opened or brought back to the front)
+- Weather alerts: with Where I am watched, the same fire no longer pops up again each time you move about a kilometre; it pops up once more only if it comes close enough to be serious
+- Weather alerts: a warning that reaches another of your places now pops up for that place even if you were told about it elsewhere, and an update pops up again when it becomes more severe; an update that only changes the end time or the wording stays quiet
+- Weather alerts: a fire whose mapped edge you are inside now counts as serious and pops up under Serious only (before, only fires with a distance in miles did)
+- Weather alerts and Home: with Satellite fire hotspots on, named fires are no longer left out; every fire source is listed and can pop up, and a fire two sources both name is shown once
+- Weather: a source that is switched on without its key now says it needs a key, instead of telling you to update
+- Home and Weather: data that ran out while Cache was closed is marked expired as soon as Cache opens, not only after the first update
 - Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
 - Bookshelves: after Go to a number takes you to a shelf or book, the box is emptied and the keyboard stays closed when you come back; dragging the list closes the keyboard
 - Weather: Latitude and Longitude in Add your own source put their text in the web address without taking the keyboard from it, and the cursor stays right after it
