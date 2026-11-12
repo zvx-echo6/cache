@@ -5,7 +5,7 @@ use cache_navigate::map::{parse_opts, route, ActiveRoute, MapEnd, MapRouteReq, P
 use cache_navigate::{NavCore, NavigateCfg, PlaceSlot};
 use cache_offroad::directions::TravelMode;
 use cache_offroad::router::Boundary;
-use cache_offroad::valhalla::{encode_polyline6, LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
+use cache_offroad::valhalla::{encode_polyline6, Lane, LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -13,6 +13,8 @@ use std::sync::Arc;
 struct Straight {
     maneuvers: usize,
     alts: usize,
+    /// Maneuver 3 carries turn lanes.
+    lanes: bool,
 }
 
 fn lerp(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
@@ -43,6 +45,7 @@ impl Straight {
                     end_shape_index: (i * 10) as i64 + if last { 0 } else { 10 },
                     bearing_after: Some(90.0),
                     bearing_before: None,
+                    lanes: if self.lanes && i == 3 { vec![Lane { directions: 16, active: None, valid: None }, Lane { directions: 48, active: Some(32), valid: None }, Lane { directions: 32, active: None, valid: Some(32) }] } else { vec![] },
                 }
             })
             .collect();
@@ -70,7 +73,7 @@ impl Valhalla for Straight {
 }
 
 fn core(maneuvers: usize, alts: usize) -> NavCore {
-    NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers, alts }))
+    NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers, alts, lanes: false }))
 }
 
 fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
@@ -294,8 +297,9 @@ fn the_store_keeps_the_newest_routes() {
 struct Record(std::sync::Mutex<Vec<Vec<(f64, f64)>>>);
 
 impl cache_navigate::TileStream for Record {
-    fn prepare(&self, points: &[(f64, f64)]) {
+    fn prepare(&self, points: &[(f64, f64)]) -> cache_navigate::TilePrep {
         self.0.lock().unwrap().push(points.to_vec());
+        cache_navigate::TilePrep::default()
     }
 }
 
@@ -321,4 +325,26 @@ fn an_off_road_mode_without_the_off_road_data_is_a_failed_route_that_says_so() {
     assert_eq!(out["errors"][0]["code"], "not_set_up");
     assert_eq!(out["errors"][0]["message"], cache_offroad::directions::OFFROAD_DATA_MISSING);
     assert!(active.is_empty());
+}
+
+#[test]
+fn turn_lanes_ride_on_the_maneuver_and_into_progress_only_where_there_are_some() {
+    let c = NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers: 6, alts: 0, lanes: true }));
+    let (out, active) = route(&c, &req(vec![], 0)).unwrap();
+    let m = out["maneuvers"].as_array().unwrap();
+    let want = json!([{"directions": 16}, {"directions": 48, "active": 32}, {"directions": 32, "valid": 32}]);
+    assert_eq!(m[3]["lanes"], want);
+    for (i, x) in m.iter().enumerate() {
+        assert_eq!(x.get("lanes").is_some(), i == 3, "maneuver {i}");
+    }
+    // a route without lanes has no key anywhere, so its JSON is what it was
+    let (plain, _) = route(&core(6, 0), &req(vec![], 0)).unwrap();
+    assert!(!serde_json::to_string(&plain).unwrap().contains("lanes"));
+    // progress: the next maneuver (3) carries them, the current and `then` ones do not
+    let r = &active[0];
+    let at3 = fix(&out, m[2]["distance_m"].as_f64().unwrap() * 2.0 + 10.0, 0.0);
+    let p3 = prog(r, at3);
+    assert_eq!(p3["next"]["index"], 3);
+    assert_eq!(p3["next"]["lanes"], want);
+    assert!(p3["current"].get("lanes").is_none());
 }

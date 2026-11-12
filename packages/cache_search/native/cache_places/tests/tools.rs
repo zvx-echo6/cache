@@ -42,7 +42,7 @@ fn run(t: &dyn Tool, location: Option<&Location>, args: Value) -> Value {
     let ctx = ToolCtx { location, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args) {
         Ok(ToolOutput::Json(v)) => v,
-        Ok(ToolOutput::Text(_)) => panic!("text"),
+        Ok(ToolOutput::Text(_) | ToolOutput::Pieces(_)) => panic!("text"),
         Err(e) => e.to_json(),
     }
 }

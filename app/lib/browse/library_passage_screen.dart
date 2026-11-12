@@ -71,10 +71,11 @@ class _LibraryPassageScreenState extends State<LibraryPassageScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (page.page != null)
+                      // The page as printed: a number, or a label that is text ("iv", "A-3").
+                      if (page.pageLabel ?? page.page?.toString() case final label?)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: Text('Page ${page.page}', style: TextStyle(fontSize: 13, color: colors.secondary)),
+                          child: Text('Page $label', style: TextStyle(fontSize: 13, color: colors.secondary)),
                         ),
                       SelectableText(
                         page.text,

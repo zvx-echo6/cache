@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../maps/maps_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../maps/palette/map_palette.dart';
 import '../maps/ui/map_assets.dart';
 import '../nav/nav_geojson.dart';
@@ -14,6 +15,7 @@ import '../nav/speaker.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
+import 'car_overlay.dart';
 import 'car_trip.dart';
 
 /// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
@@ -29,6 +31,10 @@ class CarBridge {
     required this.nav,
     required this.maps,
     required this.drive,
+    this.elevation,
+    this.theme,
+    this.overlay,
+    this.settings,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -40,6 +46,17 @@ class CarBridge {
   final NavState nav;
   final MapsState maps;
   final CarDriveSource drive;
+
+  /// The app-level elevation of the route shown (one for the phone's Maps screen and the car); null: the car draws no climb card.
+  final RouteElevation? elevation;
+
+  /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
+  final CacheThemeId Function()? theme;
+
+  /// The two car switches (Settings > Car); null: the defaults. [settings] tells the bridge when they may have changed, so the car
+  /// has the new trip within one update.
+  final Map<String, bool> Function()? overlay;
+  final Listenable? settings;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -81,6 +98,10 @@ class CarBridge {
     _started = true;
     _channel.setMethodCallHandler(_onCall);
     nav.addListener(_schedule);
+    nav.location.addListener(_onLocation);
+    elevation?.addListener(_schedule);
+    settings?.addListener(_onSettings);
+    _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
     try {
@@ -97,6 +118,9 @@ class CarBridge {
   void dispose() {
     _pushTimer?.cancel();
     nav.removeListener(_schedule);
+    if (_started) nav.location.removeListener(_onLocation);
+    elevation?.removeListener(_schedule);
+    settings?.removeListener(_onSettings);
     maps.removeListener(_onMaps);
     _events?.cancel();
     if (_started) _channel.setMethodCallHandler(null);
@@ -109,32 +133,81 @@ class CarBridge {
     if (on) {
       _lastTrip = null;
       _lastRouteSig = null;
+      _pushedPhase = null;
       _schedule();
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
+      // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
+      // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
+      // position.
+      final testDrive = drive.simulating;
       drive.simulate = false;
+      if (testDrive && nav.guiding) unawaited(nav.end());
     }
   }
 
   // ---- pushing to the car ------------------------------------------------------------------------------------
 
+  /// The phase the car was last told.
+  NavPhase? _pushedPhase;
+
   void _schedule() {
     if (!connected.value) return;
+    // Guidance starting or ending (or a preview opening or closing) is told at once, whoever ended it (End route on either
+    // screen, the car's host, an arrival dismissed): nothing on the car that depends on "guiding" waits for the throttle.
+    if (nav.phase != _pushedPhase) {
+      _pushTimer?.cancel();
+      _pushTimer = null;
+      unawaited(push());
+      return;
+    }
     _pushTimer ??= Timer(throttle, () {
       _pushTimer = null;
       unawaited(push());
     });
   }
 
+  CacheThemeId? _lastTheme;
+
+  /// What makes the car reload its map: the layers it draws (their ids and style signatures) and the pin style; the theme is tracked
+  /// on its own ([_onSettings]). The phone's MapsState.styleKey also has each layer's opacity, whether the engine is ready and the
+  /// connection count, and those must not reload the car's map: a reconnect would reload it every time the phone regains data, a
+  /// not-ready engine has no style to send (the car asks again by itself), and an opacity change waits for the next load (the car
+  /// style does draw layers at their opacity; the owner chose not to reload for it).
+  String get _carStyleKey => [
+        for (final u in maps.uses) u.def.id,
+        'pins-${maps.pinStyle.name}',
+        for (final l in maps.engine.layers) l.styleSignature,
+      ].join(',');
+
+  /// A phone setting changed: a new theme reloads the car's map style (the car asks for it again with the same request it always
+  /// uses), and the trip goes out again for the switches and the palette.
+  void _onSettings() {
+    final t = theme?.call();
+    if (t != _lastTheme) {
+      _lastTheme = t;
+      if (connected.value) unawaited(_send('styleChanged', null));
+    }
+    _schedule();
+  }
+
   void _onMaps() {
     if (!connected.value) return;
-    final key = maps.styleKey;
+    final key = _carStyleKey;
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
     unawaited(_send('styleChanged', null));
+  }
+
+  /// The phone's position changed. While nothing is guided that position is the car's marker ([snapshot]), and nothing else
+  /// tells the car about it: [NavState] does not change when the phone moves. (While guiding, guidance itself changes with
+  /// every fix, so the trip goes out from there.)
+  void _onLocation() {
+    if (!nav.guiding) _schedule();
   }
 
   void _onEvent(NavEvent e) {
@@ -144,15 +217,20 @@ class CarBridge {
   /// The trip as it is now, and the route line when it changed.
   Map<String, dynamic> snapshot() {
     final p = nav.progress;
-    final f = nav.lastFix ?? nav.fix;
+    // A simulated test drive starts at the route's start, not where the phone is: until its first fix has come the phone's
+    // own fix is not the vehicle (the car drew its arrow there, beside the route, for the first frames of the drive).
+    final f = nav.lastFix ?? (nav.guiding && drive.simulating ? null : nav.fix);
     final onRoute = nav.guiding && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
-    return carTrip(nav, position: pos, heading: heading);
+    // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
+    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
   }
 
   Future<void> push() async {
     if (!connected.value) return;
+    _pushedPhase = nav.phase;
     final trip = snapshot();
     final text = jsonEncode(trip);
     if (text != _lastTrip) {
@@ -220,6 +298,8 @@ class CarBridge {
         return null;
       case 'stop':
         await nav.end();
+        // The car has the ended trip before this is answered.
+        await push();
         return null;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
@@ -248,14 +328,14 @@ class CarBridge {
   /// with the colors of the route and the position for the lines the car adds on top.
   Future<Map<String, Object?>?> style({required bool dark}) async {
     if (!maps.engine.ready) return null;
-    final palette = mapPaletteFor(dark ? CacheThemeId.dark : CacheThemeId.light);
+    final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
     final String glyphs;
     try {
       glyphs = await _glyphs();
     } catch (_) {
       return null;
     }
-    _lastStyleKey = maps.styleKey;
+    _lastStyleKey = _carStyleKey;
     return {
       'style': await maps.styleJson(palette, glyphs),
       'colors': {for (final r in const ['route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'position', 'positionRing', 'pin']) r: palette.css(r)},
@@ -284,15 +364,16 @@ class CarBridge {
       lon: s.lon,
       matched: 'saved');
 
-  /// Saved places whose name is the query come first, then the map search (by meaning when the search model is loaded). The
-  /// phone's own search panel is left as it is.
+  /// Saved places whose name is the query come first, then the map search by name, address and category word only: the car never
+  /// asks for a query vector, so the search model is not loaded for it (owner's decision). The phone's own search panel is left as
+  /// it is. Every car search path (the car's search box, a name in a navigation request) comes through here.
   Future<List<MapPlace>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
     final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
     List<MapPlace> found = const [];
     try {
-      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: true);
+      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
     return [...saved, ...found].take(12).toList();

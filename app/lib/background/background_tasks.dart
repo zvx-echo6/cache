@@ -1,8 +1,10 @@
+import 'dart:async';
 
 import 'package:workmanager/workmanager.dart';
 
 import '../platform/app_log.dart';
 import '../platform/battery.dart';
+import '../platform/proc_diag.dart';
 
 /// The background layer the app's jobs share: one WorkManager dispatcher (background_dispatcher.dart) that routes each task by
 /// its name, the constraint presets, the one lock (background_lock.dart) and one log line per run. The tasks:
@@ -97,6 +99,8 @@ class BackgroundTasks {
 
   Future<bool> run(String task, Map<String, dynamic>? input) async {
     final start = _clock();
+    unawaited(logProcessDiag('background run start: ${kBackgroundTaskNames[task] ?? task}'));
+    final runClock = StepClock();
     BatteryReading? b;
     try {
       b = await battery();
@@ -116,7 +120,7 @@ class BackgroundTasks {
     final end = _clock();
     final line = 'Background run: task ${kBackgroundTaskNames[task] ?? task}, start ${start.toIso8601String()}, end ${end.toIso8601String()}, '
         'outcome $outcome, battery ${b == null ? 'unknown' : '${b.percent}%'}, charging ${b == null ? 'unknown' : (b.charging ? 'yes' : 'no')}, '
-        'thermal ${b?.thermal.name ?? 'unknown'}';
+        'thermal ${b?.thermal.name ?? 'unknown'}, ${runClock.took()}';
     lastLine = line;
     logInfo(line);
     return true;

@@ -14,6 +14,7 @@ import android.os.Build
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -27,21 +28,58 @@ class MainActivity : FlutterActivity() {
     // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
     // build nothing is read and the channel answers zeros.
     private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+    private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
+    private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
+    private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
 
     private fun readBenchExtras(i: Intent?) {
         if (!BuildConfig.TEST_APK || i == null) return
         if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+        if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
+        if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
+        if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
+    }
+
+    // A cachelink: link (a camera scanning a device's link code). Held until Dart takes it (a cold start: the link arrives before
+    // Dart listens) and also pushed to a running Dart on the co.cache/link channel. Flutter's own deep-link routing is off
+    // (flutter_deeplinking_enabled in the manifest), so the link never becomes a route.
+    private var linkChannel: MethodChannel? = null
+    private var pendingLink: String? = null
+
+    private fun readLink(i: Intent?) {
+        if (i == null || i.action != Intent.ACTION_VIEW) return
+        // An activity brought back from the Recents list repeats the intent it was first started with; that is not a new link.
+        if ((i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        val uri = i.data ?: return
+        if (!"cachelink".equals(uri.scheme, ignoreCase = true)) return
+        val link = i.dataString ?: return
+        // Cleared so a re-created activity does not deliver the same link again.
+        i.data = null
+        pendingLink = link
+        linkChannel?.invokeMethod("opened", link, object : MethodChannel.Result {
+            override fun success(result: Any?) { if (pendingLink == link) pendingLink = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
     }
 
     override fun onNewIntent(intent: Intent) {
+        // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
+        // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
+        // is dropped. Flutter never sees it: it would read the address as a page to open, and the app has no such pages.
+        if (NavIntent.fromPhone(intent)) return
         super.onNewIntent(intent)
         readBenchExtras(intent)
+        readLink(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
+        // The same when the request is what started this activity: the app opens as from its icon.
+        if (NavIntent.fromPhone(intent)) intent = NavIntent.plainLaunch(intent)
         super.onCreate(savedInstanceState)
         readBenchExtras(intent)
+        readLink(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -85,6 +123,18 @@ class MainActivity : FlutterActivity() {
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        linkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/link").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        val link = pendingLink
+                        pendingLink = null
+                        result.success(link)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -156,11 +206,19 @@ class MainActivity : FlutterActivity() {
                         val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
                         val mbps = benchPrereadMbps
                         if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        val days = benchDateOffsetDays
+                        if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
+                        val ub = benchUbatch
+                        if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
+                        val et = benchEmbedThreads
+                        if (BuildConfig.TEST_APK && et != null) out["cache_embed_threads"] = et
                         result.success(out)
                     }
                     else -> result.notImplemented()
                 }
             }
+        // What this build was made with (cache/build) is answered by the engine itself, with or without this activity
+        // (car/SharedEngine.kt).
         // The whole-route picture during guidance (RouteSnapshot.kt).
         routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
     }
@@ -193,9 +251,13 @@ class MainActivity : FlutterActivity() {
                     android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
                     android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
                     android.app.ApplicationExitInfo.REASON_OTHER -> "other"
+                    // numbers from the ApplicationExitInfo reference (these two are API 34; the app's compileSdk may predate them)
+                    8 -> "permission changed"
+                    15 -> "app changed"
+                    16 -> "app updated"
                     else -> "reason ${e.reason}"
                 }
-                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
+                mapOf("time" to e.timestamp, "reason" to reason, "code" to e.reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
             }
         } catch (e: Exception) {
             emptyList()

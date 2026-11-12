@@ -1,3 +1,5 @@
+import '../settings/app_settings.dart' show formatMinutes;
+
 /// "just now", "12 min ago", "3 hours ago", "3 days ago": how long ago, in words for people.
 String agoWords(Duration d) {
   final m = d.inMinutes;
@@ -40,4 +42,38 @@ String lineStart(String line) {
   final first = line.runes.first;
   final c = String.fromCharCode(first);
   return c.toUpperCase() + line.substring(c.length);
+}
+
+const List<String> _weekdaysShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/// A moment on a place's own clock: its date (as midnight UTC, for comparing dates) and the minutes after midnight.
+typedef PlaceClock = ({DateTime day, int minutes});
+
+/// A moment as the core writes it at a place ("2026-11-11T14:14:00-07:00", "2026-11-11 21:00", "2026-11-11"), read as the
+/// place's own clock shows it, whatever this device's time zone. A date alone is midnight. Null when [text] is not a moment.
+PlaceClock? placeClock(String? text) {
+  final m = RegExp(r'^(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d):(\d\d))?').firstMatch(text?.trim() ?? '');
+  if (m == null) return null;
+  return (
+    day: DateTime.utc(int.parse(m.group(1)!), int.parse(m.group(2)!), int.parse(m.group(3)!)),
+    minutes: m.group(4) == null ? 0 : int.parse(m.group(4)!) * 60 + int.parse(m.group(5)!),
+  );
+}
+
+/// The date at a place at [now] (as midnight UTC, see [PlaceClock]). The place's clock is the offset [stamp] is written with
+/// (the core stamps a source's times in the place's zone, "2026-11-11T14:14:00-07:00"); without one, this device's.
+DateTime placeToday(DateTime now, String? stamp) {
+  final o = RegExp(r'([+-])(\d\d):(\d\d)$').firstMatch(stamp?.trim() ?? '');
+  final minutes = o == null ? now.timeZoneOffset.inMinutes : (o.group(1) == '-' ? -1 : 1) * (int.parse(o.group(2)!) * 60 + int.parse(o.group(3)!));
+  final there = now.toUtc().add(Duration(minutes: minutes));
+  return DateTime.utc(there.year, there.month, there.day);
+}
+
+/// "2:14 PM" for a moment on [today], "Wed 2:14 PM" within six days of it, else "Nov 4, 2:14 PM".
+String clockWords(PlaceClock at, DateTime today) {
+  final time = formatMinutes(at.minutes);
+  final days = at.day.difference(today).inDays;
+  if (days == 0) return time;
+  if (days.abs() < 7) return '${_weekdaysShort[at.day.weekday - 1]} $time';
+  return '${_months[at.day.month - 1]} ${at.day.day}, $time';
 }

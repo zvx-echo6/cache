@@ -427,6 +427,14 @@
         "label"
       ],
       "properties": {
+        "app": {
+          "description": "Values for the app alone, by name: each is a path, and the response's value there (text, a number, a list or an object, as it is) goes with the item to the app (`cs_live_get`: the item's `app`). The `live_data` tool never includes them, so nothing the model reads changes. An alert's message type, references and VTEC go here, for the app to tell an update of an alert from another alert. At most 8 names (letters, digits and `_`); a value larger than 8 kB as JSON is left out.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "area": {
           "description": "Path to a GeoJSON geometry for the item's area.",
           "default": null,

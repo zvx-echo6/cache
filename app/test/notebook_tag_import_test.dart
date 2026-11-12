@@ -651,12 +651,15 @@ void main() {
       await tester.tap(find.text('Stop syncing this note'));
       await tester.pumpAndSettle();
       expect(find.text('Stop syncing this note?'), findsOneWidget);
-      await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('stop-sync-confirm')));
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-      });
-      await tester.pumpAndSettle();
+      await tester.runAsync(() => tester.tap(find.byKey(const ValueKey('stop-sync-confirm'))));
+      // stopping writes the note to disk before the snack bar: wait for the snack bar itself (bounded),
+      // short pumps so it is not dismissed before the check
+      for (var i = 0; i < 200 && find.text('Stopped syncing. The note stays in both.').evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
       expect(find.text('Stopped syncing. The note stays in both.'), findsOneWidget);
+      await tester.pumpAndSettle();
       expect(mem.text['Gear.md'], '---\ncachesync: off\n---\nStove #cachesync\n');
       expect(c.stoppedWith(id), 'Obsidian');
       expect(find.bySemanticsLabel('Not syncing with Obsidian'), findsOneWidget);

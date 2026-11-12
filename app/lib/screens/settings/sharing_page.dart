@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../maps/ui/format.dart';
 import '../../settings/data_kinds.dart';
+import '../../sharing/link_inbox.dart';
+import '../../sharing/link_url.dart';
 import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
@@ -12,15 +15,32 @@ import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share});
 
   final SharingState sharing;
 
   /// Settings between linked devices (each device's page); null where the app has none (tests).
   final SettingsSync? settingsSync;
 
+  /// Where a `cachelink:` link from outside waits; the app's own inbox unless a test gives one.
+  final LinkInbox? inbox;
+
+  /// Sends text through the phone's share sheet; the real one unless a test gives one.
+  final Future<void> Function(String text)? share;
+
   @override
   State<SharingPage> createState() => _SharingPageState();
+}
+
+/// The QR of a device's link (see link_url.dart): what a system camera reads and opens in Cache.
+class LinkQr extends StatelessWidget {
+  const LinkQr({super.key, required this.link});
+
+  final String link;
+
+  @override
+  Widget build(BuildContext context) =>
+      QrImageView(data: link, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L);
 }
 
 String _ago(int? ms) {
@@ -34,7 +54,71 @@ String _ago(int? ms) {
 
 class _SharingPageState extends State<SharingPage> {
   SharingState get s => widget.sharing;
+  LinkInbox get _inbox => widget.inbox ?? linkInbox;
   bool _busy = false;
+  bool _incomingOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _inbox.pageOpen = true;
+    _inbox.addListener(_incomingSoon);
+    s.addListener(_incomingSoon);
+    _incomingSoon();
+  }
+
+  @override
+  void dispose() {
+    _inbox.pageOpen = false;
+    _inbox.take(); // a link still waiting (sharing never started) is dropped, not shown later out of the blue
+    _inbox.removeListener(_incomingSoon);
+    s.removeListener(_incomingSoon);
+    super.dispose();
+  }
+
+  void _incomingSoon() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _incoming());
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// A `cachelink:` link that came from outside (a camera, another app): once sharing runs, the code goes into the same
+  /// "Enter a link code" box with the code filled in, and nothing is linked until the person taps Link. A link that cannot be
+  /// read, or whose device is this one or already linked, is said and changes nothing.
+  Future<void> _incoming() async {
+    if (!mounted || _incomingOpen || _busy || !s.running || _inbox.pending == null) return;
+    final link = _inbox.take()!;
+    _incomingOpen = true;
+    try {
+      final String code;
+      try {
+        code = _checked(linkCodeFrom(link), strict: true);
+      } on BadLinkCode catch (e) {
+        if (mounted) say(context, e.message);
+        return;
+      }
+      if (mounted) await _enterCode(initial: code);
+    } finally {
+      _incomingOpen = false;
+    }
+  }
+
+  /// [code] when it can be linked; throws [BadLinkCode] for this device's own code or one already linked, and, when [strict] (a
+  /// link from outside), for a code that cannot be read. A typed or pasted code that cannot be read here is left to the sync
+  /// engine, which gives the same messages.
+  String _checked(String code, {bool strict = false}) {
+    final LinkCodeInfo info;
+    try {
+      info = decodeLinkCode(code);
+    } on BadLinkCode {
+      if (strict) rethrow;
+      return code;
+    }
+    if (info.id.toLowerCase() == s.myId?.toLowerCase()) throw const BadLinkCode("that is this device's own code");
+    final linked = s.peers.where((p) => (p['id'] as String?)?.toLowerCase() == info.id.toLowerCase()).firstOrNull;
+    if (linked != null) throw BadLinkCode('Already linked with ${linked['name'] ?? info.name}');
+    return code;
+  }
+
   Future<void> _run(Future<void> Function() f) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -43,7 +127,10 @@ class _SharingPageState extends State<SharingPage> {
     } catch (e) {
       if (mounted) say(context, '$e');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        _incomingSoon();
+      }
     }
   }
 
@@ -100,7 +187,7 @@ class _SharingPageState extends State<SharingPage> {
                 Container(
                   color: Colors.white,
                   padding: const EdgeInsets.all(10),
-                  child: QrImageView(data: code, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L),
+                  child: LinkQr(link: buildLinkUrl(code)),
                 ),
                 const SizedBox(height: 12),
                 SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
@@ -113,6 +200,12 @@ class _SharingPageState extends State<SharingPage> {
                     say(ctx, 'Copied');
                   },
                 ),
+                TextButton.icon(
+                  key: const ValueKey('share-link'),
+                  icon: const Icon(Icons.share),
+                  label: const Text('Share link'),
+                  onPressed: () => (widget.share ?? _systemShare)(buildLinkUrl(code)),
+                ),
               ],
             ),
           ),
@@ -120,8 +213,11 @@ class _SharingPageState extends State<SharingPage> {
       },
     );
 
-  Future<void> _enterCode() async {
-    final ctl = TextEditingController();
+  static Future<void> _systemShare(String text) => SharePlus.instance.share(ShareParams(text: text)).then((_) {});
+
+  /// "Enter a link code". [initial] fills the box (a code that came in as a link). The clipboard is read only when Paste is tapped.
+  Future<void> _enterCode({String? initial}) async {
+    final ctl = TextEditingController(text: initial ?? '');
     final code = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -149,7 +245,8 @@ class _SharingPageState extends State<SharingPage> {
     if (code == null || code.isEmpty) return;
     String? linked;
     await _run(() async {
-      final r = await s.link(code);
+      // A pasted or typed link works as well as a code; a code that is not one, or is already linked, is said before connecting.
+      final r = await s.link(_checked(linkCodeFrom(code)));
       if (mounted) say(context, 'Linked with ${r.name}');
       if (r.peer.isNotEmpty) linked = r.peer;
     });

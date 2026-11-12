@@ -3,10 +3,12 @@ package com.happylittlellc.cache.car
 import android.content.Intent
 import android.net.Uri
 import androidx.car.app.CarContext
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -16,6 +18,57 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class NavIntentTest {
+    @Before
+    fun setUp() = CarLink.reset()
+
+    @After
+    fun tearDown() = CarLink.reset()
+
+    // Bug: a navigation request delivered to the phone's activity. With no car connected it is taken (so Flutter never sees
+    // it) and dropped.
+    @Test
+    fun aRequestThatReachesThePhoneWithNoCarIsTakenAndDropped() {
+        var heard = 0
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onNavRequest(req: NavRequest) {
+                heard++
+            }
+        })
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic"))))
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:42.5,-113.5"))))
+        // One that cannot be read is still a navigation request, and still kept from Flutter.
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0"))))
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE)))
+        assertEquals(0, heard)
+        // Anything else is the activity's own business.
+        assertFalse(NavIntent.fromPhone(Intent(Intent.ACTION_MAIN)))
+        assertFalse(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=Made+Up+Clinic"))))
+        assertFalse(NavIntent.fromPhone(null))
+    }
+
+    @Test
+    fun aRequestThatReachesThePhoneWithACarConnectedGoesToTheCar() {
+        val heard = mutableListOf<NavRequest>()
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onNavRequest(req: NavRequest) {
+                heard += req
+            }
+        })
+        CarLink.setCarConnected(true)
+        assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic"))))
+        assertEquals(listOf(NavRequest(null, null, "Made Up Clinic", start = true)), heard)
+    }
+
+    @Test
+    fun theActivityStartsOnAPlainLaunchWhenARequestOpenedIt() {
+        val asked = Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic")).putExtra("kept", 7)
+        val plain = NavIntent.plainLaunch(asked)
+        assertEquals(Intent.ACTION_MAIN, plain.action)
+        assertNull(plain.data)
+        assertEquals(7, plain.getIntExtra("kept", 0))
+        assertFalse(NavIntent.fromPhone(plain))
+    }
+
     @Test
     fun aPlaceByName() {
         val r = NavIntent.parse("geo:0,0?q=Googleplex")!!
