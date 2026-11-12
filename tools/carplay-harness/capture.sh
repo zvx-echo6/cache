@@ -601,8 +601,16 @@ open_place() {  # open_place <row 1..3>: Saved places by its button, then a tap 
   tap_until 'car lists: a place was chosen' 3 "$x" "$y" "$x" $((y - 9 * CAR_S)) "$x" $((y + 9 * CAR_S)) > /dev/null
 }
 
+PANEL_BOX=""
+
+panel_button() {  # the filled button in the part of the screen the route panel took from the map: "found <x> <y> ..." or "none ..."
+  xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.routes.png" > /dev/null 2>&1
+  # shellcheck disable=SC2086
+  python3 -I "$HERE/find_icon.py" button "$OUT/.routes.png" $PANEL_BOX 2>> "$LOG" | tail -n 1
+}
+
 route_pictures() {  # route_pictures <label>: the routes to a place chosen in Saved places; Back, a route that cannot be found, Start
-  local label="$1" before guiding at old new ot ol ob or nt nl nb nr spot y
+  local label="$1" before guiding started lines at old new ot ol ob or nt nl nb nr spot sx sy y
   ROUTES=""
   ROUTES_MISSING=""
   to_browsing || { ROUTES_MISSING=" [the stand-in did not go back to its first trip]"; return 0; }
@@ -678,28 +686,65 @@ route_pictures() {  # route_pictures <label>: the routes to a place chosen in Sa
   new=$(free_area)
   read -r nt nl nb nr <<< "$new"
   case "$nt$nl$nb$nr" in *[!0-9]*|"") nt=$ot; nl=$ol; nb=$ob; nr=$or ;; esac
-  xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.routes.png" > /dev/null 2>&1
-  spot=$(python3 -I "$HERE/find_icon.py" button "$OUT/.routes.png" $((ol * CAR_S)) $((ot * CAR_S)) $((CAR_W - or * CAR_S)) $((CAR_H - ob * CAR_S)) \
-    $((nl * CAR_S)) $((nt * CAR_S)) $((CAR_W - nr * CAR_S)) $((CAR_H - nb * CAR_S)) 2>> "$LOG" | tail -n 1)
-  say "  the free area before the panel: $old; with it: $new; a filled button in what it took: $spot"
-  at=""
+  PANEL_BOX="$((ol * CAR_S)) $((ot * CAR_S)) $((CAR_W - or * CAR_S)) $((CAR_H - ob * CAR_S)) $((nl * CAR_S)) $((nt * CAR_S)) $((CAR_W - nr * CAR_S)) $((CAR_H - nb * CAR_S))"
   guiding=$(log_count 'car link: trip guiding')
-  before=$(log_count 'car routes: Start pressed')
+  started=$(log_count 'car routes: Start pressed')
+  shot_ext "$label-routes-again"
+  spot=$(panel_button)
+  say "  the free area before the panel: $old; with it: $new; a filled button in what it took: $spot"
+  case "$spot" in
+    found*) ;;
+    *)
+      ROUTES_MISSING="$ROUTES_MISSING [the panel's start button was not seen as a filled button]"
+      return 0
+      ;;
+  esac
+  # shellcheck disable=SC2086
+  set -- $spot
+  sx=${2%.*}
+  sy=${3%.*}
+  # More Routes, CarPlay's own button over Start: the list of the routes. Then the second route, by taps down the middle of
+  # the panel until the app says it was chosen; the phone then draws that route as the chosen one.
+  tap_carplay "$sx" $((sy - 41 * CAR_S))
+  sleep 3
+  shot_ext "$label-routes-more"
+  before=$(log_count 'car routes: route 2 chosen')
+  lines=$(log_count 'car link: route line')
+  at=""
+  y=$(( (ot + 24) * CAR_S ))
+  while [ "$y" -lt $(( CAR_H - (ob + 10) * CAR_S )) ]; do
+    tap_carplay "$sx" "$y"
+    if wait_more 'car routes: route 2 chosen' "$before" 2; then at="$sx,$y"; break; fi
+    if [ "$(log_count 'car routes: Start pressed')" -gt "$started" ]; then break; fi
+    y=$((y + 16 * CAR_S))
+  done
+  if [ -z "$at" ]; then
+    shot_ext "$label-routes-no-other-route"
+    ROUTES_MISSING="$ROUTES_MISSING [the second route was not chosen by taps down the panel after More Routes]"
+    return 0
+  fi
+  wait_more 'car link: route line' "$lines" 8 || ROUTES_MISSING="$ROUTES_MISSING [the phone did not draw the other route]"
+  sleep 3
+  shot_ext "$label-routes-other"
+  ROUTES="$ROUTES; More Routes listed them and the second (tap at pixel $at) was chosen and drawn"
+
+  # Start, wherever the panel has it now.
+  spot=$(panel_button)
+  at=""
   case "$spot" in
     found*)
       # shellcheck disable=SC2086
       set -- $spot
       tap_carplay "${2%.*}" "${3%.*}"
-      wait_more 'car routes: Start pressed' "$before" 3 && at="${2%.*},${3%.*}"
+      wait_more 'car routes: Start pressed' "$started" 3 && at="${2%.*},${3%.*}"
       ;;
   esac
   if [ -z "$at" ]; then
-    # Up the middle of what the panel took (or of the leading half of the free area when the panel took nothing).
-    if [ "$nl" -gt "$ol" ]; then spot=$(( (ol + nl) * CAR_S / 2 )); else spot=$(( ol * CAR_S + (CAR_W - or * CAR_S - ol * CAR_S) / 4 )); fi
+    # Up the middle of what the panel took.
     y=$(( CAR_H - (ob + 14) * CAR_S ))
     while [ "$y" -gt $(( (ot + 20) * CAR_S )) ]; do
-      tap_carplay "$spot" "$y"
-      if wait_more 'car routes: Start pressed' "$before" 2; then at="$spot,$y"; break; fi
+      tap_carplay "$sx" "$y"
+      if wait_more 'car routes: Start pressed' "$started" 2; then at="$sx,$y"; break; fi
       y=$((y - 18 * CAR_S))
     done
   fi
@@ -832,7 +877,7 @@ for size in $SIZES; do
             elif [ -n "$ROUTES_MISSING" ]; then
               result "FAILED $label routes:$ROUTES_MISSING; $ROUTES"
             else
-              result "OK $label routes: $ROUTES; shots/$label-{routes,routes-left,routes-error,routes-error-left,routes-started}.png"
+              result "OK $label routes: $ROUTES; shots/$label-{routes,routes-left,routes-error,routes-error-left,routes-again,routes-more,routes-other,routes-started}.png"
             fi
           fi
         fi

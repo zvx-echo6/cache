@@ -159,6 +159,30 @@ if previewing.routes.count == 2 {
   check(firstLine == "21 min · 16 mi", "a route's line: its time and distance")
   check(secondLine == "23 min · 27 km", "a route's line in kilometres")
 }
+// ---- what CarPlay is given while guiding: a distance as a number and a unit, and the times -----------------------------
+
+let nearTurn = CarText.measure(320.4, imperial: true)
+check(nearTurn.value == 0.2 && nearTurn.unit == "mi" && nearTurn.tenths, "a distance for CarPlay: tenths of a mile")
+let veryNear = CarText.measure(100, imperial: true)
+check(veryNear.value == 350 && veryNear.unit == "ft" && !veryNear.tenths, "a distance for CarPlay: feet")
+let farMetric = CarText.measure(25400.5, imperial: false)
+check(farMetric.value == 25 && farMetric.unit == "km" && !farMetric.tenths, "a distance for CarPlay: whole kilometres")
+let nearMetric = CarText.measure(349, imperial: false)
+check(nearMetric.value == 350 && nearMetric.unit == "m", "a distance for CarPlay: metres")
+let nearLength = CarText.length(320.4, imperial: true)
+check(nearLength.value == 0.2 && nearLength.unit == UnitLength.miles, "a length for CarPlay: the phone's number, in miles")
+let farLength = CarText.length(25400.5, imperial: false)
+check(farLength.value == 25 && farLength.unit == UnitLength.kilometers, "a length for CarPlay: in kilometres")
+check(guiding.leftSeconds == 1134, "the time left is the phone's")
+if let nextTurn = guiding.step {
+  // 320.4 m of 22860.45 m left, of 1134 s: 16 s.
+  check(guiding.turnSeconds(nextTurn) == 16, "the time to the turn is its share of the time left")
+}
+let lastStretch: [String: Any] = ["phase": "guiding", "remainingS": 20, "remainingM": 150.0]
+let arrivedMessage: [String: Any] = ["phase": "guiding", "remainingS": 0, "remainingM": 0.0, "arrived": true]
+check(CarTrip.from(lastStretch).leftSeconds == 60, "under a minute left reads as one minute")
+check(CarTrip.from(arrivedMessage).leftSeconds == 0, "arrived: no time left")
+check(CarTrip.from([:]).leftSeconds == nil, "no time left known")
 let noRoute = CarTrip.from(map("trip_error.json"))
 check(noRoute.previewing && !noRoute.routing && noRoute.routes.isEmpty, "the trip with no route: choosing, not routing, no routes")
 check(noRoute.error == "Waiting for your position", "the trip with no route says why")

@@ -381,14 +381,30 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     // Android's word on the start button; CarPlay's own words on its other two.
     let words = CPTripPreviewTextConfiguration(startButtonTitle: Self.start, additionalRoutesButtonTitle: nil, overviewButtonTitle: nil)
     map.showTripPreviews([trip], textConfiguration: words)
+    // The panel's first view names the place and the chosen route's road; its time and distance are CarPlay's to write,
+    // from numbers.
+    let selected = routes.first { $0.index == t.routeIndex } ?? routes[0]
+    tellEstimates(selected, imperial: t.imperial)
     Self.log.info("car routes: preview shown, \(choices.count) routes")
+  }
+
+  /// The time and the distance of a route, for CarPlay to write on the route panel.
+  private func tellEstimates(_ route: CarRoute, imperial: Bool) {
+    guard let map = mapTemplate, let trip = previewTrip else { return }
+    let estimates = CPTravelEstimates(
+      distanceRemaining: CarText.length(route.distanceM, imperial: imperial), timeRemaining: TimeInterval(route.durationS))
+    map.updateEstimates(estimates, for: trip)
   }
 
   /// CarPlay says which route of the panel is chosen: the phone draws that one.
   func routeChosen(_ choice: CPRouteChoice) {
     guard previewing, !previewStarted, let index = choice.userInfo as? Int else { return }
     Self.log.info("car routes: route \(index + 1) chosen")
-    if index != CarLink.shared.trip.routeIndex {
+    let t = CarLink.shared.trip
+    if let route = t.routes.first(where: { $0.index == index }) {
+      tellEstimates(route, imperial: t.imperial)
+    }
+    if index != t.routeIndex {
       CarLink.shared.call("selectRoute", ["index": index])
     }
   }

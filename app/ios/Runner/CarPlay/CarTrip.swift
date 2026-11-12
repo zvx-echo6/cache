@@ -144,22 +144,41 @@ struct CarPlace: Equatable {
 enum CarText {
   /// "300 ft", "0.5 mi", "12 mi", "350 m", "1.2 km".
   static func distance(_ meters: Double, imperial: Bool) -> String {
+    let m = measure(meters, imperial: imperial)
+    if m.tenths { return "\(String(format: "%.1f", m.value)) \(m.unit)" }
+    return "\(Int(m.value)) \(m.unit)"
+  }
+
+  /// The same distance as a number and its unit ("ft", "mi", "m" or "km"), for where CarPlay writes the distance itself;
+  /// `tenths` says the phone writes it with one decimal.
+  static func measure(_ meters: Double, imperial: Bool) -> (value: Double, unit: String, tenths: Bool) {
     let m = max(0, meters)
     if imperial {
       let ft = m * 3.28084
       let mi = m / 1609.344
-      if ft < 528 { return "\(step(ft, ft < 100 ? 10 : 50)) ft" }
-      if mi < 10 { return String(format: "%.1f mi", (mi * 10).rounded() / 10) }
-      return "\(Int(mi.rounded())) mi"
+      if ft < 528 { return (step(ft, ft < 100 ? 10 : 50), "ft", false) }
+      if mi < 10 { return ((mi * 10).rounded() / 10, "mi", true) }
+      return (mi.rounded(), "mi", false)
     }
-    if m < 1000 { return "\(step(m, m < 100 ? 10 : 50)) m" }
+    if m < 1000 { return (step(m, m < 100 ? 10 : 50), "m", false) }
     let km = m / 1000
-    if km < 10 { return String(format: "%.1f km", (km * 10).rounded() / 10) }
-    return "\(Int(km.rounded())) km"
+    if km < 10 { return ((km * 10).rounded() / 10, "km", true) }
+    return (km.rounded(), "km", false)
   }
 
-  private static func step(_ value: Double, _ by: Double) -> Int {
-    Int((value / by).rounded() * by)
+  private static func step(_ value: Double, _ by: Double) -> Double {
+    (value / by).rounded() * by
+  }
+
+  /// The same again as a length CarPlay can be given: it then writes the number and the unit the phone would write.
+  static func length(_ meters: Double, imperial: Bool) -> Measurement<UnitLength> {
+    let m = measure(meters, imperial: imperial)
+    switch m.unit {
+    case "ft": return Measurement(value: m.value, unit: UnitLength.feet)
+    case "mi": return Measurement(value: m.value, unit: UnitLength.miles)
+    case "km": return Measurement(value: m.value, unit: UnitLength.kilometers)
+    default: return Measurement(value: m.value, unit: UnitLength.meters)
+    }
   }
 
   /// "5 min", "1 h 25 min", "2 d 3 h": a time in the phone's words (Fmt.duration).
@@ -172,6 +191,23 @@ enum CarText {
     if hours < 24 { return rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min" }
     let days = hours / 24
     return hours % 24 == 0 ? "\(days) d" : "\(days) d \(hours % 24) h"
+  }
+}
+
+extension CarTrip {
+  /// The time left as CarPlay is given it: under a minute counts as one minute until the phone says arrived, so the last
+  /// part of a drive never reads "0 min" (as the Android car's remainingSeconds).
+  var leftSeconds: Int64? {
+    guard let s = remainingS else { return nil }
+    return arrived ? max(0, s) : max(60, s)
+  }
+
+  /// The time to a turn: its share of the time left, as far as it is of what is left (as the Android car's trip).
+  func turnSeconds(_ step: CarStep) -> Int64 {
+    let left = remainingM ?? step.distanceM
+    if left <= 0 { return 0 }
+    let share = Double(remainingS ?? 0) * (step.distanceM / left)
+    return max(0, Int64(share.rounded()))
   }
 }
 
