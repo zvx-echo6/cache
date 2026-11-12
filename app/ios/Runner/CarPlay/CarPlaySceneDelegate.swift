@@ -9,10 +9,13 @@ enum CarPlayBuild {
   static let isOn = (Bundle.main.object(forInfoDictionaryKey: "CacheCarPlay") as? String) == "YES"
 }
 
-/// The car screen. For now it is empty: a map template with the two buttons of the car design, Search and Saved places,
+/// The car screen. For now it shows an empty map template with the two buttons of the car design, Search and Saved places,
 /// which do nothing yet, over an empty base view. The scene is declared in code (AppDelegate, configurationForConnecting),
 /// not in Info.plist.
-final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+///
+/// It is linked to the phone's guidance (CarLink): when CarPlay opens the app, with or without the phone app open, the app's
+/// one Flutter engine is running and the car knows the trip Dart pushes. Nothing of the trip is drawn yet.
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CarLinkListener {
   private static let log = Logger(subsystem: "co.cache.car", category: "scene")
   private var interfaceController: CPInterfaceController?
   private var carWindow: CPWindow?
@@ -44,6 +47,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let height = Int(window.bounds.height)
     let scale = Int(window.screen.scale)
     Self.log.info("car scene connected, \(width) x \(height) points at \(scale)x")
+
+    // The root template is set; only now the engine, which takes a moment on the main thread when the car is the one to start
+    // it (CarPlay opened Cache with the phone app closed). Dart's start-up then runs with no view, and says hello when its
+    // car bridge is up; if the phone started the engine, Dart is told at once that a car is here.
+    if let app = UIApplication.shared.delegate as? AppDelegate {
+      _ = app.obtainFlutterEngine()
+    }
+    CarLink.shared.addListener(self)
+    CarLink.shared.setCarConnected(true)
+    Self.log.info("car link: car connected, Dart ready: \(CarLink.shared.dartReady)")
   }
 
   func templateApplicationScene(
@@ -53,7 +66,38 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   ) {
     self.interfaceController = nil
     carWindow = nil
+    CarLink.shared.removeListener(self)
+    CarLink.shared.setCarConnected(false)
     Self.log.info("car scene disconnected")
+  }
+
+  // What Dart pushes. Nothing is drawn from it yet; the lines say what arrived.
+
+  func carLinkDartReady() {
+    Self.log.info("car link: Dart is ready")
+  }
+
+  func carLinkTrip(_ trip: CarTrip) {
+    // No words of the trip in the log (roads, places): the phase and the counts are enough to see it arrive.
+    let hasStep = trip.step != nil
+    let left = Int(trip.remainingM ?? -1)
+    Self.log.info("car link: trip \(trip.phase, privacy: .public), \(trip.routes.count) routes, next step \(hasStep), \(left) m left")
+  }
+
+  func carLinkRoute(geojson: String, bounds: [Double]?) {
+    Self.log.info("car link: route line, \(geojson.utf8.count) bytes, bounds \(bounds?.count ?? 0) numbers")
+  }
+
+  func carLinkSavedChanged() {
+    Self.log.info("car link: saved places changed")
+  }
+
+  func carLinkStyleChanged() {
+    Self.log.info("car link: map style changed")
+  }
+
+  func carLinkNotice(_ text: String) {
+    Self.log.info("car link: notice, \(text.count) characters")
   }
 
   private func barButton(_ symbol: String, _ name: String) -> CPBarButton {

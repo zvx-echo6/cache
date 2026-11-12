@@ -417,11 +417,20 @@ for size in $SIZES; do
     sleep 4
     shot_ext "$label-car"
     line=$(grep 'car scene connected' "$STREAM" | tail -n 1 | sed 's/.*car scene connected/car scene connected/')
+    # The car link: the app was opened from the car side alone, so the engine was started for the car scene; the stand-in
+    # Dart side then says hello from the root widget's start-up (no view exists) and pushes the recorded trips.
+    if wait_log 'car link: trip guiding' 45; then
+      link="Dart said hello and pushed $(grep -c 'car link: trip' "$STREAM") trips, phone-scene lines: $(grep -c 'phone scene' "$STREAM")"
+    else
+      link=""
+    fi
     if grep -q 'car scene disconnected' "$STREAM"; then
       result "FAILED $label: the car scene connected and was disconnected again ($line)"
       host_crash=1
+    elif [ -z "$link" ]; then
+      result "FAILED $label: the car scene is up ($line), but no trip reached the car link: Dart ready lines $(grep -c 'car link: Dart is ready' "$STREAM")"
     else
-      result "OK $label: shots/$label-car.png, the display's picture is $got pixels; $line"
+      result "OK $label: shots/$label-car.png, the display's picture is $got pixels; $line; $link"
     fi
   else
     # No log line is not proof of no screen: the picture decides when the icon grid is gone.
@@ -439,7 +448,7 @@ for size in $SIZES; do
     shot_ext "$label-car-after-phone"
     engines=$(grep -c 'The Flutter engine was started' "$STREAM")
     if [ "$engines" = 1 ] && ! grep -q 'car scene disconnected' "$STREAM"; then
-      result "OK phone: the phone's window opened beside the car scene; the engine was started once, for it (shots/$label-phone-window.png)"
+      result "OK phone: the phone's window opened beside the car scene on the engine the car scene had started; one engine start in all (shots/$label-phone-window.png)"
     else
       result "FAILED phone: engine-start lines $engines (1 expected), car scene disconnected: $(grep -c 'car scene disconnected' "$STREAM")"
     fi

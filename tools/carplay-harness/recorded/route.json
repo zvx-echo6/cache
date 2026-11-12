@@ -1,0 +1,4 @@
+{
+  "geojson": "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"properties\":{\"kind\":\"route\"},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[20.2,10.5],[20.3,10.52],[20.5,10.5]]}}]}",
+  "bounds": [20.2, 10.5, 20.5, 10.52]
+}

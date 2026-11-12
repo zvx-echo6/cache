@@ -9,8 +9,10 @@
 #   app/ios/Runner/RunnerCarPlay.entitlements
 #
 # with the three plugins the app delegate imports, at the product's versions, and a stand-in Dart side
-# (tools/carplay-harness/app). So a Swift mistake in any of those files fails here in minutes, and what the pictures show is
-# what the product's car code draws. No signing identity, no provisioning profile, no secret.
+# (tools/carplay-harness/app) that speaks the car channel with recorded messages (tools/carplay-harness/recorded). So a Swift
+# mistake in any of those files fails here in minutes, and what the pictures show is what the product's car code draws.
+# First of all it runs the car link's tests (tools/carplay-harness/tests) on those recorded messages, on the Mac.
+# No signing identity, no provisioning profile, no secret.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$GITHUB_WORKSPACE"
@@ -21,6 +23,11 @@ mkdir -p "$OUT" "$APPS"
 began=$SECONDS
 version() { awk -v p="  $1:" '$0==p{f=1;next} f&&/version:/{gsub(/"/,"",$2);print $2;exit}' "$ROOT/app/pubspec.lock"; }
 {
+  # The car link's rules on recorded messages, on the Mac: the product's CarTrip.swift and CarLink.swift need no Flutter.
+  echo "--- car link tests on the recorded messages"
+  xcrun --sdk macosx swiftc "$ROOT/app/ios/Runner/CarPlay/CarTrip.swift" "$ROOT/app/ios/Runner/CarPlay/CarLink.swift" \
+    "$HERE/tests/main.swift" -o "$RUNNER_TEMP/car-link-tests"
+  "$RUNNER_TEMP/car-link-tests" "$HERE/recorded"
   # CocoaPods for the scratch project, as the repository's other scratch iOS build (map-bench.yml).
   flutter config --no-enable-swift-package-manager
   flutter create --org org.example --project-name carharness --platforms ios "$B" > /dev/null
@@ -28,6 +35,8 @@ version() { awk -v p="  $1:" '$0==p{f=1;next} f&&/version:/{gsub(/"/,"",$2);prin
   flutter pub add "maplibre_gl:$(version maplibre_gl)" "workmanager:$(version workmanager)" "flutter_local_notifications:$(version flutter_local_notifications)"
   rm -rf test
   cp "$HERE/app/lib/main.dart" lib/main.dart
+  # The stand-in Dart side pushes the same recorded messages the tests read.
+  python3 -I "$HERE/recorded_dart.py" "$HERE/recorded" lib/recorded.dart
   cp "$ROOT/app/ios/Runner/AppDelegate.swift" ios/Runner/AppDelegate.swift
   python3 -I "$HERE/join_swift.py" ios/Runner/SceneDelegate.swift "$ROOT/app/ios/Runner/SceneDelegate.swift" "$ROOT"/app/ios/Runner/CarPlay/*.swift
   cp "$ROOT/app/ios/Runner/Info.plist" ios/Runner/Info.plist

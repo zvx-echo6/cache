@@ -16,7 +16,8 @@ import '../theme.dart';
 import 'car_drive.dart';
 import 'car_trip.dart';
 
-/// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
+/// The car screen's link to the phone's guidance (Android Auto, the native side is app/android/.../car; and CarPlay in an
+/// iPhone build made with it, the native side is app/ios/Runner/CarPlay).
 ///
 /// One guidance runs, the phone's [NavState]. The car shows it ([carTrip], pushed as it changes) and asks it for things: places
 /// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: searches and routes go to the same core
@@ -88,7 +89,7 @@ class CarBridge {
       final r = await _channel.invokeMethod<Object?>('hello');
       if (r is Map && r['connected'] == true) _setConnected(true);
     } on MissingPluginException {
-      // No car side on this platform (iOS, the tests): nothing to link.
+      // No car side on this platform or in this build (the tests): nothing to link.
     } on PlatformException {
       // Same.
     }

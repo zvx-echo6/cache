@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/car/car_bridge.dart';
@@ -115,6 +116,43 @@ void main() {
       expect(t['remainingM'], closeTo((routeJson['distance_m'] as num) * 0.9, 1));
       expect(t['remainingS'], isNotNull);
       expect(t['currentRoad'], 'Road 0');
+    });
+
+    // The iPhone car side (app/ios/Runner/CarPlay) is tested on recorded messages (tools/carplay-harness/recorded). They are
+    // held here to the shape of what carTrip really sends: the same keys, and the same kind of value under each.
+    test('the trips recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      String kind(Object? v) => switch (v) {
+            null => 'null',
+            bool() => 'bool',
+            num() => 'number',
+            String() => 'text',
+            List() => 'list',
+            Map() => 'map',
+            _ => 'other',
+          };
+      void sameShape(Map<dynamic, dynamic> sent, Map<dynamic, dynamic> recorded, String where) {
+        expect(recorded.keys.toSet(), sent.keys.toSet(), reason: '$where: the keys');
+        for (final key in sent.keys) {
+          final a = sent[key], b = recorded[key];
+          if (a == null || b == null) continue;
+          expect(kind(b), kind(a), reason: '$where: $key');
+          if (a is Map && b is Map) sameShape(a, b, '$where.$key');
+          if (a is List && b is List && a.isNotEmpty && b.isNotEmpty && a.first is Map && b.first is Map) {
+            sameShape(a.first as Map, b.first as Map, '$where.$key[0]');
+          }
+        }
+      }
+
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+
+      await preview();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.2), heading: 90), recorded('trip_previewing'), 'previewing');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90), recorded('trip_guiding'), 'guiding');
     });
 
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {

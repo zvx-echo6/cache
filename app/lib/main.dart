@@ -17,6 +17,7 @@ import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
+import 'car/car_support.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -1092,7 +1093,23 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
-      _car = CarBridge(
+      _car = _newCarBridge();
+      unawaited(_car!.start());
+    } else if (plat.isIOS) {
+      // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
+      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed.
+      unawaited(readCarScreenSupport().then((on) {
+        carScreenSupported.value = on;
+        if (!on || !mounted) return;
+        _car = _newCarBridge();
+        unawaited(_car!.start());
+      }));
+    }
+    _openHistory();
+  }
+
+  /// The car screen's link to the phone's guidance (Android Auto; CarPlay in an iPhone build made with it).
+  CarBridge _newCarBridge() => CarBridge(
         nav: nav,
         maps: maps,
         drive: carDrive,
@@ -1102,10 +1119,6 @@ class _CacheAppState extends State<CacheApp> {
           await location.request(explain: () async => false);
         },
       );
-      unawaited(_car!.start());
-    }
-    _openHistory();
-  }
 
   /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
   Future<void> _soft(String what, Future<void> Function() step) async {

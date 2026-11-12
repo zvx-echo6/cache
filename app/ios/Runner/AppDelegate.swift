@@ -101,6 +101,20 @@ import workmanager_apple
       GeneratedPluginRegistrant.register(with: registry)
     }
     GeneratedPluginRegistrant.register(with: registry)
+    // Whether this build has the car screen, for Dart (lib/car/car_support.dart), which makes its car bridge only then.
+    let build = FlutterMethodChannel(name: "cache/build", binaryMessenger: messenger)
+    build.setMethodCallHandler { call, result in
+      guard call.method == "get" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(["carPlay": CarPlayBuild.isOn])
+    }
+    // The car's side of the co.cache/car channel (Runner/CarPlay/CarLink.swift), set where the engine is made so that Dart's
+    // hello is answered whichever scene started it. Only in a build with the car screen.
+    if CarPlayBuild.isOn {
+      CarLink.shared.attach(messenger: messenger)
+    }
     // Notebooks > Connections: a folder the person picks for Obsidian or Logseq, kept as a security-scoped bookmark.
     let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: messenger)
     let access = folderAccess
