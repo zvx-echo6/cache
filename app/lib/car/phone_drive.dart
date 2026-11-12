@@ -22,6 +22,13 @@ enum CarExtras {
   always,
 }
 
+/// The word the car side sends (`extras`, `{'carries': word}`) as a [CarExtras]; absent or any word not known is [CarExtras.never].
+CarExtras carExtrasFrom(Object? word) => switch (word) {
+      'unlessPhone' => CarExtras.unlessPhoneShows,
+      'always' => CarExtras.always,
+      _ => CarExtras.never,
+    };
+
 /// What the Maps screen needs to know about the car, and the one thing it tells the car. The platform sides keep these up to
 /// date: [carConnected] while a car screen is attached, [extras] from the car's own measure of its screen (until a car side
 /// reports it, [CarExtras.never]); the screen writes [signal].

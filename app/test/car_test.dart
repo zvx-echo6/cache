@@ -833,6 +833,32 @@ void main() {
       signal.dispose();
     });
 
+    test('what the car carries: each word, an unknown word, absent, and the reset when the car disconnects', () async {
+      final carries = ValueNotifier(CarExtras.never);
+      final b = CarBridge(nav: nav, maps: maps, drive: drive, carries: carries, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(carries.value, CarExtras.never, reason: 'absent until the car reports');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('extras', {'carries': 'unlessPhone'});
+      expect(carries.value, CarExtras.unlessPhoneShows);
+      await fromCar('extras', {'carries': 'never'});
+      expect(carries.value, CarExtras.never);
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', {'carries': 'huge'});
+      expect(carries.value, CarExtras.never, reason: 'an unknown word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', <String, Object?>{});
+      expect(carries.value, CarExtras.never, reason: 'a missing word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('connected', {'on': false});
+      expect(carries.value, CarExtras.never, reason: 'absent again when the car disconnects');
+      b.dispose();
+      carries.dispose();
+    });
+
     test('places wait for the core when the car started the app', () async {
       final open = Completer<void>();
       final waiting = CarBridge(nav: nav, maps: maps, drive: drive, channel: const MethodChannel('co.cache/car-wait'), ready: () => open.future);

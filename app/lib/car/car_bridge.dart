@@ -17,6 +17,7 @@ import '../theme.dart';
 import 'car_drive.dart';
 import 'car_overlay.dart';
 import 'car_trip.dart';
+import 'phone_drive.dart';
 
 /// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
 ///
@@ -36,6 +37,7 @@ class CarBridge {
     this.overlay,
     this.settings,
     this.phoneDrive,
+    this.carries,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
@@ -63,6 +65,10 @@ class CarBridge {
   /// `phoneDrive`). The trip goes to the car at once on every change, with no throttle of its own: the pause and the fade
   /// before the car acts on it are the car's.
   final Listenable? phoneDrive;
+
+  /// Where the car carries the route mini map and the elevation, as the car side last reported it (`extras`); back to
+  /// [CarExtras.never] (absent) when the car disconnects.
+  final ValueNotifier<CarExtras>? carries;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
@@ -148,6 +154,7 @@ class CarBridge {
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      carries?.value = CarExtras.never;
       // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
       // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
       // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
@@ -291,6 +298,9 @@ class CarBridge {
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
+        return null;
+      case 'extras':
+        carries?.value = carExtrasFrom(a['carries']);
         return null;
       case 'snapshot':
         return snapshot();

@@ -1135,6 +1135,7 @@ class _CacheAppState extends State<CacheApp> {
         theme: () => app.theme,
         overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.signal.value),
         phoneDrive: _phoneDrive.signal,
+        carries: _phoneDrive.extras,
         settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
