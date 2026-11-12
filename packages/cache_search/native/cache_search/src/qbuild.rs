@@ -11,13 +11,13 @@
 //!   Units are joined by OR (a passage matching any unit is a match; more units matched score higher), as before.
 //! - A word is analyzed with the index's own analyzer, token by token (a token is a run of letters and digits).
 //!   One token: a plain term clause, a term in any of the fields (title boosted).
-//!   Several tokens: a SHOULD of two clauses that add up in the score. (a) the all-terms conjunction: every token
+//!   Several tokens: the BEST of two clauses (a DisjunctionMaxQuery, tie-breaker 0: they do not add up, so a compound counts at most as one query word). (a) the all-terms conjunction: every token
 //!   MUST be in the body (the fields without positions), scored as ONE unit (its
 //!   parts' scores scaled by 1/n, see `one_unit`: a compound weighs like one word of the query, not like n words, or generic
 //!   passages with "long" and "term" would outrank those that match the rest of the query); (b) for each field that HAS
 //!   positions (the title, and a ZIM's lead), the exact phrase of the tokens at that field's normal weight, exactly what
-//!   the old parser scored. A passage that has the words in a title in the typed order matches (b), as before, and (a) too
-//!   when its body has them, so it ranks above one that has them scattered in the body, which matches only (a). The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
+//!   the old parser scored. A passage that has the words in a title in the typed order matches (b), as before, and ranks above one
+//!   that has them scattered in the body, which matches only (a), by the title phrase's weight. The body has no positions, so for it the order and nearness of the tokens cannot be checked: "don't" in a body
 //!   matches a passage that has "don" and "t" anywhere. That is approximate, by the index's design (no change to the
 //!   index was asked for).
 //! - A token that has letters and digits together ("covid19") is ALSO tried split at the letter/digit boundary
@@ -30,7 +30,7 @@
 
 use crate::error::{Error, Result};
 use crate::search::has_term;
-use tantivy::query::{BooleanQuery, BoostQuery, EmptyQuery, Occur, PhraseQuery, Query, TermQuery};
+use tantivy::query::{BooleanQuery, BoostQuery, DisjunctionMaxQuery, EmptyQuery, Occur, PhraseQuery, Query, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption};
 use tantivy::tokenizer::TextAnalyzer;
 use tantivy::{DocAddress, Index, Searcher, Term};
@@ -219,7 +219,15 @@ fn multi_clause(cx: &Ctx, toks: &[Tok], quoted: bool) -> Box<dyn Query> {
         let terms: Vec<Term> = toks.iter().map(|t| Term::from_field_text(*f, &t.literal)).collect();
         clauses.push((Occur::Should, boosted(Box::new(PhraseQuery::new(terms)), *b)));
     }
-    one_or(clauses)
+    // The best of the clauses, not their sum (tie-breaker 0): a compound counts at most as one query word, wherever it matches
+    // best. Summed, a title phrase plus the body conjunction put "Long-Term <other subject>" titles above passages that match
+    // the rest of the query too.
+    let mut best: Vec<Box<dyn Query>> = clauses.into_iter().map(|c| c.1).collect();
+    match best.len() {
+        0 => Box::new(EmptyQuery),
+        1 => best.remove(0),
+        _ => Box::new(DisjunctionMaxQuery::new(best)),
+    }
 }
 
 /// The query for `text` over `fields` ((field, boost) pairs; all must use the same analyzer, which is read from the

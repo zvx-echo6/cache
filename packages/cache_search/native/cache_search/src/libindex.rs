@@ -668,9 +668,8 @@ mod tests {
         for q in ["elk rifle calibers 30-06 vs .270", "elk meat processing 30-06 270 cal", "30-06 cartridge 270 cal bullet elk meat"] {
             let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
             eprintln!("{q}\nold {old:?}\nnew {new:?}");
-            if old.iter().take(5).any(|p| p == "r270") {
-                assert!(pos(&new, "r270") < 5, "{q:?}: the .270 passage stays in the top 5: {new:?}");
-            }
+            // pinned: the .270 passage is where the old parser had it, or higher
+            assert!(pos(&new, "r270") <= pos(&old, "r270"), "{q:?}: the .270 passage is no lower than before: old {old:?} new {new:?}");
         }
         drop(oi);
         let _ = std::fs::remove_dir_all(&d);
@@ -694,9 +693,8 @@ mod tests {
             let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
             eprintln!("{q}\nold {old:?}\nnew {new:?}");
             for id in ["d1", "d2", "d3"] {
-                if old.iter().take(3).any(|p| p == id) {
-                    assert!(pos(&new, id) < 4, "{q:?}: {id} stays near the top: {new:?}");
-                }
+                // pinned: each direct comparison is where the old parser had it, or higher
+                assert!(pos(&new, id) <= pos(&old, id), "{q:?}: {id} is no lower than before: old {old:?} new {new:?}");
             }
         }
         drop(oi);
@@ -737,6 +735,43 @@ mod tests {
             let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
             eprintln!("{q}\nold {old:?}\nnew {new:?}");
             assert_eq!(new.first().map(String::as_str), Some(id), "{q:?}: {new:?}");
+        }
+        drop(oi);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn long_term_titles_of_other_subjects_do_not_outrank_ammunition_passages() {
+        // The second replay: a compound's title phrase and its body conjunction added up, so "Long-Term Food Storage Shelf
+        // Life" and "Long-Term Fuel Storage" went above the ammunition passages. A compound now counts at most as one word.
+        let (d, oi) = index_of(
+            "cmp-longterm2",
+            &[
+                ("ammo1", "Long-Term Ammunition Storage", "Ammunition should be stored dry in its original packaging, in a cool place with low humidity and a steady temperature."),
+                ("ammo2", "Long-Term Ammunition Storage", "Military ammo cans are ideal for long-term storage and keep humidity out."),
+                ("ammo3", "Ammunition Storage", "Proper long-term storage of ammunition keeps it dry; temperature and humidity matter for shelf stability."),
+                ("ammo4", "Positioning Ammunition Stocks", "Ammunition stocks are stored dry; long-term stocks need humidity control."),
+                ("food1", "Long-Term Food Storage Shelf Life", "Long-term food storage depends on shelf life, temperature and humidity of the pantry."),
+                ("food2", "Long-Term Food Storage Shelf Life", "Shelf life of stored food: long-term storage in a cool, dry place."),
+                ("fuel", "Long-Term Fuel Storage", "Proper long-term fuel storage is necessary for ensuring availability and preventing hazards."),
+                ("mem", "Long-Term Memory", "Long-term memory stores encoded information from short-term memory."),
+            ],
+        );
+        for q in ["store ammunition long-term shelf stability humidity temperature", "storing ammunition long-term storage"] {
+            let (old, new) = (old_ranked(&oi, q), ranked(&oi, q));
+            eprintln!("{q}\nold {old:?}\nnew {new:?}");
+            // never worse than the old parser: each ammunition passage is where it was, or higher
+            for a in ["ammo1", "ammo2", "ammo3", "ammo4"] {
+                assert!(pos(&new, a) <= pos(&old, a), "{q:?}: {a} is no lower than before: old {old:?} new {new:?}");
+            }
+            // and the other subjects' "Long-Term" titles do not come up past an ammunition passage they were below
+            for o in ["food1", "food2", "fuel", "mem"] {
+                for a in ["ammo1", "ammo2", "ammo3", "ammo4"] {
+                    if pos(&old, a) < pos(&old, o) {
+                        assert!(pos(&new, a) < pos(&new, o), "{q:?}: {a} stays above {o}: {new:?}");
+                    }
+                }
+            }
         }
         drop(oi);
         let _ = std::fs::remove_dir_all(&d);
