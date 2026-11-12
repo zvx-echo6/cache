@@ -555,10 +555,13 @@ void main() {
       expect(find.text('Working · building passages 212 of 480'), findsOneWidget);
       expect(find.text('Queued'), findsOneWidget);
       expect(find.text('Library file'), findsWidgets);
-      expect(find.text('Not a file Cache can use. Note: backup-2026-10.tar.why.txt'), findsOneWidget);
+      expect(find.textContaining('Not a file Cache can use.'), findsOneWidget, reason: 'the reason, one full stop, no note file name');
       expect(find.byKey(const ValueKey('drop-retry-backup-2026-10.tar')), findsNothing);
       expect(find.textContaining('Duplicate: the same content is already in Wilderness Medicine Handbook, 7th ed'), findsOneWidget);
-      expect(find.textContaining('Note: Trapping 1952 scan.pdf.why.txt'), findsOneWidget);
+      expect(find.textContaining('This PDF is protected with a password.'), findsOneWidget, reason: 'the reason as the device gave it, one full stop');
+      expect(find.textContaining('why.txt'), findsNothing);
+      expect(find.textContaining('Note:'), findsNothing);
+      expect(find.textContaining('..'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('drop-retry-Trapping 1952 scan.pdf')));
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-now')));
@@ -569,6 +572,14 @@ void main() {
       await tester.pump();
       expect(find.text('Edible Plants of Idaho.pdf'), findsNothing);
       expect(find.text('Trapping 1952 scan.pdf'), findsOneWidget);
+    });
+
+    test('a reason is shown as one sentence with one full stop', () {
+      expect(oneSentence('The file is damaged and could not be opened.'), 'The file is damaged and could not be opened.');
+      expect(oneSentence('Not a file Cache can use'), 'Not a file Cache can use.');
+      expect(oneSentence('Scanned. '), 'Scanned.');
+      expect(oneSentence('Could not be opened..'), 'Could not be opened.');
+      expect(oneSentence(''), '');
     });
 
     testWidgets('a missing folder is a banner, the table is the last known state, and Check now is offered', (tester) async {
