@@ -289,4 +289,4 @@ jobs:
         working-directory: app
         run: |
           CACHE_PDF_FONTS=1 LD_LIBRARY_PATH="$CS_DIR:$ZIM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            flutter test --no-pub test/pdf/pdfium_font_mapper_test.dart test/pdf/pdfium_lock_test.dart --reporter expanded
+            flutter test --no-pub test/pdf/pdfium_font_mapper_test.dart test/pdf/pdfium_lock_test.dart test/pdf/pdfium_lock_death_test.dart --reporter expanded

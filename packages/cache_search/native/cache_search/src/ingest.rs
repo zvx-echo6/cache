@@ -419,7 +419,7 @@ pub fn probe(args: &str) -> Result<String> {
     // `fonts_only` that is all: the answer is `{"fonts": {...}}` and nothing else is tried.
     let fonts = if v.get("fonts").and_then(Value::as_bool).unwrap_or(false) {
         Some(match cache_ingest::pdfium::install_fonts(text(&engines, "pdfium_lib").as_deref()) {
-            Ok(from) => json!({"ok": true, "from": from}),
+            Ok((from, installed)) => json!({"ok": true, "from": from, "installed": installed}),
             Err(e) => json!({"ok": false, "error": e.message}),
         })
     } else {
@@ -427,8 +427,13 @@ pub fn probe(args: &str) -> Result<String> {
     };
     if v.get("fonts_only").and_then(Value::as_bool).unwrap_or(false) {
         // and the addresses of the process's one PDFium lock (see cache_ingest::pdfium), for pdfrx's worker
-        let (lock, unlock) = cache_ingest::pdfium::lock_functions();
-        return Ok(json!({"fonts": fonts, "lock_fns": {"lock": lock, "unlock": unlock}}).to_string());
+        let f = cache_ingest::pdfium::lock_functions();
+        return Ok(json!({
+            "fonts": fonts,
+            "lock_fns": {"acquire": f.acquire, "release": f.release, "drop_owner": f.drop_owner, "finalize": f.finalize},
+            "lock_status": cache_ingest::pdfium::lock_status(),
+        })
+        .to_string());
     }
     let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
     let load_embedder = v.get("load_embedder").and_then(Value::as_bool).unwrap_or(true);
