@@ -14,6 +14,8 @@ release notes).
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Maps: with Off-road chosen, a route shown before you start sits above the directions panel, not partly under it; the map fits the route above what the panel really covers, and fits it again when the panel grows
+- Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
 - Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are

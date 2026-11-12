@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/maps/ui/map_widgets.dart' show ScaleBarWidget;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
@@ -172,6 +173,87 @@ void main() {
       }
     },
   );
+
+  test('the room under a fitted route is what covers the map\'s foot, and the map keeps room for the route', () {
+    // The panel in the side column (nothing covers the map's foot): half the screen, at most 420, as before.
+    expect(routeFitBottom(screen: 600, map: 600, covered: null), 300);
+    expect(routeFitBottom(screen: 1200, map: 1200, covered: null), 420);
+    // On a phone: what the scale, the credits and the panel cover, and a gap.
+    expect(routeFitBottom(screen: 844, map: 844, covered: 380), 380 + kRouteFitGap);
+    expect(routeFitBottom(screen: 844, map: 844, covered: 582), 582 + kRouteFitGap);
+    // A cover that leaves no room: the map keeps the least room for the route (with no room at all it would not move).
+    expect(routeFitBottom(screen: 400, map: 400, covered: 390), 400 - kRouteFitTop - kRouteFitLeast);
+    expect(kRouteFitTop + routeFitBottom(screen: 400, map: 400, covered: 390), lessThan(400));
+    expect(routeFitBottom(screen: 100, map: 100, covered: 90), 0);
+  });
+
+  testWidgets('on a phone with Off-road chosen the route is fitted above the panel, the scale and the credits', (tester) async {
+    tester.view.physicalSize = const Size(390, 844) * 3;
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final dir = Directory.systemTemp.createTempSync('route-fit-');
+    final originalPlatform = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => NoSurface();
+    final location = LocationService(source: FakeSource(), settingsDirOverride: dir);
+    final engine = TestLayerEngine();
+    final maps = MapsState(engine: engine, settingsDirOverride: dir);
+    final nav = NavState(backend: FakeBackend(), location: location, speaker: FakeSpeaker(), positionSource: FakeNavPosition(), fmt: const Fmt(UnitSystem.imperial));
+    final camera = CameraController();
+    // Where the map package keeps the bottom padding of a fit, read from its own encoding of a known one.
+    final bottomAt = (CameraUpdate.newLatLngBounds(LatLngBounds(southwest: const LatLng(0, 0), northeast: const LatLng(1, 1)), left: 11, top: 12, right: 13, bottom: 14).toJson() as List<dynamic>).indexOf(14.0);
+    expect(bottomAt, greaterThan(0));
+    try {
+      await tester.runAsync(() async {
+        await location.init();
+        await engine.start();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          home: MapsScreen(location: location, maps: maps, nav: nav, themeId: CacheThemeId.light, glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf'),
+        ),
+      );
+      for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump();
+      }
+      final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+      map.onMapCreated!(camera);
+      map.onStyleLoadedCallback!();
+      await tester.pump();
+      // An off-road route on foot, with a stretch of open ground: the panel has the off-road choices and the off-road note.
+      expect(nav.previewSnapshot(MapRoute.fromJson(fakeRouteJson(id: 'fit-offroad', offroad: true, mode: 'offroad_foot'))), isTrue);
+      List<List<dynamic>> fitsOf() => camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newLatLngBounds').toList();
+      for (var i = 0; i < 100 && fitsOf().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump();
+      }
+      // The panel may grow once more (the elevation arrives): the last fit is the one that stands.
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(nav.phase, NavPhase.previewing);
+      expect(find.byKey(const ValueKey('land-strict')), findsOneWidget, reason: 'Off-road is not chosen');
+      final fits = fitsOf();
+      expect(fits, isNotEmpty, reason: 'the route was not fitted into view');
+      final bottom = (fits.last[bottomAt] as num).toDouble();
+      final height = tester.getSize(find.byType(MapLibreMap)).height;
+      // The scale is the top of what covers the map's foot: under it the credits and the panel.
+      final covered = height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
+      expect(covered, greaterThan(420), reason: 'with Off-road chosen the panel covers more than the room the fit used to leave');
+      expect(bottom, greaterThanOrEqualTo(covered), reason: 'the route\'s lower end is under the panel or the credits');
+      expect(kRouteFitTop + bottom, lessThan(height), reason: 'the fit leaves the map no room');
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      MapLibrePlatform.createInstance = originalPlatform;
+      camera.dispose();
+      nav.dispose();
+      maps.dispose();
+      location.dispose();
+      await tester.runAsync(() => dir.delete(recursive: true));
+    }
+  });
 
   for (final withFix in [true, false]) {
     testWidgets(

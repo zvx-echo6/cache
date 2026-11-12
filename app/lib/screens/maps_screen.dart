@@ -49,6 +49,24 @@ import '../nav/ui/search_panel.dart';
 import '../regions/regions_state.dart';
 import '../theme.dart';
 
+/// The room left above a route fitted into view (the search bar or the directions header, and the position under it).
+const double kRouteFitTop = 120;
+
+/// The room left between a fitted route and what covers the map's foot.
+const double kRouteFitGap = 16;
+
+/// The least height a fitted route is given: a taller cover would leave the map no room (it then does not move at all), so the
+/// route's lower end goes under the cover instead.
+const double kRouteFitLeast = 48;
+
+/// The room to leave under a route fitted into view on a map [map] tall. [covered] is what the scale, the credits and the
+/// panel really cover of the map's foot, as laid out (with Off-road chosen the panel is taller than with Drive); the route ends
+/// above it. Null (the panel is in the side column, or nothing is laid out yet): half the [screen], at most 420.
+double routeFitBottom({required double screen, required double map, required double? covered}) {
+  if (covered == null) return math.min(screen * 0.5, 420);
+  return math.max(0.0, math.min(covered + kRouteFitGap, map - kRouteFitTop - kRouteFitLeast));
+}
+
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
@@ -137,6 +155,14 @@ class _MapsScreenState extends State<MapsScreen> {
 
   final GlobalKey _stackKey = GlobalKey();
   final GlobalKey _insetKey = GlobalKey();
+
+  /// The scale, the credits and the panel over the map's foot on a phone (see [_coveredFoot]).
+  final GlobalKey _bottomKey = GlobalKey();
+
+  /// What covered the map's foot when the route was last fitted into view (null: not fitted, or not measured), and whether a
+  /// finger has been on the map since (the view is then the person's, and is left alone).
+  double? _fitCovered;
+  bool _fitTouched = false;
 
   /// Where the corner inset is in the screen's stack (the live map goes there while swapped), and the stack's size.
   Rect? _insetRect;
@@ -450,7 +476,10 @@ class _MapsScreenState extends State<MapsScreen> {
       _fitFor = r.routeId;
       _fitRoute(r);
     }
-    if (nav.phase == NavPhase.browsing) _fitFor = null;
+    if (nav.phase == NavPhase.browsing) {
+      _fitFor = null;
+      _fitCovered = null;
+    }
     // A place was chosen: bring it into view.
     final sel = nav.selected;
     if (nav.phase == NavPhase.browsing && sel != null && _focusFor != sel.id) {
@@ -461,18 +490,54 @@ class _MapsScreenState extends State<MapsScreen> {
     setState(() {});
   }
 
-  Future<void> _fitRoute(MapRoute r) async {
+  /// How much of the map's foot the scale, the credits and the panel cover, from where they were laid out; null when they are
+  /// not over the map's foot (the side column from [kSideCardWidth] wide) or not laid out yet.
+  double? _coveredFoot() {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = _bottomKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stack == null || box == null || !stack.hasSize || !box.hasSize) return null;
+    return stack.size.height - box.localToGlobal(Offset.zero, ancestor: stack).dy;
+  }
+
+  /// Fits [r] into view above what covers the map's foot. The panel for this route is laid out in the next frame, so what it
+  /// covers is read after that frame (not during this one, when the panel is still the last route's).
+  void _fitRoute(MapRoute r) {
     final c = _controller;
     if (c == null || !_styleReady || r.points.length < 2) return;
     maps.setFollow(FollowMode.free); // GPS must not pull an exact preview out of view.
+    _fitTouched = false;
+    _fitCovered = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteNow(c, r));
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  Future<void> _fitRouteNow(MapLibreMapController c, MapRoute r) async {
+    if (!mounted) return;
+    if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
     final b = r.bounds;
-    final pad = MediaQuery.sizeOf(context);
+    final screen = MediaQuery.sizeOf(context).height;
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final covered = _fitCovered = _coveredFoot();
+    final bottom = routeFitBottom(screen: screen, map: stack != null && stack.hasSize ? stack.size.height : screen, covered: covered);
     try {
       await c.animateCamera(
-        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: 48, right: 48, top: 120, bottom: math.min(pad.height * 0.5, 420)),
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: 48, right: 48, top: kRouteFitTop, bottom: bottom),
         duration: const Duration(milliseconds: 600),
       );
     } catch (_) {}
+  }
+
+  /// The panel grew or shrank under a route already fitted into view (its elevation chart arrived) and no finger has moved the
+  /// map since: the route is fitted again, above what the panel covers now.
+  void _refitIfCoverChanged() {
+    if (!mounted) return;
+    final r = nav.route;
+    final was = _fitCovered;
+    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId) return;
+    if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
+    final now = _coveredFoot();
+    if (now == null || (now - was).abs() < 1) return;
+    _fitRoute(r);
   }
 
   Future<void> _focusOn(double lat, double lon) async {
@@ -1169,6 +1234,9 @@ class _MapsScreenState extends State<MapsScreen> {
         _ensurePictures(_stackSize);
       });
     }
+    if (nav.phase == NavPhase.previewing && _fitCovered != null && !_fitTouched) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
+    }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
     // but not drawn.
     final corner = swapped ? _insetRect?.deflate(2) : null;
@@ -1199,7 +1267,10 @@ class _MapsScreenState extends State<MapsScreen> {
             _mapSize = box.biggest;
               return Listener(
               // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
-              onPointerDown: (e) => _downAt = e.position,
+              onPointerDown: (e) {
+                _downAt = e.position;
+                _fitTouched = true;
+              },
               onPointerMove: (e) {
                 final d = _downAt;
                 if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
@@ -1463,6 +1534,7 @@ class _MapsScreenState extends State<MapsScreen> {
           // The guidance card sits above the home indicator (the card itself has no empty strip at its foot).
           bottom: panel == null || nav.guiding,
           child: Column(
+            key: _bottomKey,
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1562,8 +1634,9 @@ class MeasurePanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(total, key: const ValueKey('measure-total'), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                // In full, on a second line when the bar is a phone's width (it used to be cut at one line).
                 Text(points < 2 ? 'Tap the map to add points' : '$points points · tap the map to add more',
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                    key: const ValueKey('measure-hint'), style: TextStyle(fontSize: 13, color: k.secondary)),
               ],
             ),
           ),
