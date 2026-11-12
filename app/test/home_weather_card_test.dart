@@ -22,6 +22,10 @@ Widget _home(SettingsRig r, LayoutState layout) => HomeScreen(layout: layout, we
 
 Finder _inCard(Finder what) => find.descendant(of: find.byKey(const ValueKey('home-weather')), matching: what);
 
+/// A no-break space: the high and the low of the conditions line are each one piece (homeConditionsLine), so the line reads
+/// "Clear sky · High 52 °F, low 31 °F" and breaks only between its parts.
+const _nb = '\u00A0';
+
 /// Wednesday 9:00 PM at "Where I am": the forecast with its "Now", and alerts and fires checked with nothing in force (a
 /// check speaks for six hours).
 Future<void> _evening(WidgetTester tester, SettingsRig r) async {
@@ -49,7 +53,7 @@ void main() {
     await _settle(tester);
     expect(find.byKey(const ValueKey('home-temperature')), findsOneWidget);
     expect(find.text('38 °F'), findsOneWidget);
-    expect(find.text('Clear sky · High 52 °F, low 31 °F'), findsOneWidget);
+    expect(find.text('Clear sky · High${_nb}52$_nb°F, low${_nb}31$_nb°F'), findsOneWidget);
     expect(_inCard(find.byIcon(Icons.check_circle_outline)), findsOneWidget, reason: 'checked a moment ago, nothing in force: a tick');
     expect(find.byKey(const ValueKey('home-alerts-expired')), findsNothing);
 
@@ -60,7 +64,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('home-temperature')), findsNothing, reason: 'the 9 PM reading is not the temperature at 7 AM');
     expect(find.text('38 °F'), findsNothing);
-    expect(find.text('Thu Nov 12 · Light rain · High 49 °F, low 34 °F'), findsOneWidget, reason: 'today\'s forecast under its own label');
+    expect(find.text('Thu Nov 12 · Light rain · High${_nb}49$_nb°F, low${_nb}34$_nb°F'), findsOneWidget, reason: 'today\'s forecast under its own label');
     expect(find.text('Where I am · 10 hours old'), findsOneWidget);
     // The check of alerts from last night no longer speaks for now: the Weather screen's mark for that, not a tick.
     expect(find.text('No alerts known, data expired'), findsOneWidget);
@@ -82,8 +86,11 @@ void main() {
     await _evening(tester, r);
     await r.show(tester, _home(r, layout));
     await _settle(tester);
-    final line = tester.widget<Text>(find.text('Clear sky · High 52 °F, low 31 °F'));
+    final line = tester.widget<Text>(find.text('Clear sky · High${_nb}52$_nb°F, low${_nb}31$_nb°F'));
     expect(line.maxLines, 2);
+    // The card shows the line homeConditionsLine makes: the same words, and a second line never starts inside the high or the
+    // low (condition_case_test.dart lays the line out at every width).
+    expect(line.data!.replaceAll(_nb, ' '), 'Clear sky · High 52 °F, low 31 °F');
     layout.dispose();
     await r.dispose(tester);
   });

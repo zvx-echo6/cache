@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart' show Fix;
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/maps/style/style_generator.dart' show kPinSelectedReach, kPositionDotReach;
+import 'package:cache/maps/ui/map_assets.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/overview/overview_camera.dart';
@@ -72,20 +74,34 @@ double _fitPad(List<dynamic> u, double probe) => (u[_fitProbe.indexOf(probe)] as
 /// The fits among the camera moves the screen asked for, in order.
 List<List<dynamic>> _fitsOf(CameraController camera) => camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newLatLngBounds').toList();
 
-/// Where the bounding box of [route] falls on a map of [map] points after the fit [u] (a recorded camera update), by the same
-/// web-mercator fit the map makes.
+/// The camera a map of [map] points comes to after the fit [u] (a recorded camera update): the box the screen asked for inside
+/// its paddings, by the same web-mercator fit the map makes.
+OverviewCamera _cameraAfter(List<dynamic> u, Size map) {
+  List<double> pair(Object? v) => [for (final n in v as List) (n as num).toDouble()];
+  final a = pair((u[1] as List)[0]), b = pair((u[1] as List)[1]);
+  return OverviewCamera.fit(
+    south: math.min(a[0], b[0]),
+    west: math.min(a[1], b[1]),
+    north: math.max(a[0], b[0]),
+    east: math.max(a[1], b[1]),
+    size: map,
+    padding: EdgeInsets.fromLTRB(_fitPad(u, 11), _fitPad(u, 12), _fitPad(u, 13), _fitPad(u, 14)),
+  );
+}
+
+/// Where the bounding box of [route] falls on a map of [map] points after the fit [u] (a recorded camera update).
 Rect _routeBoxOnMap(List<dynamic> u, MapRoute route, Size map) {
   final b = route.bounds;
-  final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: map, padding: EdgeInsets.fromLTRB(_fitPad(u, 11), _fitPad(u, 12), _fitPad(u, 13), _fitPad(u, 14)));
+  final cam = _cameraAfter(u, map);
   return Rect.fromPoints(cam.project(b[2], b[1]), cam.project(b[0], b[3]));
 }
 
 /// The Maps screen in a window of [size] points showing [route] before starting (as a route opened from elsewhere is shown),
 /// once the screen has fitted it into view: [check] is given the last fit the screen asked for and the map's size. With
-/// [position] the phone has a position, so the position chip shows.
-Future<void> _withFittedRoute(WidgetTester tester, {required Size size, required Map<String, dynamic> route, Fix? position, required void Function(List<dynamic> fit, Size map) check}) async {
-  tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1;
+/// [position] the phone has a position, so the position chip shows. The screen has [ratio] pixels per point.
+Future<void> _withFittedRoute(WidgetTester tester, {required Size size, required Map<String, dynamic> route, Fix? position, double ratio = 1, required void Function(List<dynamic> fit, Size map) check}) async {
+  tester.view.physicalSize = size * ratio;
+  tester.view.devicePixelRatio = ratio;
   addTearDown(tester.view.reset);
   // The style template is read through the asset bundle, which keeps the read an earlier test started (it never finishes in
   // this one): read it afresh, or the map never appears.
@@ -427,12 +443,132 @@ void main() {
           // Under the chip and the buttons, wider than the column is, and the wider room in from the map's two bare edges.
           expect(box.top, greaterThanOrEqualTo(math.max(chip.bottom, findMe.bottom)));
           expect(box.width, greaterThan(layers.left - chip.right), reason: 'the wide route is not in the strip');
+          // The phone is far from this route, so nothing is drawn at its west end. At its east end is the destination's pin,
+          // and it is the pin's edge that is the bare-edge room in.
           expect(box.left, closeTo(kRouteFitBareEdge, 0.01), reason: 'the route\'s west end is not the bare-edge room in from the screen\'s side');
-          expect(map.width - box.right, closeTo(kRouteFitBareEdge, 0.01), reason: 'the route\'s east end is not the bare-edge room in from the screen\'s side');
+          expect(map.width - box.right, closeTo(kRouteFitBareEdge + kPinSelectedReach, 0.01), reason: 'the pin at the route\'s east end is not the bare-edge room in from the screen\'s side');
         }
       });
     });
   }
+
+  // What the map draws at a route's ends is not on the route's line: the destination's pin reaches 15 points from its middle
+  // and the position dot 11, or as far as its heading marker when the heading is known. The fit of the line alone left half of
+  // each outside the free rectangle (a start under the header by part of its dot).
+  test('a fit counts what is drawn at the route\'s ends: the pin and the position dot are wholly inside the free rectangle', () {
+    const map = Size(430, 932);
+    // The free column of the test above (Drive), as the room around it.
+    const free = Rect.fromLTRB(208, 130, 354, 461);
+    final room = EdgeInsets.fromLTRB(free.left, free.top, map.width - free.right, map.height - free.bottom);
+    expect((kPinSelectedReach, kPositionDotReach), (15.0, 11.0));
+    // The heading marker is a 96 pixel image: 32 points on a 3x phone, where its triangle and outline reach 15.52 points.
+    expect(MapAssets.headingMarkerReach(3, web: false), closeTo(15.52, 0.001));
+    expect(MapAssets.headingMarkerReach(2.625, web: false), closeTo(17.74, 0.01));
+    expect(MapAssets.headingMarkerReach(3, web: true), closeTo(46.56, 0.001));
+
+    // Where the disc of [m] falls on the map after [fit].
+    Rect disc(({List<double> bounds, EdgeInsets padding}) fit, RouteEndMark m) {
+      final b = fit.bounds;
+      final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: map, padding: fit.padding);
+      return Rect.fromCircle(center: cam.project(m.lat, m.lon), radius: m.reach);
+    }
+
+    bool inside(Rect outer, Rect inner) => inner.left >= outer.left - 0.01 && inner.top >= outer.top - 0.01 && inner.right <= outer.right + 0.01 && inner.bottom <= outer.bottom + 0.01;
+
+    // A route that runs south from the phone, straight: the start is at the top of the column, under the header.
+    const south = [42.48, -113.8, 42.5, -113.8];
+    const dot = RouteEndMark(lat: 42.5, lon: -113.8, reach: 15.52), pin = RouteEndMark(lat: 42.48, lon: -113.8, reach: kPinSelectedReach);
+    // The line alone: the dot's upper part is above the rectangle (it was under the header), the pin's lower part below it.
+    final lineOnly = (bounds: south, padding: room);
+    expect(disc(lineOnly, dot).top, closeTo(free.top - 15.52, 0.01));
+    expect(disc(lineOnly, pin).bottom, closeTo(free.bottom + 15, 0.01));
+    // Counted: each is inside, and touches the rectangle's edge, so no room is wasted.
+    final fit = routeFitWithMarks(map: map, room: room, bounds: south, marks: const [pin, dot]);
+    expect(fit.bounds, south);
+    expect(inside(free, disc(fit, dot)) && inside(free, disc(fit, pin)), isTrue, reason: '${disc(fit, dot)} and ${disc(fit, pin)} in $free');
+    expect(disc(fit, dot).top, closeTo(free.top, 0.01));
+    expect(disc(fit, pin).bottom, closeTo(free.bottom, 0.01));
+    expect(fit.padding.top - room.top, closeTo(15.52, 0.001));
+    expect(fit.padding.bottom - room.bottom, closeTo(15, 0.001));
+
+    // A route with a bend to the east: its ends are on the box's west edge and far from its east edge, which keeps no room.
+    const bend = [42.48, -113.8, 42.5, -113.79];
+    final bent = routeFitWithMarks(map: map, room: room, bounds: bend, marks: const [pin, dot]);
+    expect(bent.padding.left - room.left, closeTo(15.52, 0.001));
+    expect(bent.padding.right, room.right);
+    expect(inside(free, disc(bent, dot)) && inside(free, disc(bent, pin)), isTrue);
+
+    // The place is a little off the road the route ends on, and the phone a little off the road it starts on: the box grows to
+    // hold both, and both are still wholly inside.
+    const offDot = RouteEndMark(lat: 42.5004, lon: -113.8006, reach: 11), offPin = RouteEndMark(lat: 42.4797, lon: -113.7995, reach: kPinSelectedReach);
+    final off = routeFitWithMarks(map: map, room: room, bounds: south, marks: const [offPin, offDot]);
+    expect(off.bounds, [42.4797, -113.8006, 42.5004, -113.7995]);
+    expect(inside(free, disc(off, offDot)) && inside(free, disc(off, offPin)), isTrue, reason: '${disc(off, offDot)} and ${disc(off, offPin)} in $free');
+
+    // What the route's own fit does not show on the map is left out: the phone in another town, a place far from where its
+    // route ends. The route is not made smaller to bring them in.
+    const farDot = RouteEndMark(lat: 1, lon: 2, reach: 11), farPin = RouteEndMark(lat: 42.5, lon: -113.5, reach: kPinSelectedReach);
+    final far = routeFitWithMarks(map: map, room: room, bounds: south, marks: const [farPin, farDot]);
+    expect(far.bounds, south);
+    expect(far.padding, room);
+    // Nothing drawn at the ends: the fit of the line, as it was.
+    final none = routeFitWithMarks(map: map, room: room, bounds: south, marks: const []);
+    expect(none.bounds, south);
+    expect(none.padding, room);
+
+    // The least room a panel leaves (48 points each way): the marks give way, and the map still has a box of 24 points to fit.
+    final tight = EdgeInsets.fromLTRB(100, 100, map.width - 148, map.height - 148);
+    final least = routeFitWithMarks(map: map, room: tight, bounds: south, marks: const [pin, dot]);
+    expect(map.width - least.padding.horizontal, closeTo(24, 0.01));
+    expect(map.height - least.padding.vertical, closeTo(24, 0.01));
+  });
+
+  testWidgets('on a phone a route that runs south from the phone is fitted with the whole of its position dot under the header and the whole of its pin above the foot', (tester) async {
+    // The phone is at 1, 2 (a position whose text is short, so there is a column between the chip and the buttons), heading
+    // north, and the route runs straight south from it: its start is at the top of the column, where the header is.
+    final json = fakeRouteJson(id: 'fit-ends');
+    const start = GeoPoint(1, 2), end = GeoPoint(0.98, 2);
+    json['geometry'] = encodePolyline6([for (var i = 0; i <= 40; i++) GeoPoint(start.lat + (end.lat - start.lat) * i / 40, start.lon)]);
+    json['from'] = {...json['from'] as Map<String, dynamic>, 'lat': start.lat, 'lon': start.lon};
+    json['to'] = {...json['to'] as Map<String, dynamic>, 'lat': end.lat, 'lon': end.lon};
+    final route = MapRoute.fromJson(json);
+    await _withFittedRoute(tester, size: const Size(430, 932), ratio: 3, route: json, position: fixAt(start.lat, start.lon, heading: 0), check: (fit, map) {
+      final header = tester.getRect(find.byType(DirectionsHeader));
+      final chip = tester.getRect(find.ancestor(of: find.text('1.00000, 2.00000'), matching: find.byType(Container)).first);
+      final layers = tester.getRect(find.byType(MapButton).first), findMe = tester.getRect(find.byType(MapButton).last);
+      final over = {
+        'the header': header,
+        'the position chip': chip,
+        'the Layers button': layers,
+        'the Find me button': findMe,
+        'the scale': tester.getRect(find.byType(ScaleBarWidget)),
+        'the credits': tester.getRect(find.byType(AttributionChip)),
+        'the panel': tester.getRect(find.byType(RoutePanel)),
+      };
+      expect(chip.right, lessThan(layers.left - 2 * kRouteFitGap), reason: 'there is no column between the chip and the buttons to test');
+      final cam = _cameraAfter(fit, map);
+      // On this 3x phone the heading marker reaches further than the dot it turns around.
+      final dotReach = MapAssets.headingMarkerReach(3);
+      expect(dotReach, greaterThan(kPositionDotReach));
+      final dot = Rect.fromCircle(center: cam.project(start.lat, start.lon), radius: dotReach);
+      final pin = Rect.fromCircle(center: cam.project(end.lat, end.lon), radius: kPinSelectedReach);
+      final box = _routeBoxOnMap(fit, route, map);
+      expect(box.top, lessThan(chip.bottom), reason: 'the route is not in the column beside the chip');
+      expect(box.height, greaterThan(4 * dotReach), reason: 'the column has too little room to test: $box');
+      for (final MapEntry(key: what, value: disc) in {'the position dot with its heading marker': dot, 'the destination\'s pin': pin}.entries) {
+        expect(disc.left >= 0 && disc.top >= 0 && disc.right <= map.width && disc.bottom <= map.height, isTrue, reason: '$what is not wholly on the map: $disc');
+        for (final MapEntry(key: name, value: rect) in over.entries) {
+          // Clear of it, and by the gap a fitted route keeps from what covers the map (less a rounding).
+          expect(rect.inflate(kRouteFitGap - 0.5).overlaps(disc), isFalse, reason: '$what ($disc) is under $name ($rect), or nearer to it than the gap');
+        }
+      }
+      // The start's dot is exactly the gap under the header. (Fitted by its line alone, the route's start was there, and the
+      // upper part of the dot above it.)
+      expect(dot.top, closeTo(header.bottom + kRouteFitGap, 0.01));
+      expect(box.top, closeTo(header.bottom + kRouteFitGap + dotReach, 0.01));
+      expect(dot.left, greaterThanOrEqualTo(chip.right + kRouteFitGap - 0.01), reason: 'the dot touches the position chip');
+    });
+  });
 
   testWidgets('from 800 wide the route is fitted clear of the map\'s buttons on the right', (tester) async {
     await _withFittedRoute(tester, size: const Size(1200, 800), route: fakeRouteJson(id: 'fit-buttons'), check: (fit, map) {

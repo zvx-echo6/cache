@@ -58,6 +58,19 @@ const String kPinSelected = 'pin-selected';
 /// The name of the heading marker image the screen adds to the style.
 const String kHeadingImage = 'position-heading';
 
+/// The chosen place's pin (a route's destination while it is shown): its circle's radius and the edge around it, in points.
+/// Whole numbers, so the style is written as it was.
+const int kPinSelectedRadius = 11;
+const int kPinSelectedEdge = 4;
+
+/// The position dot: its circle's radius and the ring around it, in points.
+const int kPositionDotRadius = 8;
+const int kPositionDotEdge = 3;
+
+/// How far the chosen place's pin and the position dot reach from their middle, in points, whatever the zoom.
+const double kPinSelectedReach = kPinSelectedRadius + kPinSelectedEdge + 0.0;
+const double kPositionDotReach = kPositionDotRadius + kPositionDotEdge + 0.0;
+
 /// A visible layer and how opaque it is drawn.
 class StyleLayerUse {
   const StyleLayerUse(this.def, [this.opacity = 1]);
@@ -534,9 +547,9 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'source': kPinSource,
         'filter': ['==', ['get', 'role'], 'selected'],
         'paint': {
-          'circle-radius': 11,
+          'circle-radius': kPinSelectedRadius,
           'circle-color': p.css('pin'),
-          'circle-stroke-width': 4,
+          'circle-stroke-width': kPinSelectedEdge,
           'circle-stroke-color': p.css('routeCasing'),
         },
       },
@@ -563,9 +576,9 @@ List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
         'source': kPositionSource,
         'filter': ['==', ['geometry-type'], 'Point'],
         'paint': {
-          'circle-radius': 8,
+          'circle-radius': kPositionDotRadius,
           'circle-color': p.css('position'),
-          'circle-stroke-width': 3,
+          'circle-stroke-width': kPositionDotEdge,
           'circle-stroke-color': p.css('positionRing'),
           'circle-pitch-alignment': 'map',
         },
