@@ -628,6 +628,7 @@ class MapProgress {
     required this.offRoute,
     required this.offRouteCount,
     required this.arrived,
+    this.stopsReached = 0,
     required this.fraction,
     required this.remainingM,
     required this.remainingS,
@@ -654,6 +655,7 @@ class MapProgress {
       offRoute: j['off_route'] == true,
       offRouteCount: _i(j['off_route_count']) ?? 0,
       arrived: j['arrived'] == true,
+      stopsReached: _i(j['stops_reached']) ?? 0,
       fraction: _d(j['progress']) ?? 0,
       remainingM: _d(r['distance_m']) ?? 0,
       remainingS: _i(r['duration_s']) ?? 0,
@@ -678,6 +680,10 @@ class MapProgress {
   final bool offRoute;
   final int offRouteCount;
   final bool arrived;
+
+  /// How many of the route's stops (its via points, in order) the fixes have reached. A fix is never matched beyond the next
+  /// stop that has not been reached.
+  final int stopsReached;
   final double fraction;
   final double remainingM;
   final int remainingS;

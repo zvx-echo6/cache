@@ -23,7 +23,7 @@ Future<void> openAppLog() async {
   try {
     final dir = Directory('${await appSupportPath()}/logs');
     await appLog.open(dir);
-    final running = File('${dir.path}/running');
+    final running = _running = File('${dir.path}/running');
     final exits = await _readExits();
     if (running.existsSync()) {
       DateTime? marked;
@@ -47,6 +47,18 @@ Future<void> openAppLog() async {
   } catch (e) {
     debugPrint('The log could not be opened: $e');
   }
+}
+
+/// The "running" mark of this run, once the log is open.
+File? _running;
+
+/// Cache is not open any more though no phone screen said so: Android Auto started it with the phone app closed, and the car has
+/// left (main.dart). The "running" mark is taken away as it is when the phone's screen goes to the back, so Android ending the
+/// idle process later is not written down as Cache having stopped unexpectedly. The phone's screen coming to the front sets it
+/// again.
+void markAppNotOpen() {
+  final running = _running;
+  if (running != null) _mark(running, false);
 }
 
 /// Dart errors (framework and asynchronous) go to the log; the framework's own report stays.

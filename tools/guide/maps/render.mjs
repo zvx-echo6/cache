@@ -41,6 +41,8 @@ const MAPLIBRE = join(HERE, 'node_modules/maplibre-gl/dist');
 
 // The app adds its images (the heading marker, the pins) to the map as PNGs, and the phone's map draws an image at its pixels
 // divided by the screen's own scale. The pictures stand for a 3x phone (430 x 932 points), whatever scale they are drawn at.
+// The app draws its pin images for the screen it is on, so the guide test tells it this same scale (kGuidePhoneScale in
+// app/test_shots/guide_map_kit.dart): the two numbers go together.
 const IMAGE_PIXEL_RATIO = 3;
 
 const config = JSON.parse(readFileSync(join(HERE, 'sources.json'), 'utf8'));

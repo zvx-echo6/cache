@@ -93,6 +93,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
@@ -120,6 +121,7 @@ import 'platform/app_log.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
+import 'platform/phone_screen.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -148,6 +150,8 @@ void main() {
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  // A cachelink: link the app was opened with, or that arrives while it runs (the native side holds it; see LinkInbox).
+  unawaited(linkInbox.start());
   runApp(const CacheApp());
 }
 
@@ -159,7 +163,12 @@ class CacheApp extends StatefulWidget {
 }
 
 class _CacheAppState extends State<CacheApp> {
-  late final AppState app = AppState();
+  late final AppState app = AppState(
+    // No phone screen by the time the start would load the chat model: on Android that is a start by the car with the phone
+    // app closed (the engine starts with no screen and only an activity says otherwise). The model then waits for the
+    // phone's screen ([_onPhoneScreen]).
+    startedWithNoPhoneScreen: () => plat.isAndroid && noPhoneScreen(WidgetsBinding.instance.lifecycleState),
+  );
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
   // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
@@ -840,7 +849,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
-  late final RouteElevation routeElevation = RouteElevation(loader: tileServerElevationLoader(maps.engine));
+  late final RouteElevation routeElevation = RouteElevation(start: tileServerElevationJobs(maps.engine));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
@@ -1129,9 +1138,36 @@ class _CacheAppState extends State<CacheApp> {
           await location.request(explain: () async => false);
         },
       );
+      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
+      _car!.connected.addListener(_onCarScreen);
       unawaited(_car!.start());
     }
     _openHistory();
+  }
+
+  void _onCarScreen() {
+    final attached = _car?.connected.value ?? false;
+    location.carScreen(attached);
+    if (!attached) _carLeft();
+  }
+
+  /// The car has left. When Android Auto started Cache with the phone app closed, nothing shows Cache now and nothing will say
+  /// so: a start counts as in front, and only a phone screen's lifecycle ends that (before the engine was kept for the life of
+  /// the process, the run simply ended here). So Cache goes to the back by itself, as it does when the phone's screen is
+  /// hidden: index work stops and is handed to the background, the models are let go after their usual wait, the position
+  /// stream stops and the "running" mark is taken away. Nothing is loaded or started. The phone's screen coming to the front
+  /// brings it all back the usual way ([_backToFront] and the lifecycle listeners).
+  void _carLeft() {
+    if (!nothingShowsTheApp(inFront: _atFront, screen: WidgetsBinding.instance.lifecycleState)) return;
+    logInfo('The car has left and the phone screen is not open: Cache goes to the back');
+    searchModel.onLifecycle(AppLifecycleState.paused);
+    promptReadAhead.toBackground();
+    _modelRelease.toBackground();
+    _foregroundUpdates.back();
+    indexing.setOpen(false);
+    _toBack();
+    location.noScreen();
+    markAppNotOpen();
   }
 
   /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
@@ -1247,6 +1283,7 @@ class _CacheAppState extends State<CacheApp> {
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
+    _car?.connected.removeListener(_onCarScreen);
     _car?.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
@@ -1286,8 +1323,29 @@ class _CacheAppState extends State<CacheApp> {
     super.dispose();
   }
 
+  /// A phone screen has come to the front for the first time: the first one of this run, or a new one after Android closed the
+  /// last (on Android the app outlives its screen: platform/phone_screen.dart). What the start did for the screen it expected
+  /// is done for this one.
+  void _onPhoneScreen() {
+    // The system bars are the screen's own (MainActivity): a new screen has not been told how to show them.
+    applySystemUi(_applied);
+    // The chat model a start by the car left out loads now, as it would have at a start with the phone's screen.
+    unawaited(app.phoneScreenAppeared());
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Only Android keeps the app running past its screen (the engine is kept for the life of the process).
+    if (!plat.isAndroid) return _interface(context);
+    // Each phone screen gets the interface built from the start; the state above stays (platform/phone_screen.dart).
+    return PhoneScreenScope(
+      onScreen: _onPhoneScreen,
+      placeholder: ColoredBox(color: cacheTokens[_applied]!.background),
+      builder: _interface,
+    );
+  }
+
+  Widget _interface(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(

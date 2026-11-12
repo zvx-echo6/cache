@@ -34,6 +34,11 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
       for (final (i, x) in nav.routes.indexed)
         {'index': i, 'distanceM': x.distanceM, 'durationS': x.durationS, 'via': routeVia(x)},
     ],
+    // The stops still ahead, in order (Add stop): the car names them on its route screen and in its route overview, each with
+    // the number the turn card says for it when it is reached.
+    'stops': [
+      for (final (n, s) in nav.numberedStopsAhead) {'number': n, 'name': s.name, 'address': s.address},
+    ],
     'routeIndex': nav.routeIndex,
     'routeId': r?.routeId,
     'voiceOn': nav.voiceOn,

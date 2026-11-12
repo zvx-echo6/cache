@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.graphics.Bitmap
+import android.graphics.PointF
 import android.graphics.Color
 import androidx.car.app.CarContext
 import androidx.car.app.SurfaceCallback
@@ -35,10 +36,12 @@ import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.layers.TransitionOptions
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Point
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Draws Cache's map on the car's screen.
@@ -100,6 +103,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var overview = false
     private var routeCoords: List<DoubleArray> = emptyList()
     private var badgeKey: String? = null
+    private var badgeOffsetKey: String? = null
     private var routeColorKey: String? = null
 
     /** The map's pixels per density-independent pixel (the car surface's, which the map's own View has too). */
@@ -108,6 +112,11 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     /** The vehicle's two markers (the arrow, and the dot for when no heading is known), kept so that showing a heading does
      * not look them up in the style each time. Both belong to the present style and go with it. */
     private var arrowLayer: SymbolLayer? = null
+
+    /** The arrow a second time, tied to the map and turned to the compass heading: the one shown while the camera is not turned
+     * to the heading (north up, the route overview, a panned map). Which of the two shows is their opacity ([upShown]). */
+    private var compassLayer: SymbolLayer? = null
+    private var upShown: Boolean? = null
     private var dotLayer: CircleLayer? = null
 
     /** Which of the two is showing (null: neither yet), and the turn the arrow was last given. */
@@ -204,6 +213,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             val dm = carContext.getSystemService(DisplayManager::class.java)
             val vd = dm.createVirtualDisplay("CacheCarMap", width, height, surfaceContainer.dpi, surface, 0)
             display = vd
+            opened++
+            Log.i(TAG, "car map opened ${width}x$height: $opened open in this process")
             val p = Presentation(carContext, vd.display)
             val options = MapLibreMapOptions.createFromAttributes(p.context)
                 .compassEnabled(false)
@@ -345,6 +356,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         m.uiSettings.isCompassEnabled = false
         m.setMinZoomPreference(2.0)
         m.setMaxZoomPreference(19.0)
+        // The grade badge keeps off the destination wherever the camera has come to rest (the overview, a zoom, a pan).
+        m.addOnCameraIdleListener { placeBadge(CarLink.trip) }
         val t = CarLink.trip
         val lat = t.lat ?: t.destinationLat
         val lon = t.lon ?: t.destinationLon
@@ -394,6 +407,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         st.addSource(GeoJsonSource(SRC_DRIVEN, CarLink.EMPTY_GEOJSON))
         st.addSource(GeoJsonSource(SRC_BADGE, CarLink.EMPTY_GEOJSON))
         badgeKey = null
+        badgeOffsetKey = null
         routeColorKey = null
         val isAlt = Expression.eq(Expression.get("alt"), Expression.literal(true))
         val isMain = Expression.eq(Expression.get("alt"), Expression.literal(false))
@@ -458,9 +472,26 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             PropertyFactory.iconImage(ARROW_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
             PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_VIEWPORT),
             PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
-            PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE),
+            PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE), PropertyFactory.iconOpacity(0f),
         )
+        // The same arrow tied to the map, turned to the compass heading. Going between a map turned to the heading and a map
+        // with north up (the route overview opening and closing) the camera's bearing changes in one step, at once, while a
+        // new turn for a symbol reaches the screen a frame or more later: one arrow turned again showed the other view's
+        // heading for a frame. With two arrows nothing is turned at that moment: this one already has the compass heading,
+        // the other always points up, and which one shows is their opacity, a paint property that changes in the same frame
+        // as the camera (no fade: the transitions are zero).
+        val compass = SymbolLayer("car-pos-compass", SRC_POS).withProperties(
+            PropertyFactory.iconImage(ARROW_IMAGE), PropertyFactory.iconAllowOverlap(true), PropertyFactory.iconIgnorePlacement(true),
+            PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+            PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
+            PropertyFactory.iconRotate(0f), PropertyFactory.visibility(Property.NONE), PropertyFactory.iconOpacity(0f),
+        )
+        arrow.setIconOpacityTransition(TransitionOptions(0, 0))
+        compass.setIconOpacityTransition(TransitionOptions(0, 0))
+        st.addLayer(compass)
         st.addLayer(arrow)
+        compassLayer = compass
+        upShown = null
         posSource = st.getSourceAs<GeoJsonSource>(SRC_POS)
         dotLayer = dot
         arrowLayer = arrow
@@ -483,13 +514,20 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         if (arrowShown != arrow) {
             arrowShown = arrow
             arrowLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.VISIBLE else Property.NONE))
+            compassLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.VISIBLE else Property.NONE))
             dotLayer?.setProperties(PropertyFactory.visibility(if (arrow) Property.NONE else Property.VISIBLE))
         }
         if (!arrow) return
-        val turn = CarMarkerMotion.arrowTurn(heading, cameraBearing)
-        if (shownRotation.isNaN() || CarMarkerMotion.angleBetween(turn, shownRotation.toDouble()) >= ROTATE_STEP) {
-            shownRotation = turn.toFloat()
-            arrowLayer?.setProperties(PropertyFactory.iconRotate(shownRotation))
+        // The map-tied arrow keeps the compass heading also while it is not the one showing, so it is right the moment it is.
+        if (shownRotation.isNaN() || CarMarkerMotion.angleBetween(heading, shownRotation.toDouble()) >= ROTATE_STEP) {
+            shownRotation = heading.toFloat()
+            compassLayer?.setProperties(PropertyFactory.iconRotate(shownRotation))
+        }
+        val up = CarMarkerMotion.arrowIsUp(heading, cameraBearing)
+        if (upShown != up) {
+            upShown = up
+            arrowLayer?.setProperties(PropertyFactory.iconOpacity(if (up) 1f else 0f))
+            compassLayer?.setProperties(PropertyFactory.iconOpacity(if (up) 0f else 1f))
         }
     }
 
@@ -498,6 +536,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         style = null
         posSource = null
         arrowLayer = null
+        compassLayer = null
         dotLayer = null
     }
 
@@ -560,9 +599,34 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 st.addImage(BADGE_IMAGE, bmp)
             }
             st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(point(ov.steepLat, ov.steepLon))
+            placeBadge(t)
         } else {
             st.getSourceAs<GeoJsonSource>(SRC_BADGE)?.setGeoJson(CarLink.EMPTY_GEOJSON)
         }
+    }
+
+    /** Moves the grade badge off the destination marker and the route's end when, on the screen as the camera now shows
+     * it, the badge at its own point would cover them (CarOverlayPainter.badgeOffset): the steepest stretch is often the
+     * last one, and on the route overview the badge hid the destination dot. */
+    private fun placeBadge(t: CarTrip) {
+        val m = map ?: return
+        val st = style ?: return
+        val ov = t.overview ?: return
+        val lat = ov.steepLat ?: return
+        val lon = ov.steepLon ?: return
+        val g = ov.steepGradePct ?: return
+        val ends = mutableListOf<PointF>()
+        val destLat = t.destinationLat
+        val destLon = t.destinationLon
+        if (destLat != null && destLon != null) ends.add(m.projection.toScreenLocation(LatLng(destLat, destLon)))
+        routeCoords.lastOrNull()?.let { ends.add(m.projection.toScreenLocation(LatLng(it[1], it[0]))) }
+        val steep = m.projection.toScreenLocation(LatLng(lat, lon))
+        val off = CarOverlayPainter.badgeOffset(steep, ends, CarOverlayPainter.badgeWidth(CarOverlayPainter.gradeText(g), density), density)
+        val key = "${off.x.roundToInt()}|${off.y.roundToInt()}"
+        if (key == badgeOffsetKey) return
+        badgeOffsetKey = key
+        // The offset is in the style's own pixels, which the map scales by its density.
+        st.getLayer("car-grade-badge")?.setProperties(PropertyFactory.iconOffset(arrayOf(off.x / density, off.y / density)))
     }
 
     private fun applyTrip(t: CarTrip) {
@@ -748,18 +812,35 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         overlayView = null
         presentation?.dismiss()
         presentation = null
-        display?.release()
+        display?.let {
+            // The host's surface is taken off the display before the display is let go, so nothing of this map is still
+            // being composed into a surface the host may already have destroyed.
+            try {
+                it.surface = null
+            } catch (e: Exception) {
+                Log.w(TAG, "car map display", e)
+            }
+            it.release()
+            opened--
+            Log.i(TAG, "car map released: $opened still open in this process")
+        }
         display = null
     }
 
     /** The car session ended. */
     fun release() {
         CarLink.removeListener(this)
+        // The screens of the session that is over are not kept through this map.
+        onFollowingChanged = null
         releaseMap()
     }
 
     companion object {
         private const val TAG = "CacheCarMap"
+
+        /** Car maps (a virtual display with its map view) that are open in this process: 1 while a car shows the map, 0 with
+         * no car. More than 1 after a release, or a number that climbs with each car session, is a map that was not let go. */
+        private var opened = 0
         private const val SRC_ROUTE = "car-route-src"
         private const val SRC_DEST = "car-dest-src"
         private const val SRC_POS = "car-pos-src"

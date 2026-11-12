@@ -9,11 +9,29 @@ release notes).
 ### New
 - Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
 - Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
+- Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+- Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
+- Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
+- Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
+- Maps: the note on a route with an off-road part reads "Part of this route is off-road", with the distance; it said "has no road" and "over open ground" even where that part follows a trail
+- Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
+- Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
+- Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
+- Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
+- Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
+- Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight
+- Weather: when the app is opened, or comes back to the screen, hours after the last update, Home no longer shows the earlier temperature, or yesterday's high and low, as the weather now; a reading counts for three hours, as on the Weather screen, and after that Home shows today's forecast
+- Weather: a source whose first download failed says why on the Weather screen, instead of "Not downloaded yet. Update now to get it."
+- Weather: the status line in Settings > Weather and alerts no longer turns into a warning only because the last update was more than 15 minutes ago; it warns when the data is more than three hours old, there is no connection or an update failed
+- Home: on narrow phones the weather card's conditions with the high and low take a second line instead of being cut off
+- Home: "No alerts known, data expired" is marked with a warning sign, not a green tick
+- Library: going to Home and coming back while a PDF is being added no longer makes the app start and stop that PDF's work over and over (it filled the log with thousands of lines and kept the phone busy)
 - Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
 - Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
 - Places: the map when adding a place always opens close in on where you are
@@ -49,6 +67,10 @@ release notes).
 - Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
 - Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
 - Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running
+
+## 1.1.0 (build 50, Android Auto test, Android only) - 2026-11-12
+
+- Android Auto is switched on in this build, which goes to the closed test group on Google Play so that Google's car review can start. It carries the changes listed under Unreleased as of this date. iPhone has no build 50; the next regular build, 51, goes to both stores
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 
