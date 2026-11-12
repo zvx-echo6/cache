@@ -259,6 +259,7 @@ class NavState extends ChangeNotifier {
         _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
         progress = null;
         added = true;
+        logInfo('Guidance: a stop was added, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
         _events.add(NavNotice(routeErrorText(r)));
       }
@@ -697,7 +698,9 @@ class NavState extends ChangeNotifier {
     lastFix = f;
     // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
     for (final (i, s) in stops.indexed) {
-      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100) _passedStops.add(i);
+      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100 && _passedStops.add(i)) {
+        logInfo('Guidance: stop ${i + 1} of ${stops.length} is passed (a fix within 100 m of it)');
+      }
     }
     if (_busyProgress) {
       _pendingFix = f;
@@ -770,6 +773,7 @@ class NavState extends ChangeNotifier {
         _routeStarted = true;
         _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
         progress = null;
+        logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
         _events.add(NavNotice(routeErrorText(r)));
       }
