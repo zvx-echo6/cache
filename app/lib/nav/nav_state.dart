@@ -232,6 +232,9 @@ class NavState extends ChangeNotifier {
   bool arrived = false;
   Fix? lastFix;
   GuidanceEngine? _engine;
+
+  /// How far (metres) from a maneuver the first (far) voice prompt is due, for the way of travel: the lane strip shows from here.
+  double? get farStageM => _engine?.stages.first;
   StreamSubscription<Fix>? _fixSub;
   bool _busyProgress = false;
   Fix? _pendingFix;
