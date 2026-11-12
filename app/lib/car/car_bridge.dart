@@ -249,8 +249,8 @@ class CarBridge {
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
-    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route);
-    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
+    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, elevationAlong: p == null || nav.route == null ? null : elevation?.carPosition(p.distanceAlongM, nav.route!.distanceM), theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
   }
 
   Future<void> push() async {

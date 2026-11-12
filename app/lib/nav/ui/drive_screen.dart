@@ -258,7 +258,7 @@ class DriveExtras extends StatelessWidget {
     final dest = nav.selected;
     final overview = r == null
         ? null
-        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
+        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, profileAlong: elevation.carPosition(p?.distanceAlongM, r.distanceM), destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),

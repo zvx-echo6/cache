@@ -717,7 +717,7 @@ class _MapsScreenState extends State<MapsScreen> {
       _reportDrive();
     }
     _pushNav();
-    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
     if (!nav.guiding || nav.arrived) {
       _swapped = false;
       if (!nav.guiding) _elevation.setOpen(false);

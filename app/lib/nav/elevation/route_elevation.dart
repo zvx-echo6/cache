@@ -60,24 +60,49 @@ class RouteElevation extends ChangeNotifier {
   /// The job of the route shown, while it runs.
   ElevationJob? _job;
 
+  /// The route last asked for, whose profile is being read or shown.
   String? _routeId;
   ElevationProfile? _profile;
   bool _loading = false;
   bool _open = false;
 
-  /// The profile of the route last asked for, or null while it is worked out (or when there is no route).
+  /// While following a route, a newer route (a re-route) asked for while a profile is shown or being read: it is read after, and
+  /// until then the profile there is stays on screen ([stale]).
+  MapRoute? _pending;
+
+  /// The profile on screen is of an earlier route than the one now followed: the new one is being read.
+  bool _stale = false;
+
+  /// Where the position was on the profile when it went stale, and the last place worked out (profile metres).
+  double? _frozenPos, _lastPos;
+
+  /// The profile of the route last asked for. While a re-route's new profile is being read it is the earlier route's ([stale]), and
+  /// it is null only when there is nothing at all to show (nothing yet read, or no route).
   ElevationProfile? get profile => _profile;
+
+  /// A profile is being worked out (it may be shown, stale, meanwhile).
   bool get loading => _loading;
+
+  /// The profile shown is of the route before a re-route; the new route's is on its way.
+  bool get stale => _stale;
 
   /// The panel on the guidance card is pulled up.
   bool get open => _open;
 
   /// The profile for [route] (null: none). The same route again does nothing. Another route, or none, stops the job that was
   /// running for the one before.
-  void request(MapRoute? route) {
+  ///
+  /// [following]: the route is the one being driven (guidance is on). A re-route then does not clear the profile and does not stop
+  /// the job that is running: what there is stays on screen (with the position where it was) until the new route's profile is
+  /// ready, which is read after the running job ends; only the newest route is read. The reading state is then only for when
+  /// there is nothing at all to show. With [following] false (the preview, a different route chosen) the profile is cleared.
+  void request(MapRoute? route, {bool following = false}) {
     if (route == null) {
       if (_routeId == null) return;
       _routeId = null;
+      _pending = null;
+      _stale = false;
+      _frozenPos = _lastPos = null;
       _stopJob();
       _profile = null;
       _loading = false;
@@ -85,6 +110,15 @@ class RouteElevation extends ChangeNotifier {
       return;
     }
     if (route.routeId == _routeId) return;
+    if (following && (_profile != null || _job != null)) {
+      _routeId = route.routeId;
+      _pending = route;
+      if (_job == null) _startPending();
+      return;
+    }
+    _pending = null;
+    _stale = false;
+    _frozenPos = _lastPos = null;
     _stopJob();
     final id = _routeId = route.routeId;
     _profile = null;
@@ -92,13 +126,29 @@ class RouteElevation extends ChangeNotifier {
     notifyListeners();
     // A listener asked for something else meanwhile: that request has its own job.
     if (_disposed || _routeId != id) return;
+    _begin(route);
+  }
+
+  /// Reads the pending route's profile; what is on screen stays until it is ready.
+  void _startPending() {
+    final r = _pending;
+    _pending = null;
+    if (r == null || _disposed) return;
+    if (_profile != null && !_stale) {
+      _stale = true;
+      _frozenPos = _lastPos;
+    }
+    _loading = true;
+    notifyListeners();
+    _begin(r);
+  }
+
+  void _begin(MapRoute route) {
     final ElevationJob job;
     try {
       job = _start(route);
     } catch (_) {
-      _profile = ElevationProfile.none(route.distanceM);
-      _loading = false;
-      notifyListeners();
+      _finish(null, ElevationProfile.none(route.distanceM), route);
       return;
     }
     _job = job;
@@ -110,11 +160,37 @@ class RouteElevation extends ChangeNotifier {
         p = ElevationProfile.none(route.distanceM);
       }
       if (_disposed || !identical(_job, job)) return;
-      _job = null;
-      _profile = p;
+      _finish(job, p, route);
+    }());
+  }
+
+  void _finish(ElevationJob? job, ElevationProfile p, MapRoute route) {
+    _job = null;
+    if (_pending != null) {
+      // A newer route was asked for while this one was read. This profile is better than none: it is shown (it is not the newest
+      // route's, so it is stale) while the newest is read. A profile with no data does not replace one that has.
+      if (p.hasData || _profile == null || !_profile!.hasData) {
+        _profile = p;
+      }
+      _stale = true;
+      _frozenPos = _lastPos;
+      notifyListeners();
+      _startPending();
+      return;
+    }
+    // A profile with no data (the read failed or there are no tiles) does not replace one that has data, for a route that
+    // replaced the one shown (a re-route).
+    if (_stale && !p.hasData && (_profile?.hasData ?? false)) {
+      _stale = false;
       _loading = false;
       notifyListeners();
-    }());
+      return;
+    }
+    _profile = p;
+    _stale = false;
+    _frozenPos = _lastPos = null;
+    _loading = false;
+    notifyListeners();
   }
 
   void _stopJob() {
@@ -132,11 +208,23 @@ class RouteElevation extends ChangeNotifier {
   void toggle() => setOpen(!_open);
 
   /// Where the position is on the profile: the core's metres along the route, scaled to the profile's own length (the two
-  /// measure the same line slightly differently).
+  /// measure the same line slightly differently). While the profile is of the route before a re-route ([stale]) the position stays
+  /// where it was on it (null if it was not known).
   double? positionOnProfile(double? distanceAlongM, double routeM) {
     final p = _profile;
-    if (p == null || distanceAlongM == null || routeM <= 0) return null;
-    return (distanceAlongM * p.totalM / routeM).clamp(0, p.totalM).toDouble();
+    if (p == null) return null;
+    if (_stale) return _frozenPos;
+    if (distanceAlongM == null || routeM <= 0) return null;
+    return _lastPos = (distanceAlongM * p.totalM / routeM).clamp(0, p.totalM).toDouble();
+  }
+
+  /// The position for the car's climb card and mini map: [distanceAlongM] and [routeM] as they are, or, while the profile is
+  /// [stale], the position held on it with the profile's own length, so the card keeps showing the climb ahead of that place.
+  (double?, double) carPosition(double? distanceAlongM, double routeM) {
+    final p = _profile;
+    if (_stale && p != null) return (_frozenPos, p.totalM);
+    if (p != null && distanceAlongM != null && routeM > 0) _lastPos = (distanceAlongM * p.totalM / routeM).clamp(0, p.totalM).toDouble();
+    return (distanceAlongM, routeM);
   }
 
   bool _disposed = false;
