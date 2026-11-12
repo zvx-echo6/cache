@@ -18,9 +18,9 @@ import 'guidance_panels.dart';
 /// it here and nowhere else. 
 const double kDriveTurnsShare = 2 / 3;
 
-/// The other form, for a wide route only (the owner is choosing between them from pictures): the list takes half of the room and
-/// the stacked boxes the other half, each at a proper height. Off until he chooses; one constant switches it for everyone.
-const bool kDriveWideHalf = false;
+/// The stacked form (a wide route: the mini map across the full width, the elevation under it) starts from the list taking half of
+/// the room (chosen by the owner from pictures, 2026-11-12); what the mini map and the elevation do not use goes to the list
+/// ([driveStackedPlan]).
 const double kDriveWideTurnsShare = 1 / 2;
 
 /// The phone's drive screen: what the Maps tab shows while a car screen is connected and guiding. The next turn first (the
@@ -34,21 +34,12 @@ class DriveScreen extends StatefulWidget {
     required this.elevation,
     required this.palette,
     required this.themeId,
-    this.wideHalf = kDriveWideHalf,
-    this.sideBySideOnly = false,
   });
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
-
-  /// For a wide route the list takes [kDriveWideTurnsShare] of the room instead of [kDriveTurnsShare] ([kDriveWideHalf]).
-  final bool wideHalf;
-
-  /// Pictures only: every route is shown side by side, whatever its shape.
-  @visibleForTesting
-  final bool sideBySideOnly;
 
   @override
   State<DriveScreen> createState() => _DriveScreenState();
@@ -60,14 +51,16 @@ class _DriveScreenState extends State<DriveScreen> {
 
   String? _forRoute;
   bool? _stacked;
+  double _aspect = 1;
 
   /// Whether the route's two boxes stack: chosen when the route changes (the first route, or a re-route), not at each update.
   bool _stackedNow() {
     final r = nav.route;
-    if (r == null || widget.sideBySideOnly) return false;
+    if (r == null) return false;
     if (_forRoute != r.routeId) {
       _forRoute = r.routeId;
-      _stacked = driveStacked(routeAspect(r.points), previous: _stacked);
+      _aspect = routeAspect(r.points);
+      _stacked = driveStacked(_aspect, previous: _stacked);
     }
     return _stacked ?? false;
   }
@@ -89,14 +82,16 @@ class _DriveScreenState extends State<DriveScreen> {
                 builder: (context, _) => LayoutBuilder(
                   builder: (context, box) {
                     final room = box.maxHeight;
-                    final stacked = _stackedNow();
-                    final share = stacked && widget.wideHalf ? kDriveWideTurnsShare : kDriveTurnsShare;
-                    final turnsH = room * share;
+                    // A wide route stacks its boxes where there is room for both at their heights; otherwise side by side.
+                    final plan = _stackedNow()
+                        ? driveStackedPlan(room: room, width: box.maxWidth - 24, aspect: _aspect, textScale: math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16))
+                        : null;
+                    final turnsH = plan?.turnsH ?? room * kDriveTurnsShare;
                     return Column(
                       children: [
                         SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
                         Expanded(
-                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, stacked: stacked),
+                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, plan: plan),
                         ),
                       ],
                     );
@@ -125,7 +120,7 @@ class _DriveScreenState extends State<DriveScreen> {
 
 /// The list of turns: the next turn as the phone's turn banner (lane arrows included), and under it the turns after it, with the
 /// stops where they come, as they are in the route.
-class DriveTurns extends StatelessWidget {
+class DriveTurns extends StatefulWidget {
   const DriveTurns({super.key, required this.nav});
 
   final NavState nav;
@@ -155,8 +150,34 @@ class DriveTurns extends StatelessWidget {
   }
 
   @override
+  State<DriveTurns> createState() => _DriveTurnsState();
+}
+
+class _DriveTurnsState extends State<DriveTurns> {
+  NavState get nav => widget.nav;
+
+  /// The list scrolls by finger through every turn to the destination and back; it stays where the person leaves it (it does not
+  /// return to the next turn by itself).
+  final ScrollController _scroll = ScrollController();
+
+  /// More rows lie below the window: the fade at the lower edge shows only then.
+  bool? _more;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  bool _onMetrics(ScrollMetrics m) {
+    final more = m.extentAfter > 1;
+    if (more != _more) setState(() => _more = more);
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final rows = rowsAfterNext(nav);
+    final rows = DriveTurns.rowsAfterNext(nav);
     final k = context.t;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -171,29 +192,40 @@ class DriveTurns extends StatelessWidget {
             opacity: nav.rerouting ? 0.4 : 1,
             child: LayoutBuilder(
               builder: (context, box) {
-                // A list longer than its room fades out at its lower edge, so it reads as scrolling and never ends in a cut row.
                 // The rows grow with the text size (two lines of larger text still fit a row).
-                final extent = rowHeight * math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
-                final overflows = rows.length * extent + 4 > box.maxHeight;
-                final list = ListView.builder(
-                  key: const ValueKey('drive-turns'),
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                  itemExtent: extent,
-                  itemCount: rows.length,
-                  itemBuilder: (context, i) => _row(context, k, rows[i]),
-                );
-                if (!overflows || box.maxHeight <= 0) return list;
-                final fade = math.min(40.0, box.maxHeight / 2) / box.maxHeight;
-                return ShaderMask(
-                  key: const ValueKey('drive-turns-fade'),
-                  blendMode: BlendMode.dstIn,
-                  shaderCallback: (r) => LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0x00FFFFFF)],
-                    stops: [0, 1 - fade, 1],
-                  ).createShader(r),
-                  child: list,
+                final extent = DriveTurns.rowHeight * math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
+                // Before the list has told its extent, the guess is whether its rows are more than its room.
+                final more = _more ?? (rows.length * extent + 4 > box.maxHeight);
+                final fade = box.maxHeight <= 0 ? 0.0 : math.min(40.0, box.maxHeight / 2) / box.maxHeight;
+                return Stack(
+                  children: [
+                    ShaderMask(
+                      blendMode: BlendMode.dstIn,
+                      // The list fades at its lower edge while more rows lie below it, so it reads as scrolling and never ends in
+                      // a cut row; at its end, or when all of it fits, there is no fade.
+                      shaderCallback: (r) => LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: more ? const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0x00FFFFFF)] : const [Color(0xFFFFFFFF), Color(0xFFFFFFFF), Color(0xFFFFFFFF)],
+                        stops: [0, 1 - fade, 1],
+                      ).createShader(r),
+                      child: NotificationListener<ScrollMetricsNotification>(
+                        onNotification: (n) => _onMetrics(n.metrics),
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: (n) => _onMetrics(n.metrics),
+                          child: ListView.builder(
+                            key: const ValueKey('drive-turns'),
+                            controller: _scroll,
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                            itemExtent: extent,
+                            itemCount: rows.length,
+                            itemBuilder: (context, i) => _row(context, k, rows[i]),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (more) const SizedBox.shrink(key: ValueKey('drive-turns-fade')),
+                  ],
                 );
               },
             ),
@@ -312,22 +344,64 @@ double routeAspect(List<GeoPoint> points) {
 /// padding at the normal text size (a narrow phone, whose climb line wraps, and larger text, add to it).
 const double kDriveElevationMinHeight = 120;
 
-/// The least height the mini map gets when it is stacked above the elevation.
-const double kDriveMiniMinHeight = 56;
+/// The most the elevation box takes when it is stacked: what the mini map does not use goes to it first, up to this, and then to
+/// the list of turns.
+const double kDriveElevationMaxHeight = 170;
+
+/// The least and the most height the mini map's box has when it is stacked. Between them its height follows the route's shape, so
+/// the route fills the box with only its normal padding: a very wide route gets a short box, a moderately wide one a taller box.
+const double kDriveMiniMinHeight = 80;
+const double kDriveMiniMaxHeight = 240;
+
+/// The height of a stacked mini map box [width] wide in which a route of [aspect] (width over height) fills the box with only the
+/// padding the mini map draws with (24 points at its full size, scaled with the box, between half and 1.4 times that), no blank band
+/// above or below it.
+double miniFitHeight(double width, double aspect) {
+  final a = aspect.clamp(0.2, 8.0).toDouble();
+  var h = 100.0;
+  for (var i = 0; i < 20; i++) {
+    final s = math.min(h / RouteMiniMapPainter.fullHeight, width / RouteMiniMapPainter.fullWidth).clamp(0.5, 1.4).toDouble();
+    h = (width - 2 * 24 * s) / a + 2 * 24 * s;
+  }
+  return h;
+}
+
+/// The heights of a stacked drive screen: the list of turns, the mini map and the elevation (the 16 points between are the box's
+/// padding and the gap). Null where there is no room for both boxes at their least heights (a short phone, large text): they then
+/// sit side by side.
+typedef StackedPlan = ({double turnsH, double miniH, double elevH});
+
+/// The plan for [room] points of height between the top and the bottom bar and a box [width] wide for a route of [aspect].
+/// It starts from the list taking [kDriveWideTurnsShare] of the room. The mini map takes the height its route needs
+/// ([miniFitHeight], between [kDriveMiniMinHeight] and [kDriveMiniMaxHeight], and less if the elevation would otherwise be under its
+/// least); the elevation takes the rest of the half up to [kDriveElevationMaxHeight]; what is left goes to the list.
+StackedPlan? driveStackedPlan({required double room, required double width, required double aspect, double textScale = 1}) {
+  final f = math.max(1.0, textScale);
+  final elevMin = kDriveElevationMinHeight * f + (width < 330 ? 18 : 0);
+  final elevMax = math.max(kDriveElevationMaxHeight * f, elevMin);
+  final lower = room * (1 - kDriveWideTurnsShare);
+  final avail = lower - 16;
+  var miniH = math.min(math.max(miniFitHeight(width, aspect), kDriveMiniMinHeight), kDriveMiniMaxHeight);
+  if (avail - miniH < elevMin) miniH = avail - elevMin;
+  if (miniH < kDriveMiniMinHeight) return null;
+  final elevH = math.min(avail - miniH, elevMax);
+  final used = miniH + elevH + 16;
+  return (turnsH: room - used, miniH: miniH, elevH: elevH);
+}
 
 /// The route mini map and the elevation. Which way they sit is chosen once for a route, by its shape ([driveStacked]):
 /// a wide route stacks (the mini map across the full width, short; the elevation under it, full width), any other sits side by
 /// side (the mini map left, the elevation right). A re-route may change it only when its shape is clearly the other kind.
 class DriveExtras extends StatelessWidget {
-  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.stacked = false});
+  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.plan});
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
 
-  /// The route's boxes stack (see [driveStacked]); the screen decides it once for each route.
-  final bool stacked;
+  /// The heights when the boxes stack ([driveStackedPlan]); null: side by side.
+  final StackedPlan? plan;
 
   @override
   Widget build(BuildContext context) {
@@ -340,37 +414,24 @@ class DriveExtras extends StatelessWidget {
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
     if (overview == null) return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: chart);
     final mini = DriveMiniMap(overview: overview, themeId: themeId);
+    final plan = this.plan;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: LayoutBuilder(
-        builder: (context, box) {
-          // The mini map takes the height its route needs across the full width (the route fitted with the box's padding), but
-          // never so much that the elevation under it has less than it needs; the elevation takes the rest. Where there is not
-          // room for both at those least heights (a short phone, large text) the two sit side by side, as they do for other routes.
-          final f = math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
-          final narrow = box.maxWidth < 330;
-          final elevMin = kDriveElevationMinHeight * f + (narrow ? 18 : 0);
-          final avail = box.maxHeight - 8;
-          if (!stacked || avail < elevMin + kDriveMiniMinHeight) {
-            return Row(
+      child: plan != null
+          ? Column(
+              children: [
+                SizedBox(height: plan.miniH, child: mini),
+                const SizedBox(height: 8),
+                SizedBox(height: plan.elevH, child: chart),
+              ],
+            )
+          : Row(
               children: [
                 Expanded(flex: 4, child: mini),
                 const SizedBox(width: 8),
                 Expanded(flex: 6, child: chart),
               ],
-            );
-          }
-          final natural = (box.maxWidth - 48) / math.min(routeAspect(r!.points), 8) + 48;
-          final miniH = math.max(kDriveMiniMinHeight, math.min(natural, avail - elevMin));
-          return Column(
-            children: [
-              SizedBox(height: miniH, child: mini),
-              const SizedBox(height: 8),
-              Expanded(child: chart),
-            ],
-          );
-        },
-      ),
+            ),
     );
   }
 }
