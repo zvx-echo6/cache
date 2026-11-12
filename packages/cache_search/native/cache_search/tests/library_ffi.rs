@@ -1449,18 +1449,19 @@ fn where_links_are_refused_the_seal_is_declined_once_and_never_offered_again() {
 fn the_highest_generation_is_picked_only_for_an_own_library_whatever_copies_jsonl_says() {
     let f = make_fixture("gen-own");
     let root = f._tmp.0.clone();
-    let indexes = root.join("indexes");
     let mut st = settings(default_leave_out(), true);
     st["version"] = json!("1");
-    let p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300, "indexes_dir": indexes.to_str().unwrap()});
-    assert_eq!(run_job("index_library", p)["state"], "done");
-    let snaps = indexes.join("library").join("t@1").join("snap");
-    let first = std::fs::read_dir(&snaps).unwrap().flatten().next().unwrap().file_name().to_string_lossy().into_owned();
-    // a later generation beside it (the same files, a newer manifest with generation 1)
-    let second = "zz-generation-1";
-    let make_second = || {
-        let (a, b) = (snaps.join(&first), snaps.join(second));
-        let _ = std::fs::remove_dir_all(&b);
+    // Each half has its OWN indexes folder. A handle's background pick can outlive its `cs_close` (it picks, then cleans up the folder by
+    // the rule it was opened with: a catalogue library's rule deletes a later-generation duplicate as "superseded"). With both halves in
+    // one folder, a slow machine let the first half's straggler delete the second half's hand-made snapshot, and the second half then
+    // found the earliest one (aarch64 CI). Separate folders make the halves independent whatever the timing.
+    let build = |indexes: &Path| -> (PathBuf, String) {
+        let p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300, "indexes_dir": indexes.to_str().unwrap()});
+        assert_eq!(run_job("index_library", p)["state"], "done");
+        let snaps = indexes.join("library").join("t@1").join("snap");
+        let first = std::fs::read_dir(&snaps).unwrap().flatten().next().unwrap().file_name().to_string_lossy().into_owned();
+        // a later generation beside it (the same files, a newer manifest with generation 1)
+        let (a, b) = (snaps.join(&first), snaps.join("zz-generation-1"));
         std::fs::create_dir_all(&b).unwrap();
         for e in std::fs::read_dir(&a).unwrap().flatten() {
             std::fs::copy(e.path(), b.join(e.file_name())).unwrap();
@@ -1469,20 +1470,23 @@ fn the_highest_generation_is_picked_only_for_an_own_library_whatever_copies_json
         m["generation"] = json!(1);
         m["created"] = json!("2999-01-01T00:00:00Z");
         std::fs::write(b.join("manifest.json"), m.to_string()).unwrap();
+        (snaps, first)
     };
     let snapshot_in_use = |h: *mut Handle| until_snapshot(h)["index"]["snapshot"].as_str().unwrap().to_string();
     std::fs::write(f.dir.join("copies.jsonl"), b"{}\n").unwrap();
 
     // a catalogue or server-built library: copies.jsonl, no "own": the earliest
-    make_second();
-    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &indexes);
+    let catalogue = root.join("indexes-catalogue");
+    let (_, first) = build(&catalogue);
+    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &catalogue);
     assert_eq!(snapshot_in_use(h), first, "not an own library: the earliest, as ever");
     unsafe { cs_close(h) };
 
     // the same library made on the device: the highest generation
     std::fs::write(f.dir.join("cache-library.json"), json!({"library_id": "t", "version": "1", "own": true}).to_string()).unwrap();
-    make_second();
-    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &indexes);
-    assert_eq!(snapshot_in_use(h), second, "an own library takes the highest generation");
+    let own = root.join("indexes-own");
+    let (_, _) = build(&own);
+    let h = open_with_indexes(&f.dir, &st, &root.join("none"), &own);
+    assert_eq!(snapshot_in_use(h), "zz-generation-1", "an own library takes the highest generation");
     unsafe { cs_close(h) };
 }

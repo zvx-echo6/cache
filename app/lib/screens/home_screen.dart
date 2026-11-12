@@ -18,7 +18,7 @@ import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../update/update_ui.dart';
 import '../weather/weather_state.dart';
-import '../weather/words.dart' show lineStart;
+import '../weather/words.dart' show lineStart, unbroken;
 import 'setup_card.dart';
 import 'weather_turn_on.dart';
 import '../layout/adaptive.dart' show showFittedSheet, ContentWidth, isShort, kRegularWidth;
@@ -575,10 +575,13 @@ class ShortcutCard extends StatelessWidget {
 /// The conditions and the day's high and low as the Weather card's line starts: "Rain · High 61 °F, low 42 °F" (the source
 /// writes "rain"; the line starts with a capital). When they are a forecast period's and not a reading taken now, the period's
 /// own label comes first, as the Weather screen lists it: "Wed Nov 11 · Rain · High 61 °F, low 42 °F".
+///
+/// The high and the low are each one piece ([unbroken]: "High 61 °F", "low 42 °F"), so where the card gives the line two lines
+/// it breaks between its parts. It used to break inside one and leave "°F" alone on the second line.
 String homeConditionsLine(HomeWeather h) {
   final line = lineStart([
     if (h.conditions != null) h.conditions!,
-    if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
+    if (h.high != null && h.low != null) '${unbroken('High ${h.high}')}, ${unbroken('low ${h.low}')}',
   ].join(' · '));
   return h.period == null || line.isEmpty ? line : '${h.period} · $line';
 }
@@ -671,7 +674,8 @@ class _WeatherCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // two lines: at a phone's width the day's high and low were cut off beside a temperature ("… low 31 …")
+                // two lines: at a phone's width the day's high and low were cut off beside a temperature ("… low 31 …"); the
+                // line breaks between its parts (homeConditionsLine)
                 if (cond.isNotEmpty) Text(cond, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
                 Text(where, maxLines: 1, overflow: TextOverflow.ellipsis, style: small),
               ],

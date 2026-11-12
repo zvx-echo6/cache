@@ -55,6 +55,28 @@ abstract class TripScreen(carContext: CarContext, protected val map: CarMapRende
     override fun onTrip(trip: CarTrip) = invalidate()
 }
 
+/**
+ * A screen that is shown over the guidance screen and goes back to it: the route overview, and the places to pick a stop from
+ * (Add stop during a drive). While one is up, a trip update does not put the guidance screen back in front, and when guidance
+ * ends it goes with the guidance screen.
+ */
+interface OverGuidance {
+    val overGuidance: Boolean
+}
+
+internal fun isOverGuidance(s: Screen): Boolean = s is OverGuidance && s.overGuidance
+
+/** The screen Add stop returns to once a stop is picked: the route screen (before Start) or the guidance screen. */
+internal const val STOP_RETURN = "cache.add-stop.return"
+
+/** Add stop: the place joins the route (the phone works out the new route), and the car goes back to the screen Add stop was
+ * opened from. When the phone says no (it tells why in a notice), the list stays for another choice. */
+internal fun addStop(screen: Screen, p: CarPlace) {
+    CarLink.call("addStop", mapOf("id" to p.id)) { r ->
+        if (r == true) screen.screenManager.popTo(STOP_RETURN)
+    }
+}
+
 internal fun placeRow(p: CarPlace, imperial: Boolean, onClick: () -> Unit): Row {
     val b = Row.Builder().setTitle(p.name).setOnClickListener(onClick)
     val dist = CarModels.placeDistance(p.distanceM, imperial)
@@ -95,8 +117,10 @@ class HomeScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carCo
     internal fun openSaved() = screenManager.push(SavedPlacesScreen(carContext, map))
 }
 
-/** Saved places in a list over the map, with Search. Back closes it. */
-class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+/** Saved places in a list over the map, with Search. Back closes it. With [forStop] the place picked becomes a stop on the
+ * route (Add stop) instead of a destination. */
+class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer, private val forStop: Boolean = false) : TripScreen(carContext, map), OverGuidance {
+    override val overGuidance: Boolean = forStop && CarLink.trip.guiding
     private var places: List<CarPlace>? = null
     private val main = Handler(Looper.getMainLooper())
     private val retry = Runnable { load() }
@@ -133,14 +157,17 @@ class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScree
     }
 
     override fun onGetTemplate(): Template {
-        val header = Header.Builder().setTitle("Saved places").setStartHeaderAction(Action.BACK).build()
+        val header = Header.Builder().setTitle(if (forStop) "Add stop" else "Saved places").setStartHeaderAction(Action.BACK).build()
         val content = ListTemplate.Builder().setHeader(header)
         val list = places
         if (list == null) {
             content.setLoading(true)
         } else {
             val items = ItemList.Builder().setNoItemsMessage("No saved places yet. Search for a place to go.")
-            for (p in list.take(MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
+            // Add stop during a drive: the host draws its turn strip where this screen's Search button is, so the list's first
+            // row opens the search instead (the search box's own words). The saved places take the five rows left.
+            if (overGuidance) items.addItem(Row.Builder().setTitle("Search for a place").setImage(CarIcons.search).setOnClickListener { search() }.build())
+            for (p in list.take(if (overGuidance) MAX_ROWS - 1 else MAX_ROWS)) items.addItem(placeRow(p, CarLink.trip.imperial) { open(p) })
             content.setSingleList(items.build())
         }
         return MapWithContentTemplate.Builder()
@@ -150,9 +177,11 @@ class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScree
             .build()
     }
 
-    private fun open(p: CarPlace) = screenManager.push(RoutePreviewScreen(carContext, map, p))
+    internal fun open(p: CarPlace) {
+        if (forStop) addStop(this, p) else screenManager.push(RoutePreviewScreen(carContext, map, p))
+    }
 
-    private fun search() = screenManager.push(SearchScreen(carContext, map))
+    internal fun search() = screenManager.push(SearchScreen(carContext, map, forStop = forStop))
 
     companion object {
         const val MAX_ROWS = 6
@@ -163,8 +192,16 @@ class SavedPlacesScreen(carContext: CarContext, map: CarMapRenderer) : TripScree
  * Search for a place (by name, address or kind of place; by meaning when the phone's search model is loaded). While the box is
  * empty it lists the saved places, unless it was opened with text or with places already found.
  */
-class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, private val initial: String? = null, preset: List<CarPlace>? = null) :
-    Screen(carContext) {
+class SearchScreen(
+    carContext: CarContext,
+    private val map: CarMapRenderer,
+    private val initial: String? = null,
+    preset: List<CarPlace>? = null,
+    private val forStop: Boolean = false,
+) : Screen(carContext), OverGuidance {
+    // With forStop the place picked becomes a stop on the route (Add stop) instead of a destination.
+    override val overGuidance: Boolean = forStop && CarLink.trip.guiding
+
     private var results: List<CarPlace>? = preset
     private var searching = false
 
@@ -252,7 +289,9 @@ class SearchScreen(carContext: CarContext, private val map: CarMapRenderer, priv
         return b.build()
     }
 
-    private fun open(p: CarPlace) = screenManager.push(RoutePreviewScreen(carContext, map, p))
+    internal fun open(p: CarPlace) {
+        if (forStop) addStop(this, p) else screenManager.push(RoutePreviewScreen(carContext, map, p))
+    }
 
     companion object {
         const val MAX_ROWS = 6
@@ -265,9 +304,13 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     private var started = false
     private var shownSig: String? = null
 
+    init {
+        marker = STOP_RETURN
+    }
+
     // Redraw only when what this screen shows changed, not for every position update.
     override fun onTrip(trip: CarTrip) {
-        val sig = listOf(trip.phase, trip.routing, trip.error, trip.routes, trip.routeIndex, trip.destinationName).toString()
+        val sig = listOf(trip.phase, trip.routing, trip.error, trip.routes, trip.routeIndex, trip.destinationName, trip.stops).toString()
         if (sig == shownSig) return
         shownSig = sig
         invalidate()
@@ -291,11 +334,29 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
             t.previewing && !t.routing && t.error != null ->
                 MessageTemplate.Builder(t.error).setHeader(header).build()
             !ready -> ListTemplate.Builder().setHeader(header).setLoading(true).build()
+            // A route with stops is the only route there is (the router gives other routes only without stops), so there is
+            // nothing to choose: the route's row, then a row for each stop, named as the phone's route panel names them. One
+            // line under the route held all the stops and was cut after the first name.
+            t.stops.isNotEmpty() && t.routes.size == 1 -> {
+                val items = ItemList.Builder()
+                val r = t.routes[0]
+                val route = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
+                r.via?.let { route.addText(it) }
+                items.addItem(route.build())
+                for (s in t.stops.take(SavedPlacesScreen.MAX_ROWS - 1)) {
+                    val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
+                    s.address?.let { row.addText(it) }
+                    items.addItem(row.build())
+                }
+                ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build()
+            }
             else -> {
                 val items = ItemList.Builder()
                 for (r in t.routes) {
                     val row = Row.Builder().setTitle(CarText.create(CarModels.routeTitle(r, t.imperial)))
                     r.via?.let { row.addText(it) }
+                    // The stops on the way, named as the phone's route panel names them.
+                    if (t.stops.isNotEmpty()) row.addText(t.stops.joinToString(" · ") { s -> "Stop ${s.number}: ${s.name}" })
                     items.addItem(row.build())
                 }
                 items.setOnSelectedListener { i -> CarLink.call("selectRoute", mapOf("index" to i)) }
@@ -311,6 +372,8 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
                     CarLink.call("start")
                 }.build(),
             )
+            // Add stop, beside Start: a place from Saved places (or its Search) joins this route.
+            strip.addAction(Action.Builder().setTitle("Add stop").setOnClickListener { addStop() }.build())
         } else {
             strip.addAction(Action.Builder().setIcon(CarIcons.search).setOnClickListener { screenManager.push(SearchScreen(carContext, map)) }.build())
         }
@@ -320,6 +383,8 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
             .setMapController(map.mapController())
             .build()
     }
+
+    internal fun addStop() = screenManager.push(SavedPlacesScreen(carContext, map, forStop = true))
 }
 
 /** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
@@ -330,6 +395,7 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
         // trip update, up to a second later, when the session pushed a new guidance screen. Guidance is left with End route,
         // so Back does nothing here while the trip is guiding. The callback is this screen's: it holds only while the screen
         // is the one showing, so Back on the route overview still closes the overview.
+        marker = STOP_RETURN
         carContext.onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -350,6 +416,9 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
                 Action.Builder().setIcon(if (t.voiceOn) CarIcons.voiceOn else CarIcons.voiceOff)
                     .setOnClickListener { CarLink.call("voice", mapOf("on" to !CarLink.trip.voiceOn)) }.build(),
             )
+        // Add stop (the strip's fourth and last place): Saved places to pick from, with Search behind its button. Typing may
+        // be blocked by the car while it moves; the saved places list is not.
+        if (!t.arrived) strip.addAction(Action.Builder().setIcon(CarIcons.addStop).setOnClickListener { addStop() }.build())
         b.setActionStrip(strip.build())
         b.setMapActionStrip(map.mapActionStrip())
         b.setPanModeListener { on -> map.panMode = on }
@@ -368,6 +437,8 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
     internal fun stop() = CarLink.stopGuidance()
 
     internal fun openOverview() = screenManager.push(RouteOverviewScreen(carContext, map))
+
+    internal fun addStop() = screenManager.push(SavedPlacesScreen(carContext, map, forStop = true))
 }
 
 /**
@@ -375,7 +446,8 @@ class NavigationScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen
  * drive). Back returns to guidance. Not RoutePreviewNavigationTemplate: its rows are routes to pick and a Navigate button, which
  * is for before the drive; this is a map with a list, as the Car App Library's MapWithContentTemplate is meant for.
  */
-class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map) {
+class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScreen(carContext, map), OverGuidance {
+    override val overGuidance: Boolean = true
     private var shownSig: String? = null
 
     override fun onShown() = map.setOverview(true)
@@ -384,7 +456,7 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
 
     // The summary changes with the minute, not with every position update.
     override fun onTrip(trip: CarTrip) {
-        val sig = listOf(trip.remainingS?.div(30), trip.routes, trip.routeIndex, trip.destinationName, trip.imperial).toString()
+        val sig = listOf(trip.remainingS?.div(30), trip.routes, trip.routeIndex, trip.destinationName, trip.imperial, trip.stops).toString()
         if (sig == shownSig) return
         shownSig = sig
         invalidate()
@@ -394,6 +466,14 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
         val t = CarLink.trip
         val header = Header.Builder().setTitle("Route overview").setStartHeaderAction(Action.BACK).build()
         val items = ItemList.Builder()
+        // The stops still ahead, in order, then the destination. The list holds six rows: the destination and the routes keep
+        // theirs, the stops take what is left.
+        val routeRows = if (t.routes.size > 1) t.routes.size else 0
+        for (s in t.stops.take((SavedPlacesScreen.MAX_ROWS - 1 - routeRows).coerceAtLeast(0))) {
+            val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
+            s.address?.let { row.addText(it) }
+            items.addItem(row.build())
+        }
         val left = Row.Builder().setTitle(t.destinationName ?: "Destination")
         CarModels.leftText(t)?.let { left.addText(it) }
         t.destinationAddress?.let { left.addText(it) }

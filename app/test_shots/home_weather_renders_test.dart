@@ -5,6 +5,8 @@
 //   periods-with-temperatures  no "Now" (Open-Meteo's has ended), and NWS by point's periods, each with a temperature
 //   periods-only               NWS by point alone: periods with temperatures and no other forecast
 //   periods-only-old-copy      the same the next morning, from a copy older than one period (12 hours)
+//   two-lines                  conditions long enough for a second line: the line breaks between its parts, with the high and
+//                              the low each whole (it could leave "°F" alone on the second line)
 // And the status line where it says the data is old (Settings > Weather and alerts, and the Weather screen's whole-page
 // states), three days after the last update, online, with no failed update:
 //   status-settings-3-days-old, status-whole-page-3-days-old, and status-whole-page-fresh beside them
@@ -13,6 +15,7 @@
 // Not part of the test suite.
 
 import 'dart:async';
+import 'dart:ui' as ui show BoxHeightStyle;
 
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/screens/home_screen.dart';
@@ -21,6 +24,7 @@ import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/settings_rig.dart';
@@ -83,6 +87,43 @@ void main() {
     for (final theme in _themes) {
       await _show(tester, r, layout, theme);
       await snap(tester, _out, 'fresh-${theme.name}');
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    layout.dispose();
+    await r.dispose(tester);
+  });
+
+  // The conditions line on two lines. It used to break inside the high or the low, and could leave "°F" alone on the second
+  // line ("... High 52 °F, low 31" then "°F"). Each of the two is one piece now, so the line breaks between its parts.
+  testWidgets('conditions long enough for a second line: the high and the low each stay whole', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final layout = await _layout(tester, r);
+    // Wednesday 2:26 PM, updated at 2:14 PM (the quiet day, with other conditions)
+    final updated = wednesday(14, 14), shown = wednesday(14, 26);
+    r.clock = updated;
+    await useScreenSources(tester, r, kUsualSources);
+    store(r, 'openmeteo-forecast', storedAnswer(shown, updated, [
+      nowItem(updated, temperature: 45, feels: 41, wind: '8 mph NW, gusts 15 mph', conditions: 'moderate rain showers'),
+      ...sixteenDays(updated),
+    ]));
+    for (final id in kUsualSources.skip(1)) {
+      store(r, id, storedAnswer(shown, updated, const []));
+    }
+    await updatedThenShownAt(tester, r, shown);
+    const high = 'High\u00A052\u00A0°F', low = 'low\u00A031\u00A0°F';
+    const line = 'Moderate rain showers · $high, $low';
+    for (final theme in _themes) {
+      await _show(tester, r, layout, theme);
+      final paragraph = tester.renderObject<RenderParagraph>(find.text(line));
+      // The lines a stretch of the text is on (by where each line begins).
+      Set<int> linesOf(int from, int to) =>
+          {for (final b in paragraph.getBoxesForSelection(TextSelection(baseOffset: from, extentOffset: to), boxHeightStyle: ui.BoxHeightStyle.max)) b.top.round()};
+      expect(linesOf(0, line.length), hasLength(2), reason: 'the line does not take two lines at this width');
+      for (final part in [high, low]) {
+        final at = line.indexOf(part);
+        expect(linesOf(at, at + part.length), hasLength(1), reason: '"$part" is broken across two lines');
+      }
+      await snap(tester, _out, 'two-lines-${theme.name}');
     }
     await tester.pumpWidget(const SizedBox.shrink());
     layout.dispose();
