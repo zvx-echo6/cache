@@ -1,7 +1,4 @@
 import 'dart:io';
-import 'dart:ui' as ui;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import '../../app_fs.dart';
 import '../../platform.dart' as plat;
@@ -38,43 +35,5 @@ class MapAssets {
       await marker.writeAsString(_version);
     }
     return 'file://${base.path}/{fontstack}/{range}.pbf';
-  }
-
-  /// The heading marker's image is this many pixels square, on every screen.
-  static const int headingMarkerSize = 96;
-
-  /// Where the heading marker's triangle has its tip, from the top edge of its image, and how thick its outline is, each as a
-  /// part of the image's size.
-  static const double _headingTip = 0.04;
-  static const double _headingEdge = 0.05;
-
-  /// How far the heading marker reaches from the position dot it turns around, in points, on a screen of [devicePixelRatio]
-  /// pixels per point: to its triangle's tip and half the outline around it. A phone's map reads an added image at the
-  /// screen's own scale; in a browser ([web]) one pixel of it is one point (as the pins: pin_image.dart).
-  static double headingMarkerReach(double devicePixelRatio, {bool web = kIsWeb}) =>
-      headingMarkerSize * (0.5 - _headingTip + _headingEdge / 2) / (web ? 1 : devicePixelRatio);
-
-  /// The heading marker: a small triangle near the top edge of a transparent square, so that placed on the
-  /// position dot and turned by the heading it circles the dot. Drawn with the palette's position colours.
-  static Future<Uint8List> headingMarker(ui.Color fill, ui.Color outline, {int size = headingMarkerSize}) async {
-    final rec = ui.PictureRecorder();
-    final c = ui.Canvas(rec);
-    final s = size.toDouble();
-    final path = ui.Path()
-      ..moveTo(s / 2, s * _headingTip)
-      ..lineTo(s / 2 + s * 0.13, s * 0.2)
-      ..lineTo(s / 2 - s * 0.13, s * 0.2)
-      ..close();
-    c.drawPath(
-        path,
-        ui.Paint()
-          ..color = outline
-          ..style = ui.PaintingStyle.stroke
-          ..strokeWidth = s * _headingEdge
-          ..strokeJoin = ui.StrokeJoin.round);
-    c.drawPath(path, ui.Paint()..color = fill);
-    final img = await rec.endRecording().toImage(size, size);
-    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-    return bytes!.buffer.asUint8List();
   }
 }

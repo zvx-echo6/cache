@@ -20,6 +20,8 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/vehicle_arrow.dart';
+import '../platform.dart' as plat;
 import '../maps/ui/map_widgets.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
@@ -159,7 +161,7 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
 }
 
 /// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
-/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, with its heading marker).
+/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, or the arrow once a heading is known).
 class RouteEndMark {
   const RouteEndMark({required this.lat, required this.lon, required this.reach});
 
@@ -517,7 +519,8 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
     try {
       final p = _palette;
-      await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));
+      // The car's arrow, at the map's own scale: a phone reads an added image at the screen's pixels per point, a browser at one.
+      await c.addImage(kHeadingImage, await VehicleArrow.png(p['position'], p['positionRing'], plat.isWeb ? 1.0 : screenRatio));
     } catch (_) {}
     await _pushPosition();
     _navSig = null;
@@ -761,9 +764,7 @@ class _MapsScreenState extends State<MapsScreen> {
         RouteEndMark(
           lat: fix.lat,
           lon: fix.lon,
-          reach: (fix.heading ?? _lastHeading) == null
-              ? kPositionDotReach
-              : math.max(kPositionDotReach, MapAssets.headingMarkerReach(widget.imagePixelRatio ?? MediaQuery.devicePixelRatioOf(context))),
+          reach: (fix.heading ?? _lastHeading) == null ? kPositionDotReach : math.max(kPositionDotReach, VehicleArrow.reach),
         ),
     ];
   }
