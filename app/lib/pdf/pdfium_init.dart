@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:pdfrx/pdfrx.dart';
 
 /// The PDFium library the core and pdfrx share (its module path; the bundled `libpdfium.so` on Android, none on iOS, where the
@@ -52,6 +53,8 @@ Future<({int lock, int unlock})?> _coreLockFunctions() async {
 /// engine's isolate, and a second engine's (the background run's) replaced the first's. Its worker takes the core's lock around each
 /// PDFium call, so the viewer and the core never use PDFium (which is not thread-safe) at the same moment.
 Future<void> initPdfium() async {
+  // A browser has no process PDFium, font mapper or core lock (and `Platform` throws there): it only starts pdfrx.
+  if (kIsWeb) return pdfrxFlutterInitialize();
   PdfiumLock.functions ??= await _coreLockFunctions();
   await pdfrxFlutterInitialize();
   await installNativePdfFonts(onPdfrxWorker: true);
