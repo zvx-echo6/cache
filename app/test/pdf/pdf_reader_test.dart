@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/browse/web/device_api.dart' show DeviceException;
 import 'package:cache/pdf/pdf_reader_screen.dart';
 import 'package:cache/pdf/pdf_source.dart';
 import 'package:cache/theme.dart';
@@ -75,6 +76,100 @@ void main() {
     title.complete('Handbook');
     await settleUntil(tester, () => disposed);
     expect(disposed, isTrue, reason: 'a closed reader releases its document after metadata completes');
+  });
+
+  group('in a browser (opened from bytes, no temporary file)', () {
+    readerTest('a ZIM PDF opens at the cited page from the entry\'s bytes; the temporary folder is never asked for', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      var tempAsked = false;
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          initialPage: 3,
+          source: PdfZimSource(
+            address: 'zim:x/handbook.pdf#page=3',
+            title: 'Water and Shelter Handbook',
+            read: (a) async => bytes,
+            tempDir: () async {
+              tempAsked = true;
+              throw StateError('a browser has no temporary folder');
+            },
+          ),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('3 of 6')));
+      expect(find.text('3 of 6'), findsOneWidget);
+      expect(tempAsked, isFalse);
+    });
+
+    readerTest('a book PDF fetched from the server opens at its first page', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          initialPage: 1,
+          source: PdfServerSource(id: 'field/aid', title: 'Water and Shelter Handbook', fetch: () async => bytes),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('1 of 6')));
+      expect(find.text('1 of 6'), findsOneWidget);
+    });
+
+    readerTest('a PDF the server no longer has shows the gone page', (tester) async {
+      await show(
+        tester,
+        PdfReaderScreen(openFromBytes: true, source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const PdfGone())),
+      );
+      await settleUntil(tester, () => _has(find.text('This file is no longer on this device.')));
+      expect(find.text('This file is no longer on this device.'), findsOneWidget);
+    });
+
+    readerTest('a PDF that could not be fetched says so, and is not called damaged; Try again fetches it again', (tester) async {
+      final bytes = File(six).readAsBytesSync();
+      var down = true;
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(
+            id: 'f/x',
+            title: 'x',
+            fetch: () async => down ? throw const DeviceException('unreachable', 'This device could not be reached.') : bytes,
+          ),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('This device could not be reached. Try again.')));
+      expect(find.text('This device could not be reached. Try again.'), findsOneWidget);
+      expect(find.text("This PDF can't be opened. The file may be damaged."), findsNothing);
+      down = false;
+      await tester.tap(find.byKey(const ValueKey('pdf-retry')));
+      await settleUntil(tester, () => _has(find.text('1 of 6')));
+      expect(find.text('1 of 6'), findsOneWidget);
+    });
+
+    readerTest('a failing server reads as not reached, and an ended session asks to sign in again', (tester) async {
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const DeviceException('failed', 'This device answered 500.', status: 500)),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('This device could not be reached. Try again.')));
+      expect(find.text('This device could not be reached. Try again.'), findsOneWidget);
+      await show(
+        tester,
+        PdfReaderScreen(
+          openFromBytes: true,
+          source: PdfServerSource(id: 'f/x', title: 'x', fetch: () async => throw const DeviceException('unauthorized', 'Sign in again.', status: 401)),
+        ),
+      );
+      await settleUntil(tester, () => _has(find.text('Sign in again to read this.')));
+      expect(find.text('Sign in again to read this.'), findsOneWidget);
+      expect(find.text("This PDF can't be opened. The file may be damaged."), findsNothing);
+    });
   });
 
   readerTest('opens at the asked page; the count opens Go to page, which refuses a page that is not there', (tester) async {

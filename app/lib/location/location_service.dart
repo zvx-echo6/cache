@@ -141,6 +141,18 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// dot and the camera follow it.
   void publish(Fix f) => _publish(f);
 
+  /// Forgets the fix held, when it was [publish]ed from a source that was not the phone's own position and that source is gone
+  /// (the last point of a simulated test drive). Until a real one is read the position is not known, which is true; the stale
+  /// point is not. It must be forgotten and not just replaced: a real reading may carry an older time than the simulated fix,
+  /// and an older fix never replaces a newer one ([_publish]).
+  void forgetPublished() {
+    if (_disposed || fix == null) return;
+    fix = null;
+    _fixAt = null;
+    onFix?.call(null);
+    notifyListeners();
+  }
+
   /// Makes sure there is a recent position, for a user who needs it now. If the permission was never asked,
   /// [explain] is shown first (a polite reason and a choice); the system prompt only follows a yes.
   /// Returns true when a position was read.

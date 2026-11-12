@@ -53,8 +53,12 @@ class _Rig {
         regions: () async => const [(id: 'region:Idaho', name: 'Idaho')],
         hereOnMap: () => hereShown,
         setHereOnMap: (on) => hereShown = on,
+        directions: directions,
       );
   bool hereShown = true;
+
+  /// What the Directions button of a place asks (null: no button).
+  bool Function(NbPlace place, String name)? directions;
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);
 
   Future<Notebook> saved() async {
@@ -127,6 +131,34 @@ void main() {
       expect(find.text('Edit place'), findsOneWidget);
       await tester.dragUntilVisible(find.byKey(const ValueKey('place-delete')), find.byType(ListView), const Offset(0, -300));
       expect(find.byKey(const ValueKey('place-delete')), findsOneWidget);
+    });
+
+    testWidgets('Directions on a place opens them, and while a route is being followed says to finish or end it first', (tester) async {
+      final r = _Rig();
+      var guiding = false;
+      final opened = <String>[];
+      r.directions = (p, name) {
+        if (guiding) return false;
+        opened.add(name);
+        return true;
+      };
+      final book = await r.saved();
+      await r.place(book, 'Rally point 1', 42.5630, -114.4610);
+      await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
+      await tester.tap(find.text('Rally point 1'));
+      await tester.pumpAndSettle();
+      final button = find.byKey(const ValueKey('place-directions'));
+      await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pump();
+      expect(opened, ['Rally point 1']);
+      expect(find.text('Finish or end the route first'), findsNothing);
+      guiding = true;
+      await tester.tap(button);
+      await tester.pump();
+      expect(opened, ['Rally point 1'], reason: 'nothing is opened over a route being followed');
+      expect(find.text('Finish or end the route first'), findsOneWidget);
     });
 
     testWidgets('Add place: no colour of its own, weather on with its gear, a custom alert rule, then Save', (tester) async {

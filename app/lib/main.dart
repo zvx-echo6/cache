@@ -50,7 +50,11 @@ import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
+import 'car/car_overlay.dart';
+import 'car/car_support.dart';
+import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
+import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
@@ -90,6 +94,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
@@ -100,6 +105,7 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/foreground_updates.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -144,6 +150,8 @@ void main() {
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  // A cachelink: link the app was opened with, or that arrives while it runs (the native side holds it; see LinkInbox).
+  unawaited(linkInbox.start());
   runApp(const CacheApp());
 }
 
@@ -462,6 +470,7 @@ class _CacheAppState extends State<CacheApp> {
     bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    wordsPending: (path) => libraries.wordsPendingAt(path),
   );
 
   /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.
@@ -813,8 +822,11 @@ class _CacheAppState extends State<CacheApp> {
     map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
+      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
+      if (nav.guiding) return false;
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
+      return true;
     },
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
@@ -831,6 +843,8 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
+  late final RouteElevation routeElevation = RouteElevation(loader: tileServerElevationLoader(maps.engine));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
@@ -841,9 +855,13 @@ class _CacheAppState extends State<CacheApp> {
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
   bool _coreDone = false;
 
+  final IgnoreRoutePushes _noRoutePushes = IgnoreRoutePushes();
+
   @override
   void initState() {
     super.initState();
+    // Before the app's own navigator starts listening: a page address from the platform is never pushed as a route.
+    WidgetsBinding.instance.addObserver(_noRoutePushes);
     ModelDownloads.shared = modelDownloads;
     // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
     // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
@@ -875,6 +893,7 @@ class _CacheAppState extends State<CacheApp> {
       onResume: () {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) unawaited(_backToFront());
       },
@@ -897,9 +916,12 @@ class _CacheAppState extends State<CacheApp> {
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
         if (!plat.isWeb) _toBack();
       },
+      // On the screen again (a desktop window shown without being clicked into does not "resume").
+      onShow: () => _foregroundUpdates.front(),
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
@@ -1012,6 +1034,9 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1093,13 +1118,14 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
+      unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
       _car = _newCarBridge();
       unawaited(_car!.start());
     } else if (plat.isIOS) {
       // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
-      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed.
+      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
+      // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
       unawaited(readCarScreenSupport().then((on) {
-        carScreenSupported.value = on;
         if (!on || !mounted) return;
         _car = _newCarBridge();
         unawaited(_car!.start());
@@ -1113,6 +1139,10 @@ class _CacheAppState extends State<CacheApp> {
         nav: nav,
         maps: maps,
         drive: carDrive,
+        elevation: routeElevation,
+        theme: () => app.theme,
+        overlay: () => carOverlaySwitches(climb: app.carClimbAhead, miniMap: app.carRouteMiniMap),
+        settings: app,
         ready: () => sources.whenCoreReady(),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
@@ -1136,6 +1166,15 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
+
+  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
+  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
+    every: kBackgroundEvery,
+    on: () => weather.enabledSources.isNotEmpty,
+    update: () => weather.updateNow(),
+    wanted: foregroundUpdatesWanted(),
+  );
   late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
     // A load in flight holds the release like an answer does: it never unloads a model the person just asked for, and when the
     // load ends with Cache still in the back, a new grace period starts.
@@ -1211,7 +1250,9 @@ class _CacheAppState extends State<CacheApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_noRoutePushes);
     _lifecycle.dispose();
+    _foregroundUpdates.dispose();
     _modelRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
@@ -1315,6 +1356,7 @@ class _CacheAppState extends State<CacheApp> {
           video: video,
           browse: browse,
           nav: nav,
+          elevation: routeElevation,
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,

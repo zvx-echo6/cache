@@ -675,7 +675,7 @@ class AddPdfProgressPage extends StatelessWidget {
     return Scaffold(
       appBar: compact ? AppBar(title: const Text('Progress')) : libraryAppBar(context, title: 'Adding a PDF'),
       body: ListenableBuilder(
-        listenable: Listenable.merge([state, ?s, ?deps?.shelves]),
+        listenable: Listenable.merge([state, ?s, ?deps?.shelves, ?deps?.sources]),
         builder: (context, _) {
           final jobs = state.jobs;
           return LayoutBuilder(
@@ -1048,6 +1048,22 @@ class _BookCard extends StatelessWidget {
   }
 }
 
+/// The line a finished PDF's card says under its title: where the book went and whether its words are searchable. "searchable" only
+/// once the keyword index has the book's words: until the index status has been read again after the add, only where the book went; while
+/// the words are being added, "Adding to search index". Used by the progress page's card and by the Library's overview card.
+String addPdfDoneLine(AddPdfState state, AddPdfJob job) {
+  final r = job.result ?? const {};
+  final pieces = (r['pieces'] as num?)?.toInt();
+  final same = (r['same'] as List?) ?? const [];
+  final shelf = (r['shelf'] as Map?)?.cast<String, dynamic>();
+  // the default own library (My books) is where Bookshelves live: a book added to it went onto "Bookshelves"; a library the person made
+  // and named keeps its own name
+  final where = state.isDefaultLibrary(job.libraryPath) ? 'Bookshelves' : job.libraryTitle;
+  if (same.isNotEmpty || !job.wordsChecked) return 'Added to $where';
+  if (state.wordsPendingFor(job)) return 'Added to $where · Adding to search index';
+  return shelf != null && pieces != null ? 'Added to $where · $pieces pieces searchable' : 'Added to $where · searchable';
+}
+
 /// The book [job] made, as Bookshelves has it now (found by its copy key), or null while Bookshelves have not read it yet.
 ShelfBook? addPdfBook(LibraryDeps? d, AddPdfJob job) {
   final copy = job.result?['copy'] as String?;
@@ -1066,7 +1082,6 @@ class _ResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final r = job.result ?? const {};
-    final pieces = (r['pieces'] as num?)?.toInt();
     final same = (r['same'] as List?) ?? const [];
     final shelf = (r['shelf'] as Map?)?.cast<String, dynamic>();
     final suggested = (r['suggested'] as Map?)?.cast<String, dynamic>();
@@ -1089,9 +1104,7 @@ class _ResultCard extends StatelessWidget {
                   children: [
                     Text(job.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
                     Text(
-                      same.isNotEmpty
-                          ? 'Added to ${job.libraryTitle}'
-                          : (shelf != null && pieces != null ? 'Added to ${job.libraryTitle} · $pieces pieces searchable' : 'Added to ${job.libraryTitle} · searchable'),
+                      addPdfDoneLine(state, job),
                       style: TextStyle(fontSize: 13, color: k.secondary),
                     ),
                   ],

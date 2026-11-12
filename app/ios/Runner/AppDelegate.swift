@@ -115,6 +115,13 @@ import workmanager_apple
     if CarPlayBuild.isOn {
       CarLink.shared.attach(messenger: messenger)
     }
+    // A cachelink: link from outside (see LinkBridge in SceneDelegate.swift). Set where the engine is made, so a link reaches
+    // Dart whichever scene started the engine.
+    let link = FlutterMethodChannel(name: "co.cache/link", binaryMessenger: messenger)
+    LinkBridge.shared.channel = link
+    link.setMethodCallHandler { call, result in
+      if call.method == "take" { result(LinkBridge.shared.take()) } else { result(FlutterMethodNotImplemented) }
+    }
     // Notebooks > Connections: a folder the person picks for Obsidian or Logseq, kept as a security-scoped bookmark.
     let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: messenger)
     let access = folderAccess

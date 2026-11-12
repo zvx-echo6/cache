@@ -3,7 +3,8 @@ import 'package:flutter/services.dart';
 
 import '../platform.dart' as plat;
 
-/// Whether this build has a car screen. False until [readCarScreenSupport] has answered.
+/// Whether Settings shows its Car group: the switches for what the Android car draws over the map. Set from
+/// [readCarScreenSupport] on Android only (main.dart); false until it has answered, and on iPhone, web and Linux.
 final ValueNotifier<bool> carScreenSupported = ValueNotifier<bool>(false);
 
 const MethodChannel kBuildChannel = MethodChannel('cache/build');

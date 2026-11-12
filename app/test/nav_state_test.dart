@@ -557,4 +557,107 @@ void main() {
       expect(speaker.said.any((s) => s.contains('climbing')), isTrue);
     });
   });
+
+  group('when guidance is over', () {
+    MapPlace spot(String id, String name, double lat, double lon) =>
+        MapPlace(id: id, type: 'place', name: name, kind: '', lat: lat, lon: lon, matched: 'name');
+
+    /// Guidance running on a route to a made-up place, from the stand-in route's own start.
+    Future<Map<String, dynamic>> guideTo(String name) async {
+      final json = fakeRouteJson(name: name);
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(json);
+      await nav.openDirections(spot('place:20', name, 42.5, -113.5));
+      await nav.start();
+      return json;
+    }
+
+    test('a second request after guidance uses the phone\'s current position, not the last fix of the trip', () async {
+      final json = await guideTo('Juniper Depot');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(json, 0.5)));
+      gps.controller.add(fixAt(42.5, -113.65, heading: 90));
+      await settle();
+      expect(nav.here!.lon, -113.65, reason: 'while guiding, directions start at the guidance fix');
+      await nav.end();
+      expect(nav.lastFix, isNull);
+      // The phone goes somewhere else with no guidance running.
+      location.publish(fixAt(42.7, -113.9));
+      expect(nav.here!.lat, 42.7);
+      expect(nav.here!.lon, -113.9);
+      final next = spot('place:21', 'Quartz Landing', 42.7, -113.9);
+      expect(nav.distanceFromHere(next), closeTo(0, 0.01), reason: 'a place card measures from the phone too');
+      await nav.openDirections(next);
+      expect(backend.froms.last!['lat'], 42.7);
+      expect(backend.froms.last!['lon'], -113.9);
+      expect(nav.routeStart!.lat, 42.7);
+      expect(nav.routeStart!.lon, -113.9);
+    });
+
+    test('arrival is final: the position service is let go, and later fixes neither reroute nor speak', () async {
+      final json = await guideTo('Juniper Depot');
+      expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');
+      // The core answers the fix at the door with "arrived", slowly; the next fix, a walk away from the line, is "off route".
+      final gate = Completer<void>();
+      var asked = 0;
+      backend.onProgress = (r, lat, lon) async {
+        asked++;
+        if (asked == 1) {
+          await gate.future;
+          return MapProgress.fromJson(fakeProgressJson(json, 1.0, arrived: true));
+        }
+        return MapProgress.fromJson(fakeProgressJson(json, 0.99, offset: 200, offRoute: true, offCount: 3));
+      };
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-new', name: 'Juniper Depot'));
+      gps.controller.add(fixAt(42.5, -113.5));
+      await settle(10);
+      gps.controller.add(fixAt(42.502, -113.5));
+      await settle(10);
+      gate.complete();
+      await settle(40);
+      expect(nav.arrived, isTrue);
+      expect(nav.phase, NavPhase.guiding, reason: 'the arrived banner stays until it is dismissed');
+      expect(nav.progress!.arrived, isTrue);
+      expect(speaker.said.last, 'You have arrived at Juniper Depot.');
+      expect(asked, 1, reason: 'the fix that was waiting is not followed after arrival');
+      expect(gps.stops, 1, reason: 'the position service stops at arrival, not at Done');
+      expect(location.streamHealthy, isTrue, reason: 'the map has its own position stream back');
+      // Fixes after arrival go nowhere.
+      gps.controller.add(fixAt(42.504, -113.5));
+      await settle(40);
+      expect(asked, 1);
+      expect(speaker.said, isNot(contains('Rerouting.')));
+      expect(speaker.said.last, 'You have arrived at Juniper Depot.');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'only the preview asked for a route');
+      expect(nav.route!.routeId, 'r1');
+      expect(nav.arrived, isTrue);
+      await nav.finish();
+      expect(nav.phase, NavPhase.browsing);
+      expect(nav.arrived, isFalse);
+      expect(nav.selected, isNull);
+    });
+
+    test('directions asked for while guiding end guidance first: no position service is left running', () async {
+      await guideTo('Juniper Depot');
+      expect(gps.starts, 1);
+      expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-second', name: 'Quartz Landing'));
+      await nav.openDirections(spot('place:21', 'Quartz Landing', 42.6, -113.6));
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.selected!.name, 'Quartz Landing');
+      expect(nav.route!.routeId, 'r-second');
+      expect(gps.stops, 1, reason: 'the position service was stopped');
+      expect(speaker.stops, 1);
+      expect(location.streamHealthy, isTrue, reason: 'the hold on the map\'s position stream was released');
+      expect(follows.last, FollowMode.follow);
+      // No fix reaches guidance any more.
+      final before = backend.calls.where((c) => c.startsWith('progress')).length;
+      gps.controller.add(fixAt(42.5, -113.7));
+      await settle();
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, before);
+      // Backing out of the preview leaves nothing to stop.
+      nav.cancelDirections();
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1);
+    });
+  });
 }

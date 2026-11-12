@@ -264,6 +264,11 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let (id, doc) = (id.to_string(), doc.to_string());
             library_reply(b.suggestions(&id, &doc))
         }
+        // a book's PDF, for the reader in the browser (which opens it from the bytes)
+        ("GET", ["libraries", id, "books", doc, "pdf"]) => match b.book_pdf(id, doc) {
+            Ok((path, name)) => pdf_reply(&path, &name),
+            Err(e) => api_error(e),
+        },
         ("POST", ["libraries", id, "books", doc, "place"]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.place_book(&id, &doc, &body_owned)).await
@@ -332,6 +337,47 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
         ("POST", ["drop", "retry"]) => blocking(move || b.drop_retry(&body_owned)).await,
         _ => return None,
     })
+}
+
+/// A PDF file as the reply: streamed from disk in pieces, never held whole. The name is cut to plain characters for the header.
+fn pdf_reply(path: &std::path::Path, name: &str) -> Reply {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Reply::error(404, "not_found", "this book has no PDF on the server"),
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' }).collect();
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    tokio::task::spawn_blocking(move || {
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            match f.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    Reply {
+        status: 200,
+        headers: vec![
+            ("Content-Type", "application/pdf".into()),
+            ("Content-Length", len.to_string()),
+            ("Content-Disposition", format!("inline; filename=\"{name}\"")),
+            // data for the reader to open from its bytes, never a page of this origin
+            ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+        ],
+        body: vec![],
+        stream: Some(rx),
+    }
 }
 
 /// `/api/models/embedder...` and `/api/embed` (the caller has checked the session). `None` when the path is not one of these.
@@ -1010,6 +1056,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_books_pdf_is_served_to_a_session_from_the_filed_copy() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-book-pdf");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        assert_eq!(route(&a, "POST", &up, Some(&c), &book("well", 3, Some("Well book"))).await.status, 200);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        let url = format!("/api/build/libraries/{lib}/books/{doc}/pdf");
+        // no session, no PDF
+        assert_eq!(route(&a, "GET", &url, None, b"").await.status, 401);
+        let mut r = route(&a, "GET", &url, Some(&c), b"").await;
+        assert_eq!(r.status, 200);
+        let header = |r: &Reply, k: &str| r.headers.iter().find(|(h, _)| *h == k).map(|(_, v)| v.clone());
+        assert_eq!(header(&r, "Content-Type").as_deref(), Some("application/pdf"));
+        assert!(header(&r, "Content-Disposition").unwrap().starts_with("inline; filename=\""));
+        let mut got = Vec::new();
+        let mut rx = r.stream.take().expect("the PDF is streamed");
+        while let Some(piece) = rx.recv().await {
+            got.extend_from_slice(&piece.unwrap());
+        }
+        assert!(got.starts_with(b"%PDF"), "the body is the PDF");
+        assert_eq!(header(&r, "Content-Length"), Some(got.len().to_string()));
+        // the same bytes as the device copy on the server
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), got);
+        // a library or book that is not there, and a path that tries to leave
+        for p in [
+            format!("/api/build/libraries/nope/books/{doc}/pdf"),
+            format!("/api/build/libraries/{lib}/books/nope/pdf"),
+            format!("/api/build/libraries/{lib}/books/..%2F..%2Fx/pdf"),
+        ] {
+            assert_eq!(route(&a, "GET", &p, Some(&c), b"").await.status, 404, "{p}");
+        }
+        // a book whose copy is gone is not found rather than an error
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(route(&a, "GET", &url, Some(&c), b"").await.status, 404);
+    }
+
+    #[tokio::test]
     async fn the_bookshelves_routes_serve_the_view_and_take_the_events_of_a_book_page() {
         use crate::libbuild::testpdf::book;
         let d = TempDir::new("route-shelves");
@@ -1565,6 +1656,7 @@ mod tests {
             ("POST", "/api/build/queue/x/decide"),
             ("POST", "/api/build/libraries/x/books/y/place"),
             ("GET", "/api/build/libraries/x/books/y/suggestions"),
+            ("GET", "/api/build/libraries/x/books/y/pdf"),
             ("GET", "/api/build/bookshelves"),
             ("GET", "/api/build/bookshelves/stamp"),
             ("GET", "/api/build/bookshelves/facts"),

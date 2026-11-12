@@ -33,6 +33,10 @@ abstract class ShelfSource implements Listenable {
   /// Every book the source has (shelved and unsorted).
   int get bookCount;
 
+  /// In a browser: fetches [book]'s PDF from the server (the whole file, for the reader to open from its bytes), or null when this
+  /// source has no such PDF to fetch (a phone has the file itself: [ShelfBook.pdfPath]).
+  Future<List<int>> Function()? pdfFetcher(ShelfBook book) => null;
+
   /// The books the person hid from Bookshelves (on all of their devices; no file is deleted), by title. Each keeps the shelf and
   /// number it had ([ShelfBook.shelf], [ShelfBook.callNumber]), as the logs now resolve them, so it shows where it would go back.
   List<ShelfBook> get hidden;
@@ -193,6 +197,7 @@ class ShelfBook {
     this.originalTitle,
     this.pdfPath,
     this.onServer = false,
+    this.libraryId,
     this.spares = const [],
     this.aka = const [],
     this.reading,
@@ -220,6 +225,9 @@ class ShelfBook {
   /// In a browser: the book's PDF is kept on the device the browser is signed in to (Cache Server), so there is no file to open here
   /// and nothing to download. False on a phone and on desktop.
   final bool onServer;
+
+  /// In a browser: the id of the library on the server that holds the book (with [docId], what the server's PDF route takes).
+  final String? libraryId;
 
   /// Unique in its source.
   final String id;
