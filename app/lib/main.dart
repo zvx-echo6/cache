@@ -812,8 +812,11 @@ class _CacheAppState extends State<CacheApp> {
     map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
+      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
+      if (nav.guiding) return false;
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
+      return true;
     },
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots

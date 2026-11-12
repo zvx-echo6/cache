@@ -27,6 +27,9 @@ release notes).
 - Library: the main page of a ZIM shows the ZIM's own title at the top, not the title the page carries (a Wikipedia ZIM's main page said just "Wikipedia")
 - Home search: words said in videos and passages of EPUB books are now listed, and a PDF passage opens with the passage marked
 - Library: a passage on a page numbered with letters, such as iv or A-3, now opens and shows that page
+- Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
+- Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
+- Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running
 
 ## 1.1.0 (build 49, test) - 2026-11-11
 
