@@ -40,11 +40,12 @@ class CacheCarAppService : CarAppService() {
  * starts and ends and what the trip is ([NavigationManager]), posts the turn-by-turn notification, and holds navigation audio
  * focus for the prompts.
  *
- * [startEngine] is the shared engine; the tests give a stand-in.
+ * [startEngine] and [endEngine] tell the shared engine that this session starts and has ended ([SharedEngine]: the first makes
+ * and starts the engine when nothing has yet; neither ever destroys it); the tests give stand-ins.
  */
 class CarSession(
-    private val startEngine: (Context) -> Unit = { SharedEngine.obtain(it) },
-    private val endEngine: (keep: Boolean) -> Unit = { SharedEngine.carEnded(it) },
+    private val startEngine: (Context) -> Unit = { SharedEngine.carStarted(it) },
+    private val endEngine: () -> Unit = { SharedEngine.carEnded() },
 ) : Session(), CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
@@ -71,7 +72,6 @@ class CarSession(
         } catch (e: Exception) {
             Log.w(TAG, "the app engine could not start", e)
         }
-        SharedEngine.carStarted()
         renderer = CarMapRenderer(carContext)
         carContext.getCarService(AppManager::class.java).setSurfaceCallback(renderer)
         notifications = try {
@@ -196,12 +196,11 @@ class CarSession(
     private fun tearDown() {
         if (!ready) return
         ready = false
-        // The car went away during a real drive: the phone keeps guiding (the car side never asks it to stop here), so the
-        // app's engine, where guidance runs, must stay even with no phone screen open. When the car connects again the phone
-        // pushes its trip and onTrip shows guidance and tells the host it started. A simulated test drive is the deliberate
-        // exception: it exists only for the car's review, so the phone ends it when the car leaves (lib/car/car_bridge.dart)
-        // and nothing is kept for it.
-        val keepEngine = CarLink.trip.guiding && !autoDrive
+        // The app's engine, where guidance runs, always stays ([SharedEngine]), with or without a phone screen open. The car
+        // going away during a real drive leaves the phone guiding (the car side never asks it to stop here): when the car
+        // connects again the phone pushes its trip and onTrip shows guidance and tells the host it started. A simulated test
+        // drive is the deliberate exception: it exists only for the car's review, so the phone ends it when the car leaves
+        // (lib/car/car_bridge.dart).
         CarLink.removeListener(this)
         CarLink.setCarConnected(false)
         if (navigating) {
@@ -217,7 +216,7 @@ class CarSession(
         CarLink.audio = null
         renderer.release()
         CarLocationService.stop(carContext)
-        endEngine(keepEngine)
+        endEngine()
     }
 
     companion object {

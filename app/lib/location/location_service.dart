@@ -34,6 +34,12 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   AppFs? _fs;
   StreamSubscription<Fix>? _sub;
   bool _foreground = true;
+
+  /// A car screen (Android Auto) is attached ([carScreen]).
+  bool _carScreen = false;
+
+  /// Something shows the position: the phone's screen is in front, or a car screen is attached.
+  bool get _shown => _foreground || _carScreen;
   bool _held = false;
   bool _disposed = false;
   bool _resuming = false;
@@ -50,7 +56,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// True while the position stream is subscribed and healthy: no error, not cancelled (pause, hold), and the permission,
   /// the location switch and the setting still on.
   bool get streamHealthy =>
-      _sub != null && _streamOk && !_disposed && enabled && _foreground && !_held &&
+      _sub != null && _streamOk && !_disposed && enabled && _shown && !_held &&
       _serviceAvailable && permission == LocationPermissionState.granted;
 
   static bool _plausible(Fix? f) =>
@@ -208,7 +214,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _listen() {
     if (_disposed || !enabled || !_serviceAvailable || permission != LocationPermissionState.granted ||
-        _resuming || _sub != null || !_foreground || _held) {
+        _resuming || _sub != null || !_shown || _held) {
       return;
     }
     final now = DateTime.now();
@@ -217,7 +223,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     _streamSince = held != null && at != null && now.difference(held.time) <= _defaultMaxAge ? at : now;
     _streamOk = true;
     _sub = _source.stream().listen((f) {
-      if (!_disposed && enabled && _foreground && !_held) {
+      if (!_disposed && enabled && _shown && !_held) {
         if (!_streamOk) {
           _streamOk = true;
           _streamSince = DateTime.now();
@@ -226,7 +232,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }, onError: (Object _) {
       _streamOk = false;
-      if (_disposed || !enabled || !_foreground || _held) return;
+      if (_disposed || !enabled || !_shown || _held) return;
       problem = LocationProblem.noFix;
       notifyListeners();
     });
@@ -248,6 +254,22 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(s?.cancel());
     } else if (enabled && permission == LocationPermissionState.granted) {
       _listen();
+    }
+  }
+
+  /// A car screen (Android Auto) is attached, or the last one has gone. While one is attached the position keeps coming whether
+  /// or not the phone's screen is in front: the car's map shows it, and the app can be running with no phone screen at all (its
+  /// engine is kept for the life of the process, so "the phone's screen is in front" is no longer true of every car session that
+  /// has no phone app open; before, such a session was always a fresh start, which counts as in front). The car session's own
+  /// foreground service keeps the fixes coming with the phone locked (android/.../car/CarLocationService.kt). Nothing is
+  /// asked for here: the stream starts only with the permission already given.
+  void carScreen(bool attached) {
+    if (_disposed || _carScreen == attached) return;
+    _carScreen = attached;
+    if (attached) {
+      _listen();
+    } else if (!_foreground) {
+      _unlisten();
     }
   }
 
@@ -397,6 +419,11 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     _invalidateResume();
     _foreground = state == AppLifecycleState.resumed;
+    // A car screen keeps the stream it has while the phone's screen is not in front.
+    if (!_foreground && _carScreen) {
+      _listen();
+      return;
+    }
     _unlisten();
     // A permission dialog can resume the app while request() is still awaiting its
     // answer. That request performs its own permission/service/fix sequence.

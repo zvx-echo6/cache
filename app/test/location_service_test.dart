@@ -343,4 +343,115 @@ void main() {
     expect(l.fix, isNull);
     expect(l.problem, LocationProblem.permissionBlocked);
   });
+
+  // The app's engine is kept for the life of the process (Android Auto), so a car session can run in an app whose phone screen
+  // was open earlier and is in the back or closed. Before, such a session's position stopped after the one read at connecting.
+  group('a car screen attached', () {
+    Fix later(double lat) => Fix(lat: lat, lon: -114, accuracyM: 5, time: DateTime.now());
+
+    test('the position keeps coming when the phone\'s screen is no longer in front', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      expect(s.controller.hasListener, isTrue);
+      l.carScreen(true);
+      for (final state in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused, AppLifecycleState.detached]) {
+        l.didChangeAppLifecycleState(state);
+        expect(s.controller.hasListener, isTrue, reason: '$state');
+      }
+      expect(s.streamStarts, 1, reason: 'the same stream, not a new one for every state');
+      final next = later(43);
+      s.controller.add(next);
+      await Future<void>.delayed(Duration.zero);
+      expect(l.fix, same(next));
+      expect(l.streamHealthy, isTrue);
+    });
+
+    test('with no car screen the stream stops when the phone\'s screen is no longer in front, as before', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.didChangeAppLifecycleState(AppLifecycleState.paused);
+      expect(s.controller.hasListener, isFalse);
+      expect(l.streamHealthy, isFalse);
+    });
+
+    test('with no phone screen, the car screen attaching starts the stream and its leaving stops it', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      // The phone's screen was open and has been closed: the app goes on with no screen.
+      l.didChangeAppLifecycleState(AppLifecycleState.paused);
+      l.didChangeAppLifecycleState(AppLifecycleState.detached);
+      expect(s.controller.hasListener, isFalse);
+      l.carScreen(true);
+      expect(s.controller.hasListener, isTrue);
+      final next = later(43);
+      s.controller.add(next);
+      await Future<void>.delayed(Duration.zero);
+      expect(l.fix, same(next));
+      l.carScreen(false);
+      expect(s.controller.hasListener, isFalse);
+      s.controller.add(later(44));
+      await Future<void>.delayed(Duration.zero);
+      expect(l.fix, same(next));
+    });
+
+    test('with no phone screen, the read at connecting is followed by the stream', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.didChangeAppLifecycleState(AppLifecycleState.paused);
+      // Without a car screen a read in the back gives the one position and no stream (as before).
+      expect(await l.request(explain: () async => false), isTrue);
+      expect(s.controller.hasListener, isFalse);
+      // The car connects: the app marks the car screen, then reads a position without asking for anything (main.dart).
+      l.carScreen(true);
+      expect(await l.request(explain: () async => false), isTrue);
+      expect(s.prompts, 0);
+      expect(s.controller.hasListener, isTrue);
+    });
+
+    test('the car screen leaving with the phone\'s screen in front changes nothing', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.carScreen(true);
+      l.carScreen(false);
+      expect(s.controller.hasListener, isTrue);
+      expect(s.streamStarts, 1);
+    });
+
+    test('guidance still takes the stream for itself and gives it back', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.carScreen(true);
+      l.didChangeAppLifecycleState(AppLifecycleState.paused);
+      l.holdStream(true);
+      expect(s.controller.hasListener, isFalse);
+      l.holdStream(false);
+      expect(s.controller.hasListener, isTrue);
+    });
+
+    test('the phone\'s screen coming back to the front is rechecked as usual', () async {
+      final s = FakeSource()..state = LocationPermissionState.granted;
+      final l = await make(s);
+      l.carScreen(true);
+      await resume(l);
+      expect(s.currentCalls, 1);
+      expect(l.fix, same(s.next));
+      expect(s.controller.hasListener, isTrue);
+      // The permission taken away in Settings meanwhile is still noticed.
+      s.state = LocationPermissionState.deniedForever;
+      await resume(l);
+      expect(l.fix, isNull);
+      expect(l.problem, LocationProblem.permissionBlocked);
+      expect(s.controller.hasListener, isFalse);
+    });
+
+    test('nothing is asked for and nothing starts without the permission', () async {
+      final s = FakeSource();
+      final l = await make(s);
+      l.didChangeAppLifecycleState(AppLifecycleState.paused);
+      l.carScreen(true);
+      expect(s.prompts, 0);
+      expect(s.streamStarts, 0);
+      expect(s.controller.hasListener, isFalse);
+    });
+  });
 }
