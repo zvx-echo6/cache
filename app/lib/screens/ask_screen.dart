@@ -719,6 +719,20 @@ class _AssistantBlockState extends State<_AssistantBlock> {
 
   bool _open = false;
 
+  /// The opened list of sources (key for the scroll, on the Linux desktop).
+  final _listKey = GlobalKey();
+
+  /// Opening the sources scrolls the conversation so every one is in reach: they open below the answer, behind the composer's edge.
+  void _toggleSources() {
+    setState(() => _open = !_open);
+    if (!_open || !isLinuxDesktop(context)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (!mounted || c == null) return;
+      Scrollable.ensureVisible(c, duration: Duration.zero, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -841,7 +855,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: () => setState(() => _open = !_open),
+          onTap: _toggleSources,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),
             child: Align(
@@ -881,6 +895,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           ),
         ),
         if (_open)
+          Column(
+            key: _listKey,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           for (final s in m.sources)
             Container(
               margin: const EdgeInsets.only(top: 6),
@@ -930,6 +948,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ),
               ),
             ),
+            ],
+          ),
       ],
     );
   }
