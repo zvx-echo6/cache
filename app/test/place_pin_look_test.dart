@@ -51,7 +51,7 @@ void main() {
 
     // Nothing chosen on the place: the notebook's icon, else the template's, and the default colour.
     expect(seen!.icon.id, mapIconOrTemplate(book.def.icon ?? defaultNotebookIcon(book)).id);
-    expect(seen!.tint, defaultMarkerColor(const []).color);
+    expect(seen!.tint, markerColor(null).color);
 
     // Another colour: the map's pin changes with it.
     final blue = kMarkerColors.firstWhere((c) => c.id == 'blue');
