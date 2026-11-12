@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import '../app_fs.dart';
 import '../files.dart';
@@ -7,7 +8,7 @@ import '../maps/geo.dart';
 import '../platform.dart' as plat;
 import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
-import 'region_catalogue.dart' show kRegionCatalogueDir;
+import 'region_catalogue.dart' show RegionRecord, kRegionCatalogueDir;
 
 /// Where the off-road packs are published (cache-packs' recipes/offroad-regions.md): `current.json`, then one folder per build.
 const String kOffroadBaseUrl = '$kDataBaseUrl/offroad/';
@@ -88,15 +89,46 @@ List<OffroadPack> parseOffroadCatalogue(String text) {
   ];
 }
 
-/// The packs a region with box [b] needs: the smallest pack whose box holds all of it; when none does (a region across a border),
-/// every pack whose box meets it. Empty when no pack is near: the region has no off-road part.
-List<OffroadPack> packsCovering(List<OffroadPack> packs, GeoBounds b) {
-  bool holds(OffroadPack p) => p.bbox[0] <= b.west && p.bbox[1] <= b.south && p.bbox[2] >= b.east && p.bbox[3] >= b.north;
+/// The packs a region with box [b] needs. Empty when no pack is near: the region has no off-road part.
+///
+/// A pack's box is its state or province plus about 50 km, so near a state line two or three boxes hold the same ground. The
+/// smallest box that held the region used to win, which gave a county on a state line the neighbouring state's pack whenever
+/// that state's box was the smaller one: its off-road routes then ran off the edge of the data a little way into its own state.
+///
+/// - [states] given (the states or provinces the region list says the region is in, see `statesIn`): their packs, and no
+///   neighbour's. A region in one state gets that state's pack; a metro area across a state line gets one for each of its states.
+/// - Otherwise (an area drawn on the map, a region larger than a state, a state with no pack of its own): by the boxes. When
+///   packs hold all of the box, the one it lies deepest inside, which near a state line is the state it is in and not the
+///   neighbour whose margin reaches it. When none holds all of it (it crosses from one pack into another), every pack whose box
+///   reaches it, as before and as the region list sizes it.
+List<OffroadPack> packsCovering(List<OffroadPack> packs, GeoBounds b, {Iterable<RegionRecord> states = const []}) {
   bool meets(OffroadPack p) => p.bbox[0] < b.east && p.bbox[2] > b.west && p.bbox[1] < b.north && p.bbox[3] > b.south;
-  double area(OffroadPack p) => (p.bbox[2] - p.bbox[0]) * (p.bbox[3] - p.bbox[1]);
-  final whole = [for (final p in packs) if (holds(p)) p]..sort((a, c) => area(a).compareTo(area(c)));
-  if (whole.isNotEmpty) return [whole.first];
-  return [for (final p in packs) if (meets(p)) p];
+  bool holds(OffroadPack p) => p.bbox[0] <= b.west && p.bbox[1] <= b.south && p.bbox[2] >= b.east && p.bbox[3] >= b.north;
+  final near = [for (final p in packs) if (meets(p)) p];
+  final own = [for (final p in near) if (states.any((s) => _isPackOf(p, s))) p];
+  if (own.isNotEmpty) return own;
+  final whole = [for (final p in near) if (holds(p)) p];
+  if (whole.isEmpty) return near;
+  return [whole.reduce((a, c) => _depth(c, b) > _depth(a, b) ? c : a)];
+}
+
+/// [p] is the pack of the state or province [s]. The off-road list names a pack by the state's name and country ("Idaho", id
+/// "idaho", "US"), not by the region list's id for it ("us-id"), so the two are matched by name within the country.
+bool _isPackOf(OffroadPack p, RegionRecord s) {
+  final pc = p.country, sc = s.country;
+  if (pc != null && sc != null && pc.toUpperCase() != sc.toUpperCase()) return false;
+  final name = _slug(s.name);
+  return name.isNotEmpty && (name == p.id || name == _slug(p.name));
+}
+
+/// "British Columbia" as "british-columbia": a name as the off-road list writes its ids.
+String _slug(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+
+/// How deep box [b] lies inside the box of [p]: the least distance from a side of [b] to the same side of the pack's box, in
+/// degrees of latitude (a degree of longitude is counted at its length at the box's latitude).
+double _depth(OffroadPack p, GeoBounds b) {
+  final k = math.cos((b.south + b.north) / 2 * math.pi / 180);
+  return [(b.west - p.bbox[0]) * k, (p.bbox[2] - b.east) * k, b.south - p.bbox[1], p.bbox[3] - b.north].reduce(math.min);
 }
 
 /// The off-road catalogue, read from the data host and kept in [dir] so it works offline once seen. It is read again when the copy

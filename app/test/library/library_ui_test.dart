@@ -175,6 +175,29 @@ void main() {
       expect(find.text('Medicine and Health'), findsOneWidget);
     });
 
+    testWidgets('Go to a number clears and lets go of the box; coming back, it is empty, unfocused, keyboard closed', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      final box = find.byKey(const ValueKey('go-to-number'));
+      await tester.tap(box);
+      await tester.pumpAndSettle();
+      await tester.enterText(box, '210-002');
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(box).focusNode!.hasFocus, isTrue);
+      await tapKey(tester, 'go-to-number-go');
+      expect(find.text('CDS 210-002'), findsOneWidget);
+      expect(FocusManager.instance.primaryFocus?.context?.widget is EditableText, isFalse, reason: 'nothing has the keyboard on the book page');
+      await tapKey(tester, 'crumb-Bookshelves');
+      expect(box, findsOneWidget);
+      expect(tester.widget<TextField>(box).controller!.text, isEmpty, reason: 'the number is gone');
+      expect(tester.widget<TextField>(box).focusNode!.hasFocus, isFalse, reason: 'nothing refocuses it');
+      expect(tester.testTextInput.isVisible, isFalse, reason: 'the keyboard stays closed');
+      expect(tester.widget<ListView>(find.byType(ListView).first).keyboardDismissBehavior, ScrollViewKeyboardDismissBehavior.onDrag);
+    });
+
     testWidgets('a tablet held upright: the current list and its detail; sideways and on a desktop: the rows, the list and the detail', (tester) async {
       await tester.runAsync(setUpAll0);
       final d = testDeps(browse: browse, shelves: shelves);

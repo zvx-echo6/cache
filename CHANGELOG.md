@@ -7,14 +7,26 @@ release notes).
 ## Unreleased
 
 ### New
+- Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
 - Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
 - Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
 
 ### Fixed
+- Places: the map when adding a place always opens close in on where you are
+- Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
+- Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
 - Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
 - Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
 - Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
 - Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+- Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
+- Bookshelves: after Go to a number takes you to a shelf or book, the box is emptied and the keyboard stays closed when you come back; dragging the list closes the keyboard
+- Weather: Latitude and Longitude in Add your own source put their text in the web address without taking the keyboard from it, and the cursor stays right after it
+- Notebooks: a new place no longer gets a color of its own; it follows its notebook's color, and hiding a place on the map no longer gives it one. A place has its own color only when you pick one that differs from its notebook's
+- Notebooks: changing a notebook's color asks, when some of its places have a color of their own, whether to change all of them (Change all) or keep their colors; the Pin color line now says its places use the notebook's color unless you give one its own
+- Library: the main page of a ZIM shows the ZIM's own title at the top, not the title the page carries (a Wikipedia ZIM's main page said just "Wikipedia")
+- Home search: words said in videos and passages of EPUB books are now listed, and a PDF passage opens with the passage marked
+- Library: a passage on a page numbered with letters, such as iv or A-3, now opens and shows that page
 - Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
 - Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
 - Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running

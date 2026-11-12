@@ -159,6 +159,7 @@ class OwnSourceFormPage extends StatefulWidget {
 class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   final _name = TextEditingController();
   final _address = TextEditingController();
+  final _addressFocus = FocusNode();
   final _key = TextEditingController();
   int _every = kOwnRefreshDefault;
   String? _error;
@@ -186,6 +187,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   void dispose() {
     _name.dispose();
     _address.dispose();
+    _addressFocus.dispose();
     _key.dispose();
     super.dispose();
   }
@@ -215,7 +217,8 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
     if (added == true && mounted) Navigator.of(context).pop(true);
   }
 
-  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => OutlinedButton(
+  // ExcludeFocus: tapping an insert button never takes the keyboard's focus from the address, so the cursor stays where it is.
+  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => ExcludeFocus(child: OutlinedButton(
     key: ValueKey(key),
     onPressed: () => _insert(placeholder),
     style: OutlinedButton.styleFrom(
@@ -226,7 +229,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
       shape: const StadiumBorder(),
     ),
     child: Text(label, style: const TextStyle(fontSize: 14)),
-  );
+  ));
 
   @override
   Widget build(BuildContext context) {
@@ -248,6 +251,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
               TextField(
                 key: const ValueKey('own-address'),
                 controller: _address,
+                focusNode: _addressFocus,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
                 enableSuggestions: false,

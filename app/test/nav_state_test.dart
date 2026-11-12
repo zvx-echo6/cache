@@ -328,6 +328,20 @@ void main() {
       expect(nav.routes, isNotEmpty);
     });
 
+    test('a trip whose road data is not on the device says so, and what to do; 170, 171 and 442 are never "too far"', () async {
+      location.publish(fixAt(42.5, -113.8));
+      for (final end in ['from', 'to', 'via']) {
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
+              'ok': false, 'route_id': 'x', 'mode': 'drive',
+              'errors': [{'code': 'no_road_data', 'message': 'No path could be found for input', 'end': end}],
+            });
+        await nav.openDirections(place('place:4', 'Far'));
+        expect(nav.routeError, "Road data for this trip isn't on this device yet. Connect and try again.", reason: end);
+      }
+      expect(NavState.routeErrorText(MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': 'drive', 'errors': [{'code': 'too_far', 'message': 'm'}]})),
+          'These places are too far apart for one trip');
+    });
+
     test('no position is said plainly; a route that cannot be made is explained', () async {
       await nav.openDirections(place('place:4', 'Far'));
       expect(nav.routeError, contains('position is not known'));

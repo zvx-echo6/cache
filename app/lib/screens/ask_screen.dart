@@ -487,7 +487,7 @@ class _AskScreenState extends State<AskScreen> {
       if (resting != null) {
         // the chosen model, let go to leave memory free: it loads again
         button = 'Load ${app.displayName(resting)}';
-        onPressed = app.wake;
+        onPressed = () => app.wake(force: true);
       } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;
@@ -496,6 +496,8 @@ class _AskScreenState extends State<AskScreen> {
         onPressed = () => app.activate(usable.first);
       }
     }
+    final held = app.heldForMemory && app.resting != null && app.failed == null;
+    if (held) return _gateCard(k, app.displayName(app.resting!), onPressed);
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,
@@ -508,6 +510,28 @@ class _AskScreenState extends State<AskScreen> {
           Text(line, key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.emergency)),
           const SizedBox(height: 6),
           FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
+        ],
+      ),
+    );
+  }
+
+  /// The card for a model the memory gate held back ([AppState.heldForMemory]): calm, since nothing is broken (theme surface and
+  /// text colors, no emergency red). Its button loads the model whatever the room.
+  Widget _gateCard(CacheTokens k, String name, VoidCallback onLoad) {
+    return Container(
+      key: const ValueKey('ask-fix'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: k.secondary.withValues(alpha: 0.25))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$name is waiting for free memory.', key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+          const SizedBox(height: 4),
+          Text('Other apps are using it right now. Loading anyway may close some of them.', key: const ValueKey('ask-fix-note'), style: TextStyle(fontSize: 13, color: k.secondary)),
+          const SizedBox(height: 8),
+          FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onLoad, child: const Text('Load anyway')),
         ],
       ),
     );
@@ -693,6 +717,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             text: m.text,
             failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
+            dropCitations: m.isDone && m.sources.isEmpty,
           ),
           for (final card in m.confirms)
             ConfirmCardView(

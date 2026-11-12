@@ -297,8 +297,9 @@ fn the_store_keeps_the_newest_routes() {
 struct Record(std::sync::Mutex<Vec<Vec<(f64, f64)>>>);
 
 impl cache_navigate::TileStream for Record {
-    fn prepare(&self, points: &[(f64, f64)]) {
+    fn prepare(&self, points: &[(f64, f64)]) -> cache_navigate::TilePrep {
         self.0.lock().unwrap().push(points.to_vec());
+        cache_navigate::TilePrep::default()
     }
 }
 

@@ -214,10 +214,40 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   String? get _zimId => widget.sources.idOf(widget.zim);
 
+  /// The ZIM's main page, once known, to tell it from the other pages.
+  String? _mainAddress;
+
+  static String _bare(String a) {
+    final cut = a.indexOf(RegExp('[#?]'));
+    return (cut < 0 ? a : a.substring(0, cut)).toLowerCase();
+  }
+
+  /// True while the page on screen is the ZIM's main page (the page that opens with no address given counts as it).
+  bool get _onMain {
+    final here = _currentAddress ?? widget.address;
+    if (here == null) return true;
+    final main = _mainAddress;
+    return main != null && _bare(here) == _bare(main);
+  }
+
+  /// What the bar and a Home shortcut call the page: on the main page the library's title (a ZIM's main page often carries a
+  /// title that names something else, such as "Wikipedia"); on every other page the page's own title.
+  String _shownTitle(String library) => _onMain || _pageTitle.isEmpty ? library : _pageTitle;
+
+  Future<void> _learnMain() async {
+    final id = _zimId;
+    if (id == null) return;
+    try {
+      final m = await widget.sources.zimMainPage(id);
+      if (mounted) setState(() => _mainAddress = m);
+    } catch (_) {}
+  }
+
   @override
   void initState() {
     super.initState();
     _resolveStart();
+    _learnMain();
   }
 
   Future<void> _resolveStart() async {
@@ -439,7 +469,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       layout,
       Shortcut.page(
         address: address,
-        title: _pageTitle.isEmpty ? lib : _pageTitle,
+        title: _shownTitle(lib),
         library: lib,
       ),
     );
@@ -557,7 +587,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                   onSubmitted: (_) => _fullText(),
                 )
               : Text(
-                  _pageTitle.isEmpty ? title : _pageTitle,
+                  _shownTitle(title),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 18),

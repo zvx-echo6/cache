@@ -105,7 +105,7 @@ impl Env {
         let ctx = ToolCtx { location: loc, places: &self.places, now, geocoder: geo, live_fetcher: grant.map(|g| g as &dyn LiveFetcher) };
         match t.run(&ctx, &args)? {
             ToolOutput::Json(v) => Ok(v),
-            ToolOutput::Text(_) => panic!("text"),
+            ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("text"),
         }
     }
 
