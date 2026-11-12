@@ -310,7 +310,7 @@ Texts you may see on a part:
 
 ## Weather status messages
 
-The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) says how fresh data is, for example "Updated 1 hour ago". It warns when old, for example "Updated 3 days ago". The "Weather" box says the same and has "Update now".
+The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) says how fresh data is, for example "Updated 1 hour ago". It warns when old, for example "Updated 3 days ago". The top card of "Weather" has one line with the age and "Update now".
 
 - "Nothing is switched on yet." on "Weather", or "Nothing switched on yet" in settings: turn on a source.
 - "Not updated yet": tap the refresh button, or "Update now".
@@ -320,11 +320,22 @@ The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) sa
 ## Weather screen messages
 
 - "Waiting for your position." with "The forecast and alerts for where you are show here once the device knows where it is.": nothing is wrong. Wait.
+- "No forecast yet": the forecast hasn't been downloaded yet. Tap "Update now".
+- "Forecast expired, needs a connection": connect and tap "Update now".
+- "No forecast is switched on": no forecast source is on. Tap the line to open the settings.
 - "Not downloaded yet. Update now to get it.": tap "Update now".
 - "Expired · [age] · needs a connection for more": connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when online.
+- "Not checked yet": alerts and fires haven't been checked for this place yet. Tap "Update now".
+- "Last checked [when].": alert and fire data is too old to trust. Connect and update. Offline, it adds "Needs a connection for anything newer."
 - "That alert has ended or is no longer in the data.": the alert is over.
 - "No active emergency alerts": none are listed for the place right now. Nothing is wrong.
+
+One line under the top card says what needs attention. Tap it to open the settings.
+
+- "[source] has not updated since [when]": that source didn't update. Its page in the settings shows why.
+- "[source] needs a key": tap "Get key" on the source's row in the settings.
+- "Alerts and fires are not switched on": no alert or fire source is on. Turn one on in the settings.
 
 ## Update messages
 
