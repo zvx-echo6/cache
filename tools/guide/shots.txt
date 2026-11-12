@@ -12,7 +12,7 @@ download-popup-carry-on | The download pop-up for a region partly on the phone: 
 settings | Settings, the top page, with the quiet line "Getting search ready: 3 of 12" at its foot
 settings-storage | Settings > Storage: what uses the device's space, with "Clean up", and "Advanced" (Background indexing: Gentle) at the foot
 settings-maps | Settings > Maps: one line per region, the layers and Advanced
-weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
+weather | Weather for "Where I am": the top card with the reading and "Updated ... ago", an alert and a fire under "Happening nearby", and the first days of the forecast
 library | Library: the "Getting search ready · 3 of 12 done" line with its bar at the top, then the four rows: ZIM Collections, Bookshelves, Catalog and Cache Documentation, then "Add to Library"
 library-add | Library > Add: a library from the list, a file or a download link
 guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
