@@ -98,6 +98,7 @@ class CarBridge {
     _started = true;
     _channel.setMethodCallHandler(_onCall);
     nav.addListener(_schedule);
+    nav.location.addListener(_onLocation);
     elevation?.addListener(_schedule);
     settings?.addListener(_onSettings);
     _lastTheme = theme?.call();
@@ -117,6 +118,7 @@ class CarBridge {
   void dispose() {
     _pushTimer?.cancel();
     nav.removeListener(_schedule);
+    if (_started) nav.location.removeListener(_onLocation);
     elevation?.removeListener(_schedule);
     settings?.removeListener(_onSettings);
     maps.removeListener(_onMaps);
@@ -199,6 +201,13 @@ class CarBridge {
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
     unawaited(_send('styleChanged', null));
+  }
+
+  /// The phone's position changed. While nothing is guided that position is the car's marker ([snapshot]), and nothing else
+  /// tells the car about it: [NavState] does not change when the phone moves. (While guiding, guidance itself changes with
+  /// every fix, so the trip goes out from there.)
+  void _onLocation() {
+    if (!nav.guiding) _schedule();
   }
 
   void _onEvent(NavEvent e) {

@@ -589,6 +589,64 @@ void main() {
       b.dispose();
     });
 
+    Map<Object?, Object?> lastTrip() => toCar.lastWhere((c) => c.method == 'trip').arguments as Map;
+
+    test('the car is told when the phone position changes while nothing is guided', () async {
+      await settle();
+      toCar.clear();
+      // The phone has a position (read when the car connected, or it moved): the car's home map marker is that position.
+      location.publish(fixAt(43.0, -114.0));
+      await settle();
+      expect(toCar.where((c) => c.method == 'trip'), isNotEmpty, reason: 'nothing told the car the position changed');
+      expect(lastTrip()['phase'], 'browsing');
+      expect((lastTrip()['position'] as Map)['lat'], 43.0);
+      expect((lastTrip()['position'] as Map)['lon'], -114.0);
+      location.publish(fixAt(43.1, -114.2));
+      await settle();
+      expect((lastTrip()['position'] as Map)['lon'], -114.2);
+      // The position forgotten: the car is told there is none (it draws no marker) instead of keeping the last one.
+      location.forgetPublished();
+      await settle();
+      expect(lastTrip().containsKey('position'), isFalse);
+    });
+
+    test('after a test drive ends the car has the phone position again, not the last point of the drive', () async {
+      await preview(); // the phone is at 42.5, -113.8
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, ((lon + 113.8) / 0.3).clamp(0.0, 1.0)));
+      await fromCar('autoDrive', {'on': true});
+      await fromCar('start');
+      expect(drive.simulating, isTrue);
+      await settle(120);
+      // The drive's fixes are the position while it runs: the car's marker and the phone's own have moved east along the route.
+      final driven = location.fix!;
+      expect(driven.lon, greaterThan(-113.8));
+      // End route on the car.
+      await fromCar('stop');
+      await settle(80);
+      expect(nav.guiding, isFalse);
+      expect(lastTrip()['phase'], 'browsing');
+      // The phone's real position again (the test's position source reads 42.5, -113.8), with no heading: parked.
+      final pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.5);
+      expect(pos['lon'], -113.8, reason: 'the car was left with the last point of the test drive');
+      expect(pos.containsKey('heading'), isFalse);
+      expect(location.fix!.lon, -113.8);
+      expect(nav.here!.lon, -113.8);
+    });
+
+    test('a real drive that ends keeps the position it has', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.2)));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.74, heading: 90));
+      await settle();
+      await fromCar('stop');
+      await settle();
+      // The GPS fix was the phone's own position: it is not thrown away when guidance ends.
+      expect(location.fix!.lon, -113.74);
+      expect((lastTrip()['position'] as Map)['lon'], -113.74);
+    });
+
     test('car search goes by name and address only: meaning false, and the search model is never asked for a vector', () async {
       final asked = <bool?>[];
       backend.onSearch = (q, {near, meaning}) async {
