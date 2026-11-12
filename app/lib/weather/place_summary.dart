@@ -13,6 +13,11 @@ const Duration kReadingLasts = Duration(hours: 3);
 /// From this age a reading is shown with the time it was taken ("As of 2:15 PM").
 const Duration kReadingAsOf = Duration(hours: 1);
 
+/// How long Home shows a named period of a forecast ("Tonight", "Thursday": a period with a start time, not a day by its date)
+/// from one downloaded copy: one period (the Weather Service writes them twelve hours long). A named period carries no end, and
+/// in a copy the app kept the core has not left out the ones that have ended, so an older copy is not known to cover now.
+const Duration kNamedPeriodLasts = Duration(hours: 12);
+
 /// How many fires that are not serious "Happening nearby" lists before "N more fires".
 const int kFiresListed = 3;
 
