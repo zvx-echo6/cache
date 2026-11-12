@@ -262,7 +262,7 @@ void main() {
       expect(find.byKey(const ValueKey('banner-then')), findsNothing, reason: 'the turn after is the first row of the list');
       expect(find.byKey(const ValueKey('lane-strip')), findsOneWidget);
       expect(find.textContaining('Alder Street'), findsOneWidget, reason: 'the next turn, in the banner');
-      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7]);
+      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7, 8, 9]);
       expect(find.text('Turn right onto Birch Hollow Road'), findsOneWidget);
       expect(find.text('Stop 1: Corner Market'), findsOneWidget);
       expect(find.text('Merge onto Route 9'), findsOneWidget);
@@ -287,12 +287,12 @@ void main() {
 
     testWidgets('a turn passed: the list moves on, the passed turn is gone', (tester) async {
       await show(tester);
-      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7]);
+      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7, 8, 9]);
       rig.at(2, 900);
       await tester.pump();
       expect(find.textContaining('Birch Hollow Road'), findsOneWidget, reason: 'now the banner\'s turn');
       expect(find.text('Turn right onto Birch Hollow Road'), findsNothing, reason: 'not repeated as a row');
-      expect(rowIndexes(tester), [3, 4, 5, 6, 7]);
+      expect(rowIndexes(tester), [3, 4, 5, 6, 7, 8, 9]);
       expect(find.text('Turn left onto Alder Street'), findsNothing);
     });
 
@@ -300,11 +300,11 @@ void main() {
       await show(tester);
       rig.at(3, 150);
       await tester.pump();
-      expect(rowIndexes(tester), [4, 5, 6, 7]);
+      expect(rowIndexes(tester), [4, 5, 6, 7, 8, 9]);
       rig.at(4, 1200, stopsReached: 1);
       await tester.pump();
       expect(find.text('Stop 1: Corner Market'), findsNothing);
-      expect(rowIndexes(tester), [5, 6, 7]);
+      expect(rowIndexes(tester), [5, 6, 7, 8, 9]);
       expect(find.textContaining('Route 9'), findsOneWidget);
     });
 
@@ -314,7 +314,7 @@ void main() {
       rig.nav.poke();
       await tester.pump();
       expect(find.textContaining('Rerouting'), findsOneWidget);
-      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7]);
+      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7, 8, 9]);
       expect(tester.widget<Opacity>(find.ancestor(of: find.byKey(const ValueKey('drive-turns')), matching: find.byType(Opacity)).first).opacity, lessThan(1));
       // The new route lands: the list is the new route's.
       rig.nav.rerouting = false;
@@ -322,7 +322,7 @@ void main() {
       rig.nav.routes = [MapRoute.fromJson(rig.route)];
       rig.at(1, 300);
       await tester.pump();
-      expect(rowIndexes(tester), [2, 3, 4, 5, 6]);
+      expect(rowIndexes(tester), [2, 3, 4, 5, 6, 7, 8]);
       expect(find.textContaining('Stop 1'), findsNothing);
     });
 

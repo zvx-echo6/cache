@@ -268,9 +268,9 @@ class DriveExtras extends StatelessWidget {
           padding: pad,
           child: Column(
             children: [
-              Expanded(flex: 11, child: mini),
+              Expanded(flex: 10, child: mini),
               const SizedBox(height: 8),
-              Expanded(flex: 9, child: chart),
+              Expanded(flex: 10, child: chart),
             ],
           ),
         );
@@ -327,6 +327,8 @@ class DriveElevation extends StatelessWidget {
                 height: math.max(24.0, box.maxHeight),
                 positionM: pos,
                 steep: steep,
+                // The labelled chart when it has the height; the compact one (the position and the line) when it is low.
+                full: box.maxHeight >= 110,
               ),
             ),
           ),
@@ -336,20 +338,16 @@ class DriveElevation extends StatelessWidget {
             children: [
               Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3))),
               const SizedBox(width: 8),
-              Expanded(child: Text('Steepest climb ahead', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary))),
-              const SizedBox(width: 8),
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Text.rich(
-                    TextSpan(children: [
-                      TextSpan(text: steep == null ? 'None' : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
-                      if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
-                    ]),
-                    maxLines: 1,
-                    style: TextStyle(fontSize: 14, color: k.text),
-                  ),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: 'Steepest climb ahead  ', style: TextStyle(color: k.secondary)),
+                    TextSpan(text: steep == null ? 'None' : '${(steep.grade * 100).round()}%', style: TextStyle(fontWeight: FontWeight.w700, color: k.text)),
+                    if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where', style: TextStyle(color: k.text)),
+                  ]),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14, height: 1.15),
                 ),
               ),
             ],
@@ -369,7 +367,7 @@ class DriveElevation extends StatelessWidget {
             textBaseline: TextBaseline.alphabetic,
             children: [
               Expanded(child: Text('Elevation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: k.text))),
-              if (prof != null && prof.hasData) Flexible(child: Text('Whole route, ${routeLengthText(fmt, prof.totalM)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary))),
+              if (prof != null && prof.hasData) Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Whole route, ${routeLengthText(fmt, prof.totalM)}', maxLines: 1, style: TextStyle(fontSize: 13, color: k.secondary)))),
             ],
           ),
           const SizedBox(height: 4),

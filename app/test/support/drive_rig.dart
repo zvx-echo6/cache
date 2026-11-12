@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
@@ -47,18 +48,24 @@ const driveStop = MapPlace(id: 'place:test:market', type: 'place', name: 'Corner
 
 /// The made-up sample route of the drive screen's pictures and tests: east along 42.5N, 40 points, with these maneuvers (index:
 /// type, words): 0 start, 1 left onto Alder Street, 2 right onto Birch Hollow Road, 3 the stop (only when [withStop]),
-/// then a merge onto Route 9, an exit onto Quarry Lane, a left onto Fernwood Lane, and the arrival.
+/// then a merge onto Route 9, Willow Drive, an exit onto Quarry Lane, Orchard Road, a left onto Fernwood Lane, and the arrival.
 Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1'}) {
   const n = 40;
-  final pts = [for (var i = 0; i <= n; i++) GeoPoint(42.5, -113.8 + 0.3 * i / n)];
-  final total = metersBetween(pts.first, pts.last);
+  // East, wandering: the line has a shape, so the mini map has something to draw.
+  final pts = [for (var i = 0; i <= n; i++) GeoPoint(42.5 + 0.03 * math.sin(i / n * 2.6 * math.pi) * (0.4 + i / n), -113.8 + 0.3 * i / n)];
+  var total = 0.0;
+  for (var i = 1; i < pts.length; i++) {
+    total += metersBetween(pts[i - 1], pts[i]);
+  }
   final steps = <(String, String, String?, int)>[
     ('start', 'Drive east on Millbrook Avenue.', 'Millbrook Avenue', 0),
     ('left', 'Turn left onto Alder Street.', 'Alder Street', 4),
     ('right', 'Turn right onto Birch Hollow Road.', 'Birch Hollow Road', 9),
     if (withStop) ('via', 'You have reached a stop.', null, 13),
     ('merge', 'Merge onto Route 9.', 'Route 9', 18),
+    ('right', 'Turn right onto Willow Drive.', 'Willow Drive', 22),
     ('exit_right', 'Take the exit on the right onto Quarry Lane.', 'Quarry Lane', 26),
+    ('slight_left', 'Keep left onto Orchard Road.', 'Orchard Road', 29),
     ('left', 'Turn left onto Fernwood Lane.', 'Fernwood Lane', 32),
     ('destination', 'You have arrived at your destination.', null, 36),
   ];
