@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/app_fs.dart';
+import 'package:cache/browse/web/device_api.dart' show DeviceException;
 import 'package:cache/browse/web/device_files.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/shelf_source.dart';
@@ -127,6 +129,17 @@ void main() {
     expect(s.holdsBooks(libs.libraries.single), isTrue);
     expect(s.placer, isNotNull);
     expect(s.copies, isNotNull);
+  });
+
+  test('a book\'s PDF is fetched from the server by its library and document, and a 404 is a PDF that is gone', () async {
+    final s = await open();
+    final aid = s.booksOn('210').single;
+    expect((aid.libraryId, aid.docId), ('field', 'aid'));
+    server.pdfs['field/aid'] = Uint8List.fromList([37, 80, 68, 70]);
+    final fetch = s.pdfFetcher(aid)!;
+    expect(await fetch(), [37, 80, 68, 70]);
+    expect(server.pdfAsked, ['field/aid']);
+    await expectLater(s.pdfFetcher(s.unsorted.single)!(), throwsA(isA<DeviceException>().having((e) => e.status, 'status', 404)));
   });
 
   test('what a person does is sent to the server as events, one call each, and the books are read again', () async {

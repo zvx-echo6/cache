@@ -141,6 +141,58 @@ void main() {
         expect(find.text('Pharmacy'), findsNothing, reason: 'the list is gone; the field shows the choice');
       });
 
+      // After a place was chosen the box shows its name. Tapping the box again left the cursor after the name, so what was
+      // typed next was added to it (the name, then "b": a search for "Cassia Regional Hospitalb").
+      testWidgets('search: entering the box again selects the chosen place\'s name, so typing replaces it', (tester) async {
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [hospital]);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        final field = find.byKey(const ValueKey('map-search-field'));
+        TextEditingController box() => tester.widget<TextField>(field).controller!;
+        // What the keyboard does when a letter is typed: it goes in place of the selection (at the cursor when nothing is selected).
+        Future<void> type(String letter) async {
+          tester.testTextInput.updateEditingValue(box().value.replaced(box().selection, letter));
+          await tester.pump();
+        }
+
+        // Words the person typed are theirs: leaving the box and entering it again selects nothing, and typing adds to them.
+        await tester.enterText(field, 'hosp');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pump();
+        await tester.tap(field);
+        await tester.pump();
+        expect(box().selection.isCollapsed, isTrue, reason: 'typed words were selected');
+        box().selection = const TextSelection.collapsed(offset: 4);
+        await type('i');
+        expect(nav.query, 'hospi');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+
+        // A place is chosen: the box shows its name and the search is closed.
+        await tester.tap(find.text(hospital.name));
+        await tester.pump();
+        expect(nav.selected!.id, hospital.id);
+        expect(nav.searchOpen, isFalse);
+        expect(box().text, hospital.name);
+        // Long enough after the last tap that the next one is a tap of its own, not the second of a double tap.
+        await tester.pump(const Duration(seconds: 1));
+
+        // The box is entered again: the search opens with the whole name selected, and a letter typed takes its place.
+        await tester.tap(field);
+        await tester.pump();
+        expect(nav.searchOpen, isTrue);
+        expect(box().text, hospital.name);
+        expect(box().selection, TextSelection(baseOffset: 0, extentOffset: hospital.name.length), reason: 'the chosen place\'s name is not selected');
+        await type('b');
+        expect(box().text, 'b');
+        expect(nav.query, 'b', reason: 'what was typed was added to the chosen place\'s name');
+        // the search for it runs
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('search: nothing found, a note about words only, and the clear and back buttons', (tester) async {
         backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'no_embedder', results: const []);
         await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
@@ -309,7 +361,15 @@ void main() {
         expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
         expect(find.textContaining('off-road'), findsWidgets);
         expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
-        expect(find.textContaining('shown dashed'), findsOneWidget);
+        // The note says "off-road" (a part that follows a trail is off-road too, not "open ground"), then the climb and descent.
+        final totals = nav.route!.totals;
+        expect(
+          tester.widget<Text>(find.byKey(const ValueKey('offroad-note'))).data,
+          'Part of this route is off-road: ${fmt.distance(totals.offroadM)}, shown dashed. Climb ${fmt.height(totals.ascentM)}, descent ${fmt.height(totals.descentM)}.',
+        );
+        expect(fmt.distance(totals.offroadM), '3.8 mi');
+        expect(find.textContaining('no road'), findsNothing);
+        expect(find.textContaining('open ground'), findsNothing);
         expect(find.text('Start'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('route-card-1')));
         await tester.pump();
@@ -381,6 +441,42 @@ void main() {
         await nav.setLandAccess('emergency');
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt)), scale: 1.6));
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('directions: a bar beside the choices shows while there is more of them than fits, and only then', (tester) async {
+        // A phone's width, so the off-road choices take the rows they take on a phone.
+        tester.view.physicalSize = const Size(360, 700);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final color = routeChoicesBarColor(cacheTokens[theme]!).toARGB32();
+        bool bar(Symbol method, List<dynamic> args) => method == #drawRRect && args.length == 2 && args[1] is Paint && (args[1] as Paint).color.toARGB32() == color;
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: mode.startsWith('offroad'), mode: mode));
+        await nav.openDirections(hospital);
+        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
+        Future<void> settle() async {
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 400));
+          await tester.pump(const Duration(milliseconds: 400));
+        }
+
+        final choices = find.byKey(const ValueKey('route-choices-bar'));
+        ScrollPosition position() => Scrollable.of(tester.element(find.byKey(const ValueKey('mode-drive')))).position;
+        // Drive, one route: everything fits, and no bar is drawn.
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
+        // Off-road: its choices and the off-road note are more than half the window holds.
+        await nav.setMode('offroad_foot');
+        await settle();
+        expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
+        expect(position().maxScrollExtent, greaterThan(0));
+        expect(choices, paints..something(bar));
+        // Back to what fits: the bar goes.
+        await nav.setMode('drive');
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
         expect(tester.takeException(), isNull);
       });
 

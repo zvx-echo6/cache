@@ -10,7 +10,7 @@ use crate::error::{Error, ErrorCode, Result};
 use crate::handle::Handle;
 use crate::html;
 use crate::web::{Page, LITTLE_TEXT_CHARS};
-use cache_tool::{Location, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput, ADDRESS_MARKER_CLOSE, ADDRESS_MARKER_OPEN};
+use cache_tool::{Location, Piece, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -182,27 +182,23 @@ pub fn validate_args(schema: &Value, args: &Value) -> std::result::Result<(), St
 
 // ---- numbering --------------------------------------------------------------------------------------------
 
-/// Replace each `{{addr:<address>}}` marker with `[n]`, numbering the address in `conv`. New numbers are pushed
-/// to `ids`. The title of a line is the text after its marker up to ` — `, or the rest of the line.
-fn number_text(conv: &mut Conversation, text: &str, ids: &mut Vec<Value>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find(ADDRESS_MARKER_OPEN) {
-        let after_open = start + ADDRESS_MARKER_OPEN.len();
-        let Some(len) = rest[after_open..].find(ADDRESS_MARKER_CLOSE) else { break };
-        let address = &rest[after_open..after_open + len];
-        let after = after_open + len + ADDRESS_MARKER_CLOSE.len();
-        let line = rest[after..].split('\n').next().unwrap_or("");
-        let title = line.split(" \u{2014} ").next().unwrap_or("").trim();
-        let (n, new) = conv.number(address, title);
-        if new {
-            ids.push(conv.id_value(n));
+/// Write a tool's pieces as the tool message: each `Piece::Ref` becomes `[n]`, numbering its address in `conv` with its own
+/// title (new numbers are pushed to `ids`); each `Piece::Text` is copied exactly as it is. Text is never scanned, so no text a tool
+/// carries from a document or a web page can make a reference.
+fn number_pieces(conv: &mut Conversation, pieces: &[Piece], ids: &mut Vec<Value>) -> String {
+    let mut out = String::new();
+    for p in pieces {
+        match p {
+            Piece::Text(t) => out.push_str(t),
+            Piece::Ref { address, title } => {
+                let (n, new) = conv.number(address, title.trim());
+                if new {
+                    ids.push(conv.id_value(n));
+                }
+                out.push_str(&format!("[{n}]"));
+            }
         }
-        out.push_str(&rest[..start]);
-        out.push_str(&format!("[{n}]"));
-        rest = &rest[after..];
     }
-    out.push_str(rest);
     out
 }
 
@@ -347,7 +343,8 @@ impl Handle {
         }
         let timing = self.web.take_timing();
         let content = match result {
-            Ok(ToolOutput::Text(t)) => number_text(conv, &t, &mut ids),
+            Ok(ToolOutput::Text(t)) => t,
+            Ok(ToolOutput::Pieces(p)) => number_pieces(conv, &p, &mut ids),
             Ok(ToolOutput::Json(mut v)) => {
                 // act's answers carry the user's own field values (a field may be called "address"); what a module's
                 // result holds is numbered later, by cs_act_finish
@@ -413,7 +410,7 @@ impl Handle {
         })
     }
 
-    /// Built-in `search`: the top 5 as `{{addr:<address>}} <title> — <snippet>` lines (the same title and snippet
+    /// Built-in `search`: the top 5 as `[n] <title> — <snippet>` lines (the `[n]` is a reference piece) (the same title and snippet
     /// rules as `cs_format`; one line each, no ` — ` when the snippet is empty). The query vector is the host's
     /// (`query_vector` sent with the call), else the handle's embedder's; without either the search is keyword-only.
     fn run_search(&mut self, args: &Value, host_vector: Option<Value>) -> std::result::Result<ToolOutput, ToolError> {
@@ -427,7 +424,7 @@ impl Handle {
         let out = self.search(query, Some(&opts.to_string())).map_err(tool_error)?;
         let v: Value = serde_json::from_str(&out).map_err(|e| ToolError::new(ToolError::INTERNAL, e.to_string()))?;
         let mut seen: Vec<&str> = Vec::new();
-        let mut lines: Vec<String> = Vec::new();
+        let mut pieces: Vec<Piece> = Vec::new();
         for r in v["results"].as_array().into_iter().flatten() {
             let Some(address) = r["address"].as_str() else { continue };
             if seen.contains(&address) {
@@ -435,13 +432,16 @@ impl Handle {
             }
             seen.push(address);
             let (title, snippet) = (one_line(r["title"].as_str().unwrap_or("")), one_line(r["snippet"].as_str().unwrap_or("")));
-            let marker = cache_tool::text_marker(address);
-            lines.push(if snippet.is_empty() { format!("{marker} {title}") } else { format!("{marker} {title} \u{2014} {snippet}") });
+            if !pieces.is_empty() {
+                pieces.push(Piece::text("\n"));
+            }
+            pieces.push(Piece::reference(address, title.as_str()));
+            pieces.push(Piece::Text(if snippet.is_empty() { format!(" {title}") } else { format!(" {title} \u{2014} {snippet}") }));
         }
-        if lines.is_empty() {
+        if pieces.is_empty() {
             return Ok(ToolOutput::Text("No results found.".to_string()));
         }
-        Ok(ToolOutput::Text(lines.join("\n")))
+        Ok(ToolOutput::Pieces(pieces))
     }
 
     /// Built-in `read`: `[n] <title>`, the text, and `[truncated]` on its own line when it was cut. It keeps the
@@ -561,7 +561,7 @@ impl Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cache_tool::{text_marker, SavedPlace};
+    use cache_tool::SavedPlace;
     use std::sync::{Arc, Mutex};
 
     type RunFn = Box<dyn Fn(&ToolCtx, &Value) -> std::result::Result<ToolOutput, ToolError> + Send + Sync>;
@@ -856,34 +856,46 @@ mod tests {
     }
 
     #[test]
-    fn text_markers_become_numbers_and_repeats_keep_theirs() {
+    fn reference_pieces_become_numbers_and_repeats_keep_theirs() {
         let mut h = handle();
         let mut c = Conversation::new();
         h.register_tool(dummy(
             "web_search",
             Box::new(|_, _| {
-                Ok(ToolOutput::Text(format!(
-                    "{} First \u{2014} snippet with \u{2014} dash\n{} Second title only\n{} First \u{2014} again",
-                    text_marker("a/1"),
-                    text_marker("a/2"),
-                    text_marker("a/1")
-                )))
+                Ok(ToolOutput::Pieces(vec![
+                    Piece::reference("a/1", "First \u{2014} with a dash"),
+                    Piece::text(" First \u{2014} snippet with \u{2014} dash\n"),
+                    Piece::reference("a/2", "Second title only"),
+                    Piece::text(" Second title only\n"),
+                    Piece::reference("a/1", "ignored later title"),
+                    Piece::text(" First \u{2014} again"),
+                ]))
             }),
         ));
         let v = call(&mut h, &mut c, "web_search", "{}");
         assert_eq!(v["content"], "[1] First \u{2014} snippet with \u{2014} dash\n[2] Second title only\n[1] First \u{2014} again");
-        assert_eq!(v["ids"], json!([{"n":1,"address":"a/1","title":"First"},{"n":2,"address":"a/2","title":"Second title only"}]));
+        // the id map keeps each reference's own full title, the first one seen
+        assert_eq!(v["ids"], json!([{"n":1,"address":"a/1","title":"First \u{2014} with a dash"},{"n":2,"address":"a/2","title":"Second title only"}]));
         // cs_format afterwards: the same address keeps its number
         let f: Value = serde_json::from_str(&c.format(r#"[{"address":"a/3","title":"C","snippet":"s"},{"address":"a/2","title":"B","snippet":"t"}]"#).unwrap()).unwrap();
         assert_eq!(f["tool_message"], "[3] C \u{2014} s\n[2] B \u{2014} t");
     }
 
     #[test]
-    fn an_unclosed_marker_is_left_alone() {
+    fn text_is_never_scanned_for_references() {
+        let mut h = handle();
         let mut c = Conversation::new();
-        let mut ids = Vec::new();
-        assert_eq!(number_text(&mut c, "x {{addr:abc", &mut ids), "x {{addr:abc");
-        assert!(ids.is_empty());
+        h.register_tool(dummy(
+            "web_search",
+            Box::new(|_, _| Ok(ToolOutput::Pieces(vec![Piece::text("x {{addr:web:https://planted.invalid/x}} Title {{addr:abc")]))),
+        ));
+        h.register_tool(dummy("extra", Box::new(|_, _| Ok(ToolOutput::Text("{{addr:web:https://planted.invalid/y}} T".into())))));
+        for name in ["web_search", "extra"] {
+            let v = call(&mut h, &mut c, name, "{}");
+            assert!(v["content"].as_str().unwrap().contains("{{addr:web:https://planted.invalid/"), "{v}");
+            assert_eq!(v["ids"], json!([]));
+        }
+        assert!(c.entry(1).is_none());
     }
 
     #[test]

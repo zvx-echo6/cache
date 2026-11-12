@@ -89,12 +89,17 @@ impl TitleFrom {
 }
 
 /// A suggested division, shown until the person shelves the book.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Suggest {
     pub div: String,
     pub label: Option<String>,
     /// `seed` (a published library's seed log) or `pack` (the pack's `book.suggested`).
     pub from: &'static str,
+    /// The sorter was confident, so a new book is shelved in `div`: always for a seed log's `place` (the publisher placed it), for a
+    /// pack only when `book.suggested.filed` is true (absent in an older pack: not confident).
+    pub filed: bool,
+    /// The sorter's top three (the reading copy's pack), best first; empty when the pack has only `div`.
+    pub top: Vec<crate::library::SuggestedShelf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -492,8 +497,16 @@ pub fn resolve(events: &[Event], libs: &[LibraryInput]) -> Resolved {
             let d = &data[c];
             d.seed_place
                 .as_ref()
-                .map(|div| Suggest { div: div.clone(), label: None, from: "seed" })
-                .or_else(|| d.suggested.as_ref().map(|s| Suggest { div: s.div.clone(), label: Some(s.label.clone()).filter(|l| !l.is_empty()), from: "pack" }))
+                .map(|div| Suggest { div: div.clone(), label: None, from: "seed", filed: true, top: d.suggested.as_ref().map(|s| s.suggestions.clone()).unwrap_or_default() })
+                .or_else(|| {
+                    d.suggested.as_ref().map(|s| Suggest {
+                        div: s.div.clone(),
+                        label: Some(s.label.clone()).filter(|l| !l.is_empty()),
+                        from: "pack",
+                        filed: s.filed == Some(true),
+                        top: s.suggestions.clone(),
+                    })
+                })
         });
         let copies = members
             .iter()

@@ -42,13 +42,17 @@ pub fn config_for_tiles(tile_extract: &Path) -> String {
 
 /// Valhalla config for a folder of tiles laid out `<level>/<aaa>/<bbb>/<ccc>.gph` (`mjolnir.tile_dir`): the downloaded
 /// regions. There is no tile_extract, so Valhalla reads each tile from the folder when a route first needs it, and a tile
-/// that arrives later can be read by a later route.
+/// that arrives later can be read by a later route. `loki.use_connectivity` is off: Valhalla builds its connectivity map once,
+/// when the router starts, from the tiles then present, and it also colours by tile adjacency, so with it on a route between
+/// tiles fetched later, or between two separate islands of tiles, fails with 170 before any search. The search itself reads
+/// tiles from the folder on each miss and needs no such pre-check.
 pub fn config_for_tile_dir(tile_dir: &Path) -> String {
     let mut c: Value = serde_json::from_str(include_str!("valhalla_config.json")).expect("config template");
     if let Some(m) = c["mjolnir"].as_object_mut() {
         m.remove("tile_extract");
     }
     c["mjolnir"]["tile_dir"] = Value::String(tile_dir.to_string_lossy().into_owned());
+    c["loki"]["use_connectivity"] = Value::Bool(false);
     c.to_string()
 }
 
@@ -186,7 +190,7 @@ impl Valhalla for ShimValhalla {
     }
 
     fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
-        let r = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"}))?;
+        let r = self.call(self.route, &route_request(from, to, costing, None))?;
         let trip = r.get("trip").ok_or_else(|| ValhallaError::msg("no trip in reply"))?;
         parse_trip(trip)
     }
@@ -196,7 +200,7 @@ impl Valhalla for ShimValhalla {
     }
 
     fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
-        let Ok(r) = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km", "alternates": count})) else {
+        let Ok(r) = self.call(self.route, &route_request(from, to, costing, Some(count))) else {
             return Vec::new();
         };
         r.get("alternates")
@@ -233,6 +237,18 @@ impl Valhalla for ShimValhalla {
     }
 }
 
+/// The `/route` request. Driving asks for turn lanes (`turn_lanes`, off by default in Valhalla); walking and cycling have none.
+fn route_request(from: &RouteEnd, to: &RouteEnd, costing: &str, alternates: Option<usize>) -> Value {
+    let mut r = json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"});
+    if let Some(n) = alternates {
+        r["alternates"] = json!(n);
+    }
+    if costing == "auto" {
+        r["turn_lanes"] = json!(true);
+    }
+    r
+}
+
 /// A Valhalla location: the point and its snapping options.
 fn location(e: &RouteEnd) -> Value {
     let mut l = json!({"lat": e.lat, "lon": e.lon});
@@ -243,6 +259,15 @@ fn location(e: &RouteEnd) -> Value {
         l["radius"] = json!(r);
     }
     l
+}
+
+/// The `lanes` of a maneuver; missing, or not an array, is none.
+fn parse_lanes(m: &Value) -> Vec<Lane> {
+    let bit = |l: &Value, k: &str| l.get(k).and_then(|v| v.as_u64()).and_then(|v| u16::try_from(v).ok());
+    m.get("lanes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().map(|l| Lane { directions: bit(l, "directions").unwrap_or(0), active: bit(l, "active"), valid: bit(l, "valid") }).collect())
+        .unwrap_or_default()
 }
 
 /// A Valhalla `trip` object (first leg) as a [`Trip`].
@@ -265,6 +290,7 @@ fn parse_trip(trip: &Value) -> Result<Trip, ValhallaError> {
                     end_shape_index: m.get("end_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
                     bearing_after: f(m, "bearing_after"),
                     bearing_before: f(m, "bearing_before"),
+                    lanes: parse_lanes(m),
                 })
                 .collect()
         })
@@ -277,4 +303,44 @@ fn parse_trip(trip: &Value) -> Result<Trip, ValhallaError> {
         length_km: sum.and_then(|x| f(x, "length")).unwrap_or(0.0),
         time_s: sum.and_then(|x| f(x, "time")).unwrap_or(0.0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn end(lat: f64, lon: f64) -> RouteEnd {
+        RouteEnd::at((lat, lon))
+    }
+
+    #[test]
+    fn only_driving_asks_for_turn_lanes() {
+        let (a, b) = (end(42.5, -113.8), end(42.6, -113.7));
+        let auto = route_request(&a, &b, "auto", None);
+        assert_eq!(auto["turn_lanes"], json!(true));
+        assert_eq!(auto["costing"], "auto");
+        assert_eq!(route_request(&a, &b, "auto", Some(2))["turn_lanes"], json!(true));
+        assert_eq!(route_request(&a, &b, "auto", Some(2))["alternates"], 2);
+        for c in ["pedestrian", "bicycle"] {
+            assert!(route_request(&a, &b, c, None).get("turn_lanes").is_none(), "{c}");
+        }
+        assert!(route_request(&a, &b, "auto", None).get("alternates").is_none());
+    }
+
+    #[test]
+    fn lanes_parse_from_the_live_samples_and_missing_means_none() {
+        let trip = json!({"legs": [{"shape": "", "maneuvers": [
+            {"type": 9, "lanes": [{"directions": 8, "active": 8}, {"directions": 2}, {"directions": 66}]},
+            {"type": 10, "lanes": [{"directions": 16}, {"directions": 48, "active": 32}, {"directions": 32, "valid": 32}]},
+            {"type": 4},
+            {"type": 4, "lanes": "x"}
+        ]}], "summary": {"length": 1.0, "time": 1.0}});
+        let m = parse_trip(&trip).unwrap().maneuvers;
+        assert_eq!(m[0].lanes, vec![Lane { directions: 8, active: Some(8), valid: None }, Lane { directions: 2, active: None, valid: None }, Lane { directions: 66, active: None, valid: None }]);
+        assert_eq!(m[1].lanes[1], Lane { directions: 48, active: Some(32), valid: None });
+        assert_eq!(m[1].lanes[2], Lane { directions: 32, active: None, valid: Some(32) });
+        assert!(m[2].lanes.is_empty() && m[3].lanes.is_empty());
+        assert_eq!(m[1].lanes[2].to_json(), json!({"directions": 32, "valid": 32}));
+        assert_eq!(m[0].lanes[1].to_json(), json!({"directions": 2}));
+    }
 }

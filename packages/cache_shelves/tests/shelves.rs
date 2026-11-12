@@ -2,7 +2,7 @@
 
 use cache_shelves::events::{valid_relpath, FolderMode};
 use cache_shelves::import::import_own;
-use cache_shelves::library::{copies_path, copy_key, load_library, read_copies, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv};
+use cache_shelves::library::{copies_path, copy_key, load_library, read_copies, LibraryInput, LibraryRef, PackFacts, SameInfo, Seed, SuggestedDiv, SuggestedShelf};
 use cache_shelves::resolve::{resolve, TitleFrom};
 use cache_shelves::store::{parse_log, read_logs, LogWriter};
 use cache_shelves::view::{build_view, view_bytes, view_value};
@@ -396,7 +396,7 @@ fn shelf_title_removed_and_the_reading_copy() {
 #[test]
 fn the_suggestion_is_the_seed_place_then_the_pack() {
     let mut a = pf("A", "a", "A", 1);
-    a.suggested = Some(SuggestedDiv { div: s("440"), label: s("Stone") });
+    a.suggested = Some(SuggestedDiv { div: s("440"), label: s("Stone"), ..Default::default() });
     let mut l = lib("L", vec![a, pf("B", "b", "B", 1)]);
     l.seed.place.insert(s("a"), Some(s("450")));
     l.seed.place.insert(s("b"), None);
@@ -407,6 +407,117 @@ fn the_suggestion_is_the_seed_place_then_the_pack() {
     l.seed.place.clear();
     let sa = resolve(&[], &[l]).book_of("A").unwrap().suggested.clone().unwrap();
     assert_eq!((sa.div.as_str(), sa.label.as_deref(), sa.from), ("440", Some("Stone"), "pack"));
+}
+
+#[test]
+fn a_book_is_confident_only_when_the_pack_says_so_and_carries_its_top_three() {
+    let shelf = |d: &str, l: &str, x: f32| SuggestedShelf { div: s(d), label: s(l), score: Some(x) };
+    let top = vec![shelf("610", "Medicine", 0.41), shelf("620", "Engineering", 0.3), shelf("570", "Life sciences", 0.2)];
+    let mut a = pf("A", "a", "A", 1);
+    a.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(false), suggestions: top.clone() });
+    let mut b = pf("B", "b", "B", 1);
+    b.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(true), suggestions: top.clone() });
+    // an old pack: a division and no flag
+    let mut c = pf("C", "c", "C", 1);
+    c.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), ..Default::default() });
+    let mut d = pf("D", "d", "D", 1);
+    d.suggested = Some(SuggestedDiv { div: s("610"), label: s("Medicine"), filed: Some(false), suggestions: top.clone() });
+    let mut l = lib("L", vec![a, b, c, d]);
+    l.seed.place.insert(s("d"), Some(s("620"))); // the publisher placed D
+    let r = resolve(&[], &[l.clone()]);
+    let sg = |k: &str| r.book_of(k).unwrap().suggested.clone().unwrap();
+    assert!(!sg("A").filed, "the sorter was not confident: stays in Unsorted");
+    assert_eq!(sg("A").top.iter().map(|x| x.div.as_str()).collect::<Vec<_>>(), ["610", "620", "570"]);
+    assert!(sg("B").filed);
+    assert!(!sg("C").filed, "no flag (an old pack) is not confident");
+    assert!(sg("C").top.is_empty());
+    assert!(sg("D").filed && sg("D").from == "seed", "a seed place is the publisher's own filing");
+    // and in the view, and through copies.jsonl
+    let view = view_value(&r, &[l.clone()], &[]);
+    assert_eq!(view["books"]["A"]["suggested"]["filed"], json!(false));
+    assert_eq!(view["books"]["A"]["suggested"]["suggestions"][2], json!({"div": "570", "label": "Life sciences", "score": 0.2f32}));
+    assert_eq!(view["books"]["C"]["suggested"]["filed"], json!(false));
+    assert!(view["books"]["C"]["suggested"].get("suggestions").is_none());
+    let line = l.copies[0].to_copies_line();
+    assert_eq!(PackFacts::from_copies_line(&line).unwrap().suggested, l.copies[0].suggested, "the copies line keeps the flag and the three");
+    let plain = l.copies[2].to_copies_line();
+    assert!(!plain.contains("filed") && !plain.contains("suggestions"), "an old copy writes the bytes it always did: {plain}");
+}
+
+#[test]
+fn a_header_with_filed_and_suggestions_is_read_from_the_pack() {
+    let line = json!({
+        "cdoc": 1, "doc_id": "wm", "doc_version": 1, "title": "T", "source": {"blake3": "stored"},
+        "book": {"title": "T", "original_blake3": "O", "suggested": {"div": "610", "label": "Medicine", "source": "classifier", "second_div": "620", "filed": false,
+            "suggestions": [{"div": "610", "label": "Medicine", "score": 0.41}, {"div": "620", "label": "Eng"}, {"div": "570"}]}}
+    })
+    .to_string();
+    let f = PackFacts::from_header_line(&line).unwrap().suggested.unwrap();
+    assert_eq!((f.filed, f.suggestions.len()), (Some(false), 3));
+    assert_eq!((f.suggestions[1].score, f.suggestions[2].label.as_str()), (None, ""));
+}
+
+/// The one-time return to Unsorted writes its unsort and retire at the `at` it is given (just after the place it replaces), not at
+/// the device's last `at`, so a person's move made on another device before it stays on top.
+#[test]
+fn the_return_to_unsorted_is_stamped_after_its_place_so_a_persons_unsynced_move_wins() {
+    let libs = vec![lib("L", vec![pf("X", "x", "Book X", 10), pf("Y", "y", "Book Y", 10)])];
+    let tmp = Tmp::new("migration");
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    // device A: an auto place of X with a loc at t=100 (and its number), then a later event of its own at t=500
+    let a = LogWriter::open(&a_dir.join("log"), "dev-a").unwrap();
+    a.append(&[ev(100, "dev-a", place("X", "210")).with_loc("L/x"), ev(100, "dev-a", assign("X", "210", 1)), ev(500, "dev-a", title("Y", "Later"))]).unwrap();
+    // device B, not yet synced: a person moved X to 220 at t=200
+    LogWriter::open(&b_dir.join("log"), "dev-b").unwrap().append(&[ev(200, "dev-b", Kind::Place { copy: s("X"), div: s("220"), by: By::User })]).unwrap();
+    let request = |migration: Option<&str>, events: Value| {
+        let mut r = json!({"dir": a_dir.to_str().unwrap(), "dev": "dev-a", "events": events});
+        if let Some(m) = migration {
+            r["migration"] = json!(m);
+        }
+        r.to_string()
+    };
+    let ret = json!([{"ev": "unsort", "copy": "X", "by": "auto", "at": 101}, {"ev": "retire", "copy": "X", "div": "210", "seq": 1, "at": 101}]);
+
+    // an ordinary append holds the clock: the unsort lands at t=500, after the person's move, and would win (the bug)
+    let held: Value = serde_json::from_str(&ops::append(&request(None, ret.clone())).unwrap()).unwrap();
+    assert_eq!(held["written"], json!(2));
+    let held_at: Vec<u64> = parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0.iter().skip(3).map(|e| e.at).collect();
+    assert_eq!(held_at, [500, 500]);
+    // put A's log back to its first three lines for the migration below
+    let log_a = a_dir.join("log/dev-a.jsonl");
+    let first_three: String = std::fs::read_to_string(&log_a).unwrap().lines().take(3).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&log_a, first_three).unwrap();
+
+    // the migration keeps the `at` it was given
+    ops::append(&request(Some("unconfident-return"), ret.clone())).unwrap();
+    let mine = parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0;
+    assert_eq!(mine.iter().skip(3).map(|e| (e.kind.name(), e.at)).collect::<Vec<_>>(), [("unsort", 101), ("retire", 101)]);
+
+    // sync, either way round: both devices resolve the same, and the person's move is on top
+    for (from, to) in [(&a_dir, &b_dir), (&b_dir, &a_dir)] {
+        for f in std::fs::read_dir(from.join("log")).unwrap() {
+            let f = f.unwrap().path();
+            std::fs::copy(&f, to.join("log").join(f.file_name().unwrap())).unwrap();
+        }
+    }
+    let on_a = resolve(&read_logs(&a_dir.join("log")).unwrap().events, &libs);
+    let on_b = resolve(&read_logs(&b_dir.join("log")).unwrap().events, &libs);
+    for r in [&on_a, &on_b] {
+        let x = r.book_of("X").unwrap();
+        assert_eq!((x.shelf.as_deref(), x.by), (Some("220"), Some(By::User)), "the person's move wins");
+        assert_eq!(r.next_seq("210"), 2, "the returned number is retired");
+    }
+    // with no person's move the unsort is what is left
+    let only_a = resolve(&read_logs(&a_dir.join("log")).unwrap().events.into_iter().filter(|e| e.dev == "dev-a").collect::<Vec<_>>(), &libs);
+    assert_eq!(only_a.book_of("X").unwrap().shelf, None);
+    assert!(only_a.book_of("X").unwrap().shelved);
+
+    // only the return's own events may be written this way
+    for bad in [json!([{"ev": "place", "copy": "X", "div": "210", "by": "auto", "at": 1}]), json!([{"ev": "unsort", "copy": "X", "by": "user", "at": 1}]), json!([{"ev": "title", "copy": "X", "title": "T", "at": 1}])] {
+        assert!(ops::append(&request(Some("unconfident-return"), bad)).is_err());
+    }
+    assert!(ops::append(&request(Some("anything-else"), ret)).is_err());
+    assert_eq!(parse_log(&std::fs::read_to_string(a_dir.join("log/dev-a.jsonl")).unwrap()).0.len(), 5, "a refused request writes nothing");
 }
 
 #[test]

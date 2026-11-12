@@ -79,6 +79,18 @@ jobs:
           name: car-test-results
           path: app/build/app/reports/tests/testDebugUnitTest
           retention-days: 5
+      # Pictures of the car's own pieces (the mini map and the climb) on the three screens the desktop head unit was run at,
+      # painted by the tests (CarOverlayTest.picturesOfTheThreeScreens) with stand-ins for the host's parts: to look at
+      # before any time is spent on a phone.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: car-overlay-pictures
+          path: |
+            app/android/app/build/car_overlay/*.png
+            app/build/app/car_overlay/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Android Auto off by default (no CarAppService in the default release manifest)
         working-directory: app/android
         run: |

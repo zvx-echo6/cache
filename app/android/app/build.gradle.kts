@@ -30,6 +30,9 @@ android {
         manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
         // True only in that test build: MainActivity reads the bench's intent extras (cache_preread_mbps) then.
         buildConfigField("boolean", "TEST_APK", testApk.toString())
+        // True only when built with -PcacheAndroidAuto=true (the same switch that merges the car manifest): Dart reads it through
+        // the cache/build channel, so Settings shows its Car group only then.
+        buildConfigField("boolean", "CACHE_ANDROID_AUTO", ((project.findProperty("cacheAndroidAuto") as String?) == "true").toString())
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
@@ -74,6 +77,9 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
+            // One rule for the car screen (proguard-rules.pro). Flutter's Gradle plugin shrinks the release build and reads this
+            // file by its name already; it is named here too so the rule does not depend on that.
+            proguardFiles("proguard-rules.pro")
         }
     }
 
@@ -96,8 +102,9 @@ flutter {
 }
 
 // Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
-// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. The release on Play stays out of
-// Android Auto until it ships together with CarPlay (owner, 2026-11-08); the test APK and the car tests turn it on.
+// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. Play builds leave Android Auto out
+// unless the store workflow's android_auto input is on (.github/workflows/android-play.yml), which is for closed testing only;
+// the test APK and the car tests turn it on.
 val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
 if (androidAuto) {
     androidComponents {

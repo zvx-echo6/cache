@@ -102,16 +102,44 @@ class DemGrid {
   }
 }
 
-/// Reads heights at points from [tiles] at [zoom]: bilinear between the centres of the four nearest pixels, across tile edges.
-/// Tiles are fetched once each. A point with any of its four pixels missing has no height (NaN).
-Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {int zoom = 12}) async {
-  final grids = <int, DemGrid?>{};
-  final n = 1 << zoom;
+/// How many decoded tiles a job keeps while it reads heights. One point reads at most four (where four tiles meet); the rest
+/// are the ones just used, so a route that runs along a tile edge or turns back does not read the same tile again at once. A
+/// decoded tile is about 1 MB (512 x 512 heights), so a job holds about 8 MB of them however long the route is.
+const int kDemGridsKept = 8;
+
+/// The decoded tiles kept while heights are read: the [keep] used last, and no more.
+///
+/// A route used to keep every decoded tile it crossed until its job ended: about 1 MB for each 7 km, so hundreds of MB for a
+/// long route. Only the tiles around the points being read are needed. A tile dropped and needed again later (the route comes
+/// back to it) is asked of [tiles] again and decodes to the same heights. A tile that was not there, or did not decode, is
+/// remembered as missing for the whole job without being kept, so it is asked for once, as before.
+class DemGridWindow {
+  DemGridWindow(this.tiles, this.zoom, {this.keep = kDemGridsKept}) : assert(keep >= 4, 'one point reads up to four tiles');
+
+  final DemTiles tiles;
+  final int zoom;
+  final int keep;
+
+  /// In the order they were last used: the first is the one used longest ago.
+  final Map<int, DemGrid> _grids = <int, DemGrid>{};
+  final Set<int> _missing = <int>{};
+
+  /// The decoded tiles held now, and the most held at once so far.
+  int get held => _grids.length;
+  int mostHeld = 0;
+
+  /// The heights of tile [x], [y] (x wraps around the world), or null when there is none.
   Future<DemGrid?> grid(int x, int y) async {
+    final n = 1 << zoom;
     if (y < 0 || y >= n) return null;
     final wx = ((x % n) + n) % n;
     final key = wx * n + y;
-    if (grids.containsKey(key)) return grids[key];
+    final kept = _grids.remove(key);
+    if (kept != null) {
+      _grids[key] = kept;
+      return kept;
+    }
+    if (_missing.contains(key)) return null;
     final bytes = await tiles.tile(zoom, wx, y);
     DemGrid? g;
     if (bytes != null && bytes.isNotEmpty) {
@@ -121,8 +149,26 @@ Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {in
         g = null;
       }
     }
-    return grids[key] = g;
+    if (g == null) {
+      _missing.add(key);
+      return null;
+    }
+    _grids[key] = g;
+    while (_grids.length > keep) {
+      _grids.remove(_grids.keys.first);
+    }
+    if (_grids.length > mostHeld) mostHeld = _grids.length;
+    return g;
   }
+}
+
+/// Reads heights at points from [tiles] at [zoom]: bilinear between the centres of the four nearest pixels, across tile edges.
+/// At most [keep] decoded tiles are held at a time ([DemGridWindow]). A point with any of its four pixels missing has no height
+/// (NaN).
+Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {int zoom = 12, int keep = kDemGridsKept}) async {
+  final window = DemGridWindow(tiles, zoom, keep: keep);
+  final n = 1 << zoom;
+  Future<DemGrid?> grid(int x, int y) => window.grid(x, y);
 
   final out = <double>[];
   for (final p in points) {
@@ -157,9 +203,9 @@ Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {in
 
 /// The whole job: walk the route, read the heights, and build the profile. Runs in a background isolate (see
 /// [RouteElevation]); [points] are (lat, lon).
-Future<ElevationProfile> buildRouteProfile(List<(double, double)> points, DemTiles tiles, {int zoom = 12, double stepM = kProfileStepM}) async {
+Future<ElevationProfile> buildRouteProfile(List<(double, double)> points, DemTiles tiles, {int zoom = 12, double stepM = kProfileStepM, int keep = kDemGridsKept}) async {
   final samples = resampleRoute(points, stepM: stepM);
   if (samples.length < 2) return ElevationProfile.none(samples.isEmpty ? 0 : samples.last.distM);
-  final heights = await sampleHeights(samples, tiles, zoom: zoom);
+  final heights = await sampleHeights(samples, tiles, zoom: zoom, keep: keep);
   return ElevationProfile.fromSamples([for (final s in samples) s.distM], heights, totalM: samples.last.distM);
 }
