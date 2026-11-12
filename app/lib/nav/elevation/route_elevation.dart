@@ -15,17 +15,19 @@ typedef ElevationLoader = Future<ElevationProfile> Function(MapRoute route);
 /// A profile being worked out. [result] completes with it. [stop] ends the work at once: [result] then completes with
 /// [ElevationStopped], unless the profile was already on its way.
 class ElevationJob {
-  ElevationJob(this.result, {void Function()? stop}) : _stop = stop;
+  ElevationJob(this.result, {this.onStop});
 
   final Future<ElevationProfile> result;
-  final void Function()? _stop;
+
+  /// What ends the work ([stop] calls it, once); null for work that cannot be ended.
+  final void Function()? onStop;
   bool _stopped = false;
 
   /// Ends the work now. Calling it again, or after the work is done, does nothing.
   void stop() {
     if (_stopped) return;
     _stopped = true;
-    _stop?.call();
+    onStop?.call();
   }
 }
 
@@ -193,7 +195,7 @@ ElevationJob profileJob(String urlTemplate, int zoom, List<(double, double)> poi
     port.close();
     if (!result.isCompleted) result.completeError(e, st);
   }));
-  return ElevationJob(result.future, stop: () {
+  return ElevationJob(result.future, onStop: () {
     stopped = true;
     isolate?.kill(priority: Isolate.immediate);
   });

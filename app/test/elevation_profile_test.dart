@@ -571,7 +571,7 @@ class _Jobs {
     final id = route.routeId;
     started.add(id);
     final result = _results[id] = Completer<ElevationProfile>();
-    return ElevationJob(result.future, stop: () => stopped.add(id));
+    return ElevationJob(result.future, onStop: () => stopped.add(id));
   }
 
   void finish(String id, ElevationProfile profile) {
