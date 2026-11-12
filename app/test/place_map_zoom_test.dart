@@ -204,11 +204,12 @@ void main() {
       expect(c.zoom, greaterThanOrEqualTo(3));
     });
 
-    test('the fallback: the last camera, else the places\' middle at the place zoom, else nothing', () {
+    test('the fallback: the last camera, else the places\' middle fitted to them, else nothing', () {
       expect(placeFallbackCamera(last: const SavedCamera(1, 2, 9))!.zoom, 9);
       // A continent-wide last camera is not used.
       final c = placeFallbackCamera(last: const SavedCamera(39.8, -98.6, 3), places: const [NbPlace(lat: 40, lon: -110), NbPlace(lat: 42, lon: -112)])!;
-      expect((c.lat, c.lon, c.zoom), (41.0, -111.0, kPlaceZoom));
+      expect((c.lat, c.lon), (41.0, -111.0));
+      expect(c.zoom, closeTo(7.5, 0.1));
       expect(placeFallbackCamera(), isNull);
     });
 
