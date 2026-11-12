@@ -60,6 +60,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let dark = templateApplicationScene.contentStyle != .light
     let controller = CarMapViewController(dark: dark)
     controller.onFollowingChanged = { [weak self] in self?.showButtons() }
+    // The panel's second row is handed to CarPlay only where it shows whole (CarPanel), told from the room CarPlay reports.
+    controller.onRoomChanged = { [weak self, weak controller] in
+      guard let controller = controller, let room = controller.room else { return }
+      let panel = CarPanel.width(withPanel: controller.panelLeft, plain: controller.plainLeft, dockAtBottom: room.bottom > 0)
+      self?.guidance?.setSecondRow(fits: CarPanel.secondRowFits(panelWidth: panel, screenHeight: room.height), panelWidth: panel, screenHeight: room.height)
+    }
     window.rootViewController = controller
     mapController = controller
 

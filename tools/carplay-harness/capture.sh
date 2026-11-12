@@ -882,14 +882,20 @@ guide_step() {  # guide_step <notification> <log text to wait for, or ""> <pictu
 }
 
 guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
-  local label="$1" at before got
+  local label="$1" at before got rows
   local edge=$((CAR_W - 27 * CAR_S)) bar=$((28 * CAR_S))
   PROMPTS=""
   TONE=""
   GUIDE=""
   GUIDE_MISSING=""
   # CarPlay's guidance panel: the next turn, the one after, and what is left of the trip.
-  wait_log 'car guidance: turn shown, 2 maneuvers' 12 || GUIDE_MISSING=" [the app did not say the turn is shown]"
+  # Where CarPlay's panel cannot show its second row whole (a stacked turn card on a low screen) the app hands over the next
+  # turn alone, and says so: the turn after next and the lanes are then not looked for.
+  rows=2
+  grep "car guidance: the panel's second row" "$STREAM" | tail -n 1 | grep -q 'is left out' && rows=1
+  ROWS_TEXT="the next turn and the one after it, and the lanes in the panel's second place near the turn"
+  [ "$rows" = 1 ] && ROWS_TEXT="the next turn alone (the app leaves the panel's second row out on this screen: $(grep "car guidance: the panel's second row" "$STREAM" | tail -n 1 | sed 's/.*left out: //'))"
+  wait_log "car guidance: turn shown, $rows maneuvers" 12 || GUIDE_MISSING=" [the app did not say the turn is shown with $rows maneuver(s)]"
   sleep 3
   shot_ext "$label-guide"
   # How a spoken prompt may be given. The stand-in Dart side asks as the phone's voice does before each prompt: first with
@@ -946,9 +952,14 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # Nearer the turn: the phone now shows lanes for it, and they take the panel's second place. Then past it (the next turn,
   # and arriving after it).
   before=$(log_count 'car guidance: the lanes are laid out as a picture')
-  guide_step drive 'car guidance: lanes shown, 4 lanes' "$label-guide-near"
-  [ "$(log_count 'car guidance: the lanes are laid out as a picture')" -gt "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [CarPlay did not ask how to lay the lanes out]"
-  guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
+  if [ "$rows" = 2 ]; then
+    guide_step drive 'car guidance: lanes shown, 4 lanes' "$label-guide-near"
+    [ "$(log_count 'car guidance: the lanes are laid out as a picture')" -gt "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [CarPlay did not ask how to lay the lanes out]"
+  else
+    guide_step drive "" "$label-guide-near"
+    [ "$(log_count 'car guidance: lanes shown')" = 0 ] || GUIDE_MISSING="$GUIDE_MISSING [lanes were handed over where the second row is left out]"
+  fi
+  guide_step drive "car guidance: turn shown, $rows maneuvers" "$label-guide-next"
   # The voice switch, at the bar's trailing edge: off, and on again. The phone's trip says which way it is.
   if at=$(tap_until 'car guidance: voice asked off' 3 "$edge" "$bar" $((edge - 8 * CAR_S)) "$bar"); then
     sleep 3
@@ -1150,7 +1161,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: the next turn, nearer it with its lanes in the panel's second place, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi

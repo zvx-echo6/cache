@@ -111,6 +111,21 @@ final class CarGuidance: CarLinkListener {
     Self.log.info("car guidance: the alert has gone, the turns are given again")
   }
 
+  /// Whether CarPlay's panel shows its second row whole on this screen (CarPanel, from the room CarPlay reports). Where it
+  /// does not, CarPlay is handed the next turn alone: a row cut off halfway says nothing and looks broken.
+  private(set) var secondRowFits = true
+
+  func setSecondRow(fits: Bool, panelWidth: Double?, screenHeight: Double) {
+    if fits == secondRowFits { return }
+    secondRowFits = fits
+    let width: String = panelWidth.map { String(Int($0)) } ?? "not measured"
+    Self.log.info("car guidance: the panel's second row \(fits ? "fits" : "is left out", privacy: .public): the panel is \(width, privacy: .public) points wide on a screen \(Int(screenHeight)) high")
+    if guiding, session != nil {
+      shownTurns = nil
+      carLinkTrip(CarLink.shared.trip)
+    }
+  }
+
   /// The Overview button: the whole route, or the position again.
   func overviewPressed() {
     guard guiding else { return }
@@ -263,7 +278,9 @@ final class CarGuidance: CarLinkListener {
   /// to the next turn is told, and only when the number on the screen would change.
   private func showTurns(_ t: CarTrip, _ step: CarStep, _ session: CPNavigationSession) {
     var turns: String = "\(step.turn)|\(step.type)|\(step.cue)"
-    if !step.lanes.isEmpty {
+    if !secondRowFits {
+      turns += "||alone"
+    } else if !step.lanes.isEmpty {
       // While the phone shows lanes for the turn, they have the panel's second place (CarPlay's form for lanes), and the
       // turn after it waits.
       let lanes: [String] = step.lanes.map { "\($0.role):\($0.directions.joined(separator: ",")):\($0.take ?? "")" }
@@ -280,7 +297,9 @@ final class CarGuidance: CarLinkListener {
       let first = Self.maneuver(step)
       first.initialTravelEstimates = estimates
       var list: [CPManeuver] = [first]
-      if !step.lanes.isEmpty {
+      if !secondRowFits {
+        // The next turn alone.
+      } else if !step.lanes.isEmpty {
         list.append(Self.laneManeuver(step.lanes))
       } else if let then = t.then {
         list.append(Self.maneuver(then))
@@ -290,7 +309,7 @@ final class CarGuidance: CarLinkListener {
       session.upcomingManeuvers = list
       // No words of the turn in the log (roads, places).
       Self.log.info("car guidance: turn shown, \(list.count) maneuvers")
-      if !step.lanes.isEmpty {
+      if secondRowFits && !step.lanes.isEmpty {
         Self.log.info("car guidance: lanes shown, \(step.lanes.count) lanes")
       }
     } else if distance != shownTurnDistance, let first = maneuvers.first {

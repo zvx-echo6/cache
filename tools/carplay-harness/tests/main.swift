@@ -188,6 +188,23 @@ let arrivedMessage: [String: Any] = ["phase": "guiding", "remainingS": 0, "remai
 check(CarTrip.from(lastStretch).leftSeconds == 60, "under a minute left reads as one minute")
 check(CarTrip.from(arrivedMessage).leftSeconds == 0, "arrived: no time left")
 check(CarTrip.from([:]).leftSeconds == nil, "no time left known")
+// ---- the panel's second row, from the room CarPlay reports ----------------------------------------------------------
+
+// What CarPlay took from the leading edge at the four screens the harness runs, with no panel and with one, and their heights.
+check(CarPanel.width(withPanel: 225, plain: 49, dockAtBottom: false) == 176, "the panel's width where the turn card is stacked: 176")
+check(CarPanel.width(withPanel: 273, plain: 49, dockAtBottom: false) == 224, "and where it is one line: 224")
+check(CarPanel.width(withPanel: 176, plain: 0, dockAtBottom: true) == 176, "the panel's width on the upright screen, where the dock is at the bottom")
+check(CarPanel.width(withPanel: nil, plain: 49, dockAtBottom: false) == nil && CarPanel.width(withPanel: 49, plain: 49, dockAtBottom: false) == nil, "no panel measured yet: no width")
+check(CarPanel.width(withPanel: 225, plain: nil, dockAtBottom: false) == 176, "the car connecting during guidance, the plain map never seen: the dock as it was seen elsewhere")
+check(CarPanel.width(withPanel: 176, plain: nil, dockAtBottom: true) == 176, "the same on the upright screen: no dock at the leading edge")
+check(!CarPanel.secondRowFits(panelWidth: 176, screenHeight: 228), "374 x 228: a stacked card on a low screen, the second row is left out")
+check(!CarPanel.secondRowFits(panelWidth: 176, screenHeight: 240), "400 x 240: the same")
+check(CarPanel.secondRowFits(panelWidth: 224, screenHeight: 240), "640 x 240: the one-line card leaves room for the second row")
+check(CarPanel.secondRowFits(panelWidth: 176, screenHeight: 400), "300 x 400: a stacked card on a high screen has the room")
+check(CarPanel.secondRowFits(panelWidth: nil, screenHeight: 228), "not measured yet: handed over, and decided again when it is")
+let wideRoom = CarRoom(width: 640, height: 240, top: 44, left: 273, bottom: 0, right: 40)
+check(wideRoom.freeWidth == 327 && wideRoom.freeHeight == 196, "the free map is what CarPlay's parts leave")
+
 // ---- how a prompt may be given --------------------------------------------------------------------------------------
 
 for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {

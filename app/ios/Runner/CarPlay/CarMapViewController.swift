@@ -83,6 +83,13 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   /// Called when `following` changes, so the car scene can show or hide Recenter.
   var onFollowingChanged: (() -> Void)?
 
+  /// The room CarPlay reports (takeFreeArea), and what it took from the leading edge when last seen with a panel up and
+  /// with none. Called when any of it changes.
+  private(set) var room: CarRoom?
+  private(set) var panelLeft: Double?
+  private(set) var plainLeft: Double?
+  var onRoomChanged: (() -> Void)?
+
   init(dark: Bool) {
     self.dark = dark
     super.init(nibName: nil, bundle: nil)
@@ -151,6 +158,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     CarLink.shared.removeListener(self)
     NotificationCenter.default.removeObserver(self)
     onFollowingChanged = nil
+    onRoomChanged = nil
     mapView?.delegate = nil
     mapView?.removeFromSuperview()
     mapView = nil
@@ -171,6 +179,16 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     if map.contentInset == free { return }
     map.contentInset = free
     sayArea()
+    // What CarPlay takes from the leading edge, with one of its panels up and without: the panel's width follows from the two.
+    if CarLink.shared.trip.phase == "browsing" {
+      plainLeft = Double(free.left)
+    } else {
+      panelLeft = Double(free.left)
+    }
+    room = CarRoom(
+      width: Double(view.bounds.width), height: Double(view.bounds.height), top: Double(free.top), left: Double(free.left),
+      bottom: Double(free.bottom), right: Double(free.right))
+    onRoomChanged?()
     follow(force: true, keepZoom: true)
   }
 
