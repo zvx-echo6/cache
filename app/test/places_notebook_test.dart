@@ -224,6 +224,13 @@ void main() {
       expect(props['color'], 'purple');
     });
 
+    testWidgets("a picked color equal to the notebook's is not stored, so the place keeps following the notebook", (tester) async {
+      final r = _Rig();
+      final book = await colourBook(r, color: 'blue');
+      final props = await addNamed(tester, r, book, pick: 'blue');
+      expect(props.containsKey('color'), isFalse);
+    });
+
     testWidgets('the hide toggle on the map stores no colour', (tester) async {
       final r = _Rig();
       final book = await colourBook(r);

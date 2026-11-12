@@ -20,7 +20,7 @@ release notes).
 - Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
 - Bookshelves: after Go to a number takes you to a shelf or book, the box is emptied and the keyboard stays closed when you come back; dragging the list closes the keyboard
 - Weather: Latitude and Longitude in Add your own source put their text in the web address without taking the keyboard from it, and the cursor stays right after it
-- Notebooks: a new place no longer gets a color of its own; it follows its notebook's color, and hiding a place on the map no longer gives it one. A place has its own color only when you pick one
+- Notebooks: a new place no longer gets a color of its own; it follows its notebook's color, and hiding a place on the map no longer gives it one. A place has its own color only when you pick one that differs from its notebook's
 - Library: the main page of a ZIM shows the ZIM's own title at the top, not the title the page carries (a Wikipedia ZIM's main page said just "Wikipedia")
 
 ## 1.1.0 (build 49, test) - 2026-11-11

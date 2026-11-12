@@ -745,11 +745,11 @@ class _PlaceFormState extends State<PlaceForm> {
         private: e?.private ?? false,
         props: {
           ...?e?.props,
-          // A place has its own colour only when the person picked one.
-          if (_picked != null) 'color': _picked!.id,
+          // A place has its own colour only when the person picked one that differs from its notebook's.
+          if (_picked != null && _picked!.id != widget.book.def.color) 'color': _picked!.id,
           'on_map': _onMap,
           if (_icons != null && _icon != null) 'icon': _icon,
-        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && _picked == null)),
+        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && (_picked == null || _picked!.id == widget.book.def.color))),
       );
       _added.clear();
       final id = watchId(saved);
