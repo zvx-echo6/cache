@@ -14,10 +14,9 @@ import UIKit
 /// Lanes: while the phone shows lanes under its turn banner, the car shows them in CarPlay's one form for lanes, the panel's
 /// second place as a picture with no words (the phone's lane strip, drawn by CarIcons); the turn after next waits meanwhile.
 ///
-/// A climb ahead (the phone finds one of at least its least grade, and has a switch for showing it) is told in CarPlay's own
-/// form for such news, a navigation alert that shows for a set time and goes: Android's words for it, and the shape of the
-/// road ahead as its picture. The grade marker on the map is the map controller's. The bar's Overview button shows the whole
-/// route north up, and the position again when pressed again.
+/// The bar's Overview button shows the whole route north up, and the position again when pressed again. The climb ahead and
+/// the route mini map are drawn on the map (CarExtras, CarExtrasView), and the grade marker on the route is the map
+/// controller's; none of it is guidance's.
 ///
 /// The bar's buttons while guiding are End route and the voice switch (the car scene puts them there). End route is over on
 /// the car at once, and the phone is asked to end its guidance. If the car's own navigation, or another app's, takes over,
@@ -35,11 +34,6 @@ final class CarGuidance: CarLinkListener {
   /// display): off. The lanes are the only such data the app has ready; turning this on also needs every maneuver's kind
   /// and junction in CarPlay's own terms, and a car that shows them to check it in.
   static let vehicleMetadata = false
-  static let climbAhead = "Climb ahead"
-  /// The one button CarPlay's alert must have. Android's climb card has no button.
-  static let alertButton = "OK"
-  /// How long the climb alert shows before it goes by itself.
-  static let climbAlertSeconds: TimeInterval = 10
 
   private weak var mapTemplate: CPMapTemplate?
   private var session: CPNavigationSession?
@@ -62,8 +56,6 @@ final class CarGuidance: CarLinkListener {
   /// The whole route is in view (the Overview button). The car scene tells the map.
   private(set) var overview = false
   var onOverview: ((Bool) -> Void)?
-  /// The climb ahead now has had its alert.
-  private var climbTold = false
   /// Called when guidance comes to or leaves the car screen, or the voice switch changes: the bar's buttons follow.
   var onChanged: (() -> Void)?
 
@@ -100,15 +92,6 @@ final class CarGuidance: CarLinkListener {
     stopping = true
     endSession()
     CarLink.shared.call("stop")
-  }
-
-  /// A navigation alert (the climb ahead) has gone, by itself or by its button. CarPlay then shows the panel with only the
-  /// next turn until it is given the turns again, so they are made and given again here.
-  func alertGone() {
-    guard guiding, session != nil else { return }
-    shownTurns = nil
-    carLinkTrip(CarLink.shared.trip)
-    Self.log.info("car guidance: the alert has gone, the turns are given again")
   }
 
   /// Whether CarPlay's panel shows its second row whole on this screen (CarPanel, from the room CarPlay reports). Where it
@@ -181,31 +164,6 @@ final class CarGuidance: CarLinkListener {
     shownState = nil
     showTurns(t, step, session)
     showLeft(t, map, trip)
-    tellClimb(t, map)
-  }
-
-  /// A climb ahead is told once, when it first lies ahead, unless the phone's switch for it is off.
-  private func tellClimb(_ t: CarTrip, _ map: CPMapTemplate) {
-    guard t.showClimb, let climb = t.climb else {
-      climbTold = false
-      return
-    }
-    if climbTold { return }
-    climbTold = true
-    // As the Android climb card: "Climb ahead", how much is climbed, and the steepest grade and how far off it is.
-    let figure: String = CarText.climb(climb.climbAheadM, imperial: t.imperial)
-    var under: [String] = []
-    if let grade = climb.gradePct, let into = climb.steepestInM {
-      under = ["\(CarText.grade(grade)) in \(CarText.ahead(into, imperial: t.imperial))"]
-    }
-    let button = CPAlertAction(title: Self.alertButton, style: .default) { [weak map] _ in
-      map?.dismissNavigationAlert(animated: true) { _ in }
-    }
-    let alert = CPNavigationAlert(
-      titleVariants: ["\(Self.climbAhead) \(figure)", Self.climbAhead], subtitleVariants: under, image: CarIcons.climbShape(climb),
-      primaryAction: button, secondaryAction: nil, duration: Self.climbAlertSeconds)
-    map.present(navigationAlert: alert, animated: true)
-    Self.log.info("car guidance: climb alert shown")
   }
 
   private func begin(_ t: CarTrip, on map: CPMapTemplate) {
@@ -248,11 +206,7 @@ final class CarGuidance: CarLinkListener {
     shownLeft = nil
     shownState = nil
     wasArrived = false
-    climbTold = false
     vehicleLanes = nil
-    if let map = mapTemplate, map.currentNavigationAlert != nil {
-      map.dismissNavigationAlert(animated: false) { _ in }
-    }
     if overview {
       overview = false
       onOverview?(false)
@@ -269,7 +223,6 @@ final class CarGuidance: CarLinkListener {
     shownState = state
     shownTurns = nil
     shownTurnDistance = nil
-    climbTold = false
     session.pauseTrip(for: reason, description: words)
     Self.log.info("car guidance: \(state, privacy: .public)")
   }

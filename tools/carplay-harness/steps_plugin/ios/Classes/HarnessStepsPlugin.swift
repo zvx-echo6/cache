@@ -14,6 +14,8 @@ import UIKit
 /// - `org.example.carharness.roll`: while guiding, five positions a second apart along the road, as a moving vehicle
 ///   gives them, so the marker's glide can be seen.
 /// - `org.example.carharness.climb`: while guiding, the recorded trip that has a climb ahead.
+/// - `org.example.carharness.phoneon` and `.phoneoff`: the stand-in Dart side says in its trip that the phone's drive screen
+///   is showing, or no longer (`overlay.phoneDrive`), as the phone will.
 /// - `org.example.carharness.promptshort`, `.promptnone` and `.promptnormal`: the stand-in Dart side asks the car side how a
 ///   spoken prompt may be given, as the phone's voice does before each prompt, and says the answer. For the first two the
 ///   car side is first told to answer as iOS would during a call, or while Siri listens (no call can be made in the
@@ -26,7 +28,7 @@ import UIKit
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
-  private static let toDart: [String] = ["next", "nosaved", "saved", "drive", "roll", "climb"]
+  private static let toDart: [String] = ["next", "nosaved", "saved", "drive", "roll", "climb", "phoneon", "phoneoff"]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let steps = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())

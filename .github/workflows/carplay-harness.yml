@@ -29,7 +29,7 @@ on:
       sizes:
         description: 'The CarPlay screens to draw, as WIDTHxHEIGHT@SCALE in pixels, space separated'
         type: string
-        default: '748x456@2 800x480@2 1920x720@3 900x1200@3'
+        default: '748x456@2 800x480@2 1920x720@3 1280x720@2 900x1200@3'
 
 permissions:
   contents: read
@@ -41,13 +41,13 @@ concurrency:
 env:
   FLUTTER_VERSION: 3.44.8
   # Apple's four test sizes (CarPlay Developer Guide, "Test showing map in center display").
-  HARNESS_SIZES: ${{ inputs.sizes || '748x456@2 800x480@2 1920x720@3 900x1200@3' }}
+  HARNESS_SIZES: ${{ inputs.sizes || '748x456@2 800x480@2 1920x720@3 1280x720@2 900x1200@3' }}
   HARNESS_RUNTIME: iOS-26-2
 
 jobs:
   pictures:
     runs-on: macos-26
-    timeout-minutes: 85
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -60,7 +60,7 @@ jobs:
       - name: Build the harness app from the product's iOS sources
         run: bash tools/carplay-harness/build.sh
       - name: CarPlay pictures
-        timeout-minutes: 65
+        timeout-minutes: 85
         run: bash tools/carplay-harness/capture.sh
       - name: Results
         if: ${{ !cancelled() }}

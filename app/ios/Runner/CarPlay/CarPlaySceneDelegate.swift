@@ -242,13 +242,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     CarGuidance.vehicleMetadata
   }
 
-  /// A navigation alert (the climb ahead) has gone: the guidance panel is given its turns again.
-  func mapTemplate(
-    _ mapTemplate: CPMapTemplate, didDismiss navigationAlert: CPNavigationAlert, dismissalContext: CPNavigationAlert.DismissalContext
-  ) {
-    guidance?.alertGone()
-  }
-
   /// How the panel's second maneuver is laid out: the lanes as a picture across the panel and nothing else (Apple's form for
   /// lane guidance); the turn after next in CarPlay's usual way.
   func mapTemplate(_ mapTemplate: CPMapTemplate, displayStyleFor maneuver: CPManeuver) -> CPManeuverDisplayStyle {

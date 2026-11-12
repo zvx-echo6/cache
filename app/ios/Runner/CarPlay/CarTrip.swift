@@ -110,8 +110,12 @@ struct CarTrip: Equatable {
   let steepLat: Double?
   let steepLon: Double?
   let steepGradePct: Double?
-  /// The phone's switch for showing a climb ahead on the car screen (on unless the trip says false).
-  let showClimb: Bool
+  /// The phone's drive screen is showing to a person (the phone unlocked, Cache in front, its Maps tab on the drive screen):
+  /// the phone's own word for it, `overlay.phoneDrive`. Missing means no.
+  let phoneDrive: Bool
+  /// The whole route for the mini map, as [latitude, longitude] points, and how much of it is driven (0 to 1).
+  let overviewPoints: [[Double]]
+  let drivenFraction: Double
   /// The grade marker's colours for the car's day and night (the phone's palette), or nil before the palette has come.
   let badgeDay: CarBadgeColors?
   let badgeNight: CarBadgeColors?
@@ -124,14 +128,21 @@ struct CarTrip: Equatable {
     destinationAddress: nil, destinationLat: nil, destinationLon: nil, routes: [], routeIndex: 0, routeId: nil, voiceOn: true,
     arrived: false, rerouting: false, lat: nil, lon: nil, heading: nil, step: nil, then: nil, currentRoad: nil,
     remainingM: nil, remainingS: nil, etaMs: nil, climb: nil, steepLat: nil, steepLon: nil, steepGradePct: nil,
-    showClimb: true, badgeDay: nil, badgeNight: nil
+    phoneDrive: false, overviewPoints: [], drivenFraction: 0, badgeDay: nil, badgeNight: nil
   )
 
   /// From the channel's plain map. What is missing or of another kind takes the same default as on Android.
   static func from(_ m: [String: Any]) -> CarTrip {
     let dest = CarValue.map(m["destination"])
     let pos = CarValue.map(m["position"])
-    let steep = CarValue.map(CarValue.map(m["overview"])?["steep"])
+    let overview = CarValue.map(m["overview"])
+    let steep = CarValue.map(overview?["steep"])
+    var points: [[Double]] = []
+    for item in (overview?["points"] as? [Any]) ?? [] {
+      guard let pair = item as? [Any], pair.count >= 2, let lat = CarValue.double(pair[0]), let lon = CarValue.double(pair[1]) else { continue }
+      points.append([lat, lon])
+    }
+    if points.count < 2 { points = [] }
     let palette = CarValue.map(m["palette"])
     var routes: [CarRoute] = []
     for item in (m["routes"] as? [Any]) ?? [] {
@@ -172,7 +183,9 @@ struct CarTrip: Equatable {
       steepLat: CarValue.double(steep?["lat"]),
       steepLon: CarValue.double(steep?["lon"]),
       steepGradePct: CarValue.double(steep?["gradePct"]),
-      showClimb: !CarValue.isFalse(CarValue.map(m["overlay"])?["climb"]),
+      phoneDrive: CarValue.isTrue(CarValue.map(m["overlay"])?["phoneDrive"]),
+      overviewPoints: points,
+      drivenFraction: min(max(CarValue.double(overview?["drivenFraction"]) ?? 0, 0), 1),
       badgeDay: CarBadgeColors.from(palette?["day"]),
       badgeNight: CarBadgeColors.from(palette?["night"])
     )

@@ -41,6 +41,9 @@ class _HarnessAppState extends State<HarnessApp> {
   int _pushed = 0;
   int _phase = 0;
   bool _noSaved = false;
+  bool _phoneDrive = false;
+  String? _lastTrip;
+  String? _lastRoute;
   int _frame = 0;
   bool _voiceOn = true;
 
@@ -125,6 +128,14 @@ class _HarnessAppState extends State<HarnessApp> {
               await _pushRaw(jsonEncode(trip), recorded['route_guiding']!);
             }
           }
+        case 'phoneon':
+        case 'phoneoff':
+          // The phone's drive screen comes up, or goes: the trip is pushed again with the word changed and nothing else.
+          _phoneDrive = call.method == 'phoneon';
+          final String? last = _lastTrip;
+          final String? route = _lastRoute;
+          if (_phase == 2 && last != null && route != null) await _pushRaw(last, route);
+          await _steps.invokeMethod<void>('say', 'phone drive screen $_phoneDrive');
         case 'prompt':
           // As the phone's voice before each prompt (CarAwareSpeaker): how may it be given at this moment?
           final Object? how = await _car.invokeMethod<Object?>('prompt', <String, Object?>{'text': 'Turn left.'});
@@ -151,6 +162,12 @@ class _HarnessAppState extends State<HarnessApp> {
       case 'connected':
         final Object? a = call.arguments;
         await _carConnected(a is Map && a['on'] == true);
+        return null;
+      case 'extras':
+        // How the car screen carries the two extras, for the phone's drive screen (the phone's own side of this is not on
+        // this branch): said in the app's log, where the job reads it.
+        final Object? how = call.arguments;
+        await _steps.invokeMethod<void>('say', 'the car carries the extras: ${how is Map ? how['carries'] : how}');
         return null;
       case 'saved':
         return _noSaved ? <Object?>[] : jsonDecode(recorded['saved']!);
@@ -212,6 +229,12 @@ class _HarnessAppState extends State<HarnessApp> {
   Future<void> _pushRaw(String trip, String route) async {
     final Map<String, dynamic> message = jsonDecode(trip) as Map<String, dynamic>;
     message['voiceOn'] = _voiceOn;
+    // The phone's one word about its own screen (`overlay.phoneDrive`: its drive screen is showing), as the phone will send
+    // it with every trip while guiding. The recorded trips do not carry it yet; the job turns it on and off here.
+    final Object? overlay = message['overlay'];
+    if (overlay is Map<String, dynamic>) overlay['phoneDrive'] = _phoneDrive;
+    _lastTrip = jsonEncode(message);
+    _lastRoute = route;
     await _car.invokeMethod<void>('trip', message);
     _pushed++;
     await _car.invokeMethod<void>('route', jsonDecode(route));

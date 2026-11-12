@@ -74,6 +74,15 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   /// What the grade marker's picture was last made for (the grade, day or night, the colours).
   private var badgeKey: String?
 
+  /// The two extras drawn over the map (CarExtrasView), where they go on this screen with its class (measured while
+  /// guiding), and the pause and fade for the phone's drive screen.
+  private var extrasView: CarExtrasView?
+  private var extrasLayout: CarExtras.Layout?
+  private var extrasFade = CarExtrasFade(shown: true)
+  private var extrasTimer: Timer?
+  /// The word last told to the phone about how this screen carries the two, in this drive.
+  private var toldCarries: String?
+
   /// The whole route is in view instead of the position (the bar's Overview button while guiding).
   private(set) var overview = false
 
@@ -136,6 +145,12 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     }
     view.addSubview(map)
     mapView = map
+    // The two extras are drawn over the map, in the same window: a picture, with no touch of its own.
+    let extras = CarExtrasView(frame: view.bounds)
+    extras.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    extras.isHidden = true
+    view.addSubview(extras)
+    extrasView = extras
     CarLink.shared.addListener(self)
     NotificationCenter.default.addObserver(
       self, selector: #selector(heatChanged), name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
@@ -159,6 +174,11 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     NotificationCenter.default.removeObserver(self)
     onFollowingChanged = nil
     onRoomChanged = nil
+    extrasTimer?.invalidate()
+    extrasTimer = nil
+    extrasView?.removeFromSuperview()
+    extrasView = nil
+    extrasLayout = nil
     mapView?.delegate = nil
     mapView?.removeFromSuperview()
     mapView = nil
@@ -185,6 +205,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     } else {
       panelLeft = Double(free.left)
     }
+    measureExtras()
     room = CarRoom(
       width: Double(view.bounds.width), height: Double(view.bounds.height), top: Double(free.top), left: Double(free.left),
       bottom: Double(free.bottom), right: Double(free.right))
@@ -243,6 +264,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     lastCameraPhase = nil
     if !was { onFollowingChanged?() }
     follow(force: true)
+    applyExtras(CarLink.shared.trip)
   }
 
   /// How far one press of a panning arrow moves the map, in points: a quarter of the free area's shorter side.
@@ -509,12 +531,12 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     source(Self.routeSource)?.shape = Self.shape(geojson)
   }
 
-  /// The grade marker: while guiding, with the phone's climb switch on, at the steepest point of the climb ahead, in the
-  /// phone's colours for the car's day or night. Its picture is made again only when what it shows changes.
+  /// The grade marker: while guiding, at the steepest point of the climb ahead, in the phone's colours for the car's day or
+  /// night. It is part of the map and is there on every screen. Its picture is made again only when what it shows changes.
   private func applyBadge(_ t: CarTrip) {
     guard let style = mapView?.style, let point = source(Self.badgeSource) else { return }
     let colors = dark ? t.badgeNight : t.badgeDay
-    guard t.guiding, t.showClimb, let colors = colors, let grade = t.steepGradePct, let lat = t.steepLat, let lon = t.steepLon else {
+    guard t.guiding, let colors = colors, let grade = t.steepGradePct, let lat = t.steepLat, let lon = t.steepLon else {
       point.shape = Self.shape(CarLink.emptyGeoJSON)
       return
     }
@@ -529,8 +551,92 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     point.shape = place
   }
 
+  // ---- the two extras on the map (the route mini map and the climb ahead) ------------------------------------------------
+
+  private static func now() -> Double {
+    ProcessInfo.processInfo.systemUptime
+  }
+
+  /// The free map while guiding has a new size: where the two extras go on this screen, and its class. Measured only while
+  /// guiding with the camera on the vehicle, so that the class holds for the drive (the route overview and the pan arrows
+  /// change what CarPlay takes).
+  private func measureExtras() {
+    guard CarLink.shared.trip.guiding, !overview, following else { return }
+    let free = view.bounds.inset(by: view.safeAreaInsets)
+    let measured = CarExtras.layout(free: free)
+    if measured == extrasLayout { return }
+    let first = extrasLayout == nil
+    extrasLayout = measured
+    Self.log.info("car extras: \(measured.words, privacy: .public)")
+    // The phone is told how this screen carries the two, when first measured in a drive and when it changes, so it knows
+    // whether to show them itself. Nothing is said when the car goes: the phone then has no word, which reads as never.
+    let word = CarExtras.carriesWord(measured.screenClass)
+    if word != toldCarries {
+      toldCarries = word
+      CarLink.shared.call("extras", ["carries": word])
+    }
+    if first {
+      // A new screen: what it carries is there at once, with no pause and no fade.
+      extrasFade.set(CarExtras.carries(measured.screenClass, phoneDrive: CarLink.shared.trip.phoneDrive))
+    }
+    applyExtras(CarLink.shared.trip)
+  }
+
+  /// The two extras for a trip: drawn while guiding on a screen that carries them, not while the whole route is in view (the
+  /// mini map would repeat it), and never with CarExtras.onMap off. On an in-between screen they fade out while the phone's
+  /// drive screen shows and back in when it stops, after one pause (CarExtrasFade).
+  private func applyExtras(_ t: CarTrip) {
+    guard let extras = extrasView else { return }
+    guard CarExtras.onMap, t.guiding, !overview, let layout = extrasLayout, layout.fits else {
+      if !extras.isHidden {
+        extras.isHidden = true
+        Self.log.info("car extras: not drawn")
+      }
+      extrasTimer?.invalidate()
+      extrasTimer = nil
+      if !t.guiding {
+        // The next drive starts with what its screen carries, at once, and tells the phone again.
+        extrasLayout = nil
+        toldCarries = nil
+      }
+      return
+    }
+    extras.show(layout, trip: t)
+    let carries = CarExtras.carries(layout.screenClass, phoneDrive: t.phoneDrive)
+    if extras.isHidden {
+      extras.isHidden = false
+      extrasFade.set(carries)
+      extras.alpha = carries ? 1 : 0
+      let mini: String = t.overviewPoints.count >= 2 ? "the mini map" : "no mini map"
+      let climb: String = t.climb != nil ? "the climb" : "no climb"
+      Self.log.info("car extras: drawn, \(mini, privacy: .public) and \(climb, privacy: .public), \(carries ? "showing" : "faded out for the phone", privacy: .public)")
+      return
+    }
+    extrasFade.want(carries, at: Self.now())
+    extrasTimer?.invalidate()
+    extrasTimer = nil
+    if let due = extrasFade.due {
+      let wait = max(0, due - Self.now())
+      extrasTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.fadeExtras() }
+    }
+  }
+
+  /// The pause has run out: both extras fade together, to nothing or back.
+  private func fadeExtras() {
+    extrasTimer = nil
+    guard let extras = extrasView, let to = extrasFade.start(at: Self.now() + 0.01) else { return }
+    Self.log.info("car extras: fading \(to ? "in" : "out", privacy: .public)")
+    UIView.animate(
+      withDuration: CarExtras.fadeSeconds, delay: 0, options: [.beginFromCurrentState, .curveEaseInOut],
+      animations: { extras.alpha = to ? 1 : 0 },
+      completion: { done in
+        if done { Self.log.info("car extras: faded \(to ? "in" : "out", privacy: .public)") }
+      })
+  }
+
   private func applyTrip(_ t: CarTrip) {
     applyBadge(t)
+    applyExtras(t)
     let showDestination = t.phase != "browsing"
     let destination = showDestination ? Self.point(t.destinationLat, t.destinationLon) : CarLink.emptyGeoJSON
     source(Self.destinationSource)?.shape = Self.shape(destination)
@@ -543,6 +649,10 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   }
 
   func carLinkTrip(_ trip: CarTrip) {
+    // A drive begins: where the extras go is measured from the room as it is (it is measured again whenever the room changes).
+    if trip.guiding && extrasLayout == nil {
+      measureExtras()
+    }
     applyTrip(trip)
     // The overview is of a route being driven: it goes when guidance does.
     if overview && !trip.guiding {

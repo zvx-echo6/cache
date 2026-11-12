@@ -2,8 +2,8 @@ import UIKit
 
 /// The car screen's pictures, drawn in code as on the Android car (CarIcons.kt and CarOverlayPainter.kt, shape for shape), so
 /// no picture files are added: a turn picture for each of the phone's turn names (CarStep.turn), the route overview
-/// button's and the climb alert's shape, all plain shapes with no colour of their own, which CarPlay tints for its light and
-/// dark cards; the lane strip, in white and in black for CarPlay's dark and light panels; and the grade marker for the map,
+/// button's, both plain shapes with no colour of their own, which CarPlay tints for its light and dark cards; the lane
+/// strip, in white and in black for CarPlay's dark and light panels; and the grade marker for the map,
 /// in the phone's own colours.
 enum CarIcons {
   /// CarPlay shows a maneuver's picture at 50 x 50 points at most.
@@ -39,40 +39,6 @@ enum CarIcons {
       UIBezierPath(arcCenter: CGPoint(x: s * 0.26, y: s * 0.76), radius: s * 0.09, startAngle: 0, endAngle: 2 * .pi, clockwise: true).fill()
       UIBezierPath(arcCenter: CGPoint(x: s * 0.7, y: s * 0.26), radius: s * 0.09, startAngle: 0, endAngle: 2 * .pi, clockwise: true).fill()
     }
-  }
-
-  /// The shape of the road ahead for the climb alert: the heights as a line with what is under it filled lightly, and the
-  /// steep stretch filled fully (the Android climb card's shape, in one colour that CarPlay tints).
-  static func climbShape(_ climb: CarClimb) -> UIImage {
-    let heights = climb.heightsM
-    let size = CGSize(width: side, height: side)
-    let format = UIGraphicsImageRendererFormat()
-    format.scale = 3
-    format.opaque = false
-    let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-      guard heights.count >= 2, let low = heights.min(), let high = heights.max() else { return }
-      let top: CGFloat = 6
-      let bottom: CGFloat = size.height - 8
-      let span = max(high - low, 1)
-      func x(_ i: Int) -> CGFloat { size.width * CGFloat(i) / CGFloat(heights.count - 1) }
-      func y(_ i: Int) -> CGFloat { bottom - (bottom - top) * CGFloat((heights[i] - low) / span) }
-      func area(_ from: Int, _ to: Int) -> UIBezierPath {
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: x(from), y: y(from)))
-        for i in (from + 1)...to { path.addLine(to: CGPoint(x: x(i), y: y(i))) }
-        path.addLine(to: CGPoint(x: x(to), y: size.height))
-        path.addLine(to: CGPoint(x: x(from), y: size.height))
-        path.close()
-        return path
-      }
-      UIColor.white.withAlphaComponent(0.35).setFill()
-      area(0, heights.count - 1).fill()
-      if let from = climb.steepFrom, let to = climb.steepTo, from >= 0, to > from, to < heights.count {
-        UIColor.white.setFill()
-        area(from, to).fill()
-      }
-    }
-    return drawn.withRenderingMode(.alwaysTemplate)
   }
 
   /// The grade marker for the map: a pill with a slope triangle and the grade, in the phone's colours for it (the Android

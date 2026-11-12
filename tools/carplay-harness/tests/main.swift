@@ -266,12 +266,98 @@ let uphill = CarTrip.from(map("trip_guiding_climb.json"))
 check(uphill.climb?.climbAheadM == 148 && uphill.climb?.heightsM.count == 40, "a climb ahead: how much, and the heights of the road")
 check(uphill.climb?.steepFrom == 20 && uphill.climb?.steepTo == 32, "a climb ahead: where the steep stretch is among the heights")
 check(near(uphill.steepLat, 10.52) && near(uphill.steepLon, 20.26) && near(uphill.steepGradePct, 6.2), "the steepest point and its grade")
-check(uphill.showClimb, "the phone's switch for the climb is on")
 check(uphill.badgeDay?.badge == "#1f6fa8" && uphill.badgeNight?.glyph == "#0f1115", "the grade marker's colours for day and night")
 check(guiding.climb == nil && guiding.steepGradePct == nil, "no climb ahead: none")
-let climbOff: [String: Any] = ["climb": false, "miniMap": true]
-let switchedOff: [String: Any] = ["phase": "guiding", "overlay": climbOff]
-check(!CarTrip.from(switchedOff).showClimb, "the phone's switch turned off")
+
+// ---- the two extras on the map: the phone's word, the screen's class, the fade --------------------------------------
+
+// The phone's one word: its drive screen is showing. Missing means no; the old switches are not read.
+let oldSwitches: [String: Any] = ["climb": false, "miniMap": false]
+let phoneShows: [String: Any] = ["phoneDrive": true]
+let phoneHides: [String: Any] = ["phoneDrive": false]
+let notABool: [String: Any] = ["phoneDrive": 1]
+let withOld: [String: Any] = ["phase": "guiding", "overlay": oldSwitches]
+let withShows: [String: Any] = ["phase": "guiding", "overlay": phoneShows]
+let withHides: [String: Any] = ["phase": "guiding", "overlay": phoneHides]
+let withNumber: [String: Any] = ["phase": "guiding", "overlay": notABool]
+check(!CarTrip.from(withOld).phoneDrive && !guiding.phoneDrive, "the phone's drive screen: not said means not showing")
+check(CarTrip.from(withShows).phoneDrive && !CarTrip.from(withHides).phoneDrive && !CarTrip.from(withNumber).phoneDrive, "the phone's drive screen: only a plain yes is yes")
+check(guiding.overviewPoints.count >= 2 && guiding.overviewPoints.allSatisfy { $0.count == 2 }, "the whole route for the mini map, as points")
+check(guiding.drivenFraction >= 0 && guiding.drivenFraction <= 1, "how much of the route is driven")
+let onePoint: [String: Any] = ["points": [[10.5, 20.2]], "drivenFraction": 7.0]
+let shortRoute: [String: Any] = ["phase": "guiding", "overview": onePoint]
+check(CarTrip.from(shortRoute).overviewPoints.isEmpty && CarTrip.from(shortRoute).drivenFraction == 1, "one point is no route, and a share is kept between 0 and 1")
+
+// The measure at the four screens the harness runs: the room CarPlay reported while guiding (what its parts take from each
+// edge), the free map that leaves, and the class. The same measure and number as the Android car's.
+func freeMap(_ width: Double, _ height: Double, top: Double, left: Double, bottom: Double, right: Double) -> CGRect {
+  CGRect(x: left, y: top, width: width - left - right, height: height - top - bottom)
+}
+let small374 = CarExtras.layout(free: freeMap(374, 228, top: 44, left: 225, bottom: 0, right: 40))
+let small400 = CarExtras.layout(free: freeMap(400, 240, top: 44, left: 225, bottom: 0, right: 40))
+let wide640 = CarExtras.layout(free: freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
+let upright = CarExtras.layout(free: freeMap(300, 400, top: 44, left: 176, bottom: 49, right: 40))
+let high640 = CarExtras.layout(free: freeMap(640, 360, top: 44, left: 273, bottom: 0, right: 40))
+check(small374.screenClass == .small && !small374.fits && small374.mini == nil && small374.climb == nil, "374 x 228: the two do not fit beside the vehicle: small")
+check(small374.words == "SMALL (they do not fit; 0 pt of 20056 pt free map, 0 %)", "374 x 228: the measure in words")
+check(small400.screenClass == .small && small400.freeArea == 26460, "400 x 240: small, of a free map 135 x 196")
+check(upright.screenClass == .small && upright.freeArea == 25788, "300 x 400: small, the free map CarPlay reports is 84 wide")
+check(wide640.screenClass == .between && wide640.fits, "640 x 240: they fit and take more than 15 %: in-between")
+check(wide640.mini == CGRect(x: 482, y: 162, width: 110, height: 70), "640 x 240: the mini map in the trailing bottom corner, full size")
+check(wide640.climb == CGRect(x: 281, y: 200, width: 132.5, height: 32), "640 x 240: the climb's card from the leading edge to the vehicle's column")
+check(wide640.words == "IN_BETWEEN (they fit; 11940 pt of 64092 pt free map, 19 %)", "640 x 240: the measure in words")
+check(high640.screenClass == .big && high640.words == "BIG (they fit; 11940 pt of 103332 pt free map, 12 %)", "640 x 360 (not run by the harness): big")
+check(CarExtras.bigMaxShare == 0.15, "the one number: 15 % of the free map")
+if let tile = wide640.mini, let card = wide640.climb {
+  let keep = CarExtras.keepClear(freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
+  check(!tile.intersects(keep) && !card.intersects(keep), "neither piece is over the vehicle or the road ahead")
+  check(keep.minX == 413.5 && keep.maxX == 459.5 && keep.minY == 44, "the vehicle's column: the marker and free map each side, up to the top")
+}
+let vehicle = CarExtras.vehiclePoint(freeMap(640, 240, top: 44, left: 273, bottom: 0, right: 40))
+check(vehicle.x == 436.5 && near(Double(vehicle.y), 44 + 196 * 0.675, 1e-9), "the vehicle is where the guidance camera draws it")
+check(CarExtras.layout(free: CGRect.zero).screenClass == .small, "no free map: small")
+check(!CarExtras.carries(.small, phoneDrive: false) && !CarExtras.carries(.small, phoneDrive: true), "a small screen never carries the two")
+check(CarExtras.carries(.big, phoneDrive: false) && CarExtras.carries(.big, phoneDrive: true), "a big screen always does")
+check(CarExtras.carries(.between, phoneDrive: false) && !CarExtras.carries(.between, phoneDrive: true), "an in-between screen does, except while the phone's drive screen shows")
+check(CarExtras.carriesWord(.small) == "never" && CarExtras.carriesWord(.between) == "unlessPhone" && CarExtras.carriesWord(.big) == "always", "the three words the phone is told")
+check(CarExtras.onMap, "the one place that takes the two off CarPlay's map is on")
+
+// The pause and the fade.
+var fade = CarExtrasFade(shown: true)
+check(fade.due == nil && fade.start(at: 100) == nil, "nothing to do while the car shows what it should")
+fade.want(false, at: 10)
+check(fade.due == 12 && fade.shown, "the phone's screen shows: one pause of two seconds first")
+check(fade.start(at: 11.9) == nil && fade.shown, "nothing starts inside the pause")
+fade.want(true, at: 11)
+check(fade.due == nil && fade.start(at: 20) == nil && fade.shown, "a flip back inside the pause changes nothing")
+fade.want(false, at: 30)
+fade.want(false, at: 31)
+check(fade.due == 32, "told the same again: the pause runs from the first time")
+check(fade.start(at: 32) == false && !fade.shown && fade.due == nil, "the pause has run out: the fade out starts")
+fade.want(true, at: 40)
+check(fade.due == 42 && fade.start(at: 42.5) == true && fade.shown, "and the same way back in")
+fade.want(false, at: 50)
+fade.set(true)
+check(fade.due == nil && fade.shown, "a new drive or a new screen: what it carries, at once")
+check(CarExtras.pauseSeconds == 2 && CarExtras.fadeSeconds == 0.5, "two seconds, then half a second")
+
+// The mini map's sums (the Android painter's).
+let square: [[Double]] = [[0, 0], [0, 1], [1, 1]]
+let placed = CarExtras.project(square, in: CGRect(x: 0, y: 0, width: 120, height: 120), pad: 10)
+check(placed.count == 3 && near(Double(placed[0].x), 10, 0.01) && near(Double(placed[0].y), 110, 0.01), "the route's first point in the tile: south-west is bottom left")
+check(near(Double(placed[2].x), 110, 0.01) && near(Double(placed[2].y), 10, 0.01), "north-east is top right, with the padding around")
+let half = CarExtras.cut(placed, fraction: 0.5)
+check(near(half.last.map { Double($0.x) }, 110, 0.01) && near(half.last.map { Double($0.y) }, 110, 0.01), "half of the line by length ends at the corner")
+let third = CarExtras.cut(placed, fraction: 0.25)
+check(third.count == 2 && near(Double(third[1].x), 60, 0.01), "a quarter of the line ends halfway along its first leg")
+check(CarExtras.cut(placed, fraction: 0).count == 1 && CarExtras.cut(placed, fraction: 1).count == 3, "none of the line, and all of it")
+check(CarExtras.project([], in: CGRect.zero, pad: 0).isEmpty && CarExtras.cut([], fraction: 0.5).isEmpty, "no route: nothing")
+check(near(CarExtras.shapeY(1050, lo: 1000, hi: 1100, top: 0, bottom: 40), 20) && near(CarExtras.shapeY(1100, lo: 1000, hi: 1100, top: 0, bottom: 40), 0), "the shape: the middle height in the middle, the top at the top")
+check(near(CarExtras.shapeY(1010, lo: 1000, hi: 1010, top: 0, bottom: 40), 18), "a small rise is drawn low: the whole height stands for at least 100 m")
+check(CarExtras.lineForm(avail: 116, figureW: 40, gradeDistanceW: 60, gradeW: 20) == .figureGradeDistance, "the one-line card: the shape is the first to go")
+check(CarExtras.lineForm(avail: 150, figureW: 40, gradeDistanceW: 60, gradeW: 20) == .shapeFigureGradeDistance, "with room: the shape, the figure, the grade and how far")
+check(CarExtras.lineForm(avail: 70, figureW: 40, gradeDistanceW: 60, gradeW: 20) == .figureGrade && CarExtras.lineForm(avail: 50, figureW: 40, gradeDistanceW: 60, gradeW: 20) == .figure, "then the distance goes, then the grade")
+check(CarExtras.lineForm(avail: 500, figureW: 40, gradeDistanceW: nil, gradeW: nil) == .figure, "no grade known: the figure alone")
 let oneHeight: [String: Any] = ["climbAheadM": 10.0, "heightsM": [1000.0]]
 check(CarClimb.from(oneHeight) == nil && CarClimb.from(nil) == nil, "a climb needs at least two heights")
 check(CarText.climb(148, imperial: true) == "490 ft" && CarText.climb(375, imperial: true) == "1,230 ft", "how much is climbed, in feet to the nearest ten")

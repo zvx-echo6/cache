@@ -16,7 +16,7 @@ APPS="$RUNNER_TEMP/harness-apps"
 TOOL="$RUNNER_TEMP/screentool"
 UDID="${HARNESS_UDID:?no simulator was chosen}"
 DEVICE="${HARNESS_DEVICE:-iPhone}"
-SIZES="${HARNESS_SIZES:-748x456@2 800x480@2 1920x720@3 900x1200@3}"
+SIZES="${HARNESS_SIZES:-748x456@2 800x480@2 1920x720@3 1280x720@2 900x1200@3}"
 SIMAPP="$(xcode-select -p)/Applications/Simulator.app"
 mkdir -p "$OUT/shots" "$OUT/host" "$OUT/logs"
 LOG="$OUT/steps.log"
@@ -882,7 +882,9 @@ guide_step() {  # guide_step <notification> <log text to wait for, or ""> <pictu
 }
 
 guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
-  local label="$1" at before got rows
+  local label="$1" at before got rows began ended told
+  EXTRAS=""
+  EXTRAS_SAYS=""
   local edge=$((CAR_W - 27 * CAR_S)) bar=$((28 * CAR_S))
   PROMPTS=""
   TONE=""
@@ -929,20 +931,75 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   else
     GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
   fi
-  # A climb ahead: CarPlay's own alert with Android's words and the road's shape. Then, once the alert has gone, the bar's
-  # Overview button: the whole route north up, with the grade marker at the steepest point; and back.
-  guide_step climb 'car guidance: climb alert shown' "$label-guide-climb"
-  # The alert goes by itself after ten seconds; the panel then has both its turns again.
-  if wait_log 'car guidance: the alert has gone' 16; then
-    sleep 2
-    shot_ext "$label-guide-after-climb"
-  else
-    GUIDE_MISSING="$GUIDE_MISSING [the app did not say the climb alert had gone]"
-  fi
+  # The two extras on the map: the route mini map and the climb ahead. The app measures the room CarPlay reports and says
+  # the screen's class (small: never on the car; big: always; in-between: on the car except while the phone's drive screen
+  # shows). The trip with a climb ahead is pushed, and the picture shows what this screen carries.
+  EXTRAS=$(grep -E 'car extras: (SMALL|IN_BETWEEN|BIG) ' "$STREAM" | tail -n 1 | sed 's/.*car extras: //')
+  before=$(log_count 'car extras: drawn')
+  guide_step climb "" "$label-guide-extras"
+  # The phone is told how this screen carries them, in one of three words.
+  told=$(grep 'harness steps: the car carries the extras' "$STREAM" | tail -n 1 | sed 's/.*the extras: //')
+  case "${EXTRAS%% *}:$told" in
+    SMALL:never|IN_BETWEEN:unlessPhone|BIG:always) ;;
+    *) GUIDE_MISSING="$GUIDE_MISSING [the phone was told '$told' on a screen measured as ${EXTRAS%% *}]" ;;
+  esac
+  case "$EXTRAS" in
+    SMALL*)
+      [ "$(log_count 'car extras: drawn')" = 0 ] || GUIDE_MISSING="$GUIDE_MISSING [the extras were drawn on a screen measured as small]"
+      EXTRAS_SAYS="$EXTRAS: neither is drawn; the phone was told '$told'"
+      ;;
+    BIG*|IN_BETWEEN*)
+      grep -q 'car extras: drawn' "$STREAM" || GUIDE_MISSING="$GUIDE_MISSING [the extras were not drawn on a screen measured as $EXTRAS]"
+      EXTRAS_SAYS="$EXTRAS: both are drawn; the phone was told '$told'"
+      # The phone's drive screen comes up for a second and goes again: inside the pause, so nothing changes on the car.
+      before=$(log_count 'car extras: fading')
+      notify phoneon
+      sleep 1
+      notify phoneoff
+      sleep 3
+      [ "$(log_count 'car extras: fading')" = "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [a one-second flip of the phone's screen started a fade]"
+      # It comes up and stays.
+      notify phoneon
+      case "$EXTRAS" in
+        IN_BETWEEN*)
+          if wait_more 'car extras: faded out' "$(log_count 'car extras: faded out')" 6; then
+            shot_ext "$label-guide-extras-faded-out"
+            began=$(grep 'harness steps: phone drive screen true' "$STREAM" | tail -n 1 | cut -c12-23)
+            ended=$(grep 'car extras: faded out' "$STREAM" | tail -n 1 | cut -c12-23)
+            EXTRAS_SAYS="$EXTRAS_SAYS; with the phone's drive screen showing they faded out (the phone said so at $began, they were gone at $ended)"
+          else
+            shot_ext "$label-guide-extras-not-faded"
+            GUIDE_MISSING="$GUIDE_MISSING [in-between screen: the extras did not fade out while the phone's drive screen showed]"
+          fi
+          before=$(log_count 'car extras: faded in')
+          notify phoneoff
+          if wait_more 'car extras: faded in' "$before" 6; then
+            shot_ext "$label-guide-extras-back"
+            EXTRAS_SAYS="$EXTRAS_SAYS, and back in when it went"
+          else
+            GUIDE_MISSING="$GUIDE_MISSING [in-between screen: the extras did not fade back in]"
+          fi
+          ;;
+        *)
+          sleep 4
+          [ "$(log_count 'car extras: fading')" = "$before" ] || GUIDE_MISSING="$GUIDE_MISSING [big screen: the extras faded for the phone's drive screen]"
+          shot_ext "$label-guide-extras-phone-showing"
+          EXTRAS_SAYS="$EXTRAS_SAYS, and stay with the phone's drive screen showing"
+          notify phoneoff
+          sleep 1
+          ;;
+      esac
+      ;;
+    *)
+      GUIDE_MISSING="$GUIDE_MISSING [the app did not say the screen's class for the extras]"
+      EXTRAS_SAYS="no class said"
+      ;;
+  esac
   if at=$(tap_until 'car map: route overview on' 3 $(( (FREE_LEFT + 22) * CAR_S )) "$bar" $(( (FREE_LEFT + 36) * CAR_S )) "$bar" $(( (FREE_LEFT + 14) * CAR_S )) "$bar"); then
     sleep 3
     shot_ext "$label-guide-overview"
-    GUIDE="$GUIDE; a climb ahead was told in CarPlay's alert; Overview (tap at pixel $at) showed the whole route with the grade marker"
+    grep -q 'car extras: not drawn' "$STREAM" || [ "${EXTRAS%% *}" = SMALL ] || GUIDE_MISSING="$GUIDE_MISSING [the extras stayed on the map with the whole route in view]"
+    GUIDE="$GUIDE; the extras, $EXTRAS_SAYS; Overview (tap at pixel $at) showed the whole route with the grade marker"
     tap_until 'car map: route overview off' 3 "${at%,*}" "${at#*,}" > /dev/null || GUIDE_MISSING="$GUIDE_MISSING [Overview did not go back to the position]"
     sleep 2
   else
@@ -1161,7 +1218,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi
