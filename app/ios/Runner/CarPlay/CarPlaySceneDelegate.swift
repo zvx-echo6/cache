@@ -231,13 +231,19 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     guidance?.takenOver()
   }
 
-  /// While another app is in front on the car screen, CarPlay shows the next turn as a banner.
+  /// Navigation metadata for the vehicle's own displays (an instrument cluster): as CarGuidance.vehicleMetadata says.
+  func mapTemplateShouldProvideNavigationMetadata(_ mapTemplate: CPMapTemplate) -> Bool {
+    CarGuidance.vehicleMetadata
+  }
+
+  /// A navigation alert (the climb ahead) has gone: the guidance panel is given its turns again.
   func mapTemplate(
     _ mapTemplate: CPMapTemplate, didDismiss navigationAlert: CPNavigationAlert, dismissalContext: CPNavigationAlert.DismissalContext
   ) {
     guidance?.alertGone()
   }
 
+  /// While another app is in front on the car screen, CarPlay shows the next turn as a banner.
   func mapTemplate(_ mapTemplate: CPMapTemplate, shouldShowNotificationFor maneuver: CPManeuver) -> Bool {
     true
   }

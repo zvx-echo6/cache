@@ -921,8 +921,9 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     shot_ext "$label-guide-no-overview"
     GUIDE_MISSING="$GUIDE_MISSING [the Overview button did not answer taps at the bar's leading end]"
   fi
-  # Nearer the turn (only the distance changes), then past it (the next turn, and arriving after it).
-  guide_step drive "" "$label-guide-near"
+  # Nearer the turn: the phone now shows lanes for it, and they take the panel's second place. Then past it (the next turn,
+  # and arriving after it).
+  guide_step drive 'car guidance: lanes shown, 4 lanes' "$label-guide-near"
   guide_step drive 'car guidance: turn shown, 2 maneuvers' "$label-guide-next"
   # The voice switch, at the bar's trailing edge: off, and on again. The phone's trip says which way it is.
   if at=$(tap_until 'car guidance: voice asked off' 3 "$edge" "$bar" $((edge - 8 * CAR_S)) "$bar"); then
@@ -1125,7 +1126,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: the next turn, nearer it, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: the next turn, nearer it with its lanes in the panel's second place, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-climb,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi

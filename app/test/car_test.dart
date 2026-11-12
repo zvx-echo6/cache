@@ -18,6 +18,7 @@ import 'package:cache/nav/nav_geojson.dart';
 import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/lane_strip.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
@@ -241,6 +242,83 @@ void main() {
       for (final row in rows) {
         final r = row as Map;
         expect(const Fmt(UnitSystem.imperial).duration(r['seconds'] as int), r['text'], reason: '${r['seconds']} s');
+      }
+    });
+
+    test('lanes: the step carries what the phone shows under its banner, and none before the turn is near', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final far = nav.farStageM!;
+      // One lane as the router sends it: Valhalla's bits.
+      Map<String, dynamic> lane(Set<LaneDirection> d, {LaneDirection? active, LaneDirection? valid}) => {
+            'directions': d.fold<int>(0, (a, x) => a | (1 << x.index)),
+            'active': ?(active == null ? null : 1 << active.index),
+            'valid': ?(valid == null ? null : 1 << valid.index),
+          };
+      void turnAhead(double meters, List<Map<String, dynamic>> lanes) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({...j, 'next': {...(j['next'] as Map<String, dynamic>), 'distance_m': meters, 'lanes': lanes}});
+      }
+
+      final lanes = [
+        lane({LaneDirection.left, LaneDirection.through}, valid: LaneDirection.left),
+        lane({LaneDirection.left}, active: LaneDirection.left),
+        lane({LaneDirection.through}),
+        lane({LaneDirection.none}),
+      ];
+      // As close as the first voice prompt: the lanes, as the phone's strip draws them, and the phone's words for them.
+      turnAhead(far - 1, lanes);
+      var t = carTrip(nav);
+      var step = t['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through', 'left'], 'role': 'valid', 'take': 'left'},
+        {'directions': ['left'], 'role': 'active', 'take': 'left'},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use the 2 left lanes');
+      // Never on the maneuver after next.
+      expect((t['then'] as Map)['lanes'], isEmpty);
+      expect((t['then'] as Map)['lanesLabel'], isNull);
+
+      // Further off: none yet, as on the phone.
+      turnAhead(far + 1, lanes);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], isEmpty);
+      expect(step['lanesLabel'], isNull);
+
+      // The road did not say which lanes work: every lane alike.
+      turnAhead(100, [lane({LaneDirection.through}), lane({LaneDirection.through, LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through'], 'role': 'plain', 'take': null},
+        {'directions': ['through', 'right'], 'role': 'plain', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use any lane');
+
+      // A lane to be in that is not marked with a direction takes the straight arrow.
+      turnAhead(100, [lane({LaneDirection.through}, active: LaneDirection.none), lane({LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect((step['lanes'] as List).first, {'directions': ['through'], 'role': 'active', 'take': 'through'});
+
+      // No lanes from the road: none.
+      turnAhead(100, const []);
+      expect((carTrip(nav)['step'] as Map)['lanes'], isEmpty);
+
+      // The lanes recorded for the iPhone car tests are in these words.
+      final near = jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_near.json').readAsStringSync()) as Map<String, dynamic>;
+      final recorded = (near['step'] as Map)['lanes'] as List;
+      expect(recorded, isNotEmpty);
+      expect((near['step'] as Map)['lanesLabel'], isA<String>());
+      for (final l in recorded) {
+        expect((l as Map).keys.toSet(), {'directions', 'role', 'take'});
+        expect([for (final r in LaneRole.values) r.name], contains(l['role']));
+        for (final d in l['directions'] as List) {
+          expect([for (final x in LaneDirection.values) x.name], contains(d));
+        }
       }
     });
 

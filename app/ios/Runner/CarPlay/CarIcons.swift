@@ -2,8 +2,8 @@ import UIKit
 
 /// The car screen's pictures, drawn in code as on the Android car (CarIcons.kt and CarOverlayPainter.kt, shape for shape), so
 /// no picture files are added: a turn picture for each of the phone's turn names (CarStep.turn), the route overview
-/// button's, and the climb alert's shape, all plain shapes with no colour of their own, which CarPlay tints for its light and
-/// dark cards; and the grade marker for the map, in the phone's own colours.
+/// button's, the climb alert's shape and the lane strip, all plain shapes with no colour of their own, which CarPlay tints for
+/// its light and dark cards; and the grade marker for the map, in the phone's own colours.
 enum CarIcons {
   /// CarPlay shows a maneuver's picture at 50 x 50 points at most.
   private static let side: CGFloat = 50
@@ -102,6 +102,121 @@ enum CarIcons {
       slope.fill()
       words.draw(at: CGPoint(x: box.minX + 34, y: cy - words.size().height / 2))
     }
+  }
+
+  /// The lanes of the road at the next maneuver, for CarPlay's place for them (the second maneuver, a picture only, 120 by 18
+  /// points at most): the phone's lane strip (lane_strip.dart), arrow for arrow. One colour, which CarPlay tints, so the
+  /// phone's tones are strengths of it: the arrow to take on the lane to be in is full, with a faint plate behind its lane;
+  /// the other arrows of that lane and the lanes that also work are lighter; lanes that do not work are the phone's 38%.
+  /// With no lane marked every lane is full.
+  static func laneStrip(_ lanes: [CarLane]) -> UIImage {
+    let count = max(1, lanes.count)
+    let height: CGFloat = 18
+    let cell: CGFloat = min(22, ((120 - CGFloat(count - 1)) / CGFloat(count)).rounded(.down))
+    let glyph: CGFloat = max(6, min(height - 2, cell - 2))
+    let size = CGSize(width: cell * CGFloat(count) + CGFloat(count - 1), height: height)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 3
+    format.opaque = false
+    let drawn = UIGraphicsImageRenderer(size: size, format: format).image { context in
+      for (i, lane) in lanes.enumerated() {
+        let x = CGFloat(i) * (cell + 1)
+        let active = lane.role == "active"
+        if i > 0 && !active && lanes[i - 1].role != "active" {
+          UIColor.white.withAlphaComponent(0.25).setFill()
+          UIRectFill(CGRect(x: x - 1, y: (height - glyph * 0.8) / 2, width: 1, height: glyph * 0.8))
+        }
+        if active {
+          UIColor.white.withAlphaComponent(0.18).setFill()
+          UIBezierPath(roundedRect: CGRect(x: x, y: 0, width: cell, height: height), cornerRadius: 4).fill()
+        }
+        let tone: CGFloat = lane.role == "dim" ? 0.38 : (lane.role == "plain" ? 1 : 0.62)
+        let box = CGRect(x: x + (cell - glyph) / 2, y: (height - glyph) / 2, width: glyph, height: glyph)
+        let lit: String? = active ? (lane.take ?? "through") : nil
+        // The arrow to take is drawn last, over the others.
+        for direction in lane.directions where direction != lit {
+          laneArrow(direction, in: box, color: UIColor.white.withAlphaComponent(tone), context: context.cgContext)
+        }
+        if let lit = lit {
+          laneArrow(lit, in: box, color: .white, context: context.cgContext)
+        }
+      }
+    }
+    return drawn.withRenderingMode(.alwaysTemplate)
+  }
+
+  /// One lane arrow in a square, the phone's shapes in a unit square (LaneGlyphPainter): a stem from the foot that bends to
+  /// the arrow's way, with a head; the way back as a hook; a merging lane as a stem that slides over.
+  private static func laneArrow(_ direction: String, in box: CGRect, color: UIColor, context: CGContext) {
+    context.saveGState()
+    context.translateBy(x: box.minX, y: box.minY)
+    context.scaleBy(x: box.width, y: box.height)
+    color.setStroke()
+    color.setFill()
+    func line(_ path: UIBezierPath) {
+      path.lineWidth = 0.12
+      path.lineCapStyle = .round
+      path.lineJoinStyle = .round
+      path.stroke()
+    }
+    func head(_ tip: CGPoint, _ degrees: CGFloat) {
+      let t = degrees * .pi / 180
+      let dir = CGPoint(x: sin(t), y: -cos(t))
+      let perp = CGPoint(x: cos(t), y: sin(t))
+      let base = CGPoint(x: tip.x - dir.x * 0.3, y: tip.y - dir.y * 0.3)
+      let path = UIBezierPath()
+      path.move(to: tip)
+      path.addLine(to: CGPoint(x: base.x + perp.x * 0.21, y: base.y + perp.y * 0.21))
+      path.addLine(to: CGPoint(x: base.x - perp.x * 0.21, y: base.y - perp.y * 0.21))
+      path.close()
+      path.fill()
+    }
+    switch direction {
+    case "reverse":
+      let path = UIBezierPath()
+      path.move(to: CGPoint(x: 0.68, y: 0.97))
+      path.addLine(to: CGPoint(x: 0.68, y: 0.38))
+      path.addArc(withCenter: CGPoint(x: 0.5, y: 0.38), radius: 0.18, startAngle: 0, endAngle: -.pi, clockwise: false)
+      path.addLine(to: CGPoint(x: 0.32, y: 0.56))
+      line(path)
+      head(CGPoint(x: 0.32, y: 0.88), 180)
+    case "mergeToLeft", "mergeToRight":
+      let m: CGFloat = direction == "mergeToRight" ? -1 : 1
+      func x(_ v: CGFloat) -> CGFloat { 0.5 + (v - 0.5) * m }
+      let path = UIBezierPath()
+      path.move(to: CGPoint(x: x(0.66), y: 0.97))
+      path.addLine(to: CGPoint(x: x(0.66), y: 0.7))
+      path.addCurve(
+        to: CGPoint(x: x(0.34), y: 0.4), controlPoint1: CGPoint(x: x(0.66), y: 0.52), controlPoint2: CGPoint(x: x(0.34), y: 0.56))
+      path.addLine(to: CGPoint(x: x(0.34), y: 0.3))
+      line(path)
+      head(CGPoint(x: x(0.34), y: 0.04), 0)
+    default:
+      let turn: Double = CarLane.angle(direction) ?? 0
+      if turn == 0 {
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: 0.5, y: 0.97))
+        path.addLine(to: CGPoint(x: 0.5, y: 0.26))
+        line(path)
+        head(CGPoint(x: 0.5, y: 0.03), 0)
+      } else {
+        let degrees = CGFloat(turn)
+        let t = degrees * .pi / 180
+        let dir = CGPoint(x: sin(t), y: -cos(t))
+        // A sharp turn bends higher up, so its arm is long enough to read.
+        let bend = CGPoint(x: 0.5, y: abs(degrees) > 90 ? 0.4 : 0.6)
+        let tip = CGPoint(x: bend.x + dir.x * 0.38, y: bend.y + dir.y * 0.38)
+        let end = CGPoint(x: tip.x - dir.x * 0.24, y: tip.y - dir.y * 0.24)
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: 0.5, y: 0.97))
+        path.addLine(to: CGPoint(x: 0.5, y: bend.y + 0.1))
+        path.addQuadCurve(to: CGPoint(x: bend.x + dir.x * 0.1, y: bend.y + dir.y * 0.1), controlPoint: bend)
+        path.addLine(to: end)
+        line(path)
+        head(tip, degrees)
+      }
+    }
+    context.restoreGState()
   }
 
   /// A colour as Dart writes it ("#rrggbb"); black for anything else.

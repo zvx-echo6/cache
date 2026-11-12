@@ -2,6 +2,7 @@ import 'package:cache_search/cache_search.dart';
 
 import '../nav/guidance.dart';
 import '../nav/nav_state.dart';
+import '../nav/ui/lane_strip.dart';
 import '../nav/units.dart';
 import '../nav/elevation/elevation_profile.dart';
 import '../theme.dart';
@@ -41,7 +42,7 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
     'rerouting': nav.rerouting,
     if (position != null) 'position': {'lat': position.lat, 'lon': position.lon, 'heading': ?heading},
     if (nav.guiding && p != null && !nav.rerouting) ...{
-      'step': p.next == null ? null : carStep(p.next!, nav.fmt),
+      'step': p.next == null ? null : carStep(p.next!, nav.fmt, lanes: lanesToShow(p.next!, nav.farStageM)),
       'then': p.then == null || (p.then!.isArrival && (p.next?.isArrival ?? false)) ? null : carStep(p.then!, nav.fmt),
       'currentRoad': p.current.streetNames.isEmpty ? null : p.current.streetNames.first,
       'remainingM': p.remainingM,
@@ -59,7 +60,9 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
 }
 
 /// One maneuver for the car: the turn picture (the same choice the phone's banner makes), the words, the road and how far.
-Map<String, dynamic> carStep(ProgressManeuver m, Fmt fmt) {
+/// [lanes] are the lanes the phone shows under its banner for this maneuver at this moment (lanesToShow; none for the
+/// maneuver after next): `lanes` is then what the car draws, lane by lane, and `lanesLabel` the phone's words for them.
+Map<String, dynamic> carStep(ProgressManeuver m, Fmt fmt, {List<Lane> lanes = const []}) {
   final turn = turnIconFor(m.type, offroad: m.isOffroad);
   return {
     'turn': turn.name,
@@ -67,7 +70,32 @@ Map<String, dynamic> carStep(ProgressManeuver m, Fmt fmt) {
     'cue': m.isOffroad ? _offroadCue(m, fmt) : m.instruction,
     'road': m.isOffroad || m.streetNames.isEmpty ? null : m.streetNames.first,
     'distanceM': m.distanceM,
+    'lanes': carLanes(lanes),
+    'lanesLabel': lanes.isEmpty ? null : laneLabel(lanes),
   };
+}
+
+/// The lanes of the road at a maneuver for the car, left to right, as the phone's lane strip draws them (nav/ui/lane_strip.dart),
+/// worked out here so the car draws and never decides: the arrows a lane carries (`directions`, [LaneDirection] names, an
+/// unmarked lane being one straight arrow), how the lane is drawn (`role`, a [LaneRole] name: the lane to be in, another that
+/// works, one that does not, or every lane alike when the road did not say which work), and the arrow the route takes from a
+/// lane that works (`take`; null on the others).
+List<Map<String, dynamic>> carLanes(List<Lane> lanes) {
+  final anyMarked = lanes.any((l) => l.active != null || l.valid != null);
+  String? take(Lane l) {
+    final d = l.active ?? l.valid;
+    if (d == null) return null;
+    return (d == LaneDirection.none ? LaneDirection.through : d).name;
+  }
+
+  return [
+    for (final l in lanes)
+      {
+        'directions': [for (final d in laneGlyphDirections(l)..sort((a, b) => a.index - b.index)) d.name],
+        'role': laneRole(l, anyMarked: anyMarked).name,
+        'take': take(l),
+      },
+  ];
 }
 
 String _offroadCue(ProgressManeuver m, Fmt fmt) {

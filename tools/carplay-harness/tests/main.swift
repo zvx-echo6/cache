@@ -188,6 +188,35 @@ let arrivedMessage: [String: Any] = ["phase": "guiding", "remainingS": 0, "remai
 check(CarTrip.from(lastStretch).leftSeconds == 60, "under a minute left reads as one minute")
 check(CarTrip.from(arrivedMessage).leftSeconds == 0, "arrived: no time left")
 check(CarTrip.from([:]).leftSeconds == nil, "no time left known")
+// ---- lanes ----------------------------------------------------------------------------------------------------------
+
+let laned = CarTrip.from(map("trip_guiding_near.json"))
+let lanes: [CarLane] = laned.step?.lanes ?? []
+check(lanes.count == 4, "lanes: four lanes at the turn")
+check(lanes.first == CarLane(directions: ["left"], role: "active", take: "left"), "lanes: the lane to be in")
+check(lanes.count == 4 && lanes[1] == CarLane(directions: ["through", "left"], role: "valid", take: "left"), "lanes: another lane that works")
+check(lanes.count == 4 && lanes[3] == CarLane(directions: ["through", "right"], role: "dim", take: nil), "lanes: a lane that does not work")
+check(laned.step?.lanesLabel == "Lanes: use the 2 left lanes", "lanes: the phone's words for them")
+check(laned.then?.lanes.isEmpty == true && laned.then?.lanesLabel == nil, "lanes: never on the turn after next")
+check(guiding.step?.lanes.isEmpty == true && guiding.step?.lanesLabel == nil, "no lanes shown by the phone: none")
+let noArrows: [String: Any] = ["directions": [String](), "role": "dim"]
+let noDirections: [String: Any] = ["role": "dim"]
+let notLanes: [Any] = ["x", noArrows, noDirections]
+check(CarLane.list(notLanes).isEmpty && CarLane.list("x").isEmpty && CarLane.list(nil).isEmpty, "what is not a lane with arrows is left out")
+let bareLane: [Any] = [["directions": ["right"]]]
+check(CarLane.list(bareLane) == [CarLane(directions: ["right"], role: "plain", take: nil)], "a lane's defaults")
+check(CarLane.angle("through") == 0 && CarLane.angle("left") == -90 && CarLane.angle("right") == 90, "lane arrows as turns: straight, left, right")
+check(CarLane.angle("slightLeft") == -45 && CarLane.angle("sharpRight") == 135 && CarLane.angle("reverse") == 180, "slight, sharp and the way back")
+check(CarLane.angle("mergeToLeft") == -45 && CarLane.angle("mergeToRight") == 45 && CarLane.angle("sideways") == nil, "merging lanes, and a name that is no direction")
+if lanes.count == 4 {
+  check(lanes[0].takenAngle == -90 && lanes[0].otherAngles.isEmpty, "the lane to be in: the taken arrow apart, nothing else")
+  check(lanes[1].takenAngle == -90 && lanes[1].otherAngles == [0], "a lane that works: the taken arrow apart from the rest")
+  check(lanes[2].takenAngle == nil && lanes[2].otherAngles == [0], "a lane that does not work: no taken arrow")
+  check(lanes[3].otherAngles == [0, 90], "its arrows in the phone's order")
+}
+let plainLane = CarLane(directions: ["through"], role: "plain", take: "through")
+check(plainLane.takenAngle == nil && plainLane.otherAngles.isEmpty, "no lane marked: no taken arrow is claimed")
+
 // ---- a climb ahead ------------------------------------------------------------------------------------------------
 
 let uphill = CarTrip.from(map("trip_guiding_climb.json"))

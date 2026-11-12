@@ -8,6 +8,68 @@ struct CarStep: Equatable {
   let cue: String
   let road: String?
   let distanceM: Double
+  /// The lanes the phone shows for this maneuver at this moment, left to right; empty when it shows none.
+  var lanes: [CarLane] = []
+  /// The phone's words for those lanes ("Lanes: use the 2 left lanes"); nil with no lanes.
+  var lanesLabel: String?
+}
+
+/// One lane of the road at the next maneuver, as Dart worked it out from the phone's lane strip (lib/car/car_trip.dart,
+/// carLanes): the car draws it and decides nothing.
+struct CarLane: Equatable {
+  /// The arrows the lane carries: the phone's LaneDirection names ("through", "left", "slightRight", "mergeToLeft", ...).
+  let directions: [String]
+  /// How the lane is drawn: "active" (the lane to be in), "valid" (another that works), "dim" (one that does not), or
+  /// "plain" (the road did not say which lanes work: every lane alike).
+  let role: String
+  /// The arrow the route takes from a lane that works; nil on the others.
+  let take: String?
+
+  /// The lanes of a step's `lanes`; anything that is not a list of lanes is none, and a lane with no arrows is left out.
+  static func list(_ v: Any?) -> [CarLane] {
+    var lanes: [CarLane] = []
+    for item in (v as? [Any]) ?? [] {
+      guard let m = CarValue.map(item) else { continue }
+      let directions: [String] = ((m["directions"] as? [Any]) ?? []).compactMap { $0 as? String }
+      if directions.isEmpty { continue }
+      lanes.append(CarLane(directions: directions, role: m["role"] as? String ?? "plain", take: CarValue.text(m["take"])))
+    }
+    return lanes
+  }
+
+  /// A lane arrow's turn in degrees clockwise from straight ahead, as the phone's strip turns it (lane_strip.dart): left is
+  /// -90, right 90, the way back 180. The two merging arrows have no turn of their own on the phone (a lane sliding over):
+  /// here they are the slight turn to their side. Nil for a name that is no direction.
+  static func angle(_ direction: String) -> Double? {
+    switch direction {
+    case "through", "none": return 0
+    case "sharpLeft": return -135
+    case "left": return -90
+    case "slightLeft", "mergeToLeft": return -45
+    case "slightRight", "mergeToRight": return 45
+    case "right": return 90
+    case "sharpRight": return 135
+    case "reverse": return 180
+    default: return nil
+    }
+  }
+
+  /// The arrows other than the one the route takes, as turns (CarPlay's lane data wants the taken one apart from the rest).
+  var otherAngles: [Double] {
+    var angles: [Double] = []
+    let taken: Double? = take.flatMap { CarLane.angle($0) }
+    for direction in directions {
+      guard let angle = CarLane.angle(direction), angle != taken, !angles.contains(angle) else { continue }
+      angles.append(angle)
+    }
+    return angles
+  }
+
+  /// The taken arrow's turn; nil on a lane that does not work.
+  var takenAngle: Double? {
+    guard role == "active" || role == "valid" else { return nil }
+    return take.flatMap { CarLane.angle($0) }
+  }
 }
 
 struct CarRoute: Equatable {
@@ -123,7 +185,9 @@ struct CarTrip: Equatable {
       type: s["type"] as? String ?? "",
       cue: s["cue"] as? String ?? "",
       road: CarValue.text(s["road"]),
-      distanceM: CarValue.double(s["distanceM"]) ?? 0
+      distanceM: CarValue.double(s["distanceM"]) ?? 0,
+      lanes: CarLane.list(s["lanes"]),
+      lanesLabel: CarValue.text(s["lanesLabel"])
     )
   }
 }

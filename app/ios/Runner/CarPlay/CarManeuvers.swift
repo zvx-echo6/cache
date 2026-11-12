@@ -11,6 +11,9 @@ import UIKit
 /// turn after it, and what is left of the trip (distance, time, arrival). Arriving and looking for a new route are told to
 /// CarPlay as its own states for them, with Android's words; so is waiting for the first turn.
 ///
+/// Lanes: while the phone shows lanes under its turn banner, the car shows them in CarPlay's one form for lanes, the panel's
+/// second place as a picture with no words (the phone's lane strip, drawn by CarIcons); the turn after next waits meanwhile.
+///
 /// A climb ahead (the phone finds one of at least its least grade, and has a switch for showing it) is told in CarPlay's own
 /// form for such news, a navigation alert that shows for a set time and goes: Android's words for it, and the shape of the
 /// road ahead as its picture. The grade marker on the map is the map controller's. The bar's Overview button shows the whole
@@ -28,6 +31,10 @@ final class CarGuidance: CarLinkListener {
   static let rerouting = "Finding a new route"
   /// The name CarPlay is given for a destination that has none.
   static let destination = "Destination"
+  /// Whether the app gives CarPlay navigation metadata for the vehicle's own displays (an instrument cluster, a head-up
+  /// display): off. The lanes are the only such data the app has ready; turning this on also needs every maneuver's kind
+  /// and junction in CarPlay's own terms, and a car that shows them to check it in.
+  static let vehicleMetadata = false
   static let climbAhead = "Climb ahead"
   /// The one button CarPlay's alert must have. Android's climb card has no button.
   static let alertButton = "OK"
@@ -42,6 +49,8 @@ final class CarGuidance: CarLinkListener {
   private var shownTurnDistance: String?
   private var shownLeft: String?
   private var shownState: String?
+  /// The lane data last given to CarPlay for the vehicle (a CPLaneGuidance, iOS 17.4).
+  private var vehicleLanes: AnyObject?
   private var wasArrived = false
   /// End route was pressed, or the car took guidance over: the phone's trip is not shown again until it has stopped guiding.
   private var stopping = false
@@ -225,6 +234,7 @@ final class CarGuidance: CarLinkListener {
     shownState = nil
     wasArrived = false
     climbTold = false
+    vehicleLanes = nil
     if let map = mapTemplate, map.currentNavigationAlert != nil {
       map.dismissNavigationAlert(animated: false) { _ in }
     }
@@ -253,7 +263,12 @@ final class CarGuidance: CarLinkListener {
   /// to the next turn is told, and only when the number on the screen would change.
   private func showTurns(_ t: CarTrip, _ step: CarStep, _ session: CPNavigationSession) {
     var turns: String = "\(step.turn)|\(step.type)|\(step.cue)"
-    if let then = t.then {
+    if !step.lanes.isEmpty {
+      // While the phone shows lanes for the turn, they have the panel's second place (CarPlay's form for lanes), and the
+      // turn after it waits.
+      let lanes: [String] = step.lanes.map { "\($0.role):\($0.directions.joined(separator: ",")):\($0.take ?? "")" }
+      turns += "||lanes|" + lanes.joined(separator: ";")
+    } else if let then = t.then {
       turns += "||\(then.turn)|\(then.type)|\(then.cue)"
     }
     let distance: String = CarText.distance(step.distanceM, imperial: t.imperial)
@@ -265,13 +280,19 @@ final class CarGuidance: CarLinkListener {
       let first = Self.maneuver(step)
       first.initialTravelEstimates = estimates
       var list: [CPManeuver] = [first]
-      if let then = t.then {
+      if !step.lanes.isEmpty {
+        list.append(Self.laneManeuver(step.lanes))
+      } else if let then = t.then {
         list.append(Self.maneuver(then))
       }
+      tellVehicleLanes(step, first, session)
       maneuvers = list
       session.upcomingManeuvers = list
       // No words of the turn in the log (roads, places).
       Self.log.info("car guidance: turn shown, \(list.count) maneuvers")
+      if !step.lanes.isEmpty {
+        Self.log.info("car guidance: lanes shown, \(step.lanes.count) lanes")
+      }
     } else if distance != shownTurnDistance, let first = maneuvers.first {
       shownTurnDistance = distance
       session.updateEstimates(estimates, for: first)
@@ -286,6 +307,66 @@ final class CarGuidance: CarLinkListener {
     if left == shownLeft { return }
     shownLeft = left
     map.updateEstimates(CPTravelEstimates(distanceRemaining: CarText.length(meters, imperial: t.imperial), timeRemaining: TimeInterval(seconds)), for: trip)
+  }
+
+  /// The lanes in CarPlay's form for them: a maneuver in the panel's second place that is a picture and no words.
+  private static func laneManeuver(_ lanes: [CarLane]) -> CPManeuver {
+    let maneuver = CPManeuver()
+    maneuver.instructionVariants = []
+    maneuver.symbolImage = CarIcons.laneStrip(lanes)
+    return maneuver
+  }
+
+  /// The lanes as CarPlay's lane data (iOS 17.4), which is for the vehicle's own displays and goes nowhere unless the app
+  /// provides navigation metadata (`vehicleMetadata`). CarPlay does not keep the lane guidance a maneuver is linked to, so it
+  /// is kept here for as long as it is the current one.
+  private func tellVehicleLanes(_ step: CarStep, _ first: CPManeuver, _ session: CPNavigationSession) {
+    guard Self.vehicleMetadata, #available(iOS 17.4, *) else { return }
+    guard let guidance = Self.laneGuidance(step) else {
+      if vehicleLanes != nil {
+        session.currentLaneGuidance = nil
+        vehicleLanes = nil
+      }
+      return
+    }
+    vehicleLanes = guidance
+    session.add([guidance])
+    first.linkedLaneGuidance = guidance
+    session.currentLaneGuidance = guidance
+  }
+
+  /// A step's lanes as CarPlay's lane data: each lane's arrows as turns (CarLane.angle), the one the route takes apart from
+  /// the rest, the lane to be in as preferred and another that works as good. Nil with no lanes, without the phone's words
+  /// for them (CarPlay wants words), or when the road did not say which lanes work: there is then nothing to tell.
+  @available(iOS 17.4, *)
+  private static func laneGuidance(_ step: CarStep) -> CPLaneGuidance? {
+    guard !step.lanes.isEmpty, let words = step.lanesLabel, step.lanes.contains(where: { $0.takenAngle != nil }) else { return nil }
+    func degrees(_ value: Double) -> Measurement<UnitAngle> { Measurement(value: value, unit: UnitAngle.degrees) }
+    var lanes: [CPLane] = []
+    for lane in step.lanes {
+      let others: [Measurement<UnitAngle>] = lane.otherAngles.map(degrees)
+      if #available(iOS 18.0, *) {
+        if let taken = lane.takenAngle {
+          lanes.append(CPLane(angles: others, highlightedAngle: degrees(taken), isPreferred: lane.role == "active"))
+        } else {
+          lanes.append(CPLane(angles: others))
+        }
+      } else {
+        let made = CPLane()
+        if let taken = lane.takenAngle {
+          made.status = lane.role == "active" ? .preferred : .good
+          made.primaryAngle = degrees(taken)
+        } else {
+          made.status = .notGood
+        }
+        made.secondaryAngles = others
+        lanes.append(made)
+      }
+    }
+    let guidance = CPLaneGuidance()
+    guidance.lanes = lanes
+    guidance.instructionVariants = [words]
+    return guidance
   }
 
   private static func maneuver(_ step: CarStep) -> CPManeuver {
