@@ -94,10 +94,12 @@ class MainActivity : FlutterActivity() {
     }
 
     // One engine for the phone screen and the car screen (Android Auto, see car/SharedEngine.kt): guidance runs once, in Dart.
-    // With no car the engine still goes with the activity, as before.
     override fun provideFlutterEngine(context: Context): FlutterEngine = SharedEngine.obtain(context)
 
-    override fun shouldDestroyEngineWithHost(): Boolean = SharedEngine.releaseFromActivity()
+    // The engine never goes with this activity: it is kept for the life of the process, and the next phone screen or car
+    // session attaches to the same running app (car/SharedEngine.kt says why). Flutter asks this more than once, so it only
+    // answers; cleanUpFlutterEngine tells the engine's keeper that this screen has let go.
+    override fun shouldDestroyEngineWithHost(): Boolean = false
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -229,11 +231,15 @@ class MainActivity : FlutterActivity() {
         systemUiChannel = null
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
-        // The engine can outlive this activity while the car screen uses it: let go of the handlers that need the activity.
+        // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
+        linkChannel?.setMethodCallHandler(null)
+        linkChannel = null
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
+        SharedEngine.activityEnded()
     }
 
     private fun exits(): List<Map<String, Any>> {
