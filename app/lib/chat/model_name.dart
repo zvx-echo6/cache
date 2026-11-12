@@ -4,23 +4,31 @@
 /// The quantisation comes from the model's metadata (general.file_type), which the description carries. When the file has
 /// none, llama.cpp guesses it from the tensors and adds "(guessed)"; then the label in [fileName] is used if it has one.
 String prettyModelName(String description, {String? fileName}) {
+  final p = prettyModelParts(description, fileName: fileName);
+  if (p == null) return '';
+  return p.label == null ? p.name : '${p.name} · ${p.label}';
+}
+
+/// The two parts [prettyModelName] joins: the model's plain name ("Gemma 4 E2B") and its quantisation label ("Q4_K_M"; null when the
+/// description and the file name have none). Null for an empty description. A description that cannot be read is the name, as it came.
+({String name, String? label})? prettyModelParts(String description, {String? fileName}) {
   final desc = description.trim();
-  if (desc.isEmpty) return '';
+  if (desc.isEmpty) return null;
   final guessed = desc.endsWith('(guessed)');
   final tokens = desc.replaceFirst(RegExp(r'\s*\(guessed\)$'), '').split(RegExp(r'\s+'));
   final quantAt = tokens.indexWhere((t) => RegExp(r'^(I?Q\d|TQ\d|BF16$|F16$|F32$|MXFP|NVFP)', caseSensitive: false).hasMatch(t));
 
   final nameTokens = quantAt < 0 ? tokens : tokens.sublist(0, quantAt);
-  if (nameTokens.isEmpty) return desc;
+  if (nameTokens.isEmpty) return (name: desc, label: null);
   final name = <String>[];
   for (var i = 0; i < nameTokens.length; i++) {
     name.add(i == 0 ? _arch(nameTokens[i]) : nameTokens[i]);
   }
 
   final fromFile = (guessed || quantAt < 0) && fileName != null ? quantFromFileName(fileName) : null;
-  if (fromFile != null) return '${name.join(' ')} · $fromFile';
-  if (quantAt < 0) return name.join(' ');
-  return '${name.join(' ')} · ${_ftypeLabel(tokens.sublist(quantAt))}';
+  if (fromFile != null) return (name: name.join(' '), label: fromFile);
+  if (quantAt < 0) return (name: name.join(' '), label: null);
+  return (name: name.join(' '), label: _ftypeLabel(tokens.sublist(quantAt)));
 }
 
 /// llama.cpp's file type names (llama_model_ftype_name) as the labels quantised files carry: "Q4_K - Medium" -> "Q4_K_M",

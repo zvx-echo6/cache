@@ -147,6 +147,9 @@ class AppState extends ChangeNotifier {
   /// Real model names (from the model's own metadata), by [ModelEntry.key]. Known once a model has
   /// been loaded; until then the file name is shown.
   final Map<String, String> _names = {};
+
+  /// The same models' plain names, without the quantisation label ("Gemma 4 E2B"), set at the same load.
+  final Map<String, String> _plainNames = {};
   String? _lastModelFile;
 
   /// 0..1 while a file is being copied into the models folder, else null.
@@ -163,6 +166,9 @@ class AppState extends ChangeNotifier {
 
   /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
   String displayName(ModelEntry e) => _names[e.key] ?? e.name;
+
+  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"); [displayName] when none was parsed.
+  String plainName(ModelEntry e) => _plainNames[e.key] ?? displayName(e);
 
   /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
   ModelSettings? Function(ModelEntry e)? settingsFor;
@@ -255,6 +261,9 @@ class AppState extends ChangeNotifier {
       _names
         ..clear()
         ..addAll(((j['names'] as Map?) ?? const {}).cast<String, String>());
+      _plainNames
+        ..clear()
+        ..addAll(((j['plainNames'] as Map?) ?? const {}).cast<String, String>());
     } catch (_) {
       // A damaged settings file is ignored; defaults apply.
     }
@@ -272,6 +281,7 @@ class AppState extends ChangeNotifier {
         'modelDeclined': modelDeclined,
         'unsupported': _unsupported.toList(),
         'names': _names,
+        'plainNames': _plainNames,
       }));
     } catch (_) {}
   }
@@ -374,8 +384,11 @@ class AppState extends ChangeNotifier {
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
-      final pretty = prettyModelName(info.description, fileName: entry.fileName);
-      if (pretty.isNotEmpty) _names[entry.key] = pretty;
+      final parts = prettyModelParts(info.description, fileName: entry.fileName);
+      if (parts != null) {
+        _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
+        _plainNames[entry.key] = parts.name;
+      }
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
         await _writeSettings();
