@@ -89,7 +89,7 @@ void main() {
 
   testWidgets('with no plain name known, the card uses the display name as before', (tester) async {
     app.resting = app.models.first;
-    await tester.runAsync(app.wake);
+    await app.wake();
     await show(tester);
     expect(find.text('Gemma 4 E2B is waiting for free memory.'), findsOneWidget, reason: 'the file-derived name has no label either');
   });
@@ -116,7 +116,7 @@ void main() {
   ]) {
     testWidgets('failed load ${f.name}: unchanged, even if the gate had held it', (tester) async {
       app.resting = app.models.first;
-      await tester.runAsync(app.wake);
+      await app.wake();
       app.resting = null;
       app.failed = app.models.first;
       app.failure = f;

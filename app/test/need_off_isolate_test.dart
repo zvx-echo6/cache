@@ -13,19 +13,21 @@ void main() {
   late File file;
   late int calls;
   late Future<R> Function<R>(FutureOr<R> Function() computation) original;
+  late Future<R> Function<R>(FutureOr<R> Function() computation) inline;
 
   setUp(() {
     dir = Directory.systemTemp.createTempSync('need-isolate');
     file = File('${dir.path}/m.gguf')..writeAsBytesSync(List.filled(64, 0)); // not a GGUF: the header cannot be read
     calls = 0;
-    original = memoryNeedRunner;
+    inline = memoryNeedRunner; // what the test config sets for every test
+    original = Isolate.run; // the real runner, for this file
     memoryNeedRunner = <R>(FutureOr<R> Function() f) {
       calls++;
       return original<R>(f);
     };
   });
   tearDown(() {
-    memoryNeedRunner = original;
+    memoryNeedRunner = inline;
     dir.deleteSync(recursive: true);
   });
 
