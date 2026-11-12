@@ -415,6 +415,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// Every job, newest first: being added, then stopped, then added.
   List<AddPdfJob> get jobs => List.unmodifiable(_jobs);
   List<AddPdfJob> get active => [for (final j in _jobs) if (j.status == AddPdfStatus.active) j];
+  /// Whether [libraryPath] is the default own library (My books, made by `_makeOwn`, whose settings say `own_default`): found by that, not
+  /// by its title. A book added to it is said to have gone onto "Bookshelves".
+  bool isDefaultLibrary(String libraryPath) => libraries?.defaultOwnLibrary?.path == libraryPath;
+
   /// How long the Library's overview card keeps saying a PDF was added.
   static const Duration kDoneLineFor = Duration(seconds: 45);
 

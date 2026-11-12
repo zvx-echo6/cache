@@ -63,6 +63,21 @@ void main() {
     expect(find.text(_pending), findsNothing);
   });
 
+  testWidgets("the finish card says Bookshelves for a book added to the default library, and a named library's own name", (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    pending = false;
+    w.state.wordsPending = (_) => pending;
+    final own = w.libs.ownLibraries.firstWhere((l) => l != w.libs.defaultOwnLibrary);
+    w.state.debugSet([sampleJob('dflt', libraryPath: w.libs.defaultOwnLibrary!.path, status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})]);
+    await tester.pumpWidget(app());
+    await tester.pump();
+    expect(find.text('Added to Bookshelves · 254 pieces searchable'), findsOneWidget);
+    w.state.debugSet([sampleJob('named', libraryPath: own.path, libraryTitle: 'Field library', status: AddPdfStatus.done, state: 'done', result: {'pieces': 12, 'shelf': {'div': '530'}})]);
+    await tester.pump();
+    expect(find.text('Added to Field library · 12 pieces searchable'), findsOneWidget);
+  });
+
   testWidgets('already done when the card is first drawn: the done line at once', (tester) async {
     size(tester);
     await tester.runAsync(() async => w = await AddPdfWorld.make());
@@ -135,13 +150,13 @@ void main() {
     await tester.runAsync(() async => w = await AddPdfWorld.make());
     var now = DateTime(2026, 11, 11, 13, 0);
     final paused = sampleJob('paused', title: 'FEMA-IS513', paused: true);
-    final added = sampleJob('added', status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})..finishedAt = now;
+    final added = sampleJob('added', libraryPath: w.libs.defaultOwnLibrary!.path, status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})..finishedAt = now;
     w.state.wordsPending = (_) => pending;
     w.state.debugSet([paused, added]);
     pending = false;
     await tester.pumpWidget(overview(() => now));
     await tester.pump();
-    expect(find.text('Added to My books · 254 pieces searchable'), findsOneWidget, reason: 'no word index is pending: the done line straight away');
+    expect(find.text('Added to Bookshelves · 254 pieces searchable'), findsOneWidget, reason: 'no word index is pending: the done line straight away');
     expect(find.text('Paused · 1 PDF waiting'), findsNothing);
     LinearProgressIndicator bar() => tester.widget<LinearProgressIndicator>(find.byKey(const ValueKey('index-overview-bar')));
     expect(bar().value, 1, reason: 'all done: a full bar');
@@ -150,7 +165,7 @@ void main() {
     pending = true;
     w.state.debugSet([paused, added]);
     await tester.pump();
-    expect(find.text('Added to My books · Adding to search index'), findsOneWidget);
+    expect(find.text('Added to Bookshelves · Adding to search index'), findsOneWidget);
     expect(find.textContaining('pieces searchable'), findsNothing);
     expect(bar().value, isNull, reason: 'its words are being added: a moving bar, not an empty one that reads as stuck');
 
@@ -160,6 +175,27 @@ void main() {
     await tester.pump();
     expect(find.text('Paused · 1 PDF waiting'), findsOneWidget);
     expect(find.textContaining('Added to'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a book added to a library the person made and named keeps that name; the default library is Bookshelves', (tester) async {
+    size(tester);
+    await tester.runAsync(() async => w = await AddPdfWorld.make());
+    final now = DateTime(2026, 11, 11, 13, 0);
+    final own = w.libs.ownLibraries.firstWhere((l) => l != w.libs.defaultOwnLibrary);
+    expect(w.state.isDefaultLibrary(w.libs.defaultOwnLibrary!.path), isTrue);
+    expect(w.state.isDefaultLibrary(own.path), isFalse, reason: 'identified by own_default, not by the title');
+    final named = sampleJob('named', libraryPath: own.path, libraryTitle: 'Field library', status: AddPdfStatus.done, state: 'done', result: {'pieces': 12, 'shelf': {'div': '530'}})..finishedAt = now;
+    w.state.wordsPending = (_) => false;
+    w.state.debugSet([named]);
+    await tester.pumpWidget(overview(() => now));
+    await tester.pump();
+    expect(find.text('Added to Field library · 12 pieces searchable'), findsOneWidget);
+    // a default library that someone titled "Field library" would still be Bookshelves; and My books by title alone is not enough
+    final lookalike = sampleJob('lookalike', libraryPath: '/tmp/elsewhere', libraryTitle: 'My books', status: AddPdfStatus.done, state: 'done', result: {'pieces': 3, 'shelf': {'div': '530'}})..finishedAt = now;
+    w.state.debugSet([lookalike]);
+    await tester.pump();
+    expect(find.text('Added to My books · 3 pieces searchable'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 

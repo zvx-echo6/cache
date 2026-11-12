@@ -27,7 +27,7 @@ void main() {
       var pending = true;
       w.state.wordsPending = (_) => pending;
       final paused = sampleJob('paused', title: 'FEMA-IS513', paused: true);
-      final added = sampleJob('added', status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})..finishedAt = now;
+      final added = sampleJob('added', libraryPath: w.libs.defaultOwnLibrary!.path, status: AddPdfStatus.done, state: 'done', result: {'pieces': 254, 'shelf': {'div': '530'}})..finishedAt = now;
       Widget page() => Scaffold(
         appBar: AppBar(title: const Text('Library')),
         body: Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: Column(children: [IndexOverviewLine(scheduler: w.scheduler, clock: () => now)])),

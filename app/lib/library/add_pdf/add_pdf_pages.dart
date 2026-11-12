@@ -1056,9 +1056,12 @@ String addPdfDoneLine(AddPdfState state, AddPdfJob job) {
   final pieces = (r['pieces'] as num?)?.toInt();
   final same = (r['same'] as List?) ?? const [];
   final shelf = (r['shelf'] as Map?)?.cast<String, dynamic>();
-  if (same.isNotEmpty || !job.wordsChecked) return 'Added to ${job.libraryTitle}';
-  if (state.wordsPendingFor(job)) return 'Added to ${job.libraryTitle} · Adding to search index';
-  return shelf != null && pieces != null ? 'Added to ${job.libraryTitle} · $pieces pieces searchable' : 'Added to ${job.libraryTitle} · searchable';
+  // the default own library (My books) is where Bookshelves live: a book added to it went onto "Bookshelves"; a library the person made
+  // and named keeps its own name
+  final where = state.isDefaultLibrary(job.libraryPath) ? 'Bookshelves' : job.libraryTitle;
+  if (same.isNotEmpty || !job.wordsChecked) return 'Added to $where';
+  if (state.wordsPendingFor(job)) return 'Added to $where · Adding to search index';
+  return shelf != null && pieces != null ? 'Added to $where · $pieces pieces searchable' : 'Added to $where · searchable';
 }
 
 /// The book [job] made, as Bookshelves has it now (found by its copy key), or null while Bookshelves have not read it yet.
