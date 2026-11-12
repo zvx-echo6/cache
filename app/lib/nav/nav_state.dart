@@ -213,6 +213,71 @@ class NavState extends ChangeNotifier {
     return true;
   }
 
+  /// The stops still ahead, in order: all of them before the drive, and while guiding those not passed yet.
+  List<MapPlace> get stopsAhead => [
+        for (final (i, s) in stops.indexed)
+          if (!_passedStops.contains(i)) s,
+      ];
+
+  /// Add stop while guiding (the car's Add stop during a drive): [p] becomes the next stop, before the stops still ahead, and
+  /// guidance carries on along a new route from where the phone is, through it and the other stops ahead, to the destination.
+  /// False, with the route as it was, when there is no guidance to add to (not guiding, arrived, no fix yet, a new route
+  /// already being worked out), when the route has [maxStops], or when no route through the stop could be found.
+  Future<bool> addStopWhileGuiding(MapPlace p) async {
+    final f = lastFix;
+    final to = selected;
+    if (!guiding || arrived || rerouting || f == null || to == null || route == null) return false;
+    if (stops.length >= maxStops) {
+      _events.add(const NavNotice('A route has at most 10 stops'));
+      return false;
+    }
+    final before = stops;
+    final beforePassed = {..._passedStops};
+    final passed = [
+      for (final (i, s) in stops.indexed)
+        if (_passedStops.contains(i)) s,
+    ];
+    // The stops already passed keep their places at the front, so each stop keeps its number.
+    stops = [...passed, p, ...stopsAhead];
+    _passedStops
+      ..clear()
+      ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    rerouting = true;
+    _lastReroute = _clock();
+    notifyListeners();
+    var added = false;
+    try {
+      final r = await backend.route(
+          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
+      if (!guiding) return false;
+      if (r.ok) {
+        routes = [r];
+        routeIndex = 0;
+        _routeFrom = GeoPoint(f.lat, f.lon);
+        _sendRoute = true;
+        _routeStarted = true;
+        _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
+        progress = null;
+        added = true;
+        logInfo('Guidance: a stop was added, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
+      } else {
+        _events.add(NavNotice(routeErrorText(r)));
+      }
+    } catch (_) {
+      _events.add(const NavNotice('Could not work out a new route'));
+    } finally {
+      if (!added && guiding) {
+        stops = before;
+        _passedStops
+          ..clear()
+          ..addAll(beforePassed);
+      }
+      rerouting = false;
+      notifyListeners();
+    }
+    return added;
+  }
+
   Future<void> removeStop(int i) async {
     if (i < 0 || i >= stops.length) return;
     stops = [...stops]..removeAt(i);
@@ -633,7 +698,9 @@ class NavState extends ChangeNotifier {
     lastFix = f;
     // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
     for (final (i, s) in stops.indexed) {
-      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100) _passedStops.add(i);
+      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100 && _passedStops.add(i)) {
+        logInfo('Guidance: stop ${i + 1} of ${stops.length} is passed (a fix within 100 m of it)');
+      }
     }
     if (_busyProgress) {
       _pendingFix = f;
@@ -706,6 +773,7 @@ class NavState extends ChangeNotifier {
         _routeStarted = true;
         _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
         progress = null;
+        logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
         _events.add(NavNotice(routeErrorText(r)));
       }

@@ -218,8 +218,10 @@ class CarBridge {
   Map<String, dynamic> snapshot() {
     final p = nav.progress;
     // A simulated test drive starts at the route's start, not where the phone is: until its first fix has come the phone's
-    // own fix is not the vehicle (the car drew its arrow there, beside the route, for the first frames of the drive).
-    final f = nav.lastFix ?? (nav.guiding && drive.simulating ? null : nav.fix);
+    // own fix is not the vehicle (the car drew its arrow there, beside the route, for the first frames of the drive). The
+    // trip that says guidance has started goes out before the drive itself is running, so the car's request for a test
+    // drive ([CarDriveSource.simulate]) counts here as well as a drive that runs.
+    final f = nav.lastFix ?? (nav.guiding && (drive.simulating || drive.simulate) ? null : nav.fix);
     final onRoute = nav.guiding && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
@@ -269,7 +271,7 @@ class CarBridge {
   Future<Object?> _onCall(MethodCall call) async {
     final a = call.arguments is Map ? (call.arguments as Map).cast<String, Object?>() : const <String, Object?>{};
     logInfo('Car asks: ${call.method}');
-    if (const {'saved', 'search', 'directions', 'navigateTo', 'start'}.contains(call.method)) await _ready();
+    if (const {'saved', 'search', 'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
@@ -287,6 +289,14 @@ class CarBridge {
         if (p == null) return false;
         unawaited(nav.openDirections(p));
         return true;
+      case 'addStop':
+        // Add stop on the car: a place the car was shown joins the route. Before Start it is added as the phone's own Add
+        // stop adds it (after the stops there are); during the drive it becomes the next stop.
+        final p = _shown[a['id']];
+        if (p == null) return false;
+        final added = nav.guiding ? await nav.addStopWhileGuiding(p) : await nav.addStop(p);
+        if (added) await push();
+        return added;
       case 'selectRoute':
         nav.selectRoute((a['index'] as num?)?.toInt() ?? 0);
         return null;
