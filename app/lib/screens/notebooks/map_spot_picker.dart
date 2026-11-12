@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../maps/ui/place_map.dart' show PlaceFixScope;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
 import '../../notebook/place_style.dart';
@@ -47,6 +48,9 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
   /// is their own press and always moves it).
   bool _touched = false;
 
+  /// The opening position fix is still being read (false once it answered that there is none).
+  bool _fixComing = true;
+
   @override
   void initState() {
     super.initState();
@@ -79,10 +83,13 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
       if (p != null) {
         if (quiet && _touched) return;
         _go(p);
-      } else if (!quiet) {
+      } else if (quiet) {
+        setState(() => _fixComing = false);
+      } else {
         setState(() => _note = 'Where you are is not known yet. Check that location is on.');
       }
     } catch (_) {
+      if (mounted && quiet) setState(() => _fixComing = false);
       if (mounted && !quiet) setState(() => _note = 'Where you are is not known yet. Check that location is on.');
     }
   }
@@ -123,7 +130,9 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: Listener(
+            child: PlaceFixScope(
+              coming: _fixComing && _target == null,
+              child: Listener(
               key: ValueKey(_again),
               behavior: HitTestBehavior.translucent,
               onPointerDown: (_) => _touched = true,
@@ -134,6 +143,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                 (p) => setState(() => _centre = p),
                 (p) => _go(p),
               ),
+            ),
             ),
           ),
           IgnorePointer(

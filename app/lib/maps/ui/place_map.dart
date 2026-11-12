@@ -32,31 +32,39 @@ const double kPrecisePlaceZoom = 10;
 const ({double lat, double lon, double zoom}) kPlaceWideView = (lat: 39.8, lon: -98.6, zoom: 3);
 
 /// A camera to open on when there is no position: the Maps tab's last camera (when it was zoomed in to somewhere), else the
-/// middle of [places] at [kPlaceZoom], else the centre of a downloaded map region ([regions], the largest one) at the zoom that
-/// fits it (at most [kPlaceZoom]), else null (the caller falls back to [kPlaceWideView]).
+/// centre of [places] fitted to them, else the centre of a downloaded map region ([regions], the largest one) fitted to it (never
+/// closer than [kPlaceZoom]), else null (the caller falls back to [kPlaceWideView]).
 ({double lat, double lon, double zoom})? placeFallbackCamera({SavedCamera? last, List<NbPlace> places = const [], List<GeoBounds> regions = const []}) {
   if (last != null && last.zoom >= 6) return (lat: last.lat, lon: last.lon, zoom: last.zoom);
-  if (places.isNotEmpty) {
-    var la = 0.0, lo = 0.0;
-    for (final p in places) {
-      la += p.lat;
-      lo += p.lon;
-    }
-    return (lat: la / places.length, lon: lo / places.length, zoom: kPlaceZoom);
+  // The places, or else the largest downloaded region: the centre of their bounds at the zoom that fits them.
+  final boxes = places.isNotEmpty
+      ? [GeoBounds(south: places.map((p) => p.lat).reduce(math.min), west: places.map((p) => p.lon).reduce(math.min), north: places.map((p) => p.lat).reduce(math.max), east: places.map((p) => p.lon).reduce(math.max))]
+      : regions;
+  if (boxes.isEmpty) return null;
+  GeoBounds big = boxes.first;
+  for (final r in boxes) {
+    if (_span(r) > _span(big)) big = r;
   }
-  if (regions.isEmpty) return null;
-  GeoBounds? big;
-  var bigSpan = -1.0;
-  for (final r in regions) {
-    final span = math.max(r.north - r.south, r.east - r.west);
-    if (span > bigSpan) {
-      bigSpan = span;
-      big = r;
-    }
-  }
-  // A 360-degree world is 256 px wide at zoom 0 and doubles per zoom; about 300 px of map shows the region at this zoom.
-  final fit = bigSpan <= 0 ? kPlaceZoom : math.log(360 / bigSpan) / math.ln2;
-  return (lat: big!.centerLat, lon: big.centerLon, zoom: fit.clamp(3.0, kPlaceZoom).toDouble());
+  return (lat: big.centerLat, lon: big.centerLon, zoom: _fitZoom(_span(big)));
+}
+
+double _span(GeoBounds b) => math.max(b.north - b.south, b.east - b.west);
+
+/// The zoom at which an area [span] degrees across fits the map (a 360-degree world is 256 px wide at zoom 0 and doubles per zoom,
+/// so about 300 px of map shows it), clamped to 3..[kPlaceZoom]; a single point, or a tiny area, is [kPlaceZoom].
+double _fitZoom(double span) => span <= 0 ? kPlaceZoom : (math.log(360 / span) / math.ln2).clamp(3.0, kPlaceZoom).toDouble();
+
+/// Tells a [PlaceMap] under it whether a position fix is still being read. With none coming (the phone answered "no position", or
+/// location is off) the map opens on its fallback at once instead of waiting [kPlaceFixWait].
+class PlaceFixScope extends InheritedWidget {
+  const PlaceFixScope({super.key, required this.coming, required super.child});
+
+  final bool coming;
+
+  static bool comingOf(BuildContext context) => context.dependOnInheritedWidgetOfExactType<PlaceFixScope>()?.coming ?? true;
+
+  @override
+  bool updateShouldNotify(PlaceFixScope old) => old.coming != coming;
 }
 
 /// What tests put in place of the platform map: the surface drawn, the style, and where the camera is told to go.
@@ -134,6 +142,12 @@ class _PlaceMapState extends State<PlaceMap> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initial == null && _style != null) unawaited(_tryOpen());
+  }
+
+  @override
   void dispose() {
     _wait?.cancel();
     super.dispose();
@@ -160,7 +174,7 @@ class _PlaceMapState extends State<PlaceMap> {
   Future<void> _tryOpen() async {
     if (!mounted || _initial != null || _opening || _style == null) return;
     final p = widget.pin;
-    if (p == null && !_waited) return;
+    if (p == null && !_waited && PlaceFixScope.comingOf(context)) return;
     _opening = true;
     CameraPosition? cam;
     if (p == null) {

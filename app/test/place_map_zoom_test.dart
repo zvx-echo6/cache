@@ -170,6 +170,20 @@ void main() {
       expect(cam.moves.last.$2, isNull);
     });
 
+    testWidgets('two places far apart open fitted around both; one place opens at the place zoom', (tester) async {
+      final cam = _Cam();
+      Future<({double lat, double lon, double zoom})?> two() async => placeFallbackCamera(places: const [NbPlace(lat: 43.0, lon: -116.0), NbPlace(lat: 44.8, lon: -113.0)]);
+      await tester.pumpWidget(_host(_Pin(cam, ValueNotifier(null), fallback: two)));
+      await tester.pump(kPlaceFixWait + const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(cam.initial!.target.latitude, closeTo(43.9, 1e-9));
+      expect(cam.initial!.target.longitude, closeTo(-114.5, 1e-9));
+      expect(cam.initial!.zoom, lessThan(kPlaceZoom));
+      expect(cam.initial!.zoom, closeTo(6.9, 0.2));
+      final one = placeFallbackCamera(places: const [NbPlace(lat: 43.0, lon: -116.0)])!;
+      expect((one.lat, one.lon, one.zoom), (43.0, -116.0, kPlaceZoom));
+    });
+
     testWidgets('a downloaded region: opens on its centre', (tester) async {
       final cam = _Cam();
       const region = GeoBounds(south: 42.5, west: -113.8, north: 42.6, east: -113.66);
@@ -282,6 +296,27 @@ void main() {
       await tester.pump();
       expect(cam.initial!.zoom, kPlaceWideView.zoom);
       expect(cam.moves, isEmpty);
+    });
+
+    testWidgets('location off: the map opens at once, with no 3 s wait', (tester) async {
+      bigView(tester);
+      final cam = _Cam();
+      await open(tester, await deps(tester, cam, fixAfter: Duration.zero, fix: false));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(cam.initial, isNotNull);
+      expect(cam.initial!.zoom, kPlaceWideView.zoom);
+    });
+
+    testWidgets('a "no position" answer after 1 s opens the map at 1 s, not 3 s; a fix still being read waits', (tester) async {
+      bigView(tester);
+      final cam = _Cam();
+      await open(tester, await deps(tester, cam, fixAfter: const Duration(seconds: 1), fix: false));
+      await tester.pump(const Duration(milliseconds: 900));
+      expect(cam.initial, isNull, reason: 'the fix is still being read');
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(cam.initial, isNotNull);
     });
 
     testWidgets('the fix arrives after 3 s: untouched map recentres, a touched one stays', (tester) async {
