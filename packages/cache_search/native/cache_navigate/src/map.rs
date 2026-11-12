@@ -32,6 +32,21 @@ const OFFROAD_TOLERANCE: f64 = 2.0;
 /// is not mistaken for the other pass.
 const WINDOW_BACK_M: f64 = 300.0;
 const WINDOW_AHEAD_M: f64 = 3000.0;
+/// Two passes of the route this close to a fix (within this of the nearest one, or the GPS accuracy if that is larger) cannot be
+/// told apart by distance: a street driven to a stop and back out again is the same line twice. Which pass the fix is on is then
+/// decided by where the last fix was, not by which is nearer by a metre.
+const PASS_MARGIN_M: f64 = 10.0;
+/// How far behind the furthest point reached a fix may still be matched while a pass further on is as near (GPS wobble at a
+/// stand). Past that the route is not gone back along: once a stop is passed, the way in to it is behind.
+const BACK_SLACK_M: f64 = 15.0;
+/// The most the two measures above grow to with a poor GPS accuracy.
+const PASS_MARGIN_MAX_M: f64 = 25.0;
+const BACK_SLACK_MAX_M: f64 = 30.0;
+/// Places where the route comes near a fix that are closer together than this along the route are one pass (the two sides of
+/// a bend), and the nearer of them is where the fix is.
+const PASS_APART_M: f64 = 40.0;
+/// Going back along the route counts this many times as far as going on, when choosing between two passes.
+const BACK_COST: f64 = 3.0;
 
 /// An end of a route, resolved: where it is, what it is called, and the OSM category that seeds the off-road modes there.
 #[derive(Debug, Clone)]
@@ -291,16 +306,49 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
     Value::Object(o)
 }
 
-/// A failed route is a result, not a crash: `{"ok": false, "errors": [{code, message}]}` (no_route, too_far, out_of_coverage,
-/// route_too_long, upstream_timeout, internal), with the ends that were asked for.
-fn failure(d: &Directions, req: &MapRouteReq) -> Value {
+/// What the app is told about a failed leg, as `(code, end)`. The router's own codes (the model reads those, from `build::route_error`,
+/// unchanged) are re-read here for the people: 154 stays `too_far`; 170, 171, 442 and 443 never are. They are `no_road_data` (with
+/// the end, `from`, `via` or `to`) when a stop of the leg still has no road tile on the device after the fetch, `no_road_data`
+/// without an end when tiles are missing between the stops, else `no_route`. `out_of_coverage` (the router said so, outside the
+/// maps' area) always stands: no connection fixes it. `leg` is the leg's stops' positions, `last` the end's.
+pub fn app_error(e: &cache_offroad::directions::DirectionsError, prep: &crate::TilePrep, leg: (usize, usize), last: usize) -> (String, Option<&'static str>) {
+    match e.valhalla_code {
+        Some(170) | Some(171) | Some(442) | Some(443) => {
+            if e.code == "out_of_coverage" {
+                return ("out_of_coverage".into(), None);
+            }
+            if let Some(i) = [leg.0, leg.1].into_iter().find(|i| prep.lacking.contains(i)) {
+                let end = if i == 0 { "from" } else if i == last { "to" } else { "via" };
+                return ("no_road_data".into(), Some(end));
+            }
+            // tiles missing between the stops; or the fetch did not finish and the index is not known, so nothing is known
+            // about them
+            if prep.missing > 0 || (prep.state != crate::FetchState::Done && !prep.index_known) {
+                return ("no_road_data".into(), None);
+            }
+            ("no_route".into(), None)
+        }
+        _ => (e.code.clone(), None),
+    }
+}
+
+/// A failed route is a result, not a crash: `{"ok": false, "errors": [{code, message}]}` (no_route, no_road_data with its `end`,
+/// too_far, out_of_coverage, route_too_long, upstream_timeout, internal), with the ends that were asked for.
+fn failure(d: &Directions, req: &MapRouteReq, prep: &crate::TilePrep, leg: (usize, usize), last: usize) -> Value {
     json!({
         "ok": false,
         "route_id": d.route_id,
         "mode": req.mode.name(),
         "from": req.from.json(None),
         "to": req.to.json(None),
-        "errors": d.errors.iter().map(|e| json!({"code": e.code, "message": e.message})).collect::<Vec<_>>(),
+        "errors": d.errors.iter().map(|e| {
+            let (code, end) = app_error(e, prep, leg, last);
+            let mut o = json!({"code": code, "message": e.message});
+            if let Some(end) = end {
+                o["end"] = json!(end);
+            }
+            o
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -310,15 +358,15 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut stops: Vec<&MapEnd> = vec![&req.from];
     stops.extend(req.via.iter());
     stops.push(&req.to);
-    core.prepare_tiles(&stops.iter().map(|e| (e.lat, e.lon)).collect::<Vec<_>>());
+    let prep = core.prepare_tiles(&stops.iter().map(|e| (e.lat, e.lon)).collect::<Vec<_>>());
     let mut legs: Vec<Directions> = Vec::new();
     let mut have_offroad = false;
-    for pair in stops.windows(2) {
+    for (i, pair) in stops.windows(2).enumerate() {
         let nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
         let (d, h) = core.navigate(nr)?;
         have_offroad = h;
         if !d.ok {
-            return Ok((failure(&d, req), vec![]));
+            return Ok((failure(&d, req, &prep, (i, i + 1), stops.len() - 1), vec![]));
         }
         legs.push(d);
     }
@@ -361,9 +409,16 @@ struct Man {
 
 struct ProgState {
     last_m: f64,
+    /// The furthest along the route a fix has matched (set back when the route is really driven back along).
+    max_m: f64,
+    /// How many of the route's stops (its via points, in order) have been reached.
+    reached: usize,
     off_count: usize,
     fixes: usize,
 }
+
+/// A segment's closest point to a fix: (segment, distance along the route, offset in metres, the point).
+type Hit = (usize, f64, f64, (f64, f64));
 
 /// A route held for `cs_map_progress`: its points, distances along it, maneuvers, and the fix-to-fix state (where the last fix
 /// matched, how many fixes in a row were off the route).
@@ -374,6 +429,8 @@ pub struct ActiveRoute {
     mans: Vec<Man>,
     total_m: f64,
     total_s: f64,
+    /// Where along the route each stop (via point) is, in order.
+    vias: Vec<f64>,
     state: Mutex<ProgState>,
 }
 
@@ -412,7 +469,8 @@ impl ActiveRoute {
         }
         let total_m = *cum.last().unwrap();
         let total_s = r["duration_s"].as_f64().unwrap_or_else(|| mans.iter().map(|m| m.duration_s).sum());
-        Ok(ActiveRoute { id, pts, cum, mans, total_m, total_s, state: Mutex::new(ProgState { last_m: 0.0, off_count: 0, fixes: 0 }) })
+        let vias = mans.iter().filter(|m| m.json["type"] == "via").map(|m| m.begin_m).collect();
+        Ok(ActiveRoute { id, pts, cum, mans, total_m, total_s, vias, state: Mutex::new(ProgState { last_m: 0.0, max_m: 0.0, reached: 0, off_count: 0, fixes: 0 }) })
     }
 
     /// The maneuver a distance along the route falls in: the last one that has begun, leaving the final arrival (a point, not a
@@ -429,13 +487,13 @@ impl ActiveRoute {
         ix
     }
 
-    /// The closest point of the route to `p` among the segments whose start lies in `[lo_m, hi_m]` along it:
-    /// (segment, distance along the route, offset in metres, matched point).
-    fn nearest(&self, p: (f64, f64), lo_m: f64, hi_m: f64) -> Option<(usize, f64, f64, (f64, f64))> {
+    /// The closest point to `p` of each segment whose start lies in `[lo_m, hi_m]` along the route, in route order, and
+    /// whether that point is inside the segment (not one of its ends). A closest point further along than `hi_m` is left out.
+    fn hits(&self, p: (f64, f64), lo_m: f64, hi_m: f64) -> Vec<(Hit, bool)> {
         let k = p.0.to_radians().cos();
         let xy = |q: (f64, f64)| ((q.1 - p.1) * k * 111_320.0, (q.0 - p.0) * 110_574.0);
         let first = self.cum.partition_point(|c| *c < lo_m).saturating_sub(1);
-        let mut best: Option<(usize, f64, f64, (f64, f64))> = None;
+        let mut out = Vec::new();
         for i in first..self.pts.len() - 1 {
             if self.cum[i] > hi_m {
                 break;
@@ -445,20 +503,69 @@ impl ActiveRoute {
             let n = dx * dx + dy * dy;
             let t = if n == 0.0 { 0.0 } else { (((0.0 - a.0) * dx + (0.0 - a.1) * dy) / n).clamp(0.0, 1.0) };
             let off = (a.0 + t * dx).hypot(a.1 + t * dy);
-            if best.is_none_or(|x| off < x.2) {
-                let along = self.cum[i] + t * (self.cum[i + 1] - self.cum[i]);
-                let pt = (self.pts[i].0 + t * (self.pts[i + 1].0 - self.pts[i].0), self.pts[i].1 + t * (self.pts[i + 1].1 - self.pts[i].1));
-                best = Some((i, along, off, pt));
+            let along = self.cum[i] + t * (self.cum[i + 1] - self.cum[i]);
+            if along > hi_m {
+                continue;
+            }
+            let pt = (self.pts[i].0 + t * (self.pts[i + 1].0 - self.pts[i].0), self.pts[i].1 + t * (self.pts[i + 1].1 - self.pts[i].1));
+            out.push(((i, along, off, pt), t > 0.0 && t < 1.0));
+        }
+        out
+    }
+
+    /// The closest point of the route to `p` among the segments whose start lies in `[lo_m, hi_m]` along it (the first of them
+    /// along the route when several are as close).
+    fn nearest(&self, p: (f64, f64), lo_m: f64, hi_m: f64) -> Option<Hit> {
+        let mut best: Option<Hit> = None;
+        for (h, _) in self.hits(p, lo_m, hi_m) {
+            if best.is_none_or(|x| h.2 < x.2) {
+                best = Some(h);
             }
         }
         best
+    }
+
+    /// Where `p` is on the route in `[lo_m, hi_m]`, going on from the last fix. Every pass of the route by `p` (a segment
+    /// whose closest point is inside it, or that is closer than the segments before and after it) that is about as near as
+    /// the nearest one (within `margin`) is a candidate, unless it lies more than `slack` behind the furthest point reached;
+    /// candidates less than [`PASS_APART_M`] apart are one pass, the nearer of them. Of the passes the one the least far on
+    /// from the last fix is taken (going back counts [`BACK_COST`] times as far). So on a street the route uses both ways (in
+    /// to a stop and out again) the fix stays on the pass it was on, moves to the way out at the stop, and does not go back
+    /// to the way in. None when there is no candidate.
+    fn continuing(&self, p: (f64, f64), lo_m: f64, hi_m: f64, st: &ProgState, margin: f64, slack: f64) -> Option<Hit> {
+        let hits = self.hits(p, lo_m, hi_m);
+        let best = hits.iter().map(|h| h.0 .2).fold(f64::INFINITY, f64::min);
+        let mut passes: Vec<Hit> = Vec::new();
+        for (j, (h, inside)) in hits.iter().enumerate() {
+            let lowest = (j == 0 || h.2 <= hits[j - 1].0 .2) && (j + 1 == hits.len() || h.2 <= hits[j + 1].0 .2);
+            if !(*inside || lowest) || h.2 > best + margin || h.1 < st.max_m - slack {
+                continue;
+            }
+            match passes.last_mut() {
+                Some(prev) if h.1 - prev.1 < PASS_APART_M => {
+                    if h.2 < prev.2 {
+                        *prev = *h;
+                    }
+                }
+                _ => passes.push(*h),
+            }
+        }
+        let mut pick: Option<(f64, Hit)> = None;
+        for h in passes {
+            let step = h.1 - st.last_m;
+            let cost = if step >= 0.0 { step } else { -step * BACK_COST };
+            if pick.is_none_or(|x| cost < x.0) {
+                pick = Some((cost, h));
+            }
+        }
+        pick.map(|x| x.1)
     }
 
     /// Where a fix is on the route. See [`ProgressReq`].
     pub fn progress(&self, q: &ProgressReq) -> Value {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if q.reset {
-            *st = ProgState { last_m: 0.0, off_count: 0, fixes: 0 };
+            *st = ProgState { last_m: 0.0, max_m: 0.0, reached: 0, off_count: 0, fixes: 0 };
         }
         let p = (q.lat, q.lon);
         let acc = q.accuracy_m.unwrap_or(0.0).max(0.0);
@@ -468,9 +575,28 @@ impl ActiveRoute {
             let t = if self.mans[i].class == "road" { base } else { base * OFFROAD_TOLERANCE };
             t.max(acc)
         };
-        let windowed = if st.fixes > 0 { self.nearest(p, st.last_m - WINDOW_BACK_M, st.last_m + WINDOW_AHEAD_M) } else { None };
-        let mut hit = windowed.filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
+        // then anywhere on the route, still going on from the last fix (for the first fix of a route that is from its start:
+        // where the route goes out and comes back along one road, a drive that begins there is on the way out, with the stop
+        // at the far end still ahead); and with nothing on the route that way (a fix off the route, a route driven back
+        // along), the nearest point of the whole route
+        let (margin, slack) = (PASS_MARGIN_M.max(acc).min(PASS_MARGIN_MAX_M), BACK_SLACK_M.max(acc).min(BACK_SLACK_MAX_M));
+        // Stops are visited in order: nothing is matched beyond the next stop that has not been reached (but for the
+        // arrival distance past it, where reaching it is seen). A fix that is only near a later part of the route is off the
+        // route, and the app's new route from there goes through every stop still ahead.
+        let cap = self.vias.get(st.reached).map_or(f64::MAX, |v| *v + q.arrive_m.max(0.0));
+        let mut hit = None;
+        if st.fixes > 0 {
+            let windowed = self.continuing(p, st.last_m - WINDOW_BACK_M, (st.last_m + WINDOW_AHEAD_M).min(cap), &st, margin, slack);
+            hit = windowed.filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
+        }
         if hit.is_none() {
+            hit = self.continuing(p, 0.0, cap, &st, margin, slack).filter(|w| w.2 <= tol_for(w.1, q.off_route_m));
+        }
+        if hit.is_none() {
+            hit = self.nearest(p, 0.0, cap);
+        }
+        if hit.is_none() {
+            // nothing of the route lies before the stop (the stop is where the route begins)
             hit = self.nearest(p, 0.0, f64::MAX);
         }
         let (seg, along, offset, matched) = hit.expect("a route has segments");
@@ -479,12 +605,17 @@ impl ActiveRoute {
         if on_route {
             st.off_count = 0;
             st.last_m = along;
+            st.max_m = if along + slack < st.max_m { along } else { st.max_m.max(along) };
+            while st.reached < self.vias.len() && along >= self.vias[st.reached] - q.arrive_m.max(0.0) {
+                st.reached += 1;
+            }
         } else {
             st.off_count += 1;
         }
         let off_route = st.off_count >= q.off_route_fixes;
         let off_count = st.off_count;
         let fix_no = st.fixes;
+        let stops_reached = st.reached;
         drop(st);
 
         let remaining_m = (self.total_m - along).max(0.0);
@@ -553,6 +684,7 @@ impl ActiveRoute {
             "off_route": off_route,
             "off_route_count": off_count,
             "arrived": arrived,
+            "stops_reached": stops_reached,
             "progress": round_py(if self.total_m > 0.0 { along / self.total_m } else { 1.0 }, 4),
             "remaining": Value::Object(remaining),
             "total": {"distance_m": round_py(self.total_m, 1), "duration_s": self.total_s.round() as i64},

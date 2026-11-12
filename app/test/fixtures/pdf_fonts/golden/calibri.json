@@ -1,0 +1,16 @@
+{
+  "title": "Calibri",
+  "pages": [
+    {
+      "text": "The quick brown fox jumps over the lazy dog. Water purification in the field.\r\nBoil it for one minute; at altitude, three minutes. 1,234 liters (about 326 gallons) -- state-of-the-art.\r\nDon't store treated water for more than six months, e.g. COVID-19 U.S. FEMA-IS513.",
+      "label": null,
+      "png_sha256": {
+        "windows": "247af8d700ac67188abdb87f64de526f6f91affadbc21ac1b89b5b151b4c415e",
+        "linux": "247af8d700ac67188abdb87f64de526f6f91affadbc21ac1b89b5b151b4c415e"
+      },
+      "width": 612,
+      "height": 792,
+      "dpi": 72
+    }
+  ]
+}

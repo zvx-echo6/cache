@@ -149,9 +149,10 @@ fn agent() -> &'static ureq::Agent {
 
 const MAX_BODY: u64 = 256 * 1024 * 1024;
 
-/// GET `url`, or a byte range `[start, start+len)` of it. 404/403/204 come back as a `Response` with that status
-/// (a missing tile is not an error). 429 and 5xx are retried with backoff (honouring Retry-After), as are
-/// timeouts; a failure to connect is retried once and then makes later calls fail at once for 15 seconds.
+/// GET `url`, or a byte range `[start, start+len)` of it. 404, 410 and 204 come back as a `Response` with that status
+/// (a tile the source does not have is not an error). A refusal (403), 429 and 5xx are retried with backoff (honouring
+/// Retry-After), as are timeouts, and are an error when they last: a host that refuses is never read as "no tile here".
+/// A failure to connect is retried once and then makes later calls fail at once for 15 seconds.
 pub fn get(url: &str, range: Option<(u64, u64)>, gate: Option<&Arc<Gate>>) -> Result<Response> {
     if !crate::def::url_ok(url) {
         return Err(Error::bad_json(format!("{url} is not an https address")));
@@ -204,11 +205,13 @@ pub fn get(url: &str, range: Option<(u64, u64)>, gate: Option<&Arc<Gate>>) -> Re
             }
             Err(ureq::Error::Status(code, resp)) => {
                 mark_network_up();
-                if matches!(code, 404 | 403 | 410 | 204 | 416) {
+                if matches!(code, 404 | 410 | 204 | 416) {
                     return Ok(Response { status: code, body: Vec::new() });
                 }
                 last = format!("HTTP {code} from {url}");
-                if code == 429 || code >= 500 {
+                // 403 is a host that refuses (it throttles or blocks), not a tile that does not exist: tried again like a busy
+                // server. Answered as "no tile", a refused tile was stored empty and its download read complete.
+                if code == 403 || code == 429 || code >= 500 {
                     if let Some(s) = resp.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok()) {
                         delay = Duration::from_secs(s.min(10));
                     }
@@ -315,7 +318,7 @@ fn get_once(url: &str, range: Option<(u64, u64)>, timeout: Duration) -> Result<R
         }
         Err(ureq::Error::Status(code, _)) => {
             mark_network_up();
-            if matches!(code, 404 | 403 | 410 | 204 | 416) {
+            if matches!(code, 404 | 410 | 204 | 416) {
                 return Ok(Response { status: code, body: Vec::new() });
             }
             Err(Error::fetch_failed(format!("HTTP {code} from {url}")))

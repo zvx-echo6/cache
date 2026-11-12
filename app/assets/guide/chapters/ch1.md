@@ -345,6 +345,8 @@ Use this if you'd rather not share your location, or it can't be found.
 
 Cache watches that place and switches on the same three sources.
 
+If weather is already on, tap the place's name at the top of "Weather", then tap "Add a place" in "Places". It opens the same sheet. Cache watches the place and leaves your sources as they are.
+
 To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch. The same switch is under "Saved places" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 ## Add more weather sources
@@ -391,6 +393,8 @@ To fix it:
 ## Location on the map
 
 The map has its own location controls.
+
+![The Maps screen](shot:maps-find-me)
 
 1. Open "Maps" and tap the locate button ("Find me").
 2. When Cache asks "Use your location?", tap "Continue".

@@ -18,6 +18,7 @@ import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
 import '../platform/app_log.dart';
+import '../platform/bench_options.dart' show benchDateOffsetDays;
 
 /// One message in the Ask screen.
 class ChatMessage {
@@ -334,13 +335,45 @@ class ChatController extends ChangeNotifier {
       tools: tools,
       numbering: numbering,
       host: newHost?.call(numbering),
-      systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false, voice: _voice),
+      systemPrompt: () => buildSystemPrompt(now: DateTime.now().add(Duration(days: benchDateOffsetDays)), locationKnown: locationKnown?.call() ?? false, voice: _voice),
       timeLine: () => buildTimeLine(DateTime.now()),
       history: history,
       knownResults: cited.values,
     );
     await loop.syncNumbering();
     return loop;
+  }
+
+  /// The request for reading the prompt start ahead (Ask shown, the model loaded, no question yet), or null when there is nothing to
+  /// read it with: no model, a turn already running, or the search core did not start. It is prepared as a question is: the same
+  /// preparation before inference (location), the same wait for the core, the same act definitions, and the loop's own request
+  /// builder ([ToolLoop.warmRequest]) with a new chat's loop when none is open; so what the model reads is what the first question
+  /// of the chat will send before its own messages. [isCancelled]: the read was given up (Cache went to the back).
+  Future<Map<String, dynamic>?> warmRequest({bool Function()? isCancelled}) async {
+    final backend = _backend;
+    if (backend == null || busy) return null;
+    bool gone() => (isCancelled?.call() ?? false) || !identical(backend, _backend) || busy;
+    try {
+      await prepareTurn?.call(gone);
+    } catch (_) {
+      // Optional device context never blocks a request.
+    }
+    if (gone()) return null;
+    if (waitForCore != null && _loop == null) {
+      final ok = await waitForCore!();
+      if (!ok || gone()) return null;
+    }
+    await _installActions();
+    if (gone()) return null;
+    final open = _loop;
+    // A new chat has no loop yet: one is made as the first question makes it, for its tool list only, and let go again.
+    final loop = open ?? await _loopFor(null, backend);
+    try {
+      if (gone()) return null;
+      return await loop.warmRequest();
+    } finally {
+      if (open == null) await loop.dispose();
+    }
   }
 
   /// Asks the last question again in place of its failed answer (Try again).

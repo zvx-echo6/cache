@@ -94,6 +94,9 @@ class SharingState extends ChangeNotifier {
           ..clear()
           ..addAll({for (final e in off.entries) if (e.value is List) '${e.key}': {for (final k in e.value as List) '$k'}});
       }
+      // Everything _save writes (enabled, off, ask_since) is loaded before any save, or a save would overwrite the file with defaults.
+      final enabled = j['enabled'] == true;
+      _enabled = enabled;
       final since = j['ask_since'];
       if (since is int) {
         _askSince = since;
@@ -102,8 +105,7 @@ class SharingState extends ChangeNotifier {
         _askSince = DateTime.now().millisecondsSinceEpoch;
         await _save();
       }
-      if (j['enabled'] == true) {
-        _enabled = true;
+      if (enabled) {
         await _start();
       }
     } catch (e) {

@@ -15,6 +15,15 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+/// What the store holds for one tile.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stored {
+    /// The tile, as the source sent it.
+    Tile(Vec<u8>),
+    /// Downloaded, and the source has no tile here.
+    Empty,
+}
+
 fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
     m.lock().map_err(|_| Error::internal("poisoned"))
 }
@@ -46,11 +55,20 @@ impl Store {
         Ok(Store { conn: Mutex::new(c) })
     }
 
-    /// The tile's bytes; `None` if not stored or stored as "the source has no tile here".
+    /// The tile's bytes; `None` if not stored or stored as "the source has no tile here" ([`Store::find`] tells the two apart).
     pub fn get(&self, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
+        Ok(match self.find(z, x, y)? {
+            Some(Stored::Tile(d)) => Some(d),
+            Some(Stored::Empty) | None => None,
+        })
+    }
+
+    /// What is stored for the tile: its bytes, "the source has no tile here" (a download asked, and the answer is kept so
+    /// the tile is not asked for again), or `None` when no download fetched it.
+    pub fn find(&self, z: u8, x: u32, y: u32) -> Result<Option<Stored>> {
         let c = lock(&self.conn)?;
         let d: Option<Vec<u8>> = c.query_row("SELECT data FROM tiles WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| r.get(0)).optional()?;
-        Ok(d.filter(|d| !d.is_empty()))
+        Ok(d.map(|d| if d.is_empty() { Stored::Empty } else { Stored::Tile(d) }))
     }
 
     /// (size in bytes, version) of a stored tile (size 0 = known to be empty at the source).

@@ -81,6 +81,7 @@ fn run(ts: &[Box<dyn Tool>], name: &str, location: Option<&Location>, args: &Val
     match tool.run(&ctx, args) {
         Ok(ToolOutput::Json(v)) => v,
         Ok(ToolOutput::Text(t)) => json!(t),
+        Ok(ToolOutput::Pieces(_)) => unreachable!("places give JSON"),
         Err(e) => e.to_json(),
     }
 }

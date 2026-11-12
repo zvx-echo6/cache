@@ -1008,7 +1008,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     final core =
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
-    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page);
+    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).

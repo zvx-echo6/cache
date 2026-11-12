@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
-import '../../notebook/pin_image.dart' show PinStyle;
+import '../../notebook/pin_image.dart' show PinStyle, pinIconSize;
 import '../../theme.dart' show CacheThemeId;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
@@ -55,11 +55,21 @@ const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
-/// Pixels per point of the pin images (renderPinPng): the symbol layer draws them this much smaller.
-const double kPinImageRatio = 3;
-
 /// The name of the heading marker image the screen adds to the style.
 const String kHeadingImage = 'position-heading';
+
+/// The chosen place's pin (a route's destination while it is shown): its circle's radius and the edge around it, in points.
+/// Whole numbers, so the style is written as it was.
+const int kPinSelectedRadius = 11;
+const int kPinSelectedEdge = 4;
+
+/// The position dot: its circle's radius and the ring around it, in points.
+const int kPositionDotRadius = 8;
+const int kPositionDotEdge = 3;
+
+/// How far the chosen place's pin and the position dot reach from their middle, in points, whatever the zoom.
+const double kPinSelectedReach = kPinSelectedRadius + kPinSelectedEdge + 0.0;
+const double kPositionDotReach = kPositionDotRadius + kPositionDotEdge + 0.0;
 
 /// A visible layer and how opaque it is drawn.
 class StyleLayerUse {
@@ -468,7 +478,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['==', ['geometry-type'], 'Point'],
           'layout': {
             'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical),
-            'icon-size': 1 / kPinImageRatio,
+            'icon-size': pinIconSize(),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -489,7 +499,8 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         }
       else
         // A notebook's places with their icon: one image per style, icon and colour (named in the feature's `pin`, see
-        // notebook_map.dart), drawn at 1/kPinImageRatio of its pixels. The teardrop's point is the bottom of its image.
+        // notebook_map.dart), drawn at the size that makes it its points on this kind of map (pinIconSize, pin_image.dart). The
+        // teardrop's point is the bottom of its image.
         {
           'id': kNotebookPins,
           'type': 'symbol',
@@ -497,7 +508,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['has', 'pin'],
           'layout': {
             'icon-image': ['get', 'pin'],
-            'icon-size': 1 / kPinImageRatio,
+            'icon-size': pinIconSize(),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -536,9 +547,9 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'source': kPinSource,
         'filter': ['==', ['get', 'role'], 'selected'],
         'paint': {
-          'circle-radius': 11,
+          'circle-radius': kPinSelectedRadius,
           'circle-color': p.css('pin'),
-          'circle-stroke-width': 4,
+          'circle-stroke-width': kPinSelectedEdge,
           'circle-stroke-color': p.css('routeCasing'),
         },
       },
@@ -565,9 +576,9 @@ List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
         'source': kPositionSource,
         'filter': ['==', ['geometry-type'], 'Point'],
         'paint': {
-          'circle-radius': 8,
+          'circle-radius': kPositionDotRadius,
           'circle-color': p.css('position'),
-          'circle-stroke-width': 3,
+          'circle-stroke-width': kPositionDotEdge,
           'circle-stroke-color': p.css('positionRing'),
           'circle-pitch-alignment': 'map',
         },

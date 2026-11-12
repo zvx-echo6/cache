@@ -370,3 +370,11 @@ fn original_identity_survives_pack_export_archive_and_core_unpack() {
     assert_eq!(read_source_identities(&target).unwrap(), entries);
     assert_eq!(std::fs::read(target.join(DOCUMENTS_FILE)).unwrap(), std::fs::read(out.join(DOCUMENTS_FILE)).unwrap());
 }
+
+/// `own` marks a library the person made on the device (Add PDF writes to it, its keyword snapshot grows by generations). A library the
+/// builder makes, whether for the catalogue or on a person's own server, never says it.
+#[test]
+fn the_builders_library_settings_never_say_own() {
+    let s = library_settings("field", "Field library", "7");
+    assert!(s.get("own").is_none() && s.get("own_default").is_none(), "{s}");
+}

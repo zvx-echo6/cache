@@ -41,7 +41,17 @@ class _NavSearchBarState extends State<NavSearchBar> {
       if (_focus.hasFocus) nav.openSearch();
       // The cursor is in the map's search box: the search model loads ahead of the first search.
       if (_focus.hasFocus) SearchModel.aboutToSearch();
+      if (_focus.hasFocus) _selectChosenName();
     });
+  }
+
+  /// The box is entered while it shows the name of the chosen place, which the state wrote there and the person did not type:
+  /// the name is selected, so typing starts a new search in its place instead of adding to it (after "Alder Flat" was chosen,
+  /// typing "tamber" searched for "Alder Flattamber"). A second tap puts the cursor in the name, to change it.
+  void _selectChosenName() {
+    final name = nav.selected?.name;
+    if (name == null || name.isEmpty || _text.text != name || nav.query != name) return;
+    _text.selection = TextSelection(baseOffset: 0, extentOffset: name.length);
   }
 
   @override
