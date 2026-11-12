@@ -120,6 +120,34 @@ class CarModelsTest {
         assertNull(CarModels.travelEstimate(t.copy(remainingM = null)))
     }
 
+    // Bug: the estimate read "0 min" for the last seconds before arrival.
+    @Test
+    fun theTimeLeftIsNeverUnderAMinuteUntilArrived() {
+        val t = CarTrip.from(guidingMap)
+        for (s in listOf(0L, 1L, 20L, 40L, 59L)) {
+            assertEquals(60L, CarModels.travelEstimate(t.copy(remainingS = s))!!.remainingTimeSeconds)
+        }
+        assertEquals(60L, CarModels.travelEstimate(t.copy(remainingS = 60L))!!.remainingTimeSeconds)
+        assertEquals(61L, CarModels.travelEstimate(t.copy(remainingS = 61L))!!.remainingTimeSeconds)
+        // The route overview's "time left" follows the same rule.
+        val left = CarModels.leftText(t.copy(remainingS = 20L)) as Spanned
+        assertEquals(60L, left.getSpans(0, left.length, DurationSpan::class.java)[0].durationSeconds)
+        // Arrived: what the phone says.
+        assertEquals(20L, CarModels.travelEstimate(t.copy(remainingS = 20L, arrived = true))!!.remainingTimeSeconds)
+        // What goes to the instrument cluster is the same estimate.
+        val trip = CarModels.trip(t.copy(remainingS = 20L), { null }, nowMs = 1_794_199_000_000L)
+        assertEquals(60L, trip.destinationTravelEstimates[0].remainingTimeSeconds)
+    }
+
+    @Test
+    fun placeDistanceDoesNotTakeInTextAddedAfterIt() {
+        val row = android.text.SpannableStringBuilder(CarModels.placeDistance(2400.0, imperial = true)).append(" · 12 Nowhere Lane")
+        val spans = row.getSpans(0, row.length, DistanceSpan::class.java)
+        assertEquals(1, spans.size)
+        assertEquals(0, row.getSpanStart(spans[0]))
+        assertEquals(1, row.getSpanEnd(spans[0]))
+    }
+
     @Test
     fun routeTitleLetsTheHostFormatTimeAndDistance() {
         val r = CarTrip.from(guidingMap).routes[0]

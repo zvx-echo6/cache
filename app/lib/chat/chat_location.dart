@@ -58,6 +58,33 @@ class ChatLocation extends ChangeNotifier {
     }
   }
 
+  /// A position is on its way: location is on and allowed, nothing has gone wrong with it, and the chat does not have it yet (the
+  /// fix has not arrived, or its core update has not been acknowledged). Off, denied and a failed location are not pending.
+  bool get fixPending =>
+      location.enabled && location.permission == LocationPermissionState.granted && location.problem == null && !known;
+
+  /// Waits up to [timeout] for the position the chat is waiting for. [FixWait.none]: nothing to wait for (location off or denied, or
+  /// the chat has the position already), returned at once.
+  Future<FixWait> waitForFix(Duration timeout) async {
+    if (!fixPending) return FixWait.none;
+    final done = Completer<void>();
+    void look() {
+      if (!fixPending && !done.isCompleted) done.complete();
+    }
+    final both = Listenable.merge([this, location]);
+    both.addListener(look);
+    final timer = Timer(timeout, () {
+      if (!done.isCompleted) done.complete();
+    });
+    try {
+      await done.future;
+    } finally {
+      timer.cancel();
+      both.removeListener(look);
+    }
+    return known ? FixWait.arrived : FixWait.timedOut;
+  }
+
   /// Waits for the core updates asked for so far, at most [timeout]; true when the chat now has the position (the same
   /// [known] the chip and the system prompt read).
   Future<bool> settled({Duration timeout = const Duration(seconds: 5)}) async {
@@ -75,4 +102,16 @@ class ChatLocation extends ChangeNotifier {
       await pending;
     } while (!isCancelled() && !identical(pending, _writes));
   }
+}
+
+/// How [ChatLocation.waitForFix] ended.
+enum FixWait {
+  /// There was nothing to wait for.
+  none,
+
+  /// The position arrived (and the chat has it).
+  arrived,
+
+  /// No position within the time (or the location was lost meanwhile).
+  timedOut,
 }

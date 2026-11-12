@@ -307,6 +307,7 @@ fn build_steps(maneuvers: &[Maneuver], shape: &[(f64, f64)]) -> Vec<Step> {
             end: pt(end),
             instruction: Some(m.instruction.clone()),
             follow: None,
+            lanes: m.lanes.clone(),
         });
     }
     steps

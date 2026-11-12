@@ -1203,9 +1203,13 @@ fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
     let doc = w["id"].as_str().unwrap();
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
     let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("call_number") && !header.contains("CDS") && !header.contains("suggestions"), "{header}");
+    assert!(!header.contains("call_number") && !header.contains("CDS"), "{header}");
     let sg = p.header.suggested().expect("the classifier's guess is in the pack");
     assert_eq!((sg.div.as_str(), sg.source.as_str(), sg.classifier_version), ("510", "classifier", Some(1)));
+    // this book was filed: the pack says the sorter was confident, and keeps the top three
+    assert_eq!(sg.filed, Some(true), "{header}");
+    assert_eq!(sg.suggestions.len(), 3, "{header}");
+    assert_eq!(sg.suggestions[0].div, "510");
     let b = p.header.book.as_ref().unwrap();
     assert_eq!((b.title.as_str(), b.original_blake3.as_str()), ("The Well Handbook", p.header.source.blake3.as_str()));
     // this device's Bookshelves log: place and assign for the filed books, unsort for the unsure one, keyed by copy
@@ -1439,13 +1443,17 @@ fn an_unsure_book_keeps_the_top_three_with_probabilities_and_the_version() {
     assert_eq!((sw["unsorted"].as_bool(), sw["suggestions"][0]["division"].as_str()), (Some(false), Some("510")));
     assert!(sw["unsure_reason"].is_null());
     assert_eq!(svc.suggestions(&lib, "nope").unwrap_err().status, 404);
-    // the choices survive a restart; the pack keeps the best guess as a fact (book.suggested), never the list of three
+    // the choices survive a restart; the pack keeps the best guess as a fact (book.suggested) with the top three and whether the
+    // sorter was confident (this book was left in Unsorted: not confident)
     let (svc2, _) = rig(&d);
     assert_eq!(svc2.suggestions(&lib, doc).unwrap()["suggestions"].as_array().unwrap().len(), 3);
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
-    let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("suggestions"), "{header}");
-    assert_eq!(p.header.suggested().map(|s| (s.source, s.classifier_version)), Some(("classifier".to_string(), Some(1))));
+    let sg = p.header.suggested().unwrap();
+    assert_eq!((sg.source.clone(), sg.classifier_version), ("classifier".to_string(), Some(1)));
+    assert_eq!(sg.filed, Some(false));
+    let mut kept: Vec<&str> = sg.suggestions.iter().map(|x| x.div.as_str()).collect();
+    kept.sort();
+    assert_eq!(kept, vec!["510", "520", "710"]);
 }
 
 /// The events of this device's Bookshelves log.

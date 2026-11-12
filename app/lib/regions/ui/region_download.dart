@@ -99,6 +99,6 @@ DlActions regionDlActions(BuildContext context, RegionsState regions, LocalRegio
 /// "Idaho · 41%": the region's summary above its parts.
 String regionSummary(LocalRegion l) => '${l.name} · ${(l.fraction * 100).clamp(0, 99).floor()}%';
 
-/// "On this device · 1.8 GB" for a region that is all here (with "Places not available yet" when nothing is published for it).
-String regionDoneLine(LocalRegion l, {required String placesNote}) =>
-    ['On this device', formatBytes(l.bytes), if (l.placesNotAvailable) placesNote].join(' · ');
+/// "On this device · 1.8 GB" for a region that is all here (with "Places not available yet", or the same of directions, when
+/// nothing is published for it).
+String regionDoneLine(LocalRegion l) => ['On this device', formatBytes(l.bytes), ...l.notAvailableNotes].join(' · ');

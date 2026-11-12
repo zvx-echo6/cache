@@ -5,7 +5,7 @@ use cache_layers::pmtiles::{self, Header, Writer};
 use cache_layers::{AreaReq, Done, Layers, TileOut};
 use common::*;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 fn xyz_def(id: &str, port: u16, extra: Value) -> String {
@@ -17,6 +17,16 @@ fn xyz_def(id: &str, port: u16, extra: Value) -> String {
     for (k, v) in extra.as_object().unwrap() {
         d[k] = v.clone();
     }
+    d.to_string()
+}
+
+/// `xyz_def` as a layer of raster tiles. They are stored as the source sends them, so "the source has no tile here" is an
+/// empty row, as it is for every tile read from a PMTiles archive. (A vector layer fetched tile by tile is stored gzipped,
+/// an empty answer too: 20 bytes, served as an empty tile.)
+fn raster_def(id: &str, port: u16, extra: Value) -> String {
+    let mut d: Value = serde_json::from_str(&xyz_def(id, port, extra)).unwrap();
+    d["kind"] = json!("raster");
+    d["source"]["tile_format"] = json!("png");
     d.to_string()
 }
 
@@ -373,6 +383,113 @@ fn resume_after_interruption_and_update_replaces_only_when_complete() {
     let st = inner.store_read("base").unwrap();
     assert_eq!(st.staging_count(), 0);
     assert!(AreaReq::parse(&req).unwrap().tiles(0, 10).unwrap().iter().all(|t| st.info(t.1, t.2, t.3).unwrap().unwrap().1 == "2"));
+}
+
+/// A small area for the tests of what a download keeps: a handful of tiles, one batch.
+const SMALL: &str = r#""bbox":[-114,42,-113,43],"minzoom":0,"maxzoom":6"#;
+
+#[test]
+fn a_refused_tile_fails_the_download_and_is_never_stored_as_empty() {
+    let sc = Scratch::new("refused");
+    let req = format!(r#"{{"layer":"refused","area":"r","name":"R",{SMALL}}}"#);
+    let areq = AreaReq::parse(&req).unwrap();
+    let bad = areq.tiles(5, 5).unwrap()[0];
+    let none = areq.tiles(3, 3).unwrap()[0];
+    // The host has nothing at zoom 3 (404), and once the download is under way it refuses one zoom 5 tile (403), as a host
+    // that throttles does. It serves every other tile.
+    let refusing = Arc::new(AtomicBool::new(false));
+    let refusals = Arc::new(AtomicUsize::new(0));
+    let (on, count) = (refusing.clone(), refusals.clone());
+    let host = fake_host(0, move |url, _| match parse_zxy(url) {
+        Some((z, x, y)) if (z, x, y) == (bad.1, bad.2, bad.3) && on.load(Ordering::SeqCst) => {
+            count.fetch_add(1, Ordering::SeqCst);
+            (403, vec![])
+        }
+        Some((3, _, _)) | None => (404, vec![]),
+        Some((z, x, y)) => (200, tile_body(z, x, y)),
+    });
+    let inner = engine(&sc);
+    inner.save_user_def(&raster_def("refused", host.port, json!({"offline": {"allowed": true, "max_parallel": 2}}))).unwrap();
+    // The size estimate has run by the first progress report: the refusals start with the download itself.
+    let r = inner.run_download(&areq, &|_, _, _| refusing.store(true, Ordering::SeqCst), &|| false);
+    let e = r.err().expect("a download with a refused tile does not finish");
+    assert_eq!(e.code, "fetch_failed");
+    assert!(e.message.contains("HTTP 403"), "{}", e.message);
+    assert_eq!(refusals.load(Ordering::SeqCst), 4, "the refused tile was tried again under the back-off before giving up");
+    // nothing reads as downloaded, and the refused tile is not in the store, least of all as "no tile here"
+    assert_eq!(inner.partials("refused").len(), 1);
+    assert!(inner.areas("refused").iter().all(|a| a.state == "partial"));
+    assert_eq!(inner.list()["layers"][0]["installed"]["downloaded"], false);
+    let st = inner.store_read("refused").unwrap();
+    assert_eq!(st.info(bad.1, bad.2, bad.3).unwrap(), None);
+    // the host lets it through: the same request carries on and finishes with the real tile
+    refusing.store(false, Ordering::SeqCst);
+    let (r, _) = run(&inner, &req, None);
+    assert!(matches!(r.unwrap(), Done::Finished));
+    assert!(inner.areas("refused").iter().all(|a| a.state == "complete"));
+    assert_eq!(st.get(bad.1, bad.2, bad.3).unwrap().expect("the tile that was refused"), tile_body(bad.1, bad.2, bad.3));
+    // a real "no such tile" answer (404) is still kept as empty
+    assert_eq!(st.info(none.1, none.2, none.3).unwrap().map(|i| i.0), Some(0));
+}
+
+#[test]
+fn a_refused_tile_on_the_map_is_an_error_to_ask_again_not_an_empty_tile_remembered() {
+    let sc = Scratch::new("refusedlive");
+    let refusing = Arc::new(AtomicBool::new(true));
+    let on = refusing.clone();
+    let host = fake_host(0, move |url, _| match parse_zxy(url) {
+        Some(_) if on.load(Ordering::SeqCst) => (403, vec![]),
+        Some((z, x, y)) => (200, tile_body(z, x, y)),
+        None => (404, vec![]),
+    });
+    let inner = engine(&sc);
+    inner.save_user_def(&xyz_def("refusedlive", host.port, json!({}))).unwrap();
+    // the map's path: one attempt, and a failure it asks about again (the tile server answers 502)
+    let e = inner.tile_upstream("refusedlive", 4, 3, 5).err().expect("a refusal is not a tile");
+    assert_eq!((e.code, e.http_status()), ("fetch_failed", 502));
+    assert_eq!(inner.health("refusedlive")["recent_failures"], 1);
+    // it was not remembered as "no tile here" for a day: once the host answers, the tile comes
+    refusing.store(false, Ordering::SeqCst);
+    let (b, from) = tile_bytes(inner.tile_upstream("refusedlive", 4, 3, 5).unwrap());
+    assert_eq!((b, from), (tile_body(4, 3, 5), "network"));
+}
+
+#[test]
+fn a_downloaded_empty_tile_is_empty_for_good_and_not_asked_for_again() {
+    let sc = Scratch::new("storedempty");
+    // The source has no tile at zoom 3 (404) and serves the rest.
+    let host = fake_host(0, |url, _| match parse_zxy(url) {
+        Some((3, _, _)) | None => (404, vec![]),
+        Some((z, x, y)) => (200, tile_body(z, x, y)),
+    });
+    let layers = Layers::new(cache_layers::LayersCfg { dir: sc.path("l").to_string_lossy().into_owned(), defs_dirs: vec![], catalogue_urls: vec![], cache_max_bytes: 1 << 24, online: true }).unwrap();
+    let inner = &layers.inner;
+    inner.save_user_def(&raster_def("storedempty", host.port, json!({"offline": {"allowed": true}}))).unwrap();
+    let req = format!(r#"{{"layer":"storedempty","area":"e","name":"E",{SMALL}}}"#);
+    let (r, _) = run(inner, &req, None);
+    assert!(matches!(r.unwrap(), Done::Finished));
+    let t3 = AreaReq::parse(&req).unwrap().tiles(3, 3).unwrap()[0];
+    assert_eq!(inner.store_read("storedempty").unwrap().info(3, t3.2, t3.3).unwrap().map(|i| i.0), Some(0), "kept as: the source has no tile here");
+    let base = layers.serve().unwrap()["base_url"].as_str().unwrap().to_string();
+    let status = |z: u8, x: u32, y: u32| -> (u16, Option<String>, Option<String>) {
+        match ureq::get(&format!("{base}/layers/storedempty/{z}/{x}/{y}")).call() {
+            Ok(r) => (r.status(), r.header("X-Cache-Status").map(String::from), r.header("Retry-After").map(String::from)),
+            Err(ureq::Error::Status(c, r)) => (c, r.header("X-Cache-Status").map(String::from), r.header("Retry-After").map(String::from)),
+            Err(e) => panic!("{e}"),
+        }
+    };
+    // Offline, the map is told "empty", which it does not ask about again. It was told "not here, ask again in 5 seconds",
+    // for every empty tile of the downloaded area, for as long as the tile was on screen.
+    inner.set_online(false);
+    assert_eq!(status(3, t3.2, t3.3), (204, Some("empty".to_string()), None));
+    assert!(matches!(inner.tile("storedempty", 3, t3.2, t3.3).unwrap(), TileOut::Empty));
+    // a tile no download fetched is still a miss to ask about again, as before
+    assert_eq!(status(9, 1, 1), (503, Some("miss".to_string()), Some("5".to_string())));
+    // With a connection the download's answer stands too: the source is not asked again.
+    inner.set_online(true);
+    let hits = host.stats.hits.load(Ordering::SeqCst);
+    assert_eq!(status(3, t3.2, t3.3), (204, Some("empty".to_string()), None));
+    assert_eq!(host.stats.hits.load(Ordering::SeqCst), hits);
 }
 
 /// A PMTiles archive of raster-like tiles for z0..=zmax over the whole world, as a file.

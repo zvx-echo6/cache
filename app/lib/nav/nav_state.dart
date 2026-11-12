@@ -9,6 +9,7 @@ import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
 import '../maps/maps_state.dart';
+import '../platform/app_log.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
@@ -178,6 +179,11 @@ class NavState extends ChangeNotifier {
   static const int maxStops = 10;
   final Set<int> _passedStops = {};
 
+  /// The stops the route being followed goes through, in its order, as places in [stops]: the route's first stop is
+  /// `_routeStops[0]`, and so on. The core counts the stops the fixes have reached along the route ([MapProgress.stopsReached]);
+  /// this says which stops those are.
+  List<int> _routeStops = const [];
+
   /// From here: directions will start at [p]. The search opens to choose where to go (or hold the map for To here).
   void setFrom(MapPlace p) {
     fromPlace = p;
@@ -212,6 +218,99 @@ class NavState extends ChangeNotifier {
     return true;
   }
 
+  /// The stops still ahead, in order: all of them before the drive, and while guiding those not passed yet. (A stop counts as
+  /// passed only during the drive it was passed in.)
+  List<MapPlace> get stopsAhead => !guiding
+      ? stops
+      : [
+          for (final (i, s) in stops.indexed)
+            if (!_passedStops.contains(i)) s,
+        ];
+
+  /// The stops still ahead with the number each has in the route being followed: the number the turn banner says when the
+  /// stop is reached ("Stop 2 reached"), which is its place among the stops that route was made with. A stop keeps that number
+  /// when the ones before it are passed. Before the drive it is its place among all the stops.
+  List<(int, MapPlace)> get numberedStopsAhead {
+    if (!guiding) return [for (final (i, s) in stops.indexed) (i + 1, s)];
+    final out = <(int, MapPlace)>[];
+    for (final (k, i) in _routeStops.indexed) {
+      if (i < stops.length && !_passedStops.contains(i)) out.add((k + 1, stops[i]));
+    }
+    // A stop the route was not made with (there should be none) still shows, after the others.
+    for (final i in _aheadIndexes()) {
+      if (!_routeStops.contains(i)) out.add((out.length + 1, stops[i]));
+    }
+    return out;
+  }
+
+  /// The places in [stops] that are not passed, in order: what a route from here goes through.
+  List<int> _aheadIndexes() => [
+        for (var i = 0; i < stops.length; i++)
+          if (!_passedStops.contains(i)) i,
+      ];
+
+  /// Add stop while guiding (the car's Add stop during a drive): [p] becomes the next stop, before the stops still ahead, and
+  /// guidance carries on along a new route from where the phone is, through it and the other stops ahead, to the destination.
+  /// False, with the route as it was, when there is no guidance to add to (not guiding, arrived, no fix yet, a new route
+  /// already being worked out), when the route has [maxStops], or when no route through the stop could be found.
+  Future<bool> addStopWhileGuiding(MapPlace p) async {
+    final f = lastFix;
+    final to = selected;
+    if (!guiding || arrived || rerouting || f == null || to == null || route == null) return false;
+    if (stops.length >= maxStops) {
+      _events.add(const NavNotice('A route has at most 10 stops'));
+      return false;
+    }
+    final before = stops;
+    final beforePassed = {..._passedStops};
+    final passed = [
+      for (final (i, s) in stops.indexed)
+        if (_passedStops.contains(i)) s,
+    ];
+    // The stops already passed keep their places at the front, so each stop keeps its number.
+    final beforeRoute = _routeStops;
+    stops = [...passed, p, ...stopsAhead];
+    _passedStops
+      ..clear()
+      ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    rerouting = true;
+    _lastReroute = _clock();
+    notifyListeners();
+    var added = false;
+    try {
+      final r = await backend.route(
+          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
+      if (!guiding) return false;
+      if (r.ok) {
+        routes = [r];
+        routeIndex = 0;
+        _routeFrom = GeoPoint(f.lat, f.lon);
+        _sendRoute = true;
+        _routeStarted = true;
+        _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
+        progress = null;
+        _routeStops = _aheadIndexes();
+        added = true;
+        logInfo('Guidance: a stop was added, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
+      } else {
+        _events.add(NavNotice(routeErrorText(r)));
+      }
+    } catch (_) {
+      _events.add(const NavNotice('Could not work out a new route'));
+    } finally {
+      if (!added && guiding) {
+        stops = before;
+        _routeStops = beforeRoute;
+        _passedStops
+          ..clear()
+          ..addAll(beforePassed);
+      }
+      rerouting = false;
+      notifyListeners();
+    }
+    return added;
+  }
+
   Future<void> removeStop(int i) async {
     if (i < 0 || i >= stops.length) return;
     stops = [...stops]..removeAt(i);
@@ -230,8 +329,14 @@ class NavState extends ChangeNotifier {
   bool voiceOn = true;
   bool rerouting = false;
   bool arrived = false;
+
+  /// The last fix guidance was given. Kept only while guidance follows the phone: it is forgotten when guidance ends, so it
+  /// never stands in for the phone's position afterwards.
   Fix? lastFix;
   GuidanceEngine? _engine;
+
+  /// How far (metres) from a maneuver the first (far) voice prompt is due, for the way of travel: the lane strip shows from here.
+  double? get farStageM => _engine?.stages.first;
   StreamSubscription<Fix>? _fixSub;
   bool _busyProgress = false;
   Fix? _pendingFix;
@@ -244,8 +349,12 @@ class NavState extends ChangeNotifier {
 
   Fix? get fix => location.fix;
 
-  /// The point directions start from: the phone's position.
-  GeoPoint? get here => (lastFix ?? location.fix) == null ? null : GeoPoint((lastFix ?? location.fix)!.lat, (lastFix ?? location.fix)!.lon);
+  /// The point directions start from: the phone's position. While guiding that is the fix guidance last had; at any other time
+  /// it is the position the phone has now, never the last fix of a trip that is over.
+  GeoPoint? get here {
+    final f = (guiding ? lastFix : null) ?? location.fix;
+    return f == null ? null : GeoPoint(f.lat, f.lon);
+  }
 
   // ---- search ------------------------------------------------------------------------------------------------
 
@@ -470,8 +579,11 @@ class NavState extends ChangeNotifier {
     return true;
   }
 
-  /// Directions from the phone's position to [to].
+  /// Directions from the phone's position to [to]. The app's own screens do not ask while guiding (they say to finish or end
+  /// the route first); if this is reached while guiding all the same, guidance is ended first, so its position service is
+  /// never left running behind a preview.
   Future<void> openDirections(MapPlace to) async {
+    if (guiding) await end();
     selected = to;
     phase = NavPhase.previewing;
     searchOpen = false;
@@ -553,6 +665,7 @@ class NavState extends ChangeNotifier {
       'no_route' => 'No way found between these places',
       'too_far' => 'These places are too far apart for one trip',
       'out_of_coverage' => 'One of these places is outside the downloaded maps',
+      'no_road_data' => "Road data for this trip isn't on this device yet. Connect and try again.",
       'route_too_long' => 'The off-road part of this trip is too long to work out',
       'upstream_timeout' => 'Working out the route took too long. Try again',
       'not_set_up' => 'Off-road needs off-road data for this area',
@@ -586,6 +699,7 @@ class NavState extends ChangeNotifier {
     _routeStarted = false;
     _lastReroute = null;
     _passedStops.clear();
+    _routeStops = _aheadIndexes();
     _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
     onFollow?.call(FollowMode.headingUp);
     notifyListeners();
@@ -598,10 +712,14 @@ class NavState extends ChangeNotifier {
       return;
     }
     _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
+    _simulated = simulatedDrive?.call() ?? false;
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
     if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
   }
+
+  /// True while the guidance that is running is a simulated drive (asked once, when it starts).
+  bool _simulated = false;
 
   void _onFix(Fix f) {
     location.publish(f);
@@ -610,11 +728,13 @@ class NavState extends ChangeNotifier {
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
   Future<void> _handleFix(Fix f) async {
-    if (!guiding) return;
+    if (!guiding || arrived) return;
     lastFix = f;
-    // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
-    for (final (i, s) in stops.indexed) {
-      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100) _passedStops.add(i);
+    // The next stop, once the phone came within 100 m of it, is passed: a new route after going off the route leaves it out.
+    // Only the next one: stops are visited in order, and being near a later stop does not pass it or the ones before it.
+    final nextStop = _aheadIndexes().firstOrNull;
+    if (nextStop != null && _haversineM(f.lat, f.lon, stops[nextStop].lat, stops[nextStop].lon) < 100 && _passedStops.add(nextStop)) {
+      logInfo('Guidance: stop ${nextStop + 1} of ${stops.length} is passed (a fix within 100 m of it)');
     }
     if (_busyProgress) {
       _pendingFix = f;
@@ -623,7 +743,7 @@ class NavState extends ChangeNotifier {
     _busyProgress = true;
     try {
       Fix? cur = f;
-      while (cur != null && guiding) {
+      while (cur != null && guiding && !arrived) {
         _pendingFix = null;
         await _progressFor(cur);
         cur = _pendingFix;
@@ -639,8 +759,15 @@ class NavState extends ChangeNotifier {
     try {
       final p = await backend.progress(r, lat: f.lat, lon: f.lon, accuracyM: f.accuracyM, now: _clock(), sendRoute: _sendRoute);
       _sendRoute = false;
-      if (!guiding || route?.routeId != r.routeId) return;
+      if (!guiding || arrived || route?.routeId != r.routeId) return;
       progress = p;
+      // The stops the core has seen reached along this route are passed, so the list of stops ahead (the route panel, the
+      // car's overview) and the route being followed are one list.
+      for (var k = 0; k < p.stopsReached && k < _routeStops.length; k++) {
+        if (_passedStops.add(_routeStops[k])) {
+          logInfo('Guidance: stop ${_routeStops[k] + 1} of ${stops.length} is passed (reached along the route)');
+        }
+      }
       if (!_routeStarted) {
         _routeStarted = true;
         _say(_engine!.opening(r, p.current));
@@ -649,8 +776,12 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
+        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
+        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
         notifyListeners();
+        await _stopTracking();
+        logInfo('Guidance: arrived, the position service is let go');
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -683,6 +814,8 @@ class NavState extends ChangeNotifier {
         _routeStarted = true;
         _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
         progress = null;
+        _routeStops = _aheadIndexes();
+        logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
         _events.add(NavNotice(routeErrorText(r)));
       }
@@ -704,13 +837,39 @@ class NavState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lets go of what guidance holds to follow the phone: its fixes, the position service (with its notification and wake
+  /// lock) and the hold on the map's own position stream. The guidance fix is forgotten with them, so [here] is the phone's
+  /// own position again. Calling it again is harmless.
+  Future<void> _stopTracking() async {
+    final sub = _fixSub;
+    _fixSub = null;
+    _pendingFix = null;
+    lastFix = null;
+    try {
+      await sub?.cancel();
+      await positionSource.stop();
+    } finally {
+      location.holdStream(false);
+    }
+  }
+
   /// End guidance: stop the position service and the voice, back to the map with the place still selected.
   Future<void> end() async {
     if (!guiding) return;
-    await _fixSub?.cancel();
-    _fixSub = null;
-    await positionSource.stop();
-    location.holdStream(false);
+    await _stopTracking();
+    logInfo('Guidance: ended, the position service is let go');
+    // What was passed belongs to the drive that is over: the next route's stops are all ahead (a stale mark hid the stop
+    // added to the next route from the car's route screen).
+    _passedStops.clear();
+    _routeStops = const [];
+    if (_simulated) {
+      // A simulated drive's fixes went to the location service as guidance fixes do ([_onFix]), so its last point was left
+      // there as the phone's position: the map, "here" and the car's home map all showed it until something read a real
+      // position. It is forgotten, and the phone's real position is read again (no prompt: only a permission already given).
+      _simulated = false;
+      location.forgetPublished();
+      unawaited(location.request(explain: () async => false));
+    }
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
@@ -719,6 +878,7 @@ class NavState extends ChangeNotifier {
     progress = null;
     arrived = false;
     rerouting = false;
+    lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
   }
@@ -742,6 +902,7 @@ class NavState extends ChangeNotifier {
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);
+    lastFix = null;
     _events.close();
     super.dispose();
   }

@@ -122,6 +122,8 @@ You can also save a place from the map. Press and hold the map and choose "Save"
 
 Add place and Edit place are the same screen.
 
+![Editing a place](shot:places-edit)
+
 1. In the Places notebook, tap "Add place". To edit, press and hold a place.
 2. Search an address, place or coordinates, or tap the map to move the pin.
 3. Type a "Name".
@@ -148,6 +150,8 @@ A place with "Weather and alerts" on is watched. Cache keeps weather, alerts and
 ## The map ring menu
 
 Press and hold any spot on the map to open a ring. The center shows the place name and coordinates. Tap outside to close it.
+
+![The ring menu](shot:map-ring)
 
 The wedges are:
 - "To here": directions to the spot.
@@ -182,12 +186,16 @@ A route can have up to 10 stops. Each is listed under the destination with a rem
 3. Read the running total in the bar, in your units.
 4. Tap "Done" to end.
 
+![Measuring on the map](shot:map-measure)
+
 "Undo" removes the last point.
 
 ## Save a spot to a notebook
 
 1. Press and hold the map and choose "Save". The ring shows your notebooks, most used first.
 2. Tap a notebook. Its entry form opens at that spot. For "Places" it is the Add place screen with the pin there.
+
+![The notebook ring](shot:map-notebook-ring)
 
 The ring holds at most six wedges: five notebooks and "More". "More" turns to the next page, for example "2 of 3". Tap the back arrow in the center to go back.
 

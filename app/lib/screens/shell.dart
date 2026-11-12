@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
+import '../browse/library_passage_screen.dart';
 import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../browse/place_about.dart';
 import '../browse/reader_screen.dart';
@@ -13,6 +14,7 @@ import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../chat/prompt_read_ahead.dart';
 import '../chat/navigation_action.dart';
 import '../discover/discover_device.dart';
 import '../discover/discover_state.dart';
@@ -24,6 +26,8 @@ import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
 import '../pdf/index/pdf_index_app.dart';
+import '../pdf/open_pdf.dart';
+import '../pdf/pdf_address.dart' show isPdfAddress;
 import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../desktop/desktop.dart';
@@ -39,6 +43,7 @@ import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
 import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
@@ -70,6 +75,7 @@ import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/own_source_pages.dart' show OwnSourceFormPage;
+import '../sharing/link_inbox.dart';
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -92,10 +98,12 @@ class Shell extends StatefulWidget {
     required this.sources,
     required this.location,
     this.chatLocation,
+    this.readAhead,
     required this.maps,
     required this.video,
     required this.browse,
     required this.nav,
+    this.elevation,
     required this.layout,
     required this.hub,
     this.notebooks,
@@ -118,10 +126,14 @@ class Shell extends StatefulWidget {
   final SourcesState sources;
   final LocationService location;
   final ChatLocation? chatLocation;
+
+  /// Reads the chat prompt's start ahead once Ask is shown with the model loaded; null in tests that do not need it.
+  final PromptReadAhead? readAhead;
   final MapsState maps;
   final VideoState video;
   final BrowseState browse;
   final NavState nav;
+  final RouteElevation? elevation;
   final LayoutState layout;
   final SettingsHub hub;
 
@@ -139,6 +151,37 @@ class _ShellState extends State<Shell> {
   final Set<ModuleId> _built = {};
   StreamSubscription<NavEvent>? _navEvents;
   StreamSubscription<AlertFocus>? _alertTaps;
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: _onResume);
+
+  /// Back in front with Ask shown: the chosen model, let go while Cache was in the back, loads again, under the same memory gate
+  /// as opening Ask (not forced). Nothing else loads on resume.
+  void _onResume() {
+    if (_module == ModuleId.ask) unawaited(_wakeAsk());
+  }
+
+  /// Ask is shown: the chosen model loads if it was let go ([AppState.wake], under the memory gate), and with the model loaded
+  /// the chat prompt's start is read ahead. The read never loads the model: after a wake that did not load it (no room) there is
+  /// none. Not when Ask was left while the model loaded; leaving Ask later, with Cache in front, does not stop a read.
+  Future<void> _wakeAsk() async {
+    _openingRead = false; // a new opening of Ask: it may have its read ahead
+    await widget.app.wake();
+    _readAhead();
+  }
+
+  /// This opening of Ask has had its read ahead (or has none to have).
+  bool _openingRead = false;
+  int _seenGeneration = 0;
+
+  /// Reads the prompt start ahead, once per opening of Ask, when Ask is shown and the model is loaded. When the model is still loading
+  /// as Ask opens (the app start's load, which [AppState.wake] does not wait for) nothing is read yet, and [_onApp] asks again when
+  /// the load completes, so a cold start with Ask open still gets its read.
+  void _readAhead() {
+    if (_openingRead || !mounted || _module != ModuleId.ask) return;
+    final app = widget.app;
+    if (app.active == null || app.loading != null) return;
+    _openingRead = true;
+    unawaited(widget.readAhead?.start());
+  }
 
   /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
   /// and the rail (its pin is kept and it takes its old place when a model comes), and every way into Ask is closed or explained.
@@ -150,6 +193,11 @@ class _ShellState extends State<Shell> {
 
   void _onApp() {
     final app = widget.app;
+    if (app.modelGeneration != _seenGeneration) {
+      _seenGeneration = app.modelGeneration;
+      _openingRead = false; // another model is loaded while Ask stays open: it gets its read ahead
+    }
+    _readAhead(); // Ask was opened while the model loaded: its read starts when the load is done
     final arrived = _noModelSeen && app.started && app.models.isNotEmpty;
     if (app.started) _noModelSeen = app.models.isEmpty;
     final on = app.askAvailable;
@@ -189,7 +237,9 @@ class _ShellState extends State<Shell> {
     // PDF indexing's messages ("Another device finished this. Using its index.").
     pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
+    _seenGeneration = widget.app.modelGeneration;
     widget.app.addListener(_onApp);
+    _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
       if (e is MapRequested && mounted) _goModule(ModuleId.maps);
@@ -226,6 +276,20 @@ class _ShellState extends State<Shell> {
     DiscoverState.shared = _discover;
     discoverLinks = _discoverLinks;
     unawaited(_startDiscover());
+    // A cachelink: link from outside (a camera scanning a device's link code) opens Sharing and sync, which fills in the code.
+    linkInbox.addListener(_openIncomingLink);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
+  }
+
+  bool _linkPageUp = false;
+
+  void _openIncomingLink() {
+    final sharing = widget.hub.sharing;
+    if (!mounted || sharing == null || _linkPageUp || linkInbox.pending == null || linkInbox.pageOpen) return;
+    _linkPageUp = true;
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync)))
+        .whenComplete(() => _linkPageUp = false);
   }
 
   /// Discover: what activities added, and whether first run is done. A device with a model, a library or a region on it already
@@ -328,6 +392,7 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
+    linkInbox.removeListener(_openIncomingLink);
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -336,6 +401,7 @@ class _ShellState extends State<Shell> {
     if (DiscoverState.shared == _discover) DiscoverState.shared = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
+    _lifecycle.dispose();
     super.dispose();
   }
 
@@ -354,7 +420,7 @@ class _ShellState extends State<Shell> {
 
   void _goModule(ModuleId m) {
     // Ask opens: the chosen model, let go to leave memory free, loads again.
-    if (m == ModuleId.ask) unawaited(widget.app.wake());
+    if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
     if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
     setState(() {
@@ -390,8 +456,27 @@ class _ShellState extends State<Shell> {
       unawaited(openGuide(context, title: setupGuide));
       return;
     }
-    _goModule(ModuleId.library);
-    widget.browse.openAddress(address, quote: quote);
+    // Any other source opens as a page pushed over the shell, so Back returns to Ask at the same answer (it used to switch to the
+    // Library tab and open in the Library's own stack, where Back ended on the Library's first page).
+    if (address.startsWith('lib:')) {
+      unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibraryPassageScreen(sources: widget.sources, address: address))));
+      return;
+    }
+    final id = zimIdOfAddress(address);
+    final z = id == null ? null : widget.sources.zimById(id);
+    if (z == null) {
+      _say('That source is not on this device any more.');
+      return;
+    }
+    // A PDF entry opens at its page, with the quote marked.
+    if (isPdfAddress(address)) {
+      unawaited(openZimPdf(context, widget.sources, address, quote: quote));
+      return;
+    }
+    // An article, or an EPUB chapter at the cited block, with the quote's first words marked.
+    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ZimReaderScreen(sources: widget.sources, zim: z, address: address, quote: quote, layout: widget.layout),
+    )));
   }
 
   Future<void> _openGuideAt(String address) async {
@@ -751,7 +836,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),

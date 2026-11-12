@@ -1,0 +1,14 @@
+{
+  "name": "guide-maps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Renders the scenes of the guide's map pictures with MapLibre GL JS in headless Chrome (render.mjs). Used by the Renders workflow only.",
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "4.7.1",
+    "playwright-core": "1.64.1"
+  }
+}

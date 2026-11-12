@@ -1,14 +1,75 @@
 // Home search's Library part: ZIM pages, PDF passages, words said in videos (caption hits) and EPUB passages, each with
 // its row text and where tapping it opens.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/search/app_search_providers.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../packages/cache_search/test/engine_test.dart' show FakeNative;
 import 'browse/fakes.dart';
 
 const _uuid = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+// What the core returns for words said in a saved video, a passage of an EPUB book and a passage of a ZIM's PDF.
+const _coreHits = <Map<String, dynamic>>[
+  {
+    'address': 'cap:tube.example.org/0a1b2c3d/captions-en.vtt@12',
+    'title': 'Knots every camper should know, at 01:04',
+    'snippet': 'It makes a loop that will not slip.',
+    'source_id': 'tube.example.org/0a1b2c3d',
+    'source_kind': 'video',
+    'source_title': 'Knots every camper should know',
+    'page': null,
+    'link': 'https://tube.example.org/w/0a1b2c3d',
+    'time': 64,
+    'time_end': 70.5,
+    'lang': 'en',
+    'quote': 'It makes a loop',
+  },
+  {
+    'address': 'zimepub:$_uuid/Books/guide.epub@7',
+    'title': 'Field Guide, Wildfire',
+    'snippet': 'Clear a firebreak.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Survival Library',
+    'page': null,
+    'link': 'zim:$_uuid/Books/guide.epub!/OEBPS/ch2.xhtml#cache-b12',
+    'quote': 'Clear a firebreak around',
+  },
+  {
+    'address': 'zimpdf:$_uuid/Manuals/water.pdf@3',
+    'title': 'Water and Shelter Handbook, p. 47',
+    'snippet': 'Bring it to a rolling boil.',
+    'source_id': _uuid,
+    'source_kind': 'zim',
+    'source_title': 'Survival Library',
+    'page': 47,
+    'pdf_page': 49,
+    'link': 'zim:$_uuid/Manuals/water.pdf#page=49',
+    'quote': 'Bring it to a rolling boil',
+  },
+];
+
+// Runs inside the core's worker isolate, so it builds its own fake.
+CsNative _coreNative() => FakeNative()..replies['search'] = jsonEncode({'results': _coreHits, 'total_estimate': _coreHits.length});
+
+/// Sources whose searches go through a real core: the worker isolate and its dispatcher, over a fake native layer.
+class _ThroughCore extends FakeSources {
+  _ThroughCore(super.dir, this.worker);
+
+  /// Not named `core`: that would replace the inherited [SourcesState.core].
+  final SearchCore worker;
+
+  @override
+  bool get coreReady => true;
+
+  @override
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) =>
+      worker.search(query, k: k, offset: offset, sources: zimIds);
+}
 
 /// Sources whose core answers every search with [hits].
 class _Searched extends FakeSources {
@@ -178,6 +239,33 @@ void main() {
     final rows = await p.search('firebreak');
     rows.single.open();
     expect(passages, [('zim:$_uuid/Books/guide.epub!/OEBPS/ch2.xhtml#cache-b12', 'Clear a firebreak around')]);
+  });
+
+  test('caption, EPUB and ZIM PDF hits that came through the core worker are all listed and open where they should', () async {
+    final core = await SearchCore.open(const [], native: _coreNative);
+    try {
+      final played = <(String, double, String?)>[];
+      final marked = <(String, String)>[];
+      final p = LibrarySearchProvider(
+        sources: _ThroughCore(dir, core),
+        openZim: (_) {},
+        openAddress: (_) => fail('each of these opens as a video moment or a marked passage'),
+        openVideo: (link, time, lang) => played.add((link, time, lang)),
+        openPassage: (a, q) => marked.add((a, q)),
+      );
+      final rows = await p.search('loop');
+      expect([for (final r in rows) r.title], ['Knots every camper should know, at 01:04', 'Field Guide, Wildfire', 'Water and Shelter Handbook, p. 47']);
+      for (final r in rows) {
+        r.open();
+      }
+      expect(played, [('https://tube.example.org/w/0a1b2c3d', 64.0, 'en')]);
+      expect(marked, [
+        ('zim:$_uuid/Books/guide.epub!/OEBPS/ch2.xhtml#cache-b12', 'Clear a firebreak around'),
+        ('zim:$_uuid/Manuals/water.pdf#page=49', 'Bring it to a rolling boil'),
+      ]);
+    } finally {
+      await core.close();
+    }
   });
 
   test('caption and EPUB hits are left out where they cannot be opened (no opener, or an older core with no link)', () async {

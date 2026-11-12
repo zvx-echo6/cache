@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../pdfium_init.dart';
 import 'pdf_meta.dart';
 import '../../platform/app_log.dart';
 
@@ -53,7 +54,7 @@ Duration get _stepTimeout => Duration(microseconds: (kPdfStepTimeout.inMicroseco
 /// password to give); one PDFium cannot open is damaged.
 Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {PdfPermit? betweenPages, void Function(String step)? onStep}) async {
   onStep?.call('Preparing PDF reader');
-  await pdfrxFlutterInitialize();
+  await initPdfium();
   final PdfDocument doc;
   Future<void> Function() removeFile = () async {};
   try {
