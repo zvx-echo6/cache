@@ -164,4 +164,21 @@ enum CarValue {
     guard let s = v as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return s
   }
+
+  /// A colour as Dart writes it for the map (MapPalette.css): "#rrggbb", or "rgba(r,g,b,a)" with red, green and blue from 0
+  /// to 255. Answers red, green, blue and alpha, each from 0 to 1; nil for anything else.
+  static func rgba(_ css: String) -> [Double]? {
+    let s = css.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if s.hasPrefix("#") {
+      let hex = String(s.dropFirst())
+      guard hex.count == 6, hex.allSatisfy({ $0.isHexDigit }), let n = UInt32(hex, radix: 16) else { return nil }
+      return [Double((n >> 16) & 0xff) / 255, Double((n >> 8) & 0xff) / 255, Double(n & 0xff) / 255, 1]
+    }
+    guard s.hasPrefix("rgba("), s.hasSuffix(")") else { return nil }
+    let inner = String(s.dropFirst(5).dropLast())
+    let parts: [Double] = inner.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+    guard parts.count == 4, parts.allSatisfy({ $0.isFinite }) else { return nil }
+    let limited: [Double] = parts.map { min(max($0, 0), 255) }
+    return [limited[0] / 255, limited[1] / 255, limited[2] / 255, min(limited[3], 1)]
+  }
 }

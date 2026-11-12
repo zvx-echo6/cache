@@ -74,7 +74,7 @@ check(isNumber(browsing.heading, 90), "browsing: the heading")
 let previewing = CarTrip.from(map("trip_previewing.json"))
 check(previewing.previewing && !previewing.guiding, "previewing: the phase")
 check(previewing.destinationName == "Regional Hospital" && previewing.destinationAddress == "1501 Example Ave", "previewing: the destination")
-check(isNumber(previewing.destinationLat, 10.5) && isNumber(previewing.destinationLon, 20.5), "previewing: where the destination is")
+check(isNumber(previewing.destinationLat, 10.56) && isNumber(previewing.destinationLon, 20.28), "previewing: where the destination is")
 check(previewing.routes.count == 2, "previewing: two routes")
 check(previewing.routes.first == CarRoute(index: 0, distanceM: 25400.5, durationS: 1260, via: "Via Road 0"), "previewing: the first route")
 let second = previewing.routes.last
@@ -118,6 +118,30 @@ let noId: [String: Any] = ["name": "no id", "lat": 1.0, "lon": 2.0]
 let notPlaces: [Any] = [noLongitude, noId, "text"]
 check(CarPlace.list(notPlaces).isEmpty, "a place needs an id, a latitude and a longitude")
 check(CarPlace.list(NSNull()).isEmpty && CarPlace.list(nil).isEmpty, "no list is an empty list")
+
+// ---- colours as Dart writes them for the map -----------------------------------------------------------------------
+
+let blue: [Double] = CarValue.rgba("#1f6fa8") ?? []
+check(blue.count == 4, "a colour is four numbers")
+if blue.count == 4 {
+  let red: Bool = abs(blue[0] - 31.0 / 255.0) < 1e-9
+  let green: Bool = abs(blue[1] - 111.0 / 255.0) < 1e-9
+  let blueOk: Bool = abs(blue[2] - 168.0 / 255.0) < 1e-9
+  check(red && green && blueOk, "a colour: red, green and blue")
+  check(blue[3] == 1, "a colour with no alpha is opaque")
+}
+let faint: [Double] = CarValue.rgba("rgba(31,111,168,0.16)") ?? []
+check(faint.count == 4, "a colour with alpha is four numbers")
+if faint.count == 4 {
+  check(abs(faint[0] - 31.0 / 255.0) < 1e-9 && abs(faint[3] - 0.16) < 1e-9, "a colour with alpha: its red and its alpha")
+}
+let white: [Double] = [1, 1, 1, 1]
+let whiteRead: [Double]? = CarValue.rgba(" #FFFFFF ")
+check(whiteRead == white, "capitals and spaces around a colour")
+let notColours: [String] = ["blue", "#12345", "#12345g", "#+12345", "rgba(1,2,3)", "rgba(1,2,x,1)", ""]
+for text in notColours {
+  check(CarValue.rgba(text) == nil, "not a colour: '\(text)'")
+}
 
 // ---- the link -------------------------------------------------------------------------------------------------------
 
@@ -164,14 +188,20 @@ check(link.trip == guiding, "the pushed trip is kept")
 check(heard.trips == [guiding], "the listener hears the pushed trip")
 
 // the route line
-link.handle(method: "route", arguments: map("route.json"), reply: { _ in })
-let wantBounds: [Double] = [20.2, 10.5, 20.5, 10.52]
+link.handle(method: "route", arguments: map("route_previewing.json"), reply: { _ in })
+let wantBounds: [Double] = [10.5, 20.2, 10.56, 20.28]
 let line: String = link.routeGeoJson ?? ""
 check(line.contains("LineString"), "the route line")
-check(link.routeBounds == wantBounds, "the route line's bounds")
+check(line.contains("\"alt\":true") && line.contains("\"kind\":\"offroad\""), "the route line keeps what marks its stretches")
+check(link.routeBounds == wantBounds, "the route line's bounds: south, west, north, east")
 check(heard.routes.count == 1, "the listener hears the route")
 let heardBounds: [Double] = (heard.routes.first?.1 ?? nil) ?? []
 check(heardBounds.count == 4, "the listener hears the route's bounds")
+link.handle(method: "route", arguments: map("route_none.json"), reply: { _ in })
+let noneLine: String = link.routeGeoJson ?? ""
+check(noneLine == CarLink.emptyGeoJSON && link.routeBounds == nil, "the message of no route: an empty line and no bounds")
+link.handle(method: "route", arguments: map("route_guiding.json"), reply: { _ in })
+check(link.routeBounds == wantBounds, "the route while guiding has its bounds")
 link.handle(method: "route", arguments: nil, reply: { _ in })
 let emptyLine: String = link.routeGeoJson ?? ""
 check(emptyLine == CarLink.emptyGeoJSON && link.routeBounds == nil, "no route: an empty line and no bounds")

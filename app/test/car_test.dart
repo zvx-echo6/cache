@@ -8,6 +8,7 @@ import 'package:cache/car/car_trip.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/nav/nav_geojson.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
@@ -153,6 +154,52 @@ void main() {
       gps.controller.add(fixAt(42.5, -113.77, heading: 90));
       await settle();
       sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90), recorded('trip_guiding'), 'guiding');
+    });
+
+    // The same for the recorded route messages: each stretch of the line carries what routeGeoJson marks it with (the car map
+    // draws by those marks), and the bounds are in MapRoute.bounds' order, which the car's camera reads by position.
+    test('the routes recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+      const marks = {'alt', 'kind', 'route'};
+
+      await preview();
+      expect(nav.routes, isNotEmpty);
+      for (final f in routeGeoJson(nav.routes, nav.routeIndex)['features'] as List) {
+        expect(((f as Map)['properties'] as Map).keys.toSet(), marks, reason: 'what routeGeoJson marks a stretch with');
+      }
+      expect(nav.routes[nav.routeIndex].bounds, hasLength(4));
+
+      for (final name in const ['route_previewing', 'route_guiding']) {
+        final message = recorded(name);
+        expect(message.keys.toSet(), {'geojson', 'bounds'}, reason: name);
+        final line = jsonDecode(message['geojson'] as String) as Map<String, dynamic>;
+        final features = line['features'] as List;
+        expect(features, isNotEmpty, reason: name);
+        var south = 90.0, west = 180.0, north = -90.0, east = -180.0;
+        for (final f in features) {
+          final properties = (f as Map)['properties'] as Map;
+          final geometry = f['geometry'] as Map;
+          expect(properties.keys.toSet(), marks, reason: '$name: what marks a stretch');
+          expect(properties['alt'], isA<bool>(), reason: name);
+          expect(properties['kind'], isA<String>(), reason: name);
+          expect(geometry['type'], 'LineString', reason: name);
+          if (properties['alt'] == true) continue;
+          for (final c in geometry['coordinates'] as List) {
+            final lon = ((c as List)[0] as num).toDouble();
+            final lat = (c[1] as num).toDouble();
+            if (lat < south) south = lat;
+            if (lat > north) north = lat;
+            if (lon < west) west = lon;
+            if (lon > east) east = lon;
+          }
+        }
+        expect(message['bounds'], [south, west, north, east], reason: '$name: the chosen route, south, west, north, east');
+      }
+
+      final none = recorded('route_none');
+      expect(none['bounds'], isNull);
+      expect(jsonDecode(none['geojson'] as String), routeGeoJson(const [], 0));
     });
 
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {

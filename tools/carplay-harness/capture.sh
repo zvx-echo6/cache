@@ -1,7 +1,8 @@
 #!/bin/bash
 # CarPlay harness, step 3: for each size asked for, the Simulator's CarPlay display at that size (from a fresh boot), the
-# harness app started from the car side by a click on its icon, and a picture of the CarPlay display. Then the phone's window
-# is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
+# harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
+# up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
+# light one, and the panning state. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
 #   HARNESS_SIZES   the screens to draw, "WIDTHxHEIGHT@SCALE" in pixels, space separated
@@ -55,27 +56,6 @@ front() {  # the Simulator in front of everything, without sending it an Apple e
   limit 30 osascript -e 'tell application "System Events" to tell process "Simulator" to set frontmost to true' > /dev/null 2>&1
 }
 
-osa() { limit 60 osascript "$HERE/$1.applescript" "${@:2}" 2>&1; }
-
-sim_windows() { osa sim_windows; }
-
-front() {  # the Simulator in front of everything, without sending it an Apple event
-  open -a "$SIMAPP" > /dev/null 2>&1
-  limit 30 osascript -e 'tell application "System Events" to tell process "Simulator" to set frontmost to true' > /dev/null 2>&1
-}
-
-sim_windows() { osa sim_windows; }
-
-front() {  # the Simulator in front of everything, without sending it an Apple event
-  open -a "$SIMAPP" > /dev/null 2>&1
-  limit 30 osascript -e 'tell application "System Events" to tell process "Simulator" to set frontmost to true' > /dev/null 2>&1
-}
-
-front() {  # the Simulator in front of everything, without sending it an Apple event
-  open -a "$SIMAPP" > /dev/null 2>&1
-  limit 30 osascript -e 'tell application "System Events" to tell process "Simulator" to set frontmost to true' > /dev/null 2>&1
-}
-
 carplay_window() {  # "x y w h" of the CarPlay window in screen points, or nothing
   local lines hit
   lines=$(sim_windows)
@@ -90,15 +70,6 @@ carplay_window() {  # "x y w h" of the CarPlay window in screen points, or nothi
 }
 
 pic_size() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w "x" h}'; }
-
-shot_ext() {  # the CarPlay display, straight from the simulator
-  local f="$OUT/shots/$1.png"
-  rm -f "$f"
-  run xcrun simctl io "$UDID" screenshot --type=png --display=external "$f"
-  if [ -s "$f" ]; then say "  picture shots/$1.png: $(pic_size "$f") pixels"; return 0; fi
-  say "  no picture for $1"
-  return 1
-}
 
 shot_ext() {  # the CarPlay display, straight from the simulator
   local f="$OUT/shots/$1.png"
@@ -332,7 +303,7 @@ start_stream() {  # the app's own log lines (the car scene's, the engine's), int
   STREAM="$OUT/logs/app-$1.txt"
   : > "$STREAM"
   xcrun simctl spawn "$UDID" log stream --level info --style compact \
-    --predicate 'subsystem == "co.cache.car" OR (processImagePath ENDSWITH "Runner" AND (eventMessage CONTAINS "Flutter engine" OR eventMessage CONTAINS "phone scene"))' \
+    --predicate 'subsystem == "co.cache.car" OR (processImagePath ENDSWITH "Runner" AND (eventMessage CONTAINS "Flutter engine" OR eventMessage CONTAINS "phone scene" OR eventMessage CONTAINS "harness steps"))' \
     >> "$STREAM" 2>&1 &
   STREAM_PID=$!
   sleep 3
@@ -350,6 +321,91 @@ wait_log() {  # wait_log <text> <seconds>: 0 as soon as the app's log has the te
     sleep 1
   done
   return 1
+}
+
+log_count() {  # log_count <text>: how many of the app's log lines have the text
+  local n
+  n=$(grep -c -- "$1" "$STREAM" 2> /dev/null)
+  echo "${n:-0}"
+}
+
+wait_more() {  # wait_more <text> <count before> <seconds>: 0 as soon as the app's log has more lines with the text than before
+  local end=$((SECONDS + $3))
+  while [ "$SECONDS" -lt "$end" ]; do
+    [ "$(log_count "$1")" -gt "$2" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+notify() {  # notify <next|day|night>: asks the harness's own plugin in the app (steps_plugin), by a Darwin notification
+  run xcrun simctl spawn "$UDID" notifyutil -p "org.example.carharness.$1"
+}
+
+MAP_MISSING=""
+MAP_NOTES=""
+
+map_step() {  # map_step <next|day|night> <log text to wait for> <picture name or ""> : one step of the map pictures
+  local before
+  before=$(log_count "$2")
+  notify "$1"
+  if ! wait_more "$2" "$before" 20; then
+    MAP_MISSING="$MAP_MISSING [$1: no new line '$2']"
+  fi
+  sleep 3
+  [ -n "$3" ] && shot_ext "$3"
+  return 0
+}
+
+map_pictures() {  # map_pictures <label>: the map in the three phases, in the car's own dark setting and in the light one
+  local label="$1" before x y found=""
+  MAP_MISSING=""
+  MAP_NOTES=""
+  # The Simulator's car is in its dark setting. The app's style has to be the one drawn before the first picture.
+  wait_log 'car map: style loaded, dark' 40 || MAP_MISSING="$MAP_MISSING [no 'style loaded, dark' line]"
+  sleep 3
+  shot_ext "$label-map-dark-browsing"
+  # The light pictures: the harness tells the car scene that the car switched to day, through the call CarPlay makes. The map
+  # redraws light; Apple's own bar and buttons stay in the Simulator car's dark look, which is not how a real car in its day
+  # setting shows them. Hence the name of these pictures.
+  map_step day 'car map: style loaded, light' "$label-map-light-told-by-harness-browsing"
+  map_step next 'car link: trip previewing' "$label-map-light-told-by-harness-previewing"
+  map_step next 'car link: trip guiding' "$label-map-light-told-by-harness-guiding"
+  map_step night 'car map: style loaded, dark' "$label-map-dark-guiding"
+  map_step next 'car link: trip browsing' ""
+  map_step next 'car link: trip previewing' "$label-map-dark-previewing"
+  # The panning state. The Pan button is the first of the map buttons, which stand in a column 22 points in from the trailing
+  # edge: taps go down that column from under the bar until the app says panning began.
+  if [ -z "$ANCHOR" ]; then
+    MAP_MISSING="$MAP_MISSING [the CarPlay screen's place on the Mac screen is not known: no tap for the Pan button]"
+    return 0
+  fi
+  before=$(log_count 'car map: panning began')
+  x=$((CAR_W - 22 * CAR_S))
+  y=$((58 * CAR_S))
+  while [ "$y" -lt $((CAR_H - 6 * CAR_S)) ]; do
+    tap_carplay "$x" "$y"
+    if wait_more 'car map: panning began' "$before" 2; then found="$x,$y"; break; fi
+    y=$((y + 14 * CAR_S))
+  done
+  if [ -n "$found" ]; then
+    sleep 3
+    shot_ext "$label-map-panning"
+    MAP_NOTES="the Pan button answered a tap at pixel $found"
+    # Done, the one text button of the bar while panning, at the bar's trailing end.
+    before=$(log_count 'car map: panning ended')
+    tap_carplay $((CAR_W - 34 * CAR_S)) $((22 * CAR_S))
+    if wait_more 'car map: panning ended' "$before" 3; then
+      sleep 2
+      shot_ext "$label-map-after-done"
+      MAP_NOTES="$MAP_NOTES; Done ended panning"
+    else
+      MAP_NOTES="$MAP_NOTES; Done did not answer a tap at pixel $((CAR_W - 34 * CAR_S)),$((22 * CAR_S)) (its place is to be read off the picture)"
+    fi
+  else
+    shot_ext "$label-map-no-pan-button"
+    MAP_MISSING="$MAP_MISSING [no tap down the map buttons' column began panning]"
+  fi
 }
 
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
@@ -418,9 +474,17 @@ for size in $SIZES; do
     shot_ext "$label-car"
     line=$(grep 'car scene connected' "$STREAM" | tail -n 1 | sed 's/.*car scene connected/car scene connected/')
     # The car link: the app was opened from the car side alone, so the engine was started for the car scene; the stand-in
-    # Dart side then says hello from the root widget's start-up (no view exists) and pushes the recorded trips.
-    if wait_log 'car link: trip guiding' 45; then
-      link="Dart said hello and pushed $(grep -c 'car link: trip' "$STREAM") trips, phone-scene lines: $(grep -c 'phone scene' "$STREAM")"
+    # Dart side then says hello from the root widget's start-up (no view exists) and pushes its first recorded trip.
+    if wait_log 'car link: trip browsing' 45; then
+      # Opened from the car side alone: the engine's start line comes after the car scene's, in the same process.
+      car_line=$(grep -n 'car scene connected' "$STREAM" | head -n 1 | cut -d: -f1)
+      engine_line=$(grep -n 'The Flutter engine was started' "$STREAM" | head -n 1 | cut -d: -f1)
+      if [ -n "$car_line" ] && [ -n "$engine_line" ] && [ "$engine_line" -gt "$car_line" ]; then
+        started="the engine was started for the car scene"
+      else
+        started="the engine was already running when the car scene connected"
+      fi
+      link="$started; Dart said hello and its first trip reached the car link"
     else
       link=""
     fi
@@ -428,9 +492,20 @@ for size in $SIZES; do
       result "FAILED $label: the car scene connected and was disconnected again ($line)"
       host_crash=1
     elif [ -z "$link" ]; then
-      result "FAILED $label: the car scene is up ($line), but no trip reached the car link: Dart ready lines $(grep -c 'car link: Dart is ready' "$STREAM")"
+      result "FAILED $label: the car scene is up ($line), but no trip reached the car link: Dart ready lines $(log_count 'car link: Dart is ready')"
     else
       result "OK $label: shots/$label-car.png, the display's picture is $got pixels; $line; $link"
+      # The map: the three phases in the car's dark setting and in the light one, then the panning state.
+      map_pictures "$label"
+      area=$(grep 'car map: the bars and buttons take' "$STREAM" | tail -n 1 | sed 's/.*car map: //')
+      if grep -q 'car scene disconnected' "$STREAM"; then
+        result "FAILED $label map: the car scene was disconnected while the map was pictured"
+        host_crash=1
+      elif [ -n "$MAP_MISSING" ]; then
+        result "FAILED $label map:$MAP_MISSING; $MAP_NOTES"
+      else
+        result "OK $label map: shots/$label-map-dark-{browsing,previewing,guiding}.png in the car's own dark setting; shots/$label-map-light-told-by-harness-{browsing,previewing,guiding}.png after the harness told the car scene the car switched to day (Apple's bar and buttons keep the Simulator car's dark look there); shots/$label-map-panning.png; $MAP_NOTES; $area"
+      fi
     fi
   else
     # No log line is not proof of no screen: the picture decides when the icon grid is gone.
@@ -454,7 +529,7 @@ for size in $SIZES; do
     fi
   fi
   say "the app's log lines at this size:"
-  sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 30 | tee -a "$LOG"
+  sed 's/^/        /' "$STREAM" | cut -c1-260 | tail -n 70 | tee -a "$LOG"
 done
 
 # ---------------------------------------------------------------------------------------------------------------------------

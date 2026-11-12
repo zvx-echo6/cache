@@ -4,7 +4,7 @@
   "units": "imperial",
   "routing": false,
   "error": null,
-  "destination": {"name": "Regional Hospital", "address": "1501 Example Ave", "lat": 10.5, "lon": 20.5},
+  "destination": {"name": "Regional Hospital", "address": "1501 Example Ave", "lat": 10.56, "lon": 20.28},
   "routes": [
     {"index": 0, "distanceM": 25400.5, "durationS": 1260, "via": "Via Road 0"},
     {"index": 1, "distanceM": 27100.0, "durationS": 1380, "via": null}

@@ -2,7 +2,10 @@
 // for the device only). This one does what the product's does at start-up, in the same place (the root widget's start-up, which
 // runs with no view when the car was the one to start the engine): it asks whether the build has the car screen
 // (lib/car/car_support.dart), sets its side of the car channel and says hello (lib/car/car_bridge.dart). When a car is
-// connected it pushes the recorded messages of tools/carplay-harness/recorded, and it answers the car's questions from them.
+// connected it pushes the first recorded trip of tools/carplay-harness/recorded (looking at the map), and it answers the
+// car's questions from the recorded messages; the map style it answers with is the stand-in of stand_in_style.py, light or
+// dark as the car asks. The job on the Mac moves it on to the next trip (choosing a route, guiding, and round again) through
+// the harness's own plugin (steps_plugin).
 import 'dart:async';
 import 'dart:convert';
 
@@ -13,6 +16,8 @@ import 'recorded.dart';
 
 const MethodChannel _build = MethodChannel('cache/build');
 const MethodChannel _car = MethodChannel('co.cache/car');
+const MethodChannel _steps = MethodChannel('harness/steps');
+const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +35,7 @@ class _HarnessAppState extends State<HarnessApp> {
   String _status = 'The car side has not been asked yet.';
   bool _connected = false;
   int _pushed = 0;
+  int _phase = 0;
 
   @override
   void initState() {
@@ -53,6 +59,13 @@ class _HarnessAppState extends State<HarnessApp> {
       return;
     }
     _car.setMethodCallHandler(_onCall);
+    _steps.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'next' && _connected) {
+        _phase = (_phase + 1) % _phases.length;
+        await _push();
+      }
+      return null;
+    });
     try {
       final Object? reply = await _car.invokeMethod<Object?>('hello');
       _say('Said hello to the car side.');
@@ -71,9 +84,23 @@ class _HarnessAppState extends State<HarnessApp> {
       case 'saved':
         return jsonDecode(recorded['saved']!);
       case 'snapshot':
-        return jsonDecode(recorded['trip_guiding']!);
+        return jsonDecode(recorded['trip_${_phases[_phase]}']!);
+      case 'style':
+        // As car_bridge.dart answers: the style as text, and the colours of what the car draws on top.
+        final Object? asked = call.arguments;
+        final String look = asked is Map && asked['dark'] == true ? 'dark' : 'light';
+        return <String, Object?>{'style': recorded['style_$look'], 'colors': jsonDecode(recorded['colors_$look']!)};
     }
     return null;
+  }
+
+  /// The trip of the phase and then its route line, in the order car_bridge.dart pushes them.
+  Future<void> _push() async {
+    final String phase = _phases[_phase];
+    await _car.invokeMethod<void>('trip', jsonDecode(recorded['trip_$phase']!));
+    _pushed++;
+    await _car.invokeMethod<void>('route', jsonDecode(recorded[phase == 'browsing' ? 'route_none' : 'route_$phase']!));
+    _say('A car is connected: $_pushed recorded trips pushed to it, the last one $phase.');
   }
 
   Future<void> _carConnected(bool on) async {
@@ -83,14 +110,10 @@ class _HarnessAppState extends State<HarnessApp> {
       _say('The car has gone.');
       return;
     }
-    for (final String name in const <String>['trip_browsing', 'trip_previewing', 'trip_guiding']) {
-      await _car.invokeMethod<void>('trip', jsonDecode(recorded[name]!));
-      _pushed++;
-    }
-    await _car.invokeMethod<void>('route', jsonDecode(recorded['route']!));
+    _phase = 0;
+    await _push();
     await _car.invokeMethod<void>('savedChanged');
     await _car.invokeMethod<void>('notice', <String, Object?>{'text': 'A recorded notice'});
-    _say('A car is connected: $_pushed recorded trips pushed to it.');
   }
 
   @override
