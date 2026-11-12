@@ -51,6 +51,10 @@ release notes).
 - Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
 - Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running
 
+## 1.1.0 (build 50, Android Auto test, Android only) - 2026-11-12
+
+- Android Auto is switched on in this build, which goes to the closed test group on Google Play so that Google's car review can start. It carries the changes listed under Unreleased as of this date. iPhone has no build 50; the next regular build, 51, goes to both stores
+
 ## 1.1.0 (build 49, test) - 2026-11-11
 
 ### Fixed
