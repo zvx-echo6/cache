@@ -447,6 +447,11 @@ fn prepare_says_how_the_fetch_ended_and_which_points_still_have_no_tile() {
     assert_eq!(p.outcome, PrepareOutcome::Offline);
     assert_eq!(p.lacking, vec![1]);
     assert!(p.missing > 0);
+    // online, a point whose tile the build does not have (a roadless tile): nothing the device could get, so nothing is lacking
+    call(&e, "set_policy", json!({"network": true}));
+    let p = e.prepare(&[(42.6, -113.9), (45.0, -110.0)]);
+    assert_eq!((p.outcome, p.lacking), (PrepareOutcome::Done, vec![]));
+    call(&e, "set_policy", json!({"network": false}));
     // back online, the far point's tile comes
     call(&e, "set_policy", json!({"network": true}));
     let p = e.prepare(&[(42.6, -113.9), (40.1, -100.15)]);

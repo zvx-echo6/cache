@@ -293,17 +293,23 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
 
 /// What the app is told about a failed leg, as `(code, end)`. The router's own codes (the model reads those, from `build::route_error`,
 /// unchanged) are re-read here for the people: 154 stays `too_far`; 170, 171, 442 and 443 never are. They are `no_road_data` (with
-/// the end, `from`, `via` or `to`) when a stop of the leg still has no road tile on the device after the fetch, else `no_route`
-/// (or `out_of_coverage` when the router said so, outside the maps' area). `leg` is the leg's stops' positions, `last` the end's.
+/// the end, `from`, `via` or `to`) when a stop of the leg still has no road tile on the device after the fetch, `no_road_data`
+/// without an end when tiles are missing between the stops, else `no_route`. `out_of_coverage` (the router said so, outside the
+/// maps' area) always stands: no connection fixes it. `leg` is the leg's stops' positions, `last` the end's.
 pub fn app_error(e: &cache_offroad::directions::DirectionsError, prep: &crate::TilePrep, leg: (usize, usize), last: usize) -> (String, Option<&'static str>) {
     match e.valhalla_code {
         Some(170) | Some(171) | Some(442) | Some(443) => {
+            if e.code == "out_of_coverage" {
+                return ("out_of_coverage".into(), None);
+            }
             if let Some(i) = [leg.0, leg.1].into_iter().find(|i| prep.lacking.contains(i)) {
                 let end = if i == 0 { "from" } else if i == last { "to" } else { "via" };
                 return ("no_road_data".into(), Some(end));
             }
-            let code = if e.code == "out_of_coverage" { "out_of_coverage" } else { "no_route" };
-            (code.into(), None)
+            if prep.missing > 0 {
+                return ("no_road_data".into(), None);
+            }
+            ("no_route".into(), None)
         }
         _ => (e.code.clone(), None),
     }

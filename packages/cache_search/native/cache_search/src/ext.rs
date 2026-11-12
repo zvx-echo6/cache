@@ -59,7 +59,7 @@ impl cache_navigate::TileStream for RegionStream {
             O::Failed => cache_navigate::FetchState::Failed,
             O::TimedOut => cache_navigate::FetchState::TimedOut,
         };
-        cache_navigate::TilePrep { state, lacking: p.lacking }
+        cache_navigate::TilePrep { state, missing: p.missing, lacking: p.lacking }
     }
     fn tile_dir(&self) -> Option<std::path::PathBuf> {
         self.0.tile_dir()

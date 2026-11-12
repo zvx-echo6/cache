@@ -52,7 +52,11 @@ fn told(code: i64, prep: TilePrep, via: Vec<MapEnd>) -> (String, Option<String>)
 }
 
 fn prep(state: FetchState, lacking: &[usize]) -> TilePrep {
-    TilePrep { state, lacking: lacking.to_vec() }
+    TilePrep { state, missing: 0, lacking: lacking.to_vec() }
+}
+
+fn prep_missing(state: FetchState, missing: usize, lacking: &[usize]) -> TilePrep {
+    TilePrep { state, missing, lacking: lacking.to_vec() }
 }
 
 fn err(code: &str, vcode: i64) -> DirectionsError {
@@ -101,6 +105,33 @@ fn app_error_by_stop_position() {
     // codes this layer does not re-read pass through
     let timeout = DirectionsError { code: "upstream_timeout".into(), message: "m".into(), valhalla_code: None };
     assert_eq!(app_error(&timeout, &prep(FetchState::Done, &[0]), (0, 1), 1), ("upstream_timeout".into(), None));
+}
+
+#[test]
+fn outside_the_maps_area_is_out_of_coverage_whatever_is_lacking() {
+    // a stop outside coverage never has a tile: connecting does not fix it
+    let e = err("out_of_coverage", 171);
+    for lacking in [vec![], vec![0], vec![1], vec![0, 1]] {
+        for state in [FetchState::Done, FetchState::Offline, FetchState::Failed] {
+            assert_eq!(app_error(&e, &prep_missing(state, 3, &lacking), (0, 1), 1), ("out_of_coverage".into(), None), "{state:?} {lacking:?}");
+        }
+    }
+}
+
+#[test]
+fn tiles_missing_between_the_ends_is_no_road_data_without_an_end() {
+    // both ends present, tiles between them absent (offline, or a fetch that ran out of time)
+    for state in [FetchState::Offline, FetchState::TimedOut, FetchState::Failed] {
+        for code in [170, 171, 442, 443] {
+            assert_eq!(app_error(&err("no_route", code), &prep_missing(state, 4, &[]), (0, 1), 1), ("no_road_data".into(), None), "{state:?} {code}");
+        }
+    }
+    // through the route call, from a stream
+    assert_eq!(told(442, prep_missing(FetchState::Offline, 2, &[]), vec![]), ("no_road_data".into(), None));
+    // a lacking stop is still named first; nothing missing is no_route; 154 stays too_far
+    assert_eq!(told(442, prep_missing(FetchState::Offline, 2, &[1]), vec![]), ("no_road_data".into(), Some("to".into())));
+    assert_eq!(told(442, prep_missing(FetchState::Done, 0, &[]), vec![]), ("no_route".into(), None));
+    assert_eq!(told(154, prep_missing(FetchState::Offline, 2, &[]), vec![]).0, "too_far");
 }
 
 #[test]

@@ -46,7 +46,8 @@ pub struct Prepared {
     /// Tiles the route is likely to need that are still not on the device.
     pub missing: usize,
     pub outcome: PrepareOutcome,
-    /// The points (by position in the list given) whose level 2 tile is not on the device afterwards.
+    /// The points (by position in the list given) whose level 2 tile the build has (when its index is known) and the device does
+    /// not, afterwards.
     pub lacking: Vec<usize>,
 }
 
@@ -1274,13 +1275,23 @@ impl Inner {
     fn stream_points(&self, points: &[(f64, f64)], timeout: Duration) -> (Value, Prepared) {
         let deadline = Instant::now() + timeout;
         let (v, outcome) = self.stream_core(points, deadline);
+        let build = self.st().build.clone();
+        // The build's index, when it is known: a point whose level 2 tile the build does not have (a roadless tile) lacks nothing
+        // the device could get. Without the index, no tile on the device is a lack.
+        let index = build.as_ref().and_then(|b| self.cached_index(b));
         let lacking = {
             let st = self.st();
-            let build = st.build.clone();
             points
                 .iter()
                 .enumerate()
-                .filter(|(_, (lat, lon))| !build.as_ref().map(|b| st.has(b, &geo::tile_path(2, geo::tile_id(2, *lon, *lat)))).unwrap_or(false))
+                .filter(|(_, (lat, lon))| {
+                    let id = geo::tile_id(2, *lon, *lat);
+                    let Some(b) = build.as_ref() else { return true };
+                    if st.has(b, &geo::tile_path(2, id)) {
+                        return false;
+                    }
+                    index.as_ref().map(|i| i.get(2, id).is_some()).unwrap_or(true)
+                })
                 .map(|(i, _)| i)
                 .collect()
         };
