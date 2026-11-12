@@ -14,12 +14,13 @@ use crate::libreg::{self, LibEntry, ShardCell};
 use common::universal_io::{MmapFile, MmapFs};
 use edge::{
     CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
-    QueryRequest, QueryRequestBuilder, ReadOnlyEdgeShard, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams,
+    QueryRequest, QueryRequestBuilder, ReadOnlyEdgeShard, ReadOnlyEdgeShardPools, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams,
     TextIndexParams, TextQueryBuilder, VectorInternal, WithPayloadInterface, WithVector,
 };
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 pub type Shard = ReadOnlyEdgeShard<MmapFile>;
 
@@ -582,13 +583,33 @@ pub fn shard_open_count(path: &Path) -> u64 {
     open_counts().lock().ok().and_then(|m| m.get(&key).copied()).unwrap_or(0)
 }
 
+/// The two thread pools every library shard uses, made once and shared. A read-only shard that is not given pools makes its own:
+/// `edge-search-N` and `edge-load-N`, four threads per CPU each. Every library opened (and every check that one opens) cost
+/// that, so the five libraries of a start were hundreds of threads, each with its stack, for pools that are idle nearly all
+/// the time. One pool of each kind, sized to the cores, is made at the first open and serves all the shards: a shard's reads
+/// are a few segments at a time, and the load pool only runs while a library opens or reloads.
+fn shard_pools() -> ReadOnlyEdgeShardPools {
+    static POOLS: OnceLock<ReadOnlyEdgeShardPools> = OnceLock::new();
+    POOLS
+        .get_or_init(|| {
+            let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(2, 8);
+            let pool = |name: &'static str| {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(move |i| format!("{name}-{i}")).build().ok().map(Arc::new)
+            };
+            // a pool that cannot be made is left to the shard, which makes its own as before
+            ReadOnlyEdgeShardPools { search: pool("edge-search"), load: pool("edge-load") }
+        })
+        .clone()
+}
+
 /// The one place that opens a library shard.
 fn open_counted(path: &Path, profile: LoadProfile) -> Result<Shard> {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(mut m) = open_counts().lock() {
         *m.entry(key).or_insert(0) += 1;
     }
-    Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))
+    Shard::open_with_pools(MmapFs, path, None, Some(profile), shard_pools(), Arc::new(AtomicBool::new(false)))
+        .map_err(|e| op_io(&format!("opening {}", path.display()), e))
 }
 
 /// Open a library's shard read-only with the scroll load profile (for `index_library`). Like `open_library`, it
@@ -627,7 +648,7 @@ pub fn open_shard_for_handoff(path: &Path, vectors: &std::collections::BTreeSet<
 /// counted by `shard_open_count`. Used by the crash-leftover check (`libupdate::library_is_complete`).
 pub fn opens_read_only(path: &Path) -> Result<usize> {
     ensure_init();
-    Shard::open(MmapFs, path, None, Some(LoadProfile::for_scroll(None, None, true)))
+    Shard::open_with_pools(MmapFs, path, None, Some(LoadProfile::for_scroll(None, None, true)), shard_pools(), Arc::new(AtomicBool::new(false)))
         .map(|s| s.segments_count())
         .map_err(|e| op_io(&format!("opening {}", path.display()), e))
 }
