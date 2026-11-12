@@ -127,11 +127,16 @@ answer_open() {  # answer_open <link lines in the log before> <picture name>: 0 
   click_at "$(($1 + $3 / 2))" "$(($2 + 14))" "${WAYS%% *}" > /dev/null
   say "  the phone's window ($win) brought to the front by a click on its title"
   sleep 2
-  rm -f "$OUT/.host.png"
-  screencapture -x "$OUT/.host.png" 2>> "$LOG"
-  # shellcheck disable=SC2086
-  host=$(python3 -I "$HERE/find_icon.py" blue "$OUT/.host.png" "$SCREEN_W" $win 2>> "$LOG" | tail -n 1)
-  sips -s format jpeg -s formatOptions 60 "$OUT/.host.png" --out "$OUT/host/$name-question.jpg" > /dev/null 2>&1
+  # (screencapture does not write to a file whose name begins with a dot.)
+  host=""
+  rm -f "$OUT/host/$name-question.png"
+  screencapture -x "$OUT/host/$name-question.png" 2>> "$LOG"
+  if [ -s "$OUT/host/$name-question.png" ]; then
+    # shellcheck disable=SC2086
+    host=$(python3 -I "$HERE/find_icon.py" blue "$OUT/host/$name-question.png" "$SCREEN_W" $win 2>> "$LOG" | tail -n 1)
+    sips -s format jpeg -s formatOptions 60 "$OUT/host/$name-question.png" --out "$OUT/host/$name-question.jpg" > /dev/null 2>&1 \
+      && rm -f "$OUT/host/$name-question.png"
+  fi
   say "  the Open button on the Mac screen, inside the phone's window: $host"
   places=""
   case "$host" in
