@@ -207,8 +207,13 @@ impl NotebookDef {
         let mut gids = std::collections::HashSet::new();
         for f in &mut self.fields {
             match old.and_then(|o| o.field(&f.fid)).filter(|_| !f.fid.is_empty()) {
-                // A gid that is set is never changed; one that is not yet set may be set once.
-                Some(prev) if !prev.gid.is_empty() => f.gid = prev.gid.clone(),
+                // A gid that is set is never changed by the app; notebook sync may (a gid given by rule for another notebook id is
+                // replaced by the one the shared record has). One that is not yet set may be set once.
+                Some(prev) if !prev.gid.is_empty() => {
+                    if !(from_sync && !f.gid.is_empty()) {
+                        f.gid = prev.gid.clone();
+                    }
+                }
                 Some(_) => {}
                 None => {
                     next += 1;

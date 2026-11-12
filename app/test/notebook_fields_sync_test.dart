@@ -43,6 +43,81 @@ Future<(Dev, Dev, ShareLink, String)> shared({List<LogField>? fields}) async {
   return (a, b, link, n.id);
 }
 
+/// A notebook shared before the field sync whose device b had named the field "Weather" `sky` in its notes (its file for the note says
+/// so, and its state remembers it); both devices have no field ids and no record `fields`.
+Future<(Dev, Dev, ShareLink, String)> drifted({bool extraSky = false}) async {
+  final (a, b, link, id) = await shared(fields: [txt('Weather'), txt('Notes')]);
+  await a.addValues(id, 'e1', {'Weather': 'Sun'});
+  await rounds([a, b], link);
+  for (final d in [a, b]) {
+    await d.beforeFields();
+    Dev.stripRecordFields(d.folder);
+  }
+  final fidB = b.field(id, 'Weather').fid!;
+  await b.beforeFields(props: {id: jsonEncode({fidB: 'sky'})});
+  final path = b.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.endsWith('.cnote'));
+  b.folder.text[path] = b.folder.text[path]!.replaceFirst('weather:', 'sky:');
+  final stateFile = File('${b.stateDir.path}/share2.json');
+  final j = jsonDecode(await stateFile.readAsString()) as Map;
+  ((j['items'] as Map)['e1'] as Map)['base'] = b.folder.text[path];
+  await stateFile.writeAsString(jsonEncode(j));
+  if (extraSky) {
+    await a.editFields(id, (fs) => [...fs, txt('Sky')]);
+    await a.stripGids();
+  }
+  link.sync();
+  return (a, b, link, id);
+}
+
+Future<Map<String, Object?>> valuesOf(Dev d, String id, String entryId) async {
+  final e = (await d.nb.entries(id)).firstWhere((e) => e.id == entryId);
+  final names = {for (final f in d.nb.notebook(id)!.def.fields) f.fid: f.label};
+  return {for (final v in e.values.entries) names[v.key] ?? v.key: v.value};
+}
+
+void failOn(Dev d, bool Function(String path) when) {
+  d.folder.beforeWrite = (p) async {
+    if (when(p)) throw const FormatException('the folder stopped answering');
+  };
+}
+
+Future<void> syncQuiet(Dev d) async {
+  try {
+    await d.sync();
+  } catch (_) {}
+}
+
+/// Notebooks shared by the sync of v1.0.30 before the update, each device with its own id for "Hikes" and the same fields.
+Future<(Dev, Dev, ShareLink)> oldShare() async {
+  final a = Dev('a', old: true);
+  final b = Dev('b', old: true);
+  await a.boot();
+  await b.boot();
+  final fields = [num_('Distance', unit: 'km'), txt('Weather'), txt('Notes')];
+  await a.makeWith('Hikes', fields, id: 'a-1');
+  await b.makeWith('Hikes', fields, id: 'b-2');
+  await a.stripGids();
+  await b.stripGids();
+  await a.addValues('a-1', 'ea1', {'Distance': 3, 'Weather': 'Sun'});
+  await b.addValues('b-2', 'eb1', {'Distance': 5, 'Notes': 'Wet'});
+  final link = ShareLink(a.folder, b.folder);
+  await rounds([a, b], link, n: 3);
+  return (a, b, link);
+}
+
+Future<void> expectOneSet(Dev a, Dev b, {String id = 'a-1'}) async {
+  for (final d in [a, b]) {
+    expect(d.ids('Hikes'), [id], reason: d.label);
+    expect(d.labels(id), ['Distance', 'Weather', 'Notes'], reason: '${d.label}: one set of fields');
+    expect(d.nb.notebook(id)!.def.fields.length, 3, reason: '${d.label}: none twice, none hidden');
+    expect(await valuesOf(d, id, 'ea1'), {'Distance': 3, 'Weather': 'Sun'}, reason: d.label);
+    expect(await valuesOf(d, id, 'eb1'), {'Distance': 5, 'Notes': 'Wet'}, reason: d.label);
+  }
+  for (final l in ['Distance', 'Weather', 'Notes']) {
+    expect(a.field(id, l).gid, b.field(id, l).gid, reason: l);
+  }
+}
+
 void main() {
   group('the ids', () {
     test('a field has the same id on every device, and the notebook comes across with its fields in order', () async {
@@ -358,27 +433,11 @@ void main() {
 
   group('a device that stored values under its own earlier property name', () {
     test('its notes are written again under the shared name, so the other device reads the value as the field', () async {
-      final (a, b, link, id) = await shared(fields: [txt('Weather'), txt('Notes')]);
-      await a.addValues(id, 'e1', {'Weather': 'Sun'});
-      await rounds([a, b], link);
-      for (final d in [a, b]) {
-        await d.beforeFields();
-        Dev.stripRecordFields(d.folder);
-      }
-      // b had named the field "sky" before: its file for the note says so
-      final fidB = b.field(id, 'Weather').fid!;
-      await b.beforeFields(props: {id: jsonEncode({fidB: 'sky'})});
+      final (a, b, link, id) = await drifted();
       final path = b.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.endsWith('.cnote'));
-      b.folder.text[path] = b.folder.text[path]!.replaceFirst('weather:', 'sky:');
-      final stateFile = b.stateDir.uri.resolve('share2.json');
-      final j = jsonDecode(await File.fromUri(stateFile).readAsString()) as Map;
-      ((j['items'] as Map)['e1'] as Map)['base'] = b.folder.text[path];
-      await File.fromUri(stateFile).writeAsString(jsonEncode(j));
-      link.sync();
       await rounds([a, b], link, n: 4);
       for (final d in [a, b]) {
-        final e = (await d.nb.entries(id)).single;
-        expect(e.values[d.field(id, 'Weather').fid], 'Sun', reason: '${d.label}: the value is in the field');
+        expect((await valuesOf(d, id, 'e1'))['Weather'], 'Sun', reason: '${d.label}: the value is in the field');
       }
       expect(b.folder.text[path], contains('weather: Sun'));
       expect(b.folder.text[path], isNot(contains('sky:')));
@@ -489,6 +548,12 @@ void main() {
 
     test('an inferred removal is not lost or turned round by a rerun', () async {
       final (a, b, link, id) = await old();
+      // b has no value in the field (the store drops a field without values; only a removal it cannot see is inferred)
+      final weather = b.field(id, 'Weather').fid;
+      for (final e in b.store.entries) {
+        (e['values'] as Map).remove(weather);
+      }
+      await b.nb.reload();
       await b.editFields(id, (fs) => fs.where((f) => f.label != 'Weather').toList());
       for (final d in [b, a]) {
         await d.sync();
@@ -498,6 +563,156 @@ void main() {
       await rounds([a, b], link, n: 5);
       expect(a.labels(id), contains('Weather'), reason: 'a holds values for it');
       expect(b.labels(id), contains('Weather'));
+    });
+  });
+
+  group('review findings', () {
+    test('1. a share from before with fields: b upgrades first, then a (the lower id): one set of fields, all values', () async {
+      final (a, b, link) = await oldShare();
+      await b.updateCache();
+      await b.sync();
+      link.sync();
+      await a.updateCache();
+      await rounds([a, b], link, n: 6);
+      await expectOneSet(a, b);
+    });
+
+    test('1b. the other order: a upgrades first, then b', () async {
+      final (a, b, link) = await oldShare();
+      await a.updateCache();
+      await a.sync();
+      link.sync();
+      await b.updateCache();
+      await rounds([a, b], link, n: 6);
+      await expectOneSet(a, b);
+    });
+
+    test('2. a field taken out before the update stays removed everywhere, and its values stay on the entries', () async {
+      final (a, b, link, id) = await shared(fields: [num_('Distance'), txt('Weather'), txt('Notes')]);
+      await a.addValues(id, 'e1', {'Weather': 'Sun'});
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      await a.editFields(id, (fs) => fs.where((f) => f.label != 'Weather').toList());
+      expect(a.nb.notebook(id)!.def.fields.where((f) => f.hidden).length, 1, reason: 'the store keeps it hidden: it has values');
+      await rounds([a, b], link, n: 5);
+      for (final d in [a, b]) {
+        expect(d.labels(id), ['Distance', 'Notes'], reason: d.label);
+      }
+      expect(a.nb.notebook(id)!.def.fields.where((f) => f.hidden && f.label == 'Weather').length, 1);
+      expect((await a.nb.entries(id)).single.values.values, contains('Sun'));
+    });
+
+    test('3. a hidden "Notes" with values and a newer visible "Notes" on one device: both kept, the visible one visible', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Distance'), txt('Notes')]);
+      await a.addValues(id, 'e1', {'Notes': 'old text'});
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      await a.editFields(id, (fs) => fs.where((f) => f.label != 'Notes').toList());
+      await a.editFields(id, (fs) => [...fs, txt('Notes')]);
+      await a.stripGids();
+      await rounds([a, b], link, n: 5);
+      final fs = a.nb.notebook(id)!.def.fields.where((f) => f.label.startsWith('Notes')).toList();
+      expect(fs.length, 2);
+      expect(fs.where((f) => !f.hidden).length, 1, reason: 'the new one is visible');
+      expect(fs.map((f) => f.gid).toSet().length, 2, reason: 'two ids');
+      expect(a.labels(id), contains('Notes'));
+      expect(b.labels(id), contains('Notes'));
+      expect((await a.nb.entries(id)).single.values.values, contains('old text'));
+    });
+
+    test('4a. a crash after the ids were set and before the marker (a folder error): the notes are written again under the shared names', () async {
+      final (a, b, link, id) = await drifted();
+      failOn(b, (p) => p.endsWith('.cnote'));
+      await syncQuiet(b);
+      expect(b.nb.notebook(id)!.def.fields.every((f) => f.gid != null), isTrue, reason: 'the notebook took its ids before the run stopped');
+      b.folder.beforeWrite = null;
+      await rounds([a, b], link, n: 5);
+      for (final d in [a, b]) {
+        expect((await valuesOf(d, id, 'e1'))['Weather'], 'Sun', reason: d.label);
+      }
+      final path = b.folder.text.keys.firstWhere((k) => k.startsWith('$id/') && k.endsWith('.cnote'));
+      expect(b.folder.text[path], contains('weather: Sun'));
+      expect(b.folder.text[path], isNot(contains('sky:')));
+    });
+
+    test('4b. a folder error while the record is written, then a rerun', () async {
+      final (a, b, link, id) = await drifted();
+      failOn(b, (p) => p.endsWith('/notebook.json'));
+      await syncQuiet(b);
+      b.folder.beforeWrite = null;
+      await rounds([a, b], link, n: 5);
+      for (final d in [a, b]) {
+        expect((await valuesOf(d, id, 'e1'))['Weather'], 'Sun', reason: d.label);
+        expect(d.labels(id), ['Weather', 'Notes'], reason: d.label);
+      }
+    });
+
+    test('4c. another device\'s edit lands between the stopped run and its rerun', () async {
+      final (a, b, link, id) = await drifted();
+      failOn(b, (p) => p.endsWith('.cnote'));
+      await syncQuiet(b);
+      b.folder.beforeWrite = null;
+      await a.sync();
+      link.sync();
+      await a.editFields(id, (fs) => [for (final f in fs) f.label == 'Weather' ? f.copyWith(label: 'Conditions') : f]);
+      await rounds([a, b], link, n: 6);
+      for (final d in [a, b]) {
+        expect(d.labels(id), ['Conditions', 'Notes'], reason: d.label);
+        expect((await valuesOf(d, id, 'e1'))['Conditions'], 'Sun', reason: d.label);
+      }
+    });
+
+    test('4d. the notebook gets another id between the stopped run and its rerun', () async {
+      final (a, b, link) = await oldShare();
+      await b.updateCache();
+      failOn(b, (p) => p.endsWith('.cnote'));
+      await syncQuiet(b);
+      b.folder.beforeWrite = null;
+      link.sync();
+      await a.updateCache();
+      await rounds([a, b], link, n: 7);
+      await expectOneSet(a, b);
+    });
+
+    test('5. a field added on both devices before the update, each with its own key in the notes: every value is kept', () async {
+      final (a, b, link, id) = await shared(fields: [txt('Weather')]);
+      await rounds([a, b], link);
+      for (final d in [a, b]) {
+        await d.beforeFields();
+        Dev.stripRecordFields(d.folder);
+      }
+      link.sync();
+      await a.editFields(id, (fs) => [...fs, txt('Trail')]);
+      await b.editFields(id, (fs) => [...fs, txt('Trail')]);
+      await a.addValues(id, 'ea', {'Trail': 'north'});
+      await b.addValues(id, 'eb', {'Trail': 'south'});
+      await a.stripGids();
+      await b.stripGids();
+      await b.beforeFields(props: {id: jsonEncode({b.field(id, 'Trail').fid!: 'trail_b'})});
+      await rounds([a, b], link, n: 6);
+      for (final d in [a, b]) {
+        expect((await valuesOf(d, id, 'ea'))['Trail'], 'north', reason: d.label);
+        expect((await valuesOf(d, id, 'eb'))['Trail'], 'south', reason: d.label);
+        expect(d.labels(id), ['Weather', 'Trail'], reason: d.label);
+      }
+    });
+
+    test('6. an old name of one field that is the current name of another field maps to the field it was', () async {
+      final (a, b, link, id) = await drifted(extraSky: true);
+      await rounds([a, b], link, n: 6);
+      for (final d in [a, b]) {
+        final v = await valuesOf(d, id, 'e1');
+        expect(v['Weather'], 'Sun', reason: d.label);
+        expect(v.containsKey('Sky'), isFalse, reason: '${d.label}: not in Sky');
+      }
     });
   });
 }

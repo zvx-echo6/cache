@@ -107,6 +107,10 @@ class LogField {
         hidden: hidden ?? this.hidden,
       );
 
+  LogField withGid(String g) => LogField(fid: fid, gid: g, label: label, type: type, unit: unit, choices: choices, hidden: hidden);
+
+  LogField withoutGid() => LogField(fid: fid, label: label, type: type, unit: unit, choices: choices, hidden: hidden);
+
   /// As the store takes it.
   Map<String, dynamic> toJson() => {
         'fid': ?fid,

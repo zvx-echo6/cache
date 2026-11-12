@@ -296,13 +296,20 @@ class NotebookSync {
     return m;
   }
 
-  Map<String, FieldType> _propTypes(Notebook n) {
+  /// The property names of a notebook's fields and the types they have. [stale]: the file is one this device wrote before it took
+  /// the shared names, and has not written again; its keys are the ones this device used then, so an old name wins over a current one
+  /// (a name this device used for one field may be another field's now).
+  Map<String, FieldType> _propTypes(Notebook n, {bool stale = false}) {
     final m = _fieldProps(n);
     final out = {for (final f in n.def.fields) if (f.fid != null && m[f.fid] != null) m[f.fid]!: f.type};
-    // A file still written under a name this device used before it took the record's is read as the same field.
     for (final e in _aliases(n).entries) {
       final f = n.def.field(e.value);
-      if (f != null) out.putIfAbsent(e.key, () => f.type);
+      if (f == null) continue;
+      if (stale) {
+        out[e.key] = f.type;
+      } else {
+        out.putIfAbsent(e.key, () => f.type);
+      }
     }
     return out;
   }
@@ -361,7 +368,7 @@ class NotebookSync {
     }
     return _logseq
         ? parseLogseq(splitPage(text).blocks.firstOrNull ?? LsBlock([text]), day: when.substring(0, 10), fallbackNotebook: book.name, fieldProps: _propTypes(book))
-        : parseObsidian(text, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book));
+        : parseObsidian(text, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book, stale: it?.rev == -1));
   }
 
   /// Records entry [id]'s state, keeping what it is (imported or Cache's own).
@@ -468,7 +475,7 @@ class NotebookSync {
       if (it?.imp == 'note') {
         final c = cache[probe.id];
         final doc = parseObsidian(text,
-            fallbackId: '', fallbackNotebook: nbOf(probe.id), fieldProps: c == null ? const {} : _propTypes(c.$1), fallbackWhen: whenOf(probe.id), userKeys: it!.uk.toSet(), fallbackTitle: _baseName(f.path))!;
+            fallbackId: '', fallbackNotebook: nbOf(probe.id), fieldProps: c == null ? const {} : _propTypes(c.$1, stale: it?.rev == -1), fallbackWhen: whenOf(probe.id), userKeys: it!.uk.toSet(), fallbackTitle: _baseName(f.path))!;
         put(_Unit(f.path, text, doc));
         continue;
       }
@@ -687,8 +694,13 @@ class NotebookSync {
     // An imported note keeps in Cache what its file does not hold (a Logseq page or block holds only its title and text).
     final keep = _items[id]?.imp != null && existing != null;
     final propToFid = {for (final e in _fieldProps(book).entries) e.value: e.key};
+    final stale = _items[id]?.rev == -1;
     for (final e in _aliases(book).entries) {
-      propToFid.putIfAbsent(e.key, () => e.value);
+      if (stale) {
+        propToFid[e.key] = e.value;
+      } else {
+        propToFid.putIfAbsent(e.key, () => e.value);
+      }
     }
     final values = <String, dynamic>{};
     final extra = [...d.extra];
@@ -805,7 +817,7 @@ class NotebookSync {
   }
 
   /// What a device remembers of a notebook's fields after a sync: each field's state by gid, and their order.
-  FieldSnap _snapOfFields(Notebook n, List<Map<String, dynamic>> record, {Map<String, String>? pnames}) {
+  FieldSnap _snapOfFields(Notebook n, List<Map<String, dynamic>> record, {Map<String, String>? pnames, Set<String>? derived, bool pending = false}) {
     final recBy = {for (final r in record) '${r['gid']}': r};
     final state = <String, FieldState>{};
     for (final f in n.def.fields) {
@@ -820,50 +832,70 @@ class NotebookSync {
         state[g] = FieldState(name: '${r['name']}', type: '${r['type']}', removed: true);
       }
     }
-    return FieldSnap(state: state, order: [for (final f in n.def.fields) if (!f.hidden && f.gid != null && f.gid!.isNotEmpty) f.gid!], pnames: pnames ?? _fieldSnap[n.id]?.pnames ?? const {});
+    final prev = _fieldSnap[n.id];
+    return FieldSnap(
+      state: state,
+      order: [for (final f in n.def.fields) if (!f.hidden && f.gid != null && f.gid!.isNotEmpty) f.gid!],
+      pnames: pnames ?? prev?.pnames ?? const {},
+      derived: derived ?? prev?.derived,
+      forId: n.id,
+      pending: pending,
+    );
   }
 
   /// The fields of one notebook with a live record: the first time (the migration: this device's fields are matched to the record's
   /// and given their ids) and every time after (what changed here goes into the record, what the record says goes into the notebook).
-  /// Each step is repeatable, so a run that stopped halfway is finished by the next one: the record is written before the notebook
-  /// takes its ids, and what this device remembers is written last.
+  ///
+  /// Safe to stop anywhere and run again. The migration is done again from the start when the device has not written down that it is
+  /// done ([FieldSnap.pending], or nothing) or when the notebook's id changed since the ids were given by rule (they depend on it).
+  /// Everything it works out is worked out from what is on disk (the store, the record, the names the files use now), so a run that
+  /// stopped halfway leaves nothing the next one needs: the record is written first (any device's write of it is the same), then the
+  /// notebook takes its ids (set once; the ones given by rule are written down as such first), and what this device remembers, with
+  /// the names its files used before, comes last, together with the names the entries are written again under.
   Future<void> _syncFields(Notebook n, Map<String, NbRecord> recs, int now) async {
     final r = recs[n.id];
     if (r == null || r.kind != RecordKind.live) return;
     var book = notebook.notebook(n.id) ?? n;
     var record = r.body['fields'] is List ? mergeFieldLists([r.body['fields']]) : <Map<String, dynamic>>[];
-    var snap = _fieldSnap[n.id];
+    FieldSnap? snap = _fieldSnap[n.id];
     var local = book.def.fields;
-    final migrating = snap == null;
-    Map<String, String>? aliasNames;
+    final propsBefore = {..._fieldProps(book)};
+    final redo = snap == null || snap.pending || (snap.derived.isNotEmpty && snap.forId != n.id);
+    final forget = snap?.derived ?? const <String>{};
+    Set<String>? derived;
     final values = <String>{};
     for (final e in await notebook.entries(n.id)) {
       for (final v in e.values.entries) {
         if (v.value != null) values.add(v.key);
       }
     }
-    if (snap == null) {
+    if (redo) {
+      // the ids given by rule for another id (or by a run that did not finish) are forgotten: the fields are matched again
+      final asked = [for (final f in local) f.gid != null && forget.contains(f.gid) ? f.withoutGid() : f];
       final mig = migrateFields(
         notebookId: n.id,
         snapshot: (r.body['def'] is Map ? (r.body['def'] as Map)['fields'] as List? : null) ?? const [],
         snapProps: r.body['props'] is Map ? r.body['props'] as Map : const {},
         existing: r.body['fields'] is List ? record : null,
-        local: local,
-        localProps: {..._fieldProps(book)},
+        local: asked,
+        localProps: {...propsBefore},
         now: now,
       );
       record = mig.fields;
       for (final line in mig.log) {
         logInfo(line, job: 'notebook sync');
       }
-      local = [for (final f in local) (f.gid == null || f.gid!.isEmpty) && mig.gids[f.fid] != null ? LogField(fid: f.fid, gid: mig.gids[f.fid], label: f.label, type: f.type, unit: f.unit, choices: f.choices, hidden: f.hidden) : f];
+      derived = {...mig.derived};
+      local = [for (final f in asked) (f.gid == null || f.gid!.isEmpty) && mig.gids[f.fid] != null ? f.withGid(mig.gids[f.fid]!) : f];
       snap = FieldSnap(state: {for (final e in mig.baseline.entries) e.key: e.value}, order: mig.baselineOrder);
-      aliasNames = {for (final e in mig.aliases.entries) e.value: e.key};
       // what this device added before the migration is its own from the start (not a change to carry)
-      final matched = {for (final f in local) if (f.gid != null && snap.state[f.gid] == null && mig.baseline[f.gid] == null) f.gid!: f};
-      for (final e in matched.entries) {
-        snap.state[e.key] = FieldState.ofLocal(e.value);
+      for (final f in local) {
+        if (f.gid != null && f.gid!.isNotEmpty && snap.state[f.gid] == null) snap.state[f.gid!] = FieldState.ofLocal(f);
       }
+      // The ids given by rule are written down (with the id they depend on) before the notebook takes them: a run that stops after
+      // that is known, by the next one, to hold ids that are to be dropped if the notebook's id has changed.
+      _fieldSnap[n.id] = FieldSnap(state: const {}, derived: {...derived, ...forget}, forId: n.id, pending: true, pnames: _fieldSnap[n.id]?.pnames ?? const {});
+      await _save();
     }
     final plan = reconcileFields(
       notebookId: n.id,
@@ -871,40 +903,46 @@ class NotebookSync {
       local: local,
       snap: snap,
       hasValues: values.contains,
-      props: {..._fieldProps(book)},
+      props: {...propsBefore},
       now: now,
-      migrating: migrating,
     );
     for (final line in plan.log) {
       logInfo(line, job: 'notebook sync');
     }
-    if (migrating || plan.recordChanged) {
+    if (redo || plan.recordChanged) {
       final body = {...r.body, 'fields': plan.record, 'fields_at': fieldsAt(plan.record)};
-      final nameAt = r.at;
-      final rec = NbRecord.live(n.id, nameAt: nameAt, body: body);
+      final rec = NbRecord.live(n.id, nameAt: r.at, body: body);
       if (rec.text != r.text) {
         await folder.writeText('${n.id}/$kRecordFile', rec.text);
         recs[n.id] = rec;
       }
     }
-    final same = _sameFields(book.def.fields, plan.local);
-    if (!same) {
+    if (!_sameFields(book.def.fields, plan.local)) {
       book = await notebook.saveNotebook(id: n.id, def: book.def.copyWith(fields: plan.local), fromSync: true);
     }
-    // the names the files use, by the record's say
+    // the names the files use, by the record's say; a field whose name changes keeps the old one to be read by, and its notes are
+    // written again under the new one (every field, not only the ones that had no id: the names are compared with what is on disk)
+    final aliases = {...?_fieldSnap[n.id]?.pnames};
     final m = _props.putIfAbsent(n.id, () => {});
+    var renamed = false;
     for (final f in book.def.fields) {
       final g = f.gid;
-      if (f.fid != null && g != null && plan.pnames[g] != null) m[f.fid!] = plan.pnames[g]!;
+      final np = g == null ? null : plan.pnames[g];
+      if (f.fid == null || np == null) continue;
+      final op = propsBefore[f.fid];
+      if (op != null && op != np) {
+        aliases[op] = f.fid!;
+        renamed = true;
+      }
+      m[f.fid!] = np;
     }
-    _fieldSnap[n.id] = _snapOfFields(book, plan.record, pnames: aliasNames);
-    if (aliasNames != null && aliasNames.isNotEmpty) {
-      // Files this device wrote under its old names are written again under the record's, so every device reads them as the field.
+    if (renamed) {
       for (final e in await notebook.entries(n.id)) {
         _items[e.id]?.rev = -1;
       }
-      logInfo('Notebook fields: ${aliasNames.length} field name(s) here differed from the shared ones; the notes are written again under the shared names', job: 'notebook sync');
+      logInfo('Notebook fields: the name some fields use in the notes changed here; the notes are written again under the shared names', job: 'notebook sync');
     }
+    _fieldSnap[n.id] = _snapOfFields(book, plan.record, pnames: aliases, derived: redo ? (derived ?? <String>{}).intersection({for (final f in book.def.fields) ?f.gid}) : null);
   }
 
   static bool _sameFields(List<LogField> a, List<LogField> b) {

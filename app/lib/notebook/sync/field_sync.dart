@@ -27,7 +27,12 @@ String gidOfSnapshotField(String notebookId, int index, String label) => _gid('c
 /// The id of a field a device added before it migrated (it is in no snapshot): from the notebook, the label and the type, so two
 /// devices that each added "Elevation" (number) come to one field. Not from the device's own field id (`f4` here is unrelated to `f4`
 /// there).
-String gidOfLocalField(String notebookId, String label, String type) => _gid('cache-field-v1\u0000local\u0000$notebookId\u0000${normLabel(label)}\u0000$type');
+///
+/// Two different fields of one device never share one: a field the person took out ([hidden]) and a visible one with the same label
+/// and type differ, and so do two taken out ([ordinal] counts the ones alike, in the order the device has them). A field that is
+/// visible and the first of its kind (the usual one) keeps the plain form, so devices that each added it still come to one id.
+String gidOfLocalField(String notebookId, String label, String type, {bool hidden = false, int ordinal = 0}) =>
+    _gid('cache-field-v1\u0000local\u0000$notebookId\u0000${normLabel(label)}\u0000$type${hidden ? '\u0000hidden' : ''}${ordinal > 0 ? '\u0000$ordinal' : ''}');
 
 /// How a notebook's field order is kept: spaced keys, sorted by `(ord, gid)`.
 const double kOrdStep = 1000;
@@ -137,28 +142,51 @@ class FieldState {
 }
 
 /// What a device remembers about a notebook's fields between syncs: [state] by gid, and the order the gids were in.
+///
+/// [derived] are the ids this device gave its fields by rule (see [gidOfSnapshotField]); they depend on the notebook's id, so when the
+/// notebook's id changes ([forId] is no longer its id) they are dropped and the fields are matched to the record again. [pending]: the
+/// migration wrote the record and was setting the ids when the run stopped (or still is); the next run does it again from the start.
 class FieldSnap {
-  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}}) : state = state ?? {}, order = order ?? [];
+  FieldSnap({Map<String, FieldState>? state, List<String>? order, this.pnames = const {}, Set<String>? derived, this.forId = '', this.pending = false})
+      : state = state ?? {},
+        order = order ?? [],
+        derived = derived ?? {};
 
   final Map<String, FieldState> state;
   final List<String> order;
+  final Set<String> derived;
+  final String forId;
+  final bool pending;
 
   /// The device's own property names (`.cnote` keys) from before it took the record's, by that name to the field's local id: files
   /// that still use one are read as that field.
   final Map<String, String> pnames;
 
-  Map<String, dynamic> toJson() => {'state': {for (final e in state.entries) e.key: e.value.toJson()}, 'order': order, if (pnames.isNotEmpty) 'aliases': pnames};
+  Map<String, dynamic> toJson() => {
+        'state': {for (final e in state.entries) e.key: e.value.toJson()},
+        'order': order,
+        if (pnames.isNotEmpty) 'aliases': pnames,
+        if (derived.isNotEmpty) 'derived': derived.toList()..sort(),
+        if (forId.isNotEmpty) 'for': forId,
+        if (pending) 'pending': true,
+      };
 
   static FieldSnap fromJson(Map j) => FieldSnap(
         state: {for (final e in (j['state'] as Map? ?? const {}).entries) '${e.key}': FieldState.fromJson(e.value as Map)},
         order: [for (final x in (j['order'] as List? ?? const [])) '$x'],
         pnames: {for (final e in (j['aliases'] as Map? ?? const {}).entries) '${e.key}': '${e.value}'},
+        derived: {for (final x in (j['derived'] as List? ?? const [])) '$x'},
+        forId: '${j['for'] ?? ''}',
+        pending: j['pending'] == true,
       );
 }
 
 /// The record's fields made from the first-share snapshot (`record.def.fields`, with `record.props` the snapshot's property names):
 /// ids by [gidOfSnapshotField], every property at time 0, so any later change wins.
-List<Map<String, dynamic>> fieldsOfSnapshot(String notebookId, List<dynamic> snapshot, Map<dynamic, dynamic> props) {
+///
+/// A snapshot field that carries its own `gid` (one made after the field sync) keeps it; the others get the one by rule, and are
+/// added to [derived] (they depend on the notebook's id).
+List<Map<String, dynamic>> fieldsOfSnapshot(String notebookId, List<dynamic> snapshot, Map<dynamic, dynamic> props, {Set<String>? derived}) {
   final out = <Map<String, dynamic>>[];
   final used = <String>{};
   for (var i = 0; i < snapshot.length; i++) {
@@ -168,8 +196,12 @@ List<Map<String, dynamic>> fieldsOfSnapshot(String notebookId, List<dynamic> sna
     var pname = props['${sf['fid']}'] is String ? props['${sf['fid']}'] as String : propName(label, taken: used);
     if (!used.add(pname)) pname = propName(label, taken: used);
     used.add(pname);
+    final own = sf['gid'];
+    final ruled = gidOfSnapshotField(notebookId, i, label);
+    final given = own is String && RegExp(r'^[0-9a-f]{32}$').hasMatch(own);
+    if (!given) derived?.add(ruled);
     out.add({
-      'gid': gidOfSnapshotField(notebookId, i, label),
+      'gid': given ? own : ruled,
       'pname': pname,
       'name': label,
       'type': '${sf['type']}',
@@ -201,6 +233,9 @@ class FieldMigration {
   /// The snapshot's order, by gid, for the matched fields.
   final List<String> baselineOrder = [];
 
+  /// The ids given by rule here (they depend on the notebook's id; see [FieldSnap.derived]).
+  final Set<String> derived = {};
+
   final List<String> log = [];
 }
 
@@ -218,7 +253,8 @@ FieldMigration migrateFields({
   required Map<String, String> localProps,
   required int now,
 }) {
-  final snapD = fieldsOfSnapshot(notebookId, snapshot, snapProps);
+  final snapDerived = <String>{};
+  final snapD = fieldsOfSnapshot(notebookId, snapshot, snapProps, derived: snapDerived);
   final base = existing != null ? [for (final f in existing) {...f}] : [for (final f in snapD) {...f}];
   final m = FieldMigration(base);
   final byGid = {for (final f in base) f['gid'] as String: f};
@@ -262,6 +298,7 @@ FieldMigration migrateFields({
     final sf = e.value;
     final g = sf['gid'] as String;
     m.gids[e.key] = g;
+    if (snapDerived.contains(g)) m.derived.add(g);
     final lp = localProps[e.key];
     if (lp != null && lp != sf['pname']) m.aliases[e.key] = lp;
     m.baseline[g] = FieldState(
@@ -276,10 +313,14 @@ FieldMigration migrateFields({
   // the device's own additions (in no snapshot): one id by rule, in the record
   final taken = {for (final f in base) '${f['pname']}'};
   var last = base.fold<double>(0, (a, f) => a > ((f['ord'] as num?)?.toDouble() ?? 0) ? a : ((f['ord'] as num?)?.toDouble() ?? 0));
+  final alike = <String, int>{};
   for (final lf in needs) {
     if (matched.containsKey(lf.fid)) continue;
-    final g = gidOfLocalField(notebookId, lf.label, lf.type.wire);
+    final kind = '${normLabel(lf.label)}\u0000${lf.type.wire}\u0000${lf.hidden}';
+    final ordinal = alike[kind] = (alike[kind] ?? -1) + 1;
+    final g = gidOfLocalField(notebookId, lf.label, lf.type.wire, hidden: lf.hidden, ordinal: ordinal);
     m.gids[lf.fid!] = g;
+    m.derived.add(g);
     if (byGid.containsKey(g)) continue;
     var pname = localProps[lf.fid] ?? propName(lf.label, taken: taken);
     // a name another field already uses: both would write one key; neither is guessed at
@@ -289,6 +330,7 @@ FieldMigration migrateFields({
     }
     taken.add(pname);
     last += kOrdStep;
+    // a field taken out here is a removal that was made on purpose (the store keeps only fields with values hidden): not inferred
     final f = <String, dynamic>{
       'gid': g,
       'pname': pname,
@@ -298,7 +340,7 @@ FieldMigration migrateFields({
       'type_at': now,
       if (lf.type == FieldType.number && lf.unit != null && lf.unit!.trim().isNotEmpty) ...{'unit': lf.unit, 'unit_at': now},
       if (lf.type == FieldType.choice) ...{'choices': lf.choices ?? const <String>[], 'choices_at': now},
-      if (lf.hidden) ...{'removed': true, 'removed_at': now, 'inferred': true},
+      if (lf.hidden) ...{'removed': true, 'removed_at': now},
       'ord': last,
       'ord_at': now,
     };
@@ -347,7 +389,8 @@ class FieldPlan {
 /// [snap] what the device last applied. In this order: what changed here since [snap] goes into the record (later than what it
 /// says); then the record's fields go into the local list, except where the device's own values or entries decide (a removal of a
 /// field that has values is not applied if it was only inferred: the field stays and the record is corrected; a type is not changed
-/// under values). [migrating] marks the removals found as inferred (they carry the migration's time).
+/// under values). A removal made on this device is always a real one; only the migration infers one (a snapshot field this device
+/// never had a trace of), and an inferred removal never beats values.
 FieldPlan reconcileFields({
   required String notebookId,
   required List<Map<String, dynamic>> record,
@@ -356,7 +399,6 @@ FieldPlan reconcileFields({
   required bool Function(String fid) hasValues,
   required int now,
   Map<String, String> props = const {},
-  bool migrating = false,
 }) {
   final rec = <String, Map<String, dynamic>>{for (final f in record) f['gid'] as String: {...f}};
   final plan = FieldPlan([], []);
@@ -405,11 +447,7 @@ FieldPlan reconcileFields({
     if (cur == s) continue;
     if (lf.hidden && !s.removed) {
       set(r, 'removed', true);
-      if (migrating) {
-        r['inferred'] = true;
-      } else {
-        r.remove('inferred');
-      }
+      r.remove('inferred');
       continue;
     }
     if (lf.hidden) continue;
@@ -424,11 +462,7 @@ FieldPlan reconcileFields({
     final r = rec[e.key];
     if (r != null && r['removed'] != true) {
       set(r, 'removed', true);
-      if (migrating) {
-        r['inferred'] = true;
-      } else {
-        r.remove('inferred');
-      }
+      r.remove('inferred');
     }
   }
   // order changed here: only the fields that moved get a new key

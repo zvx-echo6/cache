@@ -544,3 +544,15 @@ fn sync_may_change_a_type_only_when_no_entry_has_a_value() {
     assert_eq!(call(&nb, "notebook_save", flip("text", "number", true))["def"]["fields"][1]["type"], "number");
     assert_eq!(err(&nb, "notebook_save", flip("number", "number", true)).code, "bad_json");
 }
+
+#[test]
+fn sync_may_replace_a_gid_the_editor_may_not() {
+    let (nb, _t) = notebook("gid-rebind");
+    let a = call(&nb, "notebook_save", json!({"template": "log", "def": {"name": "Hikes", "fields": [{"label": "Distance", "type": "number"}]}}));
+    let id = a["id"].as_str().unwrap().to_string();
+    let was = fields_of(&a)[0].1.clone();
+    let def = |g: &str| json!({"name": "Hikes", "fields": [{"fid": "f1", "gid": g, "label": "Distance", "type": "number"}]});
+    assert_eq!(fields_of(&call(&nb, "notebook_save", json!({"id": id, "def": def(&"ab".repeat(16))})))[0].1, was);
+    let n = call(&nb, "notebook_save", json!({"id": id, "from_sync": true, "def": def(&"ab".repeat(16))}));
+    assert_eq!(fields_of(&n)[0].1, "ab".repeat(16));
+}

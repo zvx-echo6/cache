@@ -38,7 +38,14 @@ class MemFolder implements SyncFolder {
   Future<Uint8List?> readBytes(String path) async => bytes[path];
 
   @override
-  Future<void> writeText(String path, String t) async => text[path] = t;
+  Future<void> writeText(String path, String t) async {
+    final h = beforeWrite;
+    if (h != null) await h(path);
+    text[path] = t;
+  }
+
+  /// A fault: called before each write of a text file; it may throw (a folder error mid-run).
+  Future<void> Function(String path)? beforeWrite;
 
   @override
   Future<void> writeBytes(String path, Uint8List b) async => bytes[path] = b;
@@ -231,6 +238,16 @@ class Dev {
   Future<void> addValues(String notebookId, String id, Map<String, Object> byLabel) => nb
       .saveEntry(id: id, notebookId: notebookId, occurredAt: '2026-11-01T09:00:00-07:00', title: id, values: {for (final e in byLabel.entries) field(notebookId, e.key).fid!: e.value})
       .then((_) {});
+
+  /// The notebooks' fields lose their ids (the fields of a device from before the field sync), what the device remembers stays.
+  Future<void> stripGids() async {
+    for (final n in store.notebooks) {
+      for (final f in (n['def']['fields'] as List)) {
+        (f as Map).remove('gid');
+      }
+    }
+    await nb.reload();
+  }
 
   /// What this device was before the field sync existed: fields without ids, and nothing remembered of them.
   ///

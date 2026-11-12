@@ -153,7 +153,7 @@ class FakeNotebookBackend implements NotebookBackend {
           final prev = given['fid'] == null ? null : oldFields.where((x) => x['fid'] == given['fid']).firstOrNull;
           // a gid that is set never changes; a new field gets the one it is given, else its own
           final prevGid = prev == null ? null : prev['gid'];
-          final gid = prevGid is String && prevGid.isNotEmpty ? prevGid : (given['gid'] as String? ?? (prev != null ? null : _gid()));
+          final gid = prevGid is String && prevGid.isNotEmpty ? (a['from_sync'] == true && given['gid'] is String ? given['gid'] : prevGid) : (given['gid'] as String? ?? (prev != null ? null : _gid()));
           return {...given, 'fid': given['fid'] ?? 'f${++next}', 'gid': ?gid};
         }(),
     ];
