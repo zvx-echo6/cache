@@ -40,6 +40,11 @@ object CarOverlayPainter {
     // ---- layout (mock pixels at density 1.0) ---------------------------------------------------------------------
     const val MARGIN = 16f
 
+    /** The smallest text the host itself draws on the guidance screen (the second line of its estimate card and the next
+     * step: 24 px at density 1.0, measured on the car simulator). No text on the pieces is smaller. (Declared before
+     * every size that is set from it.) */
+    const val HOST_MIN_TEXT = 24f
+
     // ---- the look: the host's own cards. Measured on the desktop head unit (DHU 2.0, 1280 x 720 at 160 dpi, Android Auto
     // ---- 17.9); the host's cards had these colors by day and by night there. Correct them here after a real car.
 
@@ -117,10 +122,6 @@ object CarOverlayPainter {
 
     /** The narrowest shape still worth drawing beside the text. */
     const val SHAPE_MIN_W = 60f
-
-    /** The smallest text the host itself draws on the guidance screen (the second line of its estimate card and the next
-     * step: 24 px at density 1.0, measured on the car simulator). No text in the box is smaller. */
-    const val HOST_MIN_TEXT = 24f
 
     /** The climb's three lines: the label, the figure (bold) and the grade line (semibold). The mock had 13, 26 and 15;
      * the label and the grade line were raised to the host's smallest size, and the figure to 34 so it still reads as the
