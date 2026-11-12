@@ -144,6 +144,24 @@ if places.count == 3 {
 }
 let bare = CarPlace(id: "x", name: "Somewhere", address: nil, lat: 1, lon: 2, distanceM: nil)
 check(bare.detail(imperial: true) == nil, "a place with no distance and no address has no line")
+let durationRows: [Any] = recorded("durations.json") as? [Any] ?? []
+check(durationRows.count > 10, "the table of times is there")
+for entry in durationRows {
+  let row: [String: Any] = entry as? [String: Any] ?? [:]
+  let seconds: Int64 = CarValue.number(row["seconds"])?.int64Value ?? -1
+  let want: String = row["text"] as? String ?? "?"
+  let got: String = CarText.duration(seconds)
+  check(got == want, "the time \(seconds) s: '\(got)', wanted '\(want)'")
+}
+if previewing.routes.count == 2 {
+  let firstLine: String = previewing.routes[0].title(imperial: true)
+  let secondLine: String = previewing.routes[1].title(imperial: false)
+  check(firstLine == "21 min · 16 mi", "a route's line: its time and distance")
+  check(secondLine == "23 min · 27 km", "a route's line in kilometres")
+}
+let noRoute = CarTrip.from(map("trip_error.json"))
+check(noRoute.previewing && !noRoute.routing && noRoute.routes.isEmpty, "the trip with no route: choosing, not routing, no routes")
+check(noRoute.error == "Waiting for your position", "the trip with no route says why")
 let found: [CarPlace] = CarPlace.list(recorded("search.json"))
 check(found.count == 3, "three places found")
 check(found.first?.name == "Coffee House", "the places found keep their order")

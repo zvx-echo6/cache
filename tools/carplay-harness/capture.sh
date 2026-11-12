@@ -2,8 +2,8 @@
 # CarPlay harness, step 3: for each size asked for, the Simulator's CarPlay display at that size (from a fresh boot), the
 # harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
 # up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
-# light one, the panning state and the map's buttons at work, and the two lists (Saved places, Search) with the stand-in's
-# recorded places. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
+# light one, the panning state and the map's buttons at work, the two lists (Saved places, Search) with the stand-in's
+# recorded places, and the routes to a place chosen there. Then the phone's window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
 #   HARNESS_SIZES   the screens to draw, "WIDTHxHEIGHT@SCALE" in pixels, space separated
@@ -571,6 +571,149 @@ list_pictures() {  # list_pictures <label>: Saved places and Search, opened by t
   fi
 }
 
+ROUTES=""
+ROUTES_MISSING=""
+
+free_area() {  # the free area the app said last, in points: "top left bottom right"
+  grep 'car map: the bars and buttons take' "$STREAM" | tail -n 1 | sed -E 's/.*take top ([0-9]+) left ([0-9]+) bottom ([0-9]+) right ([0-9]+) of.*/\1 \2 \3 \4/'
+}
+
+to_browsing() {  # the stand-in Dart side back on its first trip (looking at the map), whatever it showed last
+  local phase before
+  phase=$(grep 'car link: trip ' "$STREAM" | tail -n 1 | sed -E 's/.*car link: trip ([a-z]+),.*/\1/')
+  while [ "$phase" = previewing ] || [ "$phase" = guiding ]; do
+    before=$(log_count 'car link: trip ')
+    notify next
+    wait_more 'car link: trip ' "$before" 10 || return 1
+    phase=$(grep 'car link: trip ' "$STREAM" | tail -n 1 | sed -E 's/.*car link: trip ([a-z]+),.*/\1/')
+  done
+  sleep 1
+}
+
+open_place() {  # open_place <row 1..3>: Saved places by its button, then a tap on that row; 0 when the app says a place was chosen
+  local row="$1" before x y
+  before=$(log_count 'car lists: saved places shown, 3 rows')
+  tap_until 'car lists: saved places opened' 3 $((CAR_W - 27 * CAR_S)) $((28 * CAR_S)) > /dev/null || return 1
+  wait_more 'car lists: saved places shown, 3 rows' "$before" 12 || return 1
+  sleep 1
+  x=$(( (FREE_LEFT + 110) * CAR_S ))
+  y=$(( (75 + (row - 1) * 48) * CAR_S ))
+  tap_until 'car lists: a place was chosen' 3 "$x" "$y" "$x" $((y - 9 * CAR_S)) "$x" $((y + 9 * CAR_S)) > /dev/null
+}
+
+route_pictures() {  # route_pictures <label>: the routes to a place chosen in Saved places; Back, a route that cannot be found, Start
+  local label="$1" before guiding at old new ot ol ob or nt nl nb nr spot y
+  ROUTES=""
+  ROUTES_MISSING=""
+  to_browsing || { ROUTES_MISSING=" [the stand-in did not go back to its first trip]"; return 0; }
+  old=$(free_area)
+  read -r ot ol ob or <<< "$old"
+  case "$ot$ol$ob$or" in *[!0-9]*|"") ROUTES_MISSING=" [the free area was not said in the log]"; return 0 ;; esac
+
+  # The first saved place: its routes come up in CarPlay's own panel on the map. Then the bar's Back.
+  before=$(log_count 'car routes: preview shown, 2 routes')
+  if ! open_place 1; then
+    shot_ext "$label-routes-no-place"
+    ROUTES_MISSING=" [a row of Saved places did not answer the tap]"
+    return 0
+  fi
+  if wait_more 'car routes: preview shown, 2 routes' "$before" 12; then
+    sleep 3
+    shot_ext "$label-routes"
+    ROUTES="the first saved place's two routes came up in CarPlay's route panel"
+  else
+    shot_ext "$label-routes"
+    ROUTES_MISSING="$ROUTES_MISSING [the app did not say the route panel is shown with 2 routes]"
+    return 0
+  fi
+  before=$(log_count 'car link: trip browsing')
+  if at=$(tap_until 'car routes: preview left' 3 $(( (ol + 18) * CAR_S )) $((22 * CAR_S)) $(( (ol + 32) * CAR_S )) $((22 * CAR_S)) $(( (ol + 24) * CAR_S )) $((30 * CAR_S))); then
+    wait_more 'car link: trip browsing' "$before" 8 || ROUTES_MISSING="$ROUTES_MISSING [the phone was not told that the routes were left]"
+    sleep 2
+    shot_ext "$label-routes-left"
+    ROUTES="$ROUTES; the bar's Back (tap at pixel $at) left them and the phone forgot the routes"
+  else
+    shot_ext "$label-routes-not-left"
+    ROUTES_MISSING="$ROUTES_MISSING [the bar's Back did not answer taps at its leading end]"
+    return 0
+  fi
+
+  # The third saved place stands for one no route can be found to yet: the phone's words in an alert, and its one button.
+  before=$(log_count 'car routes: an alert says')
+  if ! open_place 3; then
+    shot_ext "$label-routes-no-third-place"
+    ROUTES_MISSING="$ROUTES_MISSING [the third row of Saved places did not answer the tap]"
+    return 0
+  fi
+  if wait_more 'car routes: an alert says' "$before" 12; then
+    sleep 2
+    shot_ext "$label-routes-error"
+    ROUTES="$ROUTES; a route that cannot be found is said in an alert"
+  else
+    shot_ext "$label-routes-error"
+    ROUTES_MISSING="$ROUTES_MISSING [no alert for the route that cannot be found]"
+    return 0
+  fi
+  spot=$(( (ol * CAR_S + CAR_W - or * CAR_S) / 2 ))
+  if at=$(tap_until 'car routes: preview left' 2 "$spot" $((CAR_H * 62 / 100)) "$spot" $((CAR_H * 70 / 100)) "$spot" $((CAR_H * 78 / 100)) "$spot" $((CAR_H * 54 / 100)) "$spot" $((CAR_H * 86 / 100)) $((CAR_W / 2)) $((CAR_H * 70 / 100))); then
+    sleep 2
+    shot_ext "$label-routes-error-left"
+    ROUTES="$ROUTES; its button (tap at pixel $at) left"
+  else
+    shot_ext "$label-routes-error-not-left"
+    ROUTES_MISSING="$ROUTES_MISSING [the alert's button did not answer taps under its words]"
+    return 0
+  fi
+
+  # The first saved place again, and Start. The start button is looked for as the one filled patch of strong colour in the
+  # part of the screen the panel took from the map; failing that, by taps up the middle of that part.
+  to_browsing
+  before=$(log_count 'car routes: preview shown, 2 routes')
+  if ! open_place 1 || ! wait_more 'car routes: preview shown, 2 routes' "$before" 12; then
+    shot_ext "$label-routes-no-second-preview"
+    ROUTES_MISSING="$ROUTES_MISSING [the route panel did not come up the second time]"
+    return 0
+  fi
+  sleep 3
+  new=$(free_area)
+  read -r nt nl nb nr <<< "$new"
+  case "$nt$nl$nb$nr" in *[!0-9]*|"") nt=$ot; nl=$ol; nb=$ob; nr=$or ;; esac
+  xcrun simctl io "$UDID" screenshot --type=png --display=external "$OUT/.routes.png" > /dev/null 2>&1
+  spot=$(python3 -I "$HERE/find_icon.py" button "$OUT/.routes.png" $((ol * CAR_S)) $((ot * CAR_S)) $((CAR_W - or * CAR_S)) $((CAR_H - ob * CAR_S)) \
+    $((nl * CAR_S)) $((nt * CAR_S)) $((CAR_W - nr * CAR_S)) $((CAR_H - nb * CAR_S)) 2>> "$LOG" | tail -n 1)
+  say "  the free area before the panel: $old; with it: $new; a filled button in what it took: $spot"
+  at=""
+  guiding=$(log_count 'car link: trip guiding')
+  before=$(log_count 'car routes: Start pressed')
+  case "$spot" in
+    found*)
+      # shellcheck disable=SC2086
+      set -- $spot
+      tap_carplay "${2%.*}" "${3%.*}"
+      wait_more 'car routes: Start pressed' "$before" 3 && at="${2%.*},${3%.*}"
+      ;;
+  esac
+  if [ -z "$at" ]; then
+    # Up the middle of what the panel took (or of the leading half of the free area when the panel took nothing).
+    if [ "$nl" -gt "$ol" ]; then spot=$(( (ol + nl) * CAR_S / 2 )); else spot=$(( ol * CAR_S + (CAR_W - or * CAR_S - ol * CAR_S) / 4 )); fi
+    y=$(( CAR_H - (ob + 14) * CAR_S ))
+    while [ "$y" -gt $(( (ot + 20) * CAR_S )) ]; do
+      tap_carplay "$spot" "$y"
+      if wait_more 'car routes: Start pressed' "$before" 2; then at="$spot,$y"; break; fi
+      y=$((y - 18 * CAR_S))
+    done
+  fi
+  if [ -z "$at" ]; then
+    shot_ext "$label-routes-no-start"
+    ROUTES_MISSING="$ROUTES_MISSING [Start was not found: neither as a filled button nor by taps up the panel]"
+    return 0
+  fi
+  wait_more 'car link: trip guiding' "$guiding" 8 || ROUTES_MISSING="$ROUTES_MISSING [guidance did not begin after Start]"
+  sleep 3
+  shot_ext "$label-routes-started"
+  ROUTES="$ROUTES; Start (tap at pixel $at) began the phone's guidance; the free area with the panel: top $nt left $nl bottom $nb right $nr"
+}
+
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
   local try lit
   CAR_W=$1
@@ -681,6 +824,16 @@ for size in $SIZES; do
             result "FAILED $label lists:$LISTS_MISSING; $LISTS"
           else
             result "OK $label lists: $LISTS; shots/$label-{saved,saved-none,search-empty,search-found,search-none,after-search,after-lists}.png"
+            # The routes to a place chosen in a list.
+            route_pictures "$label"
+            if grep -q 'car scene disconnected' "$STREAM"; then
+              result "FAILED $label routes: the car scene was disconnected while the routes were pictured; $ROUTES"
+              host_crash=1
+            elif [ -n "$ROUTES_MISSING" ]; then
+              result "FAILED $label routes:$ROUTES_MISSING; $ROUTES"
+            else
+              result "OK $label routes: $ROUTES; shots/$label-{routes,routes-left,routes-error,routes-error-left,routes-started}.png"
+            fi
           fi
         fi
       fi

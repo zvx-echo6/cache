@@ -1,18 +1,26 @@
 import CarPlay
+import MapKit
 import os
 import UIKit
 
-/// The car's lists: Saved places and Search. The twins of the Android car's SavedPlacesScreen and SearchScreen
-/// (CarScreens.kt), written against CarPlay's own templates. The words, the order of the rows and their number are Android's.
+/// The car's lists and the routes to a place: Saved places, Search and the route preview. The twins of the Android car's
+/// SavedPlacesScreen, SearchScreen and RoutePreviewScreen (CarScreens.kt), written against CarPlay's own templates. The words,
+/// the order of the rows and their number are Android's.
 ///
 /// Saved places is a list over the map with the phone's saved places, each with its distance and address, and a Search
 /// button of its own. Search is CarPlay's search screen: while its box is empty it lists the saved places; typed text is
 /// looked up by the phone (by name, address or kind of place; by meaning when the phone's search model is loaded) after a
 /// short pause in the typing, or at once when the keyboard's search key is pressed.
 ///
-/// Choosing a place does nothing yet: the routes to it are the next piece.
+/// Choosing a place goes back to the map and asks the phone for the routes to it. When they are there CarPlay's own route
+/// panel shows them on the map template: each route with its time and distance and the road it takes, and Start. Choosing
+/// another route makes the phone draw that one; Start begins the phone's guidance; the bar's Back leaves, and the phone
+/// forgets the routes. A route that cannot be found is said in a system alert.
 ///
 /// Where CarPlay's templates differ from Android's:
+/// - The route panel is CarPlay's: its start button says Android's "Start", and its other two buttons keep CarPlay's own words.
+/// - While the phone is still finding the routes CarPlay has nothing to show (Android: a spinner): the map stays as it is.
+/// - A route that cannot be found is shown in an alert, which needs a button (Android: a message, left with Back).
 /// - The search box has CarPlay's own hint; an app cannot set one (Android: "Search for a place").
 /// - The search screen has no line for "nothing found": the words are shown as one row that cannot be chosen.
 /// - A list shows its "nothing here" words as a title and a line under it: Android's one line is split at its full stop.
@@ -25,6 +33,11 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   static let noSavedTitle = "No saved places yet."
   static let noSavedDetail = "Search for a place to go."
   static let noPlacesFound = "No places found"
+  static let start = "Start"
+  /// The one button of the alert that says a route could not be found. Android has no such button (its Back key leaves).
+  static let errorButton = "OK"
+  /// The most routes shown for a place, as the phone gives them.
+  static let maxRoutes = 3
   /// The most rows a list shows, as on Android.
   static let maxRows = 6
   /// How long the typing has to pause before the phone is asked, as on Android.
@@ -44,6 +57,20 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   private var pendingSearch: DispatchWorkItem?
   private var waiting: (([CPListItem]) -> Void)?
   private var shownResults: [CPListItem] = []
+
+  /// The map template, whose route panel shows the routes to a place.
+  weak var mapTemplate: CPMapTemplate?
+  /// True from the moment a place was chosen in the car until its routes are left or guidance began.
+  private(set) var previewing = false
+  /// Called when `previewing` changes, so the map's bar shows Back in place of Search and Saved places.
+  var onPreviewChanged: (() -> Void)?
+  private var previewPlace: CarPlace?
+  private var previewStarted = false
+  private var sawRoutes = false
+  private var shownRoutes: String?
+  private var previewTrip: CPTrip?
+  private var shownError: String?
+  private var places: [String: CarPlace] = [:]
 
   /// False while the car does not allow its keyboard (many do not while moving): Search is then greyed.
   private(set) var searchAllowed = true
@@ -77,6 +104,13 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     searchTemplate = nil
     session = nil
     onSearchAllowedChanged = nil
+    onPreviewChanged = nil
+    previewing = false
+    previewPlace = nil
+    previewTrip = nil
+    shownRoutes = nil
+    shownError = nil
+    mapTemplate = nil
     interface?.delegate = nil
     interface = nil
   }
@@ -181,7 +215,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
       // The box is empty: the saved places (none, and the list is empty).
       CarLink.shared.call("saved") { [weak self] answer in
         guard let self = self, mine == self.searchSeq else { return }
-        let items = self.rows(CarPlace.list(answer), imperial: CarLink.shared.trip.imperial)
+        let items = self.rows(CarPlace.list(answer), imperial: CarLink.shared.trip.imperial, forSearch: true)
         self.answerSearch(items)
         Self.log.info("car lists: search shown, \(items.count) saved places under the empty box")
       }
@@ -204,7 +238,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     guard mine == searchSeq else { return }
     CarLink.shared.call("search", ["query": searchText]) { [weak self] answer in
       guard let self = self, mine == self.searchSeq else { return }
-      let items = self.rows(CarPlace.list(answer), imperial: CarLink.shared.trip.imperial)
+      let items = self.rows(CarPlace.list(answer), imperial: CarLink.shared.trip.imperial, forSearch: true)
       if items.isEmpty {
         let none = CPListItem(text: Self.noPlacesFound, detailText: nil)
         none.isEnabled = false
@@ -229,8 +263,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     selectedResult item: CPListItem,
     completionHandler: @escaping () -> Void
   ) {
-    if item.userInfo is String {
-      chosen()
+    if let id = item.userInfo as? String, let place = places[id] {
+      chosen(place)
     }
     completionHandler()
   }
@@ -238,23 +272,200 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   // ---- rows ----------------------------------------------------------------------------------------------------------------
 
   /// A row for each place, in the order Dart gave them: the name, and under it the distance and the address.
-  private func rows(_ places: [CarPlace], imperial: Bool) -> [CPListItem] {
+  private func rows(_ places: [CarPlace], imperial: Bool, forSearch: Bool = false) -> [CPListItem] {
     let limit = max(1, min(Self.maxRows, CPListTemplate.maximumItemCount))
     var items: [CPListItem] = []
     for place in places.prefix(limit) {
       let item = CPListItem(text: place.name, detailText: place.detail(imperial: imperial))
       item.userInfo = place.id
-      item.handler = { [weak self] _, done in
-        self?.chosen()
-        done()
+      self.places[place.id] = place
+      // In a list the row's own handler says it was chosen; the search screen says so itself (selectedResult).
+      if !forSearch {
+        item.handler = { [weak self] _, done in
+          self?.chosen(place)
+          done()
+        }
       }
       items.append(item)
     }
     return items
   }
 
-  private func chosen() {
-    Self.log.info("car lists: a place was chosen, nothing behind it yet")
+  /// A place was chosen in a list or in Search: back to the map, and the routes to it.
+  private func chosen(_ place: CarPlace) {
+    guard let interface = interface else { return }
+    // No name of the place in the log.
+    Self.log.info("car lists: a place was chosen")
+    interface.popToRootTemplate(animated: true) { _, _ in }
+    openRoutes(to: place)
+  }
+
+  // ---- the routes to a place -----------------------------------------------------------------------------------------
+
+  private func openRoutes(to place: CarPlace) {
+    if previewTrip != nil {
+      mapTemplate?.hideTripPreviews()
+      previewTrip = nil
+    }
+    previewPlace = place
+    previewStarted = false
+    sawRoutes = false
+    shownRoutes = nil
+    if !previewing {
+      previewing = true
+      onPreviewChanged?()
+    }
+    Self.log.info("car routes: directions asked")
+    CarLink.shared.call("directions", ["id": place.id]) { [weak self] answer in
+      guard let self = self, self.previewing, self.previewPlace == place else { return }
+      if !CarValue.isTrue(answer) {
+        // The phone does not know the place any more, or Dart is not up: there is nothing to show.
+        Self.log.info("car routes: the phone has no directions to give")
+        self.endPreview(tellDart: false)
+        return
+      }
+      self.showRoutes(CarLink.shared.trip)
+    }
+  }
+
+  /// What the route panel shows follows the phone's trip, as the Android route screen does.
+  private func showRoutes(_ t: CarTrip) {
+    guard previewing, let place = previewPlace else { return }
+    if t.previewing { sawRoutes = true }
+    if t.guiding {
+      // Guidance began (Start here, or on the phone) after the routes were up: the panel goes. A trip that was still
+      // guiding an older route when the place was chosen is waited out.
+      if previewStarted || sawRoutes { endPreview(tellDart: false) }
+      return
+    }
+    if previewStarted { return }
+    if !t.previewing {
+      // The phone left the routes by itself.
+      if sawRoutes { endPreview(tellDart: false) }
+      return
+    }
+    if !t.routing, let error = t.error {
+      showRouteError(error)
+      return
+    }
+    hideRouteError()
+    guard !t.routing, !t.routes.isEmpty, let map = mapTemplate else { return }
+    // Shown again only when the routes themselves changed: CarPlay keeps which one is chosen, and showing the panel
+    // again would put its choice back on the first.
+    let routes = Array(t.routes.prefix(Self.maxRoutes))
+    let name = t.destinationName ?? place.name
+    var signature: String = "\(name)|\(t.imperial)"
+    for route in routes {
+      let via: String = route.via ?? ""
+      signature += "|\(route.index):\(route.distanceM):\(route.durationS):\(via)"
+    }
+    if signature == shownRoutes { return }
+    shownRoutes = signature
+
+    let end = CLLocationCoordinate2D(latitude: t.destinationLat ?? place.lat, longitude: t.destinationLon ?? place.lon)
+    let begin = CLLocationCoordinate2D(latitude: t.lat ?? end.latitude, longitude: t.lon ?? end.longitude)
+    let destination = MKMapItem(placemark: MKPlacemark(coordinate: end))
+    destination.name = name
+    let origin = MKMapItem(placemark: MKPlacemark(coordinate: begin))
+    var choices: [CPRouteChoice] = []
+    for route in routes {
+      // As the Android rows: the time and the distance, and under them the road the route takes.
+      let title = route.title(imperial: t.imperial)
+      let via: [String] = route.via.map { [$0] } ?? []
+      let choice = CPRouteChoice(summaryVariants: [title], additionalInformationVariants: via, selectionSummaryVariants: [title])
+      choice.userInfo = route.index
+      choices.append(choice)
+    }
+    let trip = CPTrip(origin: origin, destination: destination, routeChoices: choices)
+    previewTrip = trip
+    // Android's word on the start button; CarPlay's own words on its other two.
+    let words = CPTripPreviewTextConfiguration(startButtonTitle: Self.start, additionalRoutesButtonTitle: nil, overviewButtonTitle: nil)
+    map.showTripPreviews([trip], textConfiguration: words)
+    Self.log.info("car routes: preview shown, \(choices.count) routes")
+  }
+
+  /// CarPlay says which route of the panel is chosen: the phone draws that one.
+  func routeChosen(_ choice: CPRouteChoice) {
+    guard previewing, !previewStarted, let index = choice.userInfo as? Int else { return }
+    Self.log.info("car routes: route \(index + 1) chosen")
+    if index != CarLink.shared.trip.routeIndex {
+      CarLink.shared.call("selectRoute", ["index": index])
+    }
+  }
+
+  /// Start, on the route panel.
+  func startPressed(_ choice: CPRouteChoice) {
+    guard previewing, !previewStarted else { return }
+    previewStarted = true
+    Self.log.info("car routes: Start pressed")
+    if let index = choice.userInfo as? Int, index != CarLink.shared.trip.routeIndex {
+      CarLink.shared.call("selectRoute", ["index": index])
+    }
+    mapTemplate?.hideTripPreviews()
+    previewTrip = nil
+    CarLink.shared.call("start") { [weak self] answer in
+      guard let self = self, self.previewing, self.previewStarted, !CarValue.isTrue(answer) else { return }
+      // The phone did not begin guidance: the routes are shown again.
+      Self.log.info("car routes: guidance did not begin")
+      self.previewStarted = false
+      self.shownRoutes = nil
+      self.showRoutes(CarLink.shared.trip)
+    }
+  }
+
+  /// The bar's Back while the routes are up.
+  func leaveRoutes() {
+    guard previewing else { return }
+    Self.log.info("car routes: preview left")
+    endPreview(tellDart: !previewStarted)
+  }
+
+  private func endPreview(tellDart: Bool) {
+    let was = previewing
+    previewing = false
+    previewPlace = nil
+    previewStarted = false
+    sawRoutes = false
+    shownRoutes = nil
+    if previewTrip != nil {
+      mapTemplate?.hideTripPreviews()
+      previewTrip = nil
+    }
+    hideRouteError()
+    if tellDart {
+      CarLink.shared.call("cancel")
+    }
+    if was {
+      onPreviewChanged?()
+    }
+  }
+
+  private func showRouteError(_ text: String) {
+    guard shownError != text, let interface = interface else { return }
+    hideRouteError()
+    if previewTrip != nil {
+      mapTemplate?.hideTripPreviews()
+      previewTrip = nil
+      shownRoutes = nil
+    }
+    shownError = text
+    let button = CPAlertAction(title: Self.errorButton, style: .cancel) { [weak self] _ in
+      self?.leaveRoutes()
+    }
+    let alert = CPAlertTemplate(titleVariants: [text], actions: [button])
+    interface.presentTemplate(alert, animated: true) { _, error in
+      if let error = error {
+        Self.log.error("car routes: the alert could not be shown: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+    // The words are the phone's; the log only says that they are up.
+    Self.log.info("car routes: an alert says the route could not be found, \(text.count) characters")
+  }
+
+  private func hideRouteError() {
+    guard shownError != nil else { return }
+    shownError = nil
+    interface?.dismissTemplate(animated: true) { _, _ in }
   }
 
   // ---- what is on the screen -------------------------------------------------------------------------------------------
@@ -292,9 +503,14 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   }
 
   /// The list does not change with every position; only the units its distances are in can (the first trip says which).
+  /// The route panel follows the trip.
   func carLinkTrip(_ trip: CarTrip) {
-    guard savedTemplate != nil, saved != nil, shownImperial != trip.imperial else { return }
-    showSaved()
+    if savedTemplate != nil, saved != nil, shownImperial != trip.imperial {
+      showSaved()
+    }
+    if previewing {
+      showRoutes(trip)
+    }
   }
 
   func sessionConfiguration(

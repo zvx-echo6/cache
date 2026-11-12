@@ -98,6 +98,37 @@ class _HarnessAppState extends State<HarnessApp> {
         return query.trim().length == 1 ? jsonDecode(recorded['search']!) : <Object?>[];
       case 'snapshot':
         return jsonDecode(recorded['trip_${_phases[_phase]}']!);
+      case 'directions':
+        // As car_bridge.dart: true when the place is one the car was shown, and the routes to it follow in the trip. The
+        // third saved place stands for one no route can be found to yet.
+        final Object? to = call.arguments;
+        final String id = to is Map && to['id'] is String ? to['id'] as String : '';
+        final List<Object?> known = <Object?>[...jsonDecode(recorded['saved']!) as List, ...jsonDecode(recorded['search']!) as List];
+        if (!known.any((Object? p) => p is Map && p['id'] == id)) return false;
+        _phase = 1;
+        if (id == (known[2] as Map)['id']) {
+          unawaited(_pushRaw(recorded['trip_error']!, recorded['route_none']!));
+        } else {
+          unawaited(_push());
+        }
+        return true;
+      case 'selectRoute':
+        // The other route is the chosen one now: the trip says so and the line is drawn the other way round.
+        final Object? which = call.arguments;
+        final int index = which is Map && which['index'] is int ? which['index'] as int : 0;
+        final Map<String, dynamic> trip = jsonDecode(recorded['trip_previewing']!) as Map<String, dynamic>;
+        trip['routeIndex'] = index;
+        trip['routeId'] = 'route-$index';
+        unawaited(_pushRaw(jsonEncode(trip), recorded[index == 0 ? 'route_previewing' : 'route_previewing_alt']!));
+        return null;
+      case 'start':
+        _phase = 2;
+        await _push();
+        return true;
+      case 'cancel':
+        _phase = 0;
+        await _push();
+        return null;
       case 'style':
         // As car_bridge.dart answers: the style as text, and the colours of what the car draws on top.
         final Object? asked = call.arguments;
@@ -105,6 +136,12 @@ class _HarnessAppState extends State<HarnessApp> {
         return <String, Object?>{'style': recorded['style_$look'], 'colors': jsonDecode(recorded['colors_$look']!)};
     }
     return null;
+  }
+
+  Future<void> _pushRaw(String trip, String route) async {
+    await _car.invokeMethod<void>('trip', jsonDecode(trip));
+    _pushed++;
+    await _car.invokeMethod<void>('route', jsonDecode(route));
   }
 
   /// The trip of the phase and then its route line, in the order car_bridge.dart pushes them.

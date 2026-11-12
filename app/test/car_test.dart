@@ -170,7 +170,7 @@ void main() {
       }
       expect(nav.routes[nav.routeIndex].bounds, hasLength(4));
 
-      for (final name in const ['route_previewing', 'route_guiding']) {
+      for (final name in const ['route_previewing', 'route_previewing_alt', 'route_guiding']) {
         final message = recorded(name);
         expect(message.keys.toSet(), {'geojson', 'bounds'}, reason: name);
         final line = jsonDecode(message['geojson'] as String) as Map<String, dynamic>;
@@ -211,6 +211,15 @@ void main() {
         final r = row as Map;
         final fmt = Fmt(r['imperial'] == true ? UnitSystem.imperial : UnitSystem.metric);
         expect(fmt.distance((r['meters'] as num).toDouble()), r['text'], reason: '${r['meters']} m');
+      }
+    });
+
+    test('the times recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/durations.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        expect(const Fmt(UnitSystem.imperial).duration(r['seconds'] as int), r['text'], reason: '${r['seconds']} s');
       }
     });
 

@@ -161,6 +161,25 @@ enum CarText {
   private static func step(_ value: Double, _ by: Double) -> Int {
     Int((value / by).rounded() * by)
   }
+
+  /// "5 min", "1 h 25 min", "2 d 3 h": a time in the phone's words (Fmt.duration).
+  static func duration(_ seconds: Int64) -> String {
+    let mins = Int((Double(seconds) / 60).rounded())
+    if mins < 1 { return "1 min" }
+    if mins < 60 { return "\(mins) min" }
+    let hours = mins / 60
+    let rest = mins % 60
+    if hours < 24 { return rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min" }
+    let days = hours / 24
+    return hours % 24 == 0 ? "\(days) d" : "\(days) d \(hours % 24) h"
+  }
+}
+
+extension CarRoute {
+  /// "21 min · 16 mi": the route's time and distance, as the Android car's route rows have them.
+  func title(imperial: Bool) -> String {
+    "\(CarText.duration(durationS)) · \(CarText.distance(distanceM, imperial: imperial))"
+  }
 }
 
 /// Reading the channel's plain values the way the Android side does: a boolean is not a number, a number is not a boolean,

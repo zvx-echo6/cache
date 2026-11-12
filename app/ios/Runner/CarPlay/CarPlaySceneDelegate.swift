@@ -17,6 +17,9 @@ enum CarPlayBuild {
 /// one Flutter engine is running and the car knows the trip Dart pushes. The map draws the route, the destination and the
 /// position from it; the turn, the distances and the arrival time are not shown yet.
 ///
+/// While the routes to a place are up (CarTemplates) the bar holds Back in place of the two buttons, and CarPlay's own route
+/// panel is on the map.
+///
 /// The map's buttons, as on the Android car screen: Pan, Recenter (only after the map was moved), Zoom in, Zoom out. CarPlay
 /// gives no way out of its panning arrows and shows at most two map buttons with them: while panning the two are Zoom in and
 /// Zoom out, and the bar holds one button, Done, in place of Search and Saved places.
@@ -33,6 +36,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
   private lazy var searchButton = barButton("magnifyingglass") { [weak self] in self?.templates?.openSearch() }
   private lazy var savedButton = barButton("bookmark") { [weak self] in self?.templates?.openSaved() }
+  private lazy var backButton = barButton("chevron.backward") { [weak self] in self?.templates?.leaveRoutes() }
   private lazy var doneButton = CPBarButton(title: "Done") { [weak self] _ in self?.endPanning() }
   private lazy var panButton = mapButton("arrow.up.and.down.and.arrow.left.and.right") { [weak self] in self?.beginPanning() }
   private lazy var recenterButton = mapButton("location.fill") { [weak self] in self?.mapController?.recenter() }
@@ -59,11 +63,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
       guard let self = self, let lists = self.templates else { return }
       self.searchButton.isEnabled = lists.searchAllowed
     }
+    lists.onPreviewChanged = { [weak self] in self?.showButtons() }
     templates = lists
     searchButton.isEnabled = lists.searchAllowed
 
     let template = CPMapTemplate()
     template.mapDelegate = self
+    lists.mapTemplate = template
     // The buttons stay: by default the bar hides after a while with no touch.
     template.automaticallyHidesNavigationBar = false
     mapTemplate = template
@@ -155,6 +161,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     guard let template = mapTemplate else { return }
     if panning {
       template.mapButtons = [zoomInButton, zoomOutButton]
+      template.leadingNavigationBarButtons = []
       template.trailingNavigationBarButtons = [doneButton]
       return
     }
@@ -165,8 +172,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     buttons.append(zoomInButton)
     buttons.append(zoomOutButton)
     template.mapButtons = buttons
+    if let lists = templates, lists.previewing {
+      // The routes to a place are up: Back leaves them, as on the Android route screen.
+      template.leadingNavigationBarButtons = [backButton]
+      template.trailingNavigationBarButtons = []
+      return
+    }
     // Search on the left and Saved places on the right, as on the Android car screen: CarPlay lays the trailing buttons out
     // from the edge inwards, so the one at the edge comes first.
+    template.leadingNavigationBarButtons = []
     template.trailingNavigationBarButtons = [savedButton, searchButton]
   }
 
@@ -178,6 +192,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     let button = CPMapButton { _ in pressed() }
     button.image = UIImage(systemName: symbol)
     return button
+  }
+
+  // ---- the route panel (CarTemplates has the rest) ------------------------------------------------------------------------
+
+  func mapTemplate(_ mapTemplate: CPMapTemplate, selectedPreviewFor trip: CPTrip, using routeChoice: CPRouteChoice) {
+    templates?.routeChosen(routeChoice)
+  }
+
+  func mapTemplate(_ mapTemplate: CPMapTemplate, startedTrip trip: CPTrip, using routeChoice: CPRouteChoice) {
+    templates?.startPressed(routeChoice)
   }
 
   // ---- panning -------------------------------------------------------------------------------------------------------------

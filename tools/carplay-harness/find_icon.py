@@ -5,6 +5,9 @@
     find_icon.py lit  <png>                        -> "lit <percent>": how much of the picture is not black
     find_icon.py host <png> <screen width in points> <x> <y> <w> <h>
                                                    -> only inside that window (points), answer in screen points
+    find_icon.py button <png> <x0> <y0> <x1> <y1> [<sx0> <sy0> <sx1> <sy1>]
+                                                   -> the largest patch of any strong colour (a filled button) inside the
+                                                      first box and outside the second, answer in picture pixels
 
 Prints one line: "found <x> <y> count=<n> box=<x>,<y>,<w>,<h> image=<w>x<h>" or "none image=<w>x<h> most=<n>".
 The answer is the middle of the largest connected patch of magenta pixels. Standard library only: the PNG is decoded here.
@@ -96,6 +99,37 @@ def magenta_patch(width, height, rows, bpp, step, x0, y0, x1, y1):
     return best
 
 
+def colour_patch(width, height, rows, bpp, step, box, skip):
+    """The largest connected patch of strongly coloured pixels inside `box` and outside `skip` (x0, y0, x1, y1 each)."""
+    x0, y0, x1, y1 = max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3])
+    hits = set()
+    for y in range(y0, y1):
+        line = rows[y]
+        inside_rows = skip is not None and skip[1] <= y < skip[3]
+        for x in range(x0, x1):
+            if inside_rows and skip[0] <= x < skip[2]:
+                continue
+            i = x * bpp
+            r, g, b = line[i], line[i + step], line[i + 2 * step]
+            high, low = max(r, g, b), min(r, g, b)
+            if high > 130 and high - low > 90:
+                hits.add((x, y))
+    best, left = [], hits
+    while left:
+        seed = left.pop()
+        patch, stack = [seed], [seed]
+        while stack:
+            x, y = stack.pop()
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if n in left:
+                    left.remove(n)
+                    patch.append(n)
+                    stack.append(n)
+        if len(patch) > len(best):
+            best = patch
+    return best
+
+
 def lit_percent(width, height, rows, bpp, step):
     """How much of the picture is not black: sampled every 6th pixel of every 6th row."""
     seen = lit = 0
@@ -113,6 +147,19 @@ def main():
     mode, path = sys.argv[1], sys.argv[2]
     if mode == "lit":
         print("lit %.1f" % lit_percent(*read_png(path)))
+        return 0
+    if mode == "button":
+        numbers = [int(float(v)) for v in sys.argv[3:11]]
+        box = tuple(numbers[0:4])
+        skip = tuple(numbers[4:8]) if len(numbers) == 8 else None
+        width, height, rows, bpp, step = read_png(path)
+        patch = colour_patch(width, height, rows, bpp, step, box, skip)
+        if len(patch) < 400:
+            print("none image=%dx%d most=%d" % (width, height, len(patch)))
+            return 1
+        xs, ys = [p[0] for p in patch], [p[1] for p in patch]
+        bx, by, bw, bh = min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+        print("found %.1f %.1f count=%d box=%d,%d,%d,%d image=%dx%d" % (bx + bw / 2.0, by + bh / 2.0, len(patch), bx, by, bw, bh, width, height))
         return 0
     scale, rect, last_row = 1.0, None, None
     if mode == "host":
