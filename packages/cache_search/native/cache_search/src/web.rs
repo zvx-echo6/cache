@@ -15,7 +15,7 @@
 use crate::conv::one_line;
 use crate::error::{Error, Result};
 use crate::html;
-use cache_tool::{text_marker, Tool, ToolCtx, ToolError, ToolOutput};
+use cache_tool::{Piece, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
 use std::error::Error as StdError;
 use std::io::Read;
@@ -716,7 +716,8 @@ impl Tool for WebSearchTool {
         let hits = result.map_err(|e| scrub(e, &key))?;
         let stamp = fetched_stamp(ctx.now);
         let mut seen: Vec<String> = Vec::new();
-        let mut lines: Vec<String> = Vec::new();
+        let mut pieces: Vec<Piece> = Vec::new();
+        let mut count = 0usize;
         let mut notes: Vec<(String, WebNote)> = Vec::new();
         for h in hits {
             let Some(url) = clean_url(&h.url) else { continue };
@@ -730,21 +731,28 @@ impl Tool for WebSearchTool {
             }
             let snippet = html::snippet_from_text(&clean(&plain_fragment(&h.snippet), false), snippet_chars);
             let address = format!("web:{url}");
-            let mut line = format!("{} {title} (web, fetched {stamp})", text_marker(&address));
+            // the id map keeps the title with its "(web, fetched ...)" label, as it always has
+            let shown = format!("{title} (web, fetched {stamp})");
+            let mut line = format!(" {shown}");
             if !snippet.is_empty() {
                 line.push_str(&format!(" \u{2014} {snippet}"));
             }
-            lines.push(line);
+            if count > 0 {
+                pieces.push(Piece::text("\n"));
+            }
+            pieces.push(Piece::reference(address.as_str(), shown));
+            pieces.push(Piece::Text(line));
+            count += 1;
             notes.push((address, WebNote { title, snippet, fetched: stamp.clone() }));
-            if lines.len() >= WEB_HITS {
+            if count >= WEB_HITS {
                 break;
             }
         }
-        if lines.is_empty() {
+        if pieces.is_empty() {
             return Ok(ToolOutput::Text("No results found.".to_string()));
         }
         lock(&self.0.pending).extend(notes);
-        Ok(ToolOutput::Text(lines.join("\n")))
+        Ok(ToolOutput::Pieces(pieces))
     }
 }
 

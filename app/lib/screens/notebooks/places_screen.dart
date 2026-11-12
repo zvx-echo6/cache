@@ -22,6 +22,7 @@ import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
+import '../../maps/ui/place_map.dart' show PlaceFixScope;
 import 'map_spot_picker.dart';
 import 'photo_viewer.dart';
 import 'notebook_editor.dart';
@@ -150,7 +151,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
       photos: e.photos,
       files: e.files,
       private: e.private,
-      props: {...e.props, if (e.color != null || book.def.color == null) 'color': e.color ?? defaultMarkerColor(_entries ?? const []).id, 'on_map': !e.onMap},
+      props: {...e.props, 'on_map': !e.onMap},
     );
   }
 
@@ -158,7 +159,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
 
   void _edit(Notebook book, NbEntry? e, {NbPlace? at}) {
     if (e != null) HapticFeedback.mediumImpact();
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceForm(deps: widget.deps, book: book, entry: e, at: at, others: _entries ?? const [])));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceForm(deps: widget.deps, book: book, entry: e, at: at)));
   }
 
   Future<void> _menu(Notebook book, String choice) async {
@@ -607,7 +608,7 @@ class PlaceView extends StatelessWidget {
 /// the pin), the name, the marker colour, Show on the map, one "Weather and alerts" row (saved places), notes (Markdown),
 /// photos, Save, and Delete place (with a confirm) when editing.
 class PlaceForm extends StatefulWidget {
-  const PlaceForm({super.key, required this.deps, required this.book, this.entry, this.at, this.others = const []});
+  const PlaceForm({super.key, required this.deps, required this.book, this.entry, this.at});
 
   final NotebookDeps deps;
   final Notebook book;
@@ -617,9 +618,6 @@ class PlaceForm extends StatefulWidget {
 
   /// Where a new place starts (a spot held on the map); null starts at Here.
   final NbPlace? at;
-
-  /// The notebook's places (for the default colour).
-  final List<NbEntry> others;
 
 
   @override
@@ -633,9 +631,9 @@ class _PlaceFormState extends State<PlaceForm> {
   late final MarkdownController _notes = MarkdownController(text: widget.entry?.body ?? '');
   final TextEditingController _search = TextEditingController();
   late NbPlace? _pin = widget.entry?.place ?? widget.at;
-  late MarkerColor _color = widget.entry?.color != null
-      ? markerColor(widget.entry!.color)
-      : (widget.book.def.color != null ? markerColor(widget.book.def.color) : defaultMarkerColor(widget.others));
+  /// The colour the person gave this place, or null: a place with none follows its notebook's colour (or the default).
+  late MarkerColor? _picked = widget.entry?.color != null ? markerColor(widget.entry!.color) : null;
+  MarkerColor get _color => _picked ?? markerColor(widget.book.def.color);
   late bool _onMap = widget.entry?.onMap ?? true;
   late String? _icon = widget.entry?.icon;
   MapIconSetup? get _icons => widget.deps.icons;
@@ -648,6 +646,12 @@ class _PlaceFormState extends State<PlaceForm> {
   bool _saving = false;
   String? _error;
 
+  /// The person has touched the form's map: a position that arrives later leaves it where they put it.
+  bool _touched = false;
+
+  /// A position fix is still being read (false once it answered that there is none).
+  bool _fixComing = true;
+
   String? get _id => widget.entry == null ? null : watchId(widget.entry!);
   bool get _isNew => widget.entry == null;
   bool get _weatherApplies => widget.book.savedPlaces && pd != null;
@@ -657,8 +661,15 @@ class _PlaceFormState extends State<PlaceForm> {
     super.initState();
     if (_pin == null) {
       widget.deps.places.herePlace().then((p) {
-        if (mounted && _pin == null && p != null) setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
-      }).catchError((_) {});
+        if (!mounted) return;
+        if (p == null) {
+          setState(() => _fixComing = false);
+        } else if (_pin == null && !_touched) {
+          setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
+        }
+      }).catchError((_) {
+        if (mounted) setState(() => _fixComing = false);
+      });
     }
   }
 
@@ -748,11 +759,11 @@ class _PlaceFormState extends State<PlaceForm> {
         private: e?.private ?? false,
         props: {
           ...?e?.props,
-          // A place's own colour only when it differs from its notebook's.
-          if (widget.book.def.color == null || _color.id != widget.book.def.color) 'color': _color.id,
+          // A place has its own colour only when the person picked one that differs from its notebook's.
+          if (_picked != null && _picked!.id != widget.book.def.color) 'color': _picked!.id,
           'on_map': _onMap,
           if (_icons != null && _icon != null) 'icon': _icon,
-        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && widget.book.def.color != null && _color.id == widget.book.def.color)),
+        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && (_picked == null || _picked!.id == widget.book.def.color))),
       );
       _added.clear();
       final id = watchId(saved);
@@ -836,7 +847,7 @@ class _PlaceFormState extends State<PlaceForm> {
               // 220 high, less on a short window (a phone held sideways), so the name and the switches show under it.
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))),
+                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: PlaceFixScope(coming: _fixComing, child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _touched = true, child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))))),
               ),
               if (pd?.pickerMap != null)
                 Align(
@@ -903,12 +914,12 @@ class _PlaceFormState extends State<PlaceForm> {
                     button: true,
                     selected: c.id == _color.id,
                     label: c.spoken,
-                    onTap: () => setState(() => _color = c),
+                    onTap: () => setState(() => _picked = c),
                     excludeSemantics: true,
                     child: InkResponse(
                       key: ValueKey('swatch-${c.id}'),
                       radius: 22,
-                      onTap: () => setState(() => _color = c),
+                      onTap: () => setState(() => _picked = c),
                       child: SizedBox(
                         width: 44,
                         height: 44,

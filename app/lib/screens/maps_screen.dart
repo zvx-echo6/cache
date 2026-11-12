@@ -609,58 +609,10 @@ class _MapsScreenState extends State<MapsScreen> {
 
   void _notebookCard(NbEntry e) {
     final book = widget.notebooks?.notebook(e.notebookId);
-    final place = e.place!;
     showFittedSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(entryTitle(e), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: ctx.t.text)),
-              Text([?book?.name, dayText(e.when, now: DateTime.now()), place.display].join(' · '), style: TextStyle(fontSize: 15, color: ctx.t.secondary)),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  if (widget.onOpenEntry != null)
-                    FilledButton(
-                      key: const ValueKey('pin-open'),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        widget.onOpenEntry!(e);
-                      },
-                      child: const Text('Open'),
-                    ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    key: const ValueKey('pin-directions'),
-                    onPressed: nav.phase != NavPhase.browsing
-                        ? null
-                        : () {
-                            Navigator.pop(ctx);
-                            nav.select(MapPlace(
-                              id: 'notebook:${e.id}',
-                              type: 'place',
-                              name: entryTitle(e),
-                              kind: book?.name ?? '',
-                              address: place.label ?? '',
-                              lat: place.lat,
-                              lon: place.lon,
-                              matched: '',
-                              formats: const {},
-                            ));
-                          },
-                    child: const Text('Directions'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+      builder: (ctx) => NotebookPinSheet(entry: e, book: book, nav: nav, onOpenEntry: widget.onOpenEntry),
     );
   }
 
@@ -1036,7 +988,7 @@ class _MapsScreenState extends State<MapsScreen> {
     final insetFor = '${r.routeId}|$_key|$side|$ratio';
     if (_insetFor != insetFor) {
       _insetFor = insetFor;
-      final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: Size(side, side), padding: const EdgeInsets.fromLTRB(14, 16, 14, 16));
+      final cam = OverviewCamera.fit(south: b[0], west: b[1], north: b[2], east: b[3], size: insetPictureSize(side), padding: insetPicturePadding);
       unawaited(_render(style, r, cam, ratio, full: false, sig: insetFor));
     }
     if (_swapped && !stack.isEmpty) {
@@ -1114,7 +1066,12 @@ class _MapsScreenState extends State<MapsScreen> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (!_swapped) RouteOverview(key: const ValueKey('route-overview-inset'), picture: _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const []),
+                  if (!_swapped)
+                    // The picture is taller than the corner by the strip the snapshotter draws its credit in; that strip is cut off.
+                    CreditStripCrop(
+                      key: const ValueKey('route-overview-crop'),
+                      child: RouteOverview(key: const ValueKey('route-overview-inset'), picture: _insetPicture, palette: _palette, position: _overviewPosition, route: nav.route?.points ?? const []),
+                    ),
                   Positioned(
                     left: 5,
                     top: 5,
@@ -1449,24 +1406,18 @@ class _MapsScreenState extends State<MapsScreen> {
                     Center(child: NoticePill(text: maps.notice!)),
                     const SizedBox(height: 8),
                   ],
-                  if (!searching)
+                  if (!searching) ...[
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2),
-                              const SizedBox(height: 6),
-                              AttributionChip(lines: maps.attributions, onTap: _showCredits),
-                            ],
-                          ),
-                        ),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
                         if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
                       ],
                     ),
+                    // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
+                    const SizedBox(height: 6),
+                    Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
+                  ],
                 ],
               ),
             ),
@@ -1523,20 +1474,13 @@ class _MapsScreenState extends State<MapsScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2),
-                          const SizedBox(height: 6),
-                          AttributionChip(lines: maps.attributions, onTap: _showCredits),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
                     if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
                   ],
                 ),
+                // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
+                const SizedBox(height: 6),
+                Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
                 const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)
@@ -1628,5 +1572,70 @@ class MeasurePanel extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// The sheet of a notebook pin tapped on the map: its title and place, Open (the entry) and Directions (one tap to the route
+/// preview, as the place card's own Directions is).
+class NotebookPinSheet extends StatelessWidget {
+  const NotebookPinSheet({super.key, required this.entry, required this.book, required this.nav, this.onOpenEntry});
+
+  final NbEntry entry;
+  final Notebook? book;
+  final NavState nav;
+  final void Function(NbEntry)? onOpenEntry;
+
+  @override
+  Widget build(BuildContext ctx) {
+    final e = entry;
+    final place = e.place!;
+    return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(entryTitle(e), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: ctx.t.text)),
+              Text([?book?.name, dayText(e.when, now: DateTime.now()), place.display].join(' · '), style: TextStyle(fontSize: 15, color: ctx.t.secondary)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (onOpenEntry != null)
+                    FilledButton(
+                      key: const ValueKey('pin-open'),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        onOpenEntry!(e);
+                      },
+                      child: const Text('Open'),
+                    ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    key: const ValueKey('pin-directions'),
+                    onPressed: nav.phase != NavPhase.browsing || !nav.available
+                        ? null
+                        : () {
+                            Navigator.pop(ctx);
+                            nav.openDirections(MapPlace(
+                              id: 'notebook:${e.id}',
+                              type: 'place',
+                              name: entryTitle(e),
+                              kind: book?.name ?? '',
+                              address: place.label ?? '',
+                              lat: place.lat,
+                              lon: place.lon,
+                              matched: '',
+                              formats: const {},
+                            ));
+                          },
+                    child: const Text('Directions'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
   }
 }

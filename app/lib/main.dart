@@ -29,6 +29,7 @@ import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
+import 'chat/prompt_read_ahead.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
@@ -114,6 +115,7 @@ import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
+import 'platform/model_release.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -685,6 +687,17 @@ class _CacheAppState extends State<CacheApp> {
     actions: actionRegistry,
     actCore: actCore,
   );
+  /// Reads the chat prompt's start into the model's cache while Ask is shown (chat/prompt_read_ahead.dart). It reads what the chat
+  /// would send, never loads the model, and sits out a hot device by the same heat signal as the index work.
+  late final PromptReadAhead promptReadAhead = PromptReadAhead(
+    engine: LocalReadAhead(app.session, extras: () => app.activeSettings.requestExtras, busy: () => chat.busy),
+    request: (cancelled) => chat.warmRequest(isCancelled: cancelled),
+    isHot: () async {
+      await indexThrottle.read();
+      return indexThrottle.hot;
+    },
+    waitForFix: chatLocation.waitForFix,
+  );
   // What the assistant can do through the act tool: each module's actions, handed back by the core for read and open (host_run) and
   // run by a tap on a confirm card for change. The chat installs a conversation's definitions in the core when it starts.
   final ActionRegistry actionRegistry = ActionRegistry();
@@ -771,6 +784,13 @@ class _CacheAppState extends State<CacheApp> {
   });
   // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
   // and directions.
+  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places, else a downloaded region's centre.
+  Future<({double lat, double lon, double zoom})?> _placeMapFallback() async {
+    final last = maps.savedCamera;
+    if (last != null && last.zoom >= 6) return placeFallbackCamera(last: last);
+    return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
+  }
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -790,8 +810,8 @@ class _CacheAppState extends State<CacheApp> {
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
     hereOnMap: () => location.enabled,
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
-    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look),
-    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false),
+    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
+    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
@@ -861,7 +881,21 @@ class _CacheAppState extends State<CacheApp> {
       },
       // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
       // search box does (SearchModel.aboutToSearch).
-      onStateChange: searchModel.onLifecycle,
+      onStateChange: (state) {
+        searchModel.onLifecycle(state);
+        // The chat model is let go after a grace period in the back with no answer being written; back in front cancels it.
+        switch (state) {
+          case AppLifecycleState.hidden:
+          case AppLifecycleState.paused:
+            promptReadAhead.toBackground();
+            _modelRelease.toBackground();
+          case AppLifecycleState.resumed:
+            _modelRelease.toFront();
+          case AppLifecycleState.inactive:
+          case AppLifecycleState.detached:
+            break;
+        }
+      },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
         _foregroundUpdates.back();
@@ -905,8 +939,11 @@ class _CacheAppState extends State<CacheApp> {
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
     // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading)) return;
-      searchModel.onTrim(level);
+      // Android 14 and later no longer send levels 10 to 19; older Androids do, and the chat model goes at once.
+      // Going to the back (UI_HIDDEN and beyond) starts the grace period of the release below.
+      if (trimMeansBackground(level)) _modelRelease.toBackground();
+      if (releaseModelOn(level, reading)) searchModel.onTrim(level);
+      if (!releaseChatModelNowOn(level)) return;
       if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
@@ -1103,6 +1140,14 @@ class _CacheAppState extends State<CacheApp> {
     update: () => weather.updateNow(),
     wanted: foregroundUpdatesWanted(),
   );
+  late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
+    // A load in flight holds the release like an answer does: it never unloads a model the person just asked for, and when the
+    // load ends with Cache still in the back, a new grace period starts.
+    busy: () => chat.busy || app.loading != null,
+    loaded: () => app.active != null,
+    release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
+    changes: Listenable.merge([chat, app]),
+  );
   int? _backendGeneration;
   bool? _scheduledFor;
   bool _askedNotifications = false;
@@ -1172,6 +1217,7 @@ class _CacheAppState extends State<CacheApp> {
   void dispose() {
     _lifecycle.dispose();
     _foregroundUpdates.dispose();
+    _modelRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
@@ -1269,6 +1315,7 @@ class _CacheAppState extends State<CacheApp> {
           sources: sources,
           location: location,
           chatLocation: chatLocation,
+          readAhead: promptReadAhead,
           maps: maps,
           video: video,
           browse: browse,
