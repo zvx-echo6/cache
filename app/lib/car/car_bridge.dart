@@ -250,7 +250,9 @@ class CarBridge {
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
     elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
-    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, elevationAlong: p == null || nav.route == null ? null : elevation?.carPosition(p.distanceAlongM, nav.route!.distanceM), theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
+    // Keeps where the position is on the profile current, so a re-route carries the chart over from the right place.
+    if (p != null && nav.route != null) elevation?.positionOnProfile(p.distanceAlongM, nav.route!.distanceM);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, climbAhead: elevation?.climbAhead, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
   }
 
   Future<void> push() async {

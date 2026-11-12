@@ -258,7 +258,7 @@ class DriveExtras extends StatelessWidget {
     final dest = nav.selected;
     final overview = r == null
         ? null
-        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, profileAlong: elevation.carPosition(p?.distanceAlongM, r.distanceM), destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
+        : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, climbAhead: elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -289,15 +289,11 @@ class DriveElevation extends StatelessWidget {
     final fmt = nav.fmt;
     final prof = elevation.profile;
     final Widget body;
-    if (prof == null) {
-      body = Row(
-        children: [
-          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: k.secondary)),
-          const SizedBox(width: 10),
-          Text('Reading the elevation', style: TextStyle(fontSize: 16, color: k.secondary)),
-        ],
-      );
-    } else if (!prof.hasData) {
+    if (prof == null || (!prof.hasData && elevation.loading)) {
+      // Nothing read yet: the frame and its guide lines, never a message or a spinner. The first chunk draws into it.
+      body = CustomPaint(key: const ValueKey('elevation-frame'), painter: _EmptyChartPainter(k.secondary.withValues(alpha: 0.35)), child: const SizedBox.expand());
+    } else if (!prof.chartable) {
+      // The read is done and found no data, or the route is too short to chart: the panel's own line.
       body = Row(
         key: const ValueKey('elevation-none'),
         children: [
@@ -308,7 +304,7 @@ class DriveElevation extends StatelessWidget {
       );
     } else {
       final pos = elevation.positionOnProfile(nav.progress?.distanceAlongM, nav.route?.distanceM ?? 0);
-      final steep = prof.steepestClimbAhead(pos ?? 0);
+      final steep = elevation.climbAhead(pos ?? 0);
       final where = steep == null ? '' : (pos == null || steep.startM - pos < 1 ? ', starts here' : ', in ${fmt.distance(steep.startM - pos)}');
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -345,7 +341,8 @@ class DriveElevation extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: Text.rich(
                         TextSpan(children: [
-                          TextSpan(text: steep == null ? 'None' : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
+                          // While the chunks are still coming and none holds a climb yet, no value (not "None", not a message).
+                          TextSpan(text: steep == null ? (elevation.loading ? ' ' : 'None') : '${(steep.grade * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w700)),
                           if (steep != null) TextSpan(text: ' for ${fmt.distance(steep.lengthM)}$where'),
                         ]),
                         maxLines: 1,
@@ -373,7 +370,7 @@ class DriveElevation extends StatelessWidget {
             children: [
               Flexible(child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('Elevation', maxLines: 1, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: k.text)))),
               const SizedBox(width: 8),
-              if (prof != null && prof.hasData) Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Whole route, ${routeLengthText(fmt, prof.totalM)}', maxLines: 1, style: TextStyle(fontSize: 13, color: k.secondary)))),
+              if (prof != null && prof.chartable) Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Whole route, ${routeLengthText(fmt, prof.totalM)}', maxLines: 1, style: TextStyle(fontSize: 13, color: k.secondary)))),
             ],
           ),
           const SizedBox(height: 4),
@@ -458,8 +455,7 @@ class RouteMiniMapPainter extends CustomPainter {
     final end = route.last;
     if (steep != null) {
       final at = px.last;
-      // The pill is left out when it would lie under the destination dot (as the car's is).
-      if ((at.dx - end.dx).abs() >= (14 + 6 + 2) * s || (at.dy - end.dy).abs() >= (10 + 6 + 2) * s) _pill(canvas, at, s);
+      if (pillFits(at, end, s)) _pill(canvas, at, s);
     }
     canvas.drawCircle(route.first, 5 * s, fill(colors['startDot']!));
     canvas.drawCircle(end, 6 * s, fill(colors['destDot']!));
@@ -467,6 +463,10 @@ class RouteMiniMapPainter extends CustomPainter {
     canvas.drawCircle(here, 8 * s, fill(colors['posFill']!));
     canvas.drawCircle(here, 8 * s, stroke(colors['posRing']!, 3 * s));
   }
+
+  /// The car's rule (CarOverlayPainter.miniBadgeFits): the pill is left out when it would lie under the destination dot, which is
+  /// where a climb at the end of the route puts it. The pill is 28 x 20, the dot's radius 6, and a gap of 2.
+  static bool pillFits(Offset steep, Offset end, double s) => (steep.dx - end.dx).abs() >= (14 + 6 + 2) * s || (steep.dy - end.dy).abs() >= (10 + 6 + 2) * s;
 
   /// The grade pill without its figure: a rounded 28 x 20 pill with the slope triangle.
   void _pill(Canvas canvas, Offset c, double s) {
@@ -525,4 +525,27 @@ class RouteMiniMapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(RouteMiniMapPainter old) => old.overview != overview || old.colors != colors;
+}
+
+/// The elevation box before the first chunk: dashed guide lines across it (where the chart will draw), no words.
+class _EmptyChartPainter extends CustomPainter {
+  _EmptyChartPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    for (final f in const [0.15, 0.5, 0.85]) {
+      final y = size.height * f;
+      for (var x = 0.0; x < size.width; x += 10) {
+        canvas.drawLine(Offset(x, y), Offset(math.min(x + 5, size.width), y), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_EmptyChartPainter old) => old.color != color;
 }

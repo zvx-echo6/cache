@@ -174,3 +174,16 @@ class DriveRig {
     nav.poke();
   }
 }
+
+/// A profile along the sample route that is flat but for one short steep climb at the destination end: 17 % over 0.3 mi (480 m).
+ElevationProfile driveEndClimbProfile() {
+  final d = <double>[], e = <double>[];
+  for (var x = 0.0; x <= 24600; x += 40) {
+    d.add(x);
+    e.add(1200 + (x < 24100 ? 0 : (x - 24100) * 0.17));
+  }
+  return ElevationProfile.fromSamples(d, e, totalM: 24600);
+}
+
+/// A route a few feet long (an arrival after 10 ft).
+ElevationProfile driveTinyProfile() => ElevationProfile.fromSamples(const [0.0, 1.5, 3.0], const [1200.0, 1200.2, 1200.4], totalM: 3);
