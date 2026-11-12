@@ -20,7 +20,7 @@
   "remainingM": 22860.45,
   "remainingS": 1134,
   "etaMs": 1794168000000,
-  "overlay": {"climb": true, "miniMap": true},
+  "overlay": {"phoneDrive": false},
   "palette": {
     "day": {"theme": "light", "route": "#1f6fa8", "routeDriven": "#8fb3cc", "badge": "#1f6fa8", "badgeGlyph": "#ffffff", "badgeEdge": "#ffffff", "startDot": "#5b6470", "destDot": "#c62e24", "posFill": "#1f6fa8", "posRing": "#ffffff", "hostCard": "#f2f2f2", "card": "#ffffff", "cardText": "#16181d", "cardSecondary": "#5b6470", "hatch": "#c9ced6", "miniBg": "#ffffff", "miniBorder": "#c9ced6"},
     "night": {"theme": "dark", "route": "#6bb4de", "routeDriven": "#3d6278", "badge": "#6bb4de", "badgeGlyph": "#0f1115", "badgeEdge": "#0f1115", "startDot": "#9aa3ad", "destDot": "#ff6b5e", "posFill": "#6bb4de", "posRing": "#0f1115", "hostCard": "#1a1d23", "card": "#16181d", "cardText": "#f2f4f7", "cardSecondary": "#9aa3ad", "hatch": "#3a4049", "miniBg": "#16181d", "miniBorder": "#3a4049"}
