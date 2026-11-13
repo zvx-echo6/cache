@@ -109,7 +109,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Building on the oldest supported distribution keeps the glibc requirement at 2.35.
     container: ubuntu:22.04
-    timeout-minutes: 90
+    # x86_64 builds cache-build (MuPDF with Tesseract) with fat LTO and one codegen unit, which alone took 56 minutes on a busy runner
+    # (2026-11-13) and ran the job past 90; aarch64 uses thin LTO and keeps 90.
+    timeout-minutes: ${{ matrix.arch == 'x86_64' && 150 || 90 }}
     env:
       # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
       RUSTFLAGS: ${{ matrix.rustflags }}
