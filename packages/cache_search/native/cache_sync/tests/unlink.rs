@@ -52,7 +52,8 @@ fn wait_syncing(what: &str, secs: u64, devices: &[&SyncEngine], mut ok: impl FnM
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    panic!("timed out waiting for {what}");
+    let seen: Vec<String> = devices.iter().map(|d| format!("{} peers={} unlinks={} log={}", status(d)["name"], status(d)["peers"], status(d)["unlinks"], status(d)["log"])).collect();
+    panic!("timed out waiting for {what}\n{}", seen.join("\n"));
 }
 
 fn status(e: &SyncEngine) -> Value {
@@ -428,7 +429,9 @@ fn the_clean_up_of_an_unconfirmed_link_tells_the_other_device_too() {
     assert_eq!(peers(&b).len(), 1);
     std::fs::remove_file(da.join("hold-rescan")).unwrap();
     // A removes the link it never saw confirmed, and B (which still holds it) is told, so it goes from B's list too.
-    wait_syncing("A's clean-up and B told", 180, &[&a], || peers(&a).is_empty() && peers(&b).is_empty());
+    wait_syncing("A's clean-up and B told", 120, &[&a, &b], || {
+        peers(&a).is_empty() && peers(&b).is_empty()
+    });
     wait_syncing("A's waiting unlink delivered", 60, &[&a], || unlinks(&a).is_empty());
     assert!(log(&a).contains("Phone did not finish linking with this device"), "{}", log(&a));
     assert!(log(&b).contains("Desk unlinked this device."), "{}", log(&b));
