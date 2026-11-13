@@ -50,6 +50,7 @@ import '../maps/ui/repeater_card.dart';
 import '../nav/ui/route_panel.dart';
 import '../nav/ui/route_steps.dart';
 import '../nav/ui/search_panel.dart';
+import '../maps/ui/map_overlay.dart';
 import '../regions/regions_state.dart';
 import '../theme.dart';
 
@@ -1271,7 +1272,8 @@ class _MapsScreenState extends State<MapsScreen> {
             ],
           );
     return Positioned.fill(
-      child: Stack(
+      child: MapOverlay(
+        child: Stack(
         children: [
           Positioned.fill(child: GestureDetector(key: const ValueKey('ring-dismiss'), behavior: HitTestBehavior.opaque, onTap: () => setState(() => _ring = null))),
           Positioned(
@@ -1280,6 +1282,7 @@ class _MapsScreenState extends State<MapsScreen> {
             child: RingMenu(key: const ValueKey('ring-menu'), size: size, items: _ringItems(r), onPick: _ringPick, centre: centre, onCentre: _ringBack),
           ),
         ],
+        ),
       ),
     );
   }
@@ -1763,7 +1766,7 @@ class _MapsScreenState extends State<MapsScreen> {
         if (_measure != null && !drawing)
           Align(
             alignment: Alignment.bottomCenter,
-            child: SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: _measurePanel(context, _measure!, k))),
+            child: SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: MapOverlay(child: _measurePanel(context, _measure!, k)))),
           ),
         if (drawing)
           AreaDrawOverlay(
@@ -1778,11 +1781,13 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget _topLayer(BuildContext context, Fix? fix, FollowMode follow) {
     final guiding = nav.guiding;
     final previewing = nav.phase == NavPhase.previewing;
-    final Widget top = guiding
-        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
-        : previewing
-            ? DirectionsHeader(nav: nav)
-            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
+    final Widget top = MapOverlay(
+      child: guiding
+          ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+          : previewing
+              ? DirectionsHeader(nav: nav)
+              : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions),
+    );
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
     return SafeArea(
       child: Padding(
@@ -1792,15 +1797,15 @@ class _MapsScreenState extends State<MapsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Flexible(child: KeyedSubtree(key: _headerKey, child: top)),
-            if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
+            if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
             if (!searching) ...[
               const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (fix != null && !guiding) KeyedSubtree(key: _chipKey, child: _coordsChip(context, fix)),
+                  if (fix != null && !guiding) KeyedSubtree(key: _chipKey, child: MapOverlay(child: _coordsChip(context, fix))),
                   const Spacer(),
-                  _controls(context, fix, follow),
+                  MapOverlay(child: _controls(context, fix, follow)),
                 ],
               ),
             ],
@@ -1852,6 +1857,11 @@ class _MapsScreenState extends State<MapsScreen> {
   /// The place card, the way to go, the guidance bar or a repeater's card; null when none shows.
   /// [maxHeight]: the room in the map's side column, which the card or the way to go fills before it scrolls.
   Widget? _panel(bool searching, {double? maxHeight}) {
+    final p = _panelBody(searching, maxHeight: maxHeight);
+    return p == null ? null : MapOverlay(child: p);
+  }
+
+  Widget? _panelBody(bool searching, {double? maxHeight}) {
     final sel = nav.selected;
     if (nav.guiding) return GuidanceDock(nav: nav, elevation: _elevation, palette: _palette);
     if (nav.phase == NavPhase.previewing) {
@@ -1873,11 +1883,13 @@ class _MapsScreenState extends State<MapsScreen> {
     final guiding = nav.guiding;
     final previewing = nav.phase == NavPhase.previewing;
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
-    final Widget top = guiding
-        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
-        : previewing
-            ? DirectionsHeader(nav: nav)
-            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
+    final Widget top = MapOverlay(
+      child: guiding
+          ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+          : previewing
+              ? DirectionsHeader(nav: nav)
+              : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions),
+    );
     final panel = _panel(searching);
     return SafeArea(
       child: Padding(
@@ -1893,7 +1905,7 @@ class _MapsScreenState extends State<MapsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (panel == null) Flexible(child: top) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
-                    if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
+                    if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
                     if (panel != null) ...[
                       const SizedBox(height: 8),
                       Expanded(
@@ -1918,9 +1930,9 @@ class _MapsScreenState extends State<MapsScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (fix != null && !guiding) Flexible(child: _coordsChip(context, fix)),
+                        if (fix != null && !guiding) Flexible(child: MapOverlay(child: _coordsChip(context, fix))),
                         const Spacer(),
-                        _controls(context, fix, follow),
+                        MapOverlay(child: _controls(context, fix, follow)),
                       ],
                     ),
                   const Spacer(),
@@ -1939,12 +1951,12 @@ class _MapsScreenState extends State<MapsScreen> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
-                            if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                            if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                           ],
                         ),
                         // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                         const SizedBox(height: 6),
-                        Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
+                        Align(alignment: Alignment.centerLeft, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits))),
                       ],
                     ),
                 ],
@@ -2005,12 +2017,12 @@ class _MapsScreenState extends State<MapsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
-                    if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                    if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                   ],
                 ),
                 // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                 const SizedBox(height: 6),
-                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: AttributionChip(lines: maps.attributions, onTap: _showCredits))),
+                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
                 const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)
