@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/location/location_service.dart';
@@ -45,7 +46,7 @@ void main() {
   final routeJson = fakeRouteJson(name: 'Destination');
   const dest = MapPlace(id: 'p:1', type: 'place', name: 'Destination', kind: 'Place', address: '', lat: 42.5, lon: -113.5, matched: 'name');
 
-  NavState makeNav({Duration? every}) => NavState(
+  NavState makeNav({Duration? every, Duration rerouteTimeout = const Duration(seconds: 25)}) => NavState(
         backend: backend,
         location: location,
         speaker: FakeSpeaker(),
@@ -55,6 +56,7 @@ void main() {
         searchDebounce: const Duration(milliseconds: 5),
         meaningDebounce: const Duration(milliseconds: 25),
         guidanceLogEvery: every,
+        rerouteTimeout: rerouteTimeout,
       );
 
   setUp(() async {
@@ -205,5 +207,116 @@ void main() {
     expect(minuteLines(), hasLength(1));
     await nav.end();
     expect(minuteLines(), hasLength(1), reason: 'ending twice writes one line');
+  });
+
+  group('the re-route time limit', () {
+    // The stand-in core answers off the route for every fix, so each fix past the cooldown asks for a new route.
+    Future<void> offRouteDrive() async {
+      nav.dispose();
+      nav = makeNav(rerouteTimeout: const Duration(milliseconds: 200));
+      backend.onProgress = (r, lat, lon) async => p(0.12, offset: 200, off: true, count: 3);
+      await startGuidance();
+    }
+
+    int routeCalls() => backend.calls.where((c) => c.startsWith('route:')).length;
+
+    Future<void> offFix({int afterSeconds = 10, int settleMs = 30}) async {
+      now = now.add(Duration(seconds: afterSeconds));
+      gps.controller.add(fixNow(-113.76));
+      await settle(settleMs);
+    }
+
+    test('a route call that never returns is given up: the flag clears, it is logged, and the next fix off the route asks again',
+        () async {
+      // Before the limit this failed: `rerouting` stayed true for the rest of the drive and no later fix asked again.
+      await offRouteDrive();
+      final never = Completer<MapRoute>();
+      backend.onRoute = (to, mode, from) => never.future;
+      await offFix();
+      final first = routeCalls();
+      expect(nav.rerouting, isTrue);
+      await settle(350);
+      expect(nav.rerouting, isFalse, reason: 'given up after the limit');
+      expect(lines('ERROR', 'Guidance: off the route, no new route within'), hasLength(1));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-next', name: 'Destination'));
+      await offFix(settleMs: 60);
+      expect(routeCalls(), first + 1);
+      expect(nav.route!.routeId, 'r-next');
+    });
+
+    test('an answer that comes after the limit is not used', () async {
+      await offRouteDrive();
+      final lateAnswer = Completer<MapRoute>();
+      backend.onRoute = (to, mode, from) => lateAnswer.future;
+      await offFix();
+      await settle(350);
+      expect(nav.rerouting, isFalse);
+      final before = nav.route!.routeId;
+      lateAnswer.complete(MapRoute.fromJson(fakeRouteJson(id: 'r-late', name: 'Destination')));
+      await settle();
+      expect(nav.route!.routeId, before);
+    });
+
+    test('an answer that comes after a newer re-route started is not used, whichever comes first', () async {
+      await offRouteDrive();
+      final first = Completer<MapRoute>();
+      final second = Completer<MapRoute>();
+      final pending = [first, second];
+      backend.onRoute = (to, mode, from) => pending.removeAt(0).future;
+      await offFix();
+      await settle(350); // the first is given up
+      await offFix(); // the second asks
+      expect(nav.rerouting, isTrue);
+      second.complete(MapRoute.fromJson(fakeRouteJson(id: 'r-new', name: 'Destination')));
+      await settle();
+      expect(nav.route!.routeId, 'r-new');
+      first.complete(MapRoute.fromJson(fakeRouteJson(id: 'r-late', name: 'Destination')));
+      await settle();
+      expect(nav.route!.routeId, 'r-new', reason: 'the older answer never replaces the newer route');
+    });
+
+    test('an answer that comes after guidance ended is not used', () async {
+      await offRouteDrive();
+      final pending = Completer<MapRoute>();
+      backend.onRoute = (to, mode, from) => pending.future;
+      await offFix();
+      await nav.end();
+      pending.complete(MapRoute.fromJson(fakeRouteJson(id: 'r-late', name: 'Destination')));
+      await settle();
+      expect(nav.phase, NavPhase.browsing);
+      expect(nav.routes, isEmpty);
+      expect(nav.rerouting, isFalse);
+    });
+
+    test('every skipped re-route is logged with why: one already being worked out, or the cooldown', () async {
+      await offRouteDrive();
+      // A re-route waits inside the progress update, so the fix after it waits too; a new route is already being worked out when
+      // a fix comes during Add stop while guiding.
+      final slow = Completer<MapRoute>();
+      backend.onRoute = (to, mode, from) => slow.future;
+      now = now.add(const Duration(seconds: 10));
+      final adding = nav.addStopWhileGuiding(const MapPlace(id: 'p:2', type: 'place', name: 'Stop', kind: 'Place', address: '', lat: 42.5, lon: -113.6, matched: 'name'));
+      await offFix(afterSeconds: 0);
+      expect(lines('INFO', 'Guidance: off the route, re-route skipped: one is already being worked out'), hasLength(1));
+      slow.complete(MapRoute.fromJson(fakeRouteJson(id: 'r-new', name: 'Destination')));
+      expect(await adding, isTrue);
+      expect(nav.route!.routeId, 'r-new');
+      // inside the cooldown (8 s by default) after that new route
+      await offFix(afterSeconds: 3);
+      await offFix(afterSeconds: 1);
+      expect(lines('INFO', 'Guidance: off the route, re-route skipped:').where((l) => l.contains('since the last one')), hasLength(2));
+    });
+
+    test('every failed re-route is logged: no route found, and an error', () async {
+      await offRouteDrive();
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'errors': [{'code': 'no_route', 'message': 'none'}]});
+      await offFix();
+      await offFix();
+      expect(lines('ERROR', 'Guidance: off the route, no new route (no_route)'), hasLength(2));
+      backend.onRoute = (to, mode, from) async => throw const CacheSearchException('internal', 'broken');
+      await offFix();
+      await offFix();
+      expect(lines('ERROR', 'Guidance: off the route, working out a new route failed: internal: broken'), hasLength(2));
+    });
   });
 }

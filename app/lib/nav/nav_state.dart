@@ -91,6 +91,7 @@ class NavState extends ChangeNotifier {
     this.meaningDebounce = const Duration(milliseconds: 700),
     this.rerouteCooldown = const Duration(seconds: 8),
     this.guidanceLogEvery,
+    this.rerouteTimeout = const Duration(seconds: 25),
   }) : _clock = clock ?? DateTime.now;
 
   final MapBackend backend;
@@ -105,6 +106,9 @@ class NavState extends ChangeNotifier {
   /// How often guidance writes its one line to the app log (fixes, the last progress answer, failures) while it runs; the
   /// app gives one minute. Null: no timer, only the line written when guidance lets go of the position service.
   final Duration? guidanceLogEvery;
+
+  /// How long a re-route waits for the core before it is given up (see [_reroute]).
+  final Duration rerouteTimeout;
   final DateTime Function() _clock;
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
@@ -286,7 +290,9 @@ class NavState extends ChangeNotifier {
     _passedStops
       ..clear()
       ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    _rerouteGen++;
     rerouting = true;
+    _reroutingSince = _clock();
     _lastReroute = _clock();
     notifyListeners();
     var added = false;
@@ -319,6 +325,7 @@ class NavState extends ChangeNotifier {
           ..addAll(beforePassed);
       }
       rerouting = false;
+      _reroutingSince = null;
       notifyListeners();
     }
     return added;
@@ -706,7 +713,9 @@ class NavState extends ChangeNotifier {
     if (r == null || phase != NavPhase.previewing) return;
     phase = NavPhase.guiding;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     progress = null;
     _sendRoute = true;
     _routeStarted = false;
@@ -888,28 +897,51 @@ class NavState extends ChangeNotifier {
     }
   }
 
+  /// Counts re-route requests: an answer is applied only by the request that is still the newest ([_reroute]). Start, End and
+  /// Add stop while guiding move it on too, so an answer from before them is never applied after them.
+  int _rerouteGen = 0;
+
   Future<void> _reroute(Fix f) async {
     final now = _clock();
-    if (rerouting || (_lastReroute != null && now.difference(_lastReroute!) < rerouteCooldown)) {
+    if (rerouting) {
       _diag.reroutesSkipped++;
+      final since = _reroutingSince;
+      logInfo('Guidance: off the route, re-route skipped: one is already being worked out'
+          '${since == null ? '' : ' (for ${now.difference(since).inSeconds}s)'}');
+      return;
+    }
+    final last = _lastReroute;
+    if (last != null && now.difference(last) < rerouteCooldown) {
+      _diag.reroutesSkipped++;
+      logInfo('Guidance: off the route, re-route skipped: ${now.difference(last).inSeconds}s since the last one '
+          '(it waits ${rerouteCooldown.inSeconds}s)');
       return;
     }
     final old = route;
     final to = selected;
     if (old == null || to == null) {
       _diag.rerouteFailures++;
-      _diag.rerouteFailuresLog.failed('Guidance: off the route, but there is ${old == null ? 'no route' : 'no destination'} to work out a new one for', null, now);
+      logError('Guidance: off the route, but there is ${old == null ? 'no route' : 'no destination'} to work out a new one for');
       return;
     }
+    final gen = ++_rerouteGen;
     rerouting = true;
     _reroutingSince = now;
     _lastReroute = now;
     notifyListeners();
     _say('Rerouting.');
     try {
-      final r = await backend.route(
-          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
-      if (!guiding) return;
+      // The core is one queue: a route can wait behind a slow call (opening the core, a model loading). The limit is long enough
+      // for that; past it this request is given up, the next off-route fix asks again, and its answer, if it still comes, is
+      // never used.
+      final r = await backend
+          .route(
+              from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
+          .timeout(rerouteTimeout);
+      if (gen != _rerouteGen || !guiding || !identical(selected, to)) {
+        logInfo('Guidance: a new route came after guidance had moved on, it is not used');
+        return;
+      }
       if (r.ok) {
         routes = [r];
         routeIndex = 0;
@@ -922,18 +954,28 @@ class NavState extends ChangeNotifier {
         logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
         _diag.rerouteFailures++;
-        _diag.rerouteFailuresLog.failed(
-            'Guidance: off the route, no new route (${r.errors.isEmpty ? 'no error code' : r.errors.first.code})', null, _clock());
+        logError('Guidance: off the route, no new route (${r.errors.isEmpty ? 'no error code' : r.errors.first.code})');
         _events.add(NavNotice(routeErrorText(r)));
       }
+    } on TimeoutException {
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, no new route within ${rerouteTimeout.inSeconds}s; the next fix off the route asks again');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
     } catch (e) {
-      _diag.rerouteFailures++;
-      _diag.rerouteFailuresLog.failed('Guidance: off the route, working out a new route failed', e, _clock());
-      _events.add(const NavNotice('Could not work out a new route'));
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, working out a new route failed: ${_GuidanceDiag.describe(e)}');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
     } finally {
-      rerouting = false;
-      _reroutingSince = null;
-      notifyListeners();
+      // Only the newest request lets go of the flag: one that was overtaken (a new drive, Add stop) leaves the newer one's.
+      if (gen == _rerouteGen) {
+        rerouting = false;
+        _reroutingSince = null;
+        notifyListeners();
+      }
     }
   }
 
@@ -988,7 +1030,9 @@ class NavState extends ChangeNotifier {
     stops = const [];
     progress = null;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
@@ -1040,7 +1084,6 @@ class _GuidanceDiag {
 
   final _FailureLog progressFailures = _FailureLog();
   final _FailureLog streamFailures = _FailureLog();
-  final _FailureLog rerouteFailuresLog = _FailureLog();
 
   /// A new drive.
   void reset(DateTime now) {
@@ -1050,7 +1093,6 @@ class _GuidanceDiag {
     lastProgressAt = null;
     progressFailures.reset();
     streamFailures.reset();
-    rerouteFailuresLog.reset();
   }
 
   /// The counts start again after a line.
