@@ -1,0 +1,21 @@
+[
+  {"seconds": 0, "text": "1 min"},
+  {"seconds": 20, "text": "1 min"},
+  {"seconds": 29, "text": "1 min"},
+  {"seconds": 30, "text": "1 min"},
+  {"seconds": 89, "text": "1 min"},
+  {"seconds": 90, "text": "2 min"},
+  {"seconds": 300, "text": "5 min"},
+  {"seconds": 1260, "text": "21 min"},
+  {"seconds": 1380, "text": "23 min"},
+  {"seconds": 3540, "text": "59 min"},
+  {"seconds": 3570, "text": "1 h"},
+  {"seconds": 3600, "text": "1 h"},
+  {"seconds": 5100, "text": "1 h 25 min"},
+  {"seconds": 7200, "text": "2 h"},
+  {"seconds": 86340, "text": "23 h 59 min"},
+  {"seconds": 86400, "text": "1 d"},
+  {"seconds": 97200, "text": "1 d 3 h"},
+  {"seconds": 172800, "text": "2 d"},
+  {"seconds": 183600, "text": "2 d 3 h"}
+]

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:cache_search/cache_search.dart' show MapPlace, MapRoute;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -21,6 +21,7 @@ import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
+import '../platform/phone_window.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
@@ -47,6 +48,7 @@ import '../layout/adaptive.dart' show kMapSideWidth, kSideCardWidth, showFittedS
 import '../nav/ui/place_card.dart';
 import '../maps/ui/repeater_card.dart';
 import '../nav/ui/route_panel.dart';
+import '../nav/ui/route_steps.dart';
 import '../nav/ui/search_panel.dart';
 import '../regions/regions_state.dart';
 import '../theme.dart';
@@ -368,6 +370,11 @@ class _MapsScreenState extends State<MapsScreen> {
   int _refits = 0;
   bool _fitTouched = false;
 
+  /// Stepping through the route's turns before Start: the turn the step card shows (null: the card is closed and the panel
+  /// shows the routes), and the route it was opened on ([_stepKey]); another route, way of travel or a new set of routes closes it.
+  int? _step;
+  String? _stepFor;
+
   /// Where the corner inset is in the screen's stack (the live map goes there while swapped), and the stack's size.
   Rect? _insetRect;
   Size _stackSize = Size.zero;
@@ -469,6 +476,8 @@ class _MapsScreenState extends State<MapsScreen> {
 
   @override
   void dispose() {
+    final c = _controller;
+    if (c != null) phoneMapRest.remove(c);
     _lifecycle.dispose();
     _driveBuilt = false;
     _reportDrive();
@@ -544,7 +553,11 @@ class _MapsScreenState extends State<MapsScreen> {
   // ---- map events ---------------------------------------------------------------------------------------
 
   void _onMapCreated(MapLibreMapController c) {
+    final old = _controller;
+    if (old != null) phoneMapRest.remove(old);
     _controller = c;
+    // The map rests while the phone's window is not on its screen (an iPhone in a pocket with the car screen in use).
+    phoneMapRest.add(c, pause: c.pauseMap, resume: c.resumeMap);
     _keepOnline(c);
   }
 
@@ -701,17 +714,24 @@ class _MapsScreenState extends State<MapsScreen> {
   Future<void> _pushNav() async {
     final c = _controller;
     if (c == null || !_styleReady) return;
-    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}';
+    final mark = _stepPoint();
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}';
     if (sig == _navSig) return;
     _navSig = sig;
     try {
       await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
-      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const []));
+      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark));
     } catch (_) {}
   }
 
   void _onNav() {
     if (!mounted) return;
+    // The step card shows only turns of the route on screen: another route, way of travel, a new set of routes, Start or Back
+    // close it (a new route is then fitted into view as always).
+    if (_step != null && (nav.phase != NavPhase.previewing || nav.routing || nav.route == null || _stepKey() != _stepFor)) {
+      _step = null;
+      _stepFor = null;
+    }
     if (!_driveOn) {
       _driveBuilt = false;
       _reportDrive();
@@ -839,7 +859,7 @@ class _MapsScreenState extends State<MapsScreen> {
 
   Future<void> _fitRouteNow(MapLibreMapController c, MapRoute r) async {
     if (!mounted) return;
-    if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
+    if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId || _step != null) return;
     // The room what covers the map leaves ([_fitPad]: a change of it fits the route again). On a phone the pin and the
     // position dot at the route's ends are fitted into that free rectangle too, whole.
     final room = _fitPad = _fitPaddingFor(r);
@@ -859,13 +879,79 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     final r = nav.route;
     final was = _fitPad;
-    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId) return;
+    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId || _step != null) return;
     if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
     if (_refits >= kRouteRefits) return;
     final now = _fitPaddingFor(r);
     if ((now.left - was.left).abs() < 1 && (now.top - was.top).abs() < 1 && (now.right - was.right).abs() < 1 && (now.bottom - was.bottom).abs() < 1) return;
     _refits++;
     _fitRoute(r);
+  }
+
+  // ---- stepping through the route's turns before Start ------------------------------------------------------
+
+  /// What the step card was opened on: the route shown, among which routes, and the way of travel.
+  String _stepKey() => '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.mode}';
+
+  /// Where the turn the step card shows is (marked on the map); null while the card is closed.
+  GeoPoint? _stepPoint() {
+    final i = _step, r = nav.route;
+    if (i == null || r == null || nav.phase != NavPhase.previewing || i < 0 || i >= r.maneuvers.length) return null;
+    final m = r.maneuvers[i];
+    return GeoPoint(m.lat, m.lon);
+  }
+
+  /// The route panel's next arrow: the card opens on the route's first turn.
+  void _openSteps() {
+    final r = nav.route;
+    if (r == null || r.maneuvers.isEmpty || nav.routing || nav.phase != NavPhase.previewing) return;
+    setState(() {
+      _step = 0;
+      _stepFor = _stepKey();
+    });
+    _showStep();
+  }
+
+  /// The card's back and next arrows and its swipe (back from the first turn is [_closeSteps]).
+  void _goStep(int i) {
+    final r = nav.route;
+    if (_step == null || r == null || i < 0 || i >= r.maneuvers.length || i == _step) return;
+    setState(() => _step = i);
+    _showStep();
+  }
+
+  /// The card's close button, its back arrow on the first turn, and the system Back: the routes again, and the whole route
+  /// fitted into view as before.
+  void _closeSteps() {
+    if (_step == null) return;
+    setState(() {
+      _step = null;
+      _stepFor = null;
+    });
+    _pushNav();
+    final r = nav.route;
+    if (r != null && nav.phase == NavPhase.previewing) _fitRoute(r);
+  }
+
+  /// Marks the turn shown and brings the map to it at a street's zoom, north up, in the middle of the room the header, the
+  /// buttons and the card leave free (read after the card is laid out).
+  void _showStep() {
+    _pushNav();
+    maps.setFollow(FollowMode.free);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showStepNow());
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  Future<void> _showStepNow() async {
+    final c = _controller, r = nav.route, at = _stepPoint();
+    if (!mounted || c == null || !_styleReady || r == null || at == null) return;
+    final map = _fitMapSize();
+    final room = _fitPaddingFor(r);
+    final anchor = Offset((room.left + map.width - room.right) / 2, (room.top + map.height - room.bottom) / 2);
+    final (lat, lon) = cameraCentreFor(at.lat, at.lon, bearing: 0, zoom: kStepZoom, map: map, anchor: anchor);
+    try {
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: kStepZoom, bearing: 0)), duration: const Duration(milliseconds: 500));
+    } catch (_) {}
   }
 
   Future<void> _focusOn(double lat, double lon) async {
@@ -1507,9 +1593,16 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final style = _initialStyle;
-    final map = Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: style == null ? _waiting(context) : _mapStack(context, style, k),
+    // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
+    final map = PopScope(
+      canPop: _step == null || !widget.active,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _closeSteps();
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        body: style == null ? _waiting(context) : _mapStack(context, style, k),
+      ),
     );
     final drive = widget.drive;
     if (drive == null) return map;
@@ -1587,7 +1680,7 @@ class _MapsScreenState extends State<MapsScreen> {
         _ensurePictures(_stackSize);
       });
     }
-    if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched) {
+    if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched && _step == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
     }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
@@ -1762,7 +1855,10 @@ class _MapsScreenState extends State<MapsScreen> {
     final sel = nav.selected;
     if (nav.guiding) return GuidanceDock(nav: nav, elevation: _elevation, palette: _palette);
     if (nav.phase == NavPhase.previewing) {
-      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette));
+      final step = _step;
+      final rows = step == null ? const <DriveRow>[] : previewStepRows(nav);
+      if (step != null && rows.isNotEmpty) return RouteStepCard(nav: nav, rows: rows, index: step, onStep: _goStep, onClose: _closeSteps);
+      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette), onNextTurn: _openSteps);
     }
     if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight);
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();

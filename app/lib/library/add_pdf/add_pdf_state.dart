@@ -1148,6 +1148,12 @@ class AddPdfRun implements IndexRun {
       },
     );
     if (batch.failed.isNotEmpty) logInfo('Add PDF: ${batch.failed.length} scanned pages could not be read', job: job.key);
+    for (final f in batch.failed.entries) {
+      // no_file and bad_image messages name the image file: that text goes in only from the Detailed level (logError's error)
+      final named = f.value.code == 'no_file' || f.value.code == 'bad_image';
+      logError('Add PDF: scanned page ${f.key} could not be read (${f.value.code})${named ? '' : ': ${f.value.message}'}',
+          error: named ? f.value : null, job: job.key);
+    }
     if (_stop) throw const _Stopped();
     await state.calls('ocr', batch.ingestParams, pdfium: false);
     job
