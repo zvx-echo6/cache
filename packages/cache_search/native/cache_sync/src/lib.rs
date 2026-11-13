@@ -1472,7 +1472,7 @@ impl Inner {
         .await;
         let now = now_ms();
         let delivered = res.is_ok()
-            // The other device's own gate said it holds no link with this one (it never learned of it): the same as "not linked".
+            // A 403 on cache/unlink/1 from the other device's own Gate clears only the sender's own pending entry; nothing on the receiver ever changes on a 403.
             || res.as_ref().err().map(|e| format!("{e:#}").to_lowercase().contains("not linked")).unwrap_or(false);
         // The device was reached but has no such protocol: the handshake was refused for want of it (an older version).
         let old = !delivered

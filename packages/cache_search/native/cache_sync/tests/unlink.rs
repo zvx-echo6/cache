@@ -256,9 +256,12 @@ fn a_link_the_other_device_never_learned_of_clears_the_waiting_unlink() {
     // The answer to the code never reached B: it holds no link at all (and says nothing to A about it).
     call(&b, "test_drop_peer", json!({"peer": id_of(&a)}));
     assert!(peers(&b).is_empty());
+    let before = std::fs::read(_db.join("sync.json")).unwrap();
     call(&a, "unlink", json!({"peer": id_of(&b)}));
     wait_syncing("the waiting unlink cleared", 60, &[&a, &b], || unlinks(&a).is_empty());
     assert!(log(&a).contains("Phone was told it is unlinked."), "{}", log(&a));
+    // The 403 that cleared A's entry changed nothing on B: its links file is byte for byte what it was.
+    assert_eq!(std::fs::read(_db.join("sync.json")).unwrap(), before, "a 403 never changes the receiver");
     a.close();
     b.close();
 }
@@ -364,6 +367,8 @@ fn an_old_device_gets_no_change_and_is_tried_again_slowly() {
     assert_eq!(peers(&b)[0]["id"], before["id"]);
     assert_eq!(peers(&b)[0]["link_id"], before["link_id"]);
     assert!(!log(&b).contains("unlinked this device"));
+    // Detection by error text may miss; a miss only looks offline (the entry stays, nothing changes on B), so what is asserted
+    // above holds either way except `old` itself.
     // With a short wait it is tried again, and the waiting unlink is still there.
     old_retry_ms(&da, 1000);
     wait_syncing("another try", 60, &[&a, &b], || unlinks(&a).first().map(|u| u["tries"].as_u64().unwrap_or(0) > tries).unwrap_or(false));
