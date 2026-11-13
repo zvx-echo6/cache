@@ -653,7 +653,7 @@ void main() {
     });
   });
 
-  test('picking a theme in Appearance marks it picked, and that is saved; an older file counts a saved theme other than Dark', () async {
+  test('picking a theme in Appearance marks it picked, and that is saved; a file from before the flag counts as picked', () async {
     final d = Directory.systemTemp.createTempSync('carset');
     addTearDown(() => d.deleteSync(recursive: true));
     final file = File('${d.path}/settings.json');
@@ -681,11 +681,15 @@ void main() {
     a = await load({'theme': 'dark', 'themeChosen': true});
     expect(a.themeChosen, isTrue);
     a.dispose();
-    // A file from before the flag: a saved theme other than the default counts as picked, the default does not.
+    // A file from before the flag counts as picked, whatever theme it holds (Dark too).
     a = await load({'theme': 'light'});
     expect(a.themeChosen, isTrue);
     a.dispose();
     a = await load({'theme': 'dark'});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    // No file again: not picked.
+    a = await load(null);
     expect(a.themeChosen, isFalse);
     a.dispose();
     a = await load({'theme': 'tactical', 'themeChosen': false});

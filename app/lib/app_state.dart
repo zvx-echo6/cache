@@ -117,7 +117,7 @@ class AppState extends ChangeNotifier {
   /// Whether the person has picked a theme in Settings > Appearance (any pick, also the one already shown). Never shown on
   /// screen. While it is false the car screens follow the car's own day and night (Light by day, Dark by night), as Android
   /// for Cars' quality rule MR-1 asks by default; once true they always show [theme] (car_overlay.dart, carTheme). A settings
-  /// file from before this flag counts a saved theme other than the default (Dark) as picked.
+  /// file from before this flag counts as picked, whatever theme it holds; only a new install (no settings file) starts unset.
   bool themeChosen = false;
 
   /// The Modules screen's icons: small, three across (false, the default), or large, two across.
@@ -275,7 +275,9 @@ class AppState extends ChangeNotifier {
       _lastModelFile = j['lastModel'] as String?;
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
-      themeChosen = j.containsKey('themeChosen') ? j['themeChosen'] == true : theme != CacheThemeId.dark;
+      // A settings file from before the flag counts as picked, whatever theme it holds: only a new install (no file) starts
+      // with the car's day and night.
+      themeChosen = j.containsKey('themeChosen') ? j['themeChosen'] == true : true;
       largeModuleIcons = j['moduleIcons'] == 'large';
       darkPdfPages = j['pdfDarkPages'] == true;
       modelDeclined = j['modelDeclined'] == true;
