@@ -1093,6 +1093,7 @@ dependencies = [
  "iroh-mainline-address-lookup",
  "iroh-mdns-address-lookup",
  "n0-future",
+ "n0-mainline",
  "rand 0.9.5",
  "serde",
  "serde_json",
@@ -4278,8 +4279,6 @@ dependencies = [
 [[package]]
 name = "n0-mainline"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b739fb0145326fa2287f704a5a3bceb5d21c5b6f1b09436403b504f85c2e6ded"
 dependencies = [
  "crc",
  "dyn-clone",

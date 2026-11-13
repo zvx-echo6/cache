@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::io::{self, ErrorKind, IoSliceMut};
 use std::net::{SocketAddr, SocketAddrV4};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::Interest;
 use tokio::net::UdpSocket;
@@ -22,6 +23,19 @@ use super::config::Config;
 const MTU: usize = 2048;
 
 const DEFAULT_PORT: u16 = 6881;
+
+// cache patch: the wait after a receive error starts here, doubles with each further error, and stops at the cap.
+const RECV_BACKOFF_START: Duration = Duration::from_millis(50);
+const RECV_BACKOFF_CAP: Duration = Duration::from_secs(2);
+
+// cache patch: receive errors seen by every socket in this process, for the host app to report (see `recv_error_stats`).
+static RECV_ERRORS: AtomicU64 = AtomicU64::new(0);
+static RECV_LAST_ERRNO: AtomicI32 = AtomicI32::new(-1);
+
+/// cache patch: how many receive errors the DHT sockets have had, and the OS error number of the latest (-1 when it had none).
+pub fn recv_error_stats() -> (u64, i32) {
+    (RECV_ERRORS.load(Ordering::Relaxed), RECV_LAST_ERRNO.load(Ordering::Relaxed))
+}
 
 const MIN_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -163,6 +177,9 @@ pub struct KrpcSocket {
     /// Outgoing packets queued by sync send methods.
     outbox: VecDeque<(Vec<u8>, SocketAddr)>,
     datagram_hook: Option<DatagramHook>,
+    /// cache patch: the current wait after a receive error (zero when the last receive worked), and when receiving may resume.
+    recv_backoff: Duration,
+    recv_resume: Option<Instant>,
 
     #[cfg(test)]
     version: [u8; 4],
@@ -215,6 +232,8 @@ impl KrpcSocket {
             local_addr,
             outbox: VecDeque::new(),
             datagram_hook: None,
+            recv_backoff: Duration::ZERO,
+            recv_resume: None,
 
             #[cfg(test)]
             version: if config.disable_announce_signed_peers {
@@ -320,9 +339,28 @@ impl KrpcSocket {
     pub async fn recv_batch(&mut self) -> Vec<(Message, SocketAddrV4)> {
         self.inflight_requests.cleanup();
 
+        // cache patch: after a receive error tokio keeps the socket "readable", so the next receive fails at once and the
+        // caller's loop spins at full CPU. Wait out the backoff first (the deadline is kept, so this is cancel safe).
+        if let Some(resume) = self.recv_resume {
+            tokio::time::sleep_until(resume.into()).await;
+            self.recv_resume = None;
+        }
+
         let (from, len, stride) = match self.io.recv_batch().await {
-            Ok(received) => received,
+            Ok(received) => {
+                self.recv_backoff = Duration::ZERO;
+                received
+            }
             Err(error) => {
+                // cache patch: back off before the next receive, and count the error for the host app.
+                self.recv_backoff = if self.recv_backoff.is_zero() {
+                    RECV_BACKOFF_START
+                } else {
+                    (self.recv_backoff * 2).min(RECV_BACKOFF_CAP)
+                };
+                self.recv_resume = Some(Instant::now() + self.recv_backoff);
+                RECV_ERRORS.fetch_add(1, Ordering::Relaxed);
+                RECV_LAST_ERRNO.store(error.raw_os_error().unwrap_or(-1), Ordering::Relaxed);
                 warn!("IO error {error}");
                 return Vec::new();
             }

@@ -433,6 +433,17 @@ impl Run {
     }
 }
 
+/// The activity line for the DHT's socket errors, or none: said when the latest error number is a new one (the DHT backs off by
+/// itself, so this is never a line per error). `stats` is (errors so far, latest OS error number or -1).
+fn dht_error_note(said: &mut Option<i32>, stats: (u64, i32)) -> Option<String> {
+    let (count, errno) = stats;
+    if count == 0 || *said == Some(errno) {
+        return None;
+    }
+    *said = Some(errno);
+    Some(if errno >= 0 { format!("Sync: DHT socket error {errno} (backing off)") } else { "Sync: DHT socket error (backing off)".to_string() })
+}
+
 /// Refuses every connection from a key that is not linked, except on the linking protocol (which wants the one-time code).
 #[derive(Debug)]
 struct Gate {
@@ -1998,6 +2009,19 @@ impl SyncEngine {
         let (inner, router) = rt.block_on(Self::start(cfg.clone()))?;
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
+        if cfg.dht {
+            // The DHT's socket errors (the patched n0-mainline counts them and backs off): one activity line per change of error.
+            let inner_d = inner.clone();
+            rt.spawn(async move {
+                let mut said: Option<i32> = None;
+                while !inner_d.stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if let Some(msg) = dht_error_note(&mut said, n0_mainline::recv_error_stats()) {
+                        inner_d.note(msg);
+                    }
+                }
+            });
+        }
         rt.spawn(async move {
             loop {
                 if inner2.stop.load(Ordering::Relaxed) {
@@ -2800,5 +2824,14 @@ mod peer_tests {
         let mut p: Peer = serde_json::from_str(old).unwrap();
         assert!(p.adopt_name("Pixel nine"));
         assert_eq!(p.name, "Pixel nine");
+    }
+
+    #[test]
+    fn dht_socket_errors_are_said_once_per_change() {
+        let mut said = None;
+        assert_eq!(dht_error_note(&mut said, (0, -1)), None);
+        assert_eq!(dht_error_note(&mut said, (3, 9)).as_deref(), Some("Sync: DHT socket error 9 (backing off)"));
+        assert_eq!(dht_error_note(&mut said, (4000, 9)), None);
+        assert_eq!(dht_error_note(&mut said, (4001, 101)).as_deref(), Some("Sync: DHT socket error 101 (backing off)"));
     }
 }

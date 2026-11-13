@@ -16,6 +16,8 @@ iroh = "=1.3.0"
 iroh-blobs = "=0.103.1"
 iroh-mdns-address-lookup = "=0.6.0"
 iroh-mainline-address-lookup = "=0.6.0"
+# The Mainline DHT crate itself, patched (vendor/n0-mainline-0.7.1): only its receive-error counter is read, to say so in the activity.
+n0-mainline = "=0.7.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
 n0-future = "0.3"
 serde.workspace = true

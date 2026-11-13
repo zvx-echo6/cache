@@ -38,3 +38,5 @@ pub mod errors {
 
 /// Incoming UDP datagram filter.
 pub use actor::socket::DatagramHook;
+// cache patch: receive error count and latest OS error, for the host app to report.
+pub use actor::socket::recv_error_stats;

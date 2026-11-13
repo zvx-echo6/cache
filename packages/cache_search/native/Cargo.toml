@@ -30,6 +30,10 @@ debug = "line-tables-only"
 netdev = { path = "vendor/netdev-0.46.3" }
 # iOS cannot reserve the address space for whole large ZIMs. Map bounded ranges instead.
 zim = { path = "vendor/zim-0.5.0" }
+# The Mainline DHT actor spun a CPU at ~89% after a UDP receive error (no wait before the next receive). vendor/n0-mainline-0.7.1
+# is the crates.io release (MIT OR Apache-2.0) with a backoff after a receive error, marked `cache patch:`; see its CACHE-PATCH.md.
+# Drop this when upstream fixes it.
+n0-mainline = { path = "vendor/n0-mainline-0.7.1" }
 
 # libc is held at 0.2.189 in Cargo.lock: 0.2.190 made the net/route.h constants (RTM_*, RTAX_*, RTF_*) macOS-only, and iroh's
 # netwatch uses them on iOS. Do not `cargo update` libc past 0.2.189 until netwatch or libc builds for iOS again.
