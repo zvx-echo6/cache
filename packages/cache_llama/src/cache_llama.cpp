@@ -291,12 +291,13 @@ std::string file_identity(const char * path) {
 // The KV state of a prompt start, saved by llama_state_seq_save_file (its magic and version, the tokens, then seq 0's KV state)
 // to a .part file and renamed, so a file under its final name is complete. The name is
 // prefix-<model key>-<tokens hash>.kv: the model key (FNV-1a 64 of the model file's identity, the engine build and n_ctx) makes a
-// file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used for as many of
-// its tokens as the prompt shares (the cache after that is dropped), so a file saved with a part that later changed still
-// gives the part before it. At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
-// On the first prompt shape since a load the whole probed start is saved when no file holds all of it (a file from an earlier day
-// holds the part before the date: that part is restored, the rest decoded, and today's whole start saved); within a load a changed
-// shape saves only what it shares with the shape before it.
+// file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used only when ALL of its
+// tokens are the start of the prompt: a file that only partly matches (one saved on an earlier day shares just the text before the
+// date) is not loaded and cut back, because the cache after such a cut did not drop later tails reliably (a new chat answered the
+// previous chat's question). At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
+// On the first prompt shape since a load the whole probed start is saved when no file holds all of it (with only an earlier day's
+// file the cache is cleared, the prompt is read as usual and today's whole start saved); within a load a changed shape saves only
+// what it shares with the shape before it.
 constexpr size_t kPrefixFiles  = 2;
 constexpr size_t kPrefixMinLen = 32;  // shorter prefixes are not worth a file
 
@@ -447,7 +448,8 @@ size_t cache_overlap(const Handle * h, const std::vector<llama_token> & tokens, 
     return keep;
 }
 
-// The saved prefix file that shares the most tokens with the first `limit` of tokens (best = 0: none).
+// The longest saved prefix file whose tokens are all the start of the first `limit` of tokens (best = 0: none). A file that
+// matches only in part is not a hit.
 struct PrefixHit {
     size_t      best     = 0;
     size_t      file_len = 0;
@@ -458,7 +460,7 @@ PrefixHit best_prefix_file(const Handle * h, const std::vector<llama_token> & to
     PrefixHit hit;
     for (auto & f : prefix_files(h)) {
         const size_t l = common_prefix(f.second, tokens, limit);
-        if (l > hit.best) {
+        if (l == f.second.size() && l > hit.best) {
             hit.best     = l;
             hit.path     = f.first;
             hit.file_len = f.second.size();
@@ -470,9 +472,9 @@ PrefixHit best_prefix_file(const Handle * h, const std::vector<llama_token> & to
 // Lines the KV cache up with tokens: keeps what it already holds for the start (the longest common token prefix, at most
 // `limit_tokens`: cl_start always decodes the last prompt token, because the first generated token needs its logits), drops the
 // cache after it, and when the cache does not hold the stable start (`want`: the first question after a load, or a different
-// start before) takes what a saved file shares with the prompt. Returns the tokens now in the cache. `want` is not changed: on the
-// first shape since the load the whole probed start is stable even when a saved file covers only part of it (the part is restored
-// and the whole start is saved). `covered`: a saved file already holds the whole stable start.
+// start before) restores a saved file whose tokens are all the start of the prompt. Returns the tokens now in the cache. `want` is
+// not changed: on the first shape since the load the whole probed start is stable even when no saved file covers all of it (the
+// prompt is read as usual and the whole start is saved). `covered`: a saved file already holds the whole stable start.
 size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t limit_tokens, size_t & want, bool & covered) {
     llama_memory_t mem = llama_get_memory(h->ctx);
     size_t keep = cache_overlap(h, tokens, limit_tokens);
@@ -492,9 +494,9 @@ size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t l
         const size_t best = hit.best;
         if (!h->stable_known) {
             // The first shape since the load: all of its probed start is taken as stable, whatever a saved file shares with it.
-            // A file that covers only the start of it (yesterday's, which shares the text up to the date) is restored for that
-            // part (below), and the rest is decoded and the whole start saved (covered stays false), so a later load finds it
-            // whole. Cutting `want` to what the file shares would count the start as covered and save nothing, and every fresh
+            // A file that covers only the start of it (yesterday's, which shares the text up to the date) is not restored (see
+            // best_prefix_file): the prompt is read as usual and the whole start saved (covered stays false), so a later load finds
+            // it whole. Cutting `want` to what the file shares would count the start as covered and save nothing, and every fresh
             // load on a later day would read the tool schemas again. Within one load a shape change still shrinks `stable` to
             // what the two shapes share (update_probe), so a start that flips does not write a file per question.
             h->stable       = want;
@@ -509,18 +511,17 @@ size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t l
             std::vector<llama_token> got(hit.file_len);
             size_t n_got = 0;
             const size_t rd = llama_state_seq_load_file(h->ctx, hit.path.c_str(), 0, got.data(), got.size(), &n_got);
-            const bool loaded = rd > 0 && n_got == hit.file_len && std::equal(got.begin(), got.begin() + (long) best, tokens.begin());
-            if (loaded && (n_got == best || llama_memory_seq_rm(mem, 0, (llama_pos) best, -1))) {
+            const bool loaded = rd > 0 && n_got == hit.file_len && n_got == best && std::equal(got.begin(), got.end(), tokens.begin());
+            if (loaded) {
                 h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
                 keep = best;
                 std::filesystem::last_write_time(hit.path, std::filesystem::file_time_type::clock::now(), fec);
                 h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
             } else {
                 llama_memory_clear(mem, true);
-                if (!loaded) std::filesystem::remove(hit.path, fec);
+                std::filesystem::remove(hit.path, fec);
                 covered = false;
-                h->prefix_note = loaded ? "Prompt prefix file could not be trimmed; the prompt is read as usual"
-                                        : "Prompt prefix file did not load and was removed; the prompt is read as usual";
+                h->prefix_note = "Prompt prefix file did not load and was removed; the prompt is read as usual";
             }
             cl_logi("%s", h->prefix_note.c_str());
         }

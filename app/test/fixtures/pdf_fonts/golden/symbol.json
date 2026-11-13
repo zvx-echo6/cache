@@ -5,7 +5,8 @@
       "text": "αβγδεζ ηθικλµνξοπρστυφχψω ΑΒΓ∆ΕΖ\r\nalpha beta gamma delta",
       "label": null,
       "png_sha256": {
-        "windows": "8e082be70d3a5eb03f4158f444e721ef8acde7c3ce1d8392b79524fbfa5732d2"
+        "windows": "8e082be70d3a5eb03f4158f444e721ef8acde7c3ce1d8392b79524fbfa5732d2",
+        "linux": "8e082be70d3a5eb03f4158f444e721ef8acde7c3ce1d8392b79524fbfa5732d2"
       },
       "width": 612,
       "height": 792,

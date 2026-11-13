@@ -16,6 +16,7 @@ release notes).
 - Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Sharing: updating from 1.0 no longer turns sharing off at the next start
 - Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
 - Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
 - Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
@@ -25,6 +26,7 @@ release notes).
 - Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
 - Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
 - Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
+- Library: if the part of Cache that was reading a PDF is closed while it holds PDFium, the next PDF read no longer waits for ever
 - Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight
 - Weather: when the app is opened, or comes back to the screen, hours after the last update, Home no longer shows the earlier temperature, or yesterday's high and low, as the weather now; a reading counts for three hours, as on the Weather screen, and after that Home shows today's forecast
 - Weather: a source whose first download failed says why on the Weather screen, instead of "Not downloaded yet. Update now to get it."

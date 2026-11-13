@@ -339,6 +339,35 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
     })
 }
 
+/// `/api/models/downloads...`, `/api/models/files/...`, `/api/models/upload` and `/api/system/memory` (the caller has checked the session):
+/// the model files of the browser build (see `models`). `None` when the path is not one of these.
+async fn models_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let jobs = app.llm.jobs().clone();
+    let name_of = |rest: &str| crate::fetch::percent_decode(rest).unwrap_or_default();
+    Some(match (method, path) {
+        ("GET", "/api/system/memory") => match crate::models::memory() {
+            Ok(v) => ok(v),
+            Err(e) => api_error(e),
+        },
+        ("GET", "/api/models/downloads") => ok(jobs.list(Some(&app.embed.status()))),
+        ("POST", "/api/models/downloads") => library_reply(jobs.add(body)),
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/pause") => {
+            library_reply(jobs.pause(&name_of(&p["/api/models/downloads/".len()..p.len() - "/pause".len()])))
+        }
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/resume") => {
+            library_reply(jobs.resume(&name_of(&p["/api/models/downloads/".len()..p.len() - "/resume".len()])))
+        }
+        ("DELETE", p) if p.starts_with("/api/models/downloads/") => library_reply(jobs.remove(&name_of(&p["/api/models/downloads/".len()..]))),
+        ("DELETE", p) if p.starts_with("/api/models/files/") => {
+            let (svc, id) = (app.llm.clone(), name_of(&p["/api/models/files/".len()..]));
+            blocking(move || svc.delete_model(&id)).await
+        }
+        // A body that came whole (the real server streams it: see `handle`).
+        ("POST", "/api/models/upload") => library_reply(jobs.upload(query, Some(body.len() as u64), Full::new(Bytes::copy_from_slice(body))).await),
+        _ => return None,
+    })
+}
+
 /// A PDF file as the reply: streamed from disk in pieces, never held whole. The name is cut to plain characters for the header.
 fn pdf_reply(path: &std::path::Path, name: &str) -> Reply {
     use std::io::Read;
@@ -482,6 +511,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
         return r;
     }
     if let Some(r) = settings(app, method, path, body) {
+        return r;
+    }
+    if let Some(r) = models_api(app, method, path, query, body).await {
         return r;
     }
     if let Some(r) = embedder(app, method, path, body).await {
@@ -905,6 +937,11 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.library.upload(&query, len, req.into_body()).await)
+    } else if signed_in && method == "POST" && path == "/api/models/upload" {
+        // A model upload is streamed to disk the same way.
+        let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+        let query = req.uri().query().unwrap_or("").to_string();
+        library_reply(app.llm.jobs().upload(&query, len, req.into_body()).await)
     } else if let (true, "POST", Some((lib, replace))) = (signed_in, method.as_str(), build_upload_target(&path)) {
         // A PDF upload is streamed to disk the same way.
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
@@ -1174,6 +1211,50 @@ mod tests {
         // a good call with no model on the server: asked to wait, and the download has started
         let (s, v) = json_call(&a, "POST", "/api/embed", &c, r#"{"texts":["hello"]}"#).await;
         assert_eq!((s, v["error"]["code"].clone()), (503, json!("model_missing")));
+    }
+
+    #[tokio::test]
+    async fn the_model_file_routes_need_a_session_and_check_their_input() {
+        let d = TempDir::new("route-models");
+        let a = file_app(&d);
+        for (m, p) in [
+            ("GET", "/api/system/memory"),
+            ("GET", "/api/models/downloads"),
+            ("POST", "/api/models/downloads"),
+            ("POST", "/api/models/downloads/x.gguf/pause"),
+            ("DELETE", "/api/models/downloads/x.gguf"),
+            ("DELETE", "/api/models/files/x.gguf"),
+            ("POST", "/api/models/upload?name=x.gguf"),
+        ] {
+            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        }
+        let c = sign_in(&a).await;
+        let (s, v) = json_call(&a, "GET", "/api/system/memory", &c, "").await;
+        assert_eq!(s, 200);
+        assert!(v["result"]["total"].as_u64().unwrap() >= v["result"]["avail"].as_u64().unwrap());
+        let (s, v) = json_call(&a, "GET", "/api/models/downloads", &c, "").await;
+        assert_eq!((s, v["result"]["downloads"].clone()), (200, json!([])));
+        // only Hugging Face and Cache's own address
+        let (s, v) = json_call(&a, "POST", "/api/models/downloads", &c, r#"{"name":"a.gguf","url":"https://evil.example/a.gguf","size":1}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (403, json!("host_not_allowed")));
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads", &c, "nope").await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads/nope.gguf/pause", &c, "").await.0, 404);
+        // delete: by name only, and only what is there
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        std::fs::write(d.0.join("models/bge-m3-Q8_0.gguf"), b"e").unwrap();
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/..%2Fchat.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/bge-m3-Q8_0.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/nope.gguf", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+        // upload: whole body here (the real server streams it)
+        let r = route(&a, "POST", "/api/models/upload?name=up.gguf", Some(&c), b"abcd").await;
+        assert_eq!(r.status, 200);
+        assert_eq!(std::fs::read(d.0.join("models/up.gguf")).unwrap(), b"abcd");
+        assert_eq!(route(&a, "POST", "/api/models/upload?name=up.txt", Some(&c), b"abcd").await.status, 400);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"], json!([{"id": "up.gguf", "size": 4, "loaded": false}]));
     }
 
     #[tokio::test]
