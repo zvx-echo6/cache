@@ -32,8 +32,8 @@ class MemoryNeed {
 
   /// The log line for a load.
   String get logLine => fromHeader
-      ? 'Memory need: ${total >> 20} MB (weights ${weights >> 20} MB, kv ${kv >> 20} MB, compute ${compute >> 20} MB) from header'
-      : 'Memory need: ${total >> 20} MB (size-based: 0.65 x file + 1024 MB) fallback';
+      ? 'Memory need: ${total ~/ (1 << 20)} MB (weights ${weights ~/ (1 << 20)} MB, kv ${kv ~/ (1 << 20)} MB, compute ${compute ~/ (1 << 20)} MB) from header'
+      : 'Memory need: ${total ~/ (1 << 20)} MB (size-based: 0.65 x file + 1024 MB) fallback';
 }
 
 /// What a chat model needs in memory while it answers with [nCtx] tokens of context, from its GGUF [h], with the chat model loaded

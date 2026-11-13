@@ -222,7 +222,7 @@ class PdfIndexRun extends ChangeNotifier {
   /// "PDF 3 of 37 · 12 MB": which PDF, of all, and its size.
   String _which(ZimPdf pdf) => 'PDF ${handled + 1} of ${list.pdfs.length} · ${_mb(pdf.size)}';
 
-  static String _mb(int bytes) => bytes >= 1 << 20 ? '${(bytes / (1 << 20)).toStringAsFixed(bytes >= 10 << 20 ? 0 : 1)} MB' : '${(bytes >> 10).clamp(1, 1023)} KB';
+  static String _mb(int bytes) => bytes >= 1 << 20 ? '${(bytes / (1 << 20)).toStringAsFixed(bytes >= 10 << 20 ? 0 : 1)} MB' : '${(bytes ~/ (1 << 10)).clamp(1, 1023)} KB';
   double get fraction => total == 0 ? 1 : (handled / total).clamp(0.0, 1.0);
 
   /// Time since this run started.
@@ -462,7 +462,7 @@ class PdfIndexRun extends ChangeNotifier {
   Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     // Each PDF's start and end in the log (with what came of it and how long it took), so a device's logs show where work stands.
     final all = Stopwatch()..start();
-    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size >> 10} KB) starts', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
+    logInfo('PDF ${handled + 1} of ${list.pdfs.length} (${pdf.size ~/ (1 << 10)} KB) starts', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
     final one = await _indexOneLogged(pdf, row, bytes: bytes);
     logInfo('PDF ${handled + 1} of ${list.pdfs.length} ${one.skip == null ? 'done' : 'skipped (${one.skip!.name})'} in ${all.elapsedMilliseconds} ms', detail: pdf.path, job: 'zim-pdf/${list.zimUuid}');
     return one;

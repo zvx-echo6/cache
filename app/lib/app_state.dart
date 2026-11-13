@@ -246,11 +246,11 @@ class AppState extends ChangeNotifier {
           final r = await memory();
           final need = r == null ? null : await needOf(e);
           if (r != null && need != null && need.total > r.room) {
-            logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
+            logInfo('Model not loaded at start: it needs about ${need.total ~/ (1 << 20)} MB, $r');
             resting = e;
             heldForMemory = true;
-            heldNeedMb = need.total >> 20;
-            heldFreeMb = r.room >> 20;
+            heldNeedMb = need.total ~/ (1 << 20);
+            heldFreeMb = r.room ~/ (1 << 20);
             notifyListeners();
           } else {
             await activate(e);
@@ -429,7 +429,7 @@ class AppState extends ChangeNotifier {
       await _unloading;
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
-      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
+      logInfo('Model loads (${entry.size ~/ (1 << 20)} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
@@ -607,10 +607,10 @@ class AppState extends ChangeNotifier {
       final room = await memory();
       final need = room == null ? null : await needOf(r);
       if (room != null && need != null && need.total > room.room) {
-        logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        logInfo('Model not loaded on wake: it needs about ${need.total ~/ (1 << 20)} MB, $room');
         heldForMemory = true;
-        heldNeedMb = need.total >> 20;
-        heldFreeMb = room.room >> 20;
+        heldNeedMb = need.total ~/ (1 << 20);
+        heldFreeMb = room.room ~/ (1 << 20);
         notifyListeners();
         return;
       }

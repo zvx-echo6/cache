@@ -48,7 +48,9 @@ List<GeoPoint> decodePolyline6(String encoded) {
         result |= (c & 0x1f) << shift;
         shift += 5;
       } while (c >= 0x20);
-      final delta = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      // -(x + 1), not ~x: compiled for a browser, ~ gives an unsigned 32-bit number, so every step west or south became a jump of
+      // 2^32 millionths of a degree (no route line, the camera on the whole world). The two are equal on the Dart VM.
+      final delta = (result & 1) != 0 ? -((result >> 1) + 1) : (result >> 1);
       if (axis == 0) {
         lat += delta;
       } else {

@@ -322,7 +322,7 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
       final reading = await _readMemory();
       if (!_warmWanted || _disposed) return;
       if (reading == null || reading.avail < need) {
-        logInfo('Search model: warm load skipped (${reading == null ? 'memory unknown' : 'available ${reading.avail >> 20} MB'}, needs ${need >> 20} MB)');
+        logInfo('Search model: warm load skipped (${reading == null ? 'memory unknown' : 'available ${reading.avail ~/ (1 << 20)} MB'}, needs ${need ~/ (1 << 20)} MB)');
         return;
       }
       logInfo('Search model: warm load started');

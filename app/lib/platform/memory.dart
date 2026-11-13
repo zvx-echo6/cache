@@ -92,18 +92,18 @@ class MemoryReading {
   final int? compressed;
 
   String get diagnostics => [
-    if (footprint != null) 'footprint ${footprint! >> 20} MB',
-    if (resident != null) 'RSS ${resident! >> 20} MB',
-    if (compressed != null) 'compressed ${compressed! >> 20} MB',
-    '${appScoped ? 'app room' : 'available'} ${avail >> 20} MB',
-    'device ${total >> 20} MB',
+    if (footprint != null) 'footprint ${footprint! ~/ (1 << 20)} MB',
+    if (resident != null) 'RSS ${resident! ~/ (1 << 20)} MB',
+    if (compressed != null) 'compressed ${compressed! ~/ (1 << 20)} MB',
+    '${appScoped ? 'app room' : 'available'} ${avail ~/ (1 << 20)} MB',
+    'device ${total ~/ (1 << 20)} MB',
   ].join(', ');
 
   /// What can be used before the system starts killing apps.
   int get room => avail - threshold;
 
   @override
-  String toString() => appScoped ? diagnostics : 'free ${avail >> 20} MB of ${total >> 20} MB (kills below ${threshold >> 20} MB${low ? ', low' : ''})';
+  String toString() => appScoped ? diagnostics : 'free ${avail ~/ (1 << 20)} MB of ${total ~/ (1 << 20)} MB (kills below ${threshold ~/ (1 << 20)} MB${low ? ', low' : ''})';
 }
 
 /// Android's memory channel (MainActivity: ActivityManager.MemoryInfo, and onTrimMemory).

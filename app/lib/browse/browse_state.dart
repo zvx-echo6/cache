@@ -515,7 +515,7 @@ class BrowseState extends ChangeNotifier {
           ..done = f.lengthSync()
           ..total = e.size;
         _remember(e, installed);
-        logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
+        logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() ~/ (1 << 20)} of ${e.size ~/ (1 << 20)} MB');
       } on CatalogException catch (e) {
         logInfo('A partial download is not matched yet (catalog: ${e.message}); kept', detail: fileName);
       } catch (e) {
@@ -598,7 +598,7 @@ class BrowseState extends ChangeNotifier {
     final part = File('${sources.partialDir.path}/${entry.fileName}.part');
     final from = part.existsSync() ? part.lengthSync() : 0;
     final started = DateTime.now();
-    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${from >> 20} of ${entry.size >> 20} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
+    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${from ~/ (1 << 20)} of ${entry.size ~/ (1 << 20)} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
     final previous = _loops[entry.id];
     final loop = Completer<void>();
     _loops[entry.id] = t.loop = loop.future;
@@ -644,7 +644,7 @@ class BrowseState extends ChangeNotifier {
       );
       if (transfers[entry.id] == t) transfers.remove(entry.id);
       final secs = DateTime.now().difference(started).inSeconds;
-      logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
+      logInfo('Download done: ${entry.title} (${entry.size ~/ (1 << 20)} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
       final forgotten = _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
@@ -658,7 +658,7 @@ class BrowseState extends ChangeNotifier {
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
-        logError('Download failed: ${entry.title} (${e.code}, at ${t.done >> 20} MB)', error: e.message, job: 'download/${entry.id}');
+        logError('Download failed: ${entry.title} (${e.code}, at ${t.done ~/ (1 << 20)} MB)', error: e.message, job: 'download/${entry.id}');
       }
       notifyListeners();
     } catch (e) {
@@ -684,7 +684,7 @@ class BrowseState extends ChangeNotifier {
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
-    logInfo('Download paused: ${entry.title} at ${t.done >> 20} of ${t.total >> 20} MB', job: 'download/${entry.id}');
+    logInfo('Download paused: ${entry.title} at ${t.done ~/ (1 << 20)} of ${t.total ~/ (1 << 20)} MB', job: 'download/${entry.id}');
     // resumed later, the speed is measured afresh (not across the pause)
     DlMeter.reset('zim:${entry.id}');
     t.token?.cancel();
