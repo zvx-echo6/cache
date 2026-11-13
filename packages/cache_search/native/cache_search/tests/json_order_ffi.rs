@@ -78,7 +78,8 @@ fn status_of_a_missing_zim_and_library() {
     let cfg = cstr(r#"{"sources":[{"kind":"zim","path":"/nonexistent/a.zim"},{"kind":"library","path":"/nonexistent/recon"}]}"#);
     let h = unsafe { cs_open(cfg.as_ptr()) };
     let v: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
-    assert_eq!(keys(&v), ["sources"]);
+    // "open_timings": the lines about how long the last open took (the app writes them to its log)
+    assert_eq!(keys(&v), ["sources", "open_timings"]);
     let want = ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model", "error", "source_id", "index"];
     for s in v["sources"].as_array().unwrap() {
         assert_eq!(keys(s), want, "{s}");
