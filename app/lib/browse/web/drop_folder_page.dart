@@ -16,6 +16,13 @@ import 'device_api.dart' show DeviceException;
 /// The drop folder: one folder on the device whose three subfolders are a queue. Files copied into ingest/ are taken in order and moved
 /// to complete/ or failed/. Settings on the left (folder, on or off, which library the PDFs go into), the key to the three subfolders and
 /// the table of files on the right.
+/// A reason as one sentence with one full stop: the device's reasons may or may not end in one, and the page never shows two. (The note
+/// file beside a failed file, `<name>.why.txt`, is the device's own; the page shows the reason only, not the file's name.)
+String oneSentence(String reason) {
+  final t = reason.trim().replaceFirst(RegExp(r'[.\s]+$'), '');
+  return t.isEmpty ? t : '$t.';
+}
+
 class DropFolderPage extends StatefulWidget {
   const DropFolderPage({super.key, required this.build});
 
@@ -428,11 +435,9 @@ class _DropFolderPageState extends State<DropFolderPage> {
       case 'duplicate':
         return f.reason ?? 'Duplicate: the same content is already in the library';
       case 'unsupported':
-        return '${f.reason ?? 'Not a file Cache can use'}. Note: ${f.name}.why.txt';
+        return oneSentence(f.reason ?? 'Not a file Cache can use');
       case 'failed':
-        final r = f.reason ?? 'Could not be used';
-        // Each file in failed/ has a note beside it, `<name>.why.txt`.
-        return f.folder == 'failed' ? '$r. Note: ${f.name}.why.txt' : r;
+        return oneSentence(f.reason ?? 'Could not be used');
       default:
         final n = f.name.toLowerCase();
         final base = n.endsWith('.pdf') ? 'Built into the library' : 'Added to the Library';

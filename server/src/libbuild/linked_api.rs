@@ -1,7 +1,7 @@
 //! Authenticated local administration for linked-folder identity adoption and checks.
 use super::{
     linked_checks::{self, CheckJob, Counts, JobFile, Scope},
-    linked_registry::{BrowseMode, LinkedRegistry, ScanReport},
+    linked_registry::{LinkedRegistry, ScanReport},
     BuildService,
 };
 use crate::library::ApiErr;
@@ -28,7 +28,7 @@ static RUNTIMES: OnceLock<RuntimeMap> = OnceLock::new();
 static OPS: OnceLock<OperationMap> = OnceLock::new();
 static JOB_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-fn error(status: u16, message: impl Into<String>) -> ApiErr {
+pub(super) fn error(status: u16, message: impl Into<String>) -> ApiErr {
     ApiErr { status, code: "linked_folder", message: message.into() }
 }
 
@@ -43,7 +43,7 @@ fn issue_code(e: &io::Error) -> &'static str {
     }
 }
 
-fn io_error(e: io::Error) -> ApiErr {
+pub(super) fn io_error(e: io::Error) -> ApiErr {
     let status = match e.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => 400,
         io::ErrorKind::NotFound => 404,
@@ -51,6 +51,11 @@ fn io_error(e: io::Error) -> ApiErr {
         _ => 500,
     };
     error(status, format!("{}: {}", issue_code(&e), e))
+}
+
+fn overlaps(a: &Path, b: &Path) -> bool {
+    let (a, b) = (a.canonicalize().unwrap_or_else(|_| a.to_path_buf()), b.canonicalize().unwrap_or_else(|_| b.to_path_buf()));
+    a.starts_with(&b) || b.starts_with(&a)
 }
 
 fn valid_id(s: &str) -> bool {
@@ -64,7 +69,7 @@ fn valid_rel(path: &Path) -> bool {
         && path.components().all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn library_path(data: &Path, id: &str) -> Result<PathBuf, ApiErr> {
+pub(super) fn library_path(data: &Path, id: &str) -> Result<PathBuf, ApiErr> {
     if !valid_id(id) {
         return Err(error(400, "invalid library id"));
     }
@@ -84,7 +89,7 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-fn runtime(sidecar: &Path) -> Arc<Mutex<JobFile>> {
+pub(super) fn runtime(sidecar: &Path) -> Arc<Mutex<JobFile>> {
     let mut runtimes = RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
         .lock().unwrap_or_else(|e| e.into_inner());
     runtimes.entry(sidecar.to_path_buf()).or_insert_with(|| {
@@ -130,8 +135,10 @@ fn persist(sidecar: &Path, file: &JobFile) -> io::Result<()> {
 struct Register {
     id: String,
     label: String,
+    /// The app still sends the old browse `mode`; it is read and ignored (there are no modes any more).
     #[serde(default)]
-    mode: BrowseMode,
+    #[allow(dead_code)]
+    mode: Option<Value>,
     root: PathBuf,
     #[serde(default)]
     exclusions: Vec<PathBuf>,
@@ -152,7 +159,7 @@ struct Start {
     root_id: Option<String>,
 }
 
-fn is_active(path: &Path) -> bool {
+pub(super) fn is_active(path: &Path) -> bool {
     runtime(&path.join(".local")).lock().unwrap_or_else(|e| e.into_inner()).active.is_some()
 }
 
@@ -202,10 +209,22 @@ fn attached(file: &JobFile, scope: &Scope, synchronous: bool) -> Result<Option<C
 }
 
 fn start(
-    _service: &BuildService,
+    service: &Arc<BuildService>,
     path: &Path,
     root_id: Option<String>,
     legacy: Option<Sender<CheckResult>>,
+) -> Result<CheckJob, ApiErr> {
+    start_with(service, path, root_id, legacy, None)
+}
+
+/// Start (or attach to) a check. `auto_settle_ms` is `Some` for an automatic check: the settle rule is
+/// that delay, and the check never sleeps inside the job (the scheduler comes back after the delay).
+pub(super) fn start_with(
+    service: &Arc<BuildService>,
+    path: &Path,
+    root_id: Option<String>,
+    legacy: Option<Sender<CheckResult>>,
+    auto_settle_ms: Option<u64>,
 ) -> Result<CheckJob, ApiErr> {
     let sidecar = path.join(".local");
     let rt = runtime(&sidecar);
@@ -270,8 +289,9 @@ fn start(
     drop(guard);
     let worker_path = path.to_path_buf();
     let worker_rt = rt.clone();
+    let worker_service = service.clone();
     if let Err(e) = thread::Builder::new().name("linked-folder-check".into())
-        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy))
+        .spawn(move || run_check(worker_path, worker_rt, root_id, registry, legacy, auto_settle_ms, worker_service))
     {
         finish_error(&sidecar, &rt, &e);
         return Err(error(500, "could not start linked-folder check"));
@@ -301,10 +321,11 @@ fn scan_pass(
     sidecar: &Path,
     progress: &mut ProgressState,
     bases: &ProgressBase,
+    settle_ms: u64,
 ) -> io::Result<ScanReport> {
     let registry_file = sidecar.join("linked-registry.json");
     let mut checkpoint_error = None;
-    let report = registry.scan_scoped_progress(root_id, 2_000, |root, seen, hashed, bytes, settling, observed| {
+    let report = registry.scan_scoped_progress(root_id, settle_ms, |root, seen, hashed, bytes, settling, observed| {
         let clock = now();
         let (seen_base, hash_base, byte_base) = bases.get(root).copied().unwrap_or_default();
         let mut file = rt.lock().unwrap_or_else(|e| e.into_inner());
@@ -370,7 +391,9 @@ fn progress_bases(job: &CheckJob) -> ProgressBase {
     ))).collect()
 }
 
-fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport) -> Vec<Value> {
+/// One row per folder of the check. `scanned_at` is when the scan began: a file not yet hashed that was first seen less than the
+/// settle delay before then is still settling, however long the scan took.
+fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport, settle_ms: u64, scanned_at: u64) -> Vec<Value> {
     report.roots.iter().map(|root| {
         let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
             .any(|location| location.root_id == root.root_id && location.available)).collect();
@@ -380,7 +403,7 @@ fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport) -> Vec<Valu
         ).sum();
         let settling = registry.local_config().roots.iter().find(|config| config.id == root.root_id)
             .map(|config| config.state.values().filter(|state|
-                state.blake3.is_none() && now().saturating_sub(state.first_observed_ms) < 2_000
+                state.blake3.is_none() && scanned_at.saturating_sub(state.first_observed_ms) < settle_ms
             ).count()).unwrap_or(0);
         json!({
             "root_id": root.root_id,
@@ -404,12 +427,15 @@ fn run_check(
     root_id: Option<String>,
     mut registry: LinkedRegistry,
     legacy: Option<Sender<CheckResult>>,
+    auto_settle_ms: Option<u64>,
+    service: Arc<BuildService>,
 ) {
     let sidecar = path.join(".local");
+    let library = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let result = {
         let operation = op_lock(&path);
         let _guard = operation.lock().unwrap_or_else(|e| e.into_inner());
-        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry);
+        let result = run_check_locked(&sidecar, &rt, root_id.as_deref(), &mut registry, auto_settle_ms, &service, &library);
         if let Err(e) = &result {
             finish_error(&sidecar, &rt, e);
         }
@@ -427,7 +453,20 @@ fn run_check_locked(
     rt: &Arc<Mutex<JobFile>>,
     root_id: Option<&str>,
     registry: &mut LinkedRegistry,
+    auto_settle_ms: Option<u64>,
+    service: &BuildService,
+    library: &str,
 ) -> io::Result<Value> {
+    let settle_ms = auto_settle_ms.unwrap_or(2_000);
+    // A library Cache builds is matched against its own books (the builder keeps no `documents.tsv`), and files whose hash it
+    // does not hold are queued below. An imported library keeps matching against its catalogue and queues nothing.
+    let built = service.linked_catalog(library).is_some();
+    let refresh_books = |registry: &mut LinkedRegistry| {
+        if let Some(books) = service.linked_catalog(library) {
+            registry.use_builder_books(books);
+        }
+    };
+    refresh_books(&mut *registry);
     {
         let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = state.active.as_mut() {
@@ -438,23 +477,40 @@ fn run_check_locked(
     }
     let timestamp = now();
     let mut progress = ProgressState { last_checkpoint: timestamp, last_saved: timestamp, ..ProgressState::default() };
-    let mut report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &ProgressBase::new())?;
-    // Newly observed files need two unchanged seconds before they can be hashed.
-    if report.roots.iter().any(|root| root.complete && root.errors.is_empty() && root.pending > 0) {
+    // The settling count below is taken on the clock of the scan it belongs to: a slow scan must not make a file that was
+    // still settling when it was looked at count as settled (no follow-up check would come back for it until the hourly rescan).
+    let mut scan_started = now();
+    let mut report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &ProgressBase::new(), settle_ms)?;
+    // Newly observed files need two unchanged seconds before they can be hashed. A manual check waits
+    // here; an automatic check never holds the job for its (longer) settle delay, the scheduler comes back.
+    if auto_settle_ms.is_none() && report.roots.iter().any(|root| root.complete && root.errors.is_empty() && root.pending > 0) {
         thread::sleep(Duration::from_millis(2_100));
         let bases = rt.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref()
             .map(progress_bases).unwrap_or_default();
         progress.checkpoint_seen.clear();
-        report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases)?;
+        refresh_books(&mut *registry);
+        scan_started = now();
+        report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases, settle_ms)?;
     }
     let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
     // Apply every future control, including controls for roots outside this job's scope.
     registry.reconcile_controls(&state.controls)?;
-    let roots = make_root_reports(registry, &report);
+    let roots = make_root_reports(registry, &report, settle_ms, scan_started);
     let scanned: HashSet<_> = report.roots.iter().filter(|root| !root.paused)
         .map(|root| root.root_id.as_str()).collect();
     let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
         .any(|location| location.available && scanned.contains(location.root_id.as_str()))).collect();
+    if built {
+        // Match first (a book the library holds is only relinked, above); only a hash the library does not hold is queued, once,
+        // and built in place by the ordinary queue. The builder drops a file that is no longer the one that was checked.
+        for book in books.iter().filter(|book| book.doc_id.is_none()) {
+            let place = book.locations.iter().find(|l| l.available && scanned.contains(l.root_id.as_str()));
+            let root = place.and_then(|l| registry.local_config().roots.iter().find(|r| r.id == l.root_id));
+            if let (Some(l), Some(root)) = (place, root) {
+                service.enqueue_linked(library, &root.path, &l.relative_path, &book.blake3);
+            }
+        }
+    }
     let ids: HashSet<_> = books.iter().filter_map(|book| book.doc_id.as_deref()).collect();
     let locations = books.iter().filter(|book| book.doc_id.is_some()).map(|book|
         book.locations.iter().filter(|location| location.available && scanned.contains(location.root_id.as_str())).count()
@@ -469,6 +525,11 @@ fn run_check_locked(
         if successful {
             job.last_successful_at = job.finished_at;
         }
+        let covered: Vec<(String, bool)> = report.roots.iter().filter(|root| !root.paused).map(|root| (
+            root.root_id.clone(),
+            root.complete && !root.unavailable && root.issues.is_empty() && root.pending == 0,
+        )).collect();
+        linked_checks::record_folder_checks(&mut completed, &covered, job.finished_at.unwrap_or_else(now));
         job.counts.roots_seen = Some(report.roots.len());
         job.counts.files_seen = Some(job.counts.files_seen.unwrap_or(0));
         job.counts.files_hashed = Some(job.counts.files_hashed.unwrap_or(0));
@@ -494,7 +555,9 @@ fn finish_error(sidecar: &Path, rt: &Arc<Mutex<JobFile>>, failure: &io::Error) {
         job.state = "failed".into();
         job.stage = None;
         job.finished_at = Some(now());
-        job.error = Some(json!({"code": issue_code(failure), "message": failure.to_string()}));
+        // The operating system's own text goes to the log; the browser is given the reason code it already has words for.
+        eprintln!("cache: linked-folder check failed: {failure}");
+        job.error = Some(json!({"code": issue_code(failure), "message": issue_code(failure)}));
         state.latest = Some(job);
         if let Err(e) = persist(sidecar, &state) {
             state.state_error = Some(json!({"code": "io_error", "message": e.to_string()}));
@@ -506,7 +569,7 @@ fn job_status(sidecar: &Path) -> Result<Value, ApiErr> {
     let rt = runtime(sidecar);
     let state = rt.lock().unwrap_or_else(|e| e.into_inner());
     healthy(&state)?;
-    Ok(json!({"active": state.active, "latest": state.latest}))
+    Ok(json!({"active": state.active, "latest": state.latest, "folders": state.folders}))
 }
 
 fn validate_preview(data: &Path, input: Preview) -> Result<(PathBuf, Vec<PathBuf>), ApiErr> {
@@ -528,6 +591,11 @@ fn validate_preview(data: &Path, input: Preview) -> Result<(PathBuf, Vec<PathBuf
     Ok((root, input.exclusions))
 }
 
+/// `GET /api/linked-folders/storage`: what each linked folder holds, across all libraries (see `linked_where::storage`).
+pub fn storage(service: &BuildService) -> Value {
+    super::linked_where::storage(service)
+}
+
 pub fn preview(service: &BuildService, body: &[u8]) -> Result<Value, ApiErr> {
     let input: Preview = serde_json::from_slice(body).map_err(|e| error(400, e.to_string()))?;
     let (root, exclusions) = validate_preview(&service.data, input)?;
@@ -535,7 +603,7 @@ pub fn preview(service: &BuildService, body: &[u8]) -> Result<Value, ApiErr> {
 }
 
 pub fn request(
-    service: &BuildService,
+    service: &Arc<BuildService>,
     method: &str,
     library: &str,
     rest: &[String],
@@ -557,12 +625,29 @@ pub fn request(
             Ok(json!({
                 "local_config": config,
                 "capabilities": {
-                    "reuse_existing": true, "index_new_pdfs": false,
-                    "automatic_checks": false, "sync_locations": false, "open_original": false
+                    "reuse_existing": true, "index_new_pdfs": service.has_library(library),
+                    "automatic_checks": true, "sync_locations": false, "open_original": false
                 }
             }))
         }
         ("GET", [action]) if action == "checks" => job_status(&sidecar),
+        ("GET", [books, doc]) if books == "books" => super::linked_where::places(service, library, doc),
+        ("POST", [books, doc, action]) if books == "books" && action == "forget" => {
+            if is_active(&target) {
+                return Err(error(409, "linked-folder check active; wait for it to finish"));
+            }
+            let operation = op_lock(&target);
+            let _guard = operation.try_lock().map_err(|_| error(409, "linked-folder configuration is busy"))?;
+            let rt = runtime(&sidecar);
+            let state = rt.lock().unwrap_or_else(|e| e.into_inner());
+            healthy(&state)?;
+            if state.active.is_some() {
+                return Err(error(409, "linked-folder check active; wait for it to finish"));
+            }
+            // The operation lock keeps any new check from starting; the book's removal takes its own locks.
+            drop(state);
+            super::linked_where::forget(service, library, &target, doc)
+        }
         ("POST", []) => {
             if is_active(&target) {
                 return Err(error(409, "linked-folder check active; wait for it to finish"));
@@ -580,8 +665,12 @@ pub fn request(
                 return Err(error(400, "folder label must contain 1 to 200 bytes"));
             }
             let (source, exclusions) = validate_preview(&service.data, Preview { root: input.root, exclusions: input.exclusions })?;
+            // the drop folder moves and makes files in its own folder: a linked folder must never be that folder, or around or inside it
+            if service.drop_folder_in_use().is_some_and(|folder| overlaps(&source, Path::new(&folder))) {
+                return Err(error(400, "linked originals must not overlap Cache managed data"));
+            }
             let mut registry = LinkedRegistry::open(&sidecar, &target).map_err(io_error)?;
-            registry.register_root(&input.id, input.label, input.mode, &source, exclusions).map_err(io_error)?;
+            registry.register_root(&input.id, input.label, &source, exclusions).map_err(io_error)?;
             state.registered_roots = registry.local_config().roots.iter().map(|root| root.id.clone()).collect();
             state.controls.remove(&input.id);
             persist(&sidecar, &state).map_err(io_error)?;
@@ -596,7 +685,7 @@ pub fn request(
             let (sender, receiver) = mpsc::channel();
             start(service, &target, None, Some(sender))?;
             let report = receive_report(receiver)?;
-            Ok(json!({"report": report, "indexing_new_pdfs": false}))
+            Ok(json!({"report": report, "indexing_new_pdfs": service.has_library(library)}))
         }
         ("POST", [id, action]) if action == "pause" || action == "resume" => {
             let paused = action == "pause";
@@ -658,6 +747,32 @@ mod tests {
         assert!(library_path(&data.0, "escape").is_err());
     }
 
+    /// A file not yet hashed when the scan looked at it is still settling, even when the report is made after the settle delay
+    /// has passed (a slow scan): otherwise no follow-up check is planned, and with no further event the file waits for the hourly
+    /// rescan.
+    #[test]
+    fn a_file_settling_at_scan_time_still_counts_when_the_report_comes_later() {
+        let data = crate::TempDir::new("linked-settle-clock");
+        let target = data.0.join("library");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("cache-library.json"), b"{}").unwrap();
+        std::fs::write(target.join("documents.tsv"), "").unwrap();
+        let source = data.0.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("new.pdf"), b"just arrived").unwrap();
+        let target = target.canonicalize().unwrap();
+        let mut registry = LinkedRegistry::open(&target.join(".local"), &target).unwrap();
+        registry.register_root("root-a", "Folder".into(), &source, vec![]).unwrap();
+        let settle_ms = 300;
+        let scanned_at = now();
+        let report = registry.scan_scoped_progress(Some("root-a"), settle_ms, |_, _, _, _, _, _| {}).unwrap();
+        // the scan, or the work after it, takes longer than the settle delay
+        thread::sleep(Duration::from_millis(settle_ms + 200));
+        let rows = make_root_reports(&registry, &report, settle_ms, scanned_at);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["settling_file_count"], 1, "the file seen unhashed is still settling: {rows:?}");
+    }
+
     #[test]
     fn actual_start_reserves_registered_root_and_unlink_clears_it() {
         let data = crate::TempDir::new("linked-start-roots");
@@ -677,7 +792,7 @@ mod tests {
         let target = target.canonicalize().unwrap();
         let sidecar = target.join(".local");
         let mut registry = LinkedRegistry::open(&sidecar, &target).unwrap();
-        registry.register_root("root-a", "Folder".into(), BrowseMode::Keep, &source, vec![]).unwrap();
+        registry.register_root("root-a", "Folder".into(), &source, vec![]).unwrap();
         let (first_sender, first_receiver) = mpsc::channel();
         let first = start(&service, &target, Some("root-a".into()), Some(first_sender)).unwrap();
         assert!(runtime(&sidecar).lock().unwrap().registered_roots.contains("root-a"));

@@ -4,31 +4,12 @@ import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceSta
 
 // kIndexesDirName lives in indexes_dir.dart: the Cache Server helper (plain Dart, no Flutter packages) reads core_config.dart too.
 export 'indexes_dir.dart' show kIndexesDirName;
+export '../sharing/share_rules.dart' show kIndexesShareId, kIndexesNotShared, kIndexesHidden, kIndexesLocalDeletes, kIndexesLast;
 
 /// The device's syncable search indexes (the core's `indexes_dir`): one folder, `<kind>/<source id>/`, each with its working
 /// `.build/` and its sealed snapshots `snap/<build-id>/` (manifest.json written last). It is shared with every linked device
 /// once sharing is set up, whatever kinds are ticked, so an index reaches any device that has the same source, even when the
 /// source itself does not sync (two phones with the same ZIM, each downloaded on its own).
-
-/// The always-on share of the indexes folder.
-const String kIndexesShareId = 'indexes';
-
-/// What never syncs from it: each index's build (which also holds a publish in progress, renamed into `snap/` in one step), the
-/// core's own notes about this device (`.local/`, such as the snapshots it rejected), and SQLite's working files, which belong to
-/// the device that opened the database.
-const List<String> kIndexesNotShared = ['*/*/.build', '.local', '**/*-shm', '**/*-wal', '**/*-journal'];
-
-/// Hidden files that do sync from it (a name starting with "." otherwise never does): Tantivy's `.managed.json`, which every
-/// Tantivy snapshot's manifest lists (without it the snapshot is incomplete on the other device and not used), and the empty
-/// `.tantivy-meta.lock` the core puts beside it so that opening a snapshot never writes into it.
-const List<String> kIndexesHidden = ['*/*/snap/*/.managed.json', '*/*/snap/*/.tantivy-meta.lock'];
-
-/// Where a delete stays on the device that made it: each device clears out the snapshots it no longer uses on its own, and
-/// never fetches back one it deleted.
-const List<String> kIndexesLocalDeletes = ['*/*/snap'];
-
-/// What comes after the rest of a snapshot: its manifest, whose arrival says the snapshot is whole.
-const List<String> kIndexesLast = ['*/*/snap/*/manifest.json'];
 
 /// The kinds of index folder each kind of source has (the core's kinds): a ZIM's keyword index, its PDFs', its captions' and
 /// its EPUBs'; a library's.

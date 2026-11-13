@@ -1114,7 +1114,8 @@ fn item_id(kind: &str, name: &str) -> String {
     format!("{kind}-{}", &hex(h.as_ref())[..16])
 }
 
-fn dir_bytes(p: &Path) -> u64 {
+/// Every byte under `p`, in all its files and folders (0 for a folder that is not there).
+pub(crate) fn dir_bytes(p: &Path) -> u64 {
     let mut total = 0;
     if let Ok(rd) = std::fs::read_dir(p) {
         for e in rd.flatten() {

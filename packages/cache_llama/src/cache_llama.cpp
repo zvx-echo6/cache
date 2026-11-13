@@ -27,6 +27,9 @@
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #if defined(__APPLE__)
 #include <cerrno>
 #include <fcntl.h>
@@ -167,6 +170,9 @@ struct EmbedHandle {
     int                 n_ctx  = 0;
     int                 n_embd = 0;
     bool                encoder = false;
+    ggml_threadpool_t   pool  = nullptr;                    // the embedder's own threadpool (its cores in [cpus]); null: ggml's own
+    void             (* pool_free)(ggml_threadpool_t) = nullptr;
+    std::vector<int>    cpus;                               // the cores the encode runs on (empty: wherever the thread may)
 };
 
 const char * pooling_name(enum llama_pooling_type t) {
@@ -882,7 +888,7 @@ struct CpuPlan {
 // Android phones mix fast and slow ("little") cores; threads on the slow ones hold every step back.
 // Read each core's max frequency, leave out the slowest cluster when there is more than one, and use
 // at most 5 of the rest. If the files cannot be read: 4 threads, no pinning.
-CpuPlan plan_cpus() {
+CpuPlan plan_cpus(bool log = true) {
     CpuPlan plan;
 #if defined(__ANDROID__)
     std::vector<std::pair<int, long>> cores;  // (cpu, max kHz)
@@ -902,7 +908,7 @@ CpuPlan plan_cpus() {
         cores.emplace_back(i, khz);
     }
     if (!ok || cores.empty()) {
-        cl_logi("cannot read the CPU frequencies: %d threads, not pinned", plan.n_threads);
+        if (log) cl_logi("cannot read the CPU frequencies: %d threads, not pinned", plan.n_threads);
         return plan;
     }
     std::set<long> clusters;
@@ -922,9 +928,56 @@ CpuPlan plan_cpus() {
         plan.cpus.push_back(c.first);
         list += (list.empty() ? "" : ",") + std::to_string(c.first);
     }
-    cl_logi("%d CPU clusters; using %d threads pinned to cores %s", (int) clusters.size(), plan.n_threads, list.c_str());
+    if (log) cl_logi("%d CPU clusters; using %d threads pinned to cores %s", (int) clusters.size(), plan.n_threads, list.c_str());
 #endif
     return plan;
+}
+
+// A thread's CPU affinity, kept and put back. ggml pins the thread that creates a threadpool to its first worker's cores, and
+// the thread that computes a graph on a paused pool, and never undoes it. Those threads are the app's (Dart's) threads, which go
+// on to run other work, and threads they start inherit the pin: an embedding computed from a thread pinned to one core ran all
+// its threads on that core (a fixed ~5 s per query on the Pixel instead of ~0.15 s). Linux and Android; a no-op elsewhere.
+struct ThreadAffinity {
+#if defined(__linux__)
+    cpu_set_t set;
+    bool      ok = false;
+    ThreadAffinity() { CPU_ZERO(&set); ok = sched_getaffinity(0, sizeof(set), &set) == 0; }
+    void restore() const { if (ok) sched_setaffinity(0, sizeof(set), &set); }
+#else
+    void restore() const {}
+#endif
+};
+
+// Puts the calling thread's affinity back when the scope ends.
+struct KeepAffinity {
+    ThreadAffinity saved;
+    ~KeepAffinity() { saved.restore(); }
+};
+
+// The cores the embedder computes on: the chat model's fast cores on Android when they can be read, else every core of the
+// machine. Never strict: each of the embedder's threads may use all of them. Empty when there is nothing to choose.
+std::vector<int> embed_cpus() {
+    std::vector<int> cpus = plan_cpus(/*log*/ false).cpus;
+#if defined(__linux__)
+    if (cpus.empty()) {
+        long n = sysconf(_SC_NPROCESSORS_CONF);
+        for (long i = 0; i < n && i < GGML_MAX_N_THREADS; i++) cpus.push_back((int) i);
+    }
+#endif
+    return cpus;
+}
+
+// Sets the calling thread's affinity to [cpus] (no-op when empty).
+void set_thread_cpus(const std::vector<int> & cpus) {
+#if defined(__linux__)
+    if (cpus.empty()) return;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int c : cpus) if (c >= 0 && c < CPU_SETSIZE) CPU_SET(c, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+#else
+    (void) cpus;
+#endif
 }
 
 }  // namespace
@@ -1056,7 +1109,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
                 ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
                 for (int c : plan.cpus) tpp.cpumask[c] = true;
                 tpp.strict_cpu = true;
-                h->pool = pool_new(&tpp);
+                {
+                    KeepAffinity keep;  // pool_new pins this (the app's) thread to one core: put it back
+                    h->pool = pool_new(&tpp);
+                }
                 if (h->pool) {
                     h->pool_free = pool_free;
                     llama_attach_threadpool(h->ctx, h->pool, nullptr);
@@ -1524,6 +1580,30 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
             return nullptr;
         }
         h->n_ctx   = (int) llama_n_ctx(h->ctx);
+        // The embedder's own threadpool, on explicit cores and never strict, so its threads never inherit a pin from the thread
+        // that asks for an embedding (see ThreadAffinity).
+        h->cpus = embed_cpus();
+        if (!h->cpus.empty()) {
+            ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            auto * pool_new  = reg ? (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new") : nullptr;
+            auto * pool_free = reg ? (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free") : nullptr;
+            if (pool_new && pool_free) {
+                ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
+                for (int c : h->cpus) if (c >= 0 && c < GGML_MAX_N_THREADS) tpp.cpumask[c] = true;
+                tpp.strict_cpu = false;
+                {
+                    KeepAffinity keep;  // pool_new sets this thread's affinity too
+                    h->pool = pool_new(&tpp);
+                }
+                if (h->pool) {
+                    h->pool_free = pool_free;
+                    llama_attach_threadpool(h->ctx, h->pool, nullptr);
+                } else {
+                    cl_logi("embed: cannot create the embedder's threadpool: ggml's own is used");
+                }
+            }
+        }
         // What the context really got (measurement): the threads, and the context, batch and micro-batch sizes.
         cl_logi("embed load: n_threads=%d n_threads_batch=%d n_ctx=%u n_batch=%u n_ubatch=%u", (int) llama_n_threads(h->ctx),
                 (int) llama_n_threads_batch(h->ctx), (unsigned) llama_n_ctx(h->ctx), (unsigned) llama_n_batch(h->ctx),
@@ -1580,6 +1660,10 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
         std::vector<int8_t> want_out(tokens.size(), 1);  // pooling needs every token as an output
         batch.logits = want_out.data();
+        // The calling thread computes too (as the pool's first worker): it runs on the embedder's cores for the encode and gets its
+        // own affinity back after.
+        KeepAffinity keep;
+        set_thread_cpus(h->cpus);
         const auto t_enc = std::chrono::steady_clock::now();
         int rc = h->encoder ? llama_encode(h->ctx, batch) : llama_decode(h->ctx, batch);
         const long long encode_ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_enc).count();
@@ -1604,6 +1688,7 @@ void cl_embed_free(void * hp) {
     auto * h = (EmbedHandle *) hp;
     if (!h) return;
     if (h->ctx)   llama_free(h->ctx);
+    if (h->pool)  h->pool_free(h->pool);
     if (h->model) llama_model_free(h->model);
     delete h;
 }

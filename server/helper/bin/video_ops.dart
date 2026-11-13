@@ -13,7 +13,7 @@ import 'line_protocol.dart';
 /// open. Not core ops; the helper answers them before the core dispatcher.
 ///
 ///   video.info {}                          -> {dir}     the saved videos' folder (absolute)
-///   video.call {op, request}               -> the JSON string cs_video_<op> returns (`request` a JSON string, "" for none)
+///   video.call {op, request}               -> the JSON string `cs_video_<op>` returns (`request` a JSON string, "" for none)
 ///   video.jobStart {instance, video, choice?, token?, title?, label?}
 ///                                          -> {job}     a download; one already running for the same video is returned as it is
 ///   video.jobProgress {job}                -> {state, done, total, error}      (the same shape the dispatcher's jobProgress has)
@@ -23,11 +23,15 @@ import 'line_protocol.dart';
 ///                                              every job the helper holds, so a tab opened later sees them
 /// Errors are the core's own ({code, message}).
 class VideoOps implements OpHandler {
-  VideoOps(this.dirs, this.factory, {this.log});
+  VideoOps(this.dirs, this.factory, {this.log, this.resolve});
 
   final AppDirs dirs;
   final CsNative Function() factory;
   final void Function(String message)? log;
+
+  /// Swaps the keystore references (`keystore://<name>`) in a value for the stored keys. The core hook never sees `video.*` (this
+  /// handler answers it), so the browser's tokens are swapped here, in `video.call`'s request and `video.jobStart`'s token. Null: no swap.
+  final Object? Function(Object? value)? resolve;
 
   /// The finished, cancelled and failed jobs kept at most (a tab frees them as it sees them; this only bounds one that never does).
   static const int keepStopped = 50;
@@ -64,7 +68,7 @@ class VideoOps implements OpHandler {
         return {'dir': dir};
       case 'video.call':
         final n = _open();
-        final r = n.video(_handle, a['op'] as String, (a['request'] as String?) ?? '');
+        final r = n.video(_handle, a['op'] as String, _swapRequest((a['request'] as String?) ?? ''));
         return r ?? (throw CacheSearchException.fromJson(n.lastError(_handle)));
       case 'video.jobStart':
         return _start(a);
@@ -92,6 +96,19 @@ class VideoOps implements OpHandler {
         ];
     }
     throw CacheSearchException('internal', 'Unknown call $op');
+  }
+
+  /// [request] (a JSON string) with its references swapped; one that is not a JSON object goes on as it is.
+  String _swapRequest(String request) {
+    final r = resolve;
+    if (r == null || !request.contains('keystore://')) return request;
+    final Object? j;
+    try {
+      j = jsonDecode(request);
+    } catch (_) {
+      return request;
+    }
+    return jsonEncode(r(j));
   }
 
   _Entry _entry(Object? id) => _jobs[id] ?? (throw const CacheSearchException('not_found', 'No such download'));
@@ -129,7 +146,7 @@ class VideoOps implements OpHandler {
       'instance': instance,
       'video': video,
       'choice': choice,
-      if (a['token'] != null) 'token': a['token'],
+      if (a['token'] != null) 'token': resolve == null ? a['token'] : resolve!(a['token']),
     };
     final job = CoreJob.start(n, 'video_download', params);
     final id = _next++;

@@ -10,6 +10,9 @@ import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/sharing/share_items.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/sources_state.dart' show kZimNotShared;
+import 'package:cache/sources/libraries_state.dart' as libraries_state;
+import 'package:cache/sources/sources_state.dart' as sources_state;
+import 'package:cache/sharing/share_rules.dart' as share_rules;
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -387,5 +390,12 @@ void main() {
     expect(kZimNotShared, ['*.illustration.png'], reason: 'the picture read from the ZIM is made on each device');
     s.dispose();
     await r.dir.delete(recursive: true);
+  });
+
+  test('the phone and Cache Server share one set of not-shared lists (share_rules.dart, which the server helper reads)', () {
+    // declared once: a second declaration in the app would win over the export and the two would drift apart
+    expect(identical(libraries_state.kLibraryNotShared, share_rules.kLibraryNotShared), isTrue);
+    expect(identical(sources_state.kZimNotShared, share_rules.kZimNotShared), isTrue);
+    expect(share_rules.kLibraryNotShared, ['*/index', '*/index-snapshots']);
   });
 }

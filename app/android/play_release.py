@@ -4,14 +4,23 @@
 Usage: play_release.py --check-newer <versionCode>        (fails unless it is higher than every versionCode already on Play)
        play_release.py <app-release.aab> <versionCode> <version name> [<track>[,<track>...]]
          (default: internal,alpha,beta: internal, closed and open testing)
+       play_release.py --promote <versionCode> <from-track> <to-track>[,<to-track>...] [--dry-run]
+         (puts a versionCode already on Play onto other tracks: nothing is built or uploaded)
 Environment: PLAY_SERVICE_ACCOUNT_JSON (the service account key, JSON), PACKAGE_NAME, and RELEASE_NOTES (en-US, at most 500
-characters) and RELEASE_STATUS ("completed", the default: sent for review; or "draft") for an upload.
+characters) and RELEASE_STATUS ("completed", the default: sent for review; or "draft") for an upload or a promotion.
+A promotion also reads CAR_REVIEW_PASSED ("true" once Google's Android Auto review has passed) and takes RELEASE_NOTES as optional:
+when empty, the en-US notes of that versionCode's release on the from-track are carried over.
 
 An upload opens an edit, uploads the bundle once, puts the new release on every track with that status and the release notes,
 and commits the edit. With "completed" (the owner never clicks in Play Console) the new release is the only one on each track,
 fully rolled out (no userFraction): a halted, staged or draft release left there is cleared. A "draft" (a dry run) leaves the
 tracks' live releases as they are. After the commit every track is read back from Play, and the run fails unless each shows
 the new release as sent.
+A promotion opens an edit and checks that the versionCode is among the app's bundles and is a completed release on the
+from-track, that no to-track is the from-track, that a track with a blocking car review (beta, production) is only named once
+CAR_REVIEW_PASSED is "true" (every store build carries Android Auto), and that the notes are 1 to 500 characters. It puts the
+release on each to-track as an upload does, prints every track before and in the edit, and commits, then reads the to-tracks
+back. With --dry-run the edit is deleted and nothing is committed.
 The store listing is not touched. Any API error fails the run, and the edit is deleted when a step fails, so nothing half-done
 is left on Play. Standard library and openssl only: nothing to install.
 """
@@ -19,6 +28,7 @@ is left on Play. Standard library and openssl only: nothing to install.
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -191,6 +201,74 @@ def upload(play: Play, aab: str, code: int, name: str, tracks: list, notes: str,
     verify(play, code, tracks, status)
 
 
+# Tracks whose Android Auto car review blocks the build: it only goes there once Google's car review has passed.
+CAR_BLOCKING = ("beta", "production")
+TRACK_NAME = re.compile(r"[A-Za-z0-9:_-]+")
+
+
+def en_us_notes(release: dict) -> str:
+    for n in release.get("releaseNotes", []):
+        if n.get("language") == "en-US":
+            return (n.get("text") or "").strip()
+    return ""
+
+
+def promote(play: Play, code: int, from_track: str, to_tracks: list, notes: str, status: str, car_review_passed: bool, dry_run: bool):
+    edit = play.call("POST", "/edits", {})["id"]
+    print("edit opened")
+    try:
+        bundles = {int(b["versionCode"]) for b in play.call("GET", f"/edits/{edit}/bundles").get("bundles", [])}
+        bundles |= {int(a["versionCode"]) for a in play.call("GET", f"/edits/{edit}/apks").get("apks", [])}
+        if code not in bundles:
+            raise PlayError(f"versionCode {code} is not among the app's bundles on Play: {sorted(bundles)}")
+        for t in [from_track] + to_tracks:
+            if not TRACK_NAME.fullmatch(t):
+                raise PlayError(f"not a track name: {t}")
+        if from_track in to_tracks:
+            raise PlayError(f"the to-tracks include the from-track {from_track}")
+        source = [r for r in track_releases(play, edit, from_track) if r.get("versionCodes") == [str(code)]]
+        if len(source) != 1:
+            raise PlayError(f"track {from_track} has {len(source)} releases with versionCode {code}, not exactly one")
+        source = source[0]
+        if source.get("status") != "completed":
+            raise PlayError(f"the release of versionCode {code} on {from_track} is {source.get('status')}, not completed")
+        blocked = [t for t in to_tracks if t in CAR_BLOCKING]
+        if blocked and not car_review_passed:
+            raise PlayError(f"Android Auto builds go to internal and alpha only until Google's car review has passed; "
+                            f"{', '.join(blocked)} is not allowed (CAR_REVIEW_PASSED is not true)")
+        notes = notes.strip() or en_us_notes(source)
+        if not notes:
+            raise PlayError("the release notes are empty and the release on " + from_track + " has no en-US notes to carry over")
+        if len(notes) > 500:
+            raise PlayError(f"the release notes are {len(notes)} characters; Play allows at most 500")
+        release = {"name": source.get("name") or str(code), "versionCodes": [str(code)], "status": status,
+                   "releaseNotes": [{"language": "en-US", "text": notes}]}
+        before = {t["track"]: t.get("releases", []) for t in play.call("GET", f"/edits/{edit}/tracks").get("tracks", [])}
+        for t in to_tracks:
+            before.setdefault(t, [])
+        for t in sorted(before):
+            print(f"track {t} before: {describe(before[t])}")
+        inedit = dict(before)
+        for t in to_tracks:
+            tr = play.call("PUT", f"/edits/{edit}/tracks/{t}", {"track": t, "releases": releases_for(before[t], release, status)})
+            inedit[t] = tr.get("releases", [])
+            problem = track_problem(inedit[t], code, status)
+            if problem:
+                raise PlayError(f"track {t} did not take the release as sent: {problem}")
+        for t in sorted(inedit):
+            print(f"track {t} in the edit: {describe(inedit[t])}")
+        if dry_run:
+            play.delete_edit(edit)
+            print("dry run: nothing committed")
+            return
+        play.call("POST", f"/edits/{edit}:commit")
+        print("edit committed")
+    except BaseException:
+        play.delete_edit(edit)
+        raise
+    verify(play, code, to_tracks, status)
+
+
 def verify(play: Play, code: int, tracks: list, status: str):
     """Reads every track back from Play in a fresh edit (deleted afterwards) and fails unless each shows the new release with
     the status sent (completed: fully rolled out and alone on the track)."""
@@ -225,6 +303,16 @@ def main(argv):
     try:
         if len(argv) == 3 and argv[1] == "--check-newer":
             check_newer(Play(package), int(argv[2]))
+            return 0
+        if len(argv) in (5, 6) and argv[1] == "--promote":
+            if len(argv) == 6 and argv[5] != "--dry-run":
+                print(__doc__, file=sys.stderr)
+                return 2
+            status = os.environ.get("RELEASE_STATUS", "").strip() or "completed"
+            if status not in ("completed", "draft"):
+                raise PlayError(f"RELEASE_STATUS must be completed or draft, not {status}")
+            promote(Play(package), int(argv[2]), argv[3], parse_tracks(argv[4]), os.environ.get("RELEASE_NOTES", ""), status,
+                    os.environ.get("CAR_REVIEW_PASSED", "").strip() == "true", len(argv) == 6)
             return 0
         if len(argv) not in (4, 5):
             print(__doc__, file=sys.stderr)

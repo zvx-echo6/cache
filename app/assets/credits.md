@@ -171,6 +171,8 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - petitparser 7.0.2: MIT (Copyright (c) 2006-2024 Lukas Renggli.)
 - platform 3.2.0: BSD-3-Clause (Copyright 2017, the Dart project authors. All rights reserved.)
 - plugin_platform_interface 2.1.8: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- pointer_interceptor_platform_interface 0.10.0+1: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- pointer_interceptor_web 0.10.3: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - posix 6.5.2: MIT (Copyright (c) 2020 Brett Sutton)
 - process 5.0.6: BSD-3-Clause (Copyright 2013, the Dart project authors.)
 - pub_semver 2.2.1: BSD-3-Clause (Copyright 2014, the Dart project authors.)

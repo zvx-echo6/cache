@@ -268,8 +268,9 @@ class SourceStatus {
   /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
   final String? keywordSource;
 
-  /// A library that grows (one Add PDF writes to): true while its newest points are not in its keyword index yet (their words are
-  /// not searchable), false when they are; null for any other source, or one with no keyword index to be behind.
+  /// A library that grows (one Add PDF writes to): true while its keyword index is behind its points (new points whose words are not
+  /// searchable yet, or a removed book's points the index still has), false when it is not; null for any other source, or one with no
+  /// keyword index to be behind.
   final bool? keywordPending;
 
   /// A library's resolved settings (the core's own JSON), to hand back to a job that builds or extends its index.

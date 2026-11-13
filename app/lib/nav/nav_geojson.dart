@@ -33,9 +33,17 @@ Map<String, dynamic> routeGeoJson(List<MapRoute> routes, int selected) {
   return _collection(f);
 }
 
-/// The chosen place (large) and the search results (small).
-Map<String, dynamic> pinGeoJson(MapPlace? selected, List<MapPlace> results) {
+/// The chosen place (large) and the search results (small). [mark]: the turn shown while stepping through a route before Start,
+/// drawn as a small pin (a search result's).
+Map<String, dynamic> pinGeoJson(MapPlace? selected, List<MapPlace> results, {GeoPoint? mark}) {
   final f = <Map<String, dynamic>>[];
+  if (mark != null) {
+    f.add({
+      'type': 'Feature',
+      'geometry': {'type': 'Point', 'coordinates': [mark.lon, mark.lat]},
+      'properties': {'role': 'result', 'id': 'route-step'},
+    });
+  }
   for (final p in results) {
     if (p.isCategory || p.id == selected?.id) continue;
     f.add({

@@ -94,6 +94,7 @@ import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
+import 'settings/token_store_open.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
@@ -106,7 +107,9 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/browser_notification.dart';
 import 'weather/foreground_updates.dart';
+import 'weather/weather_files.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -166,12 +169,8 @@ class CacheApp extends StatefulWidget {
 }
 
 class _CacheAppState extends State<CacheApp> {
-  late final AppState app = AppState(
-    // No phone screen by the time the start would load the chat model: on Android that is a start by the car with the phone
-    // app closed (the engine starts with no screen and only an activity says otherwise). The model then waits for the
-    // phone's screen ([_onPhoneScreen]).
-    startedWithNoPhoneScreen: () => plat.isAndroid && noPhoneScreen(WidgetsBinding.instance.lifecycleState),
-  );
+  // The chat model is never loaded at start, by the car or with the phone's screen: it loads when Ask opens (AppState.init).
+  late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
   // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
@@ -246,13 +245,14 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState(
+    tokens: platformTokenStore(),
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
     indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     setWeb: (provider, key, online) async =>
         (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
     // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
@@ -274,13 +274,25 @@ class _CacheAppState extends State<CacheApp> {
     settings: settings,
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
-    secrets: const SecureTokenStore(),
-    catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
-    liveDir: () async {
-      await sources.whenCoreReady();
-      final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
-      return dir is String ? Directory(dir) : null;
-    },
+    secrets: platformTokenStore(),
+    // A browser keeps these on Cache Server: the catalogues in the support folder, and the core's source folder (the server opens its
+    // core with `<docs>/live-defs`) in the documents folder.
+    catalogueDir: plat.isWeb ? null : () async => Directory('${await appSupportPath()}/live-catalogues'),
+    catalogueFiles: plat.isWeb ? () => AppFsFiles.open(_appFs, AppRoot.support, 'live-catalogues') : null,
+    liveDir: plat.isWeb
+        ? null
+        : () async {
+            await sources.whenCoreReady();
+            final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
+            return dir is String ? Directory(dir) : null;
+          },
+    liveFiles: plat.isWeb
+        ? () async {
+            await sources.whenCoreReady();
+            return AppFsFiles.open(_appFs, AppRoot.docs, 'live-defs');
+          }
+        : null,
+    onPlan: plat.isWeb ? (plan) => _appFs.writeStringAtomic(AppRoot.support, 'live_plan.json', jsonEncode(plan)) : null,
     builtIns: readLiveSourceAssets,
     position: () {
       final f = location.fix;
@@ -289,10 +301,13 @@ class _CacheAppState extends State<CacheApp> {
     regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
-    told: ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
+    told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
   )..placeAlerts = placeAlerts;
+  /// The app's files on Cache Server (a browser only; a phone reaches its own folders directly).
+  late final AppFs _appFs = createAppFs();
   /// Each place's own alert rule (Places notebook, the place's gear).
-  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
+  late final PlaceAlerts placeAlerts =
+      plat.isWeb ? PlaceAlerts.appFs(_appFs) : PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -419,7 +434,7 @@ class _CacheAppState extends State<CacheApp> {
       placeNames: () => _placeNames.names,
       recommended: () => RecommendedModels.shared.models,
     ),
-    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
@@ -611,8 +626,12 @@ class _CacheAppState extends State<CacheApp> {
   /// The memory is logged as the model starts, to see what each takes.
   void _onChatForIndexing() {
     final on = chat.busy || app.loading != null;
-    if (on && !_modelRunning) logInfo('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
-    if (!on && _modelRunning) logInfo('Model done; ${memoryNow()}');
+    // a fresh reading (on iOS the cached one can be minutes old); the line may follow the next ones by the reading's few ms
+    if (on && !_modelRunning) {
+      final what = app.loading != null ? 'loading' : 'answering';
+      unawaited(memorySnapshot().then((m) => logInfo('Model starts ($what); $m')));
+    }
+    if (!on && _modelRunning) unawaited(memorySnapshot().then((m) => logInfo('Model done; $m')));
     _modelRunning = on;
     indexThrottle.setGenerating(on);
   }
@@ -793,7 +812,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   Timer? _shareSync;
   // The optional app PIN: asked when Cache opens.
-  late final AppPin appPin = AppPin(const SecureTokenStore());
+  late final AppPin appPin = AppPin(platformTokenStore());
   // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
   late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
     final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
@@ -849,6 +868,8 @@ class _CacheAppState extends State<CacheApp> {
     simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
+    // One guidance line a minute in the app log while a route is followed (fixes, the core's answer, failures).
+    guidanceLogEvery: const Duration(minutes: 1),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
@@ -965,19 +986,18 @@ class _CacheAppState extends State<CacheApp> {
       if (call.method == 'changed') await indexThrottle.read(fresh: true);
       return null;
     });
-    // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
-    // again when Ask opens. Holding it is how Cache came to be the app Android killed.
-    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
+    // Memory is short (Android's onTrimMemory at the levels below, or iOS's memory warning): the chat model, by far the most memory
+    // Cache holds, is let go first while no answer is being written, and loads again when Ask opens. The search model goes only when
+    // there is no chat model to let go (or it is answering): it is much smaller, and the car's and the map's searches wait on its
+    // reload. Holding the chat model is how Cache came to be the app Android killed.
     listenMemoryTrim((level, reading) {
-      // Android 14 and later no longer send levels 10 to 19; older Androids do, and the chat model goes at once.
-      // Going to the back (UI_HIDDEN and beyond) starts the grace period of the release below.
+      // Android 14 and later no longer send levels 10 to 19; older Androids do. Going to the back (UI_HIDDEN and beyond) also starts
+      // the grace period of the background release.
       if (trimMeansBackground(level)) _modelRelease.toBackground();
-      if (releaseModelOn(level, reading)) searchModel.onTrim(level);
-      if (!releaseChatModelNowOn(level)) return;
-      if (chat.busy || app.active == null) return;
-      logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
-      unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    }, onWarning: searchModel.onMemoryWarning);
+      if (releaseModelOn(level, reading) || releaseChatModelNowOn(level)) {
+        unawaited(_memoryShort('Android trim level $level', () => searchModel.onTrim(level)));
+      }
+    }, onWarning: () => unawaited(_memoryShort('iOS memory warning', searchModel.onMemoryWarning)));
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -1046,9 +1066,14 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
-        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
-        final state = WidgetsBinding.instance.lifecycleState;
-        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        if (plat.isWeb) {
+          // A browser: the server's own timer fetches with no tab open, so while a tab is open the alerts that arrived are checked.
+          weather.watchWhileOpen(every: const Duration(minutes: 5), due: kBackgroundEvery);
+        } else {
+          // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+          final state = WidgetsBinding.instance.lifecycleState;
+          if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        }
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1228,8 +1253,15 @@ class _CacheAppState extends State<CacheApp> {
     // load ends with Cache still in the back, a new grace period starts.
     busy: () => chat.busy || app.loading != null,
     loaded: () => app.active != null,
-    release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
+    release: () => app.release().then((_) async => logInfo('Model let go; ${await memorySnapshot()}')),
     changes: Listenable.merge([chat, app]),
+  );
+
+  /// The chat model goes a while after Ask is left ([kAskIdleRelease]); an answer, a load or the prompt read ahead holds it.
+  late final AskIdleRelease _askIdleRelease = AskIdleRelease(
+    busy: () => chat.busy || app.loading != null || promptReadAhead.reading,
+    loaded: () => app.active != null,
+    release: () => app.release().then((_) async => logInfo('Model let go; ${await memorySnapshot()}')),
   );
   int? _backendGeneration;
   bool? _scheduledFor;
@@ -1244,7 +1276,7 @@ class _CacheAppState extends State<CacheApp> {
       await scheduleBackgroundUpdates(anythingOn: on);
       if (on && !_askedNotifications) {
         _askedNotifications = true;
-        await PlatformNotificationAccess().request();
+        await (plat.isWeb ? askBrowserNotifications() : PlatformNotificationAccess().request());
       }
     }
     _rememberPlace();
@@ -1273,7 +1305,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      _store = await openHistoryStore();
+      _store = await openHistoryStore(onChanged: () => chat.historyRevision.value++);
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
@@ -1302,6 +1334,7 @@ class _CacheAppState extends State<CacheApp> {
     _lifecycle.dispose();
     _foregroundUpdates.dispose();
     _modelRelease.dispose();
+    _askIdleRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
@@ -1352,14 +1385,27 @@ class _CacheAppState extends State<CacheApp> {
     super.dispose();
   }
 
+  /// Memory is short ([why]): the chat model is let go when one is loaded and not in use ([releaseOnMemoryShort]); otherwise
+  /// [releaseSearch] lets the search model go. The log line carries a fresh memory reading (on iOS the last one can be minutes old).
+  Future<void> _memoryShort(String why, void Function() releaseSearch) async {
+    final what = releaseOnMemoryShort(chatLoaded: app.active != null, chatBusy: chat.busy || app.loading != null);
+    if (what == MemoryShortRelease.searchModel) {
+      releaseSearch();
+      logInfo('Memory short ($why): the search model goes; ${await memorySnapshot()}');
+      return;
+    }
+    final released = app.release();
+    logInfo('Memory short ($why): the chat model goes; ${await memorySnapshot()}');
+    await released;
+    logInfo('Model let go; ${await memorySnapshot()}');
+  }
+
   /// A phone screen has come to the front for the first time: the first one of this run, or a new one after Android closed the
   /// last (on Android the app outlives its screen: platform/phone_screen.dart). What the start did for the screen it expected
   /// is done for this one.
   void _onPhoneScreen() {
     // The system bars are the screen's own (MainActivity): a new screen has not been told how to show them.
     applySystemUi(_applied);
-    // The chat model a start by the car left out loads now, as it would have at a start with the phone's screen.
-    unawaited(app.phoneScreenAppeared());
   }
 
   @override
@@ -1434,6 +1480,7 @@ class _CacheAppState extends State<CacheApp> {
           notebooks: notebookDeps,
           firstRunWizard: true,
           discoverFetch: () => fetchText(Uri.parse(kDiscoverUrl)),
+          onAskShown: _askIdleRelease.askShown,
         ),
       ),
     );
