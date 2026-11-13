@@ -76,6 +76,14 @@ void main() {
     expect(released, 1);
   });
 
+  test('two memory warnings in a row: the first lets the chat model go, the second (no chat model now) the search model', () {
+    var chatLoaded = true;
+    final first = releaseOnMemoryShort(chatLoaded: chatLoaded, chatBusy: false);
+    expect(first, MemoryShortRelease.chatModel);
+    chatLoaded = false; // the first one released it
+    expect(releaseOnMemoryShort(chatLoaded: chatLoaded, chatBusy: false), MemoryShortRelease.searchModel);
+  });
+
   test('memory short: the chat model goes first; the search model only with no chat model, or one in use', () {
     expect(releaseOnMemoryShort(chatLoaded: true, chatBusy: false), MemoryShortRelease.chatModel);
     expect(releaseOnMemoryShort(chatLoaded: true, chatBusy: true), MemoryShortRelease.searchModel);

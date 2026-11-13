@@ -228,3 +228,39 @@ bool releaseChatModelNowOn(int level) => level >= kTrimRunningLow && level < kTr
 
 /// Whether this onTrimMemory level means Cache's screen is hidden or Cache is in the background.
 bool trimMeansBackground(int level) => level >= kTrimUiHidden;
+
+/// How much of the file at [path] this process maps, from /proc/self/smaps (Android and Linux; the app may read its own):
+/// "model file mapped: 1812 MB, resident 1640 MB", or "model file not mapped". Null where /proc is not there (iOS, web).
+/// A log line after a model is let go says from this whether its file was really unmapped.
+String? mappedFileSummary(String path) {
+  try {
+    if (plat.isWeb || !(Platform.isAndroid || Platform.isLinux)) return null;
+    return mappedFileSummaryOf(File('/proc/self/smaps').readAsStringSync(), path);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// [mappedFileSummary] for the smaps text [smaps]: the Size and Rss of every mapping of [path], added up.
+String mappedFileSummaryOf(String smaps, String path) {
+  var size = 0, rss = 0;
+  var inFile = false;
+  for (final line in smaps.split('\n')) {
+    final header = RegExp(r'^[0-9a-f]+-[0-9a-f]+ \S+ \S+ \S+ \S+(?:\s+(.*))?$').firstMatch(line);
+    if (header != null) {
+      inFile = (header.group(1) ?? '').trim() == path;
+      continue;
+    }
+    if (!inFile) continue;
+    final kv = RegExp(r'^(Size|Rss):\s+(\d+) kB').firstMatch(line);
+    if (kv == null) continue;
+    final kb = int.parse(kv.group(2)!);
+    if (kv.group(1) == 'Size') {
+      size += kb;
+    } else {
+      rss += kb;
+    }
+  }
+  if (size == 0) return 'model file not mapped';
+  return 'model file mapped: ${size ~/ 1024} MB, resident ${rss ~/ 1024} MB';
+}

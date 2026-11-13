@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -402,7 +403,7 @@ class AppState extends ChangeNotifier {
       final sw = Stopwatch()..start();
       logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
-      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}', detail: entry.fileName);
+      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}; ${mappedFileSummary(entry.path) ?? ''}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
       final parts = prettyModelParts(info.description, fileName: entry.fileName);
       if (parts != null) {
@@ -532,6 +533,15 @@ class AppState extends ChangeNotifier {
       await u;
     } finally {
       if (identical(_unloading, u)) _unloading = null;
+    }
+    // Whether the model's file is still mapped, and the memory once the allocator has had time to give pages back (measurement:
+    // the reading right after the unload can lag).
+    final mapped = mappedFileSummary(a.path);
+    if (mapped != null) logInfo('Model released: $mapped');
+    if (mapped != null && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      unawaited(Future<void>.delayed(const Duration(seconds: 15), () async {
+        logInfo('Model released 15 s ago: ${mappedFileSummary(a.path) ?? ''}; ${await memorySnapshot()}');
+      }));
     }
   }
 
