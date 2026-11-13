@@ -2195,7 +2195,10 @@ impl SyncEngine {
                     }
                 };
                 if reply.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-                    inner.allowed.write().unwrap().remove(&peer);
+                    // Only if the device was not linked already: a refused second try must not lock out a device that is.
+                    if !inner.saved.lock().unwrap().peers.iter().any(|p| p.id == peer.to_string()) {
+                        inner.allowed.write().unwrap().remove(&peer);
+                    }
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
