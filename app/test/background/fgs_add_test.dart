@@ -3,6 +3,7 @@
 // failed or ended, and the one `run-pdf-add` lock it shares with the WorkManager charging run (they never both run).
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/background/background_lock.dart';
@@ -330,7 +331,7 @@ void main() {
       jobs[4].status = AddPdfStatus.done; // j0 (oldest) done
       jobs[3].status = AddPdfStatus.done; // j1 done
       jobs[2].pagesDone = 155; // j2 current, half way
-      final p = FgsProgress.of({for (final j in jobs) j.id}, jobs)!;
+      final p = FgsProgress.of({for (final j in jobs) j.id}, jobs, isDefault: (path) => path == '/tmp/my-books')!;
       expect((p.done, p.total, p.current), (2, 5, 'Water'));
       expect(p.library, 'Bookshelves');
       expect(p.more, 'Solar and 1 more waiting');
@@ -338,9 +339,38 @@ void main() {
       expect(p.bar, closeTo((2 + p.fraction) / 5, 1e-9));
       // no estimate yet: indeterminate
       final fresh = [sampleJob('x')];
-      expect(FgsProgress.of({'x'}, fresh)!.bar, isNull);
+      expect(FgsProgress.of({'x'}, fresh, isDefault: (_) => false)!.bar, isNull);
       // a named library keeps its name
-      expect(FgsProgress.of({'y'}, [sampleJob('y', libraryTitle: 'Field')])!.library, 'Field');
+      expect(FgsProgress.of({'y'}, [sampleJob('y', libraryTitle: 'Field', libraryPath: '/tmp/field')], isDefault: (path) => path == '/tmp/my-books')!.library, 'Field');
+    });
+  });
+
+  group('the default library is found by its identity, not its title', () {
+    late Directory tmp;
+    setUp(() => tmp = Directory.systemTemp.createTempSync('fgs-lib'));
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    Directory lib(String name, Map<String, dynamic> settings) {
+      final d = Directory('${tmp.path}/$name')..createSync();
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode(settings));
+      return d;
+    }
+
+    test('a renamed default library is still Bookshelves; a library the person made keeps its name', () {
+      final renamed = lib('a', {'title': 'Our shelf', 'own': true, 'own_default': true});
+      final other = lib('b', {'title': 'My books', 'own': true});
+      final job = sampleJob('a', libraryTitle: 'Our shelf', libraryPath: renamed.path);
+      expect(fgsLibraryWords(job), 'Bookshelves');
+      // the old title is not the test: a library called "My books" that is not the default keeps its name
+      expect(fgsLibraryWords(sampleJob('b', libraryTitle: 'My books', libraryPath: other.path)), 'My books');
+      expect(FgsProgress.of({'a'}, [job])!.library, 'Bookshelves');
+    });
+
+    test('no settings file, or one that cannot be read: the title', () {
+      expect(libraryIsDefaultOnDisk('${tmp.path}/none'), isFalse);
+      final bad = Directory('${tmp.path}/bad')..createSync();
+      File('${bad.path}/cache-library.json').writeAsStringSync('not json');
+      expect(libraryIsDefaultOnDisk(bad.path), isFalse);
     });
   });
 

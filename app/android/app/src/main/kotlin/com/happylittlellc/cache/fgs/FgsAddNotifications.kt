@@ -67,6 +67,7 @@ object FgsAddNotifications {
         }
     }
 
+    // Opens Cache. LATER ITEM (owner OK for 52): a deep link to the Adding a PDF page.
     private fun open(context: Context): PendingIntent? {
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return null
         return PendingIntent.getActivity(context, 7412, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

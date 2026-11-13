@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../library/add_pdf/add_pdf_state.dart';
 import '../platform/app_log.dart';
 import '../platform/battery.dart';
+import '../sources/libraries_state.dart' show kLibrarySettingsFile;
 
 // The foreground service for adding PDFs in the background (Android only), build 52. Design: renders/fgs/design.md (branch
 // design/fgs-background-add); the owner's decisions are in the build's notes:
@@ -23,10 +24,23 @@ const MethodChannel kFgsAppChannel = MethodChannel('co.cache/fgs_add');
 /// The service's own Dart engine <-> the service: `progress` and `finished` out, `stop` in.
 const MethodChannel kFgsRunChannel = MethodChannel('co.cache/fgs_add_run');
 
+/// Whether the library folder [libraryPath] is the default own library (the one the Bookshelves live in): found by its stable
+/// identity, `own_default` in its `cache-library.json` as the main path finds it (`LibrariesState.defaultOwnLibrary`), never by its
+/// title (the person may rename it). The background engine has no libraries state, so it reads the same file.
+bool libraryIsDefaultOnDisk(String libraryPath) {
+  try {
+    final f = File('$libraryPath${Platform.pathSeparator}$kLibrarySettingsFile');
+    if (!f.existsSync()) return false;
+    return (jsonDecode(f.readAsStringSync()) as Map)['own_default'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// The library's name in the notifications: the default own library is "Bookshelves" (the owner's wording, 2026-11-12); a library
-/// the person named keeps its name.
-const String kDefaultLibraryTitle = 'My books';
-String fgsLibraryWords(AddPdfJob job) => job.libraryTitle == kDefaultLibraryTitle ? 'Bookshelves' : job.libraryTitle;
+/// the person named keeps its name. [isDefault]: tests give their own; the default reads the library's settings on disk.
+String fgsLibraryWords(AddPdfJob job, {bool Function(String libraryPath) isDefault = libraryIsDefaultOnDisk}) =>
+    isDefault(job.libraryPath) ? 'Bookshelves' : job.libraryTitle;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The words. All of these strings are DRAFTS from wording.md (design/fgs-background-add), kept marked until the owner approves
@@ -271,7 +285,7 @@ class FgsProgress {
   };
 
   /// The progress of the jobs [ids] (the PDFs this run took on) as they stand now; null when there are none.
-  static FgsProgress? of(Set<String> ids, Iterable<AddPdfJob> jobs) {
+  static FgsProgress? of(Set<String> ids, Iterable<AddPdfJob> jobs, {bool Function(String libraryPath) isDefault = libraryIsDefaultOnDisk}) {
     final mine = [for (final j in jobs.toList().reversed) if (ids.contains(j.id)) j];
     if (mine.isEmpty) return null;
     final open = [for (final j in mine) if (j.status == AddPdfStatus.active && !j.pausedByPerson) j];
@@ -287,7 +301,7 @@ class FgsProgress {
       total: mine.length,
       current: cur.title,
       fraction: cur.fraction,
-      library: fgsLibraryWords(mine.first),
+      library: fgsLibraryWords(mine.first, isDefault: isDefault),
       left: open.isEmpty ? null : '${aboutMinutes(left)} left',
       // WORDING QUESTION (owner): draft, not yet approved
       more: waiting.isEmpty ? null : (waiting.length == 1 ? '${waiting.first.title} waiting' : '${waiting.first.title} and ${waiting.length - 1} more waiting'),
