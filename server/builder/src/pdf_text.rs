@@ -96,7 +96,7 @@ mod tests {
             images: 0,
         };
         let empty = RawPage { index: 1, label: "2".into(), width: 600.0, height: 800.0, blocks: vec![], images: 0 };
-        let ext = Extracted { title: None, pages: vec![page, empty], year: None, ppi: None };
+        let ext = Extracted { title: None, pages: vec![page, empty], year: None, ppi: None, ocr_pages: Vec::new() };
         let t = page_texts(&ext);
         assert_eq!(t.len(), 2);
         assert_eq!(t[0], "Hello\nWorld");
