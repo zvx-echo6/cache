@@ -53,6 +53,13 @@ class _DriveScreenState extends State<DriveScreen> {
   bool? _stacked;
   double _aspect = 1;
 
+  /// How many rows the list had when the route was set (the split is decided then, not as turns are passed).
+  int _rows = 0;
+
+  /// The next turn's banner as it was when the split was decided (measured once for each route; a later banner that grows, with lane
+  /// arrows, takes its room from the list, which scrolls, and the boxes do not move).
+  double? _bannerH;
+
   /// Whether the route's two boxes stack: chosen when the route changes (the first route, or a re-route), not at each update.
   bool _stackedNow() {
     final r = nav.route;
@@ -61,6 +68,9 @@ class _DriveScreenState extends State<DriveScreen> {
       _forRoute = r.routeId;
       _aspect = routeAspect(r.points);
       _stacked = driveStacked(_aspect, previous: _stacked);
+      final now = DriveTurns.rowsAfterNext(nav).length;
+      _rows = now > 0 ? now : math.max(0, r.maneuvers.length - 2);
+      _bannerH = null;
     }
     return _stacked ?? false;
   }
@@ -83,15 +93,25 @@ class _DriveScreenState extends State<DriveScreen> {
                   builder: (context, box) {
                     final room = box.maxHeight;
                     // A wide route stacks its boxes where there is room for both at their heights; otherwise side by side.
-                    final plan = _stackedNow()
-                        ? driveStackedPlan(room: room, width: box.maxWidth - 24, aspect: _aspect, textScale: math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16))
-                        : null;
-                    final turnsH = plan?.turnsH ?? room * kDriveTurnsShare;
+                    final f = math.max(1.0, MediaQuery.textScalerOf(context).scale(16) / 16);
+                    final stacked = _stackedNow();
+                    final need = driveListNeed(_rows, f, bannerH: _bannerH);
+                    final plan = stacked ? driveStackedPlan(room: room, width: box.maxWidth - 24, aspect: _aspect, textScale: f, listNeed: need) : null;
+                    final side = plan == null ? driveSidePlan(room: room, textScale: f, listNeed: need) : null;
+                    final turnsH = plan?.turnsH ?? side!.turnsH;
                     return Column(
                       children: [
-                        SizedBox(height: turnsH, child: DriveTurns(nav: nav)),
+                        SizedBox(
+                          height: turnsH,
+                          child: DriveTurns(
+                            nav: nav,
+                            onBannerHeight: (h) {
+                              if (_bannerH == null && mounted) setState(() => _bannerH = h);
+                            },
+                          ),
+                        ),
                         Expanded(
-                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, plan: plan),
+                          child: DriveExtras(nav: nav, elevation: elevation, palette: palette, themeId: themeId, plan: plan, side: side),
                         ),
                       ],
                     );
@@ -121,9 +141,12 @@ class _DriveScreenState extends State<DriveScreen> {
 /// The list of turns: the next turn as the phone's turn banner (lane arrows included), and under it the turns after it, with the
 /// stops where they come, as they are in the route.
 class DriveTurns extends StatefulWidget {
-  const DriveTurns({super.key, required this.nav});
+  const DriveTurns({super.key, required this.nav, this.onBannerHeight});
 
   final NavState nav;
+
+  /// Told the height of the next turn's banner (with its padding) once it is laid out.
+  final ValueChanged<double>? onBannerHeight;
 
   static const double rowHeight = 56;
 
@@ -182,9 +205,12 @@ class _DriveTurnsState extends State<DriveTurns> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: GuidanceBanner(nav: nav, fmt: nav.fmt, showThen: false),
+        _MeasureHeight(
+          onHeight: widget.onBannerHeight,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: GuidanceBanner(nav: nav, fmt: nav.fmt, showThen: false),
+          ),
         ),
         Expanded(
           child: Opacity(
@@ -350,6 +376,15 @@ const double kDriveElevationMaxHeight = 170;
 
 /// The least and the most height the mini map's box has when it is stacked. Between them its height follows the route's shape, so
 /// the route fills the box with only its normal padding: a very wide route gets a short box, a moderately wide one a taller box.
+/// How much of the room the next turn's banner (with its lane arrows) takes, at the normal text size.
+const double kDriveBannerReserve = 118;  // used until the banner has been measured
+
+/// The most the boxes grow into the room the list does not use: stacked, the mini map up to the first and the elevation up to the
+/// second; side by side, both boxes (the same height) up to [kDriveSideBoxMaxHeight].
+const double kDriveMiniGrowHeight = 300;
+const double kDriveElevationGrowHeight = 220;
+const double kDriveSideBoxMaxHeight = 360;
+
 const double kDriveMiniMinHeight = 80;
 const double kDriveMiniMaxHeight = 240;
 
@@ -375,33 +410,61 @@ typedef StackedPlan = ({double turnsH, double miniH, double elevH});
 /// It starts from the list taking [kDriveWideTurnsShare] of the room. The mini map takes the height its route needs
 /// ([miniFitHeight], between [kDriveMiniMinHeight] and [kDriveMiniMaxHeight], and less if the elevation would otherwise be under its
 /// least); the elevation takes the rest of the half up to [kDriveElevationMaxHeight]; what is left goes to the list.
-StackedPlan? driveStackedPlan({required double room, required double width, required double aspect, double textScale = 1}) {
+StackedPlan? driveStackedPlan({required double room, required double width, required double aspect, double textScale = 1, double listNeed = double.infinity}) {
   final f = math.max(1.0, textScale);
   final elevMin = kDriveElevationMinHeight * f + (width < 330 ? 18 : 0);
   final elevMax = math.max(kDriveElevationMaxHeight * f, elevMin);
-  final lower = room * (1 - kDriveWideTurnsShare);
-  final avail = lower - 16;
+  final cap = room * kDriveWideTurnsShare;
+  final avail = room - cap - 16;
   var miniH = math.min(math.max(miniFitHeight(width, aspect), kDriveMiniMinHeight), kDriveMiniMaxHeight);
   if (avail - miniH < elevMin) miniH = avail - elevMin;
   if (miniH < kDriveMiniMinHeight) return null;
-  final elevH = math.min(avail - miniH, elevMax);
-  final used = miniH + elevH + 16;
-  return (turnsH: room - used, miniH: miniH, elevH: elevH);
+  var elevH = math.min(avail - miniH, elevMax);
+  // What the list does not need of its half goes to the two boxes, split between them, each up to its most.
+  var budget = math.max(0.0, cap - math.max(0.0, listNeed));
+  final addE = math.min(budget / 2, math.max(0.0, kDriveElevationGrowHeight * f - elevH));
+  budget -= addE;
+  final addM = math.min(budget, math.max(0.0, kDriveMiniGrowHeight - miniH));
+  budget -= addM;
+  final addE2 = math.min(budget, math.max(0.0, kDriveElevationGrowHeight * f - elevH - addE));
+  elevH += addE + addE2;
+  miniH += addM;
+  return (turnsH: room - (miniH + elevH + 16), miniH: miniH, elevH: elevH);
 }
+
+/// The heights of the side-by-side form: the list of turns, and the mini map and the elevation, which sit in one row (the
+/// 8 points are the row's padding).
+typedef SidePlan = ({double turnsH, double miniH, double elevH});
+
+/// The side-by-side plan: the list takes the room it needs up to [kDriveTurnsShare] of [room], and what it does not use goes to
+/// the two boxes, which are always the same height (top and bottom aligned), up to [kDriveSideBoxMaxHeight]; beyond that the room
+/// goes back to the list.
+SidePlan driveSidePlan({required double room, double textScale = 1, double listNeed = double.infinity}) {
+  final cap = room * kDriveTurnsShare;
+  final rowH = room - math.min(math.max(0.0, listNeed), cap) - 8;
+  final h = math.max(0.0, math.min(rowH, kDriveSideBoxMaxHeight));
+  return (turnsH: room - (h + 8), miniH: h, elevH: h);
+}
+
+/// What the list of turns needs of the room for [rows] rows after the next turn: the next turn's banner (its measured height, with
+/// its padding, [bannerH]; until it has been measured a reserve for one with lane arrows) and the rows, at text scale [f]. Worked out once for a route, when it is set and at a re-route, so the boxes under it do not grow
+/// as turns are passed.
+double driveListNeed(int rows, double f, {double? bannerH}) => (bannerH ?? kDriveBannerReserve * math.max(1.0, f)) + rows * DriveTurns.rowHeight * math.max(1.0, f) + 4;
 
 /// The route mini map and the elevation. Which way they sit is chosen once for a route, by its shape ([driveStacked]):
 /// a wide route stacks (the mini map across the full width, short; the elevation under it, full width), any other sits side by
 /// side (the mini map left, the elevation right). A re-route may change it only when its shape is clearly the other kind.
 class DriveExtras extends StatelessWidget {
-  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.plan});
+  const DriveExtras({super.key, required this.nav, required this.elevation, required this.palette, required this.themeId, this.plan, this.side});
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
 
-  /// The heights when the boxes stack ([driveStackedPlan]); null: side by side.
+  /// The heights when the boxes stack ([driveStackedPlan]); null: side by side ([side]).
   final StackedPlan? plan;
+  final SidePlan? side;
 
   @override
   Widget build(BuildContext context) {
@@ -426,10 +489,11 @@ class DriveExtras extends StatelessWidget {
               ],
             )
           : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(flex: 4, child: mini),
+                Expanded(flex: 4, child: SizedBox(height: side?.miniH, child: mini)),
                 const SizedBox(width: 8),
-                Expanded(flex: 6, child: chart),
+                Expanded(flex: 6, child: SizedBox(height: side?.elevH, child: chart)),
               ],
             ),
     );
@@ -717,4 +781,32 @@ class _EmptyChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_EmptyChartPainter old) => old.color != color;
+}
+
+/// Reports its child's height after each layout in which it changed.
+class _MeasureHeight extends StatefulWidget {
+  const _MeasureHeight({required this.child, this.onHeight});
+
+  final Widget child;
+  final ValueChanged<double>? onHeight;
+
+  @override
+  State<_MeasureHeight> createState() => _MeasureHeightState();
+}
+
+class _MeasureHeightState extends State<_MeasureHeight> {
+  double? _last;
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final h = context.size?.height;
+      if (h != null && h != _last) {
+        _last = h;
+        widget.onHeight?.call(h);
+      }
+    });
+    return widget.child;
+  }
 }

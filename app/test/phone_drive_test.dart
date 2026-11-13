@@ -9,6 +9,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/ui/drive_screen.dart';
+import 'package:cache/nav/ui/guidance_panels.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
@@ -247,12 +248,12 @@ void main() {
     });
     tearDown(() => rig.tearDown());
 
-    Future<void> show(WidgetTester tester, {CacheThemeId theme = CacheThemeId.dark, double? aspect}) async {
-      tester.view.physicalSize = const Size(390, 844) * 3;
+    Future<void> show(WidgetTester tester, {CacheThemeId theme = CacheThemeId.dark, double? aspect, int? turns, double height = 844}) async {
+      tester.view.physicalSize = Size(390, height) * 3;
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await tester.runAsync(() async {
-        await rig.guide(aspect: aspect);
+        await rig.guide(withStop: turns == null, aspect: aspect, turns: turns);
         rig.elevation.request(rig.nav.route);
         await Future<void>.delayed(const Duration(milliseconds: 20));
       });
@@ -429,6 +430,87 @@ void main() {
         }
       });
 
+      group('the list takes the room it needs, and the boxes grow into the rest', () {
+        Rect box(WidgetTester t, String key) => t.getRect(find.byKey(ValueKey(key)));
+
+        test('the plans: a short list leaves the room to the boxes, a long one fills its share, both forms', () {
+          const room = 850.0;
+          // Stacked (a wide route).
+          final long = driveStackedPlan(room: room, width: 366, aspect: 3)!;
+          final five = driveStackedPlan(room: room, width: 366, aspect: 3, listNeed: driveListNeed(5, 1))!;
+          final thirty = driveStackedPlan(room: room, width: 366, aspect: 3, listNeed: driveListNeed(30, 1))!;
+          expect(thirty.turnsH, closeTo(long.turnsH, 0.01), reason: 'a long list: as before');
+          expect(five.turnsH, lessThan(long.turnsH), reason: 'a short list takes less');
+          expect(five.miniH + five.elevH, greaterThan(long.miniH + long.elevH), reason: 'the boxes grow into the rest');
+          expect(five.miniH, greaterThan(long.miniH));
+          expect(five.elevH, greaterThan(long.elevH), reason: 'split between the two');
+          expect(five.elevH, lessThanOrEqualTo(kDriveElevationGrowHeight));
+          expect(five.miniH, lessThanOrEqualTo(kDriveMiniGrowHeight));
+          expect(five.turnsH + five.miniH + five.elevH + 16, closeTo(room, 0.01));
+          // Side by side.
+          const sideRoom = 700.0; // a phone whose five-turn list needs less than two thirds
+          final sideLong = driveSidePlan(room: sideRoom);
+          final sideFive = driveSidePlan(room: sideRoom, listNeed: driveListNeed(5, 1));
+          final sideThirty = driveSidePlan(room: sideRoom, listNeed: driveListNeed(30, 1));
+          expect(sideThirty.turnsH, closeTo(sideRoom * kDriveTurnsShare, 0.01));
+          expect(sideLong.turnsH, closeTo(sideRoom * kDriveTurnsShare, 0.01));
+          expect(sideFive.turnsH, closeTo(driveListNeed(5, 1), 0.01), reason: 'the list takes what it needs');
+          expect(sideFive.miniH, greaterThan(sideLong.miniH), reason: 'the boxes grow');
+          expect(sideFive.elevH, sideFive.miniH, reason: 'the two boxes are the same height');
+          expect(sideFive.miniH, lessThanOrEqualTo(kDriveSideBoxMaxHeight));
+          expect(sideFive.turnsH + sideFive.miniH + 8, closeTo(sideRoom, 0.01));
+          // Beyond the boxes' most the room goes back to the list.
+          final huge = driveSidePlan(room: 2000, listNeed: driveListNeed(5, 1));
+          expect(huge.miniH, kDriveSideBoxMaxHeight);
+          expect(huge.elevH, kDriveSideBoxMaxHeight);
+          expect(huge.turnsH, closeTo(2000 - kDriveSideBoxMaxHeight - 8, 0.01));
+          // The banner's measured height replaces the reserve.
+          expect(driveListNeed(5, 1, bannerH: 78), lessThan(driveListNeed(5, 1)));
+        });
+
+        // Stacked, half the room is less than even a five-turn list needs on any phone, so the stacked case uses a two-turn route
+        // (the plans above cover five turns on a very tall room).
+        for (final (name, aspect, turns) in [('stacked (a wide route), two turns', 3.0, 2), ('side by side, five turns', 1.0, 5)]) {
+          testWidgets('a short and a thirty-turn route, $name', (tester) async {
+            await show(tester, aspect: aspect, turns: turns, height: 800);
+            final short = tester.getSize(find.byType(DriveTurns)).height;
+            final miniShort = box(tester, 'drive-mini-map').height, elevShort = box(tester, 'drive-elevation').height;
+            final room = short + tester.getSize(find.byType(DriveExtras)).height;
+            final share = aspect > 1.5 ? kDriveWideTurnsShare : kDriveTurnsShare;
+            expect(short, lessThan(room * share - 20), reason: 'the short list takes less than its share');
+            if (aspect <= 1.5) {
+              // It takes what it needs: the banner as it is (measured) and its rows; and the two boxes are the same height.
+              final banner = tester.getSize(find.byType(GuidanceBanner)).height + 20;
+              expect(short, closeTo(driveListNeed(turns, 1, bannerH: banner), 2), reason: 'it takes what it needs');
+              expect(elevShort, closeTo(miniShort, 0.01), reason: 'the boxes are the same height');
+              expect(box(tester, 'drive-mini-map').top, closeTo(box(tester, 'drive-elevation').top, 0.01));
+            }
+            // The elevation chart does not become absurdly tall.
+            expect(elevShort, lessThanOrEqualTo(aspect > 1.5 ? kDriveElevationGrowHeight : kDriveSideBoxMaxHeight));
+
+            // The split is decided when the route is set: passing turns does not move the boxes.
+            for (final (next, m) in [(2, 300.0), (3, 100.0)]) {
+              rig.at(next, m);
+              await tester.pump();
+              expect(tester.getSize(find.byType(DriveTurns)).height, closeTo(short, 0.01), reason: 'next $next');
+              expect(box(tester, 'drive-mini-map').height, closeTo(miniShort, 0.01));
+              expect(box(tester, 'drive-elevation').height, closeTo(elevShort, 0.01));
+            }
+
+            // Thirty turns: the list takes its whole share, the boxes are smaller.
+            await tester.pumpWidget(const SizedBox());
+            rig.tearDown();
+            rig = DriveRig();
+            await tester.runAsync(() => rig.setUp());
+            await show(tester, aspect: aspect, turns: 30, height: 800);
+            final long = tester.getSize(find.byType(DriveTurns)).height;
+            expect(long, greaterThan(short + 20), reason: 'a long list takes more than a short one');
+            expect(box(tester, 'drive-mini-map').height, lessThan(miniShort), reason: 'and the boxes less');
+            expect(find.byKey(const ValueKey('drive-turns-fade')), findsOneWidget, reason: 'thirty rows scroll');
+          });
+        }
+      });
+
       testWidgets('a wide route: the mini map across the full width, the elevation under it, both full width, at the planned heights', (tester) async {
         await show(tester, aspect: 3.0);
         expect(stackedNow(tester), isTrue);
@@ -590,7 +672,7 @@ void main() {
       expect(find.byKey(const ValueKey('drive-mini-map')), findsOneWidget);
       expect(find.byKey(const ValueKey('drive-elevation')), findsOneWidget);
       expect(find.text('Elevation'), findsOneWidget);
-      expect(find.text('Steepest climb ahead'), findsOneWidget);
+      expect(find.textContaining('Steepest climb ahead'), findsOneWidget);
     });
 
     testWidgets('the split is one constant: the list takes two thirds of the room, the extras the rest, side by side', (tester) async {

@@ -49,7 +49,7 @@ const driveStop = MapPlace(id: 'place:test:market', type: 'place', name: 'Corner
 /// The made-up sample route of the drive screen's pictures and tests: east along 42.5N, 40 points, with these maneuvers (index:
 /// type, words): 0 start, 1 left onto Alder Street, 2 right onto Birch Hollow Road, 3 the stop (only when [withStop]),
 /// then a merge onto Route 9, Willow Drive, an exit onto Quarry Lane, Orchard Road, a left onto Fernwood Lane, and the arrival.
-Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1', double? aspect}) {
+Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1', double? aspect, int? turns}) {
   const n = 40;
   // East, wandering: the line has a shape, so the mini map has something to draw.
   // With [aspect] (width over height as the mini map draws it) the route has that shape: 0.2 degrees of longitude wide and as high
@@ -64,7 +64,15 @@ Map<String, dynamic> driveRouteJson({bool withStop = true, String id = 'drive1',
   for (var i = 1; i < pts.length; i++) {
     total += metersBetween(pts[i - 1], pts[i]);
   }
-  final steps = <(String, String, String?, int)>[
+  // With [turns] the route has that many turns (and no stop) between its start and its arrival, on made-up streets.
+  final steps = turns != null
+      ? <(String, String, String?, int)>[
+          ('start', 'Drive east on Millbrook Avenue.', 'Millbrook Avenue', 0),
+          for (var i = 1; i <= turns; i++)
+            (i.isOdd ? 'right' : 'left', 'Turn ${i.isOdd ? 'right' : 'left'} onto Street $i.', 'Street $i', 1 + ((i - 1) * 34) ~/ turns),
+          ('destination', 'You have arrived at your destination.', null, 37),
+        ]
+      : <(String, String, String?, int)>[
     ('start', 'Drive east on Millbrook Avenue.', 'Millbrook Avenue', 0),
     ('left', 'Turn left onto Alder Street.', 'Alder Street', 4),
     ('right', 'Turn right onto Birch Hollow Road.', 'Birch Hollow Road', 9),
@@ -164,8 +172,8 @@ class DriveRig {
   }
 
   /// Guidance has started on the sample route, [withStop] with a stop on it, and no position yet.
-  Future<void> guide({bool withStop = true, double? aspect}) async {
-    route = driveRouteJson(withStop: withStop, aspect: aspect);
+  Future<void> guide({bool withStop = true, double? aspect, int? turns}) async {
+    route = driveRouteJson(withStop: withStop, aspect: aspect, turns: turns);
     backend.onRoute = (to, m, from) async => MapRoute.fromJson(route);
     backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(driveProgressJson(route, 1, 400));
     await nav.openDirections(driveDestination);
