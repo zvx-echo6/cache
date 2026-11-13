@@ -340,6 +340,8 @@ class _SharingPageState extends State<SharingPage> {
                 SettingsRow(key: const ValueKey('enter-code'), icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
               ],
             ),
+            // An unlink the other device has not been told of yet (it is off): said until it is told.
+            for (final u in s.unlinks) NoteText(key: ValueKey('unlink-waiting-${u['id']}'), unlinkWaitingNote(u['name'] as String? ?? '')),
             SettingsGroup(
               label: 'Shared with linked devices',
               rows: [
@@ -402,6 +404,9 @@ class _SharingPageState extends State<SharingPage> {
     );
   }
 }
+
+/// The note under the linked devices while an unlink is waiting for a device that is off.
+String unlinkWaitingNote(String name) => 'Unlink waiting for $name'; // WORDING QUESTION (owner): draft, not yet approved
 
 /// "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
 /// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago

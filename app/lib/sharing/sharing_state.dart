@@ -514,6 +514,9 @@ class SharingState extends ChangeNotifier {
 
   List<Map<String, dynamic>> get peers => [for (final p in (status['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
   List<Map<String, dynamic>> get shares => [for (final p in (status['shares'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+  /// Devices unlinked here that the engine has not been able to tell yet (it is off): `id`, `name` and `old` (an older version, tried
+  /// again only every few hours). Gone from the list when the device has been told, or after 30 days.
+  List<Map<String, dynamic>> get unlinks => [for (final p in (status['unlinks'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
   List<Map<String, dynamic>> get offers => [for (final p in (status['offers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
   Map<String, dynamic>? get transfer => (status['transfer'] as Map?)?.cast<String, dynamic>();
   String? get paused => status['paused'] as String?;

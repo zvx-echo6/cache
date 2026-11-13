@@ -8,6 +8,10 @@ class FakeSync implements SyncCoreLike {
   final policies = <Map<String, Object?>>[];
   final shares = <Map<String, Object?>>[];
   final peers = <Map<String, Object?>>[];
+
+  /// What `status` lists as unlinks still waiting for a device that is off (`id`, `name`, `old`), and its activity log lines.
+  final unlinks = <Map<String, Object?>>[];
+  final log = <Map<String, Object?>>[];
   String name = 'Test phone';
 
   /// The code `link_code` answers (a test of the QR gives a real-sized one).
@@ -48,11 +52,12 @@ class FakeSync implements SyncCoreLike {
           'free_bytes': freeBytes,
           'reserve_bytes': reserveBytes,
           'peers': peers,
+          'unlinks': unlinks,
           'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],
           'transfer': null,
           'paused': null,
-          'log': [],
+          'log': log,
         };
       case 'link_code':
         return {'code': codeOverride, 'valid_secs': 900};
