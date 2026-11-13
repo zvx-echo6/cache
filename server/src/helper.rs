@@ -256,6 +256,10 @@ impl Helper {
         cmd.env(cache_netguard::ENV_VAR, cache_netguard::ENV_VALUE);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
+            // The keystore (`<data>/keystore.json`, owner only) sits outside the folders the browser's `fs.*` ops reach.
+            if let Some(data) = support.parent().and_then(|p| p.parent()) {
+                cmd.env("CACHE_KEYSTORE", data.join("keystore.json"));
+            }
         }
         if let Some(data) = &self.cfg.data_dir {
             cmd.env("CACHE_DATA", data);

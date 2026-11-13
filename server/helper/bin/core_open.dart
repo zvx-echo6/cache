@@ -25,7 +25,8 @@ class OpenOp implements OpHandler {
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
 
-  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart); null in tests.
+  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart, and the keystore giving the
+  /// engine its web search settings again; the helper's main runs both); null in tests.
   final void Function()? onOpened;
 
   /// Starts the index jobs of the sources just opened (null in tests that do not index).

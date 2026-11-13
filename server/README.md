@@ -298,8 +298,19 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   (`bad_path`); missing files give `not_found`, other failures `io_error`. Bytes travel as `{"$bytes": "<base64>"}`.
 - every other op goes to the core's dispatcher.
 
-Not done yet: **`history.*`**. The browser's chat history is not saved on the server; it waits for the shared Flutter-free
-package split (step 4), because `ConversationStore` imports Flutter-dependent code.
+- **`history.*`**: the Ask conversations, kept on the server (one JSON file per conversation in `app/support/history/`, no
+  SQLite in the helper) so every tab and browser lists, reopens, renames and deletes the same ones. The browser's store is
+  `app/lib/history/server_conversation_store.dart`. Ops are in `server/helper/bin/history_ops.dart`.
+- **`keys.*`**: the keystore, `<data>/keystore.json` (owner only, outside the `fs.*` roots): the Kagi and data-source keys, video
+  tokens and the app PIN. `keys.names`, `keys.set`, `keys.delete`, and `keys.get` for names the phone UI shows (`*.user`) and
+  the PIN hash only. A browser hands a key to the engine as a reference, `keystore://<name>`, which the helper swaps for the
+  value before the core op runs, so the browser never holds the key. The helper remembers the last `setWeb` and sends it to the
+  engine again after `open`. Code inside the helper (the sharing host's `set_secrets` and `take_secrets`) calls the `KeyStore`
+  class directly (`get`, `set`, `delete`, `names`). These are not the sign-in keys of `src/keys.rs`. The swap also reaches the
+  video ops (`video.call`'s request and `video.jobStart`'s token, which the helper answers itself) and `GET /api/fetch` (a
+  reference in `url`, for trying an own data source with its saved key: the server asks the helper's `keys.expandUrl`, which a
+  tab may not call). Code on a signed-in page can still use a reference to send a stored key to an address of its own choosing
+  (within what the fetch rules allow), so "the browser never holds the key" is about normal use, not a script on the page.
 
 ## TLS
 

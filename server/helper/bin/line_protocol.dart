@@ -14,6 +14,13 @@ abstract class OpHandler {
   FutureOr<Object?> handle(String op, Map<String, dynamic> args);
 }
 
+/// A look at each op that goes on to the core dispatcher: [before] may change its arguments (the keystore swaps references for
+/// keys), [after] runs when it succeeded.
+abstract class CoreHook {
+  Map<String, dynamic> before(String op, Map<String, dynamic> args);
+  void after(String op, Map<String, dynamic> args);
+}
+
 /// Cache for Linux's helper protocol: UTF-8 lines on [input] and [output], one JSON object per line.
 ///
 /// Prints `{"ready":true}` first. A request is `{"id":<int>,"op":<string>,"args":{...}}`; the reply is
@@ -28,12 +35,13 @@ Future<void> serveLines(
   void Function(String message)? log,
   List<OpHandler> handlers = const [],
   FutureOr<void> Function()? onEnd,
+  CoreHook? hook,
 }) async {
   await output(jsonEncode({'ready': true}));
   final lines = input.transform(utf8.decoder).transform(const LineSplitter());
   await for (final line in lines) {
     if (line.trim().isEmpty) continue;
-    await output(await handleLine(line, dispatcher, log: log, handlers: handlers));
+    await output(await handleLine(line, dispatcher, log: log, handlers: handlers, hook: hook));
   }
   try {
     await onEnd?.call();
@@ -48,7 +56,7 @@ Future<void> serveLines(
 }
 
 /// One request line in, the reply line out.
-Future<String> handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log, List<OpHandler> handlers = const []}) async {
+Future<String> handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log, List<OpHandler> handlers = const [], CoreHook? hook}) async {
   Object? id;
   try {
     final req = jsonDecode(line);
@@ -67,7 +75,12 @@ Future<String> handleLine(String line, CoreDispatcher dispatcher, {void Function
         break;
       }
     }
-    result = own != null ? await own.handle(op, args) : dispatcher.handle(op, args);
+    if (own != null) {
+      result = await own.handle(op, args);
+    } else {
+      result = dispatcher.handle(op, hook == null ? args : hook.before(op, args));
+      hook?.after(op, args);
+    }
     return jsonEncode({'id': id, 'ok': true, 'result': wireEncode(result)});
   } on CacheSearchException catch (e) {
     return _error(id, e.code, e.message);
