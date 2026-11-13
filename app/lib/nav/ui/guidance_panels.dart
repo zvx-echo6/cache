@@ -189,23 +189,45 @@ class GuidanceBar extends StatelessWidget {
   /// padding (the elevation handle is above it).
   final bool bare;
 
+  /// Under this width (the card's own, in points: a 360-point phone's card is 336) the bar is drawn in its narrow form: see [_bar].
+  static const double narrowBelow = 360;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) => _bar(context, narrow: box.maxWidth < narrowBelow));
+
+  Widget _bar(BuildContext context, {required bool narrow}) {
     final k = context.t;
     final p = nav.progress;
     final r = nav.route;
     final eta = p?.eta;
     final remainingM = p?.remainingM ?? r?.distanceM ?? 0;
     final remainingS = p?.remainingS ?? r?.durationS ?? 0;
-    Widget stat(String big, String small, {Key? key}) => Expanded(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(big, key: key, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
-                Text(small, style: TextStyle(fontSize: 13, color: k.secondary)),
-              ],
+    Widget column(String big, String small, {Key? key, double bigSize = 20, double smallSize = 13}) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(big, key: key, style: TextStyle(fontSize: bigSize, fontWeight: FontWeight.w700, color: k.text)),
+            Text(small, style: TextStyle(fontSize: smallSize, color: k.secondary)),
+          ],
+        );
+    Widget stat(String big, String small, {Key? key}) => Expanded(child: FittedBox(fit: BoxFit.scaleDown, child: column(big, small, key: key)));
+    // Narrow (a 320 or 360 point phone): three equal cells left each long value only a sliver, and each was shrunk to fill its own
+    // cell, so the three ran together ("7:02 PM23 min17 mi"). Here the three sit in one run with a fixed gap between them, shrunk
+    // together by one scale, so the gaps stay; the voice switch and End take less room.
+    Widget narrowStats() => Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  column(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta'), bigSize: 18, smallSize: 12),
+                  const SizedBox(width: 14),
+                  column(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time'), bigSize: 18, smallSize: 12),
+                  const SizedBox(width: 14),
+                  column(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance'), bigSize: 18, smallSize: 12),
+                ],
+              ),
             ),
           ),
         );
@@ -228,21 +250,26 @@ class GuidanceBar extends StatelessWidget {
                   IconButton(
                     key: const ValueKey('guidance-voice'),
                     tooltip: nav.voiceOn ? 'Turn the voice off' : 'Turn the voice on',
-                    icon: Icon(nav.voiceOn ? Icons.volume_up : Icons.volume_off, color: nav.voiceOn ? k.accent : k.secondary, size: 28),
+                    icon: Icon(nav.voiceOn ? Icons.volume_up : Icons.volume_off, color: nav.voiceOn ? k.accent : k.secondary, size: narrow ? 24 : 28),
+                    padding: narrow ? EdgeInsets.zero : null,
+                    constraints: narrow ? const BoxConstraints(minWidth: 36, minHeight: 48) : null,
                     onPressed: nav.toggleVoice,
                   ),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        stat(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta')),
-                        stat(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time')),
-                        stat(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance')),
-                      ],
+                  if (narrow)
+                    narrowStats()
+                  else
+                    Expanded(
+                      child: Row(
+                        children: [
+                          stat(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta')),
+                          stat(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time')),
+                          stat(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance')),
+                        ],
+                      ),
                     ),
-                  ),
                   FilledButton(
                     key: const ValueKey('guidance-end'),
-                    style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background, minimumSize: const Size(72, 52)),
+                    style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background, minimumSize: Size(narrow ? 56 : 72, 52), padding: narrow ? const EdgeInsets.symmetric(horizontal: 12) : null),
                     onPressed: nav.end,
                     child: const Text('End'),
                   ),
