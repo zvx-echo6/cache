@@ -6,7 +6,7 @@ Checked against the 1.7.0 sources (`androidx.car.app:app:1.7.0`). Cache draws th
 
 | Part | Who draws it | What Cache controls | API |
 |---|---|---|---|
-| Guidance card | Host | Its background color, as a light and a dark variant. The host may ignore or override it for contrast. | `NavigationTemplate.Builder.setBackgroundColor(CarColor)` with `CarColor.createCustom(int color, int colorDark)`, fed from the trip palette's `hostCard` (day = light, night = dark). Tactical's is a dark red. |
+| Guidance card | Host | Its background color, as a light and a dark variant. The host may ignore or override it for contrast. | `NavigationTemplate.Builder.setBackgroundColor(CarColor)` with `CarColor.createCustom(int color, int colorDark)`, fed from the trip palette's `hostCard` (the phone's chosen theme, as both variants). Tactical's is a dark red. |
 | Card text, fonts, sizes, layout | Host | Nothing. | fixed |
 | Current step | Host | The cue, the road, the maneuver type and its icon, the distance to it (host formats it in the phone's units). | `RoutingInfo.Builder.setCurrentStep(Step, Distance)`, `Step.Builder(CharSequence).setManeuver(Maneuver).setRoad(CharSequence)` |
 | Next step | Host | The step after (cue, road, maneuver). | `RoutingInfo.Builder.setNextStep(Step)` |
@@ -30,4 +30,4 @@ Checked against the 1.7.0 sources (`androidx.car.app:app:1.7.0`). Cache draws th
 
 ## What Cache draws itself (on the map surface)
 
-The map, the route, the driven path, the grade badge, the climb ahead and the route mini map. The route, the driven path and the grade badge take their colors from the trip palette (`day` and `night`), chosen by the car's `isDarkMode`. The climb and the mini map do not: they are drawn like the host's own cards (dark fill, grey outline, white text, by day and by night), from constants in `CarOverlayPainter` measured on the desktop head unit.
+The map, the route, the driven path, the grade badge, the climb ahead and the route mini map. All of them take the colors of the phone's chosen theme, day and night alike: the map style is that theme's, and the route, the driven path, the grade badge, the climb and the mini map are painted from the trip palette (one theme; the car's `isDarkMode` is not used). The climb and the mini map keep the shape of the host's own cards (corner, outline width, text sizes) from constants in `CarOverlayPainter` measured on the desktop head unit.

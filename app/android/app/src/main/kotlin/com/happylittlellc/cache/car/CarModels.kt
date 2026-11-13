@@ -95,13 +95,13 @@ object CarModels {
     }
 
     /**
-     * The color of the host's own guidance card (NavigationTemplate.Builder.setBackgroundColor): the day and night `hostCard` of the
-     * palette Dart sent, as the light and dark variants of a custom CarColor. Null before the palette arrives. The host may still
-     * override it for contrast.
+     * The color of the host's own guidance card (NavigationTemplate.Builder.setBackgroundColor): the `hostCard` of the palette
+     * Dart sent (the phone's chosen theme), as both the light and the dark variant of a custom CarColor, so it is the theme's
+     * by day and by night. Null before the palette arrives. The host may still override it for contrast.
      */
     fun hostBackground(t: CarTrip): CarColor? {
         val p = t.palette ?: return null
-        return CarColor.createCustom(p.day.hostCard, p.night.hostCard)
+        return CarColor.createCustom(p.hostCard, p.hostCard)
     }
 
     /**

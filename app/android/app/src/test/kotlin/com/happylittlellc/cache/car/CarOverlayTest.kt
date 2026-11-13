@@ -45,7 +45,8 @@ class CarOverlayTest {
         return o.keys().asSequence().associateWith { o.getString(it) }
     }
 
-    private fun palette(theme: String) = mapOf("day" to colorsMap(theme), "night" to colorsMap(theme))
+    /** The trip's `palette` block: one theme, the phone's chosen one (car_overlay.dart, carOverlayPalette). */
+    private fun palette(theme: String) = colorsMap(theme)
 
     // ---- sample data (the mock's numbers) -------------------------------------------------------------------------------
 
@@ -124,9 +125,9 @@ class CarOverlayTest {
         assertNotNull(o.steepLat)
         assertEquals(9.0, o.steepGradePct!!, 0.0)
         val p = t.palette!!
-        assertEquals("dark", p.night.theme)
-        assertEquals(0xFF6BB4DE.toInt(), p.night.route)
-        assertEquals(0xFFF4F6F8.toInt(), p.night.badge)
+        assertEquals("dark", p.theme)
+        assertEquals(0xFF6BB4DE.toInt(), p.route)
+        assertEquals(0xFFF4F6F8.toInt(), p.badge)
     }
 
     @Test
@@ -137,18 +138,20 @@ class CarOverlayTest {
         assertNull(t.palette)
         assertFalse(t.overlay.phoneDrive)
         // A climb block with too few heights, a bad palette: dropped, not a crash.
-        val odd = CarTrip.from(mapOf("phase" to "guiding", "climb" to mapOf("heightsM" to listOf(1.0)), "palette" to mapOf("day" to mapOf("route" to "nope"))))
+        val odd = CarTrip.from(mapOf("phase" to "guiding", "climb" to mapOf("heightsM" to listOf(1.0)), "palette" to mapOf("route" to "nope")))
         assertNull(odd.climb)
         assertNull(odd.palette)
     }
 
     @Test
-    fun theHostCardColorComesFromThePaletteAsLightAndDarkVariants() {
-        val t = CarTrip.from(mapOf("phase" to "guiding", "palette" to mapOf("day" to colorsMap("light"), "night" to colorsMap("tactical"))))
-        val c = CarModels.hostBackground(t)!!
-        assertEquals(androidx.car.app.model.CarColor.TYPE_CUSTOM, c.type)
-        assertEquals(0xFFFFFDF8.toInt(), c.color)
-        assertEquals(0xFF3A0B07.toInt(), c.colorDark)
+    fun theHostCardColorIsTheChosenThemesByDayAndByNight() {
+        val light = CarModels.hostBackground(CarTrip.from(mapOf("phase" to "guiding", "palette" to colorsMap("light"))))!!
+        assertEquals(androidx.car.app.model.CarColor.TYPE_CUSTOM, light.type)
+        assertEquals(0xFFFFFDF8.toInt(), light.color)
+        assertEquals(0xFFFFFDF8.toInt(), light.colorDark)
+        val tactical = CarModels.hostBackground(CarTrip.from(mapOf("phase" to "guiding", "palette" to colorsMap("tactical"))))!!
+        assertEquals(0xFF3A0B07.toInt(), tactical.color)
+        assertEquals(0xFF3A0B07.toInt(), tactical.colorDark)
         assertNull(CarModels.hostBackground(CarTrip.from(mapOf("phase" to "guiding"))))
     }
 
@@ -172,7 +175,7 @@ class CarOverlayTest {
         assertEquals(CarOverlaySwitches.DEFAULT, old.overlay)
         assertEquals(CarOverlayView.PIECE_MINI_MAP or CarOverlayView.PIECE_CLIMB, CarOverlayView.pieces(old))
         val v = overlayView()
-        v.setTrip(old, dark = true, now = true)
+        v.setTrip(old, now = true)
         assertEquals(Pair(true, true), painted(v))
         val fields = CarOverlaySwitches::class.java.declaredFields.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name }
         assertEquals(listOf("phoneDrive"), fields)
@@ -359,7 +362,7 @@ class CarOverlayTest {
         for (y in mini.top.toInt() until mini.bottom.toInt() - 24) for (x in mini.left.toInt() until mini.right.toInt()) {
             if (with.getPixel(x, y) != without.getPixel(x, y)) throw AssertionError("the mini map differs at $x, $y")
         }
-        assertEquals(CarOverlayPainter.HOST_CARD_FILL, without.getPixel(mini.left.toInt() + 30, mini.bottom.toInt() - 5))
+        assertEquals(trip("light").palette!!.miniBg, without.getPixel(mini.left.toInt() + 30, mini.bottom.toInt() - 5))
         assertEquals(0, without.getPixel(mini.left.toInt() + 30, mini.bottom.toInt() + 5))
     }
 
@@ -495,12 +498,12 @@ class CarOverlayTest {
     @Test
     fun neitherPieceIsDrawnWhileTheRouteOverviewIsShown() {
         val v = overlayView()
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         assertEquals(Pair(true, true), painted(v))
         v.setOverview(true)
         assertTrue(shot(v).all { it == 0 })
         // Figures that arrive while the overview is up do not bring them back.
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         assertTrue(shot(v).all { it == 0 })
         v.setOverview(false)
         assertEquals(Pair(true, true), painted(v))
@@ -518,24 +521,24 @@ class CarOverlayTest {
     fun thePiecesGoInTheSameFrameGuidanceStops() {
         val ended = CarTrip.from(mapOf("phase" to "browsing", "palette" to palette("dark")))
         val v = overlayView()
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         assertEquals(Pair(true, true), painted(v))
         // Guidance ends within the step time of the last figures: not held back for the next step.
-        v.setTrip(ended, dark = true, now = false)
+        v.setTrip(ended, now = false)
         assertTrue(shot(v).all { it == 0 })
 
         // New figures were waiting for their step when guidance ended: the step does not bring the pieces back.
         val w = overlayView()
-        w.setTrip(trip("dark"), dark = true, now = true)
-        w.setTrip(trip("dark"), dark = true, now = false)
-        w.setTrip(ended, dark = true, now = false)
+        w.setTrip(trip("dark"), now = true)
+        w.setTrip(trip("dark"), now = false)
+        w.setTrip(ended, now = false)
         assertTrue(shot(w).all { it == 0 })
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2 * CarOverlayView.MIN_STEP_MS))
         assertTrue(shot(w).all { it == 0 })
 
         // Guiding with the route preview's phase or any other: nothing either (only the guiding phase draws).
         val x = overlayView()
-        x.setTrip(CarTrip.from(mapOf("phase" to "previewing", "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"))), dark = true, now = true)
+        x.setTrip(CarTrip.from(mapOf("phase" to "previewing", "climb" to sampleClimb(), "overview" to sampleOverview(), "palette" to palette("dark"))), now = true)
         assertTrue(shot(x).all { it == 0 })
     }
 
@@ -553,12 +556,12 @@ class CarOverlayTest {
         assertEquals(0, CarOverlayView.pieces(CarTrip.from(mapOf("phase" to "previewing", "overview" to sampleOverview()))))
 
         val v = overlayView()
-        v.setTrip(bare, dark = true, now = false)
+        v.setTrip(bare, now = false)
         assertTrue(shot(v).all { it == 0 })
-        v.setTrip(miniOnly, dark = true, now = false)
+        v.setTrip(miniOnly, now = false)
         assertEquals(Pair(false, true), painted(v))
         val before = shot(v)
-        v.setTrip(trip("dark"), dark = true, now = false)
+        v.setTrip(trip("dark"), now = false)
         assertEquals(Pair(true, true), painted(v))
         // The mini map did not move or change when the climb arrived under it (down to the rounded bottom it had alone).
         val after = shot(v)
@@ -570,7 +573,7 @@ class CarOverlayTest {
         v.setTrip(CarTrip.from(mapOf(
             "phase" to "guiding", "units" to "imperial", "climb" to sampleClimb(), "palette" to palette("dark"),
             "overview" to (sampleOverview() + ("drivenFraction" to 0.8)),
-        )), dark = true, now = false)
+        )), now = false)
         assertTrue(shot(v).contentEquals(after))
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CarOverlayView.MIN_STEP_MS))
         assertFalse(shot(v).contentEquals(after))
@@ -582,7 +585,7 @@ class CarOverlayTest {
         val other = Rect(92, 91, 1177, 697)
         assertEquals(CarOverlayMode.SPLIT, CarOverlayPainter.modeFor(other, 1f))
         val v = overlayView()
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         val box = shot(v)
         assertEquals(Pair(true, true), painted(v))
         // The other area arrives and goes again inside the settle time: the same pixels all along, and afterwards.
@@ -624,7 +627,7 @@ class CarOverlayTest {
             setSurfaceSize(1280, 500)
             setAreas(wide, wide)
         }
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         // An in-between screen: the pieces come in once the start of the drive has settled.
         idle(CarOverlayView.DRIVE_START_SETTLE_MS + CarExtrasFade.FADE_MS + 50)
         fun shotWide(): IntArray {
@@ -781,14 +784,14 @@ class CarOverlayTest {
         // Not on the first frame of the drive, not later, whatever the phone shows. (The painter could place a one-line
         // climb card and a smaller tile here: that is the control.)
         assertFalse(pixelsOf(drawn(800, 480, small, trip("dark"))).all { it == 0 })
-        v.setTrip(phone(false), dark = true, now = true)
+        v.setTrip(phone(false), now = true)
         assertTrue(blank())
         idle(5000)
         assertTrue(blank())
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         idle(5000)
         assertTrue(blank())
-        v.setTrip(phone(false), dark = true, now = false)
+        v.setTrip(phone(false), now = false)
         idle(5000)
         assertTrue(blank())
     }
@@ -796,17 +799,17 @@ class CarOverlayTest {
     @Test
     fun onABigScreenThePiecesStayWhateverThePhoneShows() {
         val v = overlayView()
-        v.setTrip(phone(false), dark = true, now = true)
+        v.setTrip(phone(false), now = true)
         val box = shot(v)
         assertEquals(Pair(true, true), painted(v))
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         for (i in 1..10) {
             idle(500)
             assertTrue(shot(v).contentEquals(box))
         }
         // A drive that starts with the phone's drive screen showing: there from the first frame.
         val w = overlayView()
-        w.setTrip(phone(true), dark = true, now = true)
+        w.setTrip(phone(true), now = true)
         assertTrue(shot(w).contentEquals(box))
     }
 
@@ -817,23 +820,23 @@ class CarOverlayTest {
             setAreas(inBetween, inBetween)
         }
         // The drive starts, phone not showing: once the start has settled both pieces fade in, and are fully there.
-        v.setTrip(phone(false), dark = true, now = true)
+        v.setTrip(phone(false), now = true)
         idle(CarOverlayView.DRIVE_START_SETTLE_MS + CarExtrasFade.FADE_MS + 50)
         val box = shot(v)
         assertEquals(Pair(true, true), painted(v))
         assertEquals(255, opacity(v))
         // The phone's drive screen shows for a second and goes again: inside the pause, so nothing on the car changes.
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         assertTrue(shot(v).contentEquals(box))
         idle(1000)
         assertTrue(shot(v).contentEquals(box))
-        v.setTrip(phone(false), dark = true, now = false)
+        v.setTrip(phone(false), now = false)
         for (i in 1..8) {
             idle(500)
             assertTrue(shot(v).contentEquals(box))
         }
         // It shows and stays: nothing for two seconds, then both pieces fade together over half a second, then nothing.
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         idle(CarExtrasFade.PAUSE_MS - 20)
         assertTrue(shot(v).contentEquals(box))
         idle(20 + CarExtrasFade.FADE_MS / 2)
@@ -843,12 +846,12 @@ class CarOverlayTest {
         assertTrue(shot(v).all { it == 0 })
         // Trip updates keep coming while it shows: still nothing.
         for (i in 1..5) {
-            v.setTrip(phone(true), dark = true, now = false)
+            v.setTrip(phone(true), now = false)
             idle(1000)
             assertTrue(shot(v).all { it == 0 })
         }
         // The phone stops showing it: the same pause, then the pieces fade back in, to the picture they were.
-        v.setTrip(phone(false), dark = true, now = false)
+        v.setTrip(phone(false), now = false)
         idle(CarExtrasFade.PAUSE_MS - 20)
         assertTrue(shot(v).all { it == 0 })
         idle(20 + CarExtrasFade.FADE_MS / 2)
@@ -860,7 +863,7 @@ class CarOverlayTest {
             setSurfaceSize(1280, 720)
             setAreas(inBetween, inBetween)
         }
-        w.setTrip(phone(true), dark = true, now = true)
+        w.setTrip(phone(true), now = true)
         assertTrue(shot(w).all { it == 0 })
         idle(3000)
         assertTrue(shot(w).all { it == 0 })
@@ -871,7 +874,7 @@ class CarOverlayTest {
         // The car's free room narrows (the host's own panel beside the map) but keeps the one box where it is: the class goes
         // from big to in-between, nothing moves, and the phone's drive screen now counts.
         val v = overlayView()
-        v.setTrip(phone(true), dark = true, now = true)
+        v.setTrip(phone(true), now = true)
         val box = shot(v)
         assertEquals(Pair(true, true), painted(v))
         v.setAreas(inBetween, inBetween)
@@ -896,7 +899,7 @@ class CarOverlayTest {
         v.setSurfaceSize(1280, 720)
         // Nothing before a class exists: no areas, then the visible area alone, with a drive already running.
         v.setAreas(null, null)
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         v.setAreas(Rect(0, 0, 1280, 720), null)
         idle(1000)
         assertEquals(emptyList<String>(), told)
@@ -905,7 +908,7 @@ class CarOverlayTest {
         assertEquals(listOf("always"), told)
         // Not again for trip updates, redraws, the host's buttons hiding, or the phone's drive screen showing.
         for (i in 1..5) {
-            v.setTrip(phone(i % 2 == 0), dark = true, now = false)
+            v.setTrip(phone(i % 2 == 0), now = false)
             shot(v)
             idle(1000)
         }
@@ -920,7 +923,7 @@ class CarOverlayTest {
         assertEquals(listOf("always", "unlessPhone"), told)
         // The room changes to one with no left column and stays: small, said when the new areas are taken (after the settle
         // time and the fade out), once.
-        v.setTrip(phone(false), dark = true, now = false)
+        v.setTrip(phone(false), now = false)
         idle(5000)
         v.setAreas(Rect(92, 91, 1177, 697), Rect(92, 91, 1177, 697))
         assertEquals(listOf("always", "unlessPhone"), told)
@@ -929,11 +932,11 @@ class CarOverlayTest {
         idle(5000)
         assertEquals(listOf("always", "unlessPhone", "never"), told)
         // The drive ends: nothing is sent. The next drive says its class anew, once.
-        v.setTrip(CarTrip.from(mapOf("phase" to "browsing")), dark = true, now = false)
+        v.setTrip(CarTrip.from(mapOf("phase" to "browsing")), now = false)
         idle(1000)
         assertEquals(3, told.size)
-        v.setTrip(trip("dark"), dark = true, now = true)
-        v.setTrip(trip("dark"), dark = true, now = false)
+        v.setTrip(trip("dark"), now = true)
+        v.setTrip(trip("dark"), now = false)
         assertEquals(listOf("always", "unlessPhone", "never", "never"), told)
 
         // With areas already there and no drive: nothing until guidance starts.
@@ -943,7 +946,7 @@ class CarOverlayTest {
         w.setAreas(mainHidden, main)
         idle(1000)
         assertEquals(emptyList<String>(), told2)
-        w.setTrip(trip("dark"), dark = true, now = true)
+        w.setTrip(trip("dark"), now = true)
         assertEquals(listOf("always"), told2)
 
         // On the car channel it is the method "extras" with the one argument "carries".
@@ -978,7 +981,7 @@ class CarOverlayTest {
         }
         // Start: the first guiding trip does not say yet that the phone's drive screen shows (the phone builds it once
         // guidance runs). Nothing is drawn.
-        v.setTrip(phone(false), dark = true, now = true)
+        v.setTrip(phone(false), now = true)
         assertTrue(shot(v).all { it == 0 })
         // A few hundred milliseconds later the phone says its drive screen is showing. No frame on the way draws a piece,
         // then or in the seconds after.
@@ -986,14 +989,14 @@ class CarOverlayTest {
             idle(CarOverlayView.FRAME_MS)
             assertTrue(shot(v).all { it == 0 })
         }
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         for (i in 1..60) {
             idle(100)
             assertTrue("frame $i", shot(v).all { it == 0 })
         }
         // Trip updates keep coming while it shows: still nothing.
         for (i in 1..3) {
-            v.setTrip(phone(true), dark = true, now = false)
+            v.setTrip(phone(true), now = false)
             idle(1000)
             assertTrue(shot(v).all { it == 0 })
         }
@@ -1008,10 +1011,10 @@ class CarOverlayTest {
                 setSurfaceSize(1280, 720)
                 setAreas(inBetween, inBetween)
             }
-            v.setTrip(start, dark = true, now = true)
+            v.setTrip(start, now = true)
             assertTrue(shot(v).all { it == 0 })
             idle(CarOverlayView.DRIVE_START_SETTLE_MS / 2)
-            v.setTrip(start, dark = true, now = false)
+            v.setTrip(start, now = false)
             assertTrue(shot(v).all { it == 0 })
             idle(CarOverlayView.DRIVE_START_SETTLE_MS / 2 - 20)
             assertTrue(shot(v).all { it == 0 })
@@ -1030,11 +1033,11 @@ class CarOverlayTest {
     fun theStartOfADriveIsUnchangedOnABigAndOnASmallScreen() {
         // Big: both pieces from the first frame, and the phone's drive screen coming a moment later changes nothing.
         val v = overlayView()
-        v.setTrip(phone(false), dark = true, now = true)
+        v.setTrip(phone(false), now = true)
         assertEquals(Pair(true, true), painted(v))
         val box = shot(v)
         idle(300)
-        v.setTrip(phone(true), dark = true, now = false)
+        v.setTrip(phone(true), now = false)
         for (i in 1..60) {
             idle(100)
             assertTrue(shot(v).contentEquals(box))
@@ -1044,15 +1047,15 @@ class CarOverlayTest {
             setSurfaceSize(800, 480)
             setAreas(small, small)
         }
-        w.setTrip(phone(false), dark = true, now = true)
+        w.setTrip(phone(false), now = true)
         assertTrue(shotAt(w, 800, 480).all { it == 0 })
         idle(300)
-        w.setTrip(phone(true), dark = true, now = false)
+        w.setTrip(phone(true), now = false)
         for (i in 1..30) {
             idle(100)
             assertTrue(shotAt(w, 800, 480).all { it == 0 })
         }
-        w.setTrip(phone(false), dark = true, now = false)
+        w.setTrip(phone(false), now = false)
         idle(5000)
         assertTrue(shotAt(w, 800, 480).all { it == 0 })
     }
@@ -1104,7 +1107,7 @@ class CarOverlayTest {
         v.setAreas(s95Wide, s95Wide)
         fun blank() = shotAt(v, 1190, 480).all { it == 0 }
         // The phone's drive screen shows: the in-between screen's pieces are away.
-        v.setTrip(phone(true), dark = true, now = true)
+        v.setTrip(phone(true), now = true)
         assertEquals(listOf("unlessPhone"), told)
         idle(5000)
         assertTrue(blank())
@@ -1130,7 +1133,7 @@ class CarOverlayTest {
         assertEquals(listOf("unlessPhone"), told)
         // The phone stops showing it: the pieces come back (pause, fade), and stay fully drawn while the top buttons come
         // and go (the mini map's tile stays where it is then: a spot on its card).
-        v.setTrip(phone(false), dark = true, now = false)
+        v.setTrip(phone(false), now = false)
         idle(CarExtrasFade.PAUSE_MS + CarExtrasFade.FADE_MS + 50)
         val tile = CarOverlayPainter.layout(1190, 480, s95Wide, 1f, showClimb = true, showMini = true, stable = s95Wide).mini!!
         fun tileAlpha() = shotAt(v, 1190, 480)[(tile.top + 8).toInt() * 1190 + (tile.left + 40).toInt()] ushr 24
@@ -1163,7 +1166,7 @@ class CarOverlayTest {
         val v = CarOverlayView(RuntimeEnvironment.getApplication(), 1f)
         v.setSurfaceSize(1280, 720)
         v.setAreas(null, null)
-        v.setTrip(trip("dark"), dark = true, now = true)
+        v.setTrip(trip("dark"), now = true)
         v.setAreas(Rect(0, 0, 1280, 720), null)
         v.setAreas(Rect(0, 0, 1280, 720), main)
         assertEquals(Pair(true, true), painted(v))
@@ -1184,18 +1187,19 @@ class CarOverlayTest {
             if (withShape.getPixel(x, y) != noShape.getPixel(x, y)) throw AssertionError("the shape reaches the card's edge at $x, $y")
         }
         assertTrue(CarOverlayPainter.LINE_SHAPE_INSET - 6f >= CarOverlayPainter.HOST_CARD_RADIUS)
-        // The shape is there, from 28 px in: its line in the route's color.
+        // The shape is there, from 28 px in: its line in the theme's route color.
+        val pal = trip("light").palette!!
         val x0 = r.left.toInt() + 28
-        assertTrue((x0 until x0 + 84).any { x -> (r.top.toInt() until r.bottom.toInt()).any { y -> withShape.getPixel(x, y) == CarOverlayPainter.ON_DARK_ROUTE } })
+        assertTrue((x0 until x0 + 84).any { x -> (r.top.toInt() until r.bottom.toInt()).any { y -> withShape.getPixel(x, y) == pal.route } })
         // No fill under the line: just above the shape's bottom edge, right of the start dot, is the plain card. (With the
         // fill, the same spot is not.)
         val spotX = x0 + 12
         val spotY = r.centerY().toInt() + 25
         assertFalse(CarOverlayPainter.LINE_SHAPE_FILLED)
-        assertEquals(CarOverlayPainter.HOST_CARD_FILL, withShape.getPixel(spotX, spotY))
+        assertEquals(pal.card, withShape.getPixel(spotX, spotY))
         val filled = Bitmap.createBitmap(1280, 500, Bitmap.Config.ARGB_8888)
         CarOverlayPainter.draw(Canvas(filled), trip("light"), width = 1280, height = 500, visible = wide, density = 1f, stable = wide, lineShapeFilled = true)
-        assertFalse(filled.getPixel(spotX, spotY) == CarOverlayPainter.HOST_CARD_FILL)
+        assertFalse(filled.getPixel(spotX, spotY) == pal.card)
         // The box's own shape (1280 x 720) keeps its fill.
         val box = Bitmap.createBitmap(196, 52, Bitmap.Config.ARGB_8888)
         CarOverlayPainter.drawShape(Canvas(box), RectF(0f, 0f, 196f, 52f), trip("light").climb!!, CarOverlayPainter.HOST_STYLE, 1f)
@@ -1220,7 +1224,7 @@ class CarOverlayTest {
         }
     }
 
-    // ---- the look: the host's cards, whatever the theme and by day and night ---------------------------------------------
+    // ---- the look: the phone's chosen theme, in the host's card shape ---------------------------------------------
 
     private fun drawn(w: Int, h: Int, area: Rect, t: CarTrip): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -1235,53 +1239,71 @@ class CarOverlayTest {
     }
 
     @Test
-    fun thePiecesAreInTheHostsCardStyle() {
-        assertEquals(0xFF242627.toInt(), CarOverlayPainter.HOST_CARD_FILL)
-        assertEquals(0xFF45474B.toInt(), CarOverlayPainter.HOST_CARD_EDGE)
+    fun thePiecesAreInTheThemesColorsInTheHostsCardShape() {
         assertEquals(22f, CarOverlayPainter.HOST_CARD_RADIUS, 0f)
-        // The one box at 1280 x 720: the card's fill in both parts, its 2 px outline on the left edge, the divider between
-        // the parts in the outline's color, nothing outside the box.
-        val b = drawn(1280, 720, main, trip("light"))
-        val l = layout(1280, 720, main, main)
-        val box = l.box!!
-        val midY = box.centerY().toInt()
-        assertEquals(CarOverlayPainter.HOST_CARD_EDGE, b.getPixel(box.left.toInt(), midY))
-        assertEquals(CarOverlayPainter.HOST_CARD_EDGE, b.getPixel(box.left.toInt() + 1, midY))
-        assertEquals(CarOverlayPainter.HOST_CARD_FILL, b.getPixel(box.left.toInt() + 5, l.mini!!.top.toInt() + 40))
-        assertEquals(CarOverlayPainter.HOST_CARD_FILL, b.getPixel(box.left.toInt() + 5, l.climb!!.top.toInt() + 60))
-        assertEquals(CarOverlayPainter.HOST_CARD_EDGE, b.getPixel(box.left.toInt() + 130, l.climb!!.top.toInt()))
-        assertEquals(0, b.getPixel(box.left.toInt() - 2, midY))
-        assertEquals(0, b.getPixel(box.right.toInt() + 2, midY))
-        // The corner is rounded like the host's: the very corner pixel is not painted.
-        assertEquals(0, b.getPixel(box.left.toInt() + 1, box.top.toInt() + 1))
-        // The split pieces at 800 x 480: each a card of its own in the same fill and outline.
-        val s = drawn(800, 480, small, trip("light"))
-        val sl = layout(800, 480, small, small)
-        for (r in listOf(sl.climb!!, sl.mini!!)) {
-            assertEquals(CarOverlayPainter.HOST_CARD_EDGE, s.getPixel(r.left.toInt(), r.centerY().toInt()))
-            assertEquals(CarOverlayPainter.HOST_CARD_FILL, s.getPixel(r.left.toInt() + 4, r.centerY().toInt()))
-            assertEquals(0, s.getPixel(r.left.toInt() - 2, r.centerY().toInt()))
+        for (theme in listOf("light", "dark", "parchment", "tactical")) {
+            val pal = trip(theme).palette!!
+            // The one box at 1280 x 720: its 2 px outline on the left edge, the mini map part on the theme's page color, the
+            // climb part on the card color, the divider between them in the outline's color, nothing outside the box.
+            val b = drawn(1280, 720, main, trip(theme))
+            val l = layout(1280, 720, main, main)
+            val box = l.box!!
+            val midY = box.centerY().toInt()
+            assertEquals(theme, pal.miniBorder, b.getPixel(box.left.toInt(), midY))
+            assertEquals(theme, pal.miniBorder, b.getPixel(box.left.toInt() + 1, midY))
+            assertEquals(theme, pal.miniBg, b.getPixel(box.left.toInt() + 5, l.mini!!.top.toInt() + 40))
+            assertEquals(theme, pal.card, b.getPixel(box.left.toInt() + 5, l.climb!!.top.toInt() + 60))
+            assertEquals(theme, pal.miniBorder, b.getPixel(box.left.toInt() + 130, l.climb!!.top.toInt()))
+            assertEquals(0, b.getPixel(box.left.toInt() - 2, midY))
+            assertEquals(0, b.getPixel(box.right.toInt() + 2, midY))
+            // The corner is rounded like the host's: the very corner pixel is not painted.
+            assertEquals(0, b.getPixel(box.left.toInt() + 1, box.top.toInt() + 1))
+            // The mini map's route is the theme's route color, somewhere in the box's upper part.
+            val part = l.mini!!
+            assertTrue(theme, (part.left.toInt() until part.right.toInt()).any { x -> (part.top.toInt() until part.bottom.toInt()).any { y -> b.getPixel(x, y) == pal.route } })
+            // The split pieces at 800 x 480: the climb a card of the card color, the mini map a tile of the page color, both
+            // with the outline.
+            val s = drawn(800, 480, small, trip(theme))
+            val sl = layout(800, 480, small, small)
+            for ((r, ground) in listOf(sl.climb!! to pal.card, sl.mini!! to pal.miniBg)) {
+                assertEquals(theme, pal.miniBorder, s.getPixel(r.left.toInt(), r.centerY().toInt()))
+                assertEquals(theme, ground, s.getPixel(r.left.toInt() + 4, r.centerY().toInt()))
+                assertEquals(0, s.getPixel(r.left.toInt() - 2, r.centerY().toInt()))
+            }
         }
-        // The mini map is drawn for a dark ground: its route is the light blue, somewhere in the box's upper part.
-        val part = l.mini!!
-        assertTrue((part.left.toInt() until part.right.toInt()).any { x -> (part.top.toInt() until part.bottom.toInt()).any { y -> b.getPixel(x, y) == CarOverlayPainter.ON_DARK_ROUTE } })
     }
 
     @Test
-    fun theThemeAndTheTimeOfDayDoNotChangeThePieces() {
-        // The trip's palette does not color the pieces: every theme paints the same pixels, and so does a trip with none.
+    fun eachThemePaintsThePiecesInItsOwnColorsAndATripWithNoPaletteInTheHostsCards() {
         for ((w, h, area) in listOf(Triple(1280, 720, main), Triple(800, 480, small))) {
-            val light = pixelsOf(drawn(w, h, area, trip("light")))
-            for (theme in listOf("parchment", "dark", "tactical")) assertTrue(theme, light.contentEquals(pixelsOf(drawn(w, h, area, trip(theme)))))
+            val seen = mutableListOf<IntArray>()
+            for (theme in listOf("light", "dark", "parchment", "tactical")) {
+                val px = pixelsOf(drawn(w, h, area, trip(theme)))
+                for (other in seen) assertFalse("$theme at $w x $h", other.contentEquals(px))
+                seen += px
+            }
+            // Before any palette has come: the host's dark cards.
             val bare = CarTrip.from(mapOf("phase" to "guiding", "units" to "imperial", "climb" to sampleClimb(), "overview" to sampleOverview()))
             assertNull(bare.palette)
-            assertTrue(light.contentEquals(pixelsOf(drawn(w, h, area, bare))))
+            assertEquals(CarOverlayPainter.HOST_STYLE, CarOverlayPainter.colorsFor(bare))
+            val l = layout(w, h, area, area)
+            val spot = l.climb!!
+            assertEquals(CarOverlayPainter.HOST_CARD_FILL, drawn(w, h, area, bare).getPixel(spot.left.toInt() + 4, spot.centerY().toInt()))
         }
-        // Day and night: the View paints the same in both.
-        val day = overlayView().apply { setTrip(trip("light"), dark = false, now = true) }
-        val night = overlayView().apply { setTrip(trip("light"), dark = true, now = true) }
-        assertTrue(shot(day).contentEquals(shot(night)))
-        assertTrue(shot(day).any { it != 0 })
+    }
+
+    @Test
+    fun aNewThemeOnThePhoneIsPaintedAtOnceNotAtTheNextStep() {
+        val v = overlayView()
+        v.setTrip(trip("dark"), now = true)
+        val dark = shot(v)
+        // The phone's theme changed: the next trip carries the new palette, and the View paints it in this frame, with no step
+        // to wait for.
+        v.setTrip(trip("tactical"), now = false)
+        val tactical = shot(v)
+        assertFalse(dark.contentEquals(tactical))
+        val fresh = overlayView().apply { setTrip(trip("tactical"), now = true) }
+        assertTrue(shot(fresh).contentEquals(tactical))
     }
 
     // ---- the pieces' text: size and contrast --------------------------------------------------------------------------------
@@ -1353,13 +1375,21 @@ class CarOverlayTest {
 
     @Test
     fun textOnThePiecesReadsWellAboveFourAndAHalfToOne() {
-        val p = CarOverlayPainter.HOST_STYLE
-        assertEquals(CarOverlayPainter.HOST_CARD_FILL, p.card)
-        assertEquals(p.card, p.miniBg)
-        assertTrue(contrast(p.cardText, p.card) >= 7.0)
-        assertTrue(contrast(p.cardSecondary, p.card) >= 7.0)
-        // The mini map's route and the shape's line on the dark ground.
-        assertTrue(contrast(p.route, p.miniBg) >= 4.5)
+        // In every theme: the figures and the label on the card at 4.5:1 or better (Dart's rule, car_overlay.dart), and the
+        // route on the mini map's ground and on the card (the climb's shape) at 3:1 or better.
+        for (theme in listOf("light", "dark", "parchment", "tactical")) {
+            val p = trip(theme).palette!!
+            assertTrue(theme, contrast(p.cardText, p.card) >= 4.5)
+            assertTrue(theme, contrast(p.cardSecondary, p.card) >= 4.5)
+            assertTrue(theme, contrast(p.route, p.miniBg) >= 3.0)
+            assertTrue(theme, contrast(p.route, p.card) >= 3.0)
+        }
+        // The host's dark cards, for a trip with no palette yet.
+        val h = CarOverlayPainter.HOST_STYLE
+        assertEquals(CarOverlayPainter.HOST_CARD_FILL, h.card)
+        assertTrue(contrast(h.cardText, h.card) >= 7.0)
+        assertTrue(contrast(h.cardSecondary, h.card) >= 7.0)
+        assertTrue(contrast(h.route, h.miniBg) >= 4.5)
     }
 
     // ---- the climb's shape is to scale ------------------------------------------------------------------------------------
@@ -1387,7 +1417,7 @@ class CarOverlayTest {
 
     /** The rows of the shape's line (the route color at full strength), right of the start dot, for [heights] in a 196 x 52 box. */
     private fun shapeLineRows(heights: List<Double>): IntRange {
-        val pal = trip("dark").palette!!.night
+        val pal = trip("dark").palette!!
         val bmp = Bitmap.createBitmap(196, 52, Bitmap.Config.ARGB_8888)
         val c = CarClimb(climbAheadM = 0.0, gradePct = null, steepestInM = null, heightsM = heights, steepFrom = null, steepTo = null, windowM = 8000.0)
         CarOverlayPainter.drawShape(Canvas(bmp), RectF(0f, 0f, 196f, 52f), c, pal, 1f)
@@ -1448,7 +1478,7 @@ class CarOverlayTest {
     @Test
     fun theGradeOnTheMapBadgeIsNoSmallerThanTheHostsSmallestLineAndThePillHoldsIt() {
         assertTrue(CarOverlayPainter.BADGE_TEXT_SIZE >= CarOverlayPainter.HOST_MIN_TEXT)
-        val pal = trip("light").palette!!.night
+        val pal = trip("light").palette!!
         // The pill is as high as before (36) and as wide as its text needs: wider than the mock's 68, wider again for two digits.
         val one = CarOverlayPainter.badgeBitmap(9.0, pal, 1f)
         val two = CarOverlayPainter.badgeBitmap(12.0, pal, 1f)
@@ -1732,7 +1762,7 @@ class CarOverlayTest {
 
     @Test
     fun theMiniMapsDestinationIsAPlainDotEvenWhenTheSteepestClimbIsAtTheEnd() {
-        val pal = trip("parchment").palette!!.night
+        val pal = trip("parchment").palette!!
         val box = RectF(0f, 0f, 220f, 140f)
         fun paint(ov: CarOverview): Bitmap {
             val bmp = Bitmap.createBitmap(220, 140, Bitmap.Config.ARGB_8888)
@@ -1814,7 +1844,7 @@ class CarOverlayTest {
 
     @Test
     fun theTacticalPaletteHasNoWhite() {
-        val p = trip("tactical").palette!!.night
+        val p = trip("tactical").palette!!
         for (c in listOf(p.route, p.routeDriven, p.badge, p.badgeGlyph, p.card, p.cardText, p.posFill, p.destDot, p.hatch)) {
             val r = (c shr 16) and 0xFF
             val g = (c shr 8) and 0xFF
@@ -1850,23 +1880,27 @@ class CarOverlayTest {
         Screen("1920x1080", 1816, 1056, 400f),
     )
 
-    /** A picture of the overlay as the car shows it while guiding (the phone's drive screen not showing), on a flat map with
-     * stand-ins for the host's parts (plain shapes at the measured places, in the host's card colors; not the host's drawing)
-     * and the vehicle where the camera puts it. The pieces are the real painter, drawn only where the screen's class has them
-     * on the car at all. */
-    private fun picture(sc: Screen, buttons: Boolean, climb: Boolean): Bitmap {
+    /** The four themes the phone offers; the car's pieces follow the chosen one, day and night. */
+    private val themes = listOf("dark", "light", "parchment", "tactical")
+
+    /** A picture of the overlay as the car shows it while guiding (the phone's drive screen not showing), in [theme], on a flat
+     * map in the theme's page color with stand-ins for the host's parts (plain shapes at the measured places, in the host's
+     * card colors; not the host's drawing) and the vehicle where the camera puts it. The pieces are the real painter, drawn
+     * only where the screen's class has them on the car at all. */
+    private fun picture(sc: Screen, buttons: Boolean, climb: Boolean, theme: String): Bitmap {
         val bmp = Bitmap.createBitmap(sc.w, sc.h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        canvas.drawColor(0xFFF7F4EE.toInt())
-        // The road: ahead of the vehicle in the route's blue, behind it in grey; the arrow on it.
+        val pal = trip(theme).palette!!
+        canvas.drawColor(pal.miniBg)
+        // The road: ahead of the vehicle in the theme's route color, behind it in its driven color; the arrow on it.
         val v = CarOverlayPainter.vehiclePoint(sc.shown)
-        canvas.drawLine(v.x, 0f, v.x, v.y, line(0xFF1F6FA8.toInt(), 8f))
-        canvas.drawLine(v.x, v.y, v.x, sc.h.toFloat(), line(0xFF9AA3AD.toInt(), 8f))
-        CarOverlayPainter.drawArrow(canvas, v.x, v.y, 0xFF1F6FA8.toInt(), 0xFFFFFFFF.toInt(), 1f)
+        canvas.drawLine(v.x, 0f, v.x, v.y, line(pal.route, 8f))
+        canvas.drawLine(v.x, v.y, v.x, sc.h.toFloat(), line(pal.routeDriven, 8f))
+        CarOverlayPainter.drawArrow(canvas, v.x, v.y, pal.route, pal.posFill, 1f)
         // Cache's pieces (under the host's parts, as on the car).
         if (CarOverlayPainter.extrasMeasure(sc.w, sc.h, sc.shown, 1f, sc.shown).cls.onCar(phoneDrive = false)) {
             CarOverlayPainter.draw(
-                canvas, trip("light", climb = climb), width = sc.w, height = sc.h, visible = if (buttons) sc.shown else sc.hidden,
+                canvas, trip(theme, climb = climb), width = sc.w, height = sc.h, visible = if (buttons) sc.shown else sc.hidden,
                 density = 1f, stable = sc.shown,
             )
         }
@@ -1884,15 +1918,16 @@ class CarOverlayTest {
         return bmp
     }
 
-    /** Every picture of the set, by file name: for each screen the pieces with the host's buttons showing, with them away,
-     * and with no climb to show; a small screen, where nothing of the pieces is drawn, has the one picture. */
+    /** Every picture of the set, by file name, in each of the four themes: for each screen the pieces with the host's buttons
+     * showing, with them away, and with no climb to show; a small screen, where nothing of the pieces is drawn, has the one
+     * picture. */
     private fun pictures(): Map<String, Bitmap> {
         val out = linkedMapOf<String, Bitmap>()
-        for (sc in screens) {
-            out["${sc.name}.png"] = picture(sc, buttons = true, climb = true)
+        for (theme in themes) for (sc in screens) {
+            out["${sc.name}-$theme.png"] = picture(sc, buttons = true, climb = true, theme = theme)
             if (CarOverlayPainter.extrasMeasure(sc.w, sc.h, sc.shown, 1f, sc.shown).cls == CarExtrasClass.SMALL) continue
-            out["${sc.name}-buttons-hidden.png"] = picture(sc, buttons = false, climb = true)
-            out["${sc.name}-no-climb.png"] = picture(sc, buttons = true, climb = false)
+            out["${sc.name}-$theme-buttons-hidden.png"] = picture(sc, buttons = false, climb = true, theme = theme)
+            out["${sc.name}-$theme-no-climb.png"] = picture(sc, buttons = true, climb = false, theme = theme)
         }
         return out
     }
@@ -1935,12 +1970,14 @@ class CarOverlayTest {
         assertEquals(CarOverlayPainter.MINI_H, wide.mini!!.height(), 0.5f)
         assertEquals(CarOverlayMode.ONE_BOX, layout(1190, 700, screens[2].shown, screens[2].shown).mode)
         assertEquals(CarOverlayMode.ONE_BOX, layout(1816, 1056, screens[3].shown, screens[3].shown).mode)
-        // The pieces are really in the pictures where drawn: the card fill at a spot inside each.
-        for (sc in screens.drop(1)) {
-            val p = picture(sc, buttons = true, climb = true)
-            for (piece in listOfNotNull(layout(sc.w, sc.h, sc.shown, sc.shown).climb, layout(sc.w, sc.h, sc.shown, sc.shown).mini)) {
-                assertEquals(sc.name, CarOverlayPainter.HOST_CARD_FILL, p.getPixel(piece.left.toInt() + 30, piece.bottom.toInt() - 4))
-            }
+        // The pieces are really in the pictures where drawn, in each theme's colors: the card color at a spot inside the climb,
+        // the page color at a spot inside the mini map.
+        for (theme in themes) for (sc in screens.drop(1)) {
+            val p = picture(sc, buttons = true, climb = true, theme = theme)
+            val pal = trip(theme).palette!!
+            val l = layout(sc.w, sc.h, sc.shown, sc.shown)
+            assertEquals("${sc.name} $theme", pal.card, p.getPixel(l.climb!!.left.toInt() + 30, l.climb!!.bottom.toInt() - 4))
+            assertEquals("${sc.name} $theme", pal.miniBg, p.getPixel(l.mini!!.left.toInt() + 30, l.mini!!.bottom.toInt() - 4))
         }
     }
 

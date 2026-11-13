@@ -566,42 +566,29 @@ void main() {
       expect(carOverview(null, distanceAlongM: 0), isNull);
     });
 
-    test('the car map style: Tactical at night when Tactical is chosen, otherwise Light by day and Dark by night', () {
-      expect(carMapTheme(dark: true, chosen: CacheThemeId.tactical), CacheThemeId.tactical);
-      expect(carMapTheme(dark: false, chosen: CacheThemeId.tactical), CacheThemeId.light);
-      expect(carMapTheme(dark: true, chosen: CacheThemeId.dark), CacheThemeId.dark);
-      expect(carMapTheme(dark: true, chosen: CacheThemeId.light), CacheThemeId.dark);
-      expect(carMapTheme(dark: false, chosen: CacheThemeId.parchment), CacheThemeId.light);
+    test('the car follows the phone\'s chosen theme alone: one palette block, the theme\'s own colors', () {
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayPalette(id), {'theme': id.name, ...carOverlayColors(id)}, reason: id.name);
+      }
+      expect(carOverlayPalette(CacheThemeId.tactical).containsKey('day'), isFalse);
+      expect(carOverlayPalette(CacheThemeId.tactical).containsKey('night'), isFalse);
     });
 
-    test('day and night themes: the chosen theme when it fits, else Light by day and Dark by night', () {
-      expect(carDayTheme(CacheThemeId.parchment), CacheThemeId.parchment);
-      expect(carDayTheme(CacheThemeId.light), CacheThemeId.light);
-      expect(carDayTheme(CacheThemeId.dark), CacheThemeId.light);
-      expect(carDayTheme(CacheThemeId.tactical), CacheThemeId.light);
-      expect(carNightTheme(CacheThemeId.tactical), CacheThemeId.tactical);
-      expect(carNightTheme(CacheThemeId.dark), CacheThemeId.dark);
-      expect(carNightTheme(CacheThemeId.light), CacheThemeId.dark);
-      expect(carNightTheme(CacheThemeId.parchment), CacheThemeId.dark);
-      final p = carOverlayPalette(CacheThemeId.tactical);
-      expect((p['day'] as Map)['theme'], 'light');
-      expect((p['night'] as Map)['theme'], 'tactical');
-    });
-
-    test('palette colors come from the theme tokens: one route color, a white badge, and Tactical all red', () {
-      for (final id in [CacheThemeId.light, CacheThemeId.dark, CacheThemeId.parchment]) {
+    test('palette colors come from the theme tokens: the theme\'s own route color, a white badge, and Tactical all red', () {
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayColors(id)['route'], mapPaletteFor(id).css('route'), reason: id.name);
+      }
+      for (final id in [CacheThemeId.light, CacheThemeId.dark]) {
         final c = carOverlayColors(id);
-        expect(c['route'], mapPaletteFor(id == CacheThemeId.parchment ? CacheThemeId.light : id).css('route'));
         final hsl = HSLColor.fromColor(Color(int.parse('FF${c['route']!.substring(1)}', radix: 16)));
         expect(hsl.hue, inInclusiveRange(180, 260), reason: '${id.name} route is blue, never a traffic color');
       }
-      // Parchment on the car: Light's blue for the route and everything made from it; the phone's Parchment map stays brown.
+      // Parchment on the car: the phone's own Parchment brown for the route and everything made from it.
       final pc = carOverlayColors(CacheThemeId.parchment);
-      expect(pc['route'], carOverlayColors(CacheThemeId.light)['route']);
+      expect(pc['route'], '#7a4e1d');
       expect(pc['posRing'], pc['route']);
       expect(pc['badgeEdge'], pc['route']);
-      expect(mapPaletteFor(CacheThemeId.parchment).css('route'), '#7a4e1d');
-      expect((carOverlayPalette(CacheThemeId.parchment)['day'] as Map)['route'], carOverlayColors(CacheThemeId.light)['route']);
+      expect((carOverlayPalette(CacheThemeId.parchment))['route'], '#7a4e1d');
       expect(carOverlayColors(CacheThemeId.light)['badge'], '#ffffff');
       expect(carOverlayColors(CacheThemeId.dark)['badgeGlyph'], '#161b20');
       final t = carOverlayColors(CacheThemeId.tactical);
@@ -719,17 +706,28 @@ void main() {
       messenger.setMockMethodCallHandler(channel, null);
     });
 
-    test('the car map style at night is the full Tactical style when Tactical is chosen, else Dark', () async {
+    test('the car map style is the phone\'s chosen theme, each of the four, whatever the car\'s day or night', () async {
       await maps.engine.start();
-      Future<Map<String, Object?>?> styleFor(CacheThemeId t, {required bool dark}) =>
-          CarBridge(nav: nav, maps: maps, drive: drive, theme: () => t, glyphs: () async => 'file:///g/{fontstack}/{range}.pbf').style(dark: dark);
-      final tac = await styleFor(CacheThemeId.tactical, dark: true);
-      expect((tac!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
-      final dk = await styleFor(CacheThemeId.light, dark: true);
-      expect((dk!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.dark).css('route'));
-      final day = await styleFor(CacheThemeId.tactical, dark: false);
-      expect((day!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.light).css('route'));
-      expect(tac['style'], isNot(dk['style']));
+      Future<Map<String, Object?>?> styleFor(CacheThemeId t) =>
+          CarBridge(nav: nav, maps: maps, drive: drive, theme: () => t, glyphs: () async => 'file:///g/{fontstack}/{range}.pbf').style();
+      final styles = <String>{};
+      for (final t in CacheThemeId.values) {
+        final st = await styleFor(t);
+        expect(st!['theme'], t.name);
+        expect((st['colors'] as Map)['route'], mapPaletteFor(t).css('route'), reason: t.name);
+        styles.add(st['style'] as String);
+      }
+      expect(styles, hasLength(4));
+      // The car's own day or night, still sent by a car side, does not change it.
+      final b = CarBridge(nav: nav, maps: maps, drive: drive, theme: () => CacheThemeId.tactical, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      for (final dark in [true, false]) {
+        final st = await fromCar('style', {'dark': dark}) as Map;
+        expect(st['theme'], 'tactical');
+        expect((st['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
+      }
+      b.dispose();
     });
 
     test('the car map reloads for its own look only: not a reconnect or an opacity change, but pins and layers', () async {
@@ -741,7 +739,7 @@ void main() {
       await b.start();
       await fromCar('connected', {'on': true});
       expect(m.uses, isNotEmpty);
-      await b.style(dark: true); // the car's own first style: the key is recorded as the car loads it
+      await b.style(); // the car's own first style: the key is recorded as the car loads it
       int count() => toCar.where((c) => c.method == 'styleChanged').length;
       toCar.clear();
       // The connection came back: the phone's key moves, the car's does not.
@@ -787,8 +785,8 @@ void main() {
       changed.value++;
       await settle();
       expect(toCar.where((c) => c.method == 'styleChanged'), hasLength(1));
-      // The car's own style request then builds the Tactical night style.
-      final st = await b.style(dark: true);
+      // The car's own style request then builds the Tactical style.
+      final st = await b.style();
       expect((st!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
       b.dispose();
     });

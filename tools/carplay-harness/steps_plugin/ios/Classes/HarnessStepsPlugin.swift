@@ -25,11 +25,18 @@ import UIKit
 ///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
 ///   the call CarPlay itself makes (`contentStyleDidChange`). The Simulator's car sits in its dark setting and has no switch a
-///   script can reach; the app's reaction to the call is the product's own. Apple's bars and buttons do not change with it.
+///   script can reach; the app's reaction to the call is the product's own (the map follows the phone's theme, not this).
+///   Apple's bars and buttons do not change with it.
+/// - `org.example.carharness.theme_dark`, `.theme_light`, `.theme_parchment` and `.theme_tactical`: the stand-in Dart side
+///   changes the phone's chosen theme, as the phone does: the car is told to load its style again and the trip goes out with
+///   the theme's palette. `.themeburst`: five theme changes a tenth of a second apart, ending in Tactical, timed there.
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
-  private static let toDart: [String] = ["next", "nosaved", "saved", "drive", "roll", "climb", "phoneon", "phoneoff", "phoneflip"]
+  private static let toDart: [String] = [
+    "next", "nosaved", "saved", "drive", "roll", "climb", "phoneon", "phoneoff", "phoneflip",
+    "theme_dark", "theme_light", "theme_parchment", "theme_tactical", "themeburst",
+  ]
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let steps = FlutterMethodChannel(name: "harness/steps", binaryMessenger: registrar.messenger())

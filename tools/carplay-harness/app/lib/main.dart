@@ -3,9 +3,10 @@
 // runs with no view when the car was the one to start the engine): it asks whether the build has the car screen
 // (lib/car/car_support.dart), sets its side of the car channel and says hello (lib/car/car_bridge.dart). When a car is
 // connected it pushes the first recorded trip of tools/carplay-harness/recorded (looking at the map), and it answers the
-// car's questions from the recorded messages; the map style it answers with is the stand-in of stand_in_style.py, light or
-// dark as the car asks. The job on the Mac moves it on to the next trip (choosing a route, guiding, and round again), and
-// takes its saved places away and gives them back, through the harness's own plugin (steps_plugin).
+// car's questions from the recorded messages; the map style it answers with is the stand-in of stand_in_style.py in the
+// phone's theme (Dark at start), and the trips carry that theme's palette, as the phone's do. The job on the Mac moves it on
+// to the next trip (choosing a route, guiding, and round again), changes the phone's theme, and takes its saved places away
+// and gives them back, through the harness's own plugin (steps_plugin).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -24,6 +25,9 @@ const MethodChannel _phoneWindow = MethodChannel('co.cache/phone_window');
 const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
 // The recorded drive, moved along by the job while guiding.
 const List<String> _drive = <String>['trip_guiding', 'trip_guiding_near', 'trip_guiding_next', 'trip_rerouting', 'trip_arrived'];
+// The phone's four themes; the job changes the chosen one (`theme_dark` and the others), or five times quickly (`themeburst`).
+const List<String> _themes = <String>['dark', 'light', 'parchment', 'tactical'];
+const List<String> _burst = <String>['light', 'parchment', 'dark', 'light', 'tactical'];
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +52,7 @@ class _HarnessAppState extends State<HarnessApp> {
   String? _lastRoute;
   int _frame = 0;
   bool _voiceOn = true;
+  String _theme = 'dark';
 
   @override
   void initState() {
@@ -153,6 +158,18 @@ class _HarnessAppState extends State<HarnessApp> {
           // As the phone's voice before each prompt (CarAwareSpeaker): how may it be given at this moment?
           final Object? how = await _car.invokeMethod<Object?>('prompt', <String, Object?>{'text': 'Turn left.'});
           await _steps.invokeMethod<void>('say', 'prompt answered $how');
+        case 'theme_dark':
+        case 'theme_light':
+        case 'theme_parchment':
+        case 'theme_tactical':
+          await _setTheme(call.method.substring('theme_'.length));
+        case 'themeburst':
+          // Five theme changes a tenth of a second apart, timed here: the job's notifications each take a second or more.
+          for (final String t in _burst) {
+            await _setTheme(t);
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+          await _steps.invokeMethod<void>('say', 'theme burst done, the last $_theme');
         case 'nosaved':
         case 'saved':
           // The phone's saved places changed: none are left, or the recorded ones are back.
@@ -231,17 +248,30 @@ class _HarnessAppState extends State<HarnessApp> {
         if (_phase == 2) await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
         return _voiceOn;
       case 'style':
-        // As car_bridge.dart answers: the style as text, and the colours of what the car draws on top.
-        final Object? asked = call.arguments;
-        final String look = asked is Map && asked['dark'] == true ? 'dark' : 'light';
-        return <String, Object?>{'style': recorded['style_$look'], 'colors': jsonDecode(recorded['colors_$look']!)};
+        // As car_bridge.dart answers: the style of the phone's theme as text, the theme's name, and the colours of what the car
+        // draws on top. Whatever the car says of its day or night, the theme decides.
+        return <String, Object?>{'style': recorded['style_$_theme'], 'theme': _theme, 'colors': jsonDecode(recorded['colors_$_theme']!)};
     }
     return null;
+  }
+
+  /// The phone's chosen theme changed, as car_bridge.dart does it: the car is told to load its style again (one word for each
+  /// change), and the trip goes out again with the new theme's palette.
+  Future<void> _setTheme(String theme) async {
+    if (!_themes.contains(theme)) return;
+    _theme = theme;
+    await _steps.invokeMethod<void>('say', 'phone theme $theme');
+    await _car.invokeMethod<void>('styleChanged');
+    final String? last = _lastTrip;
+    final String? route = _lastRoute;
+    if (last != null && route != null) await _pushRaw(last, route);
   }
 
   Future<void> _pushRaw(String trip, String route) async {
     final Map<String, dynamic> message = jsonDecode(trip) as Map<String, dynamic>;
     message['voiceOn'] = _voiceOn;
+    // The palette is the phone's chosen theme, as carOverlayPalette sends it (the recorded trips carry Dark's).
+    if (message['palette'] != null) message['palette'] = jsonDecode(recorded['palette_$_theme']!);
     // The phone's one word about its own screen (`overlay.phoneDrive`: its drive screen is showing), as the phone will send
     // it with every trip while guiding. The recorded trips do not carry it yet; the job turns it on and off here.
     final Object? overlay = message['overlay'];

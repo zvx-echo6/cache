@@ -15,7 +15,6 @@ import '../nav/speaker.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
-import 'car_overlay.dart';
 import 'car_pins.dart';
 import 'car_trip.dart';
 import 'phone_drive.dart';
@@ -56,7 +55,7 @@ class CarBridge {
   /// The app-level elevation of the route shown (one for the phone's Maps screen and the car); null: the car draws no climb card.
   final RouteElevation? elevation;
 
-  /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
+  /// The phone's chosen theme: the car's map style and its pieces follow it, day and night (car_overlay.dart).
   final CacheThemeId Function()? theme;
 
   /// The `overlay` part of the trip ([carOverlaySwitches]); null: `phoneDrive` false. [settings] tells the bridge when they may have changed, so the car
@@ -207,8 +206,8 @@ class CarBridge {
         for (final l in maps.engine.layers) l.styleSignature,
       ].join(',');
 
-  /// A phone setting changed: a new theme reloads the car's map style (the car asks for it again with the same request it always
-  /// uses), and the trip goes out again for the switches and the palette.
+  /// A phone setting changed: a new theme reloads the car's map style (one `styleChanged` for each change; the car asks for the
+  /// style again, and a later change replaces a reload still pending there), and the trip goes out again with the new palette.
   void _onSettings() {
     final t = theme?.call();
     if (t != _lastTheme) {
@@ -328,7 +327,8 @@ class CarBridge {
       case 'snapshot':
         return snapshot();
       case 'style':
-        return style(dark: a['dark'] == true);
+        // A car side may still say its day or night (`dark`): it is not used, the style is the phone's theme.
+        return style();
       case 'saved':
         return [for (final p in await savedPlaces()) _placeOut(p)];
       case 'search':
@@ -383,11 +383,11 @@ class CarBridge {
     return {'id': p.id, 'name': p.name, 'address': p.address.isNotEmpty ? p.address : p.kind, 'lat': p.lat, 'lon': p.lon, 'distanceM': d};
   }
 
-  /// The style the car map draws: the same layers as the phone's map in the light or dark map palette (the car says which),
-  /// with the colors of the route and the position for the lines the car adds on top.
-  Future<Map<String, Object?>?> style({required bool dark}) async {
+  /// The style the car map draws: the same layers as the phone's map in the map palette of the phone's chosen theme (day and
+  /// night alike), with the colors of the route and the position for the lines the car adds on top, and the theme's name.
+  Future<Map<String, Object?>?> style() async {
     if (!maps.engine.ready) return null;
-    final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
+    final palette = mapPaletteFor(theme?.call() ?? CacheThemeId.dark);
     // The pins' pictures follow the map's look (Tactical has its own).
     pins?.setTactical(palette.id == CacheThemeId.tactical);
     final String glyphs;
@@ -399,6 +399,7 @@ class CarBridge {
     _lastStyleKey = _carStyleKey;
     return {
       'style': await maps.styleJson(palette, glyphs),
+      'theme': palette.id.name,
       'colors': {for (final r in const ['route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'position', 'positionRing', 'pin']) r: palette.css(r)},
     };
   }

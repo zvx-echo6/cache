@@ -7,8 +7,10 @@ import UIKit
 ///
 /// CarPlay gives the car scene a window. This is its root view controller, and it holds one ordinary MapLibre map view that
 /// fills the view. The map is the car's own: the phone's Flutter map is not touched or moved, and both read the same offline
-/// tiles from the core's tile server on 127.0.0.1 with the same style, which Dart builds (the light or dark map palette, as
-/// the car asks). It is the twin of the Android car's CarMapRenderer.kt, without the virtual display Android needs.
+/// tiles from the core's tile server on 127.0.0.1 with the same style, which Dart builds in the map palette of the phone's
+/// chosen theme. The car's map follows that theme day and night (the owner's decision of 2026-11-13): the car's own day or
+/// night setting only colours the plain stand-in shown before the first style comes. It is the twin of the Android car's
+/// CarMapRenderer.kt, without the virtual display Android needs.
 ///
 /// Only map content is drawn here (Apple's rule for the base view): the base map, the route, the destination and the position.
 /// The buttons, the turn, the distances and the arrival time are the templates'. CarPlay sends the base view no touches: the
@@ -30,7 +32,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private var styleAttempt = 0
   private var colors = CarMapViewController.defaultColors
   private var dark: Bool
-  /// "dark" or "light" once the app's own style is the one set on the map; nil while the plain colour stands in.
+  /// The theme's name ("dark", "light", "parchment", "tactical") once the app's own style is the one set on the map; nil while
+  /// the plain colour stands in.
   private var shownStyle: String?
   private var drawnSaid = false
   private var lastCameraPhase: String?
@@ -71,7 +74,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private var glideBegan: Int64 = 0
   private var glideLasts: Int64 = 0
   private var lastFrameAt: Int64 = 0
-  /// What the grade marker's picture was last made for (the grade, day or night, the colours).
+  /// What the grade marker's picture was last made for (the grade and the colours).
   private var badgeKey: String?
 
   /// The two extras drawn over the map (CarExtrasView), where they go on this screen with its class (measured while
@@ -293,22 +296,25 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   // ---- light and dark --------------------------------------------------------------------------------------------------
 
-  /// The car's day or night setting, from the car scene.
+  /// The car's day or night setting, from the car scene. The map, the route and the extras follow the phone's theme, not this:
+  /// only the plain colour behind the map (seen before the first style comes) takes it. No style is loaded for it.
   func setDark(_ on: Bool) {
     if on == dark { return }
     dark = on
     view.backgroundColor = Self.uiColor(Self.restColor(dark: dark))
-    loadStyle()
   }
 
   // ---- style and overlays ----------------------------------------------------------------------------------------------
 
+  /// Asks Dart for the style (the phone's theme) and sets it. Each call replaces the one before: a reload still waiting is
+  /// cancelled, and an answer to an earlier request is dropped (styleAttempt), so only the latest is set on the map.
   private func loadStyle() {
     guard mapView != nil else { return }
+    reload?.cancel()
+    reload = nil
     styleAttempt += 1
     let attempt = styleAttempt
-    let wanted = dark
-    CarLink.shared.call("style", ["dark": wanted]) { [weak self] answer in
+    CarLink.shared.call("style") { [weak self] answer in
       guard let self = self, let map = self.mapView, attempt == self.styleAttempt else { return }
       let res = CarValue.map(answer)
       guard let json = res?["style"] as? String, Self.isStyle(json) else {
@@ -326,7 +332,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
         }
       }
       self.colors = colors
-      self.shownStyle = wanted ? "dark" : "light"
+      self.shownStyle = (res?["theme"] as? String) ?? "the phone's theme"
       self.drawnSaid = false
       self.dropStyleParts()
       map.styleJSON = json
@@ -400,7 +406,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     badgeKey = nil
 
     // The vehicle's marker: the dot and the two arrows on the one position, all hidden until a position is drawn (showHeading
-    // shows the one that applies). The arrow's picture is made here, so each style (day and night) has it in its own colours.
+    // shows the one that applies). The arrow's picture is made here, so each style (each theme) has it in its own colours.
     let dot = MLNCircleStyleLayer(identifier: "car-pos-dot", source: position)
     dot.circleColor = NSExpression(forConstantValue: color("position"))
     dot.circleRadius = NSExpression(forConstantValue: 10)
@@ -565,17 +571,16 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     source(Self.routeSource)?.shape = Self.shape(geojson)
   }
 
-  /// The grade marker: while guiding, at the steepest point of the climb ahead, in the phone's colours for the car's day or
-  /// night. It is part of the map and is there on every screen. Its picture is made again only when what it shows changes.
+  /// The grade marker: while guiding, at the steepest point of the climb ahead, in the phone's theme's colours. It is part of
+  /// the map and is there on every screen. Its picture is made again only when what it shows changes.
   private func applyBadge(_ t: CarTrip) {
     guard let style = mapView?.style, let point = source(Self.badgeSource) else { return }
-    let colors = dark ? t.badgeNight : t.badgeDay
-    guard t.guiding, let colors = colors, let grade = t.steepGradePct, let lat = t.steepLat, let lon = t.steepLon else {
+    guard t.guiding, let colors = t.badge, let grade = t.steepGradePct, let lat = t.steepLat, let lon = t.steepLon else {
       point.shape = Self.shape(CarLink.emptyGeoJSON)
       return
     }
     let words = CarText.grade(grade)
-    let key = "\(words)|\(dark)|\(colors.badge)|\(colors.glyph)|\(colors.edge)"
+    let key = "\(words)|\(colors.badge)|\(colors.glyph)|\(colors.edge)"
     if key != badgeKey {
       badgeKey = key
       style.setImage(CarIcons.gradeBadge(words, colors: colors), forName: Self.badgeImage)
@@ -709,6 +714,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     follow(force: true)
   }
 
+  /// The phone's theme or its layers changed: one reload, a short while after the last of a quick run of changes (each change
+  /// cancels the reload still waiting), so five quick theme changes give one load, of the last.
   func carLinkStyleChanged() {
     reload?.cancel()
     let work = DispatchWorkItem { [weak self] in self?.loadStyle() }

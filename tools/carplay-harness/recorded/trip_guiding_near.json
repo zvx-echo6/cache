@@ -22,9 +22,6 @@
   "remainingS": 1122,
   "etaMs": 1794168000000,
   "overlay": {"phoneDrive": false},
-  "palette": {
-    "day": {"theme": "light", "route": "#1f6fa8", "routeDriven": "#8fb3cc", "badge": "#1f6fa8", "badgeGlyph": "#ffffff", "badgeEdge": "#ffffff", "startDot": "#5b6470", "destDot": "#c62e24", "posFill": "#1f6fa8", "posRing": "#ffffff", "hostCard": "#f2f2f2", "card": "#ffffff", "cardText": "#16181d", "cardSecondary": "#5b6470", "hatch": "#c9ced6", "miniBg": "#ffffff", "miniBorder": "#c9ced6"},
-    "night": {"theme": "dark", "route": "#6bb4de", "routeDriven": "#3d6278", "badge": "#6bb4de", "badgeGlyph": "#0f1115", "badgeEdge": "#0f1115", "startDot": "#9aa3ad", "destDot": "#ff6b5e", "posFill": "#6bb4de", "posRing": "#0f1115", "hostCard": "#1a1d23", "card": "#16181d", "cardText": "#f2f4f7", "cardSecondary": "#9aa3ad", "hatch": "#3a4049", "miniBg": "#16181d", "miniBorder": "#3a4049"}
-  },
+  "palette": {"theme": "dark", "route": "#6bb4de", "routeDriven": "#4a5866", "badge": "#f4f6f8", "badgeGlyph": "#161b20", "badgeEdge": "#1a1d1f", "startDot": "#8a96a3", "destDot": "#f4f6f8", "posFill": "#ffffff", "posRing": "#6bb4de", "hostCard": "#2a3036", "card": "#2a3036", "cardText": "#dcc9a3", "cardSecondary": "#b0a58a", "hatch": "#dcc9a3", "miniBg": "#1a1d1f", "miniBorder": "#5e5a4f"},
   "overview": {"points": [[10.5, 20.2], [10.5, 20.233], [10.52, 20.233], [10.52, 20.28], [10.56, 20.28]], "drivenFraction": 0.11, "steep": null, "destination": {"lat": 10.56, "lon": 20.28}}
 }

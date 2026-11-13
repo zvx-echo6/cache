@@ -669,15 +669,13 @@ class CarSessionTest {
     @Test
     fun theGuidanceCardTakesTheThemesColorAndShowsTheNextStep() {
         start()
-        val pal = mapOf(
-            "day" to mapOf("theme" to "light", "route" to "#1f6fa8", "routeDriven" to "#9aa3ad", "badge" to "#ffffff", "badgeGlyph" to "#1a1d1f", "badgeEdge" to "#1f6fa8", "startDot" to "#7c8590", "destDot" to "#1a1d1f", "posFill" to "#ffffff", "posRing" to "#1f6fa8", "card" to "#fffdf8", "cardText" to "#1a1d1f", "cardSecondary" to "#55594f", "hatch" to "#1a1d1f", "miniBg" to "#f3ebd9", "miniBorder" to "#aca99b", "hostCard" to "#fffdf8"),
-            "night" to mapOf("theme" to "tactical", "route" to "#ff5a4a", "routeDriven" to "#7a2a24", "badge" to "#ff8a7d", "badgeGlyph" to "#3a0b07", "badgeEdge" to "#000000", "startDot" to "#8e2b24", "destDot" to "#ff5a4a", "posFill" to "#ff9a90", "posRing" to "#ff5a4a", "card" to "#120404", "cardText" to "#e0473c", "cardSecondary" to "#8e2b24", "hatch" to "#e0473c", "miniBg" to "#000000", "miniBorder" to "#4a1612", "hostCard" to "#3a0b07"),
-        )
+        // The trip's palette is the phone's chosen theme (here Tactical): its card color by day and by night alike.
+        val pal = mapOf("theme" to "tactical", "route" to "#ff5a4a", "routeDriven" to "#7a2a24", "badge" to "#ff8a7d", "badgeGlyph" to "#3a0b07", "badgeEdge" to "#000000", "startDot" to "#8e2b24", "destDot" to "#ff5a4a", "posFill" to "#ff9a90", "posRing" to "#ff5a4a", "card" to "#120404", "cardText" to "#e0473c", "cardSecondary" to "#8e2b24", "hatch" to "#e0473c", "miniBg" to "#000000", "miniBorder" to "#4a1612", "hostCard" to "#3a0b07")
         val then = mapOf("turn" to "right", "type" to "right", "cue" to "Turn right onto Road 2.", "road" to "Road 2", "distanceM" to 8000.0)
         push("trip", trip("guiding", guiding + mapOf("palette" to pal, "then" to then)))
         val t = templateOf(screens.top) as NavigationTemplate
         assertEquals(0xFF3A0B07.toInt(), t.backgroundColor!!.colorDark)
-        assertEquals(0xFFFFFDF8.toInt(), t.backgroundColor!!.color)
+        assertEquals(0xFF3A0B07.toInt(), t.backgroundColor!!.color)
         assertEquals("Turn right onto Road 2.", (t.navigationInfo as RoutingInfo).nextStep!!.cue.toString())
     }
 

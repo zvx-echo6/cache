@@ -116,9 +116,12 @@ struct CarTrip: Equatable {
   /// The whole route for the mini map, as [latitude, longitude] points, and how much of it is driven (0 to 1).
   let overviewPoints: [[Double]]
   let drivenFraction: Double
-  /// The grade marker's colours for the car's day and night (the phone's palette), or nil before the palette has come.
-  let badgeDay: CarBadgeColors?
-  let badgeNight: CarBadgeColors?
+  /// The colours of the phone's chosen theme for what the car draws itself (the grade marker, the route mini map, the climb
+  /// card), day and night alike; nil before the palette has come.
+  let palette: CarThemeColors?
+
+  /// The grade marker's colours, from the palette.
+  var badge: CarBadgeColors? { palette?.badgeColors }
 
   var guiding: Bool { phase == "guiding" }
   var previewing: Bool { phase == "previewing" }
@@ -128,7 +131,7 @@ struct CarTrip: Equatable {
     destinationAddress: nil, destinationLat: nil, destinationLon: nil, routes: [], routeIndex: 0, routeId: nil, voiceOn: true,
     arrived: false, rerouting: false, lat: nil, lon: nil, heading: nil, step: nil, then: nil, currentRoad: nil,
     remainingM: nil, remainingS: nil, etaMs: nil, climb: nil, steepLat: nil, steepLon: nil, steepGradePct: nil,
-    phoneDrive: false, overviewPoints: [], drivenFraction: 0, badgeDay: nil, badgeNight: nil
+    phoneDrive: false, overviewPoints: [], drivenFraction: 0, palette: nil
   )
 
   /// From the channel's plain map. What is missing or of another kind takes the same default as on Android.
@@ -143,7 +146,6 @@ struct CarTrip: Equatable {
       points.append([lat, lon])
     }
     if points.count < 2 { points = [] }
-    let palette = CarValue.map(m["palette"])
     var routes: [CarRoute] = []
     for item in (m["routes"] as? [Any]) ?? [] {
       guard let x = CarValue.map(item) else { continue }
@@ -186,8 +188,7 @@ struct CarTrip: Equatable {
       phoneDrive: CarValue.isTrue(CarValue.map(m["overlay"])?["phoneDrive"]),
       overviewPoints: points,
       drivenFraction: min(max(CarValue.double(overview?["drivenFraction"]) ?? 0, 0), 1),
-      badgeDay: CarBadgeColors.from(palette?["day"]),
-      badgeNight: CarBadgeColors.from(palette?["night"])
+      palette: CarThemeColors.from(m["palette"])
     )
   }
 
@@ -244,6 +245,46 @@ struct CarBadgeColors: Equatable {
     guard let m = CarValue.map(v), let badge = m["badge"] as? String, let glyph = m["badgeGlyph"] as? String,
           let edge = m["badgeEdge"] as? String else { return nil }
     return CarBadgeColors(badge: badge, glyph: glyph, edge: edge)
+  }
+}
+
+/// The trip's `palette`: the colours of the phone's chosen theme (lib/car/car_overlay.dart, carOverlayColors), as Dart writes
+/// colours ("#rrggbb"), with the theme's name. One theme, the one the phone shows: the car follows it day and night. The twin
+/// of the Android car's CarOverlayColors; nil when any colour is missing or does not read as one.
+struct CarThemeColors: Equatable {
+  let theme: String
+  let route: String
+  let routeDriven: String
+  let badge: String
+  let badgeGlyph: String
+  let badgeEdge: String
+  let startDot: String
+  let destDot: String
+  let posFill: String
+  let posRing: String
+  let card: String
+  let cardText: String
+  let cardSecondary: String
+  let hatch: String
+  let miniBg: String
+  let miniBorder: String
+
+  var badgeColors: CarBadgeColors { CarBadgeColors(badge: badge, glyph: badgeGlyph, edge: badgeEdge) }
+
+  static func from(_ v: Any?) -> CarThemeColors? {
+    guard let m = CarValue.map(v) else { return nil }
+    func c(_ key: String) -> String? {
+      guard let text = m[key] as? String, CarValue.rgba(text) != nil else { return nil }
+      return text
+    }
+    guard let route = c("route"), let routeDriven = c("routeDriven"), let badge = c("badge"), let badgeGlyph = c("badgeGlyph"),
+          let badgeEdge = c("badgeEdge"), let startDot = c("startDot"), let destDot = c("destDot"), let posFill = c("posFill"),
+          let posRing = c("posRing"), let card = c("card"), let cardText = c("cardText"), let cardSecondary = c("cardSecondary"),
+          let hatch = c("hatch"), let miniBg = c("miniBg"), let miniBorder = c("miniBorder") else { return nil }
+    return CarThemeColors(
+      theme: m["theme"] as? String ?? "", route: route, routeDriven: routeDriven, badge: badge, badgeGlyph: badgeGlyph,
+      badgeEdge: badgeEdge, startDot: startDot, destDot: destDot, posFill: posFill, posRing: posRing, card: card,
+      cardText: cardText, cardSecondary: cardSecondary, hatch: hatch, miniBg: miniBg, miniBorder: miniBorder)
   }
 }
 

@@ -13,13 +13,13 @@
 #   - The Mac's crash windows are switched off (they cover the CarPlay window), and a display that stays black after a boot is
 #     booted once more.
 #
-# No secret, no signing identity. Runs on a push to a carplay/ branch that touches the iOS sources or the harness, and by hand
-# (once this file is on the default branch) with the sizes to draw.
+# No secret, no signing identity. Runs on a push to a carplay/ or a car/ branch that touches the iOS sources or the harness, and
+# by hand (once this file is on the default branch) with the sizes to draw.
 name: CarPlay harness
 
 on:
   push:
-    branches: ['carplay/**']
+    branches: ['carplay/**', 'car/**']
     paths:
       - 'app/ios/Runner/**'
       - 'tools/carplay-harness/**'

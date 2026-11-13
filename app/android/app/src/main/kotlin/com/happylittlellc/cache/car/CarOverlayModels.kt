@@ -68,7 +68,8 @@ data class CarOverview(
     }
 }
 
-/** The overlay's colors for one theme (ARGB ints), made from Dart's theme tokens: the car holds no palette of its own. */
+/** The overlay's colors for the phone's chosen theme (ARGB ints), made from Dart's theme tokens: the car holds no palette of
+ * its own. The trip's `palette` block is one theme, the one the phone shows, day and night alike. */
 data class CarOverlayColors(
     val theme: String,
     val route: Int,
@@ -102,18 +103,6 @@ data class CarOverlayColors(
                 hatch = c("hatch") ?: return null, miniBg = c("miniBg") ?: return null, miniBorder = c("miniBorder") ?: return null,
                 hostCard = c("hostCard") ?: return null,
             )
-        }
-    }
-}
-
-/** The colors for the car's day and its night. */
-data class CarOverlayPalette(val day: CarOverlayColors, val night: CarOverlayColors) {
-    fun forMode(dark: Boolean): CarOverlayColors = if (dark) night else day
-
-    companion object {
-        fun from(v: Any?): CarOverlayPalette? {
-            val m = v.asMap() ?: return null
-            return CarOverlayPalette(CarOverlayColors.from(m["day"]) ?: return null, CarOverlayColors.from(m["night"]) ?: return null)
         }
     }
 }
