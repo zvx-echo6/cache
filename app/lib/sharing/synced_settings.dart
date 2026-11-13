@@ -270,11 +270,18 @@ List<SyncedSetting> appSyncedSettings({
 
 /// The keys saved on this device that can be sent to a linked device (each ticked on its own, all off at first): the web search
 /// key and each live source's key, your own sources' too.
+///
+/// A reference to a key on the server (`keystore://...`, what a browser's store hands out) is never a key: it is not sent.
 List<SyncedKey> appSyncedKeys({required WeatherState weather, required WebSearchSetup webSearch, required TokenStore secrets}) {
+  Future<String?> real(String name) async {
+    final v = await secrets.read(name);
+    return v != null && v.startsWith('keystore://') ? null : v;
+  }
+
   return [
-    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: 'Kagi (web search)', read: () => secrets.read(WebSearchSetup.keyName)),
+    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: 'Kagi (web search)', read: () => real(WebSearchSetup.keyName)),
     for (final alias in weather.savedKeyAliases)
-      SyncedKey(name: WeatherState.secretName(alias), label: _keyLabel(weather, alias), read: () => secrets.read(WeatherState.secretName(alias))),
+      SyncedKey(name: WeatherState.secretName(alias), label: _keyLabel(weather, alias), read: () => real(WeatherState.secretName(alias))),
   ];
 }
 
