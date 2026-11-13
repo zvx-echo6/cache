@@ -17,6 +17,7 @@ on:
     paths:
       - 'app/android/**'
       - 'app/lib/car/**'
+      - 'app/test_shots/car_aa/**'
       - 'app/pubspec.yaml'
       - '.github/workflows/android-car.yml'
   workflow_dispatch:
@@ -79,9 +80,10 @@ jobs:
           name: car-test-results
           path: app/build/app/reports/tests/testDebugUnitTest
           retention-days: 5
-      # Pictures of the car's own pieces (the mini map and the climb) on the three screens the desktop head unit was run at,
-      # painted by the tests (CarOverlayTest.picturesOfTheThreeScreens) with stand-ins for the host's parts: to look at
-      # before any time is spent on a phone.
+      # Pictures of the car's own pieces (the mini map and the climb) on the four screens the desktop head unit was run at,
+      # painted by the tests (CarOverlayTest.picturesOfTheFourScreens) with stand-ins for the host's parts. The same set is
+      # committed in app/test_shots/car_aa, and CarOverlayTest.theCommittedPicturesAreWhatThePainterDrawsNow fails when the
+      # two differ: after a change to the pieces' look, put this artifact's files there in place of the old ones.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
