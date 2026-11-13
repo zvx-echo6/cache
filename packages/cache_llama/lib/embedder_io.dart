@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'cache_llama_bindings.dart';
 
@@ -39,83 +40,126 @@ class CacheEmbedder {
   Isolate? _isolate;
   SendPort? _toWorker;
   ReceivePort? _fromWorker;
+  ReceivePort? _errors;
+  ReceivePort? _exits;
   Completer<void>? _ready;
   int _nextId = 1;
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};
   Timer? _idle;
 
+  /// The worker's entry point; tests give a stand-in.
+  @visibleForTesting
+  void Function(SendPort toMain) workerEntry = _embedWorker;
+
+  /// How long [dispose] waits for the worker to say the model is let go before it ends the worker anyway.
+  @visibleForTesting
+  Duration freeTimeout = const Duration(seconds: 5);
+
   Future<void> _ensureWorker() async {
     if (_ready != null) return _ready!.future;
-    _ready = Completer<void>();
-    final rp = ReceivePort();
-    _fromWorker = rp;
+    final ready = _ready = Completer<void>();
+    final rp = _fromWorker = ReceivePort();
     rp.listen((dynamic m) {
       if (m is SendPort) {
         _toWorker = m;
-        _ready!.complete();
+        if (!ready.isCompleted) ready.complete();
         return;
       }
       final msg = (m as Map).cast<String, dynamic>();
       _pending.remove(msg['id'])?.complete(msg);
     });
-    final errors = ReceivePort();
-    errors.listen((dynamic e) {
-      for (final c in _pending.values) {
-        c.complete({'error': 'The embedding engine crashed: ${(e as List).first}'});
-      }
-      _pending.clear();
-    });
-    _isolate = await Isolate.spawn(_embedWorker, rp.sendPort, debugName: 'cache_embed', onError: errors.sendPort);
-    return _ready!.future;
+    // A worker that throws or ends (before or after it is ready) fails what waits on it, and the next call starts a new one.
+    final errors = _errors = ReceivePort();
+    errors.listen((dynamic e) => _lost(ready, 'The embedding engine crashed: ${e is List && e.isNotEmpty ? e.first : e}'));
+    final exits = _exits = ReceivePort();
+    exits.listen((_) => _lost(ready, 'The embedding engine stopped'));
+    try {
+      _isolate = await Isolate.spawn(workerEntry, rp.sendPort,
+          debugName: 'cache_embed', onError: errors.sendPort, onExit: exits.sendPort, errorsAreFatal: true);
+    } catch (e) {
+      _lost(ready, 'The embedding engine did not start: $e');
+    }
+    return ready.future;
   }
 
-  /// The normalised vector of [text]. Throws a [StateError] with the reason when the model cannot load or embed.
-  Future<List<double>> embed(String text) async {
+  /// The worker of [ready] is gone: what waits on it gets [reason], and the state is cleared so the next call starts a new worker.
+  void _lost(Completer<void> ready, String reason) {
+    if (!identical(ready, _ready)) return; // an earlier worker, already replaced
+    if (!ready.isCompleted) ready.completeError(StateError(reason));
+    for (final c in _pending.values) {
+      c.complete({'error': reason});
+    }
+    _pending.clear();
+    _idle?.cancel();
+    _fromWorker?.close();
+    _errors?.close();
+    _exits?.close();
+    _isolate = null;
+    _toWorker = null;
+    _fromWorker = null;
+    _errors = null;
+    _exits = null;
+    _ready = null;
+  }
+
+  /// Sends [msg] with a new id and waits for the worker's reply.
+  Future<Map<String, dynamic>> _call(Map<String, dynamic> msg) async {
     await _ensureWorker();
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
     _pending[id] = c;
+    _toWorker!.send({...msg, 'id': id});
+    return c.future;
+  }
+
+  /// The normalised vector of [text]. Throws a [StateError] with the reason when the model cannot load or embed.
+  Future<List<double>> embed(String text) async {
     _idle?.cancel();
     final clock = Stopwatch()..start();
-    _toWorker!.send({'type': 'embed', 'id': id, 'path': modelPath, 'threads': threads, 'text': text});
-    final r = await c.future;
+    final r = await _call({'type': 'embed', 'path': modelPath, 'threads': threads, 'text': text});
     // Measurement: the round trip here, and the time the worker spent around the native call (sent back in the reply).
     if (r['workerMs'] != null) onTiming?.call('Embed: worker ${r['workerMs']} ms, round trip ${clock.elapsedMilliseconds} ms');
-    if (!keepLoaded) _idle = Timer(idleFor, free);
+    _armIdle();
     if (r['error'] != null) throw StateError(r['error'] as String);
     return (r['vector'] as TransferableTypedData).materialize().asFloat32List().toList();
   }
 
   /// Loads the model now, without embedding anything. Throws a [StateError] with the reason when it cannot load.
   Future<void> warm() async {
-    await _ensureWorker();
-    final id = _nextId++;
-    final c = Completer<Map<String, dynamic>>();
-    _pending[id] = c;
     _idle?.cancel();
-    _toWorker!.send({'type': 'load', 'id': id, 'path': modelPath, 'threads': threads});
-    final r = await c.future;
-    if (!keepLoaded) _idle = Timer(idleFor, free);
+    final r = await _call({'type': 'load', 'path': modelPath, 'threads': threads});
+    _armIdle();
     if (r['error'] != null) throw StateError(r['error'] as String);
   }
 
-  /// Lets the model go (the next [embed] loads it again).
-  void free() {
+  void _armIdle() {
     _idle?.cancel();
-    _toWorker?.send({'type': 'free'});
+    if (!keepLoaded && _ready != null) _idle = Timer(idleFor, free);
   }
 
-  /// Frees the model and ends the background isolate.
+  /// Lets the model go (the next [embed] loads it again).
+  void free() => unawaited(_free());
+
+  /// [free], completing once the worker has let the model go (at once when no worker runs).
+  Future<void> _free() async {
+    _idle?.cancel();
+    if (_toWorker == null) return;
+    try {
+      await _call({'type': 'free'});
+    } on StateError {
+      // The worker is gone, and the model with it.
+    }
+  }
+
+  /// Frees the model, waits (at most [freeTimeout]) until the worker says it is let go, and ends the background isolate.
   Future<void> dispose() async {
     _idle?.cancel();
-    _toWorker?.send({'type': 'free'});
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final ready = _ready;
+    if (_toWorker != null) {
+      await _free().timeout(freeTimeout, onTimeout: () {});
+    }
     _isolate?.kill(priority: Isolate.beforeNextEvent);
-    _fromWorker?.close();
-    _isolate = null;
-    _toWorker = null;
-    _fromWorker = null;
-    _ready = null;
+    if (ready != null) _lost(ready, 'The embedding engine was closed');
   }
 }
 
@@ -185,6 +229,7 @@ void _embedWorker(SendPort toMain) {
           b.clEmbedFree(handle);
           handle = nullptr;
         }
+        if (msg['id'] != null) toMain.send({'id': msg['id']});
     }
   });
 }

@@ -1,0 +1,87 @@
+# Puts a versionCode that is already on Google Play onto other testing tracks (for example internal -> alpha) without building or
+# uploading anything. Manual trigger only. It opens one edit, checks the versionCode is a completed release on from_track, that
+# no to track is from_track, that open testing and production are only named once Google's Android Auto car review has passed
+# (every store build carries Android Auto), and that the notes are 1 to 500 characters (empty = the en-US notes of the release
+# on from_track are carried over). It puts the release on each to track, prints every track before and in the edit, and commits,
+# then reads the to tracks back. With dry_run (on by default) the edit is deleted and nothing is committed.
+# PLAY_SERVICE_ACCOUNT_JSON is the Google Play Developer API service account. Every input goes in through env, never into the
+# script text.
+name: Android Play promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: versionCode already on Play (for example 31)
+        type: string
+        required: true
+      from_track:
+        description: Track that has the release, completed (internal = internal testing, alpha = closed testing, beta = open testing)
+        type: string
+        default: internal
+      to_tracks:
+        description: Tracks to put it on, comma separated
+        type: string
+        default: alpha
+      release_notes:
+        description: Release notes (en-US, at most 500 characters); empty = carried over from the release on from_track
+        type: string
+        default: ''
+      status:
+        description: Release status (completed = fully rolled out and alone on each track; draft = not sent)
+        type: choice
+        options: [completed, draft]
+        default: completed
+      car_review_passed:
+        description: Tick only after Google's Android Auto review has passed (needed to name beta or production)
+        type: boolean
+        default: false
+      dry_run:
+        description: Dry run (check and show what would change, commit nothing)
+        type: boolean
+        default: true
+  # Only so GitHub lists this workflow while it is not on the default branch (a manual run needs that): a push builds nothing.
+  push:
+    branches: [android-play-promote]
+
+concurrency:
+  group: android-play
+  cancel-in-progress: false
+
+env:
+  PACKAGE_NAME: com.happylittlellc.cache
+
+jobs:
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            app/android/play_release.py
+            app/android/play_release_test.py
+      - name: The upload script's tests (a fake Play)
+        run: python3 -I app/android/play_release_test.py
+      - name: Check upload configuration
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [[ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]]; then echo "::error::Missing required secret: PLAY_SERVICE_ACCOUNT_JSON"; exit 1; fi
+          echo "Required configuration is present (secret values are not logged)."
+      - name: Promote on Google Play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          FROM_TRACK: ${{ inputs.from_track }}
+          TO_TRACKS: ${{ inputs.to_tracks }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_STATUS: ${{ inputs.status }}
+          CAR_REVIEW_PASSED: ${{ inputs.car_review_passed && 'true' || 'false' }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          args=()
+          if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          python3 -I app/android/play_release.py --promote "$(printf '%s' "$VERSION_CODE" | tr -d '[:space:]')" \
+            "$(printf '%s' "$FROM_TRACK" | tr -d '[:space:]')" "$(printf '%s' "$TO_TRACKS" | tr -d '[:space:]')" "${args[@]}"

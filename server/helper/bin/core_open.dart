@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import '../../../app/lib/search/core_config.dart';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/models.dart';
+import 'guide_install.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
 
@@ -17,17 +19,22 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
 
-  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart); null in tests.
+  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart, and the keystore giving the
+  /// engine its web search settings again; the helper's main runs both); null in tests.
   final void Function()? onOpened;
 
   /// Starts the index jobs of the sources just opened (null in tests that do not index).
   final IndexDriver? indexer;
+
+  /// Installs the guide library after the core is open, when the sources are found on disk rather than given by a sources.json
+  /// (null: no guide package on this server, or a test).
+  final GuideInstaller? guide;
 
   @override
   bool handles(String op) => op == 'open';
@@ -44,13 +51,16 @@ class OpenOp implements OpHandler {
       log?.call('sources: ${sources.length} found in ${dirs.docs.path}/zims and /libraries');
     }
     final extra = serverCoreExtras(dirs);
-    log?.call('skipped on the server for now: ICU data install, starter map layers');
+    log?.call('skipped on the server for now: ICU data install');
     log?.call('core extras: ${(extra.keys.toList()..sort()).join(', ')}');
     final f = serverFeatures(extra);
     log?.call('road routing: shim ${(f['routing'] as Map)['shim']} ${(f['routing'] as Map)['available'] == true ? 'present' : 'missing (no road routing)'}; '
         'places: ${(f['places'] as Map)['available'] == true ? 'present' : 'none downloaded'}');
     dispatcher.handle('open', {'sources': sources, 'extra': extra});
     indexer?.useSources(sources);
+    final g = guide;
+    // A sources.json is the operator's own list: the guide is not added to it.
+    if (g != null && given is! List) unawaited(g.ensure());
     onOpened?.call();
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
@@ -105,13 +115,39 @@ class IndexStateOp implements OpHandler {
   Object? handle(String op, Map<String, dynamic> a) => {
         for (final e in indexer.progress.entries) e.key: {'fraction': e.value, 'error': null},
         for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
+        // Only while the host holds index work: why ("heat" or "memory"), under a key no source path can be.
+        if (indexer.hold != null) 'hold': {'fraction': null, 'error': null, 'hold': indexer.hold},
       };
 }
 
-/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), and the full path of the Valhalla shim
-/// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library).
+/// The helper's `index.pause`, which a browser may call through `/api/core`: the Catalog's Pause and Resume for the server's index
+/// work. `{"paused": true}` pauses, `{"paused": false}` resumes, no `paused` only reads. Replies `{"paused": bool, "busy": bool}`:
+/// `busy` is whether there is index work (running, waiting, or held by the pause).
+class IndexPauseOp implements OpHandler {
+  IndexPauseOp(this.indexer);
+
+  final IndexDriver indexer;
+
+  @override
+  bool handles(String op) => op == 'index.pause';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) {
+    switch (a['paused']) {
+      case true:
+        indexer.pause();
+      case false:
+        indexer.resume();
+    }
+    return {'paused': indexer.paused, 'busy': indexer.hasWork};
+  }
+}
+
+/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), the full path of the Valhalla shim
+/// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library) and the server's data folder
+/// (CACHE_DATA: the sharing host keeps the sync engine's identity and the Bookshelves log there).
 class AppDirs {
-  AppDirs(this.support, this.docs, {this.shim});
+  AppDirs(this.support, this.docs, {this.shim, this.data});
 
   final Directory support;
   final Directory docs;
@@ -119,11 +155,14 @@ class AppDirs {
   /// The shim's full path; null when the server gave none (then the bare name, which the core cannot route with).
   final String? shim;
 
+  /// `<data>`, when the server gave it (without it the helper runs no sharing host).
+  final Directory? data;
+
   /// From the environment; null when either folder is missing.
   static AppDirs? fromEnvironment(Map<String, String> env) {
-    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'], v = env['CACHE_VALHALLA_SHIM'];
+    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'], v = env['CACHE_VALHALLA_SHIM'], data = env['CACHE_DATA'];
     if (s == null || s.isEmpty || d == null || d.isEmpty) return null;
-    return AppDirs(Directory(s), Directory(d), shim: (v == null || v.isEmpty) ? null : v);
+    return AppDirs(Directory(s), Directory(d), shim: (v == null || v.isEmpty) ? null : v, data: (data == null || data.isEmpty) ? null : Directory(data));
   }
 }
 

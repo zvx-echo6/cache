@@ -230,7 +230,7 @@ class ElevationChartPainter extends CustomPainter {
 
     // The steepest climb ahead.
     final s = steep;
-    if (full && s != null) {
+    if (s != null) {
       final ps = <Offset>[];
       for (var m = s.startM; m <= s.endM + 0.1; m += math.max(10, (s.endM - s.startM) / 40)) {
         final e = profile.elevationAt(math.min(m, s.endM));
@@ -382,23 +382,15 @@ class ElevationPanel extends StatelessWidget {
         textBaseline: TextBaseline.alphabetic,
         children: [
           Expanded(child: Text('Elevation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: k.text))),
-          if (p != null && p.hasData) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+          if (p != null && p.chartable) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
         ],
       ),
     );
     final Widget body;
-    if (p == null) {
-      body = Padding(
-        padding: const EdgeInsets.only(top: 6, bottom: 4),
-        child: Row(
-          children: [
-            SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: k.secondary)),
-            const SizedBox(width: 10),
-            Text('Reading the elevation', style: TextStyle(fontSize: 16, color: k.secondary)),
-          ],
-        ),
-      );
-    } else if (!p.hasData) {
+    if (p == null || (!p.hasData && elevation.loading)) {
+      // Nothing read yet: the frame of the chart (the room it will take), no message and no spinner.
+      body = const SizedBox(key: ValueKey('elevation-frame'), height: 142);
+    } else if (!p.chartable) {
       body = Padding(
         padding: const EdgeInsets.only(top: 10, bottom: 4),
         child: Row(
@@ -412,7 +404,7 @@ class ElevationPanel extends StatelessWidget {
       );
     } else {
       final pos = elevation.positionOnProfile(distanceAlongM, routeM);
-      final steep = p.steepestClimbAhead(pos ?? 0);
+      final steep = elevation.climbAhead(pos ?? 0);
       Widget stat(IconData icon, String big, String small) => Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -482,16 +474,21 @@ class ElevationPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              stat(Icons.arrow_upward, elevationText(fmt, p.climbM), 'Climb'),
-              const SizedBox(width: 12),
-              stat(Icons.arrow_downward, elevationText(fmt, p.descentM), 'Descent'),
-            ],
+          // The totals are of the whole route: not drawn (the room is kept) while the chunks are still coming, so no number is
+          // ever seen growing.
+          Opacity(
+            opacity: elevation.loading ? 0 : 1,
+            child: Row(
+              children: [
+                stat(Icons.arrow_upward, elevationText(fmt, p.climbM), 'Climb'),
+                const SizedBox(width: 12),
+                stat(Icons.arrow_downward, elevationText(fmt, p.descentM), 'Descent'),
+              ],
+            ),
           ),
           const SizedBox(height: 6),
           ElevationChart(key: const ValueKey('elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 142, positionM: pos, steep: steep),
-          if (p.partial)
+          if (p.partial && !elevation.loading)
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(missingText(fmt, p), key: const ValueKey('elevation-missing'), style: TextStyle(fontSize: 13, color: k.secondary)),
@@ -500,12 +497,12 @@ class ElevationPanel extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2, bottom: 6),
             child: Column(
               children: [
-                if (p.highest case final h?) fact(dotKey, 9, 'Highest', elevationText(fmt, h.elevM), ' at ${markerText(fmt, h.distM)}'),
-                if (p.lowest case final lw?) fact(dotKey, 9, 'Lowest', elevationText(fmt, lw.elevM), ' at ${markerText(fmt, lw.distM)}'),
+                if (!elevation.loading && p.highest != null) fact(dotKey, 9, 'Highest', elevationText(fmt, p.highest!.elevM), ' at ${markerText(fmt, p.highest!.distM)}'),
+                if (!elevation.loading && p.lowest != null) fact(dotKey, 9, 'Lowest', elevationText(fmt, p.lowest!.elevM), ' at ${markerText(fmt, p.lowest!.distM)}'),
                 if (steep != null)
                   fact(steepKey, 16, 'Steepest climb ahead', '${(steep.grade * 100).round()}%', ' for ${fmt.distance(steep.lengthM)}$where', rowKey: const ValueKey('elevation-steep'))
                 else
-                  fact(steepKey, 16, 'Steepest climb ahead', '', 'None', rowKey: const ValueKey('elevation-steep')),
+                  fact(steepKey, 16, 'Steepest climb ahead', '', elevation.loading ? '' : 'None', rowKey: const ValueKey('elevation-steep')),
               ],
             ),
           ),
@@ -576,12 +573,12 @@ class RouteElevationSummary extends StatelessWidget {
     final p = elevation.profile;
     final head = <Widget>[Expanded(child: Text('Elevation', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.secondary)))];
     final children = <Widget>[];
-    if (p == null) {
+    if (p == null || elevation.loading) {
       children.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('Reading the elevation', style: TextStyle(fontSize: 14, color: k.secondary)),
       ));
-    } else if (!p.hasData) {
+    } else if (!p.chartable) {
       children.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('No elevation data for this route.', key: const ValueKey('preview-elevation-none'), style: TextStyle(fontSize: 14, color: k.secondary)),

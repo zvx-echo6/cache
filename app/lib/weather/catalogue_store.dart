@@ -8,6 +8,7 @@ import '../net/fetch.dart' as net;
 import '../platform.dart' as plat;
 import 'catalogue.dart';
 import 'connector.dart';
+import 'weather_files.dart';
 
 /// The answer to an address: the bytes. Throws [NetworkProblem] when the address cannot be read.
 typedef FetchBytes = Future<List<int>> Function(Uri url);
@@ -112,57 +113,59 @@ class CatalogueLoader {
 /// Catalogues kept on the phone, one folder each: the catalogue.json, its definitions and a note of what was left out. A new copy
 /// replaces the old one whole; removing a catalogue removes its folder.
 class CatalogueStore {
-  CatalogueStore(this.root);
+  CatalogueStore(Directory root) : files = IoFiles(root), _root = root;
 
-  final Directory root;
+  /// The folder kept in a browser: on Cache Server, reached through [WeatherFiles].
+  CatalogueStore.files(this.files) : _root = null;
+
+  /// Where the catalogues and the small files beside them (the saved places, what was last shown) are kept.
+  final WeatherFiles files;
+  final Directory? _root;
+
+  /// The folder on a phone; a browser keeps its files on the server and has none.
+  Directory get root => _root ?? (throw UnsupportedError('The catalogues are kept on Cache Server'));
 
   String folderOf(String url) => sha256.convert(utf8.encode(url)).toString().substring(0, 12);
 
-  Directory _dir(String url) => Directory('${root.path}/${folderOf(url)}');
-
   /// Replaces what is kept for [loaded.url] with [loaded].
   void save(LoadedCatalogue loaded) {
-    root.createSync(recursive: true);
-    final fresh = Directory('${_dir(loaded.url).path}.new');
-    if (fresh.existsSync()) fresh.deleteSync(recursive: true);
-    Directory('${fresh.path}/defs').createSync(recursive: true);
-    File('${fresh.path}/catalogue.json').writeAsStringSync(jsonEncode(_catalogueJson(loaded.catalogue)));
+    files.makeFolder('');
+    final dir = folderOf(loaded.url);
+    final fresh = '$dir.new';
+    if (files.exists(fresh)) files.delete(fresh);
+    files.makeFolder('$fresh/defs');
+    files.write('$fresh/catalogue.json', jsonEncode(_catalogueJson(loaded.catalogue)));
     for (final e in loaded.definitions.entries) {
-      File('${fresh.path}/defs/${e.key}.json').writeAsStringSync(e.value);
+      files.write('$fresh/defs/${e.key}.json', e.value);
     }
-    File('${fresh.path}/meta.json').writeAsStringSync(jsonEncode({
+    files.write('$fresh/meta.json', jsonEncode({
       'url': loaded.url,
       'fetched_at': loaded.fetchedAt.toIso8601String(),
       'skipped': loaded.skipped,
     }));
-    final old = _dir(loaded.url);
-    if (old.existsSync()) old.deleteSync(recursive: true);
-    fresh.renameSync(old.path);
+    if (files.exists(dir)) files.delete(dir);
+    files.rename(fresh, dir);
   }
 
-  void remove(String url) {
-    final d = _dir(url);
-    if (d.existsSync()) d.deleteSync(recursive: true);
-  }
+  void remove(String url) => files.delete(folderOf(url));
 
   /// Every catalogue kept, read back from disk.
   List<LoadedCatalogue> loadAll() {
-    if (!root.existsSync()) return [];
     final out = <LoadedCatalogue>[];
-    for (final d in root.listSync().whereType<Directory>()) {
-      if (d.path.endsWith('.new')) {
+    for (final d in files.folders('')) {
+      if (d.endsWith('.new')) {
         try {
-          d.deleteSync(recursive: true);
+          files.delete(d);
         } catch (_) {}
         continue;
       }
       try {
-        final meta = jsonDecode(File('${d.path}/meta.json').readAsStringSync()) as Map<String, dynamic>;
-        final cat = Catalogue.parse(File('${d.path}/catalogue.json').readAsStringSync());
+        final meta = jsonDecode(files.read('$d/meta.json')!) as Map<String, dynamic>;
+        final cat = Catalogue.parse(files.read('$d/catalogue.json')!);
         final defs = <String, String>{};
         for (final e in cat.entries) {
-          final f = File('${d.path}/defs/${e.id}.json');
-          if (f.existsSync()) defs[e.id] = f.readAsStringSync();
+          final text = files.read('$d/defs/${e.id}.json');
+          if (text != null) defs[e.id] = text;
         }
         out.add(LoadedCatalogue(
           url: meta['url'] as String,

@@ -3,6 +3,9 @@
 # "Family" group for a test build (an internal group that gets every build: export compliance and "What to test", no beta review).
 # Manual trigger only: macOS runner minutes cost about 10x Linux on a private repo.
 #
+# The car screen (CarPlay) is off unless `carplay` is ticked: the app then has no CarPlay entitlement and CarPlay never shows it
+# (check-app.sh refuses a signed app whose entitlement does not match the tick box).
+#
 # Signing: a distribution certificate and an App Store provisioning profile made with the App Store Connect API (the account has no
 # registered devices, so Xcode's automatic development signing cannot work headless). They live only in the Actions secrets
 # IOS_DIST_P12_B64, IOS_DIST_P12_PASSWORD and IOS_PROFILE_B64. ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_B64 are the API key (upload).
@@ -38,6 +41,10 @@ on:
         type: choice
         options: [Public, Family]
         default: Public
+      carplay:
+        description: Build with the car screen (CarPlay) on. Its icon then shows on the CarPlay screen of everyone who has the build
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-testflight-${{ github.run_id }}
@@ -96,6 +103,30 @@ jobs:
             done
           fi
           echo "Required configuration is present (secret values are not logged)."
+      # The car screen (CarPlay), input `carplay`: the build then claims the CarPlay entitlement (CACHE_CARPLAY=YES picks
+      # Runner/RunnerCarPlay.entitlements). Settled here, before any Mac minutes: the profile must carry the entitlement (an app
+      # that claims one its profile lacks does not sign). The build goes to whichever group is chosen: the car screen is part
+      # of the one build every tester gets.
+      - name: The car screen build's profile carries the CarPlay entitlement
+        if: inputs.carplay && inputs.stage == 'all'
+        env:
+          IOS_PROFILE_B64: ${{ secrets.IOS_PROFILE_B64 }}
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          echo "$IOS_PROFILE_B64" | base64 -d > "$work/profile.mobileprovision"
+          if ! openssl smime -inform der -verify -noverify -in "$work/profile.mobileprovision" -out "$work/profile.plist" 2> /dev/null; then
+            echo "::warning::The profile could not be read here; the Mac job checks it again before it archives."
+            exit 0
+          fi
+          python3 -I - "$work/profile.plist" <<'PY'
+          import plistlib, sys
+          entitlements = plistlib.load(open(sys.argv[1], "rb")).get("Entitlements", {})
+          if entitlements.get("com.apple.developer.carplay-maps") is not True:
+              print("::error::The provisioning profile does not carry com.apple.developer.carplay-maps: a build with the car screen on cannot be signed with it.")
+              sys.exit(1)
+          print("The profile carries the CarPlay entitlement (its contents are not logged).")
+          PY
       # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and build number 31, the same on iPhone and
       # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
       # version are two builds), so it is not tied to the version's last number. It is the build number TestFlight gets (not the run
@@ -336,19 +367,25 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
           cp "$RUNNER_TEMP/cache.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "profile: $(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist") $UUID"
+          if [[ "${{ inputs.carplay }}" == true ]]; then
+            [[ $(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.carplay-maps' "$RUNNER_TEMP/profile.plist" 2>/dev/null) == true ]] \
+              || { rm -f "$RUNNER_TEMP/profile.plist"; echo "::error::The profile does not carry the CarPlay entitlement: the car screen build cannot be signed."; exit 1; }
+          fi
           rm -f "$RUNNER_TEMP/profile.plist"
       - name: Archive
         working-directory: app/ios
         run: |
           set -o pipefail
+          # The car screen: CACHE_CARPLAY (NO in the project) writes Info.plist's CacheCarPlay and picks the entitlements file.
           xcodebuild archive \
             -workspace Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            CACHE_CARPLAY=${{ inputs.carplay && 'YES' || 'NO' }} \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
       - name: Verify the signed archive
         run: |
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
       - name: Export the .ipa
         run: |
@@ -379,7 +416,7 @@ jobs:
           shasum -a 256 out/*.ipa
           mkdir "$RUNNER_TEMP/ipa-check"
           unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
           rm -rf "$RUNNER_TEMP/ipa-check"
       - uses: actions/upload-artifact@v4

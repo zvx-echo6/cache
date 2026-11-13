@@ -36,6 +36,9 @@ No data, library content or language model ships inside Cache. The maps, library
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
 - OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
 - MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
+- Tesseract (reads scanned PDF pages in the library builder of Cache for Linux; the 5.0.0-alpha snapshot inside MuPDF 1.27.2, built in and linked statically): Apache-2.0, Copyright Hewlett-Packard, Google and the Tesseract contributors. https://github.com/tesseract-ocr/tesseract
+- Leptonica 1.85.0 (image handling inside Tesseract, built in and linked statically): BSD-2-Clause, Copyright Dan Bloomberg. http://www.leptonica.org
+- Tesseract English trained data (eng.traineddata from tessdata_fast 4.1.0, shipped in lib/tessdata of Cache for Linux): Apache-2.0, Copyright the Tesseract contributors. https://github.com/tesseract-ocr/tessdata_fast (the notice is at lib/tessdata/OCR-NOTICE.txt in the package)
 - PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType License), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library License 2), zlib (zlib license), libtiff (libtiff license), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode License v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - Google ML Kit text recognition (reads scanned PDF pages on Android when a PDF is added, through the cache_ocr package; com.google.mlkit:text-recognition 16.0.1 with its bundled Latin model, nothing downloaded at run time): used under the ML Kit Terms of Service, Copyright Google LLC. https://developers.google.com/ml-kit/terms
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
@@ -168,6 +171,8 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - petitparser 7.0.2: MIT (Copyright (c) 2006-2024 Lukas Renggli.)
 - platform 3.2.0: BSD-3-Clause (Copyright 2017, the Dart project authors. All rights reserved.)
 - plugin_platform_interface 2.1.8: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- pointer_interceptor_platform_interface 0.10.0+1: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- pointer_interceptor_web 0.10.3: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - posix 6.5.2: MIT (Copyright (c) 2020 Brett Sutton)
 - process 5.0.6: BSD-3-Clause (Copyright 2013, the Dart project authors.)
 - pub_semver 2.2.1: BSD-3-Clause (Copyright 2014, the Dart project authors.)

@@ -20,6 +20,8 @@ import 'sources_state.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
+export '../sharing/share_rules.dart' show kLibraryNotShared;
+
 /// The settings file of a library (docs/LIBRARY-FORMAT.md): inside a .cache-library archive, and beside the library here.
 const String kLibrarySettingsFile = 'cache-library.json';
 
@@ -31,14 +33,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-11-11';
-
-/// What a library folder holds that never syncs with the libraries folder (see DataKind.notShared): its old keyword index
-/// ([LibraryItem.indexPath]). Library indexes now build into the indexes folder and sync from there as snapshots
-/// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
-/// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
-/// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
+const String kGuideVersion = '2026-11-12';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without

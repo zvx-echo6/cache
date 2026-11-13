@@ -42,10 +42,11 @@ use classify::{call_letters, Classes, ModelStore, Suggestion};
 use filing::decision_view;
 use removed::RemovedEntry;
 use same::{Match, Quality};
-use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
+use crate::library::{dir_bytes, free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
+use cache_builder::ocr::OcrSettings;
 use cache_shelves::events::{By, How};
 use cache_builder::pack::{read_pack, write_pack, Pack, Suggested};
 use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
@@ -69,6 +70,9 @@ pub mod linked_source;
 pub mod linked_registry;
 pub mod linked_api;
 pub mod linked_checks;
+pub mod linked_watch;
+pub mod linked_auto;
+pub mod linked_where;
 pub mod removed;
 pub mod same;
 pub mod shelves_api;
@@ -202,6 +206,16 @@ impl S {
 pub enum Origin {
     Upload,
     Drop,
+    /// A PDF in a linked folder, read in place: never copied, moved or changed (see [`linked_auto`]).
+    Linked,
+}
+
+/// Where a linked PDF is: the registered folder, the path inside it, and the BLAKE3 the check recorded.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LinkedSource {
+    pub root: String,
+    pub rel: String,
+    pub blake3: String,
 }
 
 /// One book in the queue, as it is kept in `queue.json`.
@@ -232,6 +246,9 @@ pub struct Item {
     pub pieces_total: Option<u32>,
     #[serde(default)]
     pub ocr_pages: u32,
+    /// While scanned pages are being read by OCR (state `reading`, `ocr_pages` is how many there are): how many are done.
+    #[serde(default)]
+    pub ocr_done: u32,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
@@ -269,6 +286,9 @@ pub struct Item {
     pub finished_at: Option<String>,
     #[serde(default)]
     pub finished_epoch: Option<u64>,
+    /// For a linked-folder PDF (`Origin::Linked`): where to read it in place.
+    #[serde(default)]
+    pub linked: Option<LinkedSource>,
 }
 
 impl Item {
@@ -289,6 +309,7 @@ impl Item {
             pieces_done: 0,
             pieces_total: None,
             ocr_pages: 0,
+            ocr_done: 0,
             error: None,
             note: None,
             doc_id: None,
@@ -304,6 +325,7 @@ impl Item {
             started_at: None,
             finished_at: None,
             finished_epoch: None,
+            linked: None,
         }
     }
 }
@@ -491,6 +513,9 @@ pub struct BuildService {
     stopping: AtomicBool,
     /// How PDFs are read: in a child process, so a PDF that crashes MuPDF fails its own book and never the service.
     extractor: Mutex<ChildExtractor>,
+    /// Where the OCR's trained data is, when this installation has it: pages with no text layer are then read by OCR (`None`: a
+    /// scan ends as `ocr_needed`). Set by the server at start from the install folder (`cache_builder::ocr::OcrSettings::discover`).
+    ocr: Mutex<Option<OcrSettings>>,
     pub(crate) removed: Mutex<Vec<RemovedEntry>>,
     class_cache: Mutex<ClassCache>,
     /// The classifier model files in `<data>/models/`.
@@ -660,6 +685,7 @@ impl BuildService {
                 it.pieces_done = 0;
                 it.pieces_total = None;
                 it.ocr_pages = 0;
+                it.ocr_done = 0;
             }
         }
         let drop = dropdir::DropState::load(&data);
@@ -691,6 +717,7 @@ impl BuildService {
             drop,
             stopping: AtomicBool::new(false),
             extractor: Mutex::new(default_extractor(data_for_tmp)),
+            ocr: Mutex::new(None),
             removed: Mutex::new(removed::load(&data_for_removed)),
             class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()) }),
             models: ModelStore::new(&data_for_models),
@@ -716,11 +743,17 @@ impl BuildService {
         *lock(&self.extractor) = e;
     }
 
-    /// Start the build thread and the drop-folder thread.
+    /// Turn OCR on (the settings of the trained data) or off (`None`).
+    pub fn set_ocr(&self, s: Option<OcrSettings>) {
+        *lock(&self.ocr) = s;
+    }
+
+    /// Start the build thread, the drop-folder thread and the linked-folder scheduler.
     pub fn start(self: &Arc<Self>) {
         let me = self.clone();
         std::thread::spawn(move || me.worker_loop());
         dropdir::start(self);
+        linked_auto::start(self);
     }
 
     /// Ask the threads to end (used by tests and at shutdown). A book being worked on when the service is stopped on purpose
@@ -961,10 +994,23 @@ impl BuildService {
 
     /// Read, check, extract, embed and store one book.
     fn process(&self, item: &Item) -> Outcome {
-        let bytes = match std::fs::read(&item.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && item.origin == Origin::Drop => return Outcome::Gone,
-            Err(e) => return Outcome::Failed(format!("The file could not be read: {e}")),
+        let bytes = if item.origin == Origin::Linked {
+            // Read in place, once, through one handle. A file that is still changing, or is not the one that was checked, is
+            // dropped from the queue; the next automatic check finds it again once it is stable.
+            let Some(src) = &item.linked else { return Outcome::Gone };
+            match linked_source::read_stable(Path::new(&src.root), &src.rel, &src.blake3) {
+                Ok(b) => b,
+                Err(why) => {
+                    eprintln!("cache: linked PDF {} not read now ({why}); it will be tried again when it is stable", src.rel);
+                    return Outcome::Gone;
+                }
+            }
+        } else {
+            match std::fs::read(&item.path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && item.origin == Origin::Drop => return Outcome::Gone,
+                Err(e) => return Outcome::Failed(format!("The file could not be read: {e}")),
+            }
         };
         let mut bytes = bytes;
         let mut hash = blake3::hash(&bytes).to_hex().to_string();
@@ -987,7 +1033,12 @@ impl BuildService {
         // Compress first (in the crash-proof child, with the reading limits), then hash and keep the file that is stored: the
         // bookshelf hash, the pack's source hash and the device copy all refer to it. Reading (text, pages, resolution) is done on
         // that same file, so page numbers and the "better copy" comparison see what is really kept.
-        let choice = item.compression.unwrap_or_else(|| if item.origin == Origin::Drop { self.drop_compression() } else { Compression::OFF });
+        // A linked book is never compressed, whatever the item says: no copy is kept and the person's own file is never touched.
+        let choice = if item.origin == Origin::Linked {
+            Compression::OFF
+        } else {
+            item.compression.unwrap_or_else(|| if item.origin == Origin::Drop { self.drop_compression() } else { Compression::OFF })
+        };
         let mut compression: Option<CompressionOutcome> = None;
         let mut original_hash: Option<String> = None;
         if choice.level != Level::Off {
@@ -1023,6 +1074,7 @@ impl BuildService {
         let mut seen_text: Option<(usize, usize)> = None;
         let id = item.id.clone();
         let extractor = lock(&self.extractor).clone();
+        let ocr = lock(&self.ocr).clone();
         let result = build_pack_with_extractor(&bytes, &opts, &adapter, &mut |p| match p {
             Progress::Extracted { pages, pieces, ocr_pages } => {
                 seen_text = Some((pieces, ocr_pages));
@@ -1034,7 +1086,16 @@ impl BuildService {
                 });
             }
             Progress::Embedded { done, .. } => self.update_item(&id, |it| it.pieces_done = done as u32),
-        }, &|pdf| extractor.extract(pdf));
+        }, &|pdf| {
+            // Reading the PDF, then (when this installation has the OCR data) the pages with no text layer, a few at a time. The
+            // phase shows as "Reading scanned pages (OCR)": state `reading` with `ocr_pages` and `ocr_done` set.
+            extractor.extract_with_ocr(pdf, ocr.as_ref(), &mut |done, total| {
+                self.update_item(&id, |it| {
+                    it.ocr_pages = total as u32;
+                    it.ocr_done = done as u32;
+                })
+            })
+        });
         match result {
             Ok((mut pack, report)) => {
                 let mut replacing = replacing;
@@ -1081,7 +1142,8 @@ impl BuildService {
                     return Outcome::Failed(m);
                 }
                 match seen_text {
-                    Some((0, ocr)) if ocr > 0 => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {ocr} page(s) need OCR, which Cache cannot do yet.")),
+                    Some((0, n)) if n > 0 && ocr.is_some() => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {n} page(s) need OCR.")),
+                    Some((0, n)) if n > 0 => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {n} page(s) need OCR, which Cache cannot do yet.")),
                     _ => Outcome::Failed(friendly_error(&e.0)),
                 }
             }
@@ -1279,12 +1341,15 @@ impl BuildService {
             }
         };
         book.call_text = call_text;
-        let folder = cls.folder_rel(book.division.as_deref());
-        let dir = root.join(&folder);
-        std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
-        let name = dropdir::unique_name(&dir, &classify::file_name(&book.call_number(), &book.title));
-        write_bytes_atomic(&dir.join(&name), pdf).map_err(|e| io("keeping the PDF", e))?;
-        book.source_rel = Some(format!("{}/{}", folder.to_string_lossy().replace('\\', "/"), name));
+        // A linked original stays where it is: no copy is kept.
+        if item.origin != Origin::Linked {
+            let folder = cls.folder_rel(book.division.as_deref());
+            let dir = root.join(&folder);
+            std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
+            let name = dropdir::unique_name(&dir, &classify::file_name(&book.call_number(), &book.title));
+            write_bytes_atomic(&dir.join(&name), pdf).map_err(|e| io("keeping the PDF", e))?;
+            book.source_rel = Some(format!("{}/{}", folder.to_string_lossy().replace('\\', "/"), name));
+        }
         {
             let w = self.open_work(&item.library_id)?;
             w.upsert_pack(pack).map_err(|e| e.to_string())?;
@@ -1497,6 +1562,7 @@ impl BuildService {
                         it.pieces_done = 0;
                         it.pieces_total = None;
                         it.ocr_pages = 0;
+                        it.ocr_done = 0;
                     }
                     Outcome::Gone => next = Next::Remove,
                 }
@@ -1652,16 +1718,53 @@ impl BuildService {
         })
     }
 
-    /// `GET /api/build/libraries`.
+    /// `GET /api/build/libraries`. Each library carries `bytes`: what deleting it frees (see [`BuildService::library_bytes`]).
     pub fn libraries(&self) -> Value {
-        let st = lock(&self.st);
-        Value::Array(st.libs.iter().map(|m| self.lib_view(&st, m)).collect())
+        // The sizes are read after the state is let go, so a slow disk never holds up the queue.
+        let rows: Vec<(Value, Vec<PathBuf>)> = {
+            let st = lock(&self.st);
+            st.libs
+                .iter()
+                .map(|m| {
+                    let uploads = st.items.iter().filter(|i| i.library_id == m.id && i.origin == Origin::Upload).map(|i| PathBuf::from(i.path.clone())).collect();
+                    (self.lib_view(&st, m), uploads)
+                })
+                .collect()
+        };
+        Value::Array(
+            rows.into_iter()
+                .map(|(mut v, uploads)| {
+                    let id = v["id"].as_str().unwrap_or_default().to_string();
+                    v["bytes"] = json!(self.library_bytes(&id, &uploads));
+                    v
+                })
+                .collect(),
+        )
+    }
+
+    /// What deleting library `id` frees, in bytes: every file [`BuildService::delete_library`] removes. That is the library folder
+    /// (shard, keyword index, packs), the library's own work copy of the shard, the stored PDFs, the library's record and the
+    /// uploads still waiting in `uploads`. A library with no books yet is not 0 while any of these is on disk.
+    pub(crate) fn library_bytes(&self, id: &str, uploads: &[PathBuf]) -> u64 {
+        let file = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        dir_bytes(&self.live_dir(id))
+            + dir_bytes(&self.data.join("build/work").join(id))
+            + dir_bytes(&self.sources_root(id))
+            + file(self.meta_path(id).as_path())
+            + uploads.iter().map(|p| file(p.as_path())).sum::<u64>()
+    }
+
+    /// The two files removing book `b` deletes: its stored PDF and its pack. Does not touch the disk, so it is fine under the state
+    /// lock; the sizes are read after the lock is let go. The book's share of the shard and of the keyword index shrinks when the
+    /// library is published again; it cannot be measured, so it is not counted.
+    pub(crate) fn book_files(&self, lib: &str, b: &Book) -> (PathBuf, PathBuf) {
+        (self.source_of(lib, b), self.packs_dir(lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version)))
     }
 
     fn item_view(it: &Item, position: Option<usize>) -> Value {
         json!({
             "id": it.id, "library_id": it.library_id, "file_name": it.file_name, "title": it.title, "state": it.state, "size": it.size,
-            "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages},
+            "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages, "ocr_done": it.ocr_done},
             "error": it.error, "note": it.note, "replace": it.replace, "doc_id": it.doc_id, "duplicate_of": it.duplicate_of,
             "drop": it.origin == Origin::Drop, "position": position, "created_at": it.created_at, "started_at": it.started_at,
             "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
@@ -1801,6 +1904,7 @@ impl BuildService {
                 x.pieces_done = 0;
                 x.pieces_total = None;
                 x.ocr_pages = 0;
+                x.ocr_done = 0;
                 x.started_at = None;
                 x.finished_at = None;
                 x.finished_epoch = None;
@@ -1824,7 +1928,7 @@ impl BuildService {
             self.save_queue_locked(&st);
             it
         };
-        if it.state == S::NeedsDecision {
+        if it.state == S::NeedsDecision && it.origin != Origin::Linked {
             // the person leaves the copy out: it waits in Removed like any copy that was not kept
             let why = "Not added: you chose to leave it out";
             if self.to_removed(Path::new(&it.path), &it.file_name, why, if it.origin == Origin::Drop { "drop" } else { "upload" }, &it.library_id).is_err() && it.origin == Origin::Upload {
@@ -2012,6 +2116,7 @@ impl BuildService {
     /// `DELETE /api/build/libraries/{id}/books/{doc}`: the book's points, pack and PDF copy. The PDF the person gave is untouched.
     pub fn delete_book(&self, id: &str, doc: &str) -> Result<Value, ApiErr> {
         let _g = lock(&self.ops);
+        let mut deleted_hashes: Vec<String> = vec![];
         {
             let mut st = lock(&self.st);
             if st.items.iter().any(|i| i.library_id == id && i.state.working() && i.replace.as_deref() == Some(doc)) {
@@ -2019,6 +2124,8 @@ impl BuildService {
             }
             let m = st.libs.iter_mut().find(|l| l.id == id).ok_or_else(|| err(404, "not_found", "no such library"))?;
             let b = m.books.iter().find(|b| b.doc_id == doc).cloned().ok_or_else(|| err(404, "not_found", "no such book"))?;
+            deleted_hashes.push(b.blake3.clone());
+            deleted_hashes.extend(b.original_blake3.clone());
             m.books.retain(|x| x.doc_id != doc);
             m.pending_deletes.push(PendingDelete { doc_id: b.doc_id.clone(), doc_version: b.doc_version, pieces: b.pieces });
             m.dirty = true;
@@ -2032,6 +2139,7 @@ impl BuildService {
             }
             self.save_queue_locked(&st);
         }
+        self.remember_deleted(id, &deleted_hashes);
         self.apply_pending_deletes(id);
         if let Err(e) = self.update_copies(id, doc, None) {
             eprintln!("cache: writing the copies file: {e}");
@@ -2139,6 +2247,43 @@ impl BuildService {
         drop(st);
         self.poke();
         Ok(v)
+    }
+
+    /// The books of a library Cache builds, for a linked folder to match files against: `(blake3, doc_id, version, title)`. Both the
+    /// hash of the file as kept and the hash of the file as it arrived (before compression) are listed. `None` for any other
+    /// library (an imported one), which keeps matching against its own catalogue.
+    pub(crate) fn linked_catalog(&self, lib: &str) -> Option<Vec<(String, String, u32, String)>> {
+        let st = lock(&self.st);
+        let m = st.libs.iter().find(|l| l.id == lib)?;
+        let mut out = vec![];
+        for b in &m.books {
+            out.push((b.blake3.clone(), b.doc_id.clone(), b.doc_version, b.title.clone()));
+            if let Some(o) = &b.original_blake3 {
+                out.push((o.clone(), b.doc_id.clone(), b.doc_version, b.title.clone()));
+            }
+        }
+        Some(out)
+    }
+
+    /// Queue a linked PDF whose hash the library does not hold, to be built in place by the ordinary queue. Nothing is queued if
+    /// the same file (by hash) is already in the queue in any state, so a failed or waiting file is not retried every check.
+    /// Returns whether it was queued.
+    pub(crate) fn enqueue_linked(&self, lib: &str, root: &Path, rel: &str, blake3: &str) -> bool {
+        let path = root.join(rel);
+        if self.was_deleted(lib, blake3) {
+            return false; // the person deleted this book: its file in the folder never brings it back on its own
+        }
+        {
+            let st = lock(&self.st);
+            if st.items.iter().any(|i| i.library_id == lib && i.linked.as_ref().is_some_and(|l| l.blake3 == blake3)) {
+                return false;
+            }
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let name = Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string());
+        let mut item = Item::new(random_hex(), lib.to_string(), path.to_string_lossy().into_owned(), name, size, Origin::Linked);
+        item.linked = Some(LinkedSource { root: root.to_string_lossy().into_owned(), rel: rel.to_string(), blake3: blake3.to_string() });
+        self.enqueue(item).is_ok()
     }
 
     pub(crate) fn has_library(&self, id: &str) -> bool {

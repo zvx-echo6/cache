@@ -13,8 +13,7 @@ import 'formats.dart';
 import 'sync_engine.dart';
 import '../../platform/app_log.dart';
 
-/// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").
-const String kNotebookShareDir = 'notebook-share';
+export '../../sharing/share_rules.dart' show kNotebookShareDir;
 
 /// One connected folder: an Obsidian vault, a Logseq graph (two-way, or export-only for Logseq 2.x), or notebook sync's own
 /// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private
@@ -55,7 +54,11 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor});
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, DateTime Function()? clock})
+    : _now = clock ?? DateTime.now;
+
+  /// The time now: for the "Synced" line and for what each sync stamps (a fixed clock in tests and the guide's pictures).
+  final DateTime Function() _now;
 
   final NotebookState notebook;
 
@@ -283,6 +286,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
       importTag: t.tag,
+      clock: _now,
     );
     final sp = storePhoto;
     if (sp != null) e.storePhotoBytes = sp;
@@ -327,7 +331,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
               if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
             }
             final n = e.conflicts.length;
-            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';
+            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(_now())}';
           } on FileSystemException catch (x) {
             _status[t.id] = (x.osError?.errorCode == 28 || x.osError?.errorCode == 112) ? "Can't write: storage is full." : "Can't reach the folder.";
           } catch (x) {

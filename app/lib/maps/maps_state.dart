@@ -325,6 +325,8 @@ class MapsState extends ChangeNotifier {
         'pins-${pinStyle.name}',
         // The connection came back: the style is applied again with new source addresses, so blank tiles are asked for again.
         'net${engine.sourcesGeneration}',
+        // The tile server was started again on a new port (iOS took the old one away while the app was in the back).
+        'port${engine.port}',
         for (final l in engine.layers) l.styleSignature,
       ].join(',');
 

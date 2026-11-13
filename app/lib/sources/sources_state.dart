@@ -18,11 +18,9 @@ import '../search/search_access.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
-/// One ZIM file in the sources folder.
-/// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
-/// for itself (the saved `.icon.png` does sync, with its ZIM).
-const List<String> kZimNotShared = ['*.illustration.png'];
+export '../sharing/share_rules.dart' show kZimNotShared;
 
+/// One ZIM file in the sources folder.
 class ZimFile {
   ZimFile({required this.path, required this.size});
 
@@ -132,6 +130,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return _retrying ?? _coreOpened.future;
   }
 
+  final Completer<Map<String, dynamic>?> _configBuilt = Completer<Map<String, dynamic>?>();
+
+  /// The sections of the cs_open config besides the sources ([openedExtra]) once they are built, before the core opens its
+  /// sources (the car's own places handle, car/car_places.dart, opens with some of them); null when they could not be built.
+  Future<Map<String, dynamic>?> whenConfigReady() => _configBuilt.future;
+
   /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
   /// starts once the core is up waits on this, so a core opened by Try again starts it too.
   Future<SearchCore> whenCoreOpen() => _everOpened.future;
@@ -191,6 +195,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
       final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
+      if (!_configBuilt.isCompleted) _configBuilt.complete(extra);
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -198,6 +203,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       );
     } catch (e, stack) {
       logError('Search core startup failed', error: e, stack: stack);
+      if (!_configBuilt.isCompleted) _configBuilt.complete(null);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -493,9 +499,58 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
       });
 
+  /// In a browser: whether the server's index work is paused by the person (Catalog's Pause all) and whether there is any, as the
+  /// server says (`index.pause`). The same Pause and Resume as the phone's, working on the server's work.
+  bool serverIndexPaused = false;
+  bool serverIndexBusy = false;
+  bool _pauseReading = false;
+
+  Future<void> _readServerPause() async {
+    final core = _core;
+    if (core == null || _pauseReading) return;
+    _pauseReading = true;
+    try {
+      final r = await core.indexPause();
+      if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
+        serverIndexPaused = r.paused;
+        serverIndexBusy = r.busy;
+        // Work that began, or a Pause from another tab: the watcher must run to see it change again.
+        _keepServerWatch();
+        notifyListeners();
+      }
+    } on CacheSearchException {
+      // A server older than index.pause: there is nothing to pause.
+    } finally {
+      _pauseReading = false;
+    }
+  }
+
+  /// Pause all (true) or Resume (false) for the server's index work.
+  Future<void> setServerIndexPaused(bool paused) async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      final r = await core.indexPause(paused);
+      serverIndexPaused = r.paused;
+      serverIndexBusy = r.busy;
+    } on CacheSearchException catch (e) {
+      error = _words(e);
+    }
+    _watchServerIndexing();
+    notifyListeners();
+  }
+
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
-    if (!_serverWorkLeft) {
+    unawaited(_readServerPause());
+    _keepServerWatch();
+  }
+
+  /// The 2-second watcher runs while a ZIM waits for its keyword index, and also while the server says it has index work or that
+  /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
+  /// must follow them (each round reads `index.pause` again).
+  void _keepServerWatch() {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;

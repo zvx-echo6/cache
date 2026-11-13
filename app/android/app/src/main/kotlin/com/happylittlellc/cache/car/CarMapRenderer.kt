@@ -232,6 +232,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             frame.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
             ov.setSurfaceSize(width, height)
+            ov.onCarries = { word -> CarLink.extras(word) }
             ov.setAreas(visible, stable)
             ov.setOverview(overview)
             ov.setTrip(CarLink.trip, dark, now = true)
@@ -390,6 +391,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 if (attempt != styleAttempt) return@setStyle
                 style = st
                 addOverlays(st)
+                applyPins(st)
                 applyRoute(CarLink.routeGeoJson ?: CarLink.EMPTY_GEOJSON)
                 applyTrip(CarLink.trip)
                 // The new style's position source is empty: the marker is drawn into it at once.
@@ -534,6 +536,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     /** The present style is going (a new one is loading, or the map is released): nothing of it is used again. */
     private fun dropStyle() {
         style = null
+        pinImages.clear()
         posSource = null
         arrowLayer = null
         compassLayer = null
@@ -563,6 +566,26 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     private val reload = Runnable { loadStyle() }
 
+    override fun onPins() {
+        style?.let { applyPins(it) }
+    }
+
+    /** The pictures the present style has been given (CarPins.applyTo); a new style starts with none. */
+    private val pinImages = HashSet<String>()
+
+    /** The phone map's pins into the style's own pin source, with their pictures (CarPins). */
+    private fun applyPins(st: Style) {
+        CarPins.applyTo(object : CarPins.Target {
+            override fun setSource(id: String, geojson: String) {
+                st.getSourceAs<GeoJsonSource>(id)?.setGeoJson(geojson)
+            }
+
+            override fun addImage(name: String, bitmap: Bitmap) {
+                st.addImage(name, bitmap)
+            }
+        }, pinImages)
+    }
+
     private fun applyRoute(geojson: String) {
         style?.getSourceAs<GeoJsonSource>(SRC_ROUTE)?.setGeoJson(geojson)
         routeCoords = CarOverlayGeo.mainRoute(geojson)
@@ -588,9 +611,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 st.getLayer("car-route-driven")?.setProperties(PropertyFactory.lineColor(hex(pal.routeDriven)))
             }
         }
-        // The badge shows with the climb switch, at the steepest point ahead.
+        // The badge is part of the map (it marks the steepest point ahead), so it shows on every screen that has the figures.
         val g = ov?.steepGradePct
-        val showBadge = t.guiding && t.overlay.climb && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
+        val showBadge = t.guiding && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
         if (showBadge) {
             val key = "${pal!!.theme}|${dark}|${CarOverlayPainter.gradeText(g!!)}"
             if (key != badgeKey) {

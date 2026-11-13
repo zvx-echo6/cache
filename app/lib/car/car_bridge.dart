@@ -16,13 +16,18 @@ import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
 import 'car_overlay.dart';
+import 'car_places.dart';
+import 'car_pins.dart';
 import 'car_trip.dart';
+import 'phone_drive.dart';
 
-/// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
+/// The car screen's link to the phone's guidance (Android Auto, the native side is app/android/.../car; and CarPlay in an
+/// iPhone build made with it, the native side is app/ios/Runner/CarPlay).
 ///
 /// One guidance runs, the phone's [NavState]. The car shows it ([carTrip], pushed as it changes) and asks it for things: places
-/// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: searches and routes go to the same core
-/// through the same [NavState] the phone screen uses, so a route started in the car shows on the phone and the other way round.
+/// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: routes go to the same core through the
+/// same [NavState] the phone screen uses, so a route started in the car shows on the phone and the other way round. Saved places
+/// and the place search are read on a core handle of their own ([places]), so they never wait behind library work.
 ///
 /// [connected] is true while a car screen is attached. It is the hook for the phone's own view while connected (later: the
 /// phone shows the opposite view to the car's); today the phone just keeps working as it does.
@@ -35,10 +40,14 @@ class CarBridge {
     this.theme,
     this.overlay,
     this.settings,
+    this.phoneDrive,
+    this.carries,
     MethodChannel? channel,
     Future<String> Function()? glyphs,
     this.ready,
     this.onConnected,
+    this.pins,
+    this.places,
     this.throttle = const Duration(milliseconds: 250),
   })  : _channel = channel ?? const MethodChannel('co.cache/car'),
         _glyphs = glyphs ?? MapAssets.glyphsUrl;
@@ -53,22 +62,38 @@ class CarBridge {
   /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
   final CacheThemeId Function()? theme;
 
-  /// The two car switches (Settings > Car); null: the defaults. [settings] tells the bridge when they may have changed, so the car
+  /// The `overlay` part of the trip ([carOverlaySwitches]); null: `phoneDrive` false. [settings] tells the bridge when they may have changed, so the car
   /// has the new trip within one update.
   final Map<String, bool> Function()? overlay;
   final Listenable? settings;
+
+  /// Changes when the phone's drive screen starts or stops showing to a person (the value itself goes out in [overlay], as
+  /// `phoneDrive`). The trip goes to the car at once on every change, with no throttle of its own: the pause and the fade
+  /// before the car acts on it are the car's.
+  final Listenable? phoneDrive;
+
+  /// Where the car carries the route mini map and the elevation, as the car side last reported it (`extras`); back to
+  /// [CarExtras.never] (absent) when the car disconnects.
+  final ValueNotifier<CarExtras>? carries;
   final MethodChannel _channel;
   final Future<String> Function() _glyphs;
   final Duration throttle;
 
-  /// Resolves once the search core is open. The car can start Cache with the phone app closed, and asks for saved places at once:
-  /// places, search and directions wait for the core (at most [readyWait]) instead of answering empty.
+  /// Resolves once the search core is open. The car can start Cache with the phone app closed: directions, start and stops wait
+  /// for the core (at most [readyWait]) instead of answering empty; so do saved places and search when there is no [places].
   final Future<void> Function()? ready;
+
+  /// The car's saved places and place search on a handle of their own (car_places.dart): they wait neither for the main core
+  /// to open its libraries nor behind its library work. Null, or when it fails: through [nav]'s backend, after [ready].
+  final CarPlaces? places;
   static const Duration readyWait = Duration(seconds: 30);
 
   /// Called when a car screen attaches: the app reads a current position (the car may have started Cache with the phone app
   /// closed, when nothing else has read one yet).
   final Future<void> Function()? onConnected;
+
+  /// The phone map's pins for the car's map (car_pins.dart); null: the car's map draws none.
+  final CarPins? pins;
 
   Future<void> _ready() async {
     final r = ready;
@@ -88,6 +113,7 @@ class CarBridge {
   String? _lastTrip;
   String? _lastRouteSig;
   String? _lastStyleKey;
+  bool _answeringStyle = false;
   bool _started = false;
 
   /// Places the car was last shown, by id, so a tap in the car picks the very place the phone found.
@@ -101,15 +127,17 @@ class CarBridge {
     nav.location.addListener(_onLocation);
     elevation?.addListener(_schedule);
     settings?.addListener(_onSettings);
+    phoneDrive?.addListener(_onPhoneDrive);
     _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
+    pins?.bind(connected: connected, send: _send);
     try {
       // The native side may have a car session already (the car started the app): it answers with whether it does.
       final r = await _channel.invokeMethod<Object?>('hello');
       if (r is Map && r['connected'] == true) _setConnected(true);
     } on MissingPluginException {
-      // No car side on this platform (iOS, the tests): nothing to link.
+      // No car side on this platform or in this build (the tests): nothing to link.
     } on PlatformException {
       // Same.
     }
@@ -121,8 +149,11 @@ class CarBridge {
     if (_started) nav.location.removeListener(_onLocation);
     elevation?.removeListener(_schedule);
     settings?.removeListener(_onSettings);
+    phoneDrive?.removeListener(_onPhoneDrive);
     maps.removeListener(_onMaps);
     _events?.cancel();
+    pins?.dispose();
+    unawaited(places?.close());
     if (_started) _channel.setMethodCallHandler(null);
     connected.dispose();
   }
@@ -135,11 +166,16 @@ class CarBridge {
       _lastRouteSig = null;
       _pushedPhase = null;
       _schedule();
+      // The tile server may have lost its socket while the app was in the back: a new port reloads the car's map ([_onMaps]).
+      unawaited(maps.engine.recheckServer());
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
+      carries?.value = CarExtras.never;
+      // The car's own handle goes with the car; its next call opens it again.
+      unawaited(places?.close());
       // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
       // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
       // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
@@ -181,6 +217,8 @@ class CarBridge {
   String get _carStyleKey => [
         for (final u in maps.uses) u.def.id,
         'pins-${maps.pinStyle.name}',
+        // A tile server started again on a new port: the car's map must load its sources from the new one.
+        'port${maps.engine.port}',
         for (final l in maps.engine.layers) l.styleSignature,
       ].join(',');
 
@@ -195,8 +233,16 @@ class CarBridge {
     _schedule();
   }
 
-  void _onMaps() {
+  /// The phone's drive screen started or stopped showing: the trip goes out now.
+  void _onPhoneDrive() {
     if (!connected.value) return;
+    _pushTimer?.cancel();
+    _pushTimer = null;
+    unawaited(push());
+  }
+
+  void _onMaps() {
+    if (!connected.value || _answeringStyle) return;
     final key = _carStyleKey;
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
@@ -226,8 +272,10 @@ class CarBridge {
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
-    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route);
-    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
+    elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
+    // Keeps where the position is on the profile current, so a re-route carries the chart over from the right place.
+    if (p != null && nav.route != null) elevation?.positionOnProfile(p.distanceAlongM, nav.route!.distanceM);
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, climbAhead: elevation?.climbAhead, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
   }
 
   Future<void> push() async {
@@ -257,9 +305,20 @@ class CarBridge {
     }
   }
 
-  /// A spoken prompt is about to play: the car side takes navigation audio focus for it.
-  Future<void> prompt(String text) async {
-    if (connected.value) await _send('prompt', {'text': text});
+  /// A spoken prompt is about to play. The Android car side takes navigation audio focus for it and answers nothing. The
+  /// iPhone car side answers how iOS wants a prompt given at this moment (the audio session's prompt style): [kPromptNormal],
+  /// [kPromptShort] or [kPromptNone]; see [CarAwareSpeaker]. Null with no car, or from a car side that does not say.
+  Future<String?> prompt(String text) async {
+    if (!connected.value) return null;
+    try {
+      final answer = await _channel.invokeMethod<Object?>('prompt', {'text': text});
+      return answer is String ? answer : null;
+    } on MissingPluginException {
+      _setConnected(false);
+    } on PlatformException {
+      // The car side went away between the check and the call.
+    }
+    return null;
   }
 
   Future<void> promptStop() async {
@@ -271,10 +330,16 @@ class CarBridge {
   Future<Object?> _onCall(MethodCall call) async {
     final a = call.arguments is Map ? (call.arguments as Map).cast<String, Object?>() : const <String, Object?>{};
     logInfo('Car asks: ${call.method}');
-    if (const {'saved', 'search', 'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
+    // Saved places and search wait for the core only when they go through it ([_saved], [_search]).
+    if (const {'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
+        return null;
+      case 'extras':
+        // Received and unused: the phone's drive screen always shows the mini map and the elevation, whatever the car carries. The
+        // call is still answered, for the car sides, pending a cleanup there.
+        carries?.value = carExtrasFrom(a['carries']);
         return null;
       case 'snapshot':
         return snapshot();
@@ -338,7 +403,17 @@ class CarBridge {
   /// with the colors of the route and the position for the lines the car adds on top.
   Future<Map<String, Object?>?> style({required bool dark}) async {
     if (!maps.engine.ready) return null;
+    // The style must point at a tile server that answers (iOS can take its socket away while the app is in the back). A new port
+    // found here is in the style being answered, so it does not also send styleChanged.
+    _answeringStyle = true;
+    try {
+      await maps.engine.recheckServer();
+    } finally {
+      _answeringStyle = false;
+    }
     final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
+    // The pins' pictures follow the map's look (Tactical has its own).
+    pins?.setTactical(palette.id == CacheThemeId.tactical);
     final String glyphs;
     try {
       glyphs = await _glyphs();
@@ -355,13 +430,41 @@ class CarBridge {
   /// The saved places, as places to go to.
   Future<List<MapPlace>> savedPlaces() async {
     try {
-      final saved = await nav.backend.savedPlaces();
+      final saved = await _saved();
       logInfo('Car: ${saved.length} saved places');
       return [for (final s in saved) _savedPlace(s)];
     } catch (e, st) {
       logError('Car: saved places could not be read', error: e, stack: st);
       return const [];
     }
+  }
+
+  /// The saved places from the car's own handle, else from the main core once it is open.
+  Future<List<SavedPlaceRecord>> _saved() async {
+    final own = places;
+    if (own != null) {
+      try {
+        return await own.savedPlaces();
+      } catch (e, st) {
+        logError('Car: own places handle', error: e, stack: st);
+      }
+    }
+    await _ready();
+    return nav.backend.savedPlaces();
+  }
+
+  /// The map search by name, address and category word: on the car's own handle, else on the main core once it is open.
+  Future<MapSearchResponse> _search(String q) async {
+    final own = places;
+    if (own != null) {
+      try {
+        return await own.search(q, near: nav.here, limit: 10);
+      } catch (e, st) {
+        logError('Car: own places handle', error: e, stack: st);
+      }
+    }
+    await _ready();
+    return nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
   }
 
   static MapPlace _savedPlace(SavedPlaceRecord s) => MapPlace(
@@ -383,7 +486,7 @@ class CarBridge {
     final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
     List<MapPlace> found = const [];
     try {
-      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
+      final r = await _search(q);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
     return [...saved, ...found].take(12).toList();
@@ -415,8 +518,18 @@ class CarBridge {
   }
 }
 
+/// The iPhone car side's answers to [CarBridge.prompt], iOS's three prompt styles: a spoken prompt is fine; only a short one
+/// without words (a call is on, Siri is up but not listening, a voicemail plays); none at all (something is listening on the
+/// microphone).
+const String kPromptNormal = 'normal';
+const String kPromptShort = 'short';
+const String kPromptNone = 'none';
+
 /// The phone's voice, which also takes the car's navigation audio focus for each prompt while a car screen is attached. The
 /// prompts themselves are the phone's (the [GuidanceEngine] in NavState), said by the phone's text-to-speech.
+///
+/// On an iPhone with its car screen attached the car side says how iOS wants the prompt given. For a short one it has played
+/// a tone itself; for that and for none the phone's voice says nothing. Any other answer, or none, and the prompt is spoken.
 class CarAwareSpeaker implements Speaker {
   CarAwareSpeaker(this.inner, {required this.car});
 
@@ -425,9 +538,11 @@ class CarAwareSpeaker implements Speaker {
 
   @override
   Future<void> speak(String text) async {
+    String? how;
     try {
-      await car()?.prompt(text);
+      how = await car()?.prompt(text);
     } catch (_) {}
+    if (how == kPromptShort || how == kPromptNone) return;
     await inner.speak(text);
   }
 

@@ -102,7 +102,30 @@ class CoreLayerEngine extends LayerEngine {
   @override
   int get sourcesGeneration => _generation;
 
+  @override
   int get port => _port;
+
+  Future<void>? _rechecking;
+
+  @override
+  Future<void> recheckServer() => _rechecking ??= _recheckServer().whenComplete(() {
+        _rechecking = null;
+      });
+
+  Future<void> _recheckServer() async {
+    final core = _core;
+    if (core == null || !_ready || _disposed) return;
+    try {
+      final s = await core.layers('server', jsonEncode({'online': _online}));
+      final port = (s['port'] as num).toInt();
+      if (port == _port || _disposed) return;
+      logInfo('Map tile server: listening again on a new port');
+      _port = port;
+      notifyListeners();
+    } catch (e) {
+      logError('Map tile server check', error: e);
+    }
+  }
 
   @override
   Future<void> start() async {
@@ -281,7 +304,10 @@ class CoreLayerEngine extends LayerEngine {
     if (now) _generation++;
     // The engine uses the network only when told it may.
     try {
-      await _core?.layers('server', jsonEncode({'online': now}));
+      final s = await _core?.layers('server', jsonEncode({'online': now}));
+      // The same call starts the tile server again if it lost its socket (a new port, in the style key).
+      final p = (s?['port'] as num?)?.toInt();
+      if (p != null && p != 0) _port = p;
     } catch (_) {}
     notifyListeners();
     if (now) unawaited(refreshCatalogue());

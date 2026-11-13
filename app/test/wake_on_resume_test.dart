@@ -107,7 +107,7 @@ void main() {
       }
     }
 
-    Future<void> setUpShell(WidgetTester tester) async {
+    Future<void> setUpShell(WidgetTester tester, {void Function(bool shown)? onAskShown}) async {
       r = await SettingsRig.create(tester, appFactory: makeApp);
       final dir = Directory('${r.dir.path}/layout')..createSync();
       PanePrefs.testDir = dir;
@@ -127,7 +127,7 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}, isHot: () async => hot), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
+        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}, isHot: () async => hot), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout')), onAskShown: onAskShown),
       ));
       await settle(tester);
     }
@@ -157,6 +157,20 @@ void main() {
       }
       await settle(tester);
     }
+
+    testWidgets('the app is told when Ask becomes the screen shown and when it is left (the chat model\'s idle release)', (tester) async {
+      final shown = <bool>[];
+      await setUpShell(tester, onAskShown: shown.add);
+      expect(shown, isEmpty, reason: 'the shell starts on Home');
+      await openAsk(tester);
+      expect(shown, [true]);
+      await openAsk(tester);
+      expect(shown, [true], reason: 'Ask again is no change');
+      await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text('Home')));
+      await settle(tester);
+      expect(shown, [true, false]);
+      await tearDownShell(tester);
+    });
 
     testWidgets('Ask shown and room: the model loads, the loading title shows, and there is no card', (tester) async {
       avail = 1 * _gb; // opening Ask finds no room: stays resting, with the card

@@ -20,6 +20,7 @@ class FakePlay(pr.Play):
         self.edits = {}
         self.n = 0
         self.after_commit = None
+        self.bundles = [29]
 
     def call(self, method, path, body=None, data=None, ctype="application/json", base=None):
         if method == "POST" and path == "/edits":
@@ -42,7 +43,7 @@ class FakePlay(pr.Play):
             return {}
         e = self.edits[edit]
         if parts[2] == "bundles":
-            return {"bundles": [{"versionCode": 29}]}
+            return {"bundles": [{"versionCode": c} for c in self.bundles]}
         if parts[2] == "apks":
             return {}
         if parts[2] == "tracks" and len(parts) == 3:
@@ -116,6 +117,93 @@ class Tests(unittest.TestCase):
         self.assertEqual(pr.parse_tracks(" internal, alpha,beta,alpha "), ["internal", "alpha", "beta"])
         with self.assertRaises(pr.PlayError):
             pr.parse_tracks(" , ")
+
+
+PROMO = {
+    "internal": [{"name": "1.1.0 (31)", "status": "completed", "versionCodes": ["31"],
+                  "releaseNotes": [{"language": "en-US", "text": "carried"}]}],
+    "alpha": [{"name": "1.0.28 (28)", "status": "halted", "versionCodes": ["28"], "userFraction": 0.2}],
+}
+
+
+def promo_play():
+    play = FakePlay(PROMO)
+    play.bundles = [28, 31]
+    return play
+
+
+class PromoteTests(unittest.TestCase):
+    def run_promote(self, play, to=("alpha",), notes="", status="completed", car=False, dry=False, code=31, frm="internal"):
+        pr.promote(play, code, frm, list(to), notes, status, car, dry)
+
+    def test_internal_to_alpha_completed_alone_internal_unchanged(self):
+        play = promo_play()
+        self.run_promote(play, notes="new notes")
+        self.assertEqual(play.committed["alpha"], [{"name": "1.1.0 (31)", "versionCodes": ["31"], "status": "completed",
+                                                    "releaseNotes": [{"language": "en-US", "text": "new notes"}]}])
+        self.assertEqual(play.committed["internal"], PROMO["internal"])
+        self.assertEqual(play.edits, {})
+
+    def test_notes_carried_over_when_empty(self):
+        play = promo_play()
+        self.run_promote(play)
+        self.assertEqual(play.committed["alpha"][0]["releaseNotes"], [{"language": "en-US", "text": "carried"}])
+
+    def test_dry_run_commits_nothing_and_deletes_the_edit(self):
+        play = promo_play()
+        self.run_promote(play, dry=True)
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+
+    def test_a_code_not_on_play_is_refused(self):
+        play = promo_play()
+        with self.assertRaises(pr.PlayError) as e:
+            self.run_promote(play, code=40)
+        self.assertIn("not among the app's bundles", str(e.exception))
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+
+    def test_a_code_not_completed_on_the_from_track_is_refused(self):
+        play = promo_play()
+        with self.assertRaises(pr.PlayError) as e:
+            self.run_promote(play, code=28, frm="alpha", to=("internal",))
+        self.assertIn("is halted, not completed", str(e.exception))
+        play = promo_play()
+        with self.assertRaises(pr.PlayError):
+            self.run_promote(play, code=31, frm="alpha", to=("internal",))
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+
+    def test_beta_needs_the_car_review_to_have_passed(self):
+        play = promo_play()
+        with self.assertRaises(pr.PlayError) as e:
+            self.run_promote(play, to=("alpha", "beta"))
+        self.assertIn("internal and alpha only", str(e.exception))
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+        self.run_promote(play, to=("alpha", "beta"), car=True)
+        self.assertEqual(play.committed["beta"][0]["versionCodes"], ["31"])
+        self.assertEqual(play.committed["alpha"][0]["versionCodes"], ["31"])
+
+    def test_notes_over_500_are_refused(self):
+        play = promo_play()
+        with self.assertRaises(pr.PlayError) as e:
+            self.run_promote(play, notes="x" * 501)
+        self.assertIn("at most 500", str(e.exception))
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+
+    def test_to_track_equal_to_from_track_is_refused(self):
+        play = promo_play()
+        with self.assertRaises(pr.PlayError):
+            self.run_promote(play, to=("alpha", "internal"))
+        self.assertEqual(play.committed, PROMO)
+        self.assertEqual(play.edits, {})
+
+    def test_draft_status_keeps_live_releases(self):
+        play = promo_play()
+        self.run_promote(play, status="draft")
+        self.assertEqual([(r["name"], r["status"]) for r in play.committed["alpha"]], [("1.0.28 (28)", "halted"), ("1.1.0 (31)", "draft")])
 
 
 if __name__ == "__main__":

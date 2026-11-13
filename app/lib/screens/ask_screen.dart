@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent, KeyDownEvent, LogicalKeyboardKey;
 
 import '../app_state.dart';
 import '../chat/answer_progress.dart';
@@ -567,6 +568,19 @@ class _AskScreenState extends State<AskScreen> {
     );
   }
 
+  /// Enter without Shift sends the question (the desktop composer). Shift+Enter falls through, so the field adds the new line. An
+  /// input method still composing a word keeps its Enter.
+  KeyEventResult _enterSends(FocusNode node, KeyEvent event) {
+    final enter = event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
+    if (_input.value.composing.isValid && !_input.value.composing.isCollapsed) return KeyEventResult.ignored;
+    if (event is KeyDownEvent) {
+      if (widget.app.active != null) _send();
+    }
+    // The key-up and repeats of a handled Enter are swallowed too, so a held Enter never adds a line.
+    return KeyEventResult.handled;
+  }
+
   Widget _composer(BuildContext context) {
     final k = context.t;
     if (widget.readOnly) return _offLine(context);
@@ -599,15 +613,21 @@ class _AskScreenState extends State<AskScreen> {
                 const SizedBox(width: 4),
               ],
               Expanded(
-                child: TextField(
-                  controller: _input,
-                  enabled: ready,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.newline,
-                  style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
-                  decoration: InputDecoration(
-                    hintText: ready ? 'Ask anything' : 'No model',
+                child: Focus(
+                  // On the Linux desktop (a hardware keyboard) Enter sends and Shift+Enter starts a new line. A phone is untouched.
+                  canRequestFocus: false,
+                  skipTraversal: true,
+                  onKeyEvent: isLinuxDesktop(context) ? _enterSends : null,
+                  child: TextField(
+                    controller: _input,
+                    enabled: ready,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
+                    decoration: InputDecoration(
+                      hintText: ready ? 'Ask anything' : 'No model',
+                    ),
                   ),
                 ),
               ),
@@ -698,6 +718,20 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   }
 
   bool _open = false;
+
+  /// The opened list of sources (key for the scroll, on the Linux desktop).
+  final _listKey = GlobalKey();
+
+  /// Opening the sources scrolls the conversation so every one is in reach: they open below the answer, behind the composer's edge.
+  void _toggleSources() {
+    setState(() => _open = !_open);
+    if (!_open || !isLinuxDesktop(context)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (!mounted || c == null) return;
+      Scrollable.ensureVisible(c, duration: Duration.zero, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -821,7 +855,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: () => setState(() => _open = !_open),
+          onTap: _toggleSources,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),
             child: Align(
@@ -861,6 +895,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           ),
         ),
         if (_open)
+          Column(
+            key: _listKey,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           for (final s in m.sources)
             Container(
               margin: const EdgeInsets.only(top: 6),
@@ -910,6 +948,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ),
               ),
             ),
+            ],
+          ),
       ],
     );
   }

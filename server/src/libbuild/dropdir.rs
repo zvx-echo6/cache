@@ -236,6 +236,12 @@ impl BuildService {
         self.drop_settings().folder
     }
 
+    /// The drop folder's path while the drop folder is on (it moves and makes files there), else none.
+    pub(crate) fn drop_folder_in_use(&self) -> Option<String> {
+        let s = self.drop_settings();
+        s.enabled.then_some(s.folder)
+    }
+
     /// The library the drop folder fills has been deleted: PDFs wait until another is chosen.
     pub(crate) fn forget_drop_library(&self, id: &str) {
         let mut s = lock(&self.drop.settings);
@@ -295,6 +301,10 @@ impl BuildService {
                 .ok_or_else(|| super::err(400, "invalid", "\"compression\" is {\"level\": off|lossless|smaller_scans, \"preset\": high|balanced|smallest}"))?;
         }
         if let Some(a) = v.get("ask_when_one") { s.ask_when_one = a.as_bool().ok_or_else(|| super::err(400, "invalid", "ask_when_one is true or false"))?; }
+        // a linked folder is never touched: the drop folder cannot be, or be around or inside, one
+        if s.enabled && self.overlaps_linked_folder(Path::new(&s.folder)) {
+            return Err(super::err(400, "invalid", "linked originals must not overlap Cache managed data"));
+        }
         super::write_json(&self.data.join("build/drop.json"), &s).map_err(|e| super::err(500, "server_error", format!("could not save the settings: {e}")))?;
         *guard = s.clone();
         drop(guard);
@@ -585,7 +595,7 @@ impl BuildService {
             let working = it.state.working();
             files.push(json!({
                 "name": e.name, "folder": "ingest", "state": if working { "working" } else { "queued" }, "position": rank, "size": e.size,
-                "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages},
+                "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages, "ocr_done": it.ocr_done},
                 "item_id": it.id, "reason": null, "can_retry": false,
             }));
         }

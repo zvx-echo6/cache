@@ -1,0 +1,5 @@
+[
+  {"id": "place:10.500000,20.500000", "name": "Regional Hospital", "address": "1501 Example Ave", "lat": 10.5, "lon": 20.5, "distanceM": 25400.5},
+  {"id": "place:10.600000,20.300000", "name": "Trailhead", "address": "Saved place", "lat": 10.6, "lon": 20.3, "distanceM": null},
+  {"id": "place:10.700000,20.100000", "name": "Cabin", "address": " ", "lat": 10.7, "lon": 20.1, "distanceM": 61200.0}
+]

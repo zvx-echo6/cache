@@ -61,6 +61,11 @@
 	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Whether this build has the car screen (CarPlay): NO unless the build passes CACHE_CARPLAY=YES, which also picks the
+	     entitlements file with the CarPlay entitlement. Read by CarPlayBuild (Runner/CarPlay). The CarPlay scene itself is
+	     declared in code, not in the manifest below. -->
+	<key>CacheCarPlay</key>
+	<string>$(CACHE_CARPLAY)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -76,8 +81,6 @@
 					<string>flutter</string>
 					<key>UISceneDelegateClassName</key>
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
 				</dict>
 			</array>
 		</dict>
@@ -86,8 +89,6 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

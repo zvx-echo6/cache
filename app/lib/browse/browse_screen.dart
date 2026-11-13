@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart' show ZimSubIndex;
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart' show isLinuxDesktop;
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_state.dart' show PdfPart, PdfPartPhase, PdfPause;
 import '../pdf/index/pdf_index_ui.dart';
@@ -25,6 +26,7 @@ import '../library/library_prefs.dart';
 import '../library/shelf_server.dart';
 import '../library/shelf_source.dart';
 import '../regions/regions_state.dart';
+import '../settings/hub.dart';
 import '../sharing/sharing_state.dart';
 import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
@@ -76,6 +78,18 @@ class BrowseScreen extends StatefulWidget {
     this.shelfServer,
     this.structured,
   });
+
+  /// The Library as the app shows it, from every way in (its tab and Settings > Storage > Library): the regions and Sharing come
+  /// from the [hub], so Catalog shows the same places, routing and sync lines wherever it is opened from.
+  BrowseScreen.inHub({super.key, required this.browse, required this.active, this.layout, required SettingsHub hub})
+    : regions = hub.regions,
+      sharing = hub.sharing,
+      shelves = null,
+      files = null,
+      originals = null,
+      looks = null,
+      shelfServer = null,
+      structured = null;
 
   final BrowseState browse;
 
@@ -159,9 +173,11 @@ class _BrowseScreenState extends State<BrowseScreen> {
     rootTop: (ctx) => [
       if (libs?.task case final t?) _taskRow(ctx.t, t),
       // a browser: what the device is doing for this tab (uploads, downloads, a library being built)
-      if (b.device case final dv?) DeviceLibraryTop(device: dv, onAddPackage: _addPackage, onOpenBuilt: (id) => _openBuiltFrom(ctx, id)),
+      if (b.device case final dv?) DeviceLibraryTop(device: dv, onAddPackage: _addPackage, onOpenBuilt: (id) => _openBuiltFrom(ctx, id), whileClosed: !isLinuxDesktop(ctx)),
     ],
     rootBottom: (ctx) => _builtRows(ctx.t, from: ctx, heading: true),
+    // The desktop draws "While this tab was closed" last, under the list, so a card that turns up never moves the rows above it.
+    rootEnd: (ctx) => [if (isLinuxDesktop(ctx) && b.device != null) DeviceWhileClosedBelow(device: b.device!)],
   );
 
   @override
@@ -733,7 +749,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
         LibraryRow(
           key: ValueKey('built-${l.id}'),
           title: l.title,
-          detail: builtLibraryLine(l, b.device!.items.where((i) => i.kind == 'library' && i.name == l.id).firstOrNull?.bytes),
+          detail: builtLibraryLine(l, bc.freesOf(l.id)),
           badge: switch (buildBadge(bc, l)) {
             final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
             _ => null,

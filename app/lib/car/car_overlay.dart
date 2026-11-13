@@ -10,10 +10,8 @@ import '../theme.dart';
 /// The two Cache-drawn pieces on the car's map (the climb-ahead card and the route mini map), as plain data for the car side to
 /// paint (app/android/.../car/CarOverlayPainter.kt). Nothing here is drawn; the car works nothing out, it paints what it is sent.
 ///
-/// The defaults of the two switches are these constants, so turning a piece off for everyone is a one-line change. They reach the
-/// car in the trip as `overlay: {climb: .., miniMap: ..}`. (There is no car section in Settings yet, so no per-person switch.)
-const bool kCarClimbAheadDefault = true;
-const bool kCarRouteMiniMapDefault = true;
+/// Whether the car draws them is the car's own rule (by the size of its screen), told one fact by the phone: `overlay:
+/// {phoneDrive: bool}` ([carOverlaySwitches]).
 
 /// The owner's number (2026-11-11): the least grade (rise over run, 0.03 is 3%) a climb ahead must have for the car to show it.
 /// With no such climb ahead there is no climb card, no grade badge on the car's map and no grade pill on its mini map. The
@@ -23,8 +21,8 @@ const double kCarClimbMinGrade = 0.03;
 
 /// The steepest climb still ahead of [posM] metres along the profile, when it is at least [kCarClimbMinGrade] steep; else null.
 /// (The steepest is the one with the highest grade, so when it is under the floor no climb ahead reaches it.)
-Climb? carClimbAhead(ElevationProfile profile, double posM) {
-  final c = profile.steepestClimbAhead(posM);
+Climb? carClimbAhead(ElevationProfile profile, double posM, {Climb? Function(double posM)? source}) {
+  final c = source != null ? source(posM) : profile.steepestClimbAhead(posM);
   return c == null || c.grade < kCarClimbMinGrade ? null : c;
 }
 
@@ -51,10 +49,10 @@ CacheThemeId carMapTheme({required bool dark, required CacheThemeId chosen}) =>
 ///
 /// [distanceAlongM] is the core's metres along the route; [routeM] the route's length (the profile measures the same line a
 /// little differently, so the position is scaled to the profile, as [RouteElevation.positionOnProfile] does).
-Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? distanceAlongM, required double routeM}) {
+Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? distanceAlongM, required double routeM, Climb? Function(double posM)? climbAhead}) {
   if (profile == null || !profile.hasData || profile.distM.isEmpty) return null;
   final posM = _positionOnProfile(profile, distanceAlongM, routeM);
-  final steep = carClimbAhead(profile, posM);
+  final steep = carClimbAhead(profile, posM, source: climbAhead);
   if (steep == null) return null;
 
   // The climb still to come: the dead-band climb over the heights from the position on.
@@ -105,7 +103,7 @@ double _positionOnProfile(ElevationProfile p, double? alongM, double routeM) {
 /// The `overview` block: the whole route simplified, how much of it is driven, the steepest point's place and grade, and the
 /// destination. Null with no route. The steepest point follows the climb card's rule ([carClimbAhead]): it is there only for a
 /// climb ahead of at least [kCarClimbMinGrade], so the car's badge and pill never mark a gentle rise.
-Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlongM, ElevationProfile? profile, GeoPoint? destination}) {
+Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlongM, ElevationProfile? profile, Climb? Function(double posM)? climbAhead, GeoPoint? destination}) {
   if (route == null || route.points.length < 2) return null;
   final pts = simplifyRoute(route.points, kOverviewMaxPoints);
   final routeM = route.distanceM > 0 ? route.distanceM : 1.0;
@@ -114,7 +112,7 @@ Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlo
   Map<String, dynamic>? steepPoint;
   if (profile != null && profile.hasData) {
     final posM = _positionOnProfile(profile, distanceAlongM, route.distanceM);
-    final c = carClimbAhead(profile, posM);
+    final c = carClimbAhead(profile, posM, source: climbAhead);
     if (c != null && profile.totalM > 0) {
       final at = pointAtFraction(route.points, ((c.startM + c.endM) / 2 / profile.totalM).clamp(0.0, 1.0));
       steepPoint = {'lat': at.lat, 'lon': at.lon, 'gradePct': c.grade * 100};
@@ -295,5 +293,8 @@ Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) {
   };
 }
 
-/// The `overlay` switches.
-Map<String, bool> carOverlaySwitches({bool climb = kCarClimbAheadDefault, bool miniMap = kCarRouteMiniMapDefault}) => {'climb': climb, 'miniMap': miniMap};
+/// The `overlay` part of the trip: the one fact the phone tells the car, `phoneDrive`. It is true only while the phone's drive
+/// screen is actually showing to a person (a car screen is guiding, the phone is unlocked with Cache in front, the Maps tab is
+/// selected and the drive screen is the thing on it), and false in every other case. The pause and the fade are the car's; the
+/// phone sends the plain truth at once. The old keys `climb` and `miniMap` are no longer sent.
+Map<String, bool> carOverlaySwitches({bool phoneDrive = false}) => {'phoneDrive': phoneDrive};

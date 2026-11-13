@@ -27,6 +27,14 @@
 # run on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after the build fails the job if any of the
 # binaries needs a newer glibc. (libzim.so.9 also needs GCC 12's libstdc++, GLIBCXX_3.4.30: Ubuntu 22.04+, Debian 12+, bookworm+.)
 #
+# OCR for the library builder: Tesseract and Leptonica (Apache-2.0 and BSD-2-Clause) are built INTO the program, statically, by the mupdf
+# crate's `tesseract` feature (the sources MuPDF 1.27.2 carries: Tesseract 5.0.0-alpha, Leptonica 1.85.0, pinned by Cargo.lock), compiled
+# by the same cargo build on the same glibc 2.35 container as everything else, so there is no extra library and no system package.
+# Only the trained data is a file: Tesseract's English "fast" model (eng.traineddata, 4.1 MB, Apache-2.0), pinned by sha256 in
+# .github/pinned-downloads.txt and cached like the libzim prebuilt, shipped as lib/tessdata/eng.traineddata. The `os-check` job below
+# unpacks the aarch64 (and x86_64) package in a bare debian:bookworm container, the base of Raspberry Pi OS Bookworm, and builds a
+# generated text PDF and a generated scanned PDF with the builder to prove the scan comes out searchable.
+#
 # Road routing: lib/libvalhalla_shim.so is Valhalla 3.7.0 and the C shim, built and tested (route, matrix, locate) by the Valhalla
 # workflow (valhalla.yml), which the `routing` job calls; that workflow reuses its last tested output when packages/valhalla is
 # unchanged. The server hands the helper its full path (CACHE_VALHALLA_SHIM; the core needs a real file, not a bare name). The glibc
@@ -43,6 +51,9 @@ on:
       - 'packages/cache_search/native/**'
       - 'packages/cache_llama/**'
       - '.github/workflows/server-release.yml'
+      - '.github/pinned-downloads.txt'
+      - '.github/actions/pinned-downloads/**'
+      - 'packages/cache_pack/**'
       - '.github/actions/libzim-prebuilt/**'
       - 'packages/valhalla/**'
       - '.github/workflows/valhalla.yml'
@@ -98,7 +109,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Building on the oldest supported distribution keeps the glibc requirement at 2.35.
     container: ubuntu:22.04
-    timeout-minutes: 90
+    # x86_64 builds cache-build (MuPDF with Tesseract) with fat LTO and one codegen unit, which alone took 56 minutes on a busy runner
+    # (2026-11-13) and ran the job past 90; aarch64 uses thin LTO and keeps 90.
+    timeout-minutes: ${{ matrix.arch == 'x86_64' && 150 || 90 }}
     env:
       # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
       RUSTFLAGS: ${{ matrix.rustflags }}
@@ -146,6 +159,21 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: ${{ matrix.arch }}
+      # Tesseract's English trained data: pinned by sha256 (.github/pinned-downloads.txt), from the Actions cache or, on a miss, downloaded
+      # and saved to it. The builder's OCR tests read it (CACHE_TESSDATA_DIR) and the package ships it in lib/tessdata.
+      - name: Trained data for OCR (pinned)
+        id: tessdata
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: tessdata-fast-4.1.0-eng.traineddata
+      - name: Trained data folder
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/tessdata"
+          cp "${{ steps.tessdata.outputs.dir }}/tessdata-fast-4.1.0-eng.traineddata" "$RUNNER_TEMP/tessdata/eng.traineddata"
+          ls -l "$RUNNER_TEMP/tessdata"
+          echo "CACHE_TESSDATA_DIR=$RUNNER_TEMP/tessdata" >> "$GITHUB_ENV"
+          echo "CACHE_REQUIRE_OCR_TESTS=1" >> "$GITHUB_ENV"
       # The Dart SDK Flutter 3.44.8 bundles; setup-dart has Linux x64 and arm64 builds of it.
       - uses: dart-lang/setup-dart@v1
         with:
@@ -260,6 +288,17 @@ jobs:
         run: cargo test -p cache_server
       - name: Test (cache_builder)
         run: cargo test -p cache_builder
+      # OCR speed on this runner: the builder's own test reads ten generated scanned pages (300 dpi) and prints the time per page.
+      - name: OCR speed (${{ matrix.arch }})
+        run: |
+          cargo test -p cache_builder --test ocr ocr_speed_per_page -- --nocapture --test-threads=1 2>&1 | tee "$RUNNER_TEMP/ocr-speed.log"
+          {
+            echo "### OCR speed (${{ matrix.arch }}, $(nproc) cores, $(grep -m1 -E 'model name|Model' /proc/cpuinfo || true))"
+            echo "GitHub-hosted runner, not a Raspberry Pi. A Pi will be slower."
+            echo '```'
+            grep OCR-MEASURE "$RUNNER_TEMP/ocr-speed.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # The arm runner gets killed during the fat-LTO link, so aarch64 uses thin LTO; the x86_64 build is unchanged.
       - name: Build (aarch64)
         if: matrix.arch == 'aarch64'
@@ -270,9 +309,24 @@ jobs:
       - name: Build (x86_64)
         if: matrix.arch != 'aarch64'
         run: cargo build -p cache_server -p cache_search --release
+      # The sharing host (server/helper/bin/sharing_host.dart) against two real sync engines on this machine, no relay, DHT, mDNS or
+      # lookup: the host links with a second engine and the two keep a shared folder the same. The helper tests above skip it (they run
+      # before the core is built); here the built core is given, and a missing core fails the job instead of skipping.
+      - name: Sharing host loopback test (real engines)
+        working-directory: server/helper
+        env:
+          CACHE_CORE_LIB: ${{ github.workspace }}/packages/cache_search/native/target/release/libcache_search.so
+          CACHE_REQUIRE_CORE: '1'
+        run: |
+          zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
+          export LD_LIBRARY_PATH="$(dirname "$zimlib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          dart pub get
+          dart test test/sharing_loopback_test.dart
       # The library builder's program, uploaded on its own (below) so a build of a PDF can be run from this exact commit.
       - name: Build (cache-build)
-        if: matrix.arch != 'aarch64'
+        env:
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.arch == 'aarch64' && 'thin' || 'fat' }}
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.arch == 'aarch64' && '16' || '1' }}
         run: cargo build -p cache_builder --bin cache-build --release
       - name: Compile the helper
         working-directory: server/helper
@@ -291,7 +345,7 @@ jobs:
           limit="2.35"
           fail=0
           zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
-          for f in packages/cache_search/native/target/release/cache packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib" "$RUNNER_TEMP/valhalla-shim/lib/libvalhalla_shim.so"; do
+          for f in packages/cache_search/native/target/release/cache packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so packages/cache_search/native/target/release/cache-build "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib" "$RUNNER_TEMP/valhalla-shim/lib/libvalhalla_shim.so"; do
             max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
             echo "$f: max GLIBC_${max:-none}"
             if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
@@ -327,6 +381,10 @@ jobs:
           readelf -d "$stage/lib/libcache_search.so" | grep -q 'NEEDED.*\[libzim.so.9\]' || { echo "::error::libcache_search.so was built without libzim"; exit 1; }
           if env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep 'not found'; then echo "::error::the core has a missing library"; exit 1; fi
           env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep libzim
+          # Tesseract's trained data (Apache-2.0) and the notice for the OCR that is built into the program.
+          mkdir -p "$stage/lib/tessdata"
+          install -m 644 "$CACHE_TESSDATA_DIR/eng.traineddata" "$stage/lib/tessdata/eng.traineddata"
+          install -m 644 server/packaging/OCR-NOTICE.txt "$stage/lib/tessdata/OCR-NOTICE.txt"
           cp -R "$RUNNER_TEMP/web-build/." "$stage/web/"
           if [[ ! -f "$stage/web/index.html" ]]; then echo "::error::the web build has no index.html"; exit 1; fi
           printf '%s\n' "$version" > "$stage/VERSION"
@@ -370,15 +428,13 @@ jobs:
           retention-days: 14
           if-no-files-found: error
       - name: Stage cache-build
-        if: matrix.arch != 'aarch64'
         working-directory: .
         run: |
           mkdir -p "$RUNNER_TEMP/cache-build"
           install -m 755 packages/cache_search/native/target/release/cache-build "$RUNNER_TEMP/cache-build/cache-build"
       - uses: actions/upload-artifact@v4
-        if: matrix.arch != 'aarch64'
         with:
-          name: cache-build-x86_64-${{ github.sha }}
+          name: cache-build-${{ matrix.arch }}-${{ github.sha }}
           path: ${{ runner.temp }}/cache-build/cache-build
           retention-days: 14
           if-no-files-found: error
@@ -402,3 +458,40 @@ jobs:
         with:
           path: bge-model
           key: ${{ steps.cache-3.outputs.cache-primary-key }}
+
+  # The package on the system it is for: a bare debian:bookworm container (the base of Raspberry Pi OS Bookworm; on the arm64 runner it
+  # is the arm64 image), with nothing installed by apt. server/packaging/os-check.sh unpacks the package, loads its programs on that
+  # system's glibc, and builds a generated text PDF and a generated scanned PDF with the builder from the same commit, requiring the
+  # scan to come out searchable through Tesseract with the trained data from the package. The timings are a GitHub server-class
+  # runner's: a Raspberry Pi will be slower, and no number here is a Pi's.
+  os-check:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cache-*-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/osdir
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: cache-build-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/osdir
+      - name: Check on Debian bookworm (bare image, no apt)
+        run: |
+          ls -l "$RUNNER_TEMP/osdir"
+          cp server/packaging/os-check.sh "$RUNNER_TEMP/osdir/os-check.sh"
+          docker run --rm --pull=always \
+            -e "RUNNER_LABEL=${{ matrix.arch }}, GitHub-hosted ${{ matrix.runner }} runner (server class). A Raspberry Pi will be slower; these are not Raspberry Pi timings." \
+            -v "$RUNNER_TEMP/osdir:/work" debian:bookworm bash /work/os-check.sh /work
+          cat "$RUNNER_TEMP/osdir/summary.md" >> "$GITHUB_STEP_SUMMARY"

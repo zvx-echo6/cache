@@ -30,13 +30,24 @@ IconData iconForTurn(TurnIcon t) => switch (t) {
       TurnIcon.offroad => Icons.terrain,
     };
 
+/// "Head north for 0.4 mi, up 120 ft" (or "Follow the trail north for ..."): an off-road leg in words.
+String offroadHint(ProgressManeuver m, Fmt fmt) {
+  final dir = cardinalWord(m.cardinal);
+  final climb = (m.elevGainM ?? 0) >= 10 ? ', up ${fmt.height(m.elevGainM!)}' : ((m.elevLossM ?? 0) >= 10 ? ', down ${fmt.height(m.elevLossM!)}' : '');
+  if (m.kind == 'offroad_follow') return 'Follow ${m.followName ?? 'the trail'} $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
+  return 'Head $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
+}
+
 /// The strip at the top while guiding: the next turn and how far, then the one after. On an off-road leg it is the bearing to
 /// the next point, how far, and the climb.
 class GuidanceBanner extends StatelessWidget {
-  const GuidanceBanner({super.key, required this.nav, required this.fmt});
+  const GuidanceBanner({super.key, required this.nav, required this.fmt, this.showThen = true});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// The small "Then ..." line under the turn. The drive screen turns it off: the turn after is the first row of its list.
+  final bool showThen;
 
   @override
   Widget build(BuildContext context) {
@@ -59,14 +70,13 @@ class GuidanceBanner extends StatelessWidget {
       } else {
         final icon = turnIconFor(next.type, offroad: next.isOffroad);
         // The lanes show once the turn is as close as the first voice prompt (800 m by car), read from the engine for the way of travel.
-        final far = nav.farStageM;
-        if (next.lanes.isNotEmpty && !next.isOffroad && !next.isArrival && far != null && next.distanceM <= far) lanes = next.lanes;
+        lanes = lanesToShow(next, nav.farStageM);
         body = _row(
           context,
           icon: iconForTurn(icon),
           big: fmt.distance(next.distanceM),
-          small: next.isOffroad ? _offroadHint(next) : next.instruction,
-          then: p.then == null || p.then!.isArrival && next.isArrival ? null : 'Then ${_thenText(p.then!)}',
+          small: next.isOffroad ? offroadHint(next, fmt) : next.instruction,
+          then: !showThen || p.then == null || p.then!.isArrival && next.isArrival ? null : 'Then ${_thenText(p.then!)}',
         );
       }
     }
@@ -85,17 +95,10 @@ class GuidanceBanner extends StatelessWidget {
   }
 
   String _thenText(ProgressManeuver m) {
-    if (m.isOffroad) return _offroadHint(m).toLowerCase();
+    if (m.isOffroad) return offroadHint(m, fmt).toLowerCase();
     var t = m.instruction.trim();
     if (t.endsWith('.')) t = t.substring(0, t.length - 1);
     return t.isEmpty ? t : t[0].toLowerCase() + t.substring(1);
-  }
-
-  String _offroadHint(ProgressManeuver m) {
-    final dir = cardinalWord(m.cardinal);
-    final climb = (m.elevGainM ?? 0) >= 10 ? ', up ${fmt.height(m.elevGainM!)}' : ((m.elevLossM ?? 0) >= 10 ? ', down ${fmt.height(m.elevLossM!)}' : '');
-    if (m.kind == 'offroad_follow') return 'Follow ${m.followName ?? 'the trail'} $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
-    return 'Head $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
   }
 
   Widget _row(BuildContext context, {required IconData icon, required String big, required String small, String? then}) {
@@ -186,23 +189,45 @@ class GuidanceBar extends StatelessWidget {
   /// padding (the elevation handle is above it).
   final bool bare;
 
+  /// Under this width (the card's own, in points: a 360-point phone's card is 336) the bar is drawn in its narrow form: see [_bar].
+  static const double narrowBelow = 360;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) => _bar(context, narrow: box.maxWidth < narrowBelow));
+
+  Widget _bar(BuildContext context, {required bool narrow}) {
     final k = context.t;
     final p = nav.progress;
     final r = nav.route;
     final eta = p?.eta;
     final remainingM = p?.remainingM ?? r?.distanceM ?? 0;
     final remainingS = p?.remainingS ?? r?.durationS ?? 0;
-    Widget stat(String big, String small, {Key? key}) => Expanded(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(big, key: key, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
-                Text(small, style: TextStyle(fontSize: 13, color: k.secondary)),
-              ],
+    Widget column(String big, String small, {Key? key, double bigSize = 20, double smallSize = 13}) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(big, key: key, style: TextStyle(fontSize: bigSize, fontWeight: FontWeight.w700, color: k.text)),
+            Text(small, style: TextStyle(fontSize: smallSize, color: k.secondary)),
+          ],
+        );
+    Widget stat(String big, String small, {Key? key}) => Expanded(child: FittedBox(fit: BoxFit.scaleDown, child: column(big, small, key: key)));
+    // Narrow (a 320 or 360 point phone): three equal cells left each long value only a sliver, and each was shrunk to fill its own
+    // cell, so the three ran together ("7:02 PM23 min17 mi"). Here the three sit in one run with a fixed gap between them, shrunk
+    // together by one scale, so the gaps stay; the voice switch and End take less room.
+    Widget narrowStats() => Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  column(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta'), bigSize: 18, smallSize: 12),
+                  const SizedBox(width: 12),
+                  column(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time'), bigSize: 18, smallSize: 12),
+                  const SizedBox(width: 12),
+                  column(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance'), bigSize: 18, smallSize: 12),
+                ],
+              ),
             ),
           ),
         );
@@ -225,21 +250,26 @@ class GuidanceBar extends StatelessWidget {
                   IconButton(
                     key: const ValueKey('guidance-voice'),
                     tooltip: nav.voiceOn ? 'Turn the voice off' : 'Turn the voice on',
-                    icon: Icon(nav.voiceOn ? Icons.volume_up : Icons.volume_off, color: nav.voiceOn ? k.accent : k.secondary, size: 28),
+                    icon: Icon(nav.voiceOn ? Icons.volume_up : Icons.volume_off, color: nav.voiceOn ? k.accent : k.secondary, size: narrow ? 24 : 28),
+                    padding: narrow ? EdgeInsets.zero : null,
+                    constraints: narrow ? const BoxConstraints(minWidth: 36, minHeight: 48) : null,
                     onPressed: nav.toggleVoice,
                   ),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        stat(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta')),
-                        stat(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time')),
-                        stat(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance')),
-                      ],
+                  if (narrow)
+                    narrowStats()
+                  else
+                    Expanded(
+                      child: Row(
+                        children: [
+                          stat(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta')),
+                          stat(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time')),
+                          stat(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance')),
+                        ],
+                      ),
                     ),
-                  ),
                   FilledButton(
                     key: const ValueKey('guidance-end'),
-                    style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background, minimumSize: const Size(72, 52)),
+                    style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background, minimumSize: Size(narrow ? 56 : 72, 52), padding: narrow ? const EdgeInsets.symmetric(horizontal: 12) : null),
                     onPressed: nav.end,
                     child: const Text('End'),
                   ),

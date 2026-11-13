@@ -392,6 +392,32 @@ void main() {
       expect(find.textContaining('This PDF has no title inside it, so the file name is used: mushrooms_demystified_2nd_ed_OCR.pdf.'), findsOneWidget);
     });
 
+    testWidgets('Remove says what removing frees from the device\'s own figure (the PDF and the pack on disk), not the stored size alone', (tester) async {
+      api.bookMap['lib1'] = [BuildBook(id: 'a', title: 'Field Manual 21-76 Survival', passages: 480, fileName: 'fm21-76.pdf', size: 532 << 10, bytes: 800 << 10, addedAt: DateTime(2026, 8, 14))];
+      c.freeSpace = () => 61 << 30;
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      final row = find.byKey(const ValueKey('book-a'));
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(row));
+      await mouse.moveTo(tester.getCenter(row));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('book-menu-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('800 KB · 480 passages'), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('remove-dialog')), matching: find.textContaining('532 KB')), findsNothing, reason: 'not the stored size alone');
+      expect(find.textContaining('61.0 GB free now, 61.0 GB after'), findsOneWidget);
+    });
+
+    test('the device\'s figures are read: a book\'s bytes, a library\'s bytes; without them a book is its stored size', () {
+      final b = BuildBook.fromJson({'id': 'a', 'size': 1000, 'bytes': 1500});
+      expect((b.bytes, b.freesBytes), (1500, 1500));
+      expect(BuildBook.fromJson({'id': 'a', 'size': 1000}).freesBytes, 1000);
+      expect(BuildLibrary.fromJson({'id': 'l', 'bytes': 7}).bytes, 7);
+      expect(BuildLibrary.fromJson({'id': 'l'}).bytes, isNull);
+    });
+
     testWidgets('Remove asks first, says the PDF on the computer is untouched, and takes only that book away', (tester) async {
       c.freeSpace = () => 61 << 30;
       await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
@@ -480,6 +506,30 @@ void main() {
       expect(find.text('Uploading 1 PDF. Keep this tab open.'), findsNothing);
     });
 
+    testWidgets('the facts card and the delete menu show the same figure', (tester) async {
+      api.libs = [BuildLibrary(id: 'lib1', title: 'Hunting and field guides', books: 2, passages: 10, bytes: 70 << 20)];
+      c.sizeOf = (_) => 66 << 20;
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      expect(find.text('70.0 MB'), findsOneWidget, reason: 'Size on this device');
+      await tester.tap(find.byKey(const ValueKey('library-menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete · frees 70.0 MB'), findsOneWidget);
+    });
+
+    testWidgets('an emptied library says what deleting it frees, from the device\'s figure, never 0 B while it takes space', (tester) async {
+      // no books, so no search folder in the device\'s item list (sizeOf has nothing), but the library still takes 70 MB on disk
+      api.libs = [BuildLibrary(id: 'lib1', title: 'Hunting and field guides', bytes: 70 << 20)];
+      c.sizeOf = (_) => null;
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      await tester.tap(find.byKey(const ValueKey('library-menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete · frees 70.0 MB'), findsOneWidget);
+      await tester.tap(find.textContaining('Delete · frees'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('70.0 MB'), findsWidgets, reason: 'the confirm card says the same');
+      expect(find.textContaining('0 B'), findsNothing);
+    });
+
     testWidgets('Delete is in the library menu, asks first, and the library goes', (tester) async {
       api.libs = [lib(books: 0, passages: 0), lib(id: 'lib2', title: 'Garden')];
       await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
@@ -555,10 +605,13 @@ void main() {
       expect(find.text('Working · building passages 212 of 480'), findsOneWidget);
       expect(find.text('Queued'), findsOneWidget);
       expect(find.text('Library file'), findsWidgets);
-      expect(find.text('Not a file Cache can use. Note: backup-2026-10.tar.why.txt'), findsOneWidget);
+      expect(find.textContaining('Not a file Cache can use.'), findsOneWidget, reason: 'the reason, one full stop, no note file name');
       expect(find.byKey(const ValueKey('drop-retry-backup-2026-10.tar')), findsNothing);
       expect(find.textContaining('Duplicate: the same content is already in Wilderness Medicine Handbook, 7th ed'), findsOneWidget);
-      expect(find.textContaining('Note: Trapping 1952 scan.pdf.why.txt'), findsOneWidget);
+      expect(find.textContaining('This PDF is protected with a password.'), findsOneWidget, reason: 'the reason as the device gave it, one full stop');
+      expect(find.textContaining('why.txt'), findsNothing);
+      expect(find.textContaining('Note:'), findsNothing);
+      expect(find.textContaining('..'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('drop-retry-Trapping 1952 scan.pdf')));
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-now')));
@@ -569,6 +622,14 @@ void main() {
       await tester.pump();
       expect(find.text('Edible Plants of Idaho.pdf'), findsNothing);
       expect(find.text('Trapping 1952 scan.pdf'), findsOneWidget);
+    });
+
+    test('a reason is shown as one sentence with one full stop', () {
+      expect(oneSentence('The file is damaged and could not be opened.'), 'The file is damaged and could not be opened.');
+      expect(oneSentence('Not a file Cache can use'), 'Not a file Cache can use.');
+      expect(oneSentence('Scanned. '), 'Scanned.');
+      expect(oneSentence('Could not be opened..'), 'Could not be opened.');
+      expect(oneSentence(''), '');
     });
 
     testWidgets('a missing folder is a banner, the table is the last known state, and Check now is offered', (tester) async {

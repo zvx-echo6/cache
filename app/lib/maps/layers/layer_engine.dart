@@ -47,6 +47,15 @@ abstract class LayerEngine extends ChangeNotifier {
   /// the map loads its sources again: tiles it could not have while offline are asked for again.
   int get sourcesGeneration => 0;
 
+  /// The tile server's port on this device (0: none, or not on this device). It is part of the map's style key: a new port
+  /// means the map's sources have new addresses.
+  int get port => 0;
+
+  /// Asks the core for its tile server again. iOS can take a suspended app's listening socket away; the core then starts a
+  /// new server on a new port, and listeners hear of it. Called when the app comes to the front, when a car screen connects
+  /// and when the car's map asks for its style.
+  Future<void> recheckServer() async {}
+
   /// True when the engine can draw [layerId] at the middle of [view] without the network: the tile is
   /// downloaded or was cached from an earlier view.
   Future<bool> hasTiles(String layerId, GeoBounds view, int zoom);

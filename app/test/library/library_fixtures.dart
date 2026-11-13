@@ -6,6 +6,8 @@ import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
 import 'package:cache/library/library_prefs.dart';
 import 'package:cache/library/shelf_source.dart';
+import 'package:cache/regions/regions_state.dart';
+import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
 
@@ -146,12 +148,16 @@ LibraryDeps testDeps({
   BookFiles? files,
   ShelfLookPrefs? looks,
   List<String>? added,
+  RegionsState? regions,
+  SharingState? sharing,
 }) =>
     LibraryDeps(
       browse: browse,
       shelves: shelves,
       files: files ?? BookFilesUnavailable(),
       looks: looks ?? ShelfLookPrefs(dirOverride: Directory.systemTemp.createTempSync('looks')),
+      regions: regions,
+      sharing: sharing,
       zims: (_) => const Scaffold(body: Center(child: Text('ZIM list'))),
       addToLibrary: (_) => added?.add('add'),
       openGuide: (_) async {},
