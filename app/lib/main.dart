@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -911,6 +911,8 @@ class _CacheAppState extends State<CacheApp> {
     };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
+    // A core call that took over two seconds is logged with its name, its wait in the core's queue and its run (no arguments).
+    CoreCallTimes.onSlow = (op, queued, ran) => logInfo(CoreCallTimes.line(op, queued, ran));
     sources.embedding = searchModel;
     // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
     if (plat.isWeb) unawaited(searchModel.refreshServer());

@@ -1358,6 +1358,9 @@ void main() {
         'regions': {'dir': '/r'},
       };
       expect(carPlacesConfig(extra).keys.toSet(), {'user', 'places', 'regions'});
+      // The car only reads the saved places: its handle opens user.sqlite read-only.
+      expect(carPlacesConfig(extra)['user'], {'db_path': '/u.sqlite', 'read_only': true});
+      expect(extra['user'], {'db_path': '/u.sqlite'}, reason: 'the main core\'s config is left as it is');
     });
 
     test('opens at the first call, and again after a failed open', () async {

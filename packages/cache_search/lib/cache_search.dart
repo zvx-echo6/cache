@@ -3,7 +3,7 @@ library;
 
 export 'src/engine.dart' show SearchEngine, ConversationNumbers, CoreJob;
 export 'src/errors.dart' show CacheSearchException;
-export 'src/core_transport.dart' show CoreTransport;
+export 'src/core_transport.dart' show CoreTransport, CoreCallTimes;
 export 'src/transport_http.dart' show HttpTransport;
 export 'src/map_models.dart';
 export 'src/models.dart';

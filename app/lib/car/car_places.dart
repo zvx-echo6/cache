@@ -19,10 +19,12 @@ abstract interface class CarPlaces {
 
 /// The sections of the main core's cs_open config the car's handle needs: the saved places (`user`), the map search
 /// (`places`) and the region engine its places come from (`regions`; the process's one engine for that folder is shared,
-/// cache_regions' open_shared). No sources, no libraries, no layers, no live data.
+/// cache_regions' open_shared). No sources, no libraries, no layers, no live data. The car only reads the saved places, so
+/// user.sqlite is opened read-only (`read_only`): this handle never takes its write lock. (A core built before that key
+/// ignores it and opens the file as before.)
 Map<String, dynamic> carPlacesConfig(Map<String, dynamic> extra) => {
       for (final k in const ['user', 'places', 'regions'])
-        if (extra[k] != null) k: extra[k],
+        if (extra[k] != null) k: k == 'user' && extra[k] is Map ? {...(extra[k] as Map).cast<String, dynamic>(), 'read_only': true} : extra[k],
     };
 
 /// [CarPlaces] on a core handle of its own, opened at the car's first call with [config] (the main core's config, built
