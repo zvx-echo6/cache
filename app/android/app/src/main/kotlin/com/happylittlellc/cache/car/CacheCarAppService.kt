@@ -3,6 +3,7 @@ package com.happylittlellc.cache.car
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -125,6 +126,10 @@ class CarSession(
 
     // A navigation request that reached the phone's activity while this car is connected: handled as the car's own are.
     override fun onNavRequest(req: NavRequest) = handle(req)
+
+    override fun onCarConfigurationChanged(newConfiguration: Configuration) {
+        if (ready) renderer.setDark(carContext.isDarkMode)
+    }
 
     /** A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found. */
     private fun handle(req: NavRequest) {

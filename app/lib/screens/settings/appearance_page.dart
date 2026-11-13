@@ -29,7 +29,7 @@ class AppearancePage extends StatelessWidget {
                     status: [Part(id.hint)],
                     leading: Icon(id == app.theme ? Icons.radio_button_checked : Icons.radio_button_off, color: id == app.theme ? k.accent : k.secondary),
                     chevron: false,
-                    onTap: () => app.setTheme(id),
+                    onTap: () => app.chooseTheme(id),
                   ),
               ],
             ),

@@ -653,6 +653,46 @@ void main() {
     });
   });
 
+  test('picking a theme in Appearance marks it picked, and that is saved; an older file counts a saved theme other than Dark', () async {
+    final d = Directory.systemTemp.createTempSync('carset');
+    addTearDown(() => d.deleteSync(recursive: true));
+    final file = File('${d.path}/settings.json');
+    Future<AppState> load(Map<String, Object?>? saved) async {
+      if (saved == null) {
+        if (file.existsSync()) file.deleteSync();
+      } else {
+        file.writeAsStringSync(jsonEncode(saved));
+      }
+      final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
+      await a.init();
+      return a;
+    }
+
+    // A new install: not picked.
+    var a = await load(null);
+    expect(a.themeChosen, isFalse);
+    // Picking, even the theme already shown, marks it picked; any other change of theme (a synced one) does not.
+    await a.setTheme(CacheThemeId.dark);
+    expect(a.themeChosen, isFalse);
+    await a.chooseTheme(CacheThemeId.dark);
+    expect(a.themeChosen, isTrue);
+    expect((jsonDecode(file.readAsStringSync()) as Map)['themeChosen'], isTrue);
+    a.dispose();
+    a = await load({'theme': 'dark', 'themeChosen': true});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    // A file from before the flag: a saved theme other than the default counts as picked, the default does not.
+    a = await load({'theme': 'light'});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    a = await load({'theme': 'dark'});
+    expect(a.themeChosen, isFalse);
+    a.dispose();
+    a = await load({'theme': 'tactical', 'themeChosen': false});
+    expect(a.themeChosen, isFalse);
+    a.dispose();
+  });
+
   test('an old settings file that still has the two removed car switches loads, and does not write them back', () async {
     final d = Directory.systemTemp.createTempSync('carset');
     addTearDown(() => d.deleteSync(recursive: true));
@@ -764,6 +804,49 @@ void main() {
       m.setLayersOn(on);
       await settle();
       expect(count(), 3);
+      b.dispose();
+    });
+
+    test('until a theme is picked the car follows its own day and night; once picked, the theme always', () async {
+      await maps.engine.start();
+      var chosen = CacheThemeId.tactical;
+      var picked = false;
+      final changed = ValueNotifier(0);
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed, theme: () => chosen,
+          themeChosen: () => picked, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      Future<Map> styleAt({required bool dark}) async => await fromCar('style', {'dark': dark}) as Map;
+      // Not picked: Light by day, Dark by night, whatever the theme; the car is told its day and night decide.
+      var st = await styleAt(dark: false);
+      expect(st['theme'], 'light');
+      expect(st['followsCar'], isTrue);
+      expect((st['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.light).css('route'));
+      st = await styleAt(dark: true);
+      expect(st['theme'], 'dark');
+      expect(b.carShows, CacheThemeId.dark);
+      // The trip's palette follows the same theme (carTrip's `palette` is carOverlayPalette(carShows)).
+      await styleAt(dark: false);
+      expect(b.carShows, CacheThemeId.light);
+      // The person picks a theme: one style reload, and from then on it is that theme by day and by night.
+      toCar.clear();
+      picked = true;
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), hasLength(1));
+      expect(b.carShows, CacheThemeId.tactical);
+      for (final dark in [true, false]) {
+        st = await styleAt(dark: dark);
+        expect(st['theme'], 'tactical');
+        expect(st['followsCar'], isFalse);
+      }
+      // A day and night change with the theme picked changes nothing.
+      await styleAt(dark: true);
+      expect(b.carShows, CacheThemeId.tactical);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: false, carDark: false), CacheThemeId.light);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: false, carDark: true), CacheThemeId.dark);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: true, carDark: true), CacheThemeId.parchment);
       b.dispose();
     });
 

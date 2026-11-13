@@ -32,9 +32,12 @@ const int kClimbSamples = 56;
 /// The most points the mini map's route line is simplified to.
 const int kOverviewMaxPoints = 150;
 
-// The car screens always follow the phone's chosen theme (Dark, Light, Parchment or Tactical), day and night (the owner's
-// decision of 2026-11-13): the car map's style (CarBridge.style), the route line, the grade badge, the route mini map and the
-// climb card all take the chosen theme's colors ([carOverlayPalette]). The car's own day or night setting chooses none of them.
+/// The theme the car screens show: the car map's style (CarBridge.style), the route line, the grade badge, the route mini map,
+/// the climb card and the pins' pictures all take it. Once the person has picked a theme on the phone ([themeChosen], set by
+/// Settings > Appearance), always that theme ([chosen]), day and night (the owner's decision of 2026-11-13). Until then the
+/// car's own setting decides, as Android for Cars' quality rule MR-1 asks by default: Light by day, Dark by night ([carDark]).
+CacheThemeId carTheme({required CacheThemeId chosen, required bool themeChosen, required bool carDark}) =>
+    themeChosen ? chosen : (carDark ? CacheThemeId.dark : CacheThemeId.light);
 
 /// The `climb` block, or null (the card is then not drawn): with no elevation data, and with no climb ahead that is at least
 /// [kCarClimbMinGrade] steep ([carClimbAhead]). A flat road, a gentle rise and a route whose climbs are all behind get no card.
@@ -275,8 +278,7 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
   return {for (final e in c.entries) e.key: _hex(e.value)};
 }
 
-/// The `palette` block: the colors of the phone's chosen theme, with the theme's name. One theme, whatever the car's day or night
-/// setting says.
+/// The `palette` block: the colors of the theme the car shows ([carTheme]), with the theme's name. One theme.
 Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) => {'theme': chosen.name, ...carOverlayColors(chosen)};
 
 /// The `overlay` part of the trip: the one fact the phone tells the car, `phoneDrive`. It is true only while the phone's drive

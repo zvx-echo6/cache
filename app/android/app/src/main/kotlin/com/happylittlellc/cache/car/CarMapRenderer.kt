@@ -51,8 +51,9 @@ import kotlin.math.roundToInt
  * own SurfaceView or TextureView. So the surface becomes a VirtualDisplay, and a Presentation on that display holds an ordinary
  * MapLibre MapView, as Google's car documentation shows for drawing Views to the car surface. This MapView is the car's own: the
  * phone's Flutter map is not touched or moved, and both read the same offline tiles from the core's tile server on 127.0.0.1
- * with the same style, which Dart builds in the map palette of the phone's chosen theme. The car's map follows that theme day
- * and night (the owner's decision of 2026-11-13): the car's own day or night setting changes nothing here.
+ * with the same style, which Dart builds in the map palette of the theme the car shows. Dart decides it (car_overlay.dart,
+ * carTheme): the theme the person picked on the phone, day and night; until one is picked, Light by day and Dark by night by the
+ * car's own setting (quality rule MR-1). The car only reports its day or night with each style request.
  *
  * Quality rule NF-2 says only map content is drawn on the surface: the base map, the route, the destination and the position,
  * with the turn, distances and arrival time left to the templates. Two things here are deliberately drawn on the surface anyway:
@@ -92,6 +93,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var style: Style? = null
     private var styleAttempt = 0
     private var colors: Map<String, String> = DEFAULT_COLORS
+    private var dark = carContext.isDarkMode
+
+    /** Whether the car's day or night decides the theme now (Dart's `followsCar`, with each style; no theme picked yet). */
+    private var followsCar = true
     private var stable: Rect? = null
     private var visible: Rect? = null
     private var width = 0
@@ -337,6 +342,16 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     fun mapController(): MapController =
         MapController.Builder().setMapActionStrip(mapActionStrip()).setPanModeListener { on -> panMode = on }.build()
 
+    // ---- light and dark (quality rule MR-1) -------------------------------------------------------------------------
+
+    /** The car's day or night setting changed: while no theme is picked on the phone it decides the theme, so the style is asked
+     * for again (one load); once one is picked nothing changes. */
+    fun setDark(on: Boolean) {
+        if (on == dark) return
+        dark = on
+        if (followsCar) loadStyle()
+    }
+
     // ---- style and overlays ----------------------------------------------------------------------------------------
 
     private fun onMap(m: MapLibreMap) {
@@ -368,7 +383,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         if (map == null) return
         main.removeCallbacks(reload)
         val attempt = ++styleAttempt
-        CarLink.call("style") { r ->
+        CarLink.call("style", mapOf("dark" to dark)) { r ->
             val m = map ?: return@call
             if (attempt != styleAttempt) return@call
             val res = r.asMap()
@@ -378,6 +393,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 main.postDelayed({ if (attempt == styleAttempt) loadStyle() }, 1500)
                 return@call
             }
+            followsCar = res["followsCar"] != false
             @Suppress("UNCHECKED_CAST")
             colors = DEFAULT_COLORS + ((res["colors"] as? Map<String, String>) ?: emptyMap())
             dropStyle()
