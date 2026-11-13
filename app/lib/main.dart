@@ -17,6 +17,7 @@ import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
+import 'car/car_pins.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -1161,6 +1162,8 @@ class _CacheAppState extends State<CacheApp> {
         carries: _phoneDrive.extras,
         settings: app,
         ready: () => sources.whenCoreReady(),
+        // The phone map's pins (notebook places, saved places, shown repeater lists) on the car's map.
+        pins: CarPins.of(notebooks: notebooks, userLayers: userLayers, maps: maps),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
           await location.request(explain: () async => false);
