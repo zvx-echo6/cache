@@ -235,7 +235,8 @@ class RoutePanel extends StatelessWidget {
                         key: const ValueKey('route-steps'),
                         onPressed: nav.route == null || nav.routing || nav.route!.maneuvers.isEmpty ? null : onSteps,
                         icon: const Icon(Icons.turn_right),
-                        label: const Text(kStepThroughLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        // On a narrow phone the words shrink to fit beside Start rather than being cut.
+                        label: const FittedBox(fit: BoxFit.scaleDown, child: Text(kStepThroughLabel, maxLines: 1)),
                       ),
                     ),
                     const SizedBox(width: 8),
