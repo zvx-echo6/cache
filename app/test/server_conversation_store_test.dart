@@ -185,7 +185,14 @@ void main() {
     expect(() => tab(server), throwsA(isA<CacheSearchException>()));
   });
 
-  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
+  /// Waits until [ok] holds, with a deadline: what a test expects to have happened is waited for, not given a fixed time (a loaded
+  /// machine can overrun one).
+  Future<void> until(bool Function() ok, {Duration within = const Duration(seconds: 10)}) async {
+    final end = DateTime.now().add(within);
+    while (!ok() && DateTime.now().isBefore(end)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
 
   test('a write the server refuses (io_error) is dropped with a log, and the writes behind it still go', () async {
     final server = FakeServer();
@@ -212,7 +219,7 @@ void main() {
     server.fails['history.update'] = const CacheSearchException('internal', 'type error in the helper');
     a.rename(c.id, 'New');
     await say(a, c.id, 'behind it');
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await until(() => log.any((l) => l.contains('history.update was dropped')));
     expect(log.where((l) => l.contains('history.update was dropped')), hasLength(1));
     expect(server.calls.where((x) => x == 'history.update').length, ServerConversationStore.maxInternalRetries);
     server.fails.clear();
@@ -231,7 +238,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     expect(log.any((l) => l.contains('was dropped')), isFalse);
     server.down = false;
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await until(() => (server.convs[c.id]!['messages'] as List).isNotEmpty);
     expect((server.convs[c.id]!['messages'] as List), hasLength(1));
   });
 
@@ -242,7 +249,7 @@ void main() {
     await runZonedGuarded(() async {
       final a = await ServerConversationStore.open(server, poll: const Duration(milliseconds: 10), log: log.add);
       server.down = true;
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await until(() => log.any((l) => l.contains('could not look for changes')));
       a.close();
     }, (e, _) => errors.add(e));
     expect(errors, isEmpty);
@@ -293,8 +300,10 @@ void main() {
     final mine = a.create(title: 'Written offline');
     await say(a, mine.id, 'hello');
     server.down = false;
-    await settle();
-    await settle();
+    await until(() =>
+        server.convs[mine.id]?['title'] == 'Written offline' &&
+        (server.convs[mine.id]!['messages'] as List).length == 1 &&
+        a.list().length == 2);
     expect(server.convs[mine.id]!['title'], 'Written offline', reason: 'the session was not lost');
     expect((server.convs[mine.id]!['messages'] as List), hasLength(1));
     expect({for (final c in a.list()) c.title}, {'On the server', 'Written offline'}, reason: 'the server history came in too');
