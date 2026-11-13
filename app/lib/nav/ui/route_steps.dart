@@ -7,9 +7,8 @@ import '../nav_state.dart';
 import 'drive_screen.dart';
 import 'lane_strip.dart';
 
-// PLACEHOLDER: the owner chooses the final words
-/// The step card's counter: {n} is the turn shown, {total} how many the route has ("3 of 18").
-const String kStepCounterFormat = '{n} of {total}';
+/// The step card's counter: {n} is the turn shown, {total} how many the route has ("Step 3 of 18"; the owner's words).
+const String kStepCounterFormat = 'Step {n} of {total}';
 
 /// The counter's words for turn [n] (from 1) of [total].
 String stepCounterText(int n, int total) => kStepCounterFormat.replaceAll('{n}', '$n').replaceAll('{total}', '$total');
