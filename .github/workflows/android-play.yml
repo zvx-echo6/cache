@@ -1,8 +1,9 @@
 # Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to Google Play's internal, closed (alpha)
 # and open (beta) testing tracks, fully rolled out with nothing left to click in Play Console (or as a draft with status: draft).
 # Manual trigger only. It builds the branch it is started on.
-# android_auto: builds with Android Auto switched on (off in every normal build), to start Google's car review. Such a build may
-# only go to closed testing (tracks: alpha), where the car review blocks nothing; the run fails at the start on any other tracks.
+# android_auto: builds with Android Auto switched on (off unless ticked). Such a build may only go to internal and closed testing
+# (tracks: internal,alpha), where Google's car review blocks nothing; the run fails at the start on any other track. The same
+# build is put on open testing once the car review has passed.
 #
 # Signing: the upload key (PKCS12 keystore, alias "upload") lives only in the Actions secrets ANDROID_UPLOAD_KEYSTORE_B64,
 # ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_PASSWORD and ANDROID_UPLOAD_KEY_ALIAS. It is decoded into the runner's temp
@@ -34,7 +35,7 @@ on:
         options: [completed, draft]
         default: completed
       android_auto:
-        description: Build with Android Auto switched on, for Google's car review (closed testing only, tracks must be alpha)
+        description: Build with Android Auto switched on (internal and closed testing only, tracks must be internal, alpha or both)
         type: boolean
         default: false
   # Only so GitHub lists this workflow while it is not on the default branch (a manual run needs that): a push builds nothing.
@@ -97,18 +98,24 @@ jobs:
           if not re.fullmatch(r"[A-Za-z0-9:_-]+(,[A-Za-z0-9:_-]+)*", tracks): sys.exit(f"::error::Not a list of track names: {tracks}")
           print(f"tracks {tracks}, release notes {len(notes)} characters")
           PY
-      # Google reviews a car build without blocking anything only on closed testing; on open testing it would block releases.
-      - name: An Android Auto build goes to closed testing only
+      # Google's car review by track: none on internal testing, non-blocking on closed testing, blocking on open testing and
+      # production. It judges the whole submission, and every track named here goes up as one submission: with a blocking
+      # track in it, a failed car review rejects the build on every track. So a car build goes to internal and closed testing
+      # only, and the same build is put on open testing once the car review has passed.
+      - name: An Android Auto build goes to internal and closed testing only
         if: inputs.android_auto
         env:
           TRACKS: ${{ inputs.tracks }}
         run: |
           tracks=$(printf '%s' "$TRACKS" | tr -d '[:space:]')
-          if [[ "$tracks" != "alpha" ]]; then
-            echo "::error::An Android Auto build may only go to closed testing (alpha) for now; tracks is '$tracks'. Run it again with tracks: alpha"
-            exit 1
-          fi
-          echo "Android Auto build, closed testing (alpha) only"
+          IFS=, read -r -a list <<< "$tracks"
+          for t in "${list[@]}"; do
+            if [[ "$t" != internal && "$t" != alpha ]]; then
+              echo "::error::An Android Auto build may only go to internal and closed testing (internal, alpha) until Google's car review has passed; tracks is '$tracks'. Run it again with tracks: internal,alpha"
+              exit 1
+            fi
+          done
+          echo "Android Auto build, tracks $tracks (internal and closed testing only)"
       # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and versionCode 31, the same build number on iPhone and
       # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
       # version are two builds), so it is not tied to the version's last number. It is the versionCode Play gets (not the run

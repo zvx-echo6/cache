@@ -7,7 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
-- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
+- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons
 - Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
 - Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
