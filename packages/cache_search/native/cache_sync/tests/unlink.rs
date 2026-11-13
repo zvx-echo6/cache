@@ -427,6 +427,8 @@ fn the_clean_up_of_an_unconfirmed_link_tells_the_other_device_too() {
     call(&b, "link", json!({"code": code}));
     assert_eq!(peers(&a)[0]["unconfirmed"], true);
     assert_eq!(peers(&b).len(), 1);
+    // A's round stays held until the two seconds are over, so it does not ask B (which would confirm the link) first.
+    std::thread::sleep(Duration::from_secs(3));
     std::fs::remove_file(da.join("hold-rescan")).unwrap();
     // A removes the link it never saw confirmed, and B (which still holds it) is told, so it goes from B's list too.
     wait_syncing("A's clean-up and B told", 120, &[&a, &b], || {
