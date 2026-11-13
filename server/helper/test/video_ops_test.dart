@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 
 import '../../../packages/cache_search/lib/src/errors.dart';
 import '../bin/core_open.dart';
+import '../bin/keystore.dart';
 import '../bin/video_ops.dart';
 import 'fake_native.dart';
 
@@ -110,5 +111,33 @@ void main() {
 
   test('an unknown video op is an error', () {
     expect(() => ops.handle('video.nope', {}), throwsA(isA<CacheSearchException>()));
+  });
+
+  test('a keystore reference in a video op reaches the instance as the real token; the browser never gets the value', () {
+    final keys = KeyStore(File('${tmp.path}/keystore.json'));
+    keys.set('video.a.example.access', 'REAL-ACCESS');
+    keys.set('video.a.example.refresh', 'REAL-REFRESH');
+    final o = VideoOps(AppDirs(support, docs), () => fake, resolve: keys.resolve);
+    fake.videoReplies['list'] = '{"items":[]}';
+    final reply = o.handle('video.call', {
+      'op': 'list',
+      'request': jsonEncode({'instance': 'a.example', 'token': KeyStore.refOf('video.a.example.access'), 'refresh': KeyStore.refOf('video.a.example.refresh'), 'n': 3}),
+    });
+    expect(reply, '{"items":[]}');
+    final sent = jsonDecode(fake.videoCalls.single.substring('list:'.length)) as Map;
+    expect(sent, {'instance': 'a.example', 'token': 'REAL-ACCESS', 'refresh': 'REAL-REFRESH', 'n': 3});
+    expect(reply, isNot(contains('REAL')));
+    fake.progressScript.add(running(1, 2));
+    o.handle('video.jobStart', {'instance': 'a.example', 'video': 'u1', 'token': KeyStore.refOf('video.a.example.access')});
+    final start = fake.calls.firstWhere((c) => c.startsWith('jobStart:video_download:'));
+    expect((jsonDecode(start.substring('jobStart:video_download:'.length)) as Map)['token'], 'REAL-ACCESS');
+    // a request that is not JSON, or has no reference, goes on as it is; a reference to nothing is an error
+    fake.videoReplies['x'] = '{}';
+    o.handle('video.call', {'op': 'x', 'request': 'not json keystore://x'});
+    expect(fake.videoCalls.last, 'x:not json keystore://x');
+    expect(
+      () => o.handle('video.call', {'op': 'list', 'request': jsonEncode({'token': KeyStore.refOf('video.gone')})}),
+      throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'not_found')),
+    );
   });
 }
