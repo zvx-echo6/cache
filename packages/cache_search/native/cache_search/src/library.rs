@@ -1020,8 +1020,11 @@ impl LibSlot {
         self.legacy_state()
     }
 
-    /// For a library that grows (one Add PDF writes to): whether its newest points are not yet in its keyword index, so their words
-    /// are not searchable yet. `None` when it does not grow or has no keyword index to be behind. Cheap: counts only.
+    /// For a library that grows (one Add PDF writes to): whether its keyword index is behind the shard, so an extension is due. That
+    /// is when the counts differ either way: more points than the index covers (new books whose words are not searchable yet), or
+    /// fewer (a removed book whose ids the index still has; the extension deletes them). `None` when it does not grow or has no
+    /// keyword index to be behind. Cheap: counts only, so a removal and an addition of the same number of points between two looks
+    /// is not seen until the next change.
     pub fn keyword_pending(&self) -> Option<bool> {
         if !idxsnap::appendable_library(&self.path) {
             return None;
@@ -1029,10 +1032,10 @@ impl LibSlot {
         let points = self.docs as u64;
         if let Some(s) = self.snap.ready() {
             let covered = s.manifest.extra.get("points").and_then(|p| p.as_u64()).unwrap_or(s.index.docs);
-            return Some(points > covered);
+            return Some(points != covered);
         }
         match self.legacy_state() {
-            IndexState::Done(meta) => Some(points > meta.total),
+            IndexState::Done(meta) => Some(points != meta.total),
             _ => None,
         }
     }

@@ -261,12 +261,31 @@ class _DriveTurnsState extends State<DriveTurns> {
     );
   }
 
-  Widget _row(BuildContext context, CacheTokens k, DriveRow r) {
+  Widget _row(BuildContext context, CacheTokens k, DriveRow r) => DriveTurnRow(key: ValueKey('drive-row-${r.maneuver.index}'), row: r, fmt: nav.fmt);
+}
+
+/// One turn drawn as the drive screen's list draws it: the turn arrow, the route's own words (a stop's number and name), and how
+/// far it is from the turn before. The route preview's step card draws its turn with it too.
+class DriveTurnRow extends StatelessWidget {
+  const DriveTurnRow({super.key, required this.row, required this.fmt, this.divider = true, this.maxLines = 2});
+
+  final DriveRow row;
+  final Fmt fmt;
+
+  /// The thin line under the row, between the rows of the list.
+  final bool divider;
+
+  /// How many lines the words may take before they are cut.
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final r = row;
     final m = r.maneuver;
     final icon = iconForTurn(turnIconFor(m.type, offroad: m.isOffroad));
     return Container(
-      key: ValueKey('drive-row-${m.index}'),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.22)))),
+      decoration: divider ? BoxDecoration(border: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.22)))) : null,
       child: Row(
         children: [
           Container(
@@ -278,14 +297,14 @@ class _DriveTurnsState extends State<DriveTurns> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              r.text(nav.fmt),
-              maxLines: 2,
+              r.text(fmt),
+              maxLines: maxLines,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 16, height: 1.15, color: k.text),
             ),
           ),
           const SizedBox(width: 10),
-          if (r.distanceM > 0) Text(nav.fmt.distance(r.distanceM), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.secondary)),
+          if (r.distanceM > 0) Text(fmt.distance(r.distanceM), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.secondary)),
         ],
       ),
     );

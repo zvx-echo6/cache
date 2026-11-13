@@ -469,9 +469,15 @@ void main() {
           theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, pickFolder: () async => (path: 'content://tree/primary%3ADocuments%2FVault', display: 'Vault'))));
       expect(find.text('Obsidian'), findsOneWidget);
       expect(find.text('Logseq'), findsOneWidget);
+      // The status line appears when the first sync of the new folder has ended; that sync does real file work, so wait for
+      // it (up to 10 s) instead of a fixed time.
       await tester.runAsync(() async {
         await tester.tap(find.byKey(const ValueKey('connect-obsidian')));
-        await Future<void>.delayed(const Duration(milliseconds: 300));
+        for (var i = 0; i < 200; i++) {
+          final t = c.target(SyncKind.obsidian);
+          if (t != null && c.status(t.id) != null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
       });
       await tester.pumpAndSettle();
       expect(c.target(SyncKind.obsidian)?.path, 'content://tree/primary%3ADocuments%2FVault');

@@ -42,6 +42,7 @@ class LibraryDeps {
     this.sharing,
     this.rootTop,
     this.rootBottom,
+    this.rootEnd,
     this.whatsNew = currentWhatsNew,
   });
 
@@ -74,6 +75,9 @@ class LibraryDeps {
 
   /// What shows under the four rows, above Add to Library (in a browser, the libraries built from PDFs).
   final List<Widget> Function(BuildContext context)? rootBottom;
+
+  /// What shows last, under Add to Library: a notice that turns up while the page is open goes here, so no row above it moves.
+  final List<Widget> Function(BuildContext context)? rootEnd;
   final Future<List<String>> Function() whatsNew;
 
   /// Everything a Library page listens to.
@@ -261,6 +265,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                 ),
               ],
+              ...?d.rootEnd?.call(context),
             ],
           );
           });

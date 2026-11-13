@@ -7,7 +7,6 @@ import 'package:flutter/foundation.dart';
 
 import '../actions/setup_status.dart' show setupAge;
 import '../chat/system_prompt.dart' show isoWithOffset;
-import '../files.dart';
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
 import '../settings/web_search_setup.dart' show KeyCheck;
@@ -25,6 +24,7 @@ import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
 
@@ -178,8 +178,11 @@ class WeatherState extends ChangeNotifier {
     required this.policy,
     required this.core,
     required this.secrets,
-    required this.catalogueDir,
-    required this.liveDir,
+    this.catalogueDir,
+    this.liveDir,
+    this.catalogueFiles,
+    this.liveFiles,
+    this.onPlan,
     required this.builtIns,
     this.position,
     this.regions,
@@ -210,11 +213,20 @@ class WeatherState extends ChangeNotifier {
   /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
   final void Function()? onPlacesChanged;
 
-  /// Where downloaded catalogues are kept.
-  final Future<Directory> Function() catalogueDir;
+  /// Where downloaded catalogues are kept (a phone: a folder; give [catalogueFiles] instead in a browser).
+  final Future<Directory> Function()? catalogueDir;
 
-  /// The core's source folder, or null when there is no core.
-  final Future<Directory?> Function() liveDir;
+  /// The core's source folder, or null when there is no core (a phone; give [liveFiles] instead in a browser).
+  final Future<Directory?> Function()? liveDir;
+
+  /// The same two folders in a browser, where they are on Cache Server (the catalogues in the support folder, the core's source
+  /// folder in the documents folder). They are used when given.
+  final Future<WeatherFiles> Function()? catalogueFiles;
+  final Future<WeatherFiles?> Function()? liveFiles;
+
+  /// Told what the server's own timer should keep fetching when no tab is open (see [watchPlan]); null on a phone, whose
+  /// background run reads the settings and the last place itself.
+  final Future<void> Function(Map<String, dynamic> plan)? onPlan;
 
   /// The text of each built-in definition.
   final Future<List<String>> Function() builtIns;
@@ -453,7 +465,7 @@ class WeatherState extends ChangeNotifier {
   /// Called once the core has opened.
   Future<void> start() async {
     if (_started) return;
-    _store = CatalogueStore(await catalogueDir());
+    _store = catalogueFiles != null ? CatalogueStore.files(await catalogueFiles!()) : CatalogueStore((await catalogueDir!()));
     try {
       _builtIn = [for (final t in await builtIns()) Connector.parse(t)];
     } catch (e) {
@@ -518,6 +530,7 @@ class WeatherState extends ChangeNotifier {
 
   void _onSettings() {
     unawaited(pushPolicy());
+    unawaited(publishPlan());
     notifyListeners();
   }
 
@@ -559,15 +572,26 @@ class WeatherState extends ChangeNotifier {
 
   Future<void> _syncFolder() async {
     try {
-      final dir = await liveDir();
-      if (dir == null) return;
-      _folder ??= LiveFolder(dir);
+      if (_folder == null) {
+        if (liveFiles != null) {
+          final files = await liveFiles!();
+          if (files == null) return;
+          _folder = LiveFolder.files(files);
+        } else {
+          final dir = await liveDir!();
+          if (dir == null) return;
+          _folder = LiveFolder(dir);
+        }
+      }
       _folder!.apply(
         {for (final c in enabledSources) c.id: c.defText},
         formerly: [for (final c in _builtIn) c.id],
       );
+      // A browser's writes are queued: the core reads the folder itself, so they are waited for. A phone's are done already.
+      if (liveFiles != null) await _folder!.files.flush();
       final listed = await core.sources();
       _registered = {for (final s in (listed['sources'] as List? ?? const [])) (s as Map)['id'] as String};
+      unawaited(publishPlan());
     } catch (e) {
       logError('Live sources folder', error: e);
     }
@@ -597,6 +621,50 @@ class WeatherState extends ChangeNotifier {
         return;
       }
     }
+  }
+
+  String _lastPlan = '';
+
+  /// What the server's own timer keeps fetching with no tab open (a browser; see [onPlan]): the sources that are on and ready, and the
+  /// watched places with the request the core takes for each. Sent only when it changed.
+  Future<void> publishPlan() async {
+    final send = onPlan;
+    if (send == null || !_started) return;
+    try {
+      final places = await watchedPlaces();
+      final plan = <String, dynamic>{
+        'sources': [
+          for (final c in enabledSources)
+            if (keyReady(c)) {'id': c.id, 'title': c.title, 'alerts': c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts'},
+        ],
+        'places': [for (final p in places) {'id': p.id, 'name': p.name, 'request': placeRequest(p)}],
+      };
+      final text = jsonEncode(plan);
+      if (text == _lastPlan) return;
+      await send(plan);
+      _lastPlan = text;
+    } catch (e) {
+      logError('Live plan for the server', error: e);
+    }
+  }
+
+  Timer? _openWatch;
+
+  /// While a tab is open (a browser): now, then every [every], an update that is [due] runs, or else the alerts are checked, so what
+  /// the server's timer fetched while no tab was open pops up as a notification, once, by the told list.
+  void watchWhileOpen({required Duration every, required Duration due}) {
+    _openWatch?.cancel();
+    Future<void> pass() async {
+      if (!_started || _updating || enabledSources.isEmpty) return;
+      try {
+        if (await updateIfDue(due) == null) await checkAlerts();
+      } catch (e) {
+        logError('Weather check', error: e);
+      }
+    }
+
+    unawaited(pass());
+    _openWatch = Timer.periodic(every, (_) => unawaited(pass()));
   }
 
   /// cs_live_set_fetch_policy: online, metered, mobile data allowed (updates always use any connection), and the sources that are on.
@@ -1073,6 +1141,7 @@ class WeatherState extends ChangeNotifier {
     final key = p == null ? null : _hereKey(p.lat, p.lon);
     if (key == _hereSeen) return;
     _hereSeen = key;
+    unawaited(publishPlan());
     notifyListeners();
     if (key != null) _scheduleHereFetch(hereSettle);
   }
@@ -1169,18 +1238,15 @@ class WeatherState extends ChangeNotifier {
   /// The saved places the core last gave, also kept in a file (read at start, before the core opens).
   List<SavedPlaceRecord>? _savedKept;
 
-  File? get _savedFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/saved-places.json');
-  }
+  static const String _savedFile = 'saved-places.json';
 
   static Map<String, dynamic> _savedJson(SavedPlaceRecord s) => {'key': s.key, 'name': s.name, 'lat': s.lat, 'lon': s.lon, 'label': ?s.label};
 
   void _readSaved() {
     try {
-      final f = _savedFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_savedFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! List) return;
       _savedKept ??= [for (final e in j) if (e is Map) SavedPlaceRecord.fromJson(e.cast<String, dynamic>())];
     } catch (_) {}
@@ -1192,10 +1258,7 @@ class WeatherState extends ChangeNotifier {
     _savedKept = saved;
     if (text == before) return;
     try {
-      final f = _savedFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, text);
+      _store?.files.write(_savedFile, text);
     } catch (_) {}
   }
 
@@ -1311,6 +1374,8 @@ class WeatherState extends ChangeNotifier {
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
   Future<UpdateReport?> updateIfDue(Duration every) async {
     if (!_started || _updating || _updateRunning || enabledSources.isEmpty) return null;
+    // The server's own timer writes this file too (a browser); a phone has nothing to read again.
+    if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
     final last = _lastRunAt;
@@ -1493,16 +1558,13 @@ class WeatherState extends ChangeNotifier {
     return out.isEmpty ? null : out;
   }
 
-  File? get _shownFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/last-shown.json');
-  }
+  static const String _shownFile = 'last-shown.json';
 
   void _readShown() {
     try {
-      final f = _shownFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_shownFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! Map) return;
       for (final e in j.entries) {
         if (e.value is Map) _shown.putIfAbsent(e.key as String, () => (e.value as Map).cast<String, dynamic>());
@@ -1512,10 +1574,7 @@ class WeatherState extends ChangeNotifier {
 
   void _saveShown() {
     try {
-      final f = _shownFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode(_shown));
+      _store?.files.write(_shownFile, jsonEncode(_shown));
     } catch (_) {}
   }
 
@@ -1817,16 +1876,13 @@ class WeatherState extends ChangeNotifier {
 
   // ---------------------------------------------------------------- what is remembered between starts
 
-  File? get _statusFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/status.json');
-  }
+  static const String _statusFile = 'status.json';
 
   void _readStatus() {
     try {
-      final f = _statusFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = _store?.files.read(_statusFile);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       DateTime? t(Object? v) => v is int ? DateTime.fromMillisecondsSinceEpoch(v) : null;
       _lastOkAt = t(j['ok']);
       _lastRunAt = t(j['run']);
@@ -1837,10 +1893,7 @@ class WeatherState extends ChangeNotifier {
 
   void _saveStatus() {
     try {
-      final f = _statusFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode({
+      _store?.files.write(_statusFile, jsonEncode({
         'ok': _lastOkAt?.millisecondsSinceEpoch,
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,
@@ -1859,6 +1912,7 @@ class WeatherState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _openWatch?.cancel();
     _hereTimer?.cancel();
     settings.removeListener(_onSettings);
     _sub?.cancel();
