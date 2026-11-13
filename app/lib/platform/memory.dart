@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../platform.dart' as plat;
+import 'byte_units.dart';
 
 /// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2346 MB (anon 1200 MB, file
 /// 1146 MB), swap 2163 MB"; "memory unknown" where the system does not say. iOS gives its last native reading (phys_footprint
@@ -92,18 +93,18 @@ class MemoryReading {
   final int? compressed;
 
   String get diagnostics => [
-    if (footprint != null) 'footprint ${footprint! >> 20} MB',
-    if (resident != null) 'RSS ${resident! >> 20} MB',
-    if (compressed != null) 'compressed ${compressed! >> 20} MB',
-    '${appScoped ? 'app room' : 'available'} ${avail >> 20} MB',
-    'device ${total >> 20} MB',
+    if (footprint != null) 'footprint ${mbOf(footprint!)} MB',
+    if (resident != null) 'RSS ${mbOf(resident!)} MB',
+    if (compressed != null) 'compressed ${mbOf(compressed!)} MB',
+    '${appScoped ? 'app room' : 'available'} ${mbOf(avail)} MB',
+    'device ${mbOf(total)} MB',
   ].join(', ');
 
   /// What can be used before the system starts killing apps.
   int get room => avail - threshold;
 
   @override
-  String toString() => appScoped ? diagnostics : 'free ${avail >> 20} MB of ${total >> 20} MB (kills below ${threshold >> 20} MB${low ? ', low' : ''})';
+  String toString() => appScoped ? diagnostics : 'free ${mbOf(avail)} MB of ${mbOf(total)} MB (kills below ${mbOf(threshold)} MB${low ? ', low' : ''})';
 }
 
 /// Android's memory channel (MainActivity: ActivityManager.MemoryInfo, and onTrimMemory).
@@ -228,3 +229,39 @@ bool releaseChatModelNowOn(int level) => level >= kTrimRunningLow && level < kTr
 
 /// Whether this onTrimMemory level means Cache's screen is hidden or Cache is in the background.
 bool trimMeansBackground(int level) => level >= kTrimUiHidden;
+
+/// How much of the file at [path] this process maps, from /proc/self/smaps (Android and Linux; the app may read its own):
+/// "model file mapped: 1812 MB, resident 1640 MB", or "model file not mapped". Null where /proc is not there (iOS, web).
+/// A log line after a model is let go says from this whether its file was really unmapped.
+String? mappedFileSummary(String path) {
+  try {
+    if (plat.isWeb || !(Platform.isAndroid || Platform.isLinux)) return null;
+    return mappedFileSummaryOf(File('/proc/self/smaps').readAsStringSync(), path);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// [mappedFileSummary] for the smaps text [smaps]: the Size and Rss of every mapping of [path], added up.
+String mappedFileSummaryOf(String smaps, String path) {
+  var size = 0, rss = 0;
+  var inFile = false;
+  for (final line in smaps.split('\n')) {
+    final header = RegExp(r'^[0-9a-f]+-[0-9a-f]+ \S+ \S+ \S+ \S+(?:\s+(.*))?$').firstMatch(line);
+    if (header != null) {
+      inFile = (header.group(1) ?? '').trim() == path;
+      continue;
+    }
+    if (!inFile) continue;
+    final kv = RegExp(r'^(Size|Rss):\s+(\d+) kB').firstMatch(line);
+    if (kv == null) continue;
+    final kb = int.parse(kv.group(2)!);
+    if (kv.group(1) == 'Size') {
+      size += kb;
+    } else {
+      rss += kb;
+    }
+  }
+  if (size == 0) return 'model file not mapped';
+  return 'model file mapped: ${size ~/ 1024} MB, resident ${rss ~/ 1024} MB';
+}
