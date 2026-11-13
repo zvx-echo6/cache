@@ -193,14 +193,20 @@ shot_host() {  # the whole Mac screen, kept small
 }
 
 click_at() {  # click_at <x> <y> <way>: 1 the Swift tool (CGEvent), 2 System Events, 3 CGEvent from osascript
+  # A way that fails (System Events is refused assistive access on some runners) clicks with the Swift tool instead, and
+  # is not kept (CLICK_FAILED).
   local x="$1" y="$2"
+  CLICK_FAILED=""
   case "$3" in
     1)
       if [ -x "$TOOL" ]; then run "$TOOL" click "$x" "$y"; else run limit 30 osascript -e "tell application \"System Events\" to click at {${x%.*}, ${y%.*}}"; fi
+      return
       ;;
-    2) run limit 30 osascript -e "tell application \"System Events\" to click at {${x%.*}, ${y%.*}}" ;;
-    *) run limit 30 osascript -l JavaScript "$HERE/click.js" "$x" "$y" ;;
+    2) run limit 30 osascript -e "tell application \"System Events\" to click at {${x%.*}, ${y%.*}}" && return ;;
+    *) run limit 30 osascript -l JavaScript "$HERE/click.js" "$x" "$y" && return ;;
   esac
+  CLICK_FAILED=1
+  [ -x "$TOOL" ] && run "$TOOL" click "$x" "$y"
 }
 
 find_icon_on_host() {  # the app's icon inside the CarPlay window, on a picture of the Mac screen; sets ICON_X ICON_Y (points)
@@ -332,7 +338,8 @@ car_launch() {  # car_launch <label>: clicks the app's icon on the CarPlay scree
       click_at "$ICON_X" "$ICON_Y" "$way"
       if wait_more 'car scene connected' "$had" 25; then
         say "the app's CarPlay scene connected ($label, click way $way)"
-        WAYS="$way 1 2 3"
+        # A way whose click failed is not kept: the Swift tool clicked in its place.
+        [ -n "$CLICK_FAILED" ] || WAYS="$way 1 2 3"
         return 0
       fi
       say "no 'car scene connected' line 25 s after the click ($label, way $way)"
