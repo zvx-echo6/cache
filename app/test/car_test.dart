@@ -7,6 +7,7 @@ import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
 import 'package:cache/app_state.dart';
 import 'package:cache/car/car_overlay.dart';
+import 'package:cache/car/car_places.dart';
 import 'package:cache/car/phone_drive.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/nav/elevation/elevation_profile.dart';
@@ -56,6 +57,33 @@ class _NoSource implements PositionSource {
   Future<void> openAppSettings() async {}
   @override
   Future<void> openLocationSettings() async {}
+}
+
+/// The car's own places handle (car_places.dart), answering at once; [fails] makes every call throw.
+class _FakeCarPlaces implements CarPlaces {
+  final List<SavedPlaceRecord> saved = [];
+  final List<MapPlace> found = [];
+  final List<String> queries = [];
+  bool fails = false;
+  int closed = 0;
+
+  @override
+  Future<List<SavedPlaceRecord>> savedPlaces() async {
+    if (fails) throw StateError('no handle');
+    return saved;
+  }
+
+  @override
+  Future<MapSearchResponse> search(String query, {GeoPoint? near, int limit = 10}) async {
+    if (fails) throw StateError('no handle');
+    queries.add(query);
+    return MapSearchResponse(query: query, kind: 'text', meaning: 'off', results: found);
+  }
+
+  @override
+  Future<void> close() async {
+    closed++;
+  }
 }
 
 MapPlace _place(String id, String name, {double lat = 42.5, double lon = -113.5}) =>
@@ -1088,6 +1116,68 @@ void main() {
       messenger.setMockMethodCallHandler(const MethodChannel('co.cache/car-wait'), null);
     });
 
+    /// Asks [ch] as the car would; the answer, or a timeout well inside [CarBridge.readyWait].
+    Future<Object?> askOn(MethodChannel ch, String method, [Object? args]) {
+      final c = Completer<Object?>();
+      unawaited(messenger.handlePlatformMessage(ch.name, const StandardMethodCodec().encodeMethodCall(MethodCall(method, args)), (data) {
+        c.complete(data == null ? null : const StandardMethodCodec().decodeEnvelope(data));
+      }));
+      return c.future.timeout(const Duration(seconds: 2));
+    }
+
+    test('saved places and search answer at once on the car\'s own handle while the core has not opened', () async {
+      // The main core never opens here (its libraries are still opening, or it is busy): nothing the car asks for places waits on it.
+      final never = Completer<void>();
+      const ch = MethodChannel('co.cache/car-own');
+      final own = _FakeCarPlaces()
+        ..saved.add(const SavedPlaceRecord(key: 'k0', name: 'Home', lat: 42.6, lon: -113.7))
+        ..found.add(_place('place:9', 'Home Depot'));
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, ready: () => never.future, places: own);
+      await car.start();
+      final before = backend.calls.length;
+      final saved = await askOn(ch, 'saved');
+      expect([for (final p in saved as List) (p as Map)['name']], ['Home']);
+      final found = await askOn(ch, 'search', {'query': 'home'});
+      expect([for (final p in found as List) (p as Map)['name']], ['Home', 'Home Depot']);
+      expect(own.queries, ['home']);
+      // The main core (and with it the search model, which only a meaning search there would load) was never asked.
+      expect(backend.calls.length, before);
+      car.dispose();
+      expect(own.closed, 1, reason: 'the handle goes with the bridge');
+      messenger.setMockMethodCallHandler(ch, null);
+    });
+
+    test('the car\'s own handle is let go when the car disconnects', () async {
+      const ch = MethodChannel('co.cache/car-own-close');
+      final own = _FakeCarPlaces();
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, places: own);
+      await car.start();
+      await askOn(ch, 'connected', {'on': true});
+      expect(own.closed, 0);
+      await askOn(ch, 'connected', {'on': false});
+      expect(own.closed, 1);
+      car.dispose();
+      messenger.setMockMethodCallHandler(ch, null);
+    });
+
+    test('when the car\'s own handle fails, places come from the main core once it is open', () async {
+      final open = Completer<void>();
+      const ch = MethodChannel('co.cache/car-own-fails');
+      final own = _FakeCarPlaces()..fails = true;
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, ready: () => open.future, places: own);
+      await car.start();
+      backend.saved.add(('Home', 42.6, -113.7));
+      final answer = askOn(ch, 'saved');
+      await settle();
+      open.complete();
+      expect([for (final p in await answer as List) (p as Map)['name']], ['Home']);
+      car.dispose();
+      messenger.setMockMethodCallHandler(ch, null);
+    });
+
     test('hello: a car session that is already there connects the bridge', () {
       expect(toCar.first.method, 'hello');
       expect(bridge.connected.value, isTrue);
@@ -1252,6 +1342,49 @@ void main() {
       expect(await bridge.prompt('x'), isNull);
       promptAnswer = kPromptShort;
       expect(await bridge.prompt('x'), kPromptShort);
+    });
+  });
+
+  group('CoreCarPlaces: the car\'s own handle', () {
+    test('opens with only the saved places, the places and the regions sections', () {
+      final extra = <String, dynamic>{
+        'indexes_dir': '/i',
+        'user': {'db_path': '/u.sqlite'},
+        'live': {'db_path': '/l.sqlite'},
+        'places': {'packs': <String>[]},
+        'layers': {'dir': '/layers'},
+        'routing': {'offroad': {'dir': '/o'}},
+        'notebook': {'db_path': '/n.sqlite'},
+        'regions': {'dir': '/r'},
+      };
+      expect(carPlacesConfig(extra).keys.toSet(), {'user', 'places', 'regions'});
+    });
+
+    test('opens at the first call, and again after a failed open', () async {
+      final opened = <Map<String, dynamic>>[];
+      final places = CoreCarPlaces(
+        config: () async => {'user': {'db_path': '/u.sqlite'}, 'layers': {'dir': '/layers'}},
+        open: (extra) async {
+          opened.add(extra);
+          throw StateError('no native core in a test');
+        },
+      );
+      expect(opened, isEmpty, reason: 'nothing opens before the car asks');
+      await expectLater(places.savedPlaces(), throwsStateError);
+      await expectLater(places.search('home'), throwsStateError);
+      expect(opened, hasLength(2));
+      expect(opened.first.keys, ['user']);
+      await places.close();
+    });
+
+    test('no config: nothing is opened', () async {
+      var opens = 0;
+      final places = CoreCarPlaces(config: () async => null, open: (extra) async {
+        opens++;
+        throw StateError('unreachable');
+      });
+      await expectLater(places.savedPlaces(), throwsStateError);
+      expect(opens, 0);
     });
   });
 }
