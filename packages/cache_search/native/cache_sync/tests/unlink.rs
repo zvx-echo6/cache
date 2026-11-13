@@ -188,6 +188,30 @@ fn both_unlink_at_once_and_both_clear() {
 }
 
 #[test]
+fn an_unlink_for_a_device_that_already_cleared_its_own_meets_its_gate_and_clears() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b, _da, _db) = linked_pair(tmp.path(), false);
+    // Both unlink each other with no network, so both have a waiting unlink. B is let go first and tells A (which no longer lists
+    // B: not_linked), which clears B's entry and takes A out of B's gate set. Only then is A let go: its message meets B's gate,
+    // which holds no link and no waiting unlink for A, and closes it with 403. That must clear A's entry (and change nothing on B).
+    call(&a, "set_policy", json!({"network": false}));
+    call(&b, "set_policy", json!({"network": false}));
+    call(&a, "unlink", json!({"peer": id_of(&b)}));
+    call(&b, "unlink", json!({"peer": id_of(&a)}));
+    assert_eq!((unlinks(&a).len(), unlinks(&b).len()), (1, 1));
+    call(&b, "set_policy", json!({"network": true}));
+    wait_syncing("B's waiting unlink delivered first", 60, &[&b], || unlinks(&b).is_empty());
+    assert_eq!(unlinks(&a).len(), 1, "A has not tried yet");
+    let before = std::fs::read(_db.join("sync.json")).unwrap();
+    call(&a, "set_policy", json!({"network": true}));
+    wait_syncing("A's waiting unlink cleared by the 403", 60, &[&a, &b], || unlinks(&a).is_empty());
+    assert!(log(&a).contains("Phone was told it is unlinked."), "{}", log(&a));
+    assert_eq!(std::fs::read(_db.join("sync.json")).unwrap(), before, "a 403 never changes the receiver");
+    a.close();
+    b.close();
+}
+
+#[test]
 fn a_link_made_again_before_the_unlink_arrives_stays() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b, _da, _db) = linked_pair(tmp.path(), false);
@@ -258,7 +282,10 @@ fn a_link_the_other_device_never_learned_of_clears_the_waiting_unlink() {
     call(&b, "test_drop_peer", json!({"peer": id_of(&a)}));
     assert!(peers(&b).is_empty());
     let before = std::fs::read(_db.join("sync.json")).unwrap();
+    call(&a, "set_policy", json!({"network": false}));
     call(&a, "unlink", json!({"peer": id_of(&b)}));
+    assert_eq!(unlinks(&a).len(), 1, "waiting, not yet tried");
+    call(&a, "set_policy", json!({"network": true}));
     wait_syncing("the waiting unlink cleared", 60, &[&a, &b], || unlinks(&a).is_empty());
     assert!(log(&a).contains("Phone was told it is unlinked."), "{}", log(&a));
     // The 403 that cleared A's entry changed nothing on B: its links file is byte for byte what it was.
