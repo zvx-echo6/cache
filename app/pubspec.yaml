@@ -49,6 +49,11 @@ dependencies:
   geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
   maplibre_gl: ^0.27.1
+  # Stops a click on a widget drawn over the map from reaching the map as well, in a browser (where the map is a web element):
+  # the platform interface (plain Dart; elsewhere it returns the widget as it is) and its web implementation only, not the
+  # pointer_interceptor package, which also brings a native iOS plugin.
+  pointer_interceptor_platform_interface: 0.10.0+1
+  pointer_interceptor_web: 0.10.3
   video_player: ^2.14.1
   flutter_secure_storage: ^11.2.0
   ffi: ^2.1.3
