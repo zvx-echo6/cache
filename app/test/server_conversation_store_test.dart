@@ -231,7 +231,11 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     expect(log.any((l) => l.contains('was dropped')), isFalse);
     server.down = false;
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // the retry delivers it: waited for (with a deadline), not a fixed time, which a loaded machine can overrun
+    final end = DateTime.now().add(const Duration(seconds: 10));
+    while ((server.convs[c.id]!['messages'] as List).isEmpty && DateTime.now().isBefore(end)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
     expect((server.convs[c.id]!['messages'] as List), hasLength(1));
   });
 
