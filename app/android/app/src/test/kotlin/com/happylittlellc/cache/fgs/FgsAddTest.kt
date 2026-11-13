@@ -9,7 +9,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.PowerManager
 import android.os.SystemClock
-import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
@@ -37,7 +37,7 @@ import org.robolectric.shadows.ShadowPowerManager
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FgsAddTest {
-    private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val context: Context get() = RuntimeEnvironment.getApplication()
     private val nm: NotificationManager get() = context.getSystemService(NotificationManager::class.java)
 
     class FakeRunner : FgsAddRunner {

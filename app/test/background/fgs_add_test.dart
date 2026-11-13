@@ -391,7 +391,9 @@ void main() {
       final r = result(why: 'battery', battery: 12, left: ['a', 'b']);
       await writeFgsResult(bg, r);
       final back = readFgsResult(bg)!;
-      expect((back.why, back.batteryPercent, back.leftIds), ('battery', 12, ['a', 'b']));
+      expect(back.why, 'battery');
+      expect(back.batteryPercent, 12);
+      expect(back.leftIds, ['a', 'b']);
       clearFgsResult(bg);
       expect(readFgsResult(bg), isNull);
     });

@@ -21,7 +21,7 @@ void main() {
 
   for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
     testWidgets('the background add notice, 390, ${theme.name}', (tester) async {
-      phone(tester, size: const Size(390, 844), ratio: 2);
+      phone(tester, size: const Size(390, 900), ratio: 2);
       final failedOne = sampleJob('a', title: 'Radio field manual', status: AddPdfStatus.failed, error: 'embed');
       final failedTwo = sampleJob('b', title: 'Garden notes', status: AddPdfStatus.failed);
       final left = [for (final i in ['c', 'd', 'e']) sampleJob(i)];
