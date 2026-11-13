@@ -868,6 +868,8 @@ class _CacheAppState extends State<CacheApp> {
     simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
+    // One guidance line a minute in the app log while a route is followed (fixes, the core's answer, failures).
+    guidanceLogEvery: const Duration(minutes: 1),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
