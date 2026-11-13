@@ -7,10 +7,10 @@ import UIKit
 ///
 /// CarPlay gives the car scene a window. This is its root view controller, and it holds one ordinary MapLibre map view that
 /// fills the view. The map is the car's own: the phone's Flutter map is not touched or moved, and both read the same offline
-/// tiles from the core's tile server on 127.0.0.1 with the same style, which Dart builds in the map palette of the phone's
-/// chosen theme. The car's map follows that theme day and night (the owner's decision of 2026-11-13): the car's own day or
-/// night setting only colours the plain stand-in shown before the first style comes. It is the twin of the Android car's
-/// CarMapRenderer.kt, without the virtual display Android needs.
+/// tiles from the core's tile server on 127.0.0.1 with the same style, which Dart builds in the map palette of the theme the
+/// car shows. Dart decides it (car_overlay.dart, carTheme): the theme the person picked on the phone, day and night; until one
+/// is picked, Light by day and Dark by night by the car's own setting, which is sent with each style request. It is the twin
+/// of the Android car's CarMapRenderer.kt, without the virtual display Android needs.
 ///
 /// Only map content is drawn here (Apple's rule for the base view): the base map, the route, the destination and the position.
 /// The buttons, the turn, the distances and the arrival time are the templates'. CarPlay sends the base view no touches: the
@@ -32,6 +32,8 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   private var styleAttempt = 0
   private var colors = CarMapViewController.defaultColors
   private var dark: Bool
+  /// Whether the car's day or night decides the theme now (Dart's `followsCar`, with each style: no theme picked yet).
+  private var followsCar = true
   /// The theme's name ("dark", "light", "parchment", "tactical") once the app's own style is the one set on the map; nil while
   /// the plain colour stands in.
   private var shownStyle: String?
@@ -296,12 +298,13 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   // ---- light and dark --------------------------------------------------------------------------------------------------
 
-  /// The car's day or night setting, from the car scene. The map, the route and the extras follow the phone's theme, not this:
-  /// only the plain colour behind the map (seen before the first style comes) takes it. No style is loaded for it.
+  /// The car's day or night setting, from the car scene. While no theme is picked on the phone it decides the theme, so the
+  /// style is asked for again (one load); once one is picked only the plain colour behind the map takes it.
   func setDark(_ on: Bool) {
     if on == dark { return }
     dark = on
     view.backgroundColor = Self.uiColor(Self.restColor(dark: dark))
+    if followsCar { loadStyle() }
   }
 
   // ---- style and overlays ----------------------------------------------------------------------------------------------
@@ -314,7 +317,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
     reload = nil
     styleAttempt += 1
     let attempt = styleAttempt
-    CarLink.shared.call("style") { [weak self] answer in
+    CarLink.shared.call("style", ["dark": dark]) { [weak self] answer in
       guard let self = self, let map = self.mapView, attempt == self.styleAttempt else { return }
       let res = CarValue.map(answer)
       guard let json = res?["style"] as? String, Self.isStyle(json) else {
@@ -332,6 +335,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
         }
       }
       self.colors = colors
+      self.followsCar = (res?["followsCar"] as? Bool) ?? true
       self.shownStyle = (res?["theme"] as? String) ?? "the phone's theme"
       self.drawnSaid = false
       self.dropStyleParts()

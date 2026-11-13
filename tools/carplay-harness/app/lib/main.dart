@@ -248,9 +248,14 @@ class _HarnessAppState extends State<HarnessApp> {
         if (_phase == 2) await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
         return _voiceOn;
       case 'style':
-        // As car_bridge.dart answers: the style of the phone's theme as text, the theme's name, and the colours of what the car
-        // draws on top. Whatever the car says of its day or night, the theme decides.
-        return <String, Object?>{'style': recorded['style_$_theme'], 'theme': _theme, 'colors': jsonDecode(recorded['colors_$_theme']!)};
+        // As car_bridge.dart answers once the person has picked a theme (the stand-in phone has): the style of that theme as
+        // text, its name, the colours of what the car draws on top, and that the car's day or night does not decide it.
+        return <String, Object?>{
+          'style': recorded['style_$_theme'],
+          'theme': _theme,
+          'colors': jsonDecode(recorded['colors_$_theme']!),
+          'followsCar': false,
+        };
     }
     return null;
   }
