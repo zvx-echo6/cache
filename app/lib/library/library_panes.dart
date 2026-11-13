@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart';
 import '../layout/adaptive.dart';
 import '../theme.dart';
 import 'cds.dart' show kCdsMono;
@@ -164,13 +165,14 @@ class LibraryPanesState extends State<LibraryPanes> {
     // hidden: only the page the person is on (never the placeholder)
     final visible = hidden ? [shown.last < 0 ? shown[shown.length - 2] : shown.last] : shown;
     // wide enough that the Library's row names never cut off ("Cache Documentation")
-    final sections = desktop ? 280.0 : 260.0;
+    final m = DesktopMetrics.of(context);
+    final sections = m?.listWidth ?? (desktop ? 280.0 : 260.0);
     final list = desktop ? 400.0 : 330.0;
     final widths = <double>[];
     if (visible.length == 1) {
       widths.add(width);
     } else if (visible.length == 2) {
-      final first = three ? sections : (width >= 760 ? 340.0 : 300.0);
+      final first = three ? sections : (m?.listWidth ?? (width >= 760 ? 340.0 : 300.0));
       widths.addAll([first, width - first - 1]);
     } else {
       widths.addAll([sections, list, width - sections - list - 2]);
@@ -190,15 +192,19 @@ class LibraryPanesState extends State<LibraryPanes> {
         final spec = pages[level];
         final parentShows = level == 0 || visible.contains(level - 1);
         // The scope sits above the pane's Navigator, so the page sees where it stands now (its route is built once).
-        page = _LevelScope(
-          state: this,
-          level: level,
-          spec: spec,
-          compact: false,
-          showsParent: parentShows,
-          last: last,
-          canHide: i == visible.length - 2 && n > 1,
-          child: _paneNavigator(spec?.key ?? 'root', Builder(builder: spec?.builder ?? widget.root)),
+        page = FlatRows(
+          // the Linux desktop draws a list pane's rows flat; the rightmost pane is a page
+          flat: !last,
+          child: _LevelScope(
+            state: this,
+            level: level,
+            spec: spec,
+            compact: false,
+            showsParent: parentShows,
+            last: last,
+            canHide: i == visible.length - 2 && n > 1,
+            child: _paneNavigator(spec?.key ?? 'root', Builder(builder: spec?.builder ?? widget.root)),
+          ),
         );
       }
       children.add(
@@ -287,6 +293,9 @@ class LibraryNav {
   /// Goes to the level [path] names (the breadcrumb).
   void goTo(BuildContext context, List<LibraryPageSpec> path) => _scope?.state.goTo(context, path);
 
+  /// This page is the rightmost pane (nothing of the panes is to its right); true on a phone.
+  bool get isLast => _scope?.last ?? true;
+
   /// Something is open beside the Library's own rows (false on a phone, and while the detail shows its starting page).
   bool get isAnythingOpen {
     final s = _scope;
@@ -345,12 +354,16 @@ class LibraryNav {
 PreferredSizeWidget libraryAppBar(BuildContext context, {required String title, String? number, Color? numberColor, List<Widget> actions = const [], Widget? titleWidget}) {
   final nav = LibraryNav.of(context);
   final k = context.t;
+  final slim = number != null && isLinuxDesktop(context) && !nav.isLast;
   return AppBar(
     automaticallyImplyLeading: nav.impliesBack,
     leading: nav.leading(context),
     // a numbered shelf: the number above a name that may take two lines ("First aid and emergency care" in a 330 pane)
-    toolbarHeight: number == null ? kToolbarHeight : 84,
-    title: titleWidget ?? (number == null
+    toolbarHeight: number == null || slim ? kToolbarHeight : 84,
+    title: titleWidget ?? (slim
+        // On the Linux desktop a list pane with the page open beside it carries just the code; the name is in the breadcrumb there.
+        ? Text(number, style: TextStyle(fontFamily: kCdsMono, fontSize: 15, fontWeight: FontWeight.w700, color: numberColor ?? k.accent))
+        : number == null
         ? Text(title, maxLines: 1, overflow: TextOverflow.ellipsis)
         : Column(
             crossAxisAlignment: CrossAxisAlignment.start,

@@ -34,11 +34,54 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   AppFs? _fs;
   StreamSubscription<Fix>? _sub;
   bool _foreground = true;
+
+  /// A car screen (Android Auto) is attached ([carScreen]).
+  bool _carScreen = false;
+
+  /// Something shows the position: the phone's screen is in front, or a car screen is attached.
+  bool get _shown => _foreground || _carScreen;
   bool _held = false;
   bool _disposed = false;
   bool _resuming = false;
   bool _serviceAvailable = true;
   int _resumeGeneration = 0;
+
+  // Stream health, for telling a phone standing still (the stream sends nothing under its distance filter) from a lost signal.
+  // The fix counts as held while the stream has been subscribed without error since before the fix arrived.
+  bool _streamOk = false;
+  DateTime? _streamSince;
+  DateTime? _fixAt;
+  static const Duration _defaultMaxAge = Duration(minutes: 2);
+
+  /// True while the position stream is subscribed and healthy: no error, not cancelled (pause, hold), and the permission,
+  /// the location switch and the setting still on.
+  bool get streamHealthy =>
+      _sub != null && _streamOk && !_disposed && enabled && _shown && !_held &&
+      _serviceAvailable && permission == LocationPermissionState.granted;
+
+  static bool _plausible(Fix? f) =>
+      f != null && f.lat.isFinite && f.lon.isFinite && f.lat.abs() <= 90 && f.lon.abs() <= 180 &&
+      f.accuracyM.isFinite && f.accuracyM >= 0;
+
+  /// Whether [fix] may be used as the phone's position now: younger than [maxAge], or the stream has been healthy since it
+  /// arrived (a phone standing still sends nothing new).
+  bool fixIsCurrent({Duration maxAge = _defaultMaxAge}) {
+    final f = fix;
+    if (!_plausible(f)) return false;
+    final age = DateTime.now().difference(f!.time);
+    if (!age.isNegative && age <= maxAge) return true;
+    final since = _streamSince, at = _fixAt;
+    return streamHealthy && since != null && at != null && !at.isBefore(since) && !age.isNegative;
+  }
+
+  /// Why there is no usable position now (for the log).
+  String get unknownReason {
+    if (!enabled) return 'location off';
+    if (permission != LocationPermissionState.granted) return 'permission off';
+    if (!_serviceAvailable) return 'service off';
+    if (fix == null) return 'no fix';
+    return 'stale and stream down';
+  }
 
   void _invalidateResume() {
     _resumeGeneration++;
@@ -91,7 +134,10 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// The one place a fix goes to the rest of the app: [fix], and the search core through [onFix].
   void _publish(Fix f) {
     if (_disposed || !enabled) return;
+    final held = fix;
+    if (held != null && f.time.isBefore(held.time)) return; // out of order: an older reading never replaces a newer one
     fix = f;
+    _fixAt = DateTime.now();
     problem = null;
     onFix?.call(f);
     notifyListeners();
@@ -100,6 +146,18 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   /// A fix from another source (navigation's own position stream) goes through the same door as the ones read here, so the map
   /// dot and the camera follow it.
   void publish(Fix f) => _publish(f);
+
+  /// Forgets the fix held, when it was [publish]ed from a source that was not the phone's own position and that source is gone
+  /// (the last point of a simulated test drive). Until a real one is read the position is not known, which is true; the stale
+  /// point is not. It must be forgotten and not just replaced: a real reading may carry an older time than the simulated fix,
+  /// and an older fix never replaces a newer one ([_publish]).
+  void forgetPublished() {
+    if (_disposed || fix == null) return;
+    fix = null;
+    _fixAt = null;
+    onFix?.call(null);
+    notifyListeners();
+  }
 
   /// Makes sure there is a recent position, for a user who needs it now. If the permission was never asked,
   /// [explain] is shown first (a polite reason and a choice); the system prompt only follows a yes.
@@ -156,13 +214,25 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _listen() {
     if (_disposed || !enabled || !_serviceAvailable || permission != LocationPermissionState.granted ||
-        _resuming || _sub != null || !_foreground || _held) {
+        _resuming || _sub != null || !_shown || _held) {
       return;
     }
+    final now = DateTime.now();
+    final held = fix, at = _fixAt;
+    // A fix read just before the stream started (request, resume) is held from its own arrival on.
+    _streamSince = held != null && at != null && now.difference(held.time) <= _defaultMaxAge ? at : now;
+    _streamOk = true;
     _sub = _source.stream().listen((f) {
-      if (!_disposed && enabled && _foreground && !_held) _publish(f);
+      if (!_disposed && enabled && _shown && !_held) {
+        if (!_streamOk) {
+          _streamOk = true;
+          _streamSince = DateTime.now();
+        }
+        _publish(f);
+      }
     }, onError: (Object _) {
-      if (_disposed || !enabled || !_foreground || _held) return;
+      _streamOk = false;
+      if (_disposed || !enabled || !_shown || _held) return;
       problem = LocationProblem.noFix;
       notifyListeners();
     });
@@ -180,15 +250,44 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       // a cancel that waits on the platform would hold guidance up (and a widget test with it).
       final s = _sub;
       _sub = null;
+      _streamOk = false;
       unawaited(s?.cancel());
     } else if (enabled && permission == LocationPermissionState.granted) {
       _listen();
     }
   }
 
+  /// A car screen (Android Auto) is attached, or the last one has gone. While one is attached the position keeps coming whether
+  /// or not the phone's screen is in front: the car's map shows it, and the app can be running with no phone screen at all (its
+  /// engine is kept for the life of the process, so "the phone's screen is in front" is no longer true of every car session that
+  /// has no phone app open; before, such a session was always a fresh start, which counts as in front). The car session's own
+  /// foreground service keeps the fixes coming with the phone locked (android/.../car/CarLocationService.kt). Nothing is
+  /// asked for here: the stream starts only with the permission already given.
+  void carScreen(bool attached) {
+    if (_disposed || _carScreen == attached) return;
+    _carScreen = attached;
+    if (attached) {
+      _listen();
+    } else if (!_foreground) {
+      _unlisten();
+    }
+  }
+
+  /// Nothing shows the position: the phone's screen has not been in front in this run (Android Auto started Cache with the
+  /// phone app closed) and the car has left. A start counts as in front until the app's lifecycle says otherwise, and with
+  /// no phone screen it never does, so the app says it here (main.dart). As when the phone's screen leaves the front: the
+  /// stream stops and the last fix stays. The phone's screen coming to the front, or a car screen, starts it again.
+  void noScreen() {
+    if (_disposed) return;
+    _invalidateResume();
+    _foreground = false;
+    if (!_carScreen) _unlisten();
+  }
+
   void _unlisten() {
     _sub?.cancel();
     _sub = null;
+    _streamOk = false;
   }
 
   /// The setting: off stops reading the position and forgets the last fix.
@@ -221,15 +320,13 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     if (_disposed || !enabled || !_foreground || isCancelled()) return null;
     bool recent(Fix? f) {
-      if (f == null || !f.lat.isFinite || !f.lon.isFinite ||
-          f.lat.abs() > 90 || f.lon.abs() > 180 ||
-          !f.accuracyM.isFinite || f.accuracyM < 0) {
-        return false;
-      }
-      final age = DateTime.now().difference(f.time);
+      if (!_plausible(f)) return false;
+      final age = DateTime.now().difference(f!.time);
       return !age.isNegative && age <= maxAge;
     }
-    if (busy) return recent(fix) ? fix : null;
+    // A failed or timed-out refresh never throws the fix away: it is used while it is current, and kept (for the map) when not.
+    Fix? held() => fixIsCurrent(maxAge: maxAge) ? fix : null;
+    if (busy) return held();
     final generation = _resumeGeneration;
     var expired = false;
     bool valid() => !expired && !isCancelled() && _resumeIsCurrent(generation);
@@ -252,23 +349,24 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
         _clearFix(LocationProblem.serviceOff);
         return null;
       }
-      if (recent(fix)) return fix;
+      if (fixIsCurrent(maxAge: maxAge)) return fix;
       if (_held) return null;
       final current = await _source.current();
       if (!valid() || _held) return null;
       // A newer stream fix may have arrived during the one-shot request.
-      if (recent(fix) && !fix!.time.isBefore(current.time)) return fix;
+      if (fixIsCurrent(maxAge: maxAge) && !fix!.time.isBefore(current.time)) return fix;
       if (!recent(current)) return null;
       _publish(current);
       return current;
     }
     try {
-      return await read().timeout(timeout, onTimeout: () {
+      final read0 = await read().timeout(timeout, onTimeout: () {
         expired = true;
         return null;
       });
+      return read0 ?? held();
     } catch (_) {
-      return null; // Location failure must never prevent an ordinary chat.
+      return held(); // Location failure must never prevent an ordinary chat.
     }
   }
 
@@ -332,6 +430,11 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     _invalidateResume();
     _foreground = state == AppLifecycleState.resumed;
+    // A car screen keeps the stream it has while the phone's screen is not in front.
+    if (!_foreground && _carScreen) {
+      _listen();
+      return;
+    }
     _unlisten();
     // A permission dialog can resume the app while request() is still awaiting its
     // answer. That request performs its own permission/service/fix sequence.

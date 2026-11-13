@@ -20,6 +20,21 @@ object NavIntent {
         return parse(intent.dataString ?: return null)
     }
 
+    /**
+     * A navigation request that reached the phone's activity instead of the car session (another app, or a test, starting the
+     * activity directly). True when [intent] is one: the caller then keeps it away from Flutter. With a car connected it goes
+     * to the car session, the same handling as a request Android Auto delivers; with none, or when it cannot be read, it is
+     * dropped (the phone does not open places from "geo:" addresses).
+     */
+    fun fromPhone(intent: Intent?): Boolean {
+        if (intent == null || intent.action != CarContext.ACTION_NAVIGATE) return false
+        parse(intent)?.let { CarLink.navRequest(it) }
+        return true
+    }
+
+    /** [intent] with the request taken out: what the launcher sends, for the activity to start on. */
+    fun plainLaunch(intent: Intent): Intent = Intent(intent).setAction(Intent.ACTION_MAIN).setData(null)
+
     fun parse(uri: String): NavRequest? {
         val colon = uri.indexOf(':')
         if (colon < 0) return null

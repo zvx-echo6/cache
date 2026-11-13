@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../guidance.dart';
 import '../nav_state.dart';
 import '../units.dart';
+import 'lane_strip.dart';
 
 IconData iconForTurn(TurnIcon t) => switch (t) {
       TurnIcon.start => Icons.navigation,
@@ -29,19 +30,31 @@ IconData iconForTurn(TurnIcon t) => switch (t) {
       TurnIcon.offroad => Icons.terrain,
     };
 
+/// "Head north for 0.4 mi, up 120 ft" (or "Follow the trail north for ..."): an off-road leg in words.
+String offroadHint(ProgressManeuver m, Fmt fmt) {
+  final dir = cardinalWord(m.cardinal);
+  final climb = (m.elevGainM ?? 0) >= 10 ? ', up ${fmt.height(m.elevGainM!)}' : ((m.elevLossM ?? 0) >= 10 ? ', down ${fmt.height(m.elevLossM!)}' : '');
+  if (m.kind == 'offroad_follow') return 'Follow ${m.followName ?? 'the trail'} $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
+  return 'Head $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
+}
+
 /// The strip at the top while guiding: the next turn and how far, then the one after. On an off-road leg it is the bearing to
 /// the next point, how far, and the climb.
 class GuidanceBanner extends StatelessWidget {
-  const GuidanceBanner({super.key, required this.nav, required this.fmt});
+  const GuidanceBanner({super.key, required this.nav, required this.fmt, this.showThen = true});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// The small "Then ..." line under the turn. The drive screen turns it off: the turn after is the first row of its list.
+  final bool showThen;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     final p = nav.progress;
     Widget body;
+    List<Lane> lanes = const [];
     if (nav.arrived) {
       body = _row(context, icon: Icons.flag, big: 'You have arrived', small: nav.route?.destinationName ?? '');
     } else if (nav.rerouting) {
@@ -56,12 +69,14 @@ class GuidanceBanner extends StatelessWidget {
         body = _row(context, icon: Icons.flag, big: 'Arriving', small: nav.route?.destinationName ?? '');
       } else {
         final icon = turnIconFor(next.type, offroad: next.isOffroad);
+        // The lanes show once the turn is as close as the first voice prompt (800 m by car), read from the engine for the way of travel.
+        lanes = lanesToShow(next, nav.farStageM);
         body = _row(
           context,
           icon: iconForTurn(icon),
           big: fmt.distance(next.distanceM),
-          small: next.isOffroad ? _offroadHint(next) : next.instruction,
-          then: p.then == null || p.then!.isArrival && next.isArrival ? null : 'Then ${_thenText(p.then!)}',
+          small: next.isOffroad ? offroadHint(next, fmt) : next.instruction,
+          then: !showThen || p.then == null || p.then!.isArrival && next.isArrival ? null : 'Then ${_thenText(p.then!)}',
         );
       }
     }
@@ -75,22 +90,15 @@ class GuidanceBanner extends StatelessWidget {
       // Compact, so more of the map shows: how far and the turn on one line. The type stays large enough to read from the
       // dashboard and grows with the phone's text size. Solid surface and text colours, so it holds its contrast in sunlight.
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-      child: body,
+      child: lanes.isEmpty ? body : Column(mainAxisSize: MainAxisSize.min, children: [body, const SizedBox(height: 6), LaneStrip(lanes: lanes)]),
     );
   }
 
   String _thenText(ProgressManeuver m) {
-    if (m.isOffroad) return _offroadHint(m).toLowerCase();
+    if (m.isOffroad) return offroadHint(m, fmt).toLowerCase();
     var t = m.instruction.trim();
     if (t.endsWith('.')) t = t.substring(0, t.length - 1);
     return t.isEmpty ? t : t[0].toLowerCase() + t.substring(1);
-  }
-
-  String _offroadHint(ProgressManeuver m) {
-    final dir = cardinalWord(m.cardinal);
-    final climb = (m.elevGainM ?? 0) >= 10 ? ', up ${fmt.height(m.elevGainM!)}' : ((m.elevLossM ?? 0) >= 10 ? ', down ${fmt.height(m.elevLossM!)}' : '');
-    if (m.kind == 'offroad_follow') return 'Follow ${m.followName ?? 'the trail'} $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
-    return 'Head $dir for ${fmt.distance(m.lengthM)}$climb'.replaceAll('  ', ' ');
   }
 
   Widget _row(BuildContext context, {required IconData icon, required String big, required String small, String? then}) {

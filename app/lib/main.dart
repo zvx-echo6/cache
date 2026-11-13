@@ -17,16 +17,20 @@ import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
+import 'car/car_pins.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
 import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'desktop/desktop_theme.dart';
 import 'linked_folders/linked_folders.dart' show LinkedFolderApi, LinkedFolderController;
 import 'browse/web/build_state.dart' show BuildController;
 import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
+import 'chat/ask_focus.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
+import 'chat/prompt_read_ahead.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'discover/discover_state.dart' show kDiscoverUrl;
 import 'history/conversation_store.dart';
@@ -36,13 +40,22 @@ import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
 import 'library/add_pdf/add_pdf_calls.dart';
 import 'library/add_pdf/add_pdf_engines.dart';
 import 'library/add_pdf/add_pdf_state.dart';
+import 'library/add_pdf/watch_background.dart';
+import 'library/add_pdf/watch_folders.dart';
+import 'background/background_dispatcher.dart';
+import 'background/background_lock.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
+import 'car/car_overlay.dart';
+import 'car/car_support.dart';
+import 'car/phone_drive.dart';
+import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
+import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
 import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
@@ -58,6 +71,7 @@ import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
 import 'notebook/media.dart' show storePhoto;
 import 'notebook/sync/connections.dart';
+import 'screens/notebooks/icon_picker.dart' show MapIconSetup;
 import 'screens/pin_screen.dart';
 import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
@@ -81,6 +95,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
@@ -91,6 +106,7 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/foreground_updates.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -106,6 +122,9 @@ import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
+import 'platform/model_release.dart';
+import 'platform/phone_screen.dart';
+import 'platform/phone_window.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -134,6 +153,8 @@ void main() {
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  // A cachelink: link the app was opened with, or that arrives while it runs (the native side holds it; see LinkInbox).
+  unawaited(linkInbox.start());
   runApp(const CacheApp());
 }
 
@@ -145,7 +166,12 @@ class CacheApp extends StatefulWidget {
 }
 
 class _CacheAppState extends State<CacheApp> {
-  late final AppState app = AppState();
+  late final AppState app = AppState(
+    // No phone screen by the time the start would load the chat model: on Android that is a start by the car with the phone
+    // app closed (the engine starts with no screen and only an activity says otherwise). The model then waits for the
+    // phone's screen ([_onPhoneScreen]).
+    startedWithNoPhoneScreen: () => plat.isAndroid && noPhoneScreen(WidgetsBinding.instance.lifecycleState),
+  );
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
   // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
@@ -286,11 +312,12 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir, _support(kIndexesDirName)],
-      notShared: const {'libraries': kLibraryNotShared},
+      notShared: const {'library': kZimNotShared, 'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
-      list: () => BrowseScreen(browse: browse, active: true, layout: layout),
+      list: () => BrowseScreen.inHub(browse: browse, active: true, layout: layout, hub: hub),
       items: () => libraryItems(sources, libraries),
       remoteItem: libraryRemoteItem,
+      alongside: libraryAlongside,
     ),
     DataKind(
       id: 'models',
@@ -420,7 +447,7 @@ class _CacheAppState extends State<CacheApp> {
       return core == null ? null : CoreIndexJob(await core.startJob(kind, params));
     },
     indexesDir: () => _support(kIndexesDirName)?.path,
-    videoDir: () => video.dir?.path,
+    videoDir: () => video.dirPath,
     duty: () => indexThrottle.duty,
     // a finished index job: the status is read again, so the Library and the queue say it is built
     onJobDone: () => unawaited(sources.refresh()),
@@ -443,21 +470,122 @@ class _CacheAppState extends State<CacheApp> {
     engines: _addPdfEngines,
     libraries: libraries,
     ocrEngine: deviceOcrEngine,
-    bookshelves: () async {
-      final dev = await libraryDeviceIdShared?.call();
-      final dir = _support(kBookshelvesDir);
-      if (dev == null || !validDeviceId(dev) || dir == null) return null;
-      return {
-        'dir': dir.path,
-        'dev': dev,
-        'libraries': [
-          for (final l in libraries.libraries)
-            if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
-        ],
-      };
+    // a background run is adding PDFs: it is asked to stop, and the jobs are offered again at the next look
+    mayRun: () async {
+      final l = _bgLock;
+      return l == null || await l.takeOver(kAddPdfWork, wait: Duration.zero);
     },
+    bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    wordsPending: (path) => libraries.wordsPendingAt(path),
+  );
+
+  /// The `bookshelves` argument of the core's ingest job: the Bookshelves folder, this device's id, the libraries.
+  Future<Map<String, dynamic>?> _addPdfShelves() async {
+    final dev = await libraryDeviceIdShared?.call();
+    final dir = _support(kBookshelvesDir);
+    if (dev == null || !validDeviceId(dev) || dir == null) return null;
+    return {
+      'dir': dir.path,
+      'dev': dev,
+      'libraries': [
+        for (final l in libraries.libraries)
+          if (libraries.idOf(l) case final id?) {'library_id': id, 'dir': l.path},
+      ],
+    };
+  }
+
+  /// The one lock with the background runs (background/background_lock.dart), once the support folder is known.
+  BackgroundLock? _bgLock;
+  Timer? _bgOpenTimer;
+  int _bgSeen = 0;
+  int _watchCount = -1;
+
+  /// The app is open: the lock says so (and keeps saying so while it is).
+  void _bgAppOpen() {
+    _bgLock?.appOpened();
+    _bgOpenTimer ??= Timer.periodic(BackgroundLock.refreshEvery, (_) => _bgLock?.appOpened());
+  }
+
+  /// Back at the front: a background run adding PDFs is stopped first; when one ran meanwhile, Add PDF's jobs and the watched
+  /// folders are read again; then index work and the watched folders' check go on.
+  Future<void> _backToFront() async {
+    _atFront = true;
+    final l = _bgLock;
+    if (l != null) {
+      _bgAppOpen();
+      await l.takeOver(kAddPdfWork);
+      final g = l.generation;
+      if (g != _bgSeen) {
+        _bgSeen = g;
+        await addPdf.reload();
+        await watchFolders.reload();
+      }
+    }
+    if (!mounted) return;
+    indexing.setOpen(true);
+    // watched folders are checked each time Cache comes back to the front (not again within a minute)
+    unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
+  }
+
+  /// Cache is at the front (false from going to the back until it comes back).
+  bool _atFront = true;
+
+  /// To the back: once the index work that ran has really stopped and Add PDF's jobs are on disk, background runs may go ahead,
+  /// and PDFs a watched folder found that are still to add are added in the background while charging (Android). Letting go
+  /// earlier let a background slice start a PDF the app was still pausing (the job folder was still held; Pixel, 2026-11-10).
+  void _toBack() {
+    _atFront = false;
+    unawaited(_toBackAfterPause());
+  }
+
+  Future<void> _toBackAfterPause() async {
+    try {
+      await backgroundHandOff(
+        closed: indexing.closed,
+        save: () async {
+          await addPdf.save();
+          await watchFolders.save();
+        },
+        atFront: () => _atFront,
+        release: () {
+          _bgOpenTimer?.cancel();
+          _bgOpenTimer = null;
+          _bgLock?.appClosed();
+        },
+        hasWork: () => Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson),
+        queueAdd: scheduleWatchAdd,
+      );
+      await _writeBackgroundContext();
+    } catch (e, st) {
+      logError('Background hand-off failed', error: e, stack: st);
+    }
+  }
+
+  Future<void> _writeBackgroundContext() async {
+    final s = _supportPath;
+    if (s == null || !Platform.isAndroid) return;
+    await writeWatchAddContext(support: s, bookshelves: await _addPdfShelves());
+  }
+
+  /// The watched folders changed: the background count runs while any are watched (Android).
+  void _onWatchFolders() {
+    final n = watchFolders.folders.length;
+    if (_watchCount >= 0 && (n > 0) == (_watchCount > 0)) {
+      _watchCount = n;
+      return;
+    }
+    _watchCount = n;
+    unawaited(scheduleWatchDetect(anyFolders: n > 0));
+  }
+
+  /// Watch a folder: new PDFs in a folder the person chose go through Add PDF by themselves. Checked when Cache opens; on Android
+  /// also every [kWatchEvery] as index work (the indexing rules: charging, battery, heat). iOS checks only when Cache opens.
+  late final WatchFoldersState watchFolders = WatchFoldersState(
+    addPdf: addPdf,
+    dir: () async => _support('ingest'),
+    every: !plat.isWeb && Platform.isAndroid ? kWatchEvery : null,
   );
 
   Future<Map<String, dynamic>> _addPdfEngines() async => addPdfEngines(support: Directory(_supportPath ?? (await appSupportPath())), modelsDir: await _modelsDir());
@@ -468,6 +596,7 @@ class _CacheAppState extends State<CacheApp> {
       CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
       if (!plat.isWeb) addPdf,
+      if (!plat.isWeb) watchFolders,
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
@@ -504,6 +633,7 @@ class _CacheAppState extends State<CacheApp> {
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
+    focus: askFocus,
     supportDir: () async => Directory(await appSupportPath()),
     catalogue: RegionCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
@@ -554,7 +684,10 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final LayoutState layout = LayoutState();
+  /// Held while Ask generates an answer: background work (sync, downloads, indexing) starts nothing new meanwhile (chat/ask_focus.dart).
+  late final AskFocus askFocus = AskFocus();
   late final ChatController chat = ChatController(
+    focus: askFocus,
     // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
     tools: const [],
     // Try again (or the next question) after the core could not start starts it again.
@@ -566,10 +699,21 @@ class _CacheAppState extends State<CacheApp> {
         ? null
         : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector, runAction: actionRegistry.run),
     numberingState: CoreNumberingState(() => sources.core),
-    locationKnown: () => chatLocation.known,
+    locationKnown: () => chatLocation.turnKnown,
     prepareTurn: chatLocation.prepare,
     actions: actionRegistry,
     actCore: actCore,
+  );
+  /// Reads the chat prompt's start into the model's cache while Ask is shown (chat/prompt_read_ahead.dart). It reads what the chat
+  /// would send, never loads the model, and sits out a hot device by the same heat signal as the index work.
+  late final PromptReadAhead promptReadAhead = PromptReadAhead(
+    engine: LocalReadAhead(app.session, extras: () => app.activeSettings.requestExtras, busy: () => chat.busy),
+    request: (cancelled) => chat.warmRequest(isCancelled: cancelled),
+    isHot: () async {
+      await indexThrottle.read();
+      return indexThrottle.hot;
+    },
+    waitForFix: chatLocation.waitForFix,
   );
   // What the assistant can do through the act tool: each module's actions, handed back by the core for read and open (host_run) and
   // run by a tap on a confirm card for change. The chat installs a conversation's definitions in the core when it starts.
@@ -636,7 +780,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
       notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
-      shareAvailable: () => sharing.enabled);
+      shareAvailable: () => sharing.enabled, icons: MapIconSetup.of(maps));
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
@@ -657,6 +801,13 @@ class _CacheAppState extends State<CacheApp> {
   });
   // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
   // and directions.
+  /// Where the place map opens with no position: the Maps tab's last camera, else the middle of the saved places, else a downloaded region's centre.
+  Future<({double lat, double lon, double zoom})?> _placeMapFallback() async {
+    final last = maps.savedCamera;
+    if (last != null && last.zoom >= 6) return placeFallbackCamera(last: last);
+    return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
+  }
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -676,10 +827,14 @@ class _CacheAppState extends State<CacheApp> {
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
     hereOnMap: () => location.enabled,
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
-    map: (context, pin, onPick) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick),
+    map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
+    pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) {
+      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
+      if (nav.guiding) return false;
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
+      return true;
     },
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
@@ -696,19 +851,27 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
+  // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
+  late final RouteElevation routeElevation = RouteElevation(start: tileServerElevationJobs(maps.engine, along: (r) => nav.progress?.routeId == r.routeId ? nav.progress!.distanceAlongM : 0));
   late final CarDriveSource carDrive = CarDriveSource(GeolocatorNavSource(), route: () => nav.route);
   // Android Auto's car screen (lib/car): it shows and drives the guidance above; there is no second guidance.
   CarBridge? _car;
+  // Whether the phone's drive screen is showing to a person; the car is told (car/phone_drive.dart).
+  final PhoneDrive _phoneDrive = PhoneDrive();
   // The screen stays on while guiding (it dimmed on the dashboard even with the phone set to stay on while charging).
-  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav);
+  late final GuidanceWakeLock _guidanceAwake = GuidanceWakeLock(nav, drive: _phoneDrive);
   CacheThemeId _applied = CacheThemeId.dark;
 
   /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
   bool _coreDone = false;
 
+  final IgnoreRoutePushes _noRoutePushes = IgnoreRoutePushes();
+
   @override
   void initState() {
     super.initState();
+    // Before the app's own navigator starts listening: a page address from the platform is never pushed as a route.
+    WidgetsBinding.instance.addObserver(_noRoutePushes);
     ModelDownloads.shared = modelDownloads;
     // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
     // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
@@ -729,6 +892,8 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
+    if (plat.isWeb) unawaited(searchModel.refreshServer());
     // Making a ZIM's PDFs searchable on this device.
     pdfIndexShared = pdfIndex;
     _guidanceAwake;
@@ -738,16 +903,45 @@ class _CacheAppState extends State<CacheApp> {
       onResume: () {
         device?.onFocus();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
-        if (!plat.isWeb) indexing.setOpen(true);
+        if (!plat.isWeb) unawaited(_backToFront());
+      },
+      // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
+      // search box does (SearchModel.aboutToSearch).
+      onStateChange: (state) {
+        searchModel.onLifecycle(state);
+        // The chat model is let go after a grace period in the back with no answer being written; back in front cancels it.
+        switch (state) {
+          case AppLifecycleState.hidden:
+          case AppLifecycleState.paused:
+            promptReadAhead.toBackground();
+            _modelRelease.toBackground();
+          case AppLifecycleState.resumed:
+            _modelRelease.toFront();
+            // Where the phone's window stands is asked again: a missed message must not leave the phone's map still.
+            if (plat.isIOS) unawaited(phoneWindow.refresh());
+          case AppLifecycleState.inactive:
+          case AppLifecycleState.detached:
+            break;
+        }
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
+        if (!plat.isWeb) _toBack();
       },
+      // On the screen again (a desktop window shown without being clicked into does not "resume").
+      onShow: () => _foregroundUpdates.front(),
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    askFocusShared = askFocus;
+    // The workers that hold off while Ask answers (named in the log). Indexing follows the throttle (chat.busy, _onChatForIndexing).
+    for (final name in ['Indexing', 'Notebook sync', 'Settings sync', 'Downloads', 'Region downloads']) {
+      askFocus.register(name);
+    }
     indexSchedulerShared = indexing;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
@@ -773,11 +967,17 @@ class _CacheAppState extends State<CacheApp> {
     });
     // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
     // again when Ask opens. Holding it is how Cache came to be the app Android killed.
+    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
     listenMemoryTrim((level, reading) {
-      if (!releaseModelOn(level, reading) || chat.busy || app.active == null) return;
+      // Android 14 and later no longer send levels 10 to 19; older Androids do, and the chat model goes at once.
+      // Going to the back (UI_HIDDEN and beyond) starts the grace period of the release below.
+      if (trimMeansBackground(level)) _modelRelease.toBackground();
+      if (releaseModelOn(level, reading)) searchModel.onTrim(level);
+      if (!releaseChatModelNowOn(level)) return;
+      if (chat.busy || app.active == null) return;
       logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
       unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    });
+    }, onWarning: searchModel.onMemoryWarning);
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -795,6 +995,28 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) appTempPath().then((p) => _tempPath = p).catchError((_) => '');
     if (!plat.isWeb) {
       addPdfShared = addPdf;
+      watchFoldersShared = watchFolders;
+      // the lock with the background runs: the app is open; a background run adding PDFs is stopped, and what it changed is
+      // read again. Then the watched folders are checked, once the libraries can be read (a first PDF may make My books).
+      unawaited(supportRead.then((_) async {
+        final s = _supportPath;
+        if (s == null) return;
+        final l = _bgLock = BackgroundLock(Directory(backgroundDir(s)));
+        _bgSeen = l.generation;
+        _bgAppOpen();
+        final ran = l.runs(kAddPdfWork);
+        await l.takeOver(kAddPdfWork);
+        if (ran) {
+          await addPdf.reload();
+          await watchFolders.reload();
+        }
+        watchFolders.addListener(_onWatchFolders);
+        await watchFolders.load();
+        _onWatchFolders();
+        await _writeBackgroundContext();
+      }).then((_) => sources.whenCoreReady()).then((_) => watchFolders.checkAll()).catchError((Object e) {
+        logError('Watch a folder: the check at start', error: e);
+      }));
       // the startup self-check of Add PDF's engines, logged at Standard once Cache has settled
       unawaited(supportRead.then((_) => addPdf.load()).then((_) => Future<void>.delayed(const Duration(seconds: 20))).then((_) async {
         final s = _supportPath;
@@ -824,6 +1046,9 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
+        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -892,8 +1117,9 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
       Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
-      settingsRead.then((_) => regions.init());
     }
+    // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
+    settingsRead.then((_) => regions.init());
     _layoutRead = layout.init();
     sources.init();
     if (!plat.isWeb) unawaited(pdfIndex.init());
@@ -904,19 +1130,72 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     _mapsRead = maps.init();
     if (plat.isAndroid) {
-      _car = CarBridge(
+      unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
+      _car = _newCarBridge();
+      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
+      _car!.connected.addListener(_onCarScreen);
+      unawaited(_car!.start());
+    } else if (plat.isIOS) {
+      // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
+      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
+      // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
+      unawaited(readCarScreenSupport().then((on) {
+        if (!on || !mounted) return;
+        _car = _newCarBridge();
+        // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
+        _car!.connected.addListener(_onCarScreen);
+        unawaited(_car!.start());
+      }));
+      // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
+      unawaited(phoneWindow.start());
+    }
+    _openHistory();
+  }
+
+  /// The car screen's link to the phone's guidance (Android Auto; CarPlay in an iPhone build made with it).
+  CarBridge _newCarBridge() => CarBridge(
         nav: nav,
         maps: maps,
         drive: carDrive,
+        elevation: routeElevation,
+        theme: () => app.theme,
+        overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.signal.value),
+        phoneDrive: _phoneDrive.signal,
+        carries: _phoneDrive.extras,
+        settings: app,
         ready: () => sources.whenCoreReady(),
+        // The phone map's pins (notebook places, saved places, shown repeater lists) on the car's map.
+        pins: CarPins.of(notebooks: notebooks, userLayers: userLayers, maps: maps),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
         onConnected: () async {
           await location.request(explain: () async => false);
         },
       );
-      unawaited(_car!.start());
-    }
-    _openHistory();
+
+  void _onCarScreen() {
+    final attached = _car?.connected.value ?? false;
+    _phoneDrive.carConnected.value = attached;
+    location.carScreen(attached);
+    if (!attached) _carLeft();
+  }
+
+  /// The car has left. When Android Auto started Cache with the phone app closed, nothing shows Cache now and nothing will say
+  /// so: a start counts as in front, and only a phone screen's lifecycle ends that (before the engine was kept for the life of
+  /// the process, the run simply ended here). So Cache goes to the back by itself, as it does when the phone's screen is
+  /// hidden: index work stops and is handed to the background, the models are let go after their usual wait, the position
+  /// stream stops and the "running" mark is taken away. Nothing is loaded or started. The phone's screen coming to the front
+  /// brings it all back the usual way ([_backToFront] and the lifecycle listeners).
+  void _carLeft() {
+    if (!nothingShowsTheApp(inFront: _atFront, screen: WidgetsBinding.instance.lifecycleState)) return;
+    logInfo('The car has left and the phone screen is not open: Cache goes to the back');
+    searchModel.onLifecycle(AppLifecycleState.paused);
+    promptReadAhead.toBackground();
+    _modelRelease.toBackground();
+    _foregroundUpdates.back();
+    indexing.setOpen(false);
+    _toBack();
+    location.noScreen();
+    markAppNotOpen();
   }
 
   /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
@@ -935,6 +1214,23 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
+
+  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
+  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
+    every: kBackgroundEvery,
+    on: () => weather.enabledSources.isNotEmpty,
+    update: () => weather.updateNow(),
+    wanted: foregroundUpdatesWanted(),
+  );
+  late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
+    // A load in flight holds the release like an answer does: it never unloads a model the person just asked for, and when the
+    // load ends with Cache still in the back, a new grace period starts.
+    busy: () => chat.busy || app.loading != null,
+    loaded: () => app.active != null,
+    release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
+    changes: Listenable.merge([chat, app]),
+  );
   int? _backendGeneration;
   bool? _scheduledFor;
   bool _askedNotifications = false;
@@ -1002,7 +1298,10 @@ class _CacheAppState extends State<CacheApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_noRoutePushes);
     _lifecycle.dispose();
+    _foregroundUpdates.dispose();
+    _modelRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
@@ -1012,7 +1311,9 @@ class _CacheAppState extends State<CacheApp> {
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
+    _car?.connected.removeListener(_onCarScreen);
     _car?.dispose();
+    _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
@@ -1023,7 +1324,12 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();
+    _bgOpenTimer?.cancel();
+    watchFolders.removeListener(_onWatchFolders);
+    watchFolders.dispose();
     indexThrottle.dispose();
+    if (identical(askFocusShared, askFocus)) askFocusShared = null;
+    askFocus.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
@@ -1046,8 +1352,29 @@ class _CacheAppState extends State<CacheApp> {
     super.dispose();
   }
 
+  /// A phone screen has come to the front for the first time: the first one of this run, or a new one after Android closed the
+  /// last (on Android the app outlives its screen: platform/phone_screen.dart). What the start did for the screen it expected
+  /// is done for this one.
+  void _onPhoneScreen() {
+    // The system bars are the screen's own (MainActivity): a new screen has not been told how to show them.
+    applySystemUi(_applied);
+    // The chat model a start by the car left out loads now, as it would have at a start with the phone's screen.
+    unawaited(app.phoneScreenAppeared());
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Only Android keeps the app running past its screen (the engine is kept for the life of the process).
+    if (!plat.isAndroid) return _interface(context);
+    // Each phone screen gets the interface built from the start; the state above stays (platform/phone_screen.dart).
+    return PhoneScreenScope(
+      onScreen: _onPhoneScreen,
+      placeholder: ColoredBox(color: cacheTokens[_applied]!.background),
+      builder: _interface,
+    );
+  }
+
+  Widget _interface(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
@@ -1073,7 +1400,7 @@ class _CacheAppState extends State<CacheApp> {
                   children: [
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
-                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: child!)),
+                    Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
                   ],
                 ),
               ),
@@ -1095,10 +1422,13 @@ class _CacheAppState extends State<CacheApp> {
           sources: sources,
           location: location,
           chatLocation: chatLocation,
+          readAhead: promptReadAhead,
           maps: maps,
           video: video,
           browse: browse,
           nav: nav,
+          elevation: routeElevation,
+          phoneDrive: _phoneDrive,
           layout: layout,
           hub: hub,
           notebooks: notebookDeps,

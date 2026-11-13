@@ -195,6 +195,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     if let Some(shim) = a.get("valhalla-shim") {
         helper_cfg.shim = PathBuf::from(shim);
     }
+    helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
     helper_cfg.data_dir = Some(data.clone());
 
@@ -205,6 +206,11 @@ fn serve(argv: &[String]) -> Result<(), String> {
         // The text embedder (bge-m3): the model is fetched on first need; a loaded model is let go when idle.
         let llm = cache_server::llm::LlmService::new(data.clone(), embed_lib.clone(), cache_server::embed::ModelSpec::bge_m3().file_name);
         let embed = cache_server::embed::EmbedService::new(data.clone(), embed_lib);
+        // A model download that asked for the search model starts it when it is done, with no browser open.
+        let follower = embed.clone();
+        llm.jobs().set_after(Arc::new(move || {
+            follower.start_download();
+        }));
         let reaper = embed.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -215,6 +221,14 @@ fn serve(argv: &[String]) -> Result<(), String> {
         });
         // The library builder: books from PDFs, one at a time, and the drop folder. Its threads keep going with no browser open.
         let build = cache_server::libbuild::BuildService::new(data.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
+        // OCR for scanned pages when the trained data is in this install (lib/tessdata) or CACHE_TESSDATA_DIR names it.
+        match cache_builder::ocr::OcrSettings::discover() {
+            Some(o) => {
+                eprintln!("OCR is on (trained data in {})", o.datadir.display());
+                build.set_ocr(Some(o));
+            }
+            None => eprintln!("OCR is off: no eng.traineddata found in lib/tessdata"),
+        }
         build.start();
         let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed, llm, build });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
@@ -275,6 +289,8 @@ fn main() {
         }
         // Hidden: the server re-runs itself as this to read one PDF, so a PDF that crashes MuPDF takes down only this process.
         Some("extract-pdf") => std::process::exit(cache_builder::isolate::child_main()),
+        // Hidden: the helper runs this on each PDF inside a ZIM to index it headless (builder/src/pdf_text.rs).
+        Some("pdf-text") => std::process::exit(cache_builder::pdf_text::child_main(&argv[1..])),
         Some("serve") => serve(&argv[1..]),
         Some("set-password") => set_password(&argv[1..]),
         Some("keys") => keys(&argv[1..]),

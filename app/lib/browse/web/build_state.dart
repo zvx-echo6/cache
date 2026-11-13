@@ -363,6 +363,20 @@ class BuildController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Whether the device can delete a whole built library.
+  bool get canDeleteLibrary => api is BuildLibraryDeleteApi;
+
+  /// Deletes a built library: its books, search data and PDF copies on the device. The PDFs the person gave are not touched.
+  Future<void> deleteLibrary(String id) async {
+    final a = api;
+    if (a is! BuildLibraryDeleteApi) return;
+    await a.deleteLibrary(id);
+    libraries = [for (final x in libraries) if (x.id != id) x];
+    books.remove(id);
+    notifyListeners();
+    unawaited(refresh());
+  }
+
   Future<void> renameBook(String libraryId, String docId, String title) async {
     await api.renameBook(libraryId, docId, title.trim());
     await loadBooks(libraryId);

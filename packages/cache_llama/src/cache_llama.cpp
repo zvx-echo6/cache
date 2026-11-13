@@ -22,10 +22,23 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+#if defined(__linux__) || defined(__ANDROID__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -50,6 +63,7 @@ struct Handle {
     std::vector<llama_token>  cached;
     int                       n_reused = 0;  // prompt tokens of the last cl_start taken from the cache
     int                       first_token = -1;  // first token of the last cl_start's prompt
+    long long                 prompt_decoded = 0;  // prompt tokens decoded since the load (cl_start and cl_warm), for tests
 
     // Sampling defaults: llama.cpp's own, replaced by what the GGUF recommends (general.sampling.*) at load.
     common_params_sampling    sampling;
@@ -64,8 +78,17 @@ struct Handle {
     int                                  n_prompt    = 0;
     int                                  n_generated = 0;
     bool                                 finished    = true;
+    bool                                 context_cut = false;  // the last generation ended because the context was full
     std::atomic<bool>                    stop{false};
+    std::atomic<unsigned long long>      cancel_qid{0};  // cl_cancel_question: the one queued or running question whose turn is cancelled (the read ahead is not)
+    unsigned long long                   cur_qid = 0;    // the question cl_start_q began (0: none)
+    std::atomic<unsigned long long>      stop_epoch{0};  // bumped by every cl_stop: a queued cl_warm that sees a new one was stopped before it began
+    std::atomic<bool>                    in_prefill{false};  // cl_start is decoding the prompt: llama.cpp's abort hook obeys `stop`
     std::vector<llama_token>             stop_tokens;  // tool_choice "none": tool-call openings end the generation
+
+    // Gentle pre-read of the model file into the page cache (cl_configure preread_mbps): one thread, stopped and joined in free_handle.
+    std::thread       preread;
+    std::atomic<bool> preread_stop{false};
 
     // How the weights were loaded (cl_info): "repacked", "mmap" or "default", and why.
     std::string weights        = "default";
@@ -202,7 +225,9 @@ void cl_logi(const char * fmt, ...) {
 // ---------------- options (cl_configure) ----------------
 std::mutex  g_opt_mu;
 std::string g_prefix_dir;
+int         g_n_ubatch       = 0;      // test builds: the context's n_ubatch, 0 = llama.cpp's default (cl_configure "n_ubatch")
 bool        g_repack_weights = false;  // Android, measurement only (cl_configure "repack_weights")
+int         g_preread_mbps   = 0;      // target rate of the gentle pre-read in MB/s, 0 = off (cl_configure "preread_mbps")
 
 std::string engine_build() {
 #if defined(CACHE_GEMMA4_PREFILL_OPT)
@@ -266,9 +291,13 @@ std::string file_identity(const char * path) {
 // The KV state of a prompt start, saved by llama_state_seq_save_file (its magic and version, the tokens, then seq 0's KV state)
 // to a .part file and renamed, so a file under its final name is complete. The name is
 // prefix-<model key>-<tokens hash>.kv: the model key (FNV-1a 64 of the model file's identity, the engine build and n_ctx) makes a
-// file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used for as many of
-// its tokens as the prompt shares (the cache after that is dropped), so a file saved with a part that later changed still
-// gives the part before it. At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
+// file of another model, engine or context size invisible (it goes when the folder is pruned). A file is used only when ALL of its
+// tokens are the start of the prompt: a file that only partly matches (one saved on an earlier day shares just the text before the
+// date) is not loaded and cut back, because the cache after such a cut did not drop later tails reliably (a new chat answered the
+// previous chat's question). At most kPrefixFiles stay (the least recently used go). A file that does not load is deleted.
+// On the first prompt shape since a load the whole probed start is saved when no file holds all of it (with only an earlier day's
+// file the cache is cleared, the prompt is read as usual and today's whole start saved); within a load a changed shape saves only
+// what it shares with the shape before it.
 constexpr size_t kPrefixFiles  = 2;
 constexpr size_t kPrefixMinLen = 32;  // shorter prefixes are not worth a file
 
@@ -344,6 +373,446 @@ void prune_prefix_files(const std::string & dir) {
     std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
     for (size_t i = kPrefixFiles; i < files.size(); i++) fs::remove(files[i].second, ec);
 }
+
+// ---------------- the prompt start, shared by cl_start and cl_warm ----------------
+// cl_start (a question) and cl_warm (the prompt read ahead, no question yet) render a request through the same code below: the
+// request parsed into template inputs, the stable prompt start found from them (update_probe), the KV cache and the saved
+// prefix files lined up with it (align_cache), and the tokens decoded and the prefix file saved (decode_tokens).
+
+using sclock = std::chrono::steady_clock;
+long long ms_since(sclock::time_point t0) {
+    return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count();
+}
+
+// A request's messages, thinking switch, tools and tool_choice as the chat template takes them.
+common_chat_templates_inputs parse_chat_inputs(const common_json & req) {
+    common_chat_templates_inputs in;
+    in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
+    in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    // Optional top-level "enable_thinking": true|false. Passed to the template as the
+    // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
+    if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
+        in.enable_thinking = req.at("enable_thinking").get<bool>();
+    }
+    if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
+        in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
+    }
+    // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
+    // tool-call grammar off; the tool-call opening tokens then end the generation (below).
+    if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
+        in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
+    }
+    return in;
+}
+
+// The stable prompt start exists only with a prefix folder, tools and a system message.
+bool probe_applies(const Handle * h, const common_chat_templates_inputs & in) {
+    return !h->prefix_dir.empty() && !in.tools.empty() && !in.messages.empty() && in.messages[0].role == "system";
+}
+
+// Finds the prompt start of the request's shape (system prompt + tools + thinking switch), once per shape: the tokens the template
+// renders for the system message and the tools with two different one-word questions, as far as both renderings agree. Sets
+// probe_key, probe_tokens, stable and stable_known. Call only when probe_applies.
+void update_probe(Handle * h, const common_chat_templates_inputs & in, const common_json & req) {
+    const std::string key = in.messages[0].content + '\x1f' + req.at("tools").dump() + '\x1f' + (in.enable_thinking ? "1" : "0");
+    if (key != h->probe_key) {
+        common_chat_templates_inputs pa = in;
+        pa.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+        common_chat_msg u;
+        u.role    = "user";
+        u.content = "a";
+        pa.messages = { in.messages[0], u };
+        auto ta = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+        pa.messages[1].content = "b";
+        auto tb = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
+        ta.resize(common_prefix(ta, tb, ta.size()));
+        if (!h->probe_tokens.empty()) {
+            h->stable       = common_prefix(h->probe_tokens, ta, ta.size());
+            h->stable_known = true;
+        } else {
+            h->stable_known = false;  // the first shape since the load: see the saved files (align_cache)
+        }
+        h->probe_key    = key;
+        h->probe_tokens = std::move(ta);
+    } else {
+        h->stable       = h->probe_tokens.size();
+        h->stable_known = true;
+    }
+}
+
+// How many of tokens' first `limit` the KV cache already holds, in order. Changes nothing.
+size_t cache_overlap(const Handle * h, const std::vector<llama_token> & tokens, size_t limit) {
+    const size_t lim = std::min(h->cached.size(), limit);
+    size_t keep = 0;
+    while (keep < lim && h->cached[keep] == tokens[keep]) keep++;
+    return keep;
+}
+
+// The longest saved prefix file whose tokens are all the start of the first `limit` of tokens (best = 0: none). A file that
+// matches only in part is not a hit.
+struct PrefixHit {
+    size_t      best     = 0;
+    size_t      file_len = 0;
+    std::string path;
+};
+
+PrefixHit best_prefix_file(const Handle * h, const std::vector<llama_token> & tokens, size_t limit) {
+    PrefixHit hit;
+    for (auto & f : prefix_files(h)) {
+        const size_t l = common_prefix(f.second, tokens, limit);
+        if (l == f.second.size() && l > hit.best) {
+            hit.best     = l;
+            hit.path     = f.first;
+            hit.file_len = f.second.size();
+        }
+    }
+    return hit;
+}
+
+// Lines the KV cache up with tokens: keeps what it already holds for the start (the longest common token prefix, at most
+// `limit_tokens`: cl_start always decodes the last prompt token, because the first generated token needs its logits), drops the
+// cache after it, and when the cache does not hold the stable start (`want`: the first question after a load, or a different
+// start before) restores a saved file whose tokens are all the start of the prompt. Returns the tokens now in the cache. `want` is
+// not changed: on the first shape since the load the whole probed start is stable even when no saved file covers all of it (the
+// prompt is read as usual and the whole start is saved). `covered`: a saved file already holds the whole stable start.
+size_t align_cache(Handle * h, const std::vector<llama_token> & tokens, size_t limit_tokens, size_t & want, bool & covered) {
+    llama_memory_t mem = llama_get_memory(h->ctx);
+    size_t keep = cache_overlap(h, tokens, limit_tokens);
+    if (keep == 0) {
+        llama_memory_clear(mem, true);
+    } else if (keep < h->cached.size() && !llama_memory_seq_rm(mem, 0, (llama_pos) keep, -1)) {
+        // Some caches (sliding-window attention) cannot drop just a tail: start over, correct but slower.
+        llama_memory_clear(mem, true);
+        keep = 0;
+    }
+    h->cached.resize(keep);
+
+    std::error_code fec;
+    covered = true;
+    if (want >= kPrefixMinLen && keep < want) {
+        const PrefixHit hit = best_prefix_file(h, tokens, limit_tokens);
+        const size_t best = hit.best;
+        if (!h->stable_known) {
+            // The first shape since the load: all of its probed start is taken as stable, whatever a saved file shares with it.
+            // A file that covers only the start of it (yesterday's, which shares the text up to the date) is not restored (see
+            // best_prefix_file): the prompt is read as usual and the whole start saved (covered stays false), so a later load finds
+            // it whole. Cutting `want` to what the file shares would count the start as covered and save nothing, and every fresh
+            // load on a later day would read the tool schemas again. Within one load a shape change still shrinks `stable` to
+            // what the two shapes share (update_probe), so a start that flips does not write a file per question.
+            h->stable       = want;
+            h->stable_known = true;
+        }
+        covered = best >= want;
+        if (best > keep && best >= kPrefixMinLen) {
+            const auto t0 = sclock::now();
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            keep = 0;
+            std::vector<llama_token> got(hit.file_len);
+            size_t n_got = 0;
+            const size_t rd = llama_state_seq_load_file(h->ctx, hit.path.c_str(), 0, got.data(), got.size(), &n_got);
+            const bool loaded = rd > 0 && n_got == hit.file_len && n_got == best && std::equal(got.begin(), got.end(), tokens.begin());
+            if (loaded) {
+                h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
+                keep = best;
+                std::filesystem::last_write_time(hit.path, std::filesystem::file_time_type::clock::now(), fec);
+                h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+            } else {
+                llama_memory_clear(mem, true);
+                std::filesystem::remove(hit.path, fec);
+                covered = false;
+                h->prefix_note = "Prompt prefix file did not load and was removed; the prompt is read as usual";
+            }
+            cl_logi("%s", h->prefix_note.c_str());
+        }
+    }
+    return keep;
+}
+
+// Decodes tokens[from, to) into the KV cache, in batches of 512 (with in_prefill set, so llama.cpp's abort hook obeys `stop`), and
+// saves the prefix file (tokens[0, prefix)) when `save` and the decode passes `prefix`. Returns 0 when done, 1 when stopped
+// between batches (every batch so far was decoded whole and is in `cached`), 2 when aborted inside a batch (its state in the cache
+// is not known, so the cache is cleared and nothing is saved as a prefix), -1 when a decode failed (cache cleared). `reached`: the
+// tokens decoded up to.
+int decode_tokens(Handle * h, const std::vector<llama_token> & tokens, size_t from, size_t to, bool save, size_t prefix,
+                  const std::string & prefix_file, size_t & reached) {
+    llama_memory_t mem = llama_get_memory(h->ctx);
+    std::error_code fec;
+    const int n_batch = 512;
+    struct PrefillGuard {
+        std::atomic<bool> & f;
+        explicit PrefillGuard(std::atomic<bool> & x) : f(x) { f = true; }
+        ~PrefillGuard() { f = false; }
+    } prefill_guard(h->in_prefill);
+    reached = from;
+    for (int i = (int) from; i < (int) to;) {
+        int n = std::min(n_batch, (int) to - i);
+        if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
+        // Stop between batches: every batch so far was decoded whole and is in `cached`, so the cache stays consistent.
+        if (h->stop.load()) {
+            cl_logi("prefill stopped after %d of %d tokens", i, (int) to);
+            return 1;
+        }
+        const int rc = llama_decode(h->ctx, llama_batch_get_one(const_cast<llama_token *>(tokens.data()) + i, n));
+        if (rc == 2) {
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            cl_logi("prefill stopped after %d of %d tokens", i, (int) to);
+            return 2;
+        }
+        if (rc != 0) {
+            llama_memory_clear(mem, true);
+            h->cached.clear();
+            return -1;
+        }
+        h->prompt_decoded += n;
+        h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
+        i += n;
+        reached = (size_t) i;
+        if (save && (size_t) i == prefix) {
+            const auto t0 = sclock::now();
+            std::filesystem::create_directories(h->prefix_dir, fec);
+            const std::string part = prefix_file + ".part";
+            const size_t wr = llama_state_seq_save_file(h->ctx, part.c_str(), 0, tokens.data(), prefix);
+            std::error_code rec;
+            if (wr > 0) std::filesystem::rename(part, prefix_file, rec);
+            if (wr > 0 && !rec) {
+                prune_prefix_files(h->prefix_dir);
+                h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix saved (") + std::to_string(prefix) +
+                                  " tokens, " + std::to_string(ms_since(t0)) + " ms)";
+            } else {
+                std::filesystem::remove(part, fec);
+                h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix could not be saved");
+            }
+            cl_logi("%s", h->prefix_note.c_str());
+        }
+    }
+    return 0;
+}
+
+// ---------------- lookup-only tensors stay on flash ----------------
+// The embedding tables a token only looks one row up in (GET_ROWS): per_layer_token_embd (Gemma 4's per-layer table, 56% of the E2B
+// file) and token_embd when the model has a separate output.weight (tied to the output head, token_embd is read in full every token,
+// so it is not lookup-only). Their pages are advised MADV_RANDOM so the kernel does not read ahead around each row and fill memory
+// with pages that are used once. kPleAdvice is the one switch the bench compares (none = no advice).
+enum class PleAdvice { kRandom, kNone };
+constexpr PleAdvice kPleAdvice = PleAdvice::kRandom;
+
+#if defined(__linux__) || defined(__ANDROID__)
+// madvise(MADV_RANDOM) on the lookup-only tensors of the model file, inside its mmap (found from /proc/self/maps by file offset;
+// a tensor that is not inside a mapping of the model file, e.g. weights not file-mapped, is skipped). Logs once.
+void advise_lookup_tensors(const char * model_path) {
+    if (kPleAdvice == PleAdvice::kNone) {
+        cl_logi("PLE advice: none");
+        return;
+    }
+    struct Range { uint64_t off, size; };
+    std::vector<Range> ranges;
+    {
+        gguf_init_params gp;
+        gp.no_alloc = true;
+        gp.ctx      = nullptr;
+        gguf_context * g = gguf_init_from_file(model_path, gp);
+        if (!g) {
+            cl_logi("PLE advice: model header not read, nothing advised");
+            return;
+        }
+        const uint64_t base = gguf_get_data_offset(g);
+        const int64_t  n    = gguf_get_n_tensors(g);
+        bool has_output = false;
+        for (int64_t i = 0; i < n; i++) {
+            if (strcmp(gguf_get_tensor_name(g, i), "output.weight") == 0) has_output = true;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            const char * name = gguf_get_tensor_name(g, i);
+            const bool lookup = strncmp(name, "per_layer_token_embd", 20) == 0 || (has_output && strncmp(name, "token_embd", 10) == 0);
+            if (lookup) ranges.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+        }
+        gguf_free(g);
+    }
+    if (ranges.empty()) {
+        cl_logi("PLE advice: no lookup-only tensors in this model");
+        return;
+    }
+    struct Vma { uint64_t start, end, off; };
+    std::vector<Vma> vmas;
+    std::error_code ec;
+    const std::string real = std::filesystem::weakly_canonical(model_path, ec).string();
+    if (FILE * f = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long st, en, off;
+            int n = 0;
+            if (sscanf(line, "%llx-%llx %*4s %llx %*s %*s %n", &st, &en, &off, &n) < 3 || n <= 0) continue;
+            std::string path = line + n;
+            while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) path.pop_back();
+            if (path == model_path || (!real.empty() && path == real)) vmas.push_back({ st, en, off });
+        }
+        fclose(f);
+    }
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t bytes = 0;
+    int      err   = 0;
+    for (const auto & r : ranges) {
+        for (const auto & v : vmas) {
+            if (r.off < v.off || r.off + r.size > v.off + (v.end - v.start)) continue;
+            const uint64_t addr = v.start + (r.off - v.off);
+            const uint64_t lo   = (addr + ps - 1) & ~(ps - 1);          // rounded in: no neighbouring tensor's page is advised
+            const uint64_t hi   = (addr + r.size) & ~(ps - 1);
+            if (hi <= lo) break;
+            if (madvise((void *) lo, hi - lo, MADV_RANDOM) == 0) bytes += hi - lo; else err = errno;
+            break;
+        }
+    }
+    if (err != 0) {
+        cl_logi("PLE advice: random on %llu MB (errno %d)", (unsigned long long) (bytes >> 20), err);
+    } else {
+        cl_logi("PLE advice: random on %llu MB (ok)", (unsigned long long) (bytes >> 20));
+    }
+}
+#else
+void advise_lookup_tensors(const char *) {}
+#endif
+
+// ---------------- gentle pre-read ----------------
+// The first prompt of a chat faults in about 1.5 GB of the mmapped model within seconds, which pushes free pages under Android's
+// low-memory watermark and kills cached apps. Reading the file ahead at a low, steady rate spreads that out. It uses its own file
+// descriptor and never touches the mapping or the model. per_layer_token_embd is left alone: llama.cpp reads those rows lazily.
+[[maybe_unused]] constexpr uint64_t kPrereadStep = 1u << 20;  // 1 MiB
+
+// Milliseconds to sleep so that `bytes` read after `elapsed_us` microseconds never exceeds `mbps` MB/s (1 MB = 1 MiB). 0 if on pace.
+[[maybe_unused]] long long preread_sleep_ms(uint64_t bytes, long long elapsed_us, int mbps) {
+    if (mbps <= 0) return 0;
+    const long long due_us = (long long) ((double) bytes * 1e6 / ((double) mbps * 1048576.0));
+    const long long wait   = due_us - elapsed_us;
+    return wait > 0 ? (wait + 999) / 1000 : 0;
+}
+
+// File ranges to read: every tensor except per_layer_token_embd*, sorted by offset, adjacent or overlapping ranges merged.
+[[maybe_unused]] std::vector<std::pair<uint64_t, uint64_t>> preread_ranges(const char * model_path) {
+    std::vector<std::pair<uint64_t, uint64_t>> r;  // (offset, size)
+    gguf_init_params gp;
+    gp.no_alloc = true;
+    gp.ctx      = nullptr;
+    gguf_context * g = gguf_init_from_file(model_path, gp);
+    if (!g) return r;
+    const uint64_t base = gguf_get_data_offset(g);
+    const int64_t  n    = gguf_get_n_tensors(g);
+    for (int64_t i = 0; i < n; i++) {
+        if (strncmp(gguf_get_tensor_name(g, i), "per_layer_token_embd", 20) == 0) continue;
+        r.push_back({ base + gguf_get_tensor_offset(g, i), (uint64_t) gguf_get_tensor_size(g, i) });
+    }
+    gguf_free(g);
+    std::sort(r.begin(), r.end());
+    std::vector<std::pair<uint64_t, uint64_t>> m;
+    for (const auto & x : r) {
+        if (x.second == 0) continue;
+        if (!m.empty() && x.first <= m.back().first + m.back().second) {
+            const uint64_t end = std::max(m.back().first + m.back().second, x.first + x.second);
+            m.back().second = end - m.back().first;
+        } else {
+            m.push_back(x);
+        }
+    }
+    return m;
+}
+
+#if defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(__APPLE__)
+typedef char mincore_vec_t;
+#else
+typedef unsigned char mincore_vec_t;
+#endif
+// Reads the model's tensor ranges into the page cache, paced to `mbps` MB/s. Steps whose pages are all resident already (found with
+// mincore() on this thread's own read-only mapping, never read through) are skipped and do not count toward the pace.
+void preread_run(std::string path, int mbps, std::atomic<bool> * stop) {
+    using clock = std::chrono::steady_clock;
+    const auto ranges = preread_ranges(path.c_str());
+    uint64_t total = 0;
+    for (const auto & r : ranges) total += r.second;
+    cl_logi("preread: start, %llu MB in %zu ranges at %d MB/s", (unsigned long long) (total >> 20), ranges.size(), mbps);
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        cl_logi("preread: stopped at 0 MB read (0 MB resident) after 0 ms (cannot open the file)");
+        return;
+    }
+    // Own mapping, only for mincore(); if it cannot be made, every step is read as before.
+    const uint64_t ps = (uint64_t) sysconf(_SC_PAGESIZE);
+    uint64_t fsize = 0;
+    {
+        struct stat st;
+        if (fstat(fd, &st) == 0) fsize = (uint64_t) st.st_size;
+    }
+    void * map = (fsize > 0) ? mmap(nullptr, (size_t) fsize, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+    bool resident_check = map != MAP_FAILED;
+    if (!resident_check) cl_logi("preread: residency check off (mmap failed, errno %d), reading every step", errno);
+    const uint64_t map_end = (fsize + ps - 1) & ~(ps - 1);
+    std::vector<mincore_vec_t> vec;
+    std::vector<char> buf(kPrereadStep);
+    const auto t0 = clock::now();
+    auto since_us = [&]() { return (long long) std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count(); };
+    uint64_t done = 0;      // bytes passed (read or already resident)
+    uint64_t read_b = 0;    // bytes read: these count toward the pace
+    uint64_t resident_b = 0;
+    bool halted = false;
+    for (const auto & r : ranges) {
+        for (uint64_t pos = 0; pos < r.second && !halted; ) {
+            if (stop->load()) { halted = true; break; }
+            const uint64_t off  = r.first + pos;
+            const uint64_t want = std::min<uint64_t>(kPrereadStep, r.second - pos);
+            bool all_resident = false;
+            if (resident_check) {
+                const uint64_t lo = off & ~(ps - 1);
+                const uint64_t hi = std::min<uint64_t>((off + want + ps - 1) & ~(ps - 1), map_end);
+                if (hi > lo) {
+                    vec.assign((size_t) ((hi - lo) / ps), 0);
+                    if (mincore((char *) map + lo, (size_t) (hi - lo), vec.data()) == 0) {
+                        all_resident = true;
+                        for (mincore_vec_t v : vec) {
+                            if (!(v & 1)) { all_resident = false; break; }
+                        }
+                    } else {
+                        cl_logi("preread: residency check off (mincore failed, errno %d), reading every step", errno);
+                        resident_check = false;
+                    }
+                }
+            }
+            if (all_resident) {
+                pos        += want;
+                done       += want;
+                resident_b += want;
+                continue;
+            }
+            const ssize_t got = pread(fd, buf.data(), (size_t) want, (off_t) off);
+            if (got <= 0) { halted = true; break; }
+            pos    += (uint64_t) got;
+            done   += (uint64_t) got;
+            read_b += (uint64_t) got;
+            long long ms = preread_sleep_ms(read_b, since_us(), mbps);
+            while (ms > 0 && !stop->load()) {  // sleep in slices so a free is noticed within one step
+                const long long slice = std::min<long long>(ms, 20);
+                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+                ms -= slice;
+            }
+        }
+        if (halted) break;
+    }
+    if (map != MAP_FAILED) munmap(map, (size_t) fsize);
+    close(fd);
+    const long long ms = since_us() / 1000;
+    if (!halted && done >= total) {
+        cl_logi("preread: done, read %llu MB, already resident %llu MB, in %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
+    } else {
+        cl_logi("preread: stopped at %llu MB read (%llu MB resident) after %lld ms", (unsigned long long) (read_b >> 20),
+                (unsigned long long) (resident_b >> 20), ms);
+    }
+}
+#else
+void preread_run(std::string, int, std::atomic<bool> *) {
+    cl_logi("preread: off");  // no pread() on this platform
+}
+#endif
 
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
@@ -467,6 +936,9 @@ static std::mutex          g_live_mu;
 static std::set<Handle *>  g_live;
 
 static void free_handle(Handle * h) {
+    // Stop the pre-read first: it must be gone before the model is.
+    h->preread_stop.store(true);
+    if (h->preread.joinable()) h->preread.join();
     h->smpl.reset();
     h->session.reset();
     h->tmpls.reset();
@@ -483,7 +955,9 @@ int cl_configure(const char * options_json) {
         auto j = common_json::parse(options_json ? options_json : "{}");
         std::lock_guard<std::mutex> lock(g_opt_mu);
         if (j.contains("prefix_dir") && j.at("prefix_dir").is_string()) g_prefix_dir = j.at("prefix_dir").get<std::string>();
+        if (j.contains("n_ubatch") && j.at("n_ubatch").is_number()) g_n_ubatch = std::max(0, j.at("n_ubatch").get<int>());
         if (j.contains("repack_weights") && j.at("repack_weights").is_boolean()) g_repack_weights = j.at("repack_weights").get<bool>();
+        if (j.contains("preread_mbps") && j.at("preread_mbps").is_number()) g_preread_mbps = std::max(0, j.at("preread_mbps").get<int>());
         return 0;
     } catch (const std::exception &) {
         return -1;
@@ -510,9 +984,13 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
         bool repack_opt_in = false;
+        int  preread_mbps  = 0;
+        int  n_ubatch_opt  = 0;
         {
             std::lock_guard<std::mutex> lock(g_opt_mu);
             repack_opt_in = g_repack_weights;
+            preread_mbps  = g_preread_mbps;
+            n_ubatch_opt  = g_n_ubatch;
             h->prefix_dir = g_prefix_dir;
         }
         (void) repack_opt_in;
@@ -535,6 +1013,10 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         cl_logi("weights: %s (%s)", h->weights.c_str(), h->weights_reason.c_str());
 #endif
+        // llama.cpp's own on-demand reading of the tensors the architecture marks (Gemma 4's per-layer table): no read of the whole
+        // file up front, the rows a batch needs are prefetched. Needs mmap.
+        mp.lazy_mode = LLAMA_LAZY_MODE_ON;
+        cl_logi("engine: lazy=on");
         h->model_id = file_identity(model_path);
         h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
@@ -547,8 +1029,13 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = (uint32_t) n_ctx;
         cp.n_batch         = 512;
+        if (n_ubatch_opt > 0) cp.n_ubatch = (uint32_t) n_ubatch_opt;  // test builds only: the app sends it only from the bench extra
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
+        // llama.cpp's own abort hook: a stop ends an in-flight prompt decode (llama_decode returns 2). Only while the prompt is
+        // read (in_prefill); a single-token decode while generating is never aborted.
+        cp.abort_callback      = [](void * d) -> bool { auto * hh = (Handle *) d; return hh->in_prefill.load() && hh->stop.load(); };
+        cp.abort_callback_data = h.get();
         h->ctx = llama_init_from_model(h->model, cp);
         if (!h->ctx) {
             set_err(err, err_len, "cannot create context (out of memory?)");
@@ -556,6 +1043,8 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
+        if (n_ubatch_opt > 0) cl_logi("engine: n_ubatch=%u (asked for %d)", (unsigned) llama_n_ubatch(h->ctx), n_ubatch_opt);
+        advise_lookup_tensors(model_path);
 
         if (!plan.cpus.empty()) {
             // A threadpool whose threads are each pinned to one of the chosen cores.
@@ -591,6 +1080,15 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
             g_live.insert(out);
+        }
+        if (preread_mbps > 0) {
+            try {
+                out->preread = std::thread(preread_run, std::string(model_path), preread_mbps, &out->preread_stop);
+            } catch (const std::exception &) {
+                cl_logi("preread: off (thread not started)");
+            }
+        } else {
+            cl_logi("preread: off");
         }
         return out;
     } catch (const std::exception & e) {
@@ -633,8 +1131,9 @@ int cl_info(void * hp, char * out_json, int len) {
     }
 }
 
-int cl_start(void * hp, const char * request_json, char * err, int err_len) {
+int cl_start_q(void * hp, const char * request_json, unsigned long long epoch, unsigned long long qid, char * err, int err_len) {
     auto * h = (Handle *) hp;
+    h->cur_qid = qid;
     try {
         h->finished = true;
         h->session.reset();
@@ -645,26 +1144,12 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_generated = 0;
         h->n_reused = 0;
         h->stop = false;
+        h->context_cut = false;
         h->stop_tokens.clear();
         h->prefix_note.clear();
 
         auto req = common_json::parse(request_json);
-        common_chat_templates_inputs in;
-        in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
-        in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        // Optional top-level "enable_thinking": true|false. Passed to the template as the
-        // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
-        if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
-            in.enable_thinking = req.at("enable_thinking").get<bool>();
-        }
-        if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
-            in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
-        }
-        // Optional "tool_choice": "none" keeps the tools in the prompt (the same prompt start as the rounds before) but turns the
-        // tool-call grammar off; the tool-call opening tokens then end the generation (below).
-        if (req.contains("tool_choice") && req.at("tool_choice").is_string()) {
-            in.tool_choice = common_chat_tool_choice_parse_oaicompat(req.at("tool_choice").get<std::string>());
-        }
+        common_chat_templates_inputs in = parse_chat_inputs(req);
         if (in.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE && !in.tools.empty()) {
             for (const char * open : { "<|tool_call>", "<tool_call>" }) {
                 auto t = common_tokenize(h->vocab, open, /*add_special*/ false, /*parse_special*/ true);
@@ -703,7 +1188,17 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->n_prompt = (int) tokens.size();
         if (h->n_prompt == 0 || h->n_prompt >= h->n_ctx) {
             set_err(err, err_len, "prompt does not fit the context (" + std::to_string(h->n_prompt) + " tokens)");
-            return -1;
+            return -3;  // context full: distinct from the other failures (-1)
+        }
+
+        // Stopped after the question was queued and before it began (the stop epoch moved: a read ahead it waited behind was
+        // stopped, or the person tapped Stop): it ends as a stop before the first token does, with no decode. `stop` was cleared at
+        // the top, so the epoch is looked at after that clear: a stop before it is seen here, one after it sets the flag the decode
+        // obeys. A stop before the question was queued is not seen: the caller read the epoch when it queued it.
+        if (h->stop_epoch.load() != epoch || (qid != 0 && h->cancel_qid.load() == qid)) {
+            cl_logi("question stopped before it began");
+            h->finished = true;
+            return 0;
         }
 
         // The stable prompt start. The prompt start of this request shape is the system prompt and the tool schemas the template
@@ -712,137 +1207,37 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         // the shape before it (a clock in the system prompt makes that the text before the clock), or all of it once the same
         // shape comes again. Only with a prefix folder, tools and a system message.
         size_t want = 0;  // the stable start of this prompt, in tokens
-        if (!h->prefix_dir.empty() && !in.tools.empty() && !in.messages.empty() && in.messages[0].role == "system") {
-            const std::string key = in.messages[0].content + '\x1f' + req.at("tools").dump() + '\x1f' + (in.enable_thinking ? "1" : "0");
-            if (key != h->probe_key) {
-                common_chat_templates_inputs pa = in;
-                pa.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
-                common_chat_msg u;
-                u.role    = "user";
-                u.content = "a";
-                pa.messages = { in.messages[0], u };
-                auto ta = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
-                pa.messages[1].content = "b";
-                auto tb = common_tokenize(h->vocab, common_chat_templates_apply(h->tmpls.get(), pa).prompt.str(), true, true);
-                ta.resize(common_prefix(ta, tb, ta.size()));
-                if (!h->probe_tokens.empty()) {
-                    h->stable       = common_prefix(h->probe_tokens, ta, ta.size());
-                    h->stable_known = true;
-                } else {
-                    h->stable_known = false;  // the first shape since the load: see the saved files below
-                }
-                h->probe_key    = key;
-                h->probe_tokens = std::move(ta);
-            } else {
-                h->stable       = h->probe_tokens.size();
-                h->stable_known = true;
-            }
+        if (probe_applies(h, in)) {
+            update_probe(h, in, req);
             // The request's own tokens must agree (a merge across the boundary could differ), and the last prompt token is
             // always decoded.
             want = common_prefix(h->probe_tokens, tokens, tokens.size() - 1);
             if (h->stable_known) want = std::min(want, h->stable);
         }
 
-        // Keep what the KV cache already holds for the start of this prompt: find the longest common
-        // token prefix, drop the cache after it and decode only the rest. At least the last prompt
-        // token is always decoded, because the first generated token needs its logits.
-        llama_memory_t mem = llama_get_memory(h->ctx);
-        size_t keep = 0;
-        {
-            const size_t limit = std::min(h->cached.size(), tokens.size() - 1);
-            while (keep < limit && h->cached[keep] == tokens[keep]) keep++;
-        }
-        if (keep == 0) {
-            llama_memory_clear(mem, true);
-        } else if (keep < h->cached.size() && !llama_memory_seq_rm(mem, 0, (llama_pos) keep, -1)) {
-            // Some caches (sliding-window attention) cannot drop just a tail: start over, correct but slower.
-            llama_memory_clear(mem, true);
-            keep = 0;
-        }
-        h->cached.resize(keep);
-
-        // The cache does not hold the stable start (the first question after a load, or a different start before): take what a
-        // saved file shares with this prompt.
-        using sclock = std::chrono::steady_clock;
-        auto ms_since = [](sclock::time_point t0) { return (long long) std::chrono::duration_cast<std::chrono::milliseconds>(sclock::now() - t0).count(); };
-        std::error_code fec;
         bool covered = true;  // a saved file already holds the stable start
-        if (want >= kPrefixMinLen && keep < want) {
-            auto files = prefix_files(h);
-            size_t best = 0, best_file_len = 0;
-            std::string best_path;
-            for (auto & f : files) {
-                const size_t l = common_prefix(f.second, tokens, tokens.size() - 1);
-                if (l > best) { best = l; best_path = f.first; best_file_len = f.second.size(); }
-            }
-            if (!h->stable_known) {
-                // The first shape since the load: a saved file of this model tells how much of it stayed the same before. With
-                // none, all of it is taken as stable (and saved once).
-                if (!best_path.empty()) want = std::min(want, best);
-                h->stable       = want;
-                h->stable_known = true;
-            }
-            covered = best >= want;
-            if (best > keep && best >= kPrefixMinLen) {
-                const auto t0 = sclock::now();
-                llama_memory_clear(mem, true);
-                h->cached.clear();
-                keep = 0;
-                std::vector<llama_token> got(best_file_len);
-                size_t n_got = 0;
-                const size_t rd = llama_state_seq_load_file(h->ctx, best_path.c_str(), 0, got.data(), got.size(), &n_got);
-                const bool loaded = rd > 0 && n_got == best_file_len && std::equal(got.begin(), got.begin() + (long) best, tokens.begin());
-                if (loaded && (n_got == best || llama_memory_seq_rm(mem, 0, (llama_pos) best, -1))) {
-                    h->cached.assign(tokens.begin(), tokens.begin() + (long) best);
-                    keep = best;
-                    std::filesystem::last_write_time(best_path, std::filesystem::file_time_type::clock::now(), fec);
-                    h->prefix_note = "Prompt prefix restored (" + std::to_string(best) + " tokens, " + std::to_string(ms_since(t0)) + " ms)";
-                } else {
-                    llama_memory_clear(mem, true);
-                    if (!loaded) std::filesystem::remove(best_path, fec);
-                    covered = false;
-                    h->prefix_note = loaded ? "Prompt prefix file could not be trimmed; the prompt is read as usual"
-                                            : "Prompt prefix file did not load and was removed; the prompt is read as usual";
-                }
-                cl_logi("%s", h->prefix_note.c_str());
-            }
-        }
+        const size_t keep = align_cache(h, tokens, tokens.size() - 1, want, covered);
         h->n_reused = (int) keep;
         // Saved when no file holds the stable start yet and this start decodes it itself.
         const size_t prefix = want;
         const bool   save   = want >= kPrefixMinLen && keep < want && !covered;
         const std::string prefix_file = save ? prefix_path(h, tokens.data(), prefix) : std::string();
 
-        const int n_batch = 512;
-        for (int i = (int) keep; i < h->n_prompt;) {
-            int n = std::min(n_batch, h->n_prompt - i);
-            if (save && i < (int) prefix && i + n > (int) prefix) n = (int) prefix - i;  // a batch ends exactly at the prefix
-            if (llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n)) != 0) {
-                llama_memory_clear(mem, true);
-                h->cached.clear();
-                h->n_reused = 0;
-                set_err(err, err_len, "decode failed while reading the prompt");
-                return -1;
-            }
-            h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
-            i += n;
-            if (save && (size_t) i == prefix) {
-                const auto t0 = sclock::now();
-                std::filesystem::create_directories(h->prefix_dir, fec);
-                const std::string part = prefix_file + ".part";
-                const size_t wr = llama_state_seq_save_file(h->ctx, part.c_str(), 0, tokens.data(), prefix);
-                std::error_code rec;
-                if (wr > 0) std::filesystem::rename(part, prefix_file, rec);
-                if (wr > 0 && !rec) {
-                    prune_prefix_files(h->prefix_dir);
-                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix saved (") + std::to_string(prefix) +
-                                      " tokens, " + std::to_string(ms_since(t0)) + " ms)";
-                } else {
-                    std::filesystem::remove(part, fec);
-                    h->prefix_note += (h->prefix_note.empty() ? "" : "; ") + std::string("Prompt prefix could not be saved");
-                }
-                cl_logi("%s", h->prefix_note.c_str());
-            }
+        size_t reached = keep;
+        const int rc = decode_tokens(h, tokens, keep, tokens.size(), save, prefix, prefix_file, reached);
+        if (rc == 1) {  // stopped between batches: what was decoded is in the cache
+            h->finished = true;  // as after a stop while generating: cl_next returns -1, cl_finish gives an empty answer
+            return 0;
+        }
+        if (rc == 2) {
+            h->n_reused = 0;
+            h->finished = true;
+            return 0;
+        }
+        if (rc != 0) {
+            h->n_reused = 0;
+            set_err(err, err_len, "decode failed while reading the prompt");
+            return -1;
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
@@ -853,10 +1248,82 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
     }
 }
 
+// cl_warm results.
+enum { kWarmCovered = 0, kWarmRead = 1, kWarmStopped = 2, kWarmSkipped = 3 };
+
+int cl_warm(void * hp, const char * request_json, int check_only, unsigned long long epoch, int * n_tokens, char * err, int err_len) {
+    auto * h = (Handle *) hp;
+    if (n_tokens) *n_tokens = 0;
+    // Stopped after it was queued and before it began (Cache went to the back): nothing is read, and `stop` is left as it is.
+    if (h->stop_epoch.load() != epoch) return kWarmStopped;
+    try {
+        auto req = common_json::parse(request_json);
+        const common_chat_templates_inputs in = parse_chat_inputs(req);
+        if (!probe_applies(h, in)) return kWarmSkipped;
+        update_probe(h, in, req);
+        // This shape is about to be used: its whole prompt start counts as stable (as when cl_start sees the same shape twice),
+        // not only what it shares with the shape before it (a new day's date would leave that at the text before the date).
+        h->stable       = h->probe_tokens.size();
+        h->stable_known = true;
+        const std::vector<llama_token> tokens = h->probe_tokens;
+        const size_t want = tokens.size();
+        if (want < kPrefixMinLen || want >= (size_t) h->n_ctx) return kWarmSkipped;
+
+        // Covered: the KV cache holds the stable start, or a saved file does (cl_start restores it). Nothing is changed.
+        const size_t in_mem = cache_overlap(h, tokens, want);
+        if (in_mem >= want) return kWarmCovered;
+        const PrefixHit hit = best_prefix_file(h, tokens, want);
+        if (hit.best >= want) return kWarmCovered;
+        const size_t have = std::max(in_mem, hit.best >= kPrefixMinLen ? hit.best : (size_t) 0);
+        if (n_tokens) *n_tokens = (int) (want - have);
+        if (check_only) return kWarmRead;
+
+        // Clear the flag, then look at the epoch again: a cl_stop before this point bumped it (and is seen here); one after it sets
+        // the flag again, which the decode obeys.
+        h->stop = false;
+        if (h->stop_epoch.load() != epoch) {
+            h->stop = true;
+            return kWarmStopped;
+        }
+        h->prefix_note.clear();
+        size_t want_now = want;
+        bool covered = true;
+        const size_t keep = align_cache(h, tokens, want, want_now, covered);
+        if (covered && keep >= want) return kWarmCovered;
+        const bool save = want >= kPrefixMinLen && keep < want && !covered;
+        const std::string prefix_file = save ? prefix_path(h, tokens.data(), want) : std::string();
+        size_t reached = keep;
+        const int rc = decode_tokens(h, tokens, keep, want, save, want, prefix_file, reached);
+        if (n_tokens) *n_tokens = (int) (reached - keep);
+        if (rc == 1 || rc == 2) return kWarmStopped;
+        if (rc != 0) {
+            set_err(err, err_len, "decode failed while reading the prompt start");
+            return -1;
+        }
+        return kWarmRead;
+    } catch (const std::exception & e) {
+        set_err(err, err_len, e.what());
+        return -1;
+    }
+}
+
+int cl_prompt_decoded(void * hp) { return (int) ((Handle *) hp)->prompt_decoded; }
+
+int cl_start_e(void * hp, const char * request_json, unsigned long long epoch, char * err, int err_len) {
+    return cl_start_q(hp, request_json, epoch, 0, err, err_len);
+}
+
+void cl_cancel_question(void * hp, unsigned long long qid) { ((Handle *) hp)->cancel_qid.store(qid); }
+
+int cl_start(void * hp, const char * request_json, char * err, int err_len) {
+    // No epoch from the caller: the question counts as queued now, so no earlier stop can end it.
+    return cl_start_e(hp, request_json, ((Handle *) hp)->stop_epoch.load(), err, err_len);
+}
+
 int cl_next(void * hp, char * buf, int buf_len) {
     auto * h = (Handle *) hp;
     try {
-        if (h->finished || h->stop.load()) {
+        if (h->finished || h->stop.load() || (h->cur_qid != 0 && h->cancel_qid.load() == h->cur_qid)) {
             h->finished = true;
             return -1;
         }
@@ -876,6 +1343,7 @@ int cl_next(void * hp, char * buf, int buf_len) {
 
         if (h->n_past + 1 >= h->n_ctx) {
             h->finished = true;  // context full: this is the last token
+            h->context_cut = true;
         } else if (llama_decode(h->ctx, llama_batch_get_one(&tok, 1)) != 0) {
             llama_memory_clear(llama_get_memory(h->ctx), true);  // the cache no longer matches `cached`
             h->cached.clear();
@@ -950,9 +1418,11 @@ int cl_finish(void * hp, char * out_json, int len) {
         const common_chat_msg & msg = h->session->finish(common_chat_input(h->generated.substr(h->fed)));
         h->fed = h->generated.size();
         msg_to_json(msg, j);
+        if (h->context_cut) j["stop"] = std::string("context");
     } catch (const std::exception & e) {
         j["content"]     = h->generated;
         j["parse_error"] = std::string(e.what());
+        if (h->context_cut) j["stop"] = std::string("context");
     }
     return put(j.dump(), out_json, len);
 }
@@ -967,7 +1437,13 @@ int cl_bos_token(void * hp) {
     return llama_vocab_get_add_bos(h->vocab) ? (int) llama_vocab_bos(h->vocab) : -1;
 }
 
-void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
+void cl_stop(void * hp) {
+    auto * h = (Handle *) hp;
+    h->stop_epoch.fetch_add(1);  // before the flag: a cl_warm that clears the flag and then sees this epoch unchanged is stopped by the flag
+    h->stop.store(true);
+}
+
+unsigned long long cl_stop_epoch(void * hp) { return ((Handle *) hp)->stop_epoch.load(); }
 
 void cl_free(void * hp) {
     auto * h = (Handle *) hp;
@@ -1022,7 +1498,10 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
         llama_backend_init();
 
         auto h = std::make_unique<EmbedHandle>();
-        h->model = llama_model_load_from_file(model_path, llama_model_default_params());
+        // The weights stay memory-mapped from the file: no repacked anonymous copy of them.
+        llama_model_params mp = llama_model_default_params();
+        mp.use_extra_bufts    = false;
+        h->model = llama_model_load_from_file(model_path, mp);
         if (!h->model) {
             set_err(err, err_len, std::string("cannot load model: ") + model_path);
             return nullptr;
@@ -1045,6 +1524,10 @@ void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * e
             return nullptr;
         }
         h->n_ctx   = (int) llama_n_ctx(h->ctx);
+        // What the context really got (measurement): the threads, and the context, batch and micro-batch sizes.
+        cl_logi("embed load: n_threads=%d n_threads_batch=%d n_ctx=%u n_batch=%u n_ubatch=%u", (int) llama_n_threads(h->ctx),
+                (int) llama_n_threads_batch(h->ctx), (unsigned) llama_n_ctx(h->ctx), (unsigned) llama_n_batch(h->ctx),
+                (unsigned) llama_n_ubatch(h->ctx));
         h->n_embd  = llama_model_n_embd_out(h->model);
         if (h->n_embd <= 0) {
             h->n_embd = llama_model_n_embd(h->model);
@@ -1078,6 +1561,7 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
     auto * h = (EmbedHandle *) hp;
     if (!h || !text || !out) return -1;
     try {
+        const auto t_all = std::chrono::steady_clock::now();
         if (out_len < h->n_embd) return -2;
 
         auto tokens = common_tokenize(h->vocab, text, /*add_special*/ true, /*parse_special*/ false);
@@ -1096,7 +1580,9 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
         std::vector<int8_t> want_out(tokens.size(), 1);  // pooling needs every token as an output
         batch.logits = want_out.data();
+        const auto t_enc = std::chrono::steady_clock::now();
         int rc = h->encoder ? llama_encode(h->ctx, batch) : llama_decode(h->ctx, batch);
+        const long long encode_ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_enc).count();
         if (rc != 0) return -4;
 
         const float * e = llama_get_embeddings_seq(h->ctx, 0);
@@ -1105,6 +1591,9 @@ int cl_embed(void * hp, const char * text, float * out, int out_len, int normali
         for (int i = 0; i < h->n_embd; i++) norm += (double) e[i] * e[i];
         float scale = (normalize && norm > 0.0) ? (float) (1.0 / std::sqrt(norm)) : 1.0f;
         for (int i = 0; i < h->n_embd; i++) out[i] = e[i] * scale;
+        // Measurement: where the time of one embedding goes (the encode call alone, and the whole function).
+        cl_logi("embed: %d tokens, encode %lld ms, threads %d, total %lld ms", (int) tokens.size(), encode_ms, (int) llama_n_threads(h->ctx),
+                (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_all).count());
         return h->n_embd;
     } catch (const std::exception &) {
         return -1;

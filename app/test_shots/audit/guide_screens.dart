@@ -550,6 +550,8 @@ void guideScreens() {
       opener: (_) async => core,
       offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
       packDownloader: _Packs(),
+      // a fixed storage, so the region's space check never depends on the machine drawing the pictures
+      spaceOf: (_) => const Space(free: 200 << 30, reserve: 20 << 30),
     );
     await tester.runAsync(() async {
       await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
@@ -1850,7 +1852,7 @@ class _NbRig {
     hereOnMap: () => true,
     setHereOnMap: (_) {},
     // The map is a platform view: the space is left empty, as in the Maps tests.
-    map: (context, pin, onPick) => const SizedBox.shrink(),
+    map: (context, pin, onPick, look) => const SizedBox.shrink(),
   );
 
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);

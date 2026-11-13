@@ -4,6 +4,10 @@
 # Guide pictures: run it by hand with guide=true (gh workflow run renders.yml --ref <branch> -f guide=true). It draws
 # test_shots/guide_shots_test.dart, cuts the pictures with tools/guide/make_shots.py into app/assets/guide/shots/ (regions-sheet
 # is made by hand and left as it is) and uploads them as the artifact guide-shots-<sha>, ready to commit on the branch.
+# The Maps pictures have a real map behind the screen (tools/guide/README.md, "The map pictures"): the guide test first writes
+# what each map shows, tools/guide/maps/render.mjs draws it with MapLibre GL JS in the runner's own Chrome (Node and two pinned
+# npm packages, in this path only), and the draw puts the pictures behind the screens. The renderer reads map tiles from the
+# app's own published sources and the public elevation tiles, counts its requests and fails above a fixed ceiling.
 name: Renders
 
 on:
@@ -54,10 +58,27 @@ jobs:
           names: pdfium-chromium-7811-linux-x64.tgz sqlite3-3.5.2-libsqlite3.x64.linux.so
       - name: Seed the build hooks
         run: bash .github/scripts/seed-native-assets.sh "${{ steps.native.outputs.dir }}" app linux-x64
+      # ---- the guide's map pictures: scenes, then their pictures (the draw below shows them where the map is) ----
+      - name: Map renderer packages
+        if: ${{ github.event.inputs.guide == 'true' }}
+        working-directory: tools/guide/maps
+        run: |
+          node --version
+          # Exactly the packages of package-lock.json.
+          npm ci --no-audit --no-fund
+      - name: Write the map scenes
+        if: ${{ github.event.inputs.guide == 'true' }}
+        working-directory: app
+        env:
+          GUIDE_MAPS: export
+        run: flutter test --no-pub --update-goldens test_shots/guide_shots_test.dart
+      - name: Render the maps
+        if: ${{ github.event.inputs.guide == 'true' }}
+        run: node tools/guide/maps/render.mjs
       - name: Draw the renders
         working-directory: app
         env:
-          TESTS: ${{ (github.event.inputs.guide == 'true' && 'test_shots/guide_shots_test.dart') || github.event.inputs.tests || (github.ref_name == 'rel-30' && 'test_shots/desktop_renders_test.dart') || 'test_shots/downloads_renders_test.dart' }}
+          TESTS: ${{ (github.event.inputs.guide == 'true' && 'test_shots/guide_shots_test.dart') || github.event.inputs.tests || (github.ref_name == 'rel-30' && 'test_shots/desktop_renders_test.dart') || 'test_shots/linux_ux_renders_test.dart' }}
         run: |
           # shellcheck disable=SC2086
           flutter test --no-pub --update-goldens $TESTS
@@ -86,4 +107,16 @@ jobs:
           name: guide-shots-${{ github.sha }}
           path: app/assets/guide/shots/*.png
           if-no-files-found: error
+          retention-days: 14
+      # The rendered maps with their lock file, and the scenes they were rendered from (with the renderer's report). Uploaded
+      # after a failure too, to see what the renderer made.
+      - name: Upload the map pictures
+        if: ${{ always() && github.event.inputs.guide == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: guide-maps-${{ github.sha }}
+          path: |
+            app/test_shots/guide_maps/
+            app/test_shots/guide/scenes/
+          if-no-files-found: warn
           retention-days: 14

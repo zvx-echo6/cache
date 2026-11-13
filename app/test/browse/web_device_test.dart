@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cache/browse/opds.dart';
+import 'package:cache/browse/web/build_api.dart';
+import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/browse/web/device_api.dart';
 import 'package:cache/browse/web/device_library.dart';
 import 'package:cache/net/fetch.dart';
@@ -10,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'build_fakes.dart';
 import 'web_fakes.dart';
 
 void main() {
@@ -36,6 +39,28 @@ void main() {
   });
 
   group('reading the device', () {
+    test('a built library that changes (a book removed, a library published) makes the sizes and the app\'s books read again at once', () async {
+      api.itemList = [item('proof', kind: 'library', bytes: 66 << 20)];
+      final buildApi = FakeBuildApi()..libs = [const BuildLibrary(id: 'proof', title: 'Proof', books: 4, passages: 4, published: true)];
+      final b = BuildController(api: buildApi, poll: false, leaveWarning: (_) {});
+      final d = DeviceLibrary(api: api, fs: fs, uploader: uploader, leaveWarning: warnings.add, onItemsChanged: () async => changed++, build: b);
+      await d.start();
+      expect(b.sizeOf!('proof'), 66 << 20);
+      final reads = api.jobsReads;
+      // nothing changed: nothing is read again
+      await b.refresh();
+      expect(api.jobsReads, reads);
+      // the books go and the device's folder is small again
+      api.itemList = [item('proof', kind: 'library', bytes: 3 << 10)];
+      buildApi.libs = [const BuildLibrary(id: 'proof', title: 'Proof')];
+      await b.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.jobsReads, greaterThan(reads));
+      expect(b.sizeOf!('proof'), 3 << 10);
+      expect(changed, greaterThan(0));
+      d.dispose();
+    });
+
     test('items, transfers and free space are read; the device that cannot be reached is said, not thrown', () async {
       api.itemList = [item('a.zim', bytes: 10), item('guide', kind: 'library', bytes: 5)];
       api.jobList = [job('j1', 'running', bytes: 5, total: 20)];
@@ -200,6 +225,54 @@ void main() {
       d.dispose();
     });
 
+    test('Pause keeps a transfer in the list and Resume queues it again; a paused one can still be cancelled', () async {
+      final d = make();
+      await d.start();
+      const url = 'https://dl.example/p1.zim';
+      api.jobList = [job('p1', 'running', url: url, bytes: 5, total: 20)];
+      await d.refresh();
+      expect(d.jobForUrl(url)!.paused, isFalse);
+      await d.pauseJob(d.jobs.single);
+      expect(api.paused, ['p1']);
+      expect(d.jobs.single.state, 'paused');
+      expect(d.jobForUrl(url), isNotNull, reason: 'a paused transfer is still the one for its link');
+      expect(d.anyActive, isFalse, reason: 'nothing is downloading while it is paused');
+      await d.resumeJob(d.jobs.single);
+      expect(api.resumed, ['p1']);
+      expect(d.jobs.single.state, 'queued');
+      await d.pauseJob(d.jobs.single);
+      await d.cancelJob(d.jobs.single);
+      expect(api.cancelled.where((c) => c == 'p1').length, 2, reason: 'cancelled, then taken off the list');
+      d.dispose();
+    });
+
+    test('a Pause or Resume that fails says why until the next press, in the device\'s words when the download has ended', () async {
+      final d = make();
+      await d.start();
+      api.jobList = [job('p1', 'running', url: 'https://dl.example/p1.zim', bytes: 5, total: 20)];
+      await d.refresh();
+      var told = 0;
+      d.addListener(() => told++);
+      api.pauseError = const DeviceException('not_active', 'That download has already ended.', status: 409);
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, 'That download has already ended.');
+      expect(d.jobs.single.state, 'running');
+      expect(told, greaterThan(0), reason: 'the screen is told');
+      api.pauseError = const DeviceException('internal', 'boom', status: 500);
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, 'The download could not be paused. Try again.');
+      api.pauseError = null;
+      await d.pauseJob(d.jobs.single);
+      expect(d.jobProblem, isNull, reason: 'the next press clears it');
+      api.resumeError = const DeviceException('not_paused', 'That download has already ended. Add it again.', status: 409);
+      await d.resumeJob(d.jobs.single);
+      expect(d.jobProblem, 'That download has already ended. Add it again.');
+      api.resumeError = const DeviceException('internal', 'boom', status: 500);
+      await d.resumeJob(d.jobs.single);
+      expect(d.jobProblem, 'The download could not be resumed. Try again.');
+      d.dispose();
+    });
+
     test('a library link is a library download; the words for a failure never name the machine', () async {
       final d = make();
       await d.start();
@@ -334,6 +407,44 @@ void main() {
       await expectLater(fetchBytesViaDevice(api, url, maxBytes: 3), throwsA(isA<FetchException>()));
     });
 
+    test('a browser read says what kind it is: the scope and plain http reach the device, and the new refusals are the app\'s own', () async {
+      api.fetchBody = Uint8List.fromList(utf8.encode('WEBVTT'));
+      final cue = Uri.parse('http://tube.example/lazy-static/video-captions/x.vtt');
+      await fetchBytesViaDevice(api, cue, scope: FetchScope.video, plain: true);
+      expect((api.fetchedScope, api.fetchedPlain), ('video', true));
+      await fetchBytesViaDevice(api, Uri.parse('https://data.cached.info/x.json'));
+      expect((api.fetchedScope, api.fetchedPlain), (null, false));
+      Future<FetchFailure> fail(String code) async {
+        api.fetchError = DeviceException(code, 'x');
+        try {
+          await fetchBytesViaDevice(api, cue, scope: FetchScope.user);
+        } on FetchException catch (x) {
+          return x.failure;
+        }
+        throw TestFailure('a FetchException was expected');
+      }
+
+      expect(await fail('scope_off'), FetchFailure.notAllowed);
+      expect(await fail('busy'), FetchFailure.unreachable);
+      expect(await fail('unsupported_type'), FetchFailure.unreadable);
+    });
+
+    test('the HTTP side puts the scope and plain in the query', () async {
+      final seen = <Uri>[];
+      final a = HttpDeviceApi(client: MockClient((r) async {
+        seen.add(r.url);
+        return http.Response('x', 200);
+      }));
+      await a.fetch(Uri.parse('https://huggingface.co/api/models?search=a'), scope: FetchScope.models);
+      await a.fetch(Uri.parse('http://tube.example/api/v1/videos'), scope: FetchScope.video, plain: true);
+      await a.fetch(Uri.parse('https://data.cached.info/x'));
+      expect(seen.map((u) => u.queryParameters), [
+        {'url': 'https://huggingface.co/api/models?search=a', 'scope': 'models'},
+        {'url': 'http://tube.example/api/v1/videos', 'scope': 'video', 'plain': '1'},
+        {'url': 'https://data.cached.info/x'},
+      ]);
+    });
+
     test('the Kiwix catalogue in a browser gives its failures in the same words', () async {
       api.fetchBody = Uint8List.fromList(utf8.encode('<feed/>'));
       expect(await fetchCatalogueViaDevice(api, Uri.parse('https://opds.library.kiwix.org/x')), '<feed/>');
@@ -356,6 +467,8 @@ void main() {
             expect(jsonDecode(r.body), {'url': 'https://x/a.zim', 'kind': 'zim', 'name': 'a.zim'});
             return http.Response(jsonEncode({'ok': true, 'result': {'id': 'j', 'url': 'https://x/a.zim', 'kind': 'zim', 'name': 'a.zim', 'bytes': 0, 'total': 0, 'state': 'queued', 'error': null}}), 200);
           case 'DELETE /api/library/jobs/j':
+          case 'POST /api/library/jobs/j/pause':
+          case 'POST /api/library/jobs/j/resume':
           case 'POST /api/library/rescan':
             return http.Response(jsonEncode({'ok': true, 'result': {}}), 200);
           case 'GET /api/fetch':
@@ -371,6 +484,9 @@ void main() {
       expect((s.free, s.total), (10, null));
       expect((await a.download(url: 'https://x/a.zim', kind: 'zim', name: 'a.zim')).state, 'queued');
       await a.cancelJob('j');
+      await a.pauseJob('j');
+      await a.resumeJob('j');
+      expect(seen, containsAll(['POST /api/library/jobs/j/pause', 'POST /api/library/jobs/j/resume']));
       await a.rescan();
       expect(utf8.decode(await a.fetch(Uri.parse('https://opds.library.kiwix.org/a b'))), 'feed');
       await expectLater(a.fetch(Uri.parse('https://evil.example/')), throwsA(isA<DeviceException>().having((e) => e.code, 'code', 'host_not_allowed')));

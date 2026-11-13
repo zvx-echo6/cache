@@ -12,6 +12,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - Map, place and routing packs built from OpenStreetMap are databases under the ODbL 1.0. Attribution: (c) OpenStreetMap contributors.
 - Protomaps: the base map tiles (Protomaps basemap, version 4) and the PMTiles format. The tiles carry OpenStreetMap data (ODbL 1.0). The Protomaps basemaps style code is BSD-3-Clause, Copyright Protomaps LLC. https://protomaps.com
 - OpenFreeMap and OpenMapTiles: the alternative base map and the style the map is drawn from. The style is derived from OpenFreeMap's "Liberty" style (MIT), a fork of OSM Liberty, itself a fork of OSM Bright, derived from Mapbox Open Styles. Style code: BSD-3-Clause. Style design: CC BY 4.0 (OpenMapTiles). Map data: (c) OpenStreetMap contributors, ODbL 1.0. https://openfreemap.org
+- Material Symbols (Google): the icons notebooks and places have on the map, Apache-2.0. https://fonts.google.com/icons
 - Noto Sans: the map label fonts (glyph ranges as served by OpenFreeMap), SIL Open Font License 1.1. https://openfontlicense.org
 - Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 license. https://docs.overturemaps.org/attribution/
 - Mapterhorn: terrain heights, and the hillshade and contour lines made from them. (c) Mapterhorn. Open data from many national sources, see https://mapterhorn.com/attribution
@@ -35,6 +36,9 @@ No data, library content or language model ships inside Cache. The maps, library
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
 - OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
 - MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
+- Tesseract (reads scanned PDF pages in the library builder of Cache for Linux; the 5.0.0-alpha snapshot inside MuPDF 1.27.2, built in and linked statically): Apache-2.0, Copyright Hewlett-Packard, Google and the Tesseract contributors. https://github.com/tesseract-ocr/tesseract
+- Leptonica 1.85.0 (image handling inside Tesseract, built in and linked statically): BSD-2-Clause, Copyright Dan Bloomberg. http://www.leptonica.org
+- Tesseract English trained data (eng.traineddata from tessdata_fast 4.1.0, shipped in lib/tessdata of Cache for Linux): Apache-2.0, Copyright the Tesseract contributors. https://github.com/tesseract-ocr/tessdata_fast (the notice is at lib/tessdata/OCR-NOTICE.txt in the package)
 - PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType License), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library License 2), zlib (zlib license), libtiff (libtiff license), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode License v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - Google ML Kit text recognition (reads scanned PDF pages on Android when a PDF is added, through the cache_ocr package; com.google.mlkit:text-recognition 16.0.1 with its bundled Latin model, nothing downloaded at run time): used under the ML Kit Terms of Service, Copyright Google LLC. https://developers.google.com/ml-kit/terms
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
@@ -144,6 +148,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - markdown 7.3.1: BSD-3-Clause (Copyright 2012, the Dart project authors.)
 - matcher 0.12.19: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - material_color_utilities 0.13.0: Apache-2.0
+- material_symbols_icons 4.2960.0: Apache-2.0 (Google's Material Symbols icon fonts, packaged for Flutter; the map icons)
 - meta 1.18.0: BSD-3-Clause (Copyright 2016, the Dart project authors.)
 - mime 2.1.0: BSD-3-Clause (Copyright 2015, the Dart project authors.)
 - native_toolchain_c 0.19.2: BSD-3-Clause (Copyright 2023, the Dart project authors.)

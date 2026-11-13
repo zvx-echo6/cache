@@ -156,6 +156,12 @@ class IndexThrottle extends ChangeNotifier {
   /// How work may run now.
   IndexDuty get duty => _duty;
 
+  /// The device is hot: the smoothed heat reached [kHeatPause] (the system's thermal status severe or critical) and has not
+  /// fallen below [kHeatResume] since. This is the state where index work is held for heat; other work that should stay off a hot
+  /// device (the prompt read ahead) reads it here, so there is one heat signal and one set of thresholds. It does not depend on
+  /// why else the work is held (a low battery, the model answering).
+  bool get hot => _hot;
+
   /// Heat is slowing the work down or holding it (from the thermal headroom, the system's forecast, or the thermal status).
   bool get warm => _duty.hold == IndexHold.heat;
 
@@ -261,12 +267,14 @@ class IndexThrottle extends ChangeNotifier {
 
   /// For the app's own loops (the PDF loop between PDFs and between pages): returns at once while the burst lasts, rests when it
   /// is over, and waits while work is paused (heat, low battery, the model generating).
-  Future<void> permit() async {
+  /// [stop]: the work was asked to stop (paused, Cache going to the back): the wait ends at once, so the work can stop.
+  Future<void> permit({bool Function()? stop}) async {
     await read();
-    while (_duty.paused && !_disposed) {
+    while (_duty.paused && !_disposed && !(stop?.call() ?? false)) {
       final c = _resume ??= Completer<void>();
       // Looks again now and then: the warmth goes down without anyone saying so.
       await Future.any([c.future, _sleep(every)]);
+      if (stop?.call() ?? false) return;
       await read(fresh: true);
     }
     final now = _clock();

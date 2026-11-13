@@ -299,6 +299,11 @@ char *cs_captions_search(cs_handle *h, const char *request_json);
 /* {"address":"zim:<uuid>/<main page path>"} */
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
 
+/* cs_zim_illustration: {"png_base64"} - the ZIM's own icon, its "Illustration_48x48@1" metadata (a PNG), base64 encoded. NULL
+ * (cs_last_error, code "not_found") for an unknown id or a ZIM without an illustration (or one that is not a PNG, or over 1 MiB).
+ * Read through the Rust zim crate, never libzim. */
+char *cs_zim_illustration(cs_handle *h, const char *zim_id);
+
 /* --- PDF indexes of ZIMs ---
  *
  * A ZIM's PDFs are searched by keyword like the rest of the ZIM: one Tantivy index per ZIM, no vectors, one document per piece
@@ -446,7 +451,8 @@ int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t 
  * cs_live_set_key: the API key of one source (source_id is a live source id, e.g. "alerts"); NULL key_or_null (or an empty
  * one) clears it. The key is kept in memory only: it is never written to disk, logged, or put in any result, error,
  * status or debug output; it is cleared by NULL and on cs_close. Returns 0; -1 with code "bad_json" for a NULL source_id.
- * Both only store state: a fetch itself is made by cs_live_fetch or by a tool built on the fetcher. */
+ * Both only store state: a fetch itself is made by cs_live_fetch (which uses the source's key when its request has none) or by
+ * a tool built on the fetcher. */
 int32_t cs_live_set_fetch_policy(cs_handle *h, const char *policy_json);
 int32_t cs_live_set_key(cs_handle *h, const char *source_id, const char *key_or_null);
 
@@ -586,7 +592,7 @@ char *cs_place_delete(cs_handle *h, const char *key);
  *            "photos":[{"id","width"?,"height"?,"bytes"?}],"files":[{"id","name","mime"?,"bytes"?}],"props"?,"draft",
  *            "private","created","updated","rev"} (created/updated in Unix ms; rev counts changes; private = its own or its
  *            notebook's). A value is a number, true/false, text, a place, or a list of photo ids (a photo field). "props":
- *            {"color"?: a marker colour's name (lower-case letters), "on_map"?: false = not drawn on the map}.
+ *            {"color"?: a marker colour's name (lower-case letters), "icon"?: a map icon's id (lower-case letters, digits, _), "on_map"?: false = not drawn on the map}.
  * A notebook: {"id","template","def","private","map","template_ref","created","updated","last_used","rev","entries":n,
  *            "files":n,"places":n,"last_entry":entry|null} (counts of entries, attached files and entries with a place;
  *            counts and last_entry leave drafts out; last_used = when an entry was last
@@ -797,7 +803,8 @@ char *cs_live_sources(cs_handle *h);
  * that needs one the place lacks fails with "fetch_failed" saying which. "params" are the user's values for the source's
  * "params" (cs_live_sources lists them; a missing one takes its default). With parameters other than the defaults the
  * row is stored under the place key "<key>~<8 hex>" (reported in the result's "place"). "secrets" gives other
- * secrets by alias (a Basic login: both of its aliases); "api_key" is the value for the source's api_key alias. "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
+ * secrets by alias (a Basic login: both of its aliases); "api_key" is the value for the source's api_key alias, and without it
+ * the key set for the source with cs_live_set_key is used (a key in the request comes first). "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
  * unless the stored copy is younger than the source's refresh interval and still valid (then "fetched":false and no
  * network); maps the response with the definition and stores it with the raw response. The API key is used for this
  * call only and never stored. A failed download returns NULL (codes fetch_failed, quota, key_missing, bad_response,
@@ -817,7 +824,11 @@ cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
  *  "last_error":null|{"code","message","at"},"truncated"?:true (a paged result was cut at the definition's page cap),
  *  "missing_requests"?:n (repeated requests that failed and are missing),"params"?:{...} (the values it was fetched with),
  *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
- *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
+ *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>,"app"?:{"<name>":<value>}}]}
+ * ("app": the values the definition names for the app alone, as the response has them: an alert's message type, references and
+ * VTEC. The live_data tool never includes them. An item with a distance field also has "distances":{"<field label>":
+ * {"km":n,"inside":bool}}: the same distance as a number (km 0 and inside true when the place is inside the item's area), also
+ * for the app alone, so it never reads "inside the area" out of the field's text.)
  * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */
@@ -897,7 +908,7 @@ char *cs_live_preview(const char *request_json);
  *   Where a GPS fix is on a route from cs_map_route (found by route_id; after a restart send the route object as "route"
  *   and it is loaded again). Fixes are matched near the last match first, so a route that passes itself is not confused.
  *   Returns {"route_id","fix","matched":{lat,lon,distance_along_m,offset_m,segment,route_bearing_deg},"on_route","off_route",
- *   "off_route_count","arrived","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
+ *   "off_route_count","arrived","stops_reached","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
  *   "off_route" is true once the fix has been more than off_route_m from the route (or the GPS accuracy if larger; twice
  *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "current",
  *   "next" and "then" are maneuvers: {index,kind,type,instruction,street_names,travel,lat,lon,distance_m,length_m,cardinal,bearing_deg}

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/car/phone_drive.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/nav/guidance_wakelock.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -113,6 +114,51 @@ void main() {
     // A new one for tearDown to dispose; guidance is still on, so it takes the screen again.
     lock = GuidanceWakeLock(nav, setKeepOn: (on) async => calls.add(on));
     expect(calls, [true, false, true]);
+  });
+
+  testWidgets('with a car connected the screen is held only while the drive screen shows; with no car nothing changes', (tester) async {
+    lock.dispose();
+    final drive = PhoneDrive();
+    addTearDown(drive.dispose);
+    calls.clear();
+    lock = GuidanceWakeLock(nav, setKeepOn: (on) async => calls.add(on), drive: drive);
+    await tester.runAsync(startGuiding);
+    // No car: held while guiding, as before.
+    expect(lock.held, isTrue);
+    expect(calls, [true]);
+    // The car connects, the drive screen is not showing (another tab, say): the phone may sleep.
+    drive.carConnected.value = true;
+    expect(lock.held, isFalse);
+    expect(calls, [true, false]);
+    // The drive screen shows: held.
+    drive.signal.value = true;
+    expect(lock.held, isTrue);
+    // Another tab or the phone locked: the signal goes false and the hold is let go.
+    drive.signal.value = false;
+    expect(lock.held, isFalse);
+    drive.signal.value = true;
+    expect(lock.held, isTrue);
+    // Guidance ends while the signal is still true for a moment: nothing is held.
+    await tester.runAsync(() => nav.end());
+    expect(lock.held, isFalse);
+    expect(calls, [true, false, true, false, true, false]);
+    // The car leaves: no car, the old rule (not guiding, so nothing held).
+    drive.signal.value = false;
+    drive.carConnected.value = false;
+    expect(lock.held, isFalse);
+  });
+
+  testWidgets('the car leaving mid-drive hands the screen back to the phone\'s own rule', (tester) async {
+    lock.dispose();
+    final drive = PhoneDrive();
+    addTearDown(drive.dispose);
+    calls.clear();
+    drive.carConnected.value = true;
+    lock = GuidanceWakeLock(nav, setKeepOn: (on) async => calls.add(on), drive: drive);
+    await tester.runAsync(startGuiding);
+    expect(lock.held, isFalse, reason: 'car connected, drive screen not showing');
+    drive.carConnected.value = false;
+    expect(lock.held, isTrue);
   });
 
   group('the platform side', () {

@@ -18,3 +18,6 @@ sqlite3-3.5.2-libsqlite3.x64.android.so      949965f0eba976f707ae364cdcb42c342b5
 sqlite3-3.5.2-libsqlite3.arm64.macos.dylib   6d80ba56cff1fa44f62bebc3e6b6b71513cc628862a9745c223c7bea8bf813f3  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.macos.dylib
 sqlite3-3.5.2-libsqlite3.arm64.ios.dylib     f1bc69a4304a21e472c15f849c34ae46539483cfa7ce901f54175c6d6cc17991  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.ios.dylib
 sqlite3-3.5.2-libsqlite3.arm64.ios_sim.dylib 1ce8ac8ebbb3f61fd6282c45a4da15b9c6c6ec169eff40a918520357a502510b  https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.5.2/libsqlite3.arm64.ios_sim.dylib
+# Tesseract's English trained data (the "fast" LSTM model, 4,113,088 bytes, Apache-2.0), tag 4.1.0 of tesseract-ocr/tessdata_fast. The Linux
+# release ships it as lib/tessdata/eng.traineddata, and the builder's OCR tests read it from the same pin.
+tessdata-fast-4.1.0-eng.traineddata          7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2  https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata

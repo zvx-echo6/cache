@@ -9,21 +9,28 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../../chat/answer_markdown.dart' show answerStyle;
 import '../../layout/layout_state.dart';
 import '../../notebook/markdown_text.dart';
+import '../../notebook/map_icons.dart';
 import '../../notebook/media.dart';
+import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
+import '../../notebook/pin_image.dart' show PinStyle;
 import '../../notebook/place_style.dart';
 import '../../notebook/places.dart';
 import '../../theme.dart';
 import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
+import 'icon_picker.dart';
+import '../../maps/ui/place_map.dart' show PlaceFixScope;
+import 'map_spot_picker.dart';
+import 'photo_viewer.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart' show NotebookDeps;
 import 'place_alert_sheet.dart';
 
 /// A map that shows [pin] and, when [onPick] is given, moves it to where it is tapped (the place screen's map).
-typedef PlaceMapBuilder = Widget Function(BuildContext context, NbPlace? pin, ValueChanged<NbPlace>? onPick);
+typedef PlaceMapBuilder = Widget Function(BuildContext context, NbPlace? pin, ValueChanged<NbPlace>? onPick, PinLook look);
 
 /// What the Places notebooks need besides the store: the weather and alert switches of the saved places, the place map and
 /// directions. Weather and alerts are kept for saved places only (the saved-places notebook): a watched place's id is
@@ -37,6 +44,7 @@ class PlaceNotebookDeps {
     this.alertSetting,
     this.alertKinds,
     this.map,
+    this.pickerMap,
     this.directions,
     this.regions,
     this.hereOnMap,
@@ -58,8 +66,12 @@ class PlaceNotebookDeps {
   final List<String> Function()? alertKinds;
   final PlaceMapBuilder? map;
 
-  /// Directions on the map to a place.
-  final void Function(NbPlace place, String name)? directions;
+  /// The map of the full-screen "Choose on map" picker.
+  final SpotMapBuilder? pickerMap;
+
+  /// Directions on the map to a place. False when they were not opened because a route is being followed: the place's screen
+  /// then says so, as the rest of the app does.
+  final bool Function(NbPlace place, String name)? directions;
 
   /// The downloaded regions weather can be kept for (watched-place id `region:<name>`). No longer listed in the Places notebook
   /// (1.0.29); kept for the Weather and alerts screen that lists the watched areas.
@@ -140,7 +152,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
       photos: e.photos,
       files: e.files,
       private: e.private,
-      props: {...e.props, 'color': e.color ?? defaultMarkerColor(_entries ?? const []).id, 'on_map': !e.onMap},
+      props: {...e.props, 'on_map': !e.onMap},
     );
   }
 
@@ -148,7 +160,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
 
   void _edit(Notebook book, NbEntry? e, {NbPlace? at}) {
     if (e != null) HapticFeedback.mediumImpact();
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceForm(deps: widget.deps, book: book, entry: e, at: at, others: _entries ?? const [])));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceForm(deps: widget.deps, book: book, entry: e, at: at)));
   }
 
   Future<void> _menu(Notebook book, String choice) async {
@@ -156,7 +168,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
       case 'import':
         await importPlacesInto(context, nb, notebookId: book.id, now: widget.deps.now);
       case 'edit':
-        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book)));
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book, icons: widget.deps.icons)));
       case 'map':
         await nb.setOnMap(book, !book.map);
       case 'home':
@@ -245,7 +257,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   }
 
   Widget _row(Notebook book, NbEntry e, CacheTokens k) {
-    final color = markerColor(e.color);
+    final color = markerColor(e.color ?? book.def.color);
     final h = _here;
     final id = watchId(e);
     final detail = [
@@ -285,7 +297,18 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
             key: ValueKey('marker-${e.id}'),
             radius: 24,
             onTap: () => _toggleMap(book, e),
-            child: SizedBox(width: 44, height: 44, child: Center(child: PlaceMarker(color: color, hidden: !e.onMap))),
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: PlaceMarker(
+                  color: color,
+                  hidden: !e.onMap,
+                  icon: widget.deps.icons == null ? null : iconForPlace(e, book).icon,
+                  pinStyle: widget.deps.icons?.pinStyle(),
+                ),
+              ),
+            ),
           ),
         ),
         title: name,
@@ -449,6 +472,25 @@ class PlaceView extends StatelessWidget {
   final Notebook book;
   final String entryId;
 
+  /// The place's own icon was changed here (null: use the notebook's): saved at once, and it goes to the top of Recent.
+  Future<void> _setIcon(NotebookState nb, NbEntry e, String? icon, MapIconSetup icons) async {
+    if (icon != null) icons.used?.call(icon);
+    await nb.saveEntry(
+      id: e.id,
+      notebookId: e.notebookId,
+      occurredAt: e.occurredAt,
+      title: e.title,
+      body: e.body,
+      values: e.values,
+      place: e.place,
+      photos: e.photos,
+      files: e.files,
+      draft: e.draft,
+      private: e.private,
+      props: {...e.props, 'icon': ?icon}..removeWhere((k, v) => k == 'icon' && icon == null),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final nb = deps.notebook;
@@ -467,6 +509,7 @@ class PlaceView extends StatelessWidget {
           final p = e.place;
           final pd = deps.placesDeps;
           final id = watchId(e);
+          final icons = deps.icons;
           return Scaffold(
             appBar: AppBar(
               title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -485,15 +528,32 @@ class PlaceView extends StatelessWidget {
             body: LayoutBuilder(builder: (context, cts) => ListView(
               padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
               children: [
-                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null))),
+                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context))))),
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    PlaceMarker(color: markerColor(e.color), hidden: !e.onMap),
+                    if (icons == null)
+                      PlaceMarker(color: markerColor(e.color ?? book.def.color), hidden: !e.onMap)
+                    else
+                      PlaceIconButton(
+                        overrideId: e.icon,
+                        notebookIconId: book.def.icon ?? defaultNotebookIcon(book),
+                        notebookName: book.name,
+                        tint: iconTint(context, markerColor(e.color ?? book.def.color).color),
+                        recent: icons.recent(),
+                        pinStyle: icons.pinStyle(),
+                        onChanged: (id) => _setIcon(nb, e, id, icons),
+                      ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '),
-                          style: TextStyle(fontSize: 14, color: k.secondary)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          if (icons != null)
+                            Text(e.icon == null ? 'Icon: ${iconForPlace(e, book).label} (notebook icon)' : 'Icon: ${iconForPlace(e, book).label} (this place)', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -519,7 +579,10 @@ class PlaceView extends StatelessWidget {
                 ],
                 if (e.photos.isNotEmpty) ...[
                   const SizedBox(height: 14),
-                  Wrap(spacing: 8, runSpacing: 8, children: [for (final ph in e.photos) NbThumb(notebook: nb, id: ph.id, size: 96)]),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (var i = 0; i < e.photos.length; i++)
+                      GestureDetector(key: ValueKey('photo-${e.photos[i].id}'), onTap: () => openPhotoViewer(context, nb, [for (final p in e.photos) p.id], i), child: NbThumb(notebook: nb, id: e.photos[i].id, size: 96)),
+                  ]),
                 ],
                 if (pd?.directions != null && p != null) ...[
                   const SizedBox(height: 16),
@@ -527,7 +590,12 @@ class PlaceView extends StatelessWidget {
                     alignment: Alignment.centerLeft,
                     child: FilledButton.icon(
                       key: const ValueKey('place-directions'),
-                      onPressed: () => pd!.directions!(p, name),
+                      onPressed: () {
+                        if (pd!.directions!(p, name)) return;
+                        final m = ScaffoldMessenger.of(context);
+                        m.hideCurrentSnackBar();
+                        m.showSnackBar(const SnackBar(content: Text('Finish or end the route first')));
+                      },
                       icon: const Icon(Icons.directions),
                       label: const Text('Directions'),
                     ),
@@ -546,7 +614,7 @@ class PlaceView extends StatelessWidget {
 /// the pin), the name, the marker colour, Show on the map, one "Weather and alerts" row (saved places), notes (Markdown),
 /// photos, Save, and Delete place (with a confirm) when editing.
 class PlaceForm extends StatefulWidget {
-  const PlaceForm({super.key, required this.deps, required this.book, this.entry, this.at, this.others = const []});
+  const PlaceForm({super.key, required this.deps, required this.book, this.entry, this.at});
 
   final NotebookDeps deps;
   final Notebook book;
@@ -557,8 +625,6 @@ class PlaceForm extends StatefulWidget {
   /// Where a new place starts (a spot held on the map); null starts at Here.
   final NbPlace? at;
 
-  /// The notebook's places (for the default colour).
-  final List<NbEntry> others;
 
   @override
   State<PlaceForm> createState() => _PlaceFormState();
@@ -571,8 +637,12 @@ class _PlaceFormState extends State<PlaceForm> {
   late final MarkdownController _notes = MarkdownController(text: widget.entry?.body ?? '');
   final TextEditingController _search = TextEditingController();
   late NbPlace? _pin = widget.entry?.place ?? widget.at;
-  late MarkerColor _color = widget.entry?.color != null ? markerColor(widget.entry!.color) : defaultMarkerColor(widget.others);
+  /// The colour the person gave this place, or null: a place with none follows its notebook's colour (or the default).
+  late MarkerColor? _picked = widget.entry?.color != null ? markerColor(widget.entry!.color) : null;
+  MarkerColor get _color => _picked ?? markerColor(widget.book.def.color);
   late bool _onMap = widget.entry?.onMap ?? true;
+  late String? _icon = widget.entry?.icon;
+  MapIconSetup? get _icons => widget.deps.icons;
   late bool _weather = _id == null ? true : pd?.watched(_id!) ?? false;
   late PlaceAlertRule _rule = _id == null ? PlaceAlertRule.same : pd?.alerts.ruleFor(_id!) ?? PlaceAlertRule.same;
   late List<NbPhoto> _photos = [...?widget.entry?.photos];
@@ -581,6 +651,12 @@ class _PlaceFormState extends State<PlaceForm> {
   bool _searching = false;
   bool _saving = false;
   String? _error;
+
+  /// The person has touched the form's map: a position that arrives later leaves it where they put it.
+  bool _touched = false;
+
+  /// A position fix is still being read (false once it answered that there is none).
+  bool _fixComing = true;
 
   String? get _id => widget.entry == null ? null : watchId(widget.entry!);
   bool get _isNew => widget.entry == null;
@@ -591,8 +667,15 @@ class _PlaceFormState extends State<PlaceForm> {
     super.initState();
     if (_pin == null) {
       widget.deps.places.herePlace().then((p) {
-        if (mounted && _pin == null && p != null) setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
-      }).catchError((_) {});
+        if (!mounted) return;
+        if (p == null) {
+          setState(() => _fixComing = false);
+        } else if (_pin == null && !_touched) {
+          setState(() => _pin = NbPlace(lat: p.lat, lon: p.lon));
+        }
+      }).catchError((_) {
+        if (mounted) setState(() => _fixComing = false);
+      });
     }
   }
 
@@ -636,6 +719,29 @@ class _PlaceFormState extends State<PlaceForm> {
     });
   }
 
+  /// The place's pin as it is now: its own icon, else its notebook's, else the template's; its colour (the notebook's, else the
+  /// default, is already in [_color]); red in Tactical.
+  PinLook _look(BuildContext context) => PinLook(icon: mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)), tint: pinTint(context, _color.color));
+
+  /// "Choose on map": the full-screen picker; Cancel (null) keeps the pin the place has.
+  Future<void> _chooseOnMap() async {
+    final pm = pd?.pickerMap;
+    if (pm == null) return;
+    final look = _look(context);
+    final got = await Navigator.of(context).push<NbPlace>(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (ctx) => MapSpotPicker(
+        map: pm,
+        places: widget.deps.places,
+        start: _pin,
+        icon: look.glyph,
+        tint: look.tint,
+        pinStyle: _icons?.pinStyle() ?? PinStyle.icon,
+      ),
+    ));
+    if (got != null && mounted) setState(() => _pin = got);
+  }
+
   Future<void> _save() async {
     final pin = _pin;
     final name = _name.text.trim();
@@ -657,7 +763,13 @@ class _PlaceFormState extends State<PlaceForm> {
         photos: _photos,
         files: e?.files ?? const [],
         private: e?.private ?? false,
-        props: {...?e?.props, 'color': _color.id, 'on_map': _onMap},
+        props: {
+          ...?e?.props,
+          // A place has its own colour only when the person picked one that differs from its notebook's.
+          if (_picked != null && _picked!.id != widget.book.def.color) 'color': _picked!.id,
+          'on_map': _onMap,
+          if (_icons != null && _icon != null) 'icon': _icon,
+        }..removeWhere((k, _) => (k == 'icon' && _icons != null && _icon == null) || (k == 'color' && (_picked == null || _picked!.id == widget.book.def.color))),
       );
       _added.clear();
       final id = watchId(saved);
@@ -741,15 +853,20 @@ class _PlaceFormState extends State<PlaceForm> {
               // 220 high, less on a short window (a phone held sideways), so the name and the switches show under it.
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: pd!.map!(context, pin, (p) => setState(() => _pin = p))),
+                child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: PlaceFixScope(coming: _fixComing, child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _touched = true, child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))))),
               ),
+              if (pd?.pickerMap != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+                ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text(
                 pin == null
                     ? 'No position yet. Search for the place${pd?.map != null ? ' or tap the map' : ''}.'
-                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'tap the map to move the pin'].join(' · '),
+                    : [pin.coords, if (pin.label != null) pin.label!, if (pd?.map != null) 'drag the map or tap it to move the pin'].join(' · '),
                 key: const ValueKey('place-where'),
                 style: TextStyle(fontSize: 13, color: k.secondary),
               ),
@@ -762,6 +879,38 @@ class _PlaceFormState extends State<PlaceForm> {
               decoration: const InputDecoration(labelText: 'Name', counterText: ''),
               onChanged: (_) => setState(() {}),
             ),
+            if (_icons != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  PlaceIconButton(
+                    overrideId: _icon,
+                    notebookIconId: widget.book.def.icon ?? defaultNotebookIcon(widget.book),
+                    notebookName: widget.book.name,
+                    tint: iconTint(context, _color.color),
+                    recent: _icons!.recent(),
+                    pinStyle: _icons!.pinStyle(),
+                    onChanged: (id) {
+                      if (id != null) _icons!.used?.call(id);
+                      setState(() => _icon = id);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Map icon', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        Text(
+                          _icon == null ? '${mapIconOrTemplate(widget.book.def.icon ?? defaultNotebookIcon(widget.book)).label} (notebook icon)' : '${mapIconOrTemplate(_icon).label} (this place)',
+                          style: TextStyle(fontSize: 16, color: k.text),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Text('Marker color', style: TextStyle(fontSize: 14, color: k.secondary)),
             Wrap(
@@ -771,12 +920,12 @@ class _PlaceFormState extends State<PlaceForm> {
                     button: true,
                     selected: c.id == _color.id,
                     label: c.spoken,
-                    onTap: () => setState(() => _color = c),
+                    onTap: () => setState(() => _picked = c),
                     excludeSemantics: true,
                     child: InkResponse(
                       key: ValueKey('swatch-${c.id}'),
                       radius: 22,
-                      onTap: () => setState(() => _color = c),
+                      onTap: () => setState(() => _picked = c),
                       child: SizedBox(
                         width: 44,
                         height: 44,
@@ -799,7 +948,12 @@ class _PlaceFormState extends State<PlaceForm> {
             SwitchListTile(
               key: const ValueKey('place-on-map'),
               contentPadding: EdgeInsets.zero,
-              secondary: PlaceMarker(color: _color, hidden: !_onMap),
+              secondary: PlaceMarker(
+                color: _color,
+                hidden: !_onMap,
+                icon: _icons == null ? null : mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)).icon,
+                pinStyle: _icons?.pinStyle(),
+              ),
               title: const Text('Show on the map'),
               value: _onMap,
               onChanged: (v) => setState(() => _onMap = v),

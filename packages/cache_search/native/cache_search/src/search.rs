@@ -9,12 +9,13 @@ use crate::pdfindex::{self, PdfHit};
 use crate::html;
 use crate::zimsrc;
 use crate::index;
+use crate::qbuild;
 use crate::zimx::{clean_snippet, XHit};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{Query, QueryParser};
+use tantivy::query::Query;
 use tantivy::schema::{Field, IndexRecordOption, Value as _};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
@@ -211,18 +212,20 @@ pub(crate) fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[Stri
     let invs: Vec<_> = fields.iter().filter_map(|f| seg.inverted_index(*f).ok().map(|i| (*f, i))).collect();
     let mut matched = 0usize;
     for t in terms {
-        let hit = invs.iter().any(|(f, inv)| {
-            let term = Term::from_field_text(*f, t);
-            match inv.read_postings(&term, IndexRecordOption::Basic) {
-                Ok(Some(mut p)) => p.doc() <= addr.doc_id && (p.doc() == addr.doc_id || p.seek(addr.doc_id) == addr.doc_id),
-                _ => false,
-            }
-        });
-        if hit {
+        if invs.iter().any(|(f, inv)| has_term(inv, *f, t, addr.doc_id)) {
             matched += 1;
         }
     }
     matched as f32 / terms.len() as f32
+}
+
+/// Whether the term `text` of field `f` occurs in the document `doc_id` of a segment (`inv` is that field's index there).
+pub(crate) fn has_term(inv: &tantivy::InvertedIndexReader, f: Field, text: &str, doc_id: tantivy::DocId) -> bool {
+    let term = Term::from_field_text(f, text);
+    match inv.read_postings(&term, IndexRecordOption::Basic) {
+        Ok(Some(mut p)) => p.doc() <= doc_id && (p.doc() == doc_id || p.seek(doc_id) == doc_id),
+        _ => false,
+    }
 }
 
 /// A hit chosen for the merged list: (source index, hit index, merge score, passed the coverage test).
@@ -597,19 +600,19 @@ impl Handle {
             // Sources that are not `done`, or whose index cannot be opened, are skipped (cs_status reports them).
             let Ok(Some(oi)) = z.searchable() else { continue };
             let searcher = oi.reader.searcher();
-            let mut qp = QueryParser::for_index(&oi.index, vec![oi.fields.title, oi.fields.lead, oi.fields.body]);
-            qp.set_field_boost(oi.fields.title, 2.0);
-            let (q, _errors) = qp.parse_query_lenient(query);
-            let Ok((top, count)) = top_deterministic(&searcher, &*q, candidates, oi.fields.path) else {
+            // The query is built by `qbuild` (words with hyphens, apostrophes or dots search the body too).
+            let qf = [(oi.fields.title, 2.0), (oi.fields.lead, 1.0), (oi.fields.body, 1.0)];
+            let Ok(plan) = qbuild::build(&oi.index, &qf, query) else { continue };
+            let Ok((top, count)) = top_deterministic(&searcher, &*plan.query, candidates, oi.fields.path) else {
                 continue;
             };
-            let terms = query_term_texts(&*q);
             let fields = [oi.fields.title, oi.fields.lead, oi.fields.body];
             let mut hits = Vec::with_capacity(top.len());
             for (raw, addr, path) in top {
-                let coverage = term_coverage(&searcher, addr, &terms, &fields);
+                let coverage = plan.coverage(&searcher, addr, &fields);
                 hits.push(Hit { path, addr: Some(addr), raw, coverage, title_cov: coverage });
             }
+            let q = plan.query;
             per.push(SrcHits {
                 id,
                 title,
@@ -1218,6 +1221,7 @@ pub fn read_zim_entry(address: &str, e: &zimsrc::RawEntry, max_chars: i32) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tantivy::query::QueryParser;
 
     fn l(v: &[&str]) -> Vec<(String, f32)> {
         v.iter().enumerate().map(|(i, s)| (s.to_string(), 10.0 - i as f32)).collect()

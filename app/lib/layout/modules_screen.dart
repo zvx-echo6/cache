@@ -34,6 +34,9 @@ class ModulesScreen extends StatelessWidget {
   /// The model downloads (for "Model downloading 40%"); the app's when null.
   final ModelDownloads? downloads;
 
+  /// The options sheet for [m] (Cache on Linux's sidebar opens it from a right-click).
+  Future<void> moduleOptions(BuildContext context, ModuleId m) => _actions(context, m);
+
   Future<void> _actions(BuildContext context, ModuleId m) async {
     final pinned = layout.isPinned(m);
     final choice = await showFittedSheet<String>(

@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import '../app_fs.dart';
 import '../files.dart';
 import '../maps/geo.dart';
+import '../platform.dart' as plat;
 import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
 
@@ -146,6 +148,32 @@ class RegionRecord {
     }
     return GeoBounds(south: b[1], west: west, north: b[3], east: east);
   }
+}
+
+/// The states or provinces (kind `region`) the region list says region [id] is in, from one country's [records]:
+/// - itself, when it is a state;
+/// - else the states it sits in, through its parents at any distance (a county's state; a city's, through its county; both
+///   states of a metro area that crosses a state line);
+/// - else the state its id starts with (ids are `<state>-<name>`, "us-id-..." in Idaho), when its parents name none.
+/// Empty when [records] does not hold [id], and for a region larger than a state (several states, a country): the list does
+/// not put those in one.
+List<RegionRecord> statesIn(Map<String, RegionRecord> records, String id) {
+  final r = records[id];
+  if (r == null) return const [];
+  bool isState(RegionRecord? x) => x != null && x.kind == 'region';
+  if (isState(r)) return [r];
+  // every region it sits in, nearest first
+  final above = <String>{};
+  final todo = [id];
+  while (todo.isNotEmpty) {
+    for (final p in records[todo.removeAt(0)]?.parents ?? const <String>[]) {
+      if (above.add(p)) todo.add(p);
+    }
+  }
+  final up = [for (final p in above) if (isState(records[p])) records[p]!];
+  if (up.isNotEmpty) return up;
+  final byId = records[id.split('-').take(2).join('-')];
+  return isState(byId) ? [byId!] : const [];
 }
 
 /// A place in the browse tree. The same region can sit under more than one parent (Idaho is in the Pacific Northwest and in the
@@ -296,7 +324,7 @@ class RegionCatalogue {
     // A country's file from before the catalogue had sizes is read again (once): the sizes come with it.
     final text = await _text('$id.json', freshAfter: kRegionSizesSince);
     // A large country's shard is several megabytes of JSON: read off the screen's thread.
-    final s = await Isolate.run(() => RegionShard.parse(id, text));
+    final s = await _off(() => RegionShard.parse(id, text));
     return _shards[id] = s;
   }
 
@@ -308,7 +336,7 @@ class RegionCatalogue {
     final known = _global;
     if (known != null) return known;
     final text = await _text('search-global.json');
-    final list = await Isolate.run(() => RegionHit.parseList(text));
+    final list = await _off(() => RegionHit.parseList(text));
     _global = list;
     return list;
   }
@@ -319,7 +347,7 @@ class RegionCatalogue {
     if (known != null) return known;
     final name = (await index()).searchFiles[id] ?? '$id.search.json';
     final text = await _text(name);
-    return _search[id] = await Isolate.run(() => RegionHit.parseList(text, shard: id));
+    return _search[id] = await _off(() => RegionHit.parseList(text, shard: id));
   }
 
   /// The region's outline as a GeoJSON geometry (a Polygon or MultiPolygon). A drawn area's is its rectangle.
@@ -390,6 +418,8 @@ class RegionCatalogue {
   /// The text of [name]: the copy on the phone while it is younger than [maxAge] (and newer than [freshAfter]), else fetched (and
   /// kept), else the old copy.
   Future<String> _text(String name, {String? url, DateTime? freshAfter}) async {
+    // A browser keeps the copy on Cache Server (the app's support folder there), through the app's folder seam.
+    if (plat.isWeb) return _textOnServer(name, url: url, freshAfter: freshAfter);
     final f = File('${(await dir()).path}/$name');
     final have = await f.exists();
     if (have) {
@@ -409,7 +439,39 @@ class RegionCatalogue {
       throw NetworkProblem('The region list could not be read: $e');
     }
   }
+
+  AppFs? _webFs;
+
+  /// [_text] in a browser: the same rules, the copy in `region-catalogue/` of the server's support folder.
+  Future<String> _textOnServer(String name, {String? url, DateTime? freshAfter}) async {
+    final fs = _webFs ??= createAppFs();
+    final path = '$kRegionCatalogueDir/$name';
+    final stat = await fs.stat(AppRoot.support, path);
+    final have = stat != null;
+    if (stat != null && _now().difference(stat.mtime) < maxAge && (freshAfter == null || stat.mtime.isAfter(freshAfter))) {
+      final text = await fs.readString(AppRoot.support, path);
+      if (text != null) return text;
+    }
+    try {
+      final bytes = await _fetch(Uri.parse(url ?? '$base$name'));
+      final text = utf8.decode(bytes);
+      jsonDecode(text); // never keep something that is not JSON
+      await fs.writeStringAtomic(AppRoot.support, path, text);
+      return text;
+    } catch (e) {
+      final old = have ? await fs.readString(AppRoot.support, path) : null;
+      if (old != null) return old;
+      if (e is NetworkProblem) rethrow;
+      throw NetworkProblem('The region list could not be read: $e');
+    }
+  }
 }
+
+/// The folder of the support folder the region catalogue and the off-road catalogue are kept in.
+const String kRegionCatalogueDir = 'region-catalogue';
+
+/// [Isolate.run] where there are isolates; a browser has none, so the work runs here.
+Future<T> _off<T>(T Function() work) => plat.isWeb ? Future<T>.sync(work) : Isolate.run(work);
 
 /// Finds regions by name in [rows]: every word of the query must start a word of the name (or of one of its other names).
 /// Exact names first, then names that start with the query, then the rest; larger places first within each.

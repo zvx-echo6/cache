@@ -124,12 +124,15 @@ class BuildBook {
 
 /// What the book is doing in the queue.
 class QueueProgress {
-  const QueueProgress({this.pages = 0, this.pieces = 0, this.piecesTotal, this.ocrPages = 0});
+  const QueueProgress({this.pages = 0, this.pieces = 0, this.piecesTotal, this.ocrPages = 0, this.ocrDone = 0});
 
   final int pages;
   final int pieces;
   final int? piecesTotal;
   final int ocrPages;
+
+  /// While scanned pages are being read (state `reading`, `ocrPages` of them): how many are done.
+  final int ocrDone;
 
   static QueueProgress fromJson(Object? j) {
     if (j is! Map) return const QueueProgress();
@@ -138,6 +141,7 @@ class QueueProgress {
       pieces: (j['pieces'] as num?)?.toInt() ?? 0,
       piecesTotal: (j['pieces_total'] as num?)?.toInt(),
       ocrPages: (j['ocr_pages'] as num?)?.toInt() ?? 0,
+      ocrDone: (j['ocr_done'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -421,6 +425,11 @@ abstract interface class BuildCompressionApi implements BuildApi {
   Future<BuildCompressionSettings> putCompressionSettings(BuildCompressionSettings settings);
 }
 
+/// Optional: deleting a whole built library, so existing BuildApi fakes do not need a new method.
+abstract interface class BuildLibraryDeleteApi implements BuildApi {
+  Future<void> deleteLibrary(String id);
+}
+
 /// What the browser can ask of the device about building libraries from PDFs (`/api/build/...`). A class so tests can answer for it.
 abstract class BuildApi {
   Future<List<BuildLibrary>> libraries();
@@ -476,7 +485,7 @@ class BuildClass {
 }
 
 /// The browser's [BuildApi]: Cache for Linux's `/api/build/...`, same origin, so the session goes along.
-class HttpBuildApi implements BuildFilingApi, BuildCompressionApi {
+class HttpBuildApi implements BuildFilingApi, BuildCompressionApi, BuildLibraryDeleteApi {
   HttpBuildApi({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
@@ -518,6 +527,11 @@ class HttpBuildApi implements BuildFilingApi, BuildCompressionApi {
 
   @override
   Future<BuildLibrary> renameLibrary(String id, String title) async => BuildLibrary.fromJson(_map(await _call('PATCH', '/api/build/libraries/${_id(id)}', body: {'title': title})));
+
+  @override
+  Future<void> deleteLibrary(String id) async {
+    await _call('DELETE', '/api/build/libraries/${_id(id)}');
+  }
 
   @override
   Future<List<BuildBook>> books(String libraryId) async => [for (final j in (await _call('GET', '/api/build/libraries/${_id(libraryId)}/books')) as List) BuildBook.fromJson(_map(j))];

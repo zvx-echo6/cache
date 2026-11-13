@@ -10,6 +10,13 @@ class FakeSync implements SyncCoreLike {
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
 
+  /// The code `link_code` answers (a test of the QR gives a real-sized one).
+  String codeOverride = 'CACHE1-TESTCODE';
+
+  /// The free space and the kept-free reserve `status` answers.
+  int freeBytes = 10 << 30;
+  int reserveBytes = 1 << 30;
+
   /// This device's key.
   String id = 'me';
   bool closed = false;
@@ -38,8 +45,8 @@ class FakeSync implements SyncCoreLike {
           'name': name,
           'relay': 'https://relay.example',
           'network': true,
-          'free_bytes': 10 << 30,
-          'reserve_bytes': 1 << 30,
+          'free_bytes': freeBytes,
+          'reserve_bytes': reserveBytes,
           'peers': peers,
           'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],
@@ -48,7 +55,7 @@ class FakeSync implements SyncCoreLike {
           'log': [],
         };
       case 'link_code':
-        return {'code': 'CACHE1-TESTCODE', 'valid_secs': 900};
+        return {'code': codeOverride, 'valid_secs': 900};
       case 'link':
         peers.removeWhere((p) => p['id'] == 'peer1');
         // As the engine makes a link: Off, waiting for the answer.
@@ -58,7 +65,13 @@ class FakeSync implements SyncCoreLike {
         });
         return {'ok': true, 'peer': 'peer1', 'name': 'Desk'};
       case 'share_add':
-        shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
+        // Like the engine: the same id again re-points the share (its name stays).
+        final have = shares.where((s) => s['id'] == args['id']).firstOrNull;
+        if (have != null) {
+          have['path'] = args['path'];
+        } else {
+          shares.add({'id': args['id'], 'name': args['name'], 'path': args['path']});
+        }
         return {'ok': true, 'id': args['id']};
       case 'share_remove':
         shares.removeWhere((s) => s['id'] == args['id']);

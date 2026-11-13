@@ -1,0 +1,33 @@
+# Full-size photos: storage design (proposal, not built)
+
+**Keeping the original, minus metadata.** For a JPEG, `encodePhoto` stops decoding. It walks the marker segments and copies the file byte for byte, dropping: APP1 Exif (position, camera, time, embedded thumbnail), APP1 XMP, APP13 (IPTC), APP2 MPF (secondary images some phones embed), and COM comments. APP0, the ICC colour profile and the image data are kept, so nothing is recompressed.
+
+**Orientation.** The Exif orientation is read before it is dropped. Orientation 1 or missing: plain copy. Orientation 2 to 8: if the dimensions are whole 16 px blocks, turn losslessly (reorder blocks, as jpegtran does); otherwise decode, `bakeOrientation`, and re-encode once at quality 95. PNG: drop the eXIf and text chunks. HEIC or WebP: re-encode once to JPEG at quality 95.
+
+**Preview and thumb.** `thumbs/<id>.jpg` (256 px) stays. New `previews/<id>.jpg` (1600 px long side, quality 80) sits beside it. Both are local only: never in a share, never synced, never in the Obsidian or Logseq export, deleted with the photo. They are made when the photo is stored, or on first use if missing (old photos, photos that arrived by sync). The viewer opens the preview first and loads the full file when zoomed.
+
+**Sync and old photos.** The full file keeps `photos/<id>.jpg` and its id, so the existing verified transfer carries it unchanged: same file, same checks, more bytes. Old photos stay as stored. Builds 47 and 48 read the larger files and re-encode their own copy on arrival.
+
+**Not yet checked:** I have not read the core's transfer code. Before building, confirm its size accounting and the free-space reserve check handle 5 to 15 MB files.
+
+## Added after the owner's review
+
+**Viewer rotation.** The app sets no orientation of its own except the video player (it locks while playing and resets with an empty list). Android's manifest sets none and iOS allows portrait and both landscapes on iPhone. The viewer now asks for all four orientations when it opens and resets to none on close, so a wide photo fills the screen sideways. Renders: `844x390-*-viewer-wide`.
+
+**Zoom.** Before: min 1x, max a fixed 6x, which stops short of the pixels of a 4000 px photo (about 10x on a 390 px screen); the pan was clamped to the screen edges; double-tap went to a fixed 3x. Now: max is the larger of 4x and the photo's pixel width over its displayed width (read from the file header, so it is known before the file loads); panning is free (no edge, no snap back; at fit a drag is the swipe to the next photo, and zooming back out returns to centre); double-tap toggles fit and 2.5x or the photo's own pixels if smaller (never under 1.5x), centred on the tap. A photo with a preview shows it first and loads the full file when zoomed. Renders: `*-viewer-actual-pixels`.
+
+**What image_picker hands over (read from source, locked versions).** `media.dart:57` calls `ImagePicker().pickImage(source: ...)` with no maxWidth, maxHeight or imageQuality. Read, in the pub cache at the versions in `pubspec.lock`: image_picker 1.2.4 (`lib/image_picker.dart:72-89`, passes the three straight through, null stays null), image_picker_ios 0.8.13+10 and image_picker_android 0.8.13+25. I read the plugin source; I have not run it on a phone, so build 51's log line (below) is the proof.
+
+*iPhone, gallery (PHPicker).* `FLTImagePickerPlugin.m:110` asks for `AssetRepresentationModeCurrent` (the original, HEIC included). `FLTPHPickerSaveImageToPathOperation.m:96-98` loads the original data; `:129` decodes it to a UIImage at full size. Scaling happens only inside `if (maxWidth != nil || maxHeight != nil)` (`:138-142`), so with our call nothing is scaled. `FLTImagePickerPhotoAssetUtil.m:42-45` reads the type from the first byte (`FLTImagePickerMetaDataUtil.m:17-28`: JPEG, PNG or GIF, anything else, HEIC included, is "other") and `:85` re-encodes through `convertImage` (`FLTImagePickerMetaDataUtil.m:75-97`): PNG stays PNG; JPEG and everything else become JPEG with `UIImageJPEGRepresentation` at quality 1.0 (`:86`, `:93`). The quality is 1.0 because `getDesiredImageQuality` (`FLTImagePickerPlugin.m:463-471`) returns 1 when none is given. The original's metadata (EXIF, GPS) is copied onto the new JPEG (`FLTImagePickerPhotoAssetUtil.m:87-92`, `FLTImagePickerMetaDataUtil.m:52-69`).
+
+*iPhone, camera (UIImagePickerController).* Same end: `FLTImagePickerPlugin.m:601` to `FLTImagePickerPhotoAssetUtil.m:62-71`, type default (JPEG), quality 1.0, no scaling (`FLTImagePickerPlugin.m:591-596` gates on maxWidth and maxHeight).
+
+So on iPhone the file we receive is a JPEG at the camera's pixel size, quality 100, but it is a re-encode by the plugin, not the original bytes: one lossy generation happens before our step, and a HEIC is converted by the plugin, not by us. Our step then copies that JPEG exactly. From source I could not tell how the orientation flag is set on that JPEG (pixels turned, or flag kept), so our step must handle both, as designed.
+
+*Android.* `ImagePickerDelegate.java:467-478` opens the system Photo Picker (when available) or `ACTION_GET_CONTENT`; the camera is `ACTION_IMAGE_CAPTURE` (`:564`). The chosen file is returned as it is: `ImageResizer.java:42-45` returns the original path unless maxWidth, maxHeight or a quality under 100 is given (`ImagePickerDelegate.java:281-283` makes a missing quality 100). With our call it never downscales and never re-encodes, so a JPEG arrives byte for byte (and a HEIC from the gallery arrives as HEIC; our step converts it once at quality 95).
+
+**Sync size and reserve (read in `cache_sync`).** A file is fetched by its BLAKE3 hash, checked as it arrives. Before fetching, it needs the size from the index (the real file size, so 5 to 15 MB counts correctly) plus the reserve (1 GiB unless the app sets it) free, in the store and in the shared folder (`allowed_bytes`); otherwise the transfer pauses with a message. No per-file size limit; the 256 MB limit is on the index only.
+
+**Older photos.** A photo stored at 2048 px by an older build stays as it is; the viewer shows it (its zoom limit is its own, smaller, size).
+
+**Build 49 receiving a full-size photo.** `_copyPhotosOut` skips a file that already exists in the shared folder, so the full-size original is never overwritten. On import, build 49 finds no local photo, reads the folder's file and calls `storePhoto`, which runs `encodePhoto`: its own 2048 px copy and thumbnail under the same id. No version gate exists in rel-1.1 today, so build 49 would receive and re-encode. If a gate lands before 51, build 49 is shut out of sync entirely.

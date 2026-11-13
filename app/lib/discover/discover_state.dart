@@ -71,8 +71,12 @@ abstract interface class DiscoverDevice implements DiscoverPorts {
   /// What an outside source gives ("Forecast and alerts").
   String providerDetail(RecipeItem item);
 
-  /// Free space on the device; null when it cannot be told.
+  /// Free space on the device as the screens show it (free now); null when it cannot be told.
   int? freeBytes();
+
+  /// What a download may use: the allowance (free now, and on iPhone half of what iOS can purge) less what Cache leaves for the
+  /// phone. The Get sheet, the wizard and the activity page check sizes against this, not against [freeBytes].
+  int? usableBytes();
 
   /// The item's download as the app's download rows show it.
   DlState progressOf(RecipeItem item);
@@ -185,6 +189,8 @@ class DiscoverState extends ChangeNotifier {
         // An update from before Discover: kept, so the wizard never comes for a device that was set up.
         if (setUpBefore) {
           firstRunDone = true;
+          // Told now, before the file work: Home shows Discover's card at once, not the Set up card until init ends.
+          notifyListeners();
           await _save();
         }
         return;
@@ -196,6 +202,8 @@ class DiscoverState extends ChangeNotifier {
       choosePlace = j['choose_place'] == true;
       final p = DiscoverPlace.fromJson(j['place']);
       if (p != null && (choosePlace || device.place == null)) device.place = p;
+      // Told now, before the catalogue is read (see above).
+      if (firstRunDone) notifyListeners();
     } catch (e) {
       logError('Discover could not read its file', error: e);
     }

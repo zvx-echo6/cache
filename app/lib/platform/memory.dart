@@ -1,7 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+
+import '../platform.dart' as plat;
 
 /// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2346 MB (anon 1200 MB, file
 /// 1146 MB), swap 2163 MB"; "memory unknown" where the system does not say. iOS gives its last native reading (phys_footprint
@@ -125,6 +129,8 @@ MemoryReading? _readingOf(Object? m) {
 /// The device's memory now: Android from the system (ActivityManager), Linux from /proc/meminfo (MemAvailable); null where it
 /// cannot be read (then nothing waits for memory).
 Future<MemoryReading?> readMemory() async {
+  // A browser has no memory of its own to read: the figures are the server's (GET /api/system/memory, from its /proc/meminfo).
+  if (plat.isWeb) return _readServerMemory();
   try {
     if (Platform.isAndroid || Platform.isIOS) {
       final reading = _readingOf(await kMemoryChannel.invokeMethod<Object?>('read'));
@@ -150,6 +156,25 @@ Future<MemoryReading?> readMemory() async {
   return null;
 }
 
+Future<MemoryReading?> _readServerMemory() async {
+  try {
+    final r = await http.get(Uri.parse('/api/system/memory'));
+    return r.statusCode == 200 ? memoryFromServerBody(utf8.decode(r.bodyBytes)) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The reading in the body of `GET /api/system/memory` (`{"ok":true,"result":{"total","avail","threshold","low"}}`), or null.
+MemoryReading? memoryFromServerBody(String body) {
+  try {
+    final j = jsonDecode(body);
+    return _readingOf(j is Map ? j['result'] : null);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// A fresh sample for diagnostic logs. A slow native probe never holds up indexing.
 Future<String> memorySnapshot() async {
   try {
@@ -170,9 +195,14 @@ const int kTrimUiHidden = 20;
 /// Android says memory is short: [level] (onTrimMemory's) and the memory then.
 typedef MemoryTrim = void Function(int level, MemoryReading? reading);
 
-/// Calls [onTrim] each time Android sends onTrimMemory (Android only; elsewhere never).
-void listenMemoryTrim(MemoryTrim onTrim) {
+/// Calls [onTrim] each time Android sends onTrimMemory (Android only; elsewhere never), and [onWarning] each time iOS sends a
+/// memory warning (iOS only).
+void listenMemoryTrim(MemoryTrim onTrim, {void Function()? onWarning}) {
   kMemoryChannel.setMethodCallHandler((call) async {
+    if (call.method == 'memoryWarning') {
+      onWarning?.call();
+      return null;
+    }
     if (call.method != 'trim') return null;
     final m = call.arguments;
     final level = m is Map && m['level'] is int ? m['level'] as int : 0;
@@ -183,8 +213,18 @@ void listenMemoryTrim(MemoryTrim onTrim) {
 
 /// Whether the model should be let go on this onTrimMemory: Android says memory runs low while Cache is in front (older
 /// Androids), or Cache went to the back and what is free is under a gigabyte above where Android starts killing apps.
+///
+/// This is the search model's rule. The chat model uses [releaseChatModelNowOn] and the grace period ([BackgroundModelRelease]).
 bool releaseModelOn(int level, MemoryReading? r) {
   if (level >= kTrimRunningLow && level < kTrimUiHidden) return true;
   if (level >= kTrimUiHidden) return r != null && (r.low || r.room < (1 << 30));
   return false;
 }
+
+/// Whether the chat model is let go at once on this onTrimMemory: levels 10 to 19 (running low or critical in front), which
+/// only older Androids send (Android 14 and later no longer notify apps of them). Going to the back is handled by
+/// [BackgroundModelRelease], which waits out a grace period and an answer being written.
+bool releaseChatModelNowOn(int level) => level >= kTrimRunningLow && level < kTrimUiHidden;
+
+/// Whether this onTrimMemory level means Cache's screen is hidden or Cache is in the background.
+bool trimMeansBackground(int level) => level >= kTrimUiHidden;

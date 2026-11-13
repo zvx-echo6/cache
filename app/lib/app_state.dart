@@ -4,15 +4,18 @@ import 'dart:io';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
 import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
+import 'browse/web/local_files.dart' show UploadCancelled, pickLocalFile, setLeaveWarning;
 import 'models/recommendations.dart' show ModelSettings;
+import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
+import 'platform/bench_options.dart';
 import 'platform/memory.dart';
+import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
@@ -64,7 +67,37 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory}) : memory = memory ?? readMemory;
+  AppState({
+    this.settingsDirOverride,
+    this.modelsDirOverride,
+    Future<MemoryReading?> Function()? memory,
+    Future<BenchOptions> Function()? bench,
+    LlamaSession? session,
+    bool Function()? startedWithNoPhoneScreen,
+    ServerModels? server,
+  })  : memory = memory ?? readMemory,
+        session = session ?? LlamaSession(),
+        _bench = bench ?? readBenchOptions,
+        _startedWithNoPhoneScreen = startedWithNoPhoneScreen ?? _never,
+        _server = server ?? (plat.isWeb ? ServerModels() : null);
+
+  static bool _never() => false;
+
+  /// Whether Cache is starting with no phone screen: Android Auto started it with the phone app closed. Asked once, when the start
+  /// would load the chosen model. Never true unless the app says so (tests and every platform but Android: never).
+  final bool Function() _startedWithNoPhoneScreen;
+
+  /// The chosen model was left out of a start with no phone screen and waits for one ([phoneScreenAppeared]).
+  bool _waitsForPhoneScreen = false;
+
+  /// The bench's launch options (test APK only; off everywhere else), read at each model load.
+  final Future<BenchOptions> Function() _bench;
+
+  /// The bench options of the last model load.
+  BenchOptions benchOptions = BenchOptions.off;
+
+  /// A browser: the model files are the server's (list, delete, upload); there is no models folder here.
+  final ServerModels? _server;
 
   /// The device's free memory (a test hook; the system's reading by default).
   final Future<MemoryReading?> Function() memory;
@@ -73,7 +106,11 @@ class AppState extends ChangeNotifier {
   final Directory? settingsDirOverride;
   final Directory? modelsDirOverride;
 
-  final LlamaSession session = LlamaSession();
+  /// The native session (a test hook: a fake stands in for it).
+  final LlamaSession session;
+
+  /// The unload a [release] sent, until it is done: a load that follows waits for it, so a load never begins under an unload.
+  Future<void>? _unloading;
 
   CacheThemeId theme = CacheThemeId.dark;
 
@@ -96,6 +133,19 @@ class AppState extends ChangeNotifier {
   /// The chosen model, not in memory now so the phone has room: at start there was not enough free memory for it, or it was
   /// let go when Android said memory was short. It loads again when Ask opens ([wake]); it stays the chosen model.
   ModelEntry? resting;
+
+  /// True while the start or wake memory gate holds the chosen model back (it needs more than the memory free then); false once a
+  /// model loads (or is tried), is unloaded, or another is chosen. [heldNeedMb] and [heldFreeMb] are the gate's two numbers.
+  bool heldForMemory = false;
+  int? heldNeedMb;
+  int? heldFreeMb;
+
+  void _clearHeld() {
+    heldForMemory = false;
+    heldNeedMb = null;
+    heldFreeMb = null;
+  }
+
   String? loadError;
 
   /// The model whose last load failed, and why; null once a model loads, is unloaded or that file is deleted.
@@ -119,6 +169,9 @@ class AppState extends ChangeNotifier {
   /// Real model names (from the model's own metadata), by [ModelEntry.key]. Known once a model has
   /// been loaded; until then the file name is shown.
   final Map<String, String> _names = {};
+
+  /// The same models' plain names, without the quantisation label ("Gemma 4 E2B"), set at the same load.
+  final Map<String, String> _plainNames = {};
   String? _lastModelFile;
 
   /// 0..1 while a file is being copied into the models folder, else null.
@@ -135,6 +188,9 @@ class AppState extends ChangeNotifier {
 
   /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
   String displayName(ModelEntry e) => _names[e.key] ?? e.name;
+
+  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"); [displayName] when none was parsed.
+  String plainName(ModelEntry e) => _plainNames[e.key] ?? displayName(e);
 
   /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
   ModelSettings? Function(ModelEntry e)? settingsFor;
@@ -153,20 +209,6 @@ class AppState extends ChangeNotifier {
       // server/docs/llm-protocol.md); a model's id is the "path" LlamaSession.load takes on the web. When the server has none
       // (or cannot be asked) the list stays empty and nothing is wrong.
       await refreshModels();
-      try {
-        final r = await http.get(Uri.parse('/api/llm/models?v=1'));
-        if (r.statusCode == 200) {
-          final list = ((jsonDecode(utf8.decode(r.bodyBytes)) as Map)['result'] as Map)['models'] as List;
-          final found = [
-            for (final m in list.cast<Map>()) ModelEntry(path: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0),
-          ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-          models = found;
-        } else {
-          logInfo('The server lists no chat models (HTTP ${r.statusCode})');
-        }
-      } catch (e) {
-        logInfo('The server\'s chat models could not be read', detail: '$e');
-      }
       started = true;
       notifyListeners();
       return;
@@ -189,12 +231,26 @@ class AppState extends ChangeNotifier {
     if (last != null) {
       for (final e in models) {
         if (e.fileName == last && !isUnsupported(e)) {
+          // The car started Cache and the phone's screen is not open: the car never asks the chat model anything, so it is
+          // not loaded for it. It rests, still the chosen model, and loads when the phone's screen first appears
+          // ([phoneScreenAppeared]) or when Ask needs it ([wake]), under the same memory gate as below.
+          if (_startedWithNoPhoneScreen()) {
+            logInfo('Model not loaded at start: the car started Cache and the phone screen is not open');
+            resting = e;
+            _waitsForPhoneScreen = true;
+            notifyListeners();
+            break;
+          }
           // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
           // room for it makes Android kill Cache (or everything else) while it answers.
           final r = await memory();
-          if (r != null && modelMemoryNeed(e.size) > r.room) {
-            logInfo('Model not loaded at start: it needs about ${modelMemoryNeed(e.size) >> 20} MB, $r');
+          final need = r == null ? null : await needOf(e);
+          if (r != null && need != null && need.total > r.room) {
+            logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
             resting = e;
+            heldForMemory = true;
+            heldNeedMb = need.total >> 20;
+            heldFreeMb = r.room >> 20;
             notifyListeners();
           } else {
             await activate(e);
@@ -223,6 +279,9 @@ class AppState extends ChangeNotifier {
       _names
         ..clear()
         ..addAll(((j['names'] as Map?) ?? const {}).cast<String, String>());
+      _plainNames
+        ..clear()
+        ..addAll(((j['plainNames'] as Map?) ?? const {}).cast<String, String>());
     } catch (_) {
       // A damaged settings file is ignored; defaults apply.
     }
@@ -240,6 +299,7 @@ class AppState extends ChangeNotifier {
         'modelDeclined': modelDeclined,
         'unsupported': _unsupported.toList(),
         'names': _names,
+        'plainNames': _plainNames,
       }));
     } catch (_) {}
   }
@@ -272,6 +332,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshModels() async {
+    if (_server != null) return _refreshServerModels();
     final found = <ModelEntry>[];
     ModelEntry? search;
     if (modelsDir == null) {
@@ -309,9 +370,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A browser: the chat models on the server.
+  Future<void> _refreshServerModels() async {
+    try {
+      final found = [
+        for (final m in await _server!.chatModels()) ModelEntry(path: m.id, size: m.size),
+      ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      models = found;
+      if (failed != null && !found.any((m) => m.path == failed!.path)) {
+        failed = null;
+        failure = null;
+        loadError = null;
+      }
+    } on ServerModelsException catch (e) {
+      logInfo('The server\'s chat models could not be read', detail: e.message);
+    }
+    notifyListeners();
+  }
+
   /// Deletes a model file from the models folder. The model in use (or one being loaded) is kept: false.
   Future<bool> deleteModel(ModelEntry entry) async {
     if (loading != null || active?.path == entry.path) return false;
+    if (_server != null) {
+      try {
+        await _server.deleteFile(entry.fileName);
+      } on ServerModelsException catch (e) {
+        // the server also keeps the model it has loaded, which another tab may have chosen
+        loadError = 'Could not delete the file: ${e.message}';
+        notifyListeners();
+        return false;
+      }
+      await refreshModels();
+      return true;
+    }
     try {
       final f = File(entry.path);
       if (f.existsSync()) f.deleteSync();
@@ -330,18 +421,23 @@ class AppState extends ChangeNotifier {
     if (loading != null || isUnsupported(entry)) return;
     final previous = active;
     resting = null;
+    _clearHeld();
     loading = entry;
     loadError = null;
     notifyListeners();
     try {
+      await _unloading;
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
       logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
-      final pretty = prettyModelName(info.description, fileName: entry.fileName);
-      if (pretty.isNotEmpty) _names[entry.key] = pretty;
+      final parts = prettyModelParts(info.description, fileName: entry.fileName);
+      if (parts != null) {
+        _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
+        _plainNames[entry.key] = parts.name;
+      }
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
         await _writeSettings();
@@ -389,7 +485,15 @@ class AppState extends ChangeNotifier {
         // Without a folder the model loads without the saved prefix.
       }
     }
-    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir);
+    // The bench's options come before the load: the pre-read rate is a load option (0 when the bench set nothing).
+    benchOptions = await _bench();
+    logInfo('Bench options: $benchOptions');
+    benchDateOffsetDays = benchOptions.dateOffsetDays;
+    benchEmbedThreads = benchOptions.embedThreads;
+    if (benchOptions.embedThreads != 0) logInfo('Bench options: embed_threads=${benchOptions.embedThreads}');
+    if (benchOptions.dateOffsetDays != 0) logInfo('Bench options: date_offset_days=${benchOptions.dateOffsetDays}');
+    if (benchOptions.ubatch != 0) logInfo('Bench options: cache_ubatch=${benchOptions.ubatch}');
+    return session.load(path, nCtx: nCtx, repackWeights: kRepackChatWeightsForMeasurement, prefixDir: prefixDir, prereadMbps: benchOptions.prereadMbps, nUbatch: benchOptions.ubatch);
   }
 
   /// The chosen model's file name (the one Ask uses, loaded or not), or null when none is chosen.
@@ -409,6 +513,7 @@ class AppState extends ChangeNotifier {
     }
     _lastModelFile = fileName;
     resting = e;
+    _clearHeld();
     notifyListeners();
     await _writeSettings();
     return true;
@@ -419,6 +524,7 @@ class AppState extends ChangeNotifier {
   Future<void> unload() async {
     if (loading != null || active == null) return;
     resting = null;
+    _clearHeld();
     active = null;
     activeInfo = null;
     loadError = null;
@@ -427,7 +533,13 @@ class AppState extends ChangeNotifier {
     _lastModelFile = null;
     modelGeneration++;
     notifyListeners();
-    await session.unload();
+    final u = session.unload();
+    _unloading = u; // a load that follows waits for it, as after release()
+    try {
+      await u;
+    } finally {
+      if (identical(_unloading, u)) _unloading = null;
+    }
     logInfo('Model unloaded; ${memoryNow()}');
     await _writeSettings();
   }
@@ -438,23 +550,101 @@ class AppState extends ChangeNotifier {
     final a = active;
     if (loading != null || a == null) return;
     resting = a;
+    _clearHeld();
     active = null;
     activeInfo = null;
     modelGeneration++;
     notifyListeners();
-    await session.unload();
+    final u = session.unload();
+    _unloading = u;
+    try {
+      await u;
+    } finally {
+      if (identical(_unloading, u)) _unloading = null;
+    }
   }
 
-  /// Loads the [resting] model again (Ask opened, or its question was sent).
-  Future<void> wake() async {
+  /// What [e] needs in memory while it answers ([memoryNeedForFile]: the header's tensors with the lazy per-layer table left out,
+  /// the f16 KV cache at the model's context size, and the compute reserve).
+  ///
+  /// Read once per run for a file: the result is kept by (path, length, modified time, nCtx), so the start and every wake after it do
+  /// not read the header (about 16 MB and a 262,144-entry skip, on this isolate) again; a file that changed is read again.
+  Future<MemoryNeed?> needOf(ModelEntry e) async {
+    final nCtx = settingsFor?.call(e)?.nCtx ?? kContextTokens;
+    String? key;
+    try {
+      final st = File(e.path).statSync();
+      if (st.type != FileSystemEntityType.notFound) key = '${e.path}|${st.size}|${st.modified.microsecondsSinceEpoch}|$nCtx';
+    } catch (_) {}
+    if (key != null && _needCache.containsKey(key)) return _needCache[key];
+    try {
+      final sw = Stopwatch()..start();
+      final need = await memoryNeedReader(e.path, nCtx: nCtx, fallbackBytes: e.size);
+      logInfo('Model memory need: header read in ${sw.elapsedMilliseconds} ms (cached after)');
+      if (key != null) _needCache[key] = need;
+      return need;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final Map<String, MemoryNeed?> _needCache = {};
+
+  /// Reads a model's memory need from its file (a test hook: a counter stands in for the file read).
+  @visibleForTesting
+  Future<MemoryNeed?> Function(String path, {int nCtx, int? fallbackBytes}) memoryNeedReader = memoryNeedForFile;
+
+  /// Loads the [resting] model again (Ask opened, or its question was sent). Gated as the load at start is: when the model needs
+  /// more than the memory free now ([memory]), it stays resting (Ask shows "No model is loaded" with its Load button), and the log
+  /// says why. [force] is the person's own tap on that button: it loads whatever the room.
+  Future<void> wake({bool force = false}) async {
     final r = resting;
     if (r == null || active != null || loading != null) return;
+    // A release in progress finishes first (and the memory it frees is there to be read below).
+    await _unloading;
+    if (resting != r || active != null || loading != null) return;
+    if (!force) {
+      final room = await memory();
+      final need = room == null ? null : await needOf(r);
+      if (room != null && need != null && need.total > room.room) {
+        logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        heldForMemory = true;
+        heldNeedMb = need.total >> 20;
+        heldFreeMb = room.room >> 20;
+        notifyListeners();
+        return;
+      }
+      // the answer to the read above may have come after another load began
+      if (resting != r || active != null || loading != null) return;
+    }
     await activate(r);
+  }
+
+  /// The phone's screen has appeared. The chosen model that a start with no phone screen left out loads now, as it would have
+  /// at start: when it fits the memory free now ([wake]). Anything else (a model already loaded, loading or let go for memory;
+  /// a later screen) changes nothing here.
+  ///
+  /// It loads only through the memory gate. On Android the memory reading is the phone screen's own (its activity answers
+  /// it), so with no reading there is no phone screen, whatever said there was: nothing is loaded and the model goes on
+  /// waiting for a screen. (Flutter reports "resumed" before any other state that follows "detached", the state an Android
+  /// engine starts in: the car side once told an app with no phone screen that it was in the back, and that read as a screen
+  /// in front and loaded the model into whatever memory there was.)
+  Future<void> phoneScreenAppeared() async {
+    if (!_waitsForPhoneScreen) return;
+    if (await memory() == null) {
+      logInfo('Model not loaded: no phone screen answers for the free memory; it waits for one');
+      return;
+    }
+    if (!_waitsForPhoneScreen) return;
+    _waitsForPhoneScreen = false;
+    await wake();
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.
   /// Returns the new entry, or null if cancelled.
   Future<ModelEntry?> pickAndCopy() async {
+    // Straight from the tap: a browser opens its file chooser only then.
+    if (_server != null) return _pickAndUpload(_server);
     final picked = await FilePicker.pickFile();
     if (picked == null || picked.path == null) return null;
     final src = File(picked.path!);
@@ -466,6 +656,37 @@ class AppState extends ChangeNotifier {
         await FilePicker.clearTemporaryFiles();
       } catch (_) {}
     }
+  }
+
+  /// A browser: the chosen file goes to the server's models folder as it is read from the disk, with the same progress line.
+  Future<ModelEntry?> _pickAndUpload(ServerModels server) async {
+    final picked = await pickLocalFile(accept: const ['.gguf']);
+    if (picked == null) return null;
+    copyName = picked.name;
+    copyProgress = 0;
+    loadError = null;
+    notifyListeners();
+    setLeaveWarning(true);
+    try {
+      await server.upload(picked, picked.name, (sent, total) {
+        copyProgress = total == 0 ? 1.0 : sent / total;
+        notifyListeners();
+      });
+    } on ServerModelsException catch (e) {
+      loadError = 'Could not copy the file: ${e.message}';
+    } on UploadCancelled {
+      loadError = null;
+    } finally {
+      setLeaveWarning(false);
+      copyProgress = null;
+      copyName = null;
+    }
+    await refreshModels();
+    notifyListeners();
+    for (final m in models) {
+      if (m.fileName == picked.name) return m;
+    }
+    return null;
   }
 
   Future<ModelEntry?> copyIn(File src, {String? name}) async {

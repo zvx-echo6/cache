@@ -17,9 +17,11 @@ path = "src/main.rs"
 
 [dependencies]
 # PDF text extraction (MuPDF, AGPL-3.0-or-later like Cache). 0.8.0 is the newest release at least two weeks old (2026-06-22).
-# No default features: no JavaScript, Tesseract, system-font scan or Brotli (OCR comes later and will bring its own);
-# base14-fonts keeps the standard 14 fonts so PDFs that do not embed Helvetica or Times still load.
-mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
+# No default features: no JavaScript, system-font scan or Brotli; base14-fonts keeps the standard 14 fonts so PDFs that do not embed
+# Helvetica or Times still load. `tesseract` builds the Tesseract and Leptonica sources MuPDF 1.27.2 carries (Apache-2.0 and
+# BSD-2-Clause) into the same static library, so scanned pages are read in the same process with no extra shared library and no
+# system package (src/ocr.rs). The trained data (eng.traineddata) is a separate file shipped in the package under lib/tessdata.
+mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts", "tesseract"] }
 # The core: the blank library shard, the snapshot packer and the library check, so a built library is the one the app opens.
 cache_search = { path = "../../packages/cache_search/native/cache_search" }
 # The pack format and its one writer (pages in, pack out), shared with the ingest job in the core.

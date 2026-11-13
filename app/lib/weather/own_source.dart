@@ -226,7 +226,7 @@ class OwnTry {
 typedef OwnFetch = Future<List<int>> Function(Uri url, Duration timeout);
 
 /// The real read (net/fetch.dart: https or this phone, the app's User-Agent, at most 4 MB).
-Future<List<int>> fetchOwnAddress(Uri url, Duration timeout) => net.fetchBytes(url, timeout: timeout);
+Future<List<int>> fetchOwnAddress(Uri url, Duration timeout) => net.fetchBytes(url, timeout: timeout, scope: net.FetchScope.user);
 
 /// Fetches [url] once and finds the values in its JSON answer. Nothing is kept.
 Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duration timeout = const Duration(seconds: 20)}) async {

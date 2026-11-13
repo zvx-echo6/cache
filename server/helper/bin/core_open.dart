@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import '../../../app/lib/search/core_config.dart';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/models.dart';
+import 'guide_install.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
 
@@ -17,14 +19,21 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
 
+  /// Called once the core is open (the region engine's Pause and unfinished downloads, regions_ops.dart); null in tests.
+  final void Function()? onOpened;
+
   /// Starts the index jobs of the sources just opened (null in tests that do not index).
   final IndexDriver? indexer;
+
+  /// Installs the guide library after the core is open, when the sources are found on disk rather than given by a sources.json
+  /// (null: no guide package on this server, or a test).
+  final GuideInstaller? guide;
 
   @override
   bool handles(String op) => op == 'open';
@@ -48,6 +57,10 @@ class OpenOp implements OpHandler {
         'places: ${(f['places'] as Map)['available'] == true ? 'present' : 'none downloaded'}');
     dispatcher.handle('open', {'sources': sources, 'extra': extra});
     indexer?.useSources(sources);
+    final g = guide;
+    // A sources.json is the operator's own list: the guide is not added to it.
+    if (g != null && given is! List) unawaited(g.ensure());
+    onOpened?.call();
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
 }
@@ -101,7 +114,32 @@ class IndexStateOp implements OpHandler {
   Object? handle(String op, Map<String, dynamic> a) => {
         for (final e in indexer.progress.entries) e.key: {'fraction': e.value, 'error': null},
         for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
+        // Only while the host holds index work: why ("heat" or "memory"), under a key no source path can be.
+        if (indexer.hold != null) 'hold': {'fraction': null, 'error': null, 'hold': indexer.hold},
       };
+}
+
+/// The helper's `index.pause`, which a browser may call through `/api/core`: the Catalog's Pause and Resume for the server's index
+/// work. `{"paused": true}` pauses, `{"paused": false}` resumes, no `paused` only reads. Replies `{"paused": bool, "busy": bool}`:
+/// `busy` is whether there is index work (running, waiting, or held by the pause).
+class IndexPauseOp implements OpHandler {
+  IndexPauseOp(this.indexer);
+
+  final IndexDriver indexer;
+
+  @override
+  bool handles(String op) => op == 'index.pause';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) {
+    switch (a['paused']) {
+      case true:
+        indexer.pause();
+      case false:
+        indexer.resume();
+    }
+    return {'paused': indexer.paused, 'busy': indexer.hasWork};
+  }
 }
 
 /// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), the full path of the Valhalla shim

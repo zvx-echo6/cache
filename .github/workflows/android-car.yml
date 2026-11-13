@@ -17,6 +17,7 @@ on:
     paths:
       - 'app/android/**'
       - 'app/lib/car/**'
+      - 'app/test_shots/car_aa/**'
       - 'app/pubspec.yaml'
       - '.github/workflows/android-car.yml'
   workflow_dispatch:
@@ -25,7 +26,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-car-${{ github.ref }}
+  # rel-1.1 and main: a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
+  group: android-car-${{ (github.ref == 'refs/heads/rel-1.1' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -78,6 +80,19 @@ jobs:
           name: car-test-results
           path: app/build/app/reports/tests/testDebugUnitTest
           retention-days: 5
+      # Pictures of the car's own pieces (the mini map and the climb) on the four screens the desktop head unit was run at,
+      # painted by the tests (CarOverlayTest.picturesOfTheFourScreens) with stand-ins for the host's parts. The same set is
+      # committed in app/test_shots/car_aa, and CarOverlayTest.theCommittedPicturesAreWhatThePainterDrawsNow fails when the
+      # two differ: after a change to the pieces' look, put this artifact's files there in place of the old ones.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: car-overlay-pictures
+          path: |
+            app/android/app/build/car_overlay/*.png
+            app/build/app/car_overlay/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Android Auto off by default (no CarAppService in the default release manifest)
         working-directory: app/android
         run: |

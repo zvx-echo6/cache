@@ -270,6 +270,26 @@ fn pages_that_need_ocr_make_a_partial_book_and_a_scan_only_pdf_is_ocr_needed_not
 }
 
 #[test]
+fn with_ocr_on_a_scan_the_reader_cannot_read_still_ends_as_ocr_needed_with_its_own_reason() {
+    // OCR is on but the trained data is not where it was said to be: the child's OCR job fails, the pages stay unread, and the book
+    // is the same ocr_needed as without OCR (and a clear reason, not "cannot do yet").
+    let d = TempDir::new("b7ocr");
+    let (svc, _) = rig(&d);
+    svc.set_ocr(Some(cache_builder::ocr::OcrSettings::new(d.0.join("no-tessdata"))));
+    let lib = new_lib(&svc, "L");
+    let scan = make_pdf(&[picture_page(), picture_page()], None);
+    let b = add(&svc, &lib, "scan.pdf", &scan);
+    drain(&svc);
+    let ib = item(&svc, &b);
+    assert_eq!(ib.state, S::OcrNeeded);
+    let msg = ib.error.unwrap();
+    assert!(msg.contains("2 page(s) need OCR") && !msg.contains("cannot do yet"), "{msg}");
+    // the progress it showed while OCR was tried is reset for the retry
+    svc.retry(&b).unwrap();
+    assert_eq!((item(&svc, &b).ocr_pages, item(&svc, &b).ocr_done), (0, 0));
+}
+
+#[test]
 fn building_waits_for_the_search_model() {
     let d = TempDir::new("b8");
     let (svc, fake) = rig(&d);
@@ -489,6 +509,25 @@ fn the_core_only_ever_sees_a_whole_shard() {
     for n in names.iter().filter(|n| *n != ".local") {
         assert!(!n.starts_with('.'), "left behind: {names:?}");
     }
+}
+
+/// A built library has a catalogue, as the one-shot builder's libraries do: `documents.tsv` lists the books (a browser reads them
+/// from it).
+#[test]
+fn a_built_library_has_documents_tsv() {
+    let d = TempDir::new("b15cat");
+    let (svc, _) = rig_with(&d, cfg());
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "a.pdf", &book("one", 3, None));
+    drain(&svc);
+    let live = svc.live_dir(&lib);
+    let tsv = std::fs::read_to_string(live.join("documents.tsv")).unwrap();
+    assert_eq!(tsv.lines().count(), 2, "{tsv}");
+    // and the local view, format 2, which carries each book's compression and OCR
+    let view: serde_json::Value = serde_json::from_slice(&std::fs::read(live.join(".local/docs.json")).unwrap()).unwrap();
+    assert_eq!(view["format"], 2);
+    assert_eq!(view["docs"].as_object().unwrap().len(), 1);
+    assert!(view["docs"].as_object().unwrap().values().all(|v| v.get("compression").is_some() && v.get("ocr").is_some()));
 }
 
 #[test]
@@ -1184,9 +1223,13 @@ fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
     let doc = w["id"].as_str().unwrap();
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
     let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("call_number") && !header.contains("CDS") && !header.contains("suggestions"), "{header}");
+    assert!(!header.contains("call_number") && !header.contains("CDS"), "{header}");
     let sg = p.header.suggested().expect("the classifier's guess is in the pack");
     assert_eq!((sg.div.as_str(), sg.source.as_str(), sg.classifier_version), ("510", "classifier", Some(1)));
+    // this book was filed: the pack says the sorter was confident, and keeps the top three
+    assert_eq!(sg.filed, Some(true), "{header}");
+    assert_eq!(sg.suggestions.len(), 3, "{header}");
+    assert_eq!(sg.suggestions[0].div, "510");
     let b = p.header.book.as_ref().unwrap();
     assert_eq!((b.title.as_str(), b.original_blake3.as_str()), ("The Well Handbook", p.header.source.blake3.as_str()));
     // this device's Bookshelves log: place and assign for the filed books, unsort for the unsure one, keyed by copy
@@ -1420,13 +1463,17 @@ fn an_unsure_book_keeps_the_top_three_with_probabilities_and_the_version() {
     assert_eq!((sw["unsorted"].as_bool(), sw["suggestions"][0]["division"].as_str()), (Some(false), Some("510")));
     assert!(sw["unsure_reason"].is_null());
     assert_eq!(svc.suggestions(&lib, "nope").unwrap_err().status, 404);
-    // the choices survive a restart; the pack keeps the best guess as a fact (book.suggested), never the list of three
+    // the choices survive a restart; the pack keeps the best guess as a fact (book.suggested) with the top three and whether the
+    // sorter was confident (this book was left in Unsorted: not confident)
     let (svc2, _) = rig(&d);
     assert_eq!(svc2.suggestions(&lib, doc).unwrap()["suggestions"].as_array().unwrap().len(), 3);
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
-    let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("suggestions"), "{header}");
-    assert_eq!(p.header.suggested().map(|s| (s.source, s.classifier_version)), Some(("classifier".to_string(), Some(1))));
+    let sg = p.header.suggested().unwrap();
+    assert_eq!((sg.source.clone(), sg.classifier_version), ("classifier".to_string(), Some(1)));
+    assert_eq!(sg.filed, Some(false));
+    let mut kept: Vec<&str> = sg.suggestions.iter().map(|x| x.div.as_str()).collect();
+    kept.sort();
+    assert_eq!(kept, vec!["510", "520", "710"]);
 }
 
 /// The events of this device's Bookshelves log.

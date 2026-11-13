@@ -33,6 +33,9 @@ pub struct HelperConfig {
     /// The Valhalla shim (`libvalhalla_shim.so`), handed to the helper as `CACHE_VALHALLA_SHIM`: the full path the core's road
     /// router opens (the core checks it with a plain file test, so a bare library name never routes). Default: [default_shim].
     pub shim: PathBuf,
+    /// The setup guide library the app bundles (`<web>/assets/assets/guide/cache-guide.cache-library` in the web build), handed to the
+    /// helper as `CACHE_GUIDE_LIBRARY` when the file is there; the helper installs it so guide search has something to search.
+    pub guide_package: Option<PathBuf>,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -52,6 +55,7 @@ impl HelperConfig {
             sources_file,
             app_dirs: None,
             data_dir: None,
+            guide_package: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -240,6 +244,16 @@ impl Helper {
         let sources = read_sources(&self.cfg.sources_file)?;
         let mut cmd = Command::new(&self.cfg.exe);
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
+        // This program, which the helper re-runs as `pdf-text` to read the PDFs inside ZIMs for indexing (MuPDF is here, not in Dart).
+        if let Ok(me) = std::env::current_exe() {
+            cmd.env("CACHE_PDF_TEXT_EXE", me);
+        }
+        if let Some(guide) = self.cfg.guide_package.as_ref().filter(|g| g.is_file()) {
+            cmd.env("CACHE_GUIDE_LIBRARY", guide);
+        }
+        // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
+        // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.
+        cmd.env(cache_netguard::ENV_VAR, cache_netguard::ENV_VALUE);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
         }

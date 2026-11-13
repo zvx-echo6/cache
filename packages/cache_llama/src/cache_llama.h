@@ -22,6 +22,8 @@ extern "C" {
 //   "repack_weights": Android only, for measurement: true repacks the CPU weights (an anonymous copy that can be swapped).
 //                     false (the default) keeps them file-backed through mmap, as every Android load does unless this is set.
 //                     It is never set automatically. Other platforms ignore it.
+//   "preread_mbps":   after a successful cl_load, a background thread reads the model file (all tensors except per_layer_token_embd*)
+//                     into the page cache at this many MB/s (steps already in the page cache are skipped), so the first prompt does not fault it in all at once. 0, the default, is off. The thread is stopped when the handle is freed.
 // Returns 0, or -1 when the JSON does not parse.
 CL_API int cl_configure(const char * options_json);
 
@@ -45,8 +47,47 @@ CL_API int cl_info(void * h, char * out_json, int len);
 // the same as the previous prompt plus its answer is not decoded again (KV cache reuse). With a prefix_dir (cl_configure),
 // the stable start of the system prompt and tools (the part that stays the same from one request to the next) is restored
 // from disk when the cache does not hold it, and saved once.
-// Returns 0 or -1 (reason in err).
+// Returns 0, -1 (reason in err) or -3 when the prompt does not fit the context (err holds the engine text for the log; the
+// caller must not show it: the chat is full).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
+
+// cl_start for a caller that queues the call (the app's worker isolate): [epoch] is cl_stop_epoch as of when the question was
+// queued. If a cl_stop came after that and before the call began, the question ends at once as a stop before the first token does
+// (returns 0, no decode, cl_next returns -1, cl_finish gives an empty answer). A stop before it was queued does not affect it.
+CL_API int cl_start_e(void * h, const char * request_json, unsigned long long epoch, char * err, int err_len);
+
+// cl_start_e for a question the caller can cancel alone: [qid] (non-zero, unique per question) names it. cl_cancel_question(qid)
+// ends that question, queued or generating, as a stop does (cl_start returns 0 with no decode, cl_next returns -1, cl_finish gives
+// the answer so far), without touching a read ahead (cl_warm) running before it: the read goes on and saves its prefix. A cancel
+// during the question's own prompt read takes effect when its first token is asked for. Thread-safe.
+CL_API int cl_start_q(void * h, const char * request_json, unsigned long long epoch, unsigned long long qid, char * err, int err_len);
+CL_API void cl_cancel_question(void * h, unsigned long long qid);
+
+// Reads the prompt start ahead, before any question: [request_json] is a request as cl_start takes it but with no user message
+// (the system message, the tools, enable_thinking). It is rendered by the same code as cl_start's, the stable prompt start is
+// found the same way (the tokens the template renders for it with two different one-word questions share), and that start is
+// decoded into the KV cache and saved as a prefix file exactly as cl_start does when it passes the prefix. Unlike cl_start it
+// counts the whole start as stable (this shape is about to be used). It never loads a model and the caller serializes it with
+// cl_start (one handle, one call at a time); cl_stop may end it from any thread (llama.cpp's abort hook and the check between
+// batches apply, as when cl_start reads a prompt): batches decoded whole stay in the cache, a batch aborted midway clears it, and
+// no prefix file is written unless the whole start was decoded.
+// [epoch]: cl_stop_epoch as of when the call was queued.
+// [check_only] non-zero: renders and tokenizes but decodes nothing and changes no cache. It does record the probed start as this
+// load's stable start (the whole of it), so the next cl_start of the same shape saves it whole when no file holds it. [n_tokens] (may be null): the tokens
+// still to read (check_only), read (done) or read before the stop.
+// Returns 0 when the stable start is covered already (the KV cache holds it, or a saved prefix file does: nothing to do),
+// 1 when it needs reading (check_only) or was read, 2 when stopped before it was whole, 3 when there is nothing to read (no
+// prefix folder, no tools, no system message, or a start too short or too long), -1 on error (reason in err).
+CL_API int cl_warm(void * h, const char * request_json, int check_only, unsigned long long epoch, int * n_tokens, char * err, int err_len);
+
+// The stop epoch: it grows by one with every cl_stop. The caller reads it (from any thread, as it calls cl_stop) when it queues a
+// cl_warm and passes it as [epoch]; a cl_warm that finds a newer one was stopped while it waited and returns 2 at once, reading
+// nothing and leaving the stop flag alone. Thread-safe.
+CL_API unsigned long long cl_stop_epoch(void * h);
+
+// Prompt tokens decoded since the load by cl_start and cl_warm together (tokens taken from the cache or a file are not counted).
+// For tests: a start read ahead and then reused is decoded once.
+CL_API int cl_prompt_decoded(void * h);
 
 // Generate the next token. Writes its UTF-8 text to buf and returns the byte count (may be 0 while an
 // incomplete multi-byte character is held back). Returns -1 when finished, -2 on error.
@@ -60,6 +101,7 @@ CL_API int cl_partial(void * h, char * out_json, int len);
 // Parse everything generated so far into an OpenAI style assistant message:
 // {"role","content","tool_calls":[{"id","type":"function","function":{"name","arguments"}}]}.
 // If the output does not parse, content is the raw text and "parse_error" is set.
+// "stop":"context" is added when the generation ended because the context filled up (the answer is cut off).
 // Returns the length, or -1 if out is too small.
 CL_API int cl_finish(void * h, char * out_json, int len);
 

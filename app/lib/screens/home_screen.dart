@@ -3,18 +3,22 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../desktop/desktop.dart';
+import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
 import '../discover/ui/home_card.dart';
+import '../discover/ui/kit.dart' show DTile;
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart' show ModuleId;
+import '../models/search_model.dart' show SearchModel;
 import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../update/update_ui.dart';
 import '../weather/weather_state.dart';
-import '../weather/words.dart' show lineStart;
+import '../weather/words.dart' show lineStart, unbroken;
 import 'setup_card.dart';
 import 'weather_turn_on.dart';
 import '../layout/adaptive.dart' show showFittedSheet, ContentWidth, isShort, kRegularWidth;
@@ -100,7 +104,23 @@ class _HomeScreenState extends State<HomeScreen> {
   LayoutState get layout => widget.layout;
 
   @override
+  void initState() {
+    super.initState();
+    homeSearchRequests.addListener(_focusSearch);
+    // The cursor is in the search box: the search model loads ahead of the first search.
+    _focus.addListener(() {
+      if (_focus.hasFocus) SearchModel.aboutToSearch();
+    });
+  }
+
+  /// The "/" key on the Linux desktop: the search box has the focus once Home is the page shown.
+  void _focusSearch() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _focus.requestFocus();
+  });
+
+  @override
   void dispose() {
+    homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
     _focus.dispose();
@@ -161,17 +181,30 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final typing = _query.text.trim().isNotEmpty;
+    final desktop = DesktopMetrics.of(context);
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
-        title: const BrandWordmark(height: 30),
+        // The wide desktop's sidebar carries the wordmark, so the bar says where we are; the rail has none, so the bar keeps it.
+        title: isLinuxWide(context) ? const Text('Home') : const BrandWordmark(height: 30),
+        // On the Linux desktop Settings has its place in the sidebar, and Edit Home is the page's one action, here.
         actions: [
-          IconButton(
-            key: const ValueKey('home-settings'),
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: widget.onOpenSettings,
-          ),
+          if (desktop != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton(
+                key: const ValueKey('edit-home'),
+                onPressed: () => _editHome(context),
+                child: const Text('Edit Home', style: TextStyle(fontSize: 15)),
+              ),
+            ),
+          if (desktop == null)
+            IconButton(
+              key: const ValueKey('home-settings'),
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: widget.onOpenSettings,
+            ),
         ],
       ),
       body: ListenableBuilder(
@@ -210,10 +243,13 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
           return LayoutBuilder(builder: (context, cts) {
-            final padding = ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
+            // The desktop dashboard: left-aligned under the bar, at most 1040 wide, on the page gutter.
+            final padding = desktop != null
+                ? EdgeInsets.fromLTRB(desktop.gutter, 24, (cts.maxWidth - desktop.gutter - 1040).clamp(desktop.gutter, double.infinity).toDouble(), 24)
+                : ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24);
             // A short, wide window (a phone held sideways): two columns, so the first screen shows the search box and the weather
             // on the left and the Set up card and the shortcuts on the right, instead of one column a few rows of which show.
-            if (!typing && isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth) {
+            if (!typing && (desktop != null || (isShort(context) && cts.maxWidth - padding.horizontal >= kHomeTwoColumnMinWidth))) {
               const right = {HomeBlock.setup, HomeBlock.shortcuts};
               return ListView(
                 key: const ValueKey('home-two-columns'),
@@ -223,12 +259,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
-                      const SizedBox(width: 16),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
+                      Expanded(flex: desktop != null ? 3 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (!right.contains(b)) block(b)])),
+                      SizedBox(width: desktop != null ? 24 : 16),
+                      Expanded(flex: desktop != null ? 2 : 1, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final b in blocks) if (right.contains(b)) block(b)])),
                     ],
                   ),
-                  editHome,
+                  if (desktop == null) editHome,
                 ],
               );
             }
@@ -241,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 for (final b in blocks)
                   if (typing && b != HomeBlock.ask) const SizedBox.shrink() else block(b),
                 if (typing) _resultList(k),
-                if (!typing) editHome,
+                if (!typing && desktop == null) editHome,
               ],
             );
           });
@@ -501,7 +537,9 @@ class ShortcutCard extends StatelessWidget {
     final s = shortcut;
     final double a = large ? 56 : 32;
     final Widget art = switch (s.kind) {
-      ShortcutKind.module => BrandTileImage(s.module!.tile, size: a),
+      ShortcutKind.module => s.module!.tile == null
+          ? DTile(s.module!.icon, size: a)
+          : BrandTileImage(s.module!.tile!, size: a),
       ShortcutKind.chat => BrandTileImage(BrandTile.chat, size: a),
       ShortcutKind.page => BrandTileImage(BrandTile.library, size: a),
       ShortcutKind.place => SizedBox(height: a, width: a, child: Icon(Icons.place_outlined, size: a * 0.8, color: k.accent)),
@@ -535,11 +573,18 @@ class ShortcutCard extends StatelessWidget {
 }
 
 /// The conditions and the day's high and low as the Weather card's line starts: "Rain · High 61 °F, low 42 °F" (the source
-/// writes "rain"; the line starts with a capital).
-String homeConditionsLine(HomeWeather h) => lineStart([
-  if (h.conditions != null) h.conditions!,
-  if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
-].join(' · '));
+/// writes "rain"; the line starts with a capital). When they are a forecast period's and not a reading taken now, the period's
+/// own label comes first, as the Weather screen lists it: "Wed Nov 11 · Rain · High 61 °F, low 42 °F".
+///
+/// The high and the low are each one piece ([unbroken]: "High 61 °F", "low 42 °F"), so where the card gives the line two lines
+/// it breaks between its parts. It used to break inside one and leave "°F" alone on the second line.
+String homeConditionsLine(HomeWeather h) {
+  final line = lineStart([
+    if (h.conditions != null) h.conditions!,
+    if (h.high != null && h.low != null) '${unbroken('High ${h.high}')}, ${unbroken('low ${h.low}')}',
+  ].join(' · '));
+  return h.period == null || line.isEmpty ? line : '${h.period} · $line';
+}
 
 /// The one Weather and alerts card: a weather icon and the temperature in large type, the conditions and the day's high and low, and
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it
@@ -569,7 +614,13 @@ class _WeatherCard extends StatelessWidget {
         future: _read(w),
         builder: (context, snap) {
           // Until the core answers: what was last shown for the place, at once (build 46: 13-20 s of "…" at start).
-          final h = snap.data?.$1 ?? w.homeCardNow() ?? const HomeWeather(message: '…');
+          // The last card stays while the next one is awaited, and that can be hours after it was made (the app left in
+          // memory overnight): it is worked out again for the time it is shown, so last night's reading is not this
+          // morning's.
+          final earlier = snap.data?.$1;
+          final h = earlier == null
+              ? (w.homeCardNow() ?? const HomeWeather(message: '…'))
+              : (snap.connectionState == ConnectionState.done ? earlier : w.homeCardAsOfNow(earlier));
           final Widget? action;
           if (h.off && onOpenSettings != null) {
             action = Align(
@@ -623,7 +674,9 @@ class _WeatherCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (cond.isNotEmpty) Text(cond, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
+                // two lines: at a phone's width the day's high and low were cut off beside a temperature ("… low 31 …"); the
+                // line breaks between its parts (homeConditionsLine)
+                if (cond.isNotEmpty) Text(cond, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
                 Text(where, maxLines: 1, overflow: TextOverflow.ellipsis, style: small),
               ],
             ),
@@ -631,6 +684,8 @@ class _WeatherCard extends StatelessWidget {
         ],
       );
     }
+    // The desktop puts the button at the end of the title row instead of a full-width bar under it.
+    final trailing = isLinuxDesktop(context) && action != null;
     return InkWell(
       key: const ValueKey('home-weather'),
       onTap: onTap,
@@ -641,7 +696,7 @@ class _WeatherCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            top,
+            if (trailing) Row(children: [Expanded(child: top), const SizedBox(width: 16), SizedBox(width: 180, child: action)]) else top,
             if (h.message == null && h.alerts.isNotEmpty)
               for (final a in h.alerts.take(4))
                 Padding(
@@ -667,7 +722,11 @@ class _WeatherCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(
                   children: [
-                    Icon(Icons.check_circle_outline, size: 18, color: k.ok),
+                    // A check too old to speak for now is not a tick: the mark the Weather screen has for the same state.
+                    if (h.alertsExpired)
+                      Icon(Icons.warning_amber_rounded, key: const ValueKey('home-alerts-expired'), size: 18, color: k.warning)
+                    else
+                      Icon(Icons.check_circle_outline, size: 18, color: k.ok),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -681,7 +740,7 @@ class _WeatherCard extends StatelessWidget {
                 ),
               ),
             if (h.alerts.length > 4) Padding(padding: const EdgeInsets.only(top: 6), child: Text('${h.alerts.length - 4} more in Weather', style: small)),
-            if (action != null) ...[const SizedBox(height: 10), action],
+            if (action != null && !trailing) ...[const SizedBox(height: 10), action],
           ],
         ),
       ),

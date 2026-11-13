@@ -393,9 +393,16 @@ class IndexScheduler extends ChangeNotifier {
       _timer = Timer.periodic(every, (_) => kick());
       kick();
     } else {
-      unawaited(_pause(IndexWait.closed));
+      _closing = _pause(IndexWait.closed);
+      unawaited(_closing);
     }
   }
+
+  Future<void> _closing = Future<void>.value();
+
+  /// Ends when the work that ran when the app went to the back has stopped (it keeps what is done): only then may a background
+  /// run take the same work over.
+  Future<void> get closed => _closing;
 
   /// Looks for work and runs or pauses it by the rules now. While a look is under way, it is looked again after it, and the
   /// future ends when that is done too.
@@ -574,7 +581,9 @@ class IndexScheduler extends ChangeNotifier {
       final d = throttle?.duty;
       if (d != null) run.setDuty(d);
       unawaited(run.finished.then((ok) {
-        if (_current?.key != t.key) return;
+        // This run's end only: an earlier run of the same work (the app went to the back and came again while it was stopping)
+        // ending later must not clear the run that has taken its place, or the work is started again and again.
+        if (!identical(_run, run)) return;
         if (ok) {
           _done.add(t.key);
           _order = [for (final k in _order) if (k != t.key) k];
@@ -660,7 +669,7 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse, this.step});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir, this.title = '', this.progress, this.pulse, this.step, this.extendOf});
 
   /// The running job's step in words ("Looking through the library · 2,000 of 40,000").
   final String? Function()? step;
@@ -682,6 +691,9 @@ class CoreIndexNeed {
 
   /// For a seal: the old index's folder (cs_status's index "dir"), for when no handle has the source.
   final String? indexDir;
+
+  /// For `kind` 'library-words': the library's shard folder and settings, to bring its keyword snapshot up to date (index_extend).
+  final ({String path, Map<String, dynamic>? settings})? extendOf;
   final int size;
   final int uses;
   final int bytesNeeded;
@@ -697,7 +709,7 @@ class _NoCoreCalls implements IndexCoreCalls {
   Future<IndexRun> start(CoreIndexNeed need) => throw UnsupportedError('this core has no index_source or index_seal');
 }
 
-/// [IndexWorkSource] over the core's calls. A seal only copies what is built, so it is short work; a build is long.
+/// [IndexWorkSource] over the core's calls. A seal only links what is built, and an extension only adds the new points, so they are short work; a build is long.
 class CoreIndexWork implements IndexWorkSource {
   CoreIndexWork(this.calls);
 
@@ -710,7 +722,7 @@ class CoreIndexWork implements IndexWorkSource {
             key: '${n.kind}/${n.sourceId}',
             size: n.size,
             uses: n.uses,
-            long: !n.seal,
+            long: !n.seal && n.extendOf == null,
             bytesNeeded: n.bytesNeeded,
             title: n.title,
             progress: n.progress,

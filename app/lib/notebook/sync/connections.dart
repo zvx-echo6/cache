@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../../chat/ask_focus.dart';
 import '../../files.dart';
 import '../notebook_state.dart';
 import 'folder.dart';
@@ -53,7 +54,11 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor});
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, DateTime Function()? clock})
+    : _now = clock ?? DateTime.now;
+
+  /// The time now: for the "Synced" line and for what each sync stamps (a fixed clock in tests and the guide's pictures).
+  final DateTime Function() _now;
 
   final NotebookState notebook;
 
@@ -254,8 +259,14 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   SyncTargetConfig? _shareTarget() {
     final have = _targets.where((t) => t.kind == SyncKind.share).firstOrNull;
-    if (have != null) return have;
     final d = shareFolder?.call();
+    if (have != null) {
+      // The app's folder path changes across iOS installs and updates: the saved one is re-rooted at the current folder.
+      if (d == null || d.path == have.path) return have;
+      final moved = SyncTargetConfig(id: have.id, kind: have.kind, path: d.path, paused: have.paused, display: have.display, importTag: have.importTag);
+      _targets = [for (final t in _targets) t.id == have.id ? moved : t];
+      return moved;
+    }
     if (d == null) return null;
     final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path);
     _targets = [..._targets, t];
@@ -275,6 +286,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
       importTag: t.tag,
+      clock: _now,
     );
     final sp = storePhoto;
     if (sp != null) e.storePhotoBytes = sp;
@@ -300,6 +312,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
         _again = false;
         final share = shareOn?.call() == true ? _shareTarget() : null;
         for (final t in [..._targets.where((t) => t.kind != SyncKind.share), ?share]) {
+          // While Ask answers, the next folder waits (the one syncing finishes); sync goes on where it left off.
+          await askIdle(worker: 'Notebook sync');
           if (t.paused) {
             _status[t.id] = 'Paused.';
             continue;
@@ -317,7 +331,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
               if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
             }
             final n = e.conflicts.length;
-            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';
+            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(_now())}';
           } on FileSystemException catch (x) {
             _status[t.id] = (x.osError?.errorCode == 28 || x.osError?.errorCode == 112) ? "Can't write: storage is full." : "Can't reach the folder.";
           } catch (x) {

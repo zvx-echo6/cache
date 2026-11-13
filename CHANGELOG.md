@@ -6,6 +6,137 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 51, test) - 2026-11-12
+
+- If you went from 1.0 to build 49, check Settings > Sharing and sync: it may have switched itself off
+
+### New
+- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons
+- CarPlay: Cache's map on the car screen with Saved places and Search, a choice of routes, and turn-by-turn guidance with lane arrows, a position arrow that glides, the grade of a climb ahead marked on the route, a mini map of the whole route and the climb ahead drawn on the map on car screens big enough for them, and a Route overview button; spoken prompts give way to a tone during a call
+- Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
+- Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
+- Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
+- Places: drag and zoom the map when adding a place, or Choose on map for a full-screen picker
+- Notebooks: tap a photo to see it full screen; pinch to zoom, swipe between photos, turn the phone for wide photos; share or save it
+- Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
+
+### Fixed
+- Library: a scanned PDF added on Android now has its pages read, so its words can be found (in store builds, reading failed on every page)
+- Ask: sources cited as a list or a range, such as [1, 2] or [1-3], now count as sources; they were dropped
+- Ask: when the search engine fails to start or stops, Ask's searches no longer wait for ever; the engine starts again
+- Sharing: updating from 1.0 no longer turns sharing off at the next start
+- Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
+- Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
+- Maps: a route shown before you start is fitted with the whole of your position's dot and of the destination's pin in the free part of the map; the dot at the start could sit partly under the header or touch the box with your position
+- Maps: the note on a route with an off-road part reads "Part of this route is off-road", with the distance; it said "has no road" and "over open ground" even where that part follows a trail
+- Maps: a route shown before you start is fitted into the free part of the map, with nothing of it under the directions panel, your position, the Layers and Find me buttons, the scale or the credits (with Off-road chosen it sat partly under the panel); it is fitted again when the panel grows
+- Maps: the pins of saved places and repeaters are their full size on phones; they were drawn at a third of it on most phones
+- Maps: on a tablet or in a wide window, a route shown before you start stays clear of the panel on the left
+- Maps: the directions panel shows a thin bar at its right edge when it has more choices than fit (as with Off-road), so you can see there is more to scroll to
+- Maps: while measuring, the line under the distance is shown in full on a phone, on a second line, instead of being cut off
+- Library: if the part of Cache that was reading a PDF is closed while it holds PDFium, the next PDF read no longer waits for ever
+- Weather: Home no longer shows a forecast's temperature for tonight or tomorrow as the temperature now when no current reading is stored (seen with the NWS by point forecast); with that forecast alone, Home shows the forecast for the period under way, such as Tonight
+- Weather: when the app is opened, or comes back to the screen, hours after the last update, Home no longer shows the earlier temperature, or yesterday's high and low, as the weather now; a reading counts for three hours, as on the Weather screen, and after that Home shows today's forecast
+- Weather: a source whose first download failed says why on the Weather screen, instead of "Not downloaded yet. Update now to get it."
+- Weather: the status line in Settings > Weather and alerts no longer turns into a warning only because the last update was more than 15 minutes ago; it warns when the data is more than three hours old, there is no connection or an update failed
+- Home: on narrow phones the weather card's conditions with the high and low take a second line instead of being cut off
+- Home: "No alerts known, data expired" is marked with a warning sign, not a green tick
+- Library: going to Home and coming back while a PDF is being added no longer makes the app start and stop that PDF's work over and over (it filled the log with thousands of lines and kept the phone busy)
+- Search: words with hyphens, apostrophes or dots, like COVID-19, don't and U.S., now find passages, not only titles
+- Library: when a book is removed, the next search index update deletes its words too (they used to stay in the index), and a search index that is far behind (more than 2,000 new pieces) is rebuilt in one pass instead of being held in memory
+- Places: the map when adding a place always opens close in on where you are
+- Library: adding a PDF, going to Home and coming back no longer adds the PDF twice or fills the log with "waiting for the earlier run" lines; one run handles each PDF
+- Library: the PDF viewer and a PDF being added in the background can no longer use PDFium at the same moment, which could corrupt its memory
+- Library: adding a PDF no longer crashes Cache when it moves to the background: PDFium's font lookups no longer depend on which part of the app started first
+- Library: a book you add is found by its words as well as by its meaning: its words are added to the search index in a short background job (the finished card and the book's row say "Adding to search index" until then), and a library that missed them before is brought up to date by itself
+- Library: on Android the search index of your own books no longer fails and retries on every open
+- Sharing and sync: one file that cannot be fetched or deleted no longer holds up the rest of its share
+- Ask: Stop now also works while the model is still reading the question and its sources, so Send comes back at once
+- Sharing and sync: a link the other device never finished is cleaned up after a week, not kept for ever as a device that never answers
+- Sharing and sync: when a shared folder moves (as after an iPhone update), files missing from the new folder can no longer be recorded as deleted
+- Weather and alerts: a source that needs a key (satellite fire hotspots, or a source of your own with a key) now updates from Update now, in the background and when you move, not only when Ask looks it up
+- Home: the weather card no longer says "no forecast yet" while a forecast is stored; when the current reading is too old to show, it shows today's forecast under the day's name, with its age
+- Home and Weather: a warning that has ended no longer shows again for a moment each time Cache opens
+- Weather alerts: an alert no longer pops up twice when two updates or two checks run in the same moment, and a damaged record of what you were already told is read from a spare copy, so it no longer brings every alert back
+- Weather and alerts: a source's address can no longer be redirected from https to plain http, and a source's key is no longer sent on to a server the source does not name
+- Weather and alerts: with Cache left open on the screen, weather and alerts now keep updating every 30 minutes on iPhone and on Linux (before, only when Cache was opened or brought back to the front)
+- Weather alerts: with Where I am watched, the same fire no longer pops up again each time you move about a kilometre; it pops up once more only if it comes close enough to be serious
+- Weather alerts: a warning that reaches another of your places now pops up for that place even if you were told about it elsewhere, and an update pops up again when it becomes more severe; an update that only changes the end time or the wording stays quiet
+- Weather alerts: a fire whose mapped edge you are inside now counts as serious and pops up under Serious only (before, only fires with a distance in miles did)
+- Weather alerts and Home: with Satellite fire hotspots on, named fires are no longer left out; every fire source is listed and can pop up, and a fire two sources both name is shown once
+- Weather: a source that is switched on without its key now says it needs a key, instead of telling you to update
+- Home and Weather: data that ran out while Cache was closed is marked expired as soon as Cache opens, not only after the first update
+- Bookshelves: a book Cache is not sure about now stays in Unsorted with its top three suggested shelves, instead of being shelved on a guess; books an earlier build shelved that way come back to Unsorted once, and anything you shelved yourself stays where you put it (a device that is still on build 49 keeps shelving guesses, and those books are not returned)
+- Bookshelves: after Go to a number takes you to a shelf or book, the box is emptied and the keyboard stays closed when you come back; dragging the list closes the keyboard
+- Weather: Latitude and Longitude in Add your own source put their text in the web address without taking the keyboard from it, and the cursor stays right after it
+- Notebooks: a new place no longer gets a color of its own; it follows its notebook's color, and hiding a place on the map no longer gives it one. A place has its own color only when you pick one that differs from its notebook's
+- Notebooks: changing a notebook's color asks, when some of its places have a color of their own, whether to change all of them (Change all) or keep their colors; the Pin color line now says its places use the notebook's color unless you give one its own
+- Library: the main page of a ZIM shows the ZIM's own title at the top, not the title the page carries (a Wikipedia ZIM's main page said just "Wikipedia")
+- Home search: words said in videos and passages of EPUB books are now listed, and a PDF passage opens with the passage marked
+- Library: a passage on a page numbered with letters, such as iv or A-3, now opens and shows that page
+- Maps: after a guided trip ends, directions, distances and search start from where you are now, not from where that trip ended
+- Maps: once you have arrived, guidance no longer reroutes or speaks again if you walk on, and its GPS tracking and notification stop then, not when you tap Done
+- Places: Directions on a place while a route is being followed now says to finish or end the route first, as elsewhere, and no longer drops the route and leaves GPS tracking running
+
+## 1.1.0 (build 50, Android Auto test, Android only) - 2026-11-12
+
+- Android Auto is switched on in this build, which goes to the closed test group on Google Play so that Google's car review can start. It carries the changes listed under Unreleased as of this date. iPhone has no build 50; the next regular build, 51, goes to both stores
+
+## 1.1.0 (build 49, test) - 2026-11-11
+
+### Fixed
+- Home: the weather card shows the forecast even when a weather station lists no temperature
+- Home: a phone that is already set up no longer shows the Set up Cache card for a moment when Cache opens
+- Ask: Stop now works while Ask is searching or reading, not only while the answer is being written
+- Sharing and sync: a file dated in the future now syncs; a damaged links file no longer loses your linked devices; and syncing starts again by itself after an internal error
+
+### New
+- Sharing: after linking, one answer sets how settings sync on both devices, and you can take the other device's settings.
+- Discover is now a module: open it from Modules or pin it to the bottom bar.
+- Library: Watch a folder: new PDFs in a folder you choose are added by themselves, when you open Cache or, on Android, in the background while charging
+- Notebooks and Maps: a notebook has a map icon and a color, and each place can have its own icon and color; pick them from a searchable icon set, and choose how pins look in Settings > Maps > Pin style (Icon, Teardrop or Badge). A place's icon, color and Show on map now sync between your devices
+- Ask: shows each step as it works, such as what it's searching for and reading, and folds them away once the answer starts
+- Ask: other apps are less likely to be closed while Ask loads and answers, and background work pauses while Ask answers
+- Ask: a phone that stays in one place keeps its location between questions, so nearby answers no longer lose track of where you are
+- Library: Add to Library now shows Your own (Your own library, Add a PDF, Add a folder) at the top
+- Ask: when a chat is full, it says so plainly with a New chat button, and marks an answer cut short
+
+### Changed
+- Android: Cache now ships for 64-bit ARM phones only (x86 devices and Chromebooks are not supported)
+- Ask and search: the search model loads when you open Ask or tap a search box, not every time Cache opens, so Cache holds less memory when you aren't searching
+
+## 1.1.0 (build 48, test) - 2026-11-10
+
+### Fixed
+- Sharing and sync: after Cache updates on an iPhone, syncing works again (it kept looking in the app's old folders); while it rechecks a moved folder, nothing is deleted
+- Storage: free space is shown correctly on iPhone, and downloads and sync keep space in reserve and clean up if storage runs out
+
+### New
+- Sharing and sync: each linked device shows when it was last seen, and Unlink asks once to confirm
+- Library: a ZIM's menu has "Get icon from source", which fetches its icon again from Kiwix, or reads the one inside the ZIM
+
+## 1.1.0 (build 47, test) - 2026-11-09
+
+This build covers everything new since the public release 1.0.29.
+
+### New
+- Library: the new Library has ZIM Collections, Bookshelves, the Catalog and the Cache guide (with What's new and Credits)
+- Library: add a PDF, several at once, or a whole folder; scanned pages are read too; each book becomes searchable and is shelved by subject with a call number; if Cache is not sure, the book waits in Unsorted with a best guess to place it
+- Bookshelves: list, drawers and spines views, and Go to a number; a book's page lets you rename it, hide it, and mark spare copies of the same book
+- Search and Ask: find text inside your PDFs and inside the PDFs, EPUBs and video captions in your ZIMs; answers cite the page, chapter or moment
+- Reader: read PDFs and EPUBs inside Cache
+- Discover: ready-made setups (Ready, Backcountry, Homestead) plus libraries and maps, each showing what it adds before you get it
+- Setup: a step-by-step welcome setup, which you can run again from Settings
+- Maps: while navigating, a smaller turn banner, an elevation profile you pull up from the guidance card, and a mini map of the whole route (tap to swap it with the live map)
+- Videos: one Videos list and a new player with captions, quality choice, resume and a transcript on larger screens; saved videos are searchable by what is said in them
+- Sharing and sync: choose what to share item by item, with Sync now at every level, and a page for each linked device where settings can match or follow one device
+- Add your own source: plug in a web service as a weather or data source
+- No model needed: search-only mode when no model is installed
+- Obsidian and Logseq: tag a note `#cachesync` to bring it into Cache
+- Layout: better layouts for phones held sideways, tablets and large iPads
+- Known: Ask can still take a long time to answer on some phones
+- Known: Ask sometimes offers to search instead of searching
+
 ## 1.0.30 (unreleased, test)
 
 ### New

@@ -139,7 +139,7 @@ fn search_read_and_library_status_order() {
     assert_eq!(
         keys(s),
         ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model",
-         "library_id", "keyword_source", "whole_library_only", "settings", "error", "source_id", "index"]
+         "library_id", "keyword_source", "keyword_pending", "whole_library_only", "settings", "error", "source_id", "index"]
     );
     assert_eq!(
         keys(&s["settings"]),

@@ -6,6 +6,8 @@ import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
 import 'package:cache/library/library_prefs.dart';
 import 'package:cache/library/shelf_source.dart';
+import 'package:cache/regions/regions_state.dart';
+import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
 
@@ -22,10 +24,17 @@ String sampleHash(String doc) => (doc.codeUnits.map((c) => c.toRadixString(16).p
 /// [pdfs]: the books whose PDF is on this device, as `bookshelf/<blake3>.pdf` (3,000 bytes each). [extra]: more keys for each
 /// book's `book` block (a later pack revision's author or edition).
 Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
-    {String? log, Map<String, dynamic>? compression, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}, Map<String, Map<String, dynamic>> samebook = const {}}) {
+    {String? log,
+    Map<String, dynamic>? compression,
+    Set<String> pdfs = const {},
+    Map<String, Map<String, dynamic>> extra = const {},
+    Map<String, Map<String, dynamic>> samebook = const {},
+    bool own = false,
+    Set<String> unsure = const {},
+    Set<String> noFlag = const {}}) {
   final d = Directory('${root.path}/$name')..createSync(recursive: true);
   Directory('${d.path}/shard').createSync();
-  File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': name, 'title': 'Field library', 'version': '1'}));
+  File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': name, 'title': 'Field library', 'version': '1', if (own) 'own': true}));
   final tsv = StringBuffer('doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n');
   for (final b in books) {
     tsv.writeln('${b.$1}\t1\t${b.$2}\t${sampleHash(b.$1)}\t10\t120');
@@ -48,7 +57,15 @@ Directory writeBookLibrary(Directory root, String name, List<SampleBook> books,
         'original_blake3': null,
         'compression': compression,
         'ocr': null,
-        'suggested': b.$3 == null ? null : {'div': b.$3, 'label': '', 'score': 0.4, 'classifier_version': 3, 'source': 'classifier', 'second_div': b.$4},
+        // the sorter's verdict as a pack records it: confident (filed) unless the book is in [unsure] (not filed, with its top three) or
+        // [noFlag] (a pack from before the flag: a division and a second, no flag, no list)
+        'suggested': b.$3 == null
+            ? null
+            : {
+                'div': b.$3, 'label': '', 'score': 0.4, 'classifier_version': 3, 'source': 'classifier', 'second_div': b.$4,
+                if (!noFlag.contains(b.$1)) 'filed': !unsure.contains(b.$1),
+                if (!noFlag.contains(b.$1)) 'suggestions': [for (final d in [b.$3, b.$4, if (b.$4 != null) '120']) if (d != null) {'div': d, 'label': '', 'score': 0.3}],
+              },
         ...?extra[b.$1],
       },
       if (samebook[b.$1] != null) 'samebook': samebook[b.$1],
@@ -131,16 +148,21 @@ LibraryDeps testDeps({
   BookFiles? files,
   ShelfLookPrefs? looks,
   List<String>? added,
+  RegionsState? regions,
+  SharingState? sharing,
 }) =>
     LibraryDeps(
       browse: browse,
       shelves: shelves,
       files: files ?? BookFilesUnavailable(),
       looks: looks ?? ShelfLookPrefs(dirOverride: Directory.systemTemp.createTempSync('looks')),
+      regions: regions,
+      sharing: sharing,
       zims: (_) => const Scaffold(body: Center(child: Text('ZIM list'))),
       addToLibrary: (_) => added?.add('add'),
       openGuide: (_) async {},
       openOwnLibrary: (_, _) {},
       holdsBooks: (l) => shelves is CdsShelfSource && shelves.holdsBooks(l),
+      booksIn: (l) => shelves is CdsShelfSource ? shelves.booksIn(l) : 0,
       whatsNew: () async => const ['- **A new Library:** four places in one.'],
     );

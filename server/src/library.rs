@@ -15,6 +15,9 @@
 //!   runs that procedure itself. The server only brings the file: a downloaded or uploaded package lands in
 //!   `<data>/app/docs/incoming/<name>` (the docs root, where the helper's `fs.*` ops and the core's jobs can reach it), and the
 //!   browser installs it from there and deletes it.
+//! - **Pause and resume** (`POST /api/library/jobs/{id}/pause` and `/resume`): a paused job keeps its part file and its place in the
+//!   list (state `paused`); Resume queues it and it continues where the file ends (a Range request), as the phone's downloads do.
+//!   A canceled job (`DELETE`) throws the part file away. A paused job is still "active": asking for its address again gives it.
 //! - **Uploads** (`POST /api/library/upload`) stream the request body to `<data>/tmp/up-<random>.part` without holding it in memory.
 //! - **Items** (`GET /api/library/items`, `DELETE /api/library/items/{id}`) list and remove what is on the server.
 //! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
@@ -25,6 +28,7 @@
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
 
 use crate::fetch::{self, FetchError};
+use crate::fetch_scope::{address_ok, guarded_agent, Policy, Scope};
 use crate::helper::Helper;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
@@ -65,6 +69,8 @@ fn api_err(status: u16, code: &'static str, message: impl Into<String>) -> ApiEr
 pub enum State {
     Queued,
     Running,
+    /// Stopped by the person; the part file is kept and Resume continues it.
+    Paused,
     Done,
     Failed,
     Cancelled,
@@ -72,7 +78,7 @@ pub enum State {
 
 impl State {
     fn active(self) -> bool {
-        matches!(self, State::Queued | State::Running)
+        matches!(self, State::Queued | State::Running | State::Paused)
     }
 }
 
@@ -165,6 +171,12 @@ pub struct LibraryOptions {
     pub fetch_hosts: Option<Vec<String>>,
     /// The size cap of `/api/fetch`. Default: [`fetch::FETCH_MAX_BYTES`].
     pub fetch_max: Option<u64>,
+    /// Whether the `user` scope of `/api/fetch` (any public address the person typed) is on. Default: on.
+    pub fetch_user: Option<bool>,
+    /// Tests only: `/api/fetch` scopes other than `catalog` may read addresses on this machine.
+    pub fetch_allow_private: bool,
+    /// The most one read of a non-catalog `/api/fetch` scope may take. Default: [`crate::fetch_scope::READ_DEADLINE`].
+    pub fetch_deadline: Option<Duration>,
 }
 
 pub struct Library {
@@ -173,6 +185,11 @@ pub struct Library {
     free: FreeFn,
     total: FreeFn,
     fetch_hosts: Vec<String>,
+    fetch_user: bool,
+    fetch_allow_private: bool,
+    fetch_deadline: Duration,
+    /// How many reads of the non-catalog scopes may run at once.
+    fetch_slots: Arc<tokio::sync::Semaphore>,
     fetch_max: u64,
     jobs: Mutex<Vec<Job>>,
     /// The cancel flag of the job that is running.
@@ -314,6 +331,9 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     })
 }
 
+/// How many reads of the non-catalog `/api/fetch` scopes may run at once.
+const FETCH_SLOTS: usize = 8;
+
 /// What the library routes need to answer the fetch proxy: the type, and the body as it arrives. An error item ends the body
 /// early (the connection is cut), which is what happens when the cap is passed.
 pub struct FetchStream {
@@ -353,6 +373,10 @@ impl Library {
             total: o.total_bytes.unwrap_or_else(|| Arc::new(total_bytes)),
             fetch_hosts: o.fetch_hosts.unwrap_or_else(|| fetch::FETCH_HOSTS.iter().map(|h| h.to_string()).collect()),
             fetch_max: o.fetch_max.unwrap_or(fetch::FETCH_MAX_BYTES),
+            fetch_user: o.fetch_user.unwrap_or(true),
+            fetch_allow_private: o.fetch_allow_private,
+            fetch_deadline: o.fetch_deadline.unwrap_or(crate::fetch_scope::READ_DEADLINE),
+            fetch_slots: Arc::new(tokio::sync::Semaphore::new(FETCH_SLOTS)),
             jobs: Mutex::new(jobs),
             running: Mutex::new(None),
             locks: Mutex::new(HashMap::new()),
@@ -476,6 +500,10 @@ impl Library {
                 if j.state == State::Cancelled && res.is_err() {
                     return;
                 }
+                // Paused (or paused and resumed again before the worker noticed): the job is as the person left it.
+                if matches!(j.state, State::Paused | State::Queued) && res.as_ref().is_err_and(|e| e.code == "cancelled") {
+                    return;
+                }
                 j.finished_at = Some(now_rfc3339());
                 match res {
                     Ok(()) => {
@@ -505,8 +533,12 @@ impl Library {
         let part = part_path(&self.data, &job.url);
         let result = self.download_and_install(job, &part, cancel);
         match &result {
+            // Paused keeps the part file (Resume continues it with a Range request); a canceled job throws it away.
             Err(e) if e.code == "cancelled" => {
-                let _ = std::fs::remove_file(&part);
+                let state = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|j| j.id == job.id).map(|j| j.state);
+                if matches!(state, None | Some(State::Cancelled)) {
+                    let _ = std::fs::remove_file(&part);
+                }
             }
             Err(e) if e.code == "checksum" => {
                 let _ = std::fs::remove_file(&part);
@@ -519,7 +551,8 @@ impl Library {
     fn download_and_install(&self, job: &Job, part: &Path, cancel: &AtomicBool) -> Result<(), JobErr> {
         let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         std::fs::create_dir_all(self.tmp_dir()).map_err(io_job_err)?;
-        let agent = fetch::agent();
+        // The address came from a tab: connect only to public addresses, on every redirect too (the catalog hosts excepted).
+        let (agent, refused) = guarded_agent(&self.fetch_hosts, self.fetch_allow_private);
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         let mut restarted = false;
         let mut cur = job.url.clone();
@@ -550,6 +583,9 @@ impl Library {
                 }
                 Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.")),
                 Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}."))),
+                Err(_) if refused.load(Ordering::Relaxed) => {
+                    return Err(job_err("failed", "That address is not on the public internet, so the server will not download from it."))
+                }
                 Err(e) => return Err(job_err("network", format!("The connection failed: {e}"))),
             };
             let status = resp.status();
@@ -720,7 +756,10 @@ impl Library {
     pub fn add_download(self: &Arc<Self>, body: &[u8]) -> Result<Value, ApiErr> {
         let v: Value = serde_json::from_slice(body).map_err(|_| api_err(400, "bad_json", "the body is not JSON"))?;
         let url = v["url"].as_str().ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?.trim().to_string();
-        fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        let parsed = fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        if !address_ok(&parsed, &self.fetch_hosts, self.fetch_allow_private) {
+            return Err(api_err(400, "invalid", "That address is not on the public internet, so the server will not download from it."));
+        }
         let kind = v["kind"].as_str().unwrap_or("");
         if kind != "zim" && kind != "library" {
             return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\""));
@@ -746,7 +785,7 @@ impl Library {
         };
         let icon_url = match v["icon_url"].as_str() {
             None => None,
-            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p)) => Some(u.to_string()),
+            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p) && address_ok(&p, &self.fetch_hosts, self.fetch_allow_private)) => Some(u.to_string()),
             Some(_) => return Err(api_err(400, "invalid", "\"icon_url\" is not an address the server can read")),
         };
         let view = self.update_jobs(|jobs| {
@@ -767,6 +806,52 @@ impl Library {
     pub fn list_jobs(&self) -> Value {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         Value::Array(jobs.iter().map(Job::view).collect())
+    }
+
+    /// `POST /api/library/jobs/{id}/pause`: a waiting or running job stops and keeps what it has downloaded (the part file); it is
+    /// not started again until [Library::resume_job]. Pausing a paused job answers with it; a finished one is 409 `not_active`.
+    pub fn pause_job(&self, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Queued | State::Running => {
+                        j.state = State::Paused;
+                        j.error = None;
+                        Ok(j.view())
+                    }
+                    State::Paused => Ok(j.view()),
+                    _ => Err(api_err(409, "not_active", "That download has already ended.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        if let Some((rid, flag)) = self.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if rid == id {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+        Ok(view)
+    }
+
+    /// `POST /api/library/jobs/{id}/resume`: a paused job goes back in the queue and continues from its part file. A job that is
+    /// not paused is answered as it is; a finished one is 409 `not_paused`.
+    pub fn resume_job(self: &Arc<Self>, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Paused => {
+                        j.state = State::Queued;
+                        Ok(j.view())
+                    }
+                    State::Queued | State::Running => Ok(j.view()),
+                    _ => Err(api_err(409, "not_paused", "That download has already ended. Add it again.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        self.ensure_worker();
+        self.wake.notify_one();
+        Ok(view)
     }
 
     /// `DELETE /api/library/jobs/{id}`: a waiting or running job is canceled (its part file is thrown away); a finished one is
@@ -961,23 +1046,42 @@ impl Library {
 
     // ---- the catalog fetch proxy
 
-    /// `GET /api/fetch?url=`: check the address, connect, and hand back the body as a stream capped at the size limit.
+    /// `GET /api/fetch?url=[&scope=catalog|models|video|user][&plain=1]`: check the address against the scope's rules, connect, and
+    /// hand back the body as a stream capped at the scope's size limit. `plain=1` is the phone's `httpsOnly: false`.
     pub async fn fetch(self: &Arc<Self>, query: &str) -> Result<FetchStream, ApiErr> {
         let url = fetch::query_param(query, "url").ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?;
-        let (hosts, max) = (self.fetch_hosts.clone(), self.fetch_max);
-        let u2 = url.clone();
-        let opened = tokio::task::spawn_blocking(move || fetch::open(&hosts, &u2, max)).await.map_err(|e| api_err(500, "server_error", e.to_string()))?;
+        let scope = match fetch::query_param(query, "scope") {
+            None => Scope::Catalog,
+            Some(s) => Scope::parse(&s).ok_or_else(|| api_err(400, "invalid", "\"scope\" is catalog, models, video or user"))?,
+        };
+        let mut policy = Policy::new(scope, self.fetch_hosts.clone());
+        policy.plain = fetch::query_param(query, "plain").as_deref() == Some("1");
+        policy.allow_private = self.fetch_allow_private;
+        policy.deadline = self.fetch_deadline;
+        if scope == Scope::User && !self.fetch_user {
+            return Err(api_err(403, "scope_off", "Reading an address you typed is switched off on this server."));
+        }
+        // The catalog hosts are few and fixed; the other scopes reach other people's servers, so only a few run at once.
+        let permit = if scope == Scope::Catalog {
+            None
+        } else {
+            Some(self.fetch_slots.clone().try_acquire_owned().map_err(|_| api_err(429, "busy", "Too many reads are running. Try again in a moment."))?)
+        };
+        let max = policy.max_bytes(self.fetch_max);
+        let opened = tokio::task::spawn_blocking(move || fetch::open_with(&policy, &url, max)).await.map_err(|e| api_err(500, "server_error", e.to_string()))?;
         let opened = opened.map_err(|e| match e {
             FetchError::BadUrl => api_err(400, "invalid", "That is not an address the server will read."),
-            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not one of the catalog hosts.")),
-            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The catalog answered {c}.")),
-            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than a catalog."),
-            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The catalog redirected too many times."),
-            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the catalog: {m}")),
+            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not an address this server will read for that.")),
+            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The server answered {c}.")),
+            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than this server hands on."),
+            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The server redirected too many times."),
+            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the server: {m}")),
+            FetchError::BadType(t) => api_err(415, "unsupported_type", format!("That answer is not text, data or a picture ({t}).")),
         })?;
         let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
         let mut reader = opened.reader;
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let mut buf = vec![0u8; 64 << 10];
             let mut sent: u64 = 0;
             loop {

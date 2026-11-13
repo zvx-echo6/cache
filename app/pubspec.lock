@@ -41,6 +41,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.2"
+  cache_device:
+    dependency: "direct main"
+    description:
+      path: "../packages/cache_device"
+      relative: true
+    source: path
+    version: "0.0.1"
   cache_llama:
     dependency: "direct main"
     description:
@@ -780,6 +787,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
+  material_symbols_icons:
+    dependency: "direct main"
+    description:
+      name: material_symbols_icons
+      sha256: bd513edc2bc9b034108d5518c48cf5cebbb67d0653728cc452368cb27ca80bb0
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.2960.0"
   meta:
     dependency: transitive
     description:
@@ -925,12 +940,11 @@ packages:
     source: hosted
     version: "2.4.8"
   pdfrx_engine:
-    dependency: transitive
+    dependency: "direct dev"
     description:
-      name: pdfrx_engine
-      sha256: "4399846809a75aed03881d8b8a19e5e70addd4b46b22fd94a0effd8859258f07"
-      url: "https://pub.dev"
-    source: hosted
+      path: "../third_party/pdfrx_engine"
+      relative: true
+    source: path
     version: "0.4.7"
   petitparser:
     dependency: transitive

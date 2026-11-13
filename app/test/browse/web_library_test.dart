@@ -153,6 +153,27 @@ void main() {
       expect(api.downloads.single['url'], 'https://dl.example/f1.zim');
     });
 
+    testWidgets('a paused transfer is a card with its bytes, Resume and Remove; Resume asks the device to go on', (tester) async {
+      api.jobList = [job('p1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.byKey(const ValueKey('job-p1')), findsOneWidget);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      expect(find.byKey(const ValueKey('remove-p1')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('resume-p1')));
+      await tester.pump();
+      await tester.pump();
+      expect(api.resumed, ['p1']);
+    });
+
+    testWidgets('Remove on a paused transfer cancels it on the device (which deletes the part file) and takes it off the list', (tester) async {
+      api.jobList = [job('p1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('remove-p1')));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, ['p1', 'p1']);
+      expect(find.byKey(const ValueKey('job-p1')), findsNothing);
+    });
+
     testWidgets('"While this tab was closed" lists what finished, still runs or stopped, and Dismiss clears it', (tester) async {
       api.jobList = [job('j1', 'running', bytes: 1, total: 9, name: 'WikiMed.zim'), job('j2', 'running', name: 'Wikipedia.zim'), job('j3', 'running', name: 'Guides.zim')];
       await tester.runAsync(device.start);
@@ -282,7 +303,7 @@ void main() {
       await tester.tap(find.textContaining('Delete · frees'));
       await tester.pumpAndSettle();
       expect(find.text('You uploaded this file. To get it back, upload it again.'), findsOneWidget);
-      expect(find.textContaining('80.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
+      expect(find.textContaining('100.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.longPress(find.text('Downloaded one'));

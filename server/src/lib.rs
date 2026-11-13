@@ -11,14 +11,17 @@ pub mod libbuild;
 pub mod config;
 pub mod embed;
 pub mod fetch;
+pub mod fetch_scope;
 pub mod helper;
 pub mod http;
 pub mod keys;
 pub mod library;
 pub mod llm;
+pub mod models;
 pub mod pages;
 pub mod tiles;
 pub mod tls;
+pub mod video;
 pub mod webfiles;
 
 use std::io::Write;

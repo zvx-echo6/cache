@@ -2,6 +2,9 @@
 library;
 
 export 'llama_session.dart' show LlamaSession;
-export 'partial_message.dart' show PartialMessage, ModelInfo, ToolCall;
+export 'partial_message.dart' show PartialMessage, ModelInfo, ToolCall, ContextFullException;
 export 'embedder.dart' show CacheEmbedder;
-export 'load_options.dart' show llamaLoadOptions;
+export 'embed_remote.dart' show EmbedHttp, EmbedRemoteException, ServerEmbedderState, ServerEmbedderStatus, embedRemote;
+export 'load_options.dart' show llamaLoadOptions, kDefaultPrereadMbps;
+export 'warm_result.dart' show WarmResult, WarmOutcome;
+export 'warm_stop.dart' show WarmStopPolicy, StopAction;

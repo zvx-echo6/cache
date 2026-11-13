@@ -7,6 +7,8 @@ import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
+import '../desktop/ask_column.dart';
+import '../desktop/desktop.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
@@ -365,7 +367,8 @@ class _AskScreenState extends State<AskScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: Column(
+        child: DesktopReadingColumn(
+          child: Column(
           children: [
             ListenableBuilder(listenable: widget.app, builder: (context, _) => _fixLine(context) ?? const SizedBox.shrink()),
             Expanded(
@@ -429,6 +432,7 @@ class _AskScreenState extends State<AskScreen> {
             ReadingWidth(style: _readingStyle, child: _composer(context)),
           ],
         ),
+        ),
       ),
     );
     if (!docked) return page;
@@ -483,7 +487,7 @@ class _AskScreenState extends State<AskScreen> {
       if (resting != null) {
         // the chosen model, let go to leave memory free: it loads again
         button = 'Load ${app.displayName(resting)}';
-        onPressed = app.wake;
+        onPressed = () => app.wake(force: true);
       } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;
@@ -492,6 +496,8 @@ class _AskScreenState extends State<AskScreen> {
         onPressed = () => app.activate(usable.first);
       }
     }
+    final held = app.heldForMemory && app.resting != null && app.failed == null;
+    if (held) return _gateCard(k, app.plainName(app.resting!), onPressed);
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,
@@ -504,6 +510,28 @@ class _AskScreenState extends State<AskScreen> {
           Text(line, key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.emergency)),
           const SizedBox(height: 6),
           FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
+        ],
+      ),
+    );
+  }
+
+  /// The card for a model the memory gate held back ([AppState.heldForMemory]): calm, since nothing is broken (theme surface and
+  /// text colors, no emergency red). Its button loads the model whatever the room.
+  Widget _gateCard(CacheTokens k, String name, VoidCallback onLoad) {
+    return Container(
+      key: const ValueKey('ask-fix'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: k.secondary.withValues(alpha: 0.25))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$name is waiting for free memory.', key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+          const SizedBox(height: 4),
+          Text('Other apps are using it right now. Loading anyway may close some of them.', key: const ValueKey('ask-fix-note'), style: TextStyle(fontSize: 13, color: k.secondary)),
+          const SizedBox(height: 8),
+          FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onLoad, child: const Text('Load anyway')),
         ],
       ),
     );
@@ -577,7 +605,7 @@ class _AskScreenState extends State<AskScreen> {
                   minLines: 1,
                   maxLines: 5,
                   textInputAction: TextInputAction.newline,
-                  style: const TextStyle(fontSize: 18),
+                  style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
                   decoration: InputDecoration(
                     hintText: ready ? 'Ask anything' : 'No model',
                   ),
@@ -630,7 +658,7 @@ class _UserBubble extends StatelessWidget {
         ),
         child: Text(
           text,
-          style: TextStyle(fontSize: 18, height: 1.35, color: k.text),
+          style: TextStyle(fontSize: isLinuxDesktop(context) ? 15 : 18, height: 1.35, color: k.text),
         ),
       ),
     );
@@ -683,10 +711,13 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           AnswerProgress(
             phase: m.phase,
             activeTool: m.activeTool,
+            activeStep: m.activeStep,
+            steps: m.steps,
             notes: m.toolNotes,
             text: m.text,
-            failed: m.error != null,
+            failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
+            dropCitations: m.isDone && m.sources.isEmpty,
           ),
           for (final card in m.confirms)
             ConfirmCardView(
@@ -719,12 +750,17 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ],
               ),
             ),
+          if (m.cutShort && m.isDone)
+            _newChatNote(context, 'This answer was cut short because the chat is full.', 14, k.secondary, 'ask-cut-short'),
+          if (m.chatFull && m.isDone)
+            _newChatNote(context, 'This chat is full. Start a new chat to keep asking.', 16, k.text, 'ask-chat-full'),
           if (m.error != null)
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
           if (m.error == kCoreDidNotStart && widget.chat != null)
             TextButton(key: const ValueKey('ask-try-again'), onPressed: widget.chat!.retryLast, child: const Text('Try again')),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
-            _sourcesRow(context, m),
+            // On the Linux desktop the sources chip has 12 pixels of air above it.
+            isLinuxDesktop(context) && m.sources.isNotEmpty ? Padding(padding: const EdgeInsets.only(top: 12), child: _sourcesRow(context, m)) : _sourcesRow(context, m),
           if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)
             Align(
               alignment: Alignment.centerLeft,
@@ -735,11 +771,34 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 label: Text('Report this answer', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
             ),
-          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
+          if (m.isDone && m.error == null && !m.chatFull && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
             Text(
               'No answer was produced.',
               style: TextStyle(fontSize: 15, color: k.secondary),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// A plain note with a New chat button (the same action as the app bar's), for a full chat.
+  Widget _newChatNote(BuildContext context, String message, double size, Color color, String key) {
+    if (widget.chat == null) return Text(message, style: TextStyle(fontSize: size, color: color));
+    return Padding(
+      key: ValueKey(key),
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: TextStyle(fontSize: size, height: 1.35, color: color)),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('ask-new-chat'),
+            onPressed: widget.chat!.newChat,
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+            icon: const Icon(Icons.add_comment_outlined, size: 20),
+            label: const Text('New chat'),
+          ),
         ],
       ),
     );

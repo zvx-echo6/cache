@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart';
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
@@ -30,6 +31,7 @@ class BookshelvesPage extends StatefulWidget {
 
 class _BookshelvesPageState extends State<BookshelvesPage> {
   final _number = TextEditingController();
+  final _focus = FocusNode();
 
   LibraryDeps get d => widget.deps;
 
@@ -42,6 +44,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
   @override
   void dispose() {
     _number.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -57,7 +60,10 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
       if (shelf != null) ...shelfPath(d, shelf) else bookshelvesSpec(d),
       if (t.bookId != null) bookSpec(d, t.bookId!),
     ];
-    FocusScope.of(context).unfocus();
+    // Done with the box: it is emptied and let go of, so coming back to this page finds it empty with the keyboard closed.
+    _number.clear();
+    _focus.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
     nav.goTo(context, path);
   }
 
@@ -75,6 +81,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
           final unsorted = s.unsorted;
           final working = _working();
           return ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
               if (!nav.compact) LibraryCrumbs(crumbs: shelfCrumbs(context, d, null)),
@@ -89,6 +96,8 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 TextField(
                   key: const ValueKey('go-to-number'),
                   controller: _number,
+                  focusNode: _focus,
+                  // Text, not a number pad: a call number such as 530-002.1 needs "-" and "." and an Android number pad does not promise both.
                   keyboardType: TextInputType.text,
                   textInputAction: TextInputAction.go,
                   onSubmitted: (_) => _go(),
@@ -558,7 +567,8 @@ class ShelfPage extends StatelessWidget {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
-              LibraryCrumbs(crumbs: shelfCrumbs(context, d, sh.id), trail: booksWord(n)),
+              // The Linux desktop shows the breadcrumb once, in the page beside this list, not again here.
+              if (!(isLinuxDesktop(context) && !LibraryNav.of(context).isLast)) LibraryCrumbs(crumbs: shelfCrumbs(context, d, sh.id), trail: booksWord(n)),
               const SizedBox(height: 4),
               if (!sh.holdsBooks)
                 _ShelfList(deps: d, shelves: sh.children, inside: true)
@@ -729,6 +739,7 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
     default:
       break;
   }
+  if (addPdfShared?.awaitsWords(b.id) == true) return 'Adding to search index';
   if (b.pdfPath == null && !b.onServer) return 'Not on this device';
   return null;
 }
