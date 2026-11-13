@@ -2240,3 +2240,43 @@ fn the_facts_and_the_view_for_the_browser_come_from_the_packs_and_the_log() {
     assert!(h.get("samebook").is_none());
     assert_eq!(svc.bookshelves_stamp(), json!({"stamp": svc.shelves_stamp()}));
 }
+
+#[test]
+fn the_frees_figures_are_what_deleting_removes() {
+    let d = TempDir::new("frees1");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    // a library with no book yet is not 0 B: its record is on disk
+    assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() > 0);
+    let a = add(&svc, &lib, "wells.pdf", &book("well", 12, Some("Wells")));
+    drain(&svc);
+    assert_eq!(state(&svc, &a), S::Done, "{:?}", item(&svc, &a).error);
+    let b = lock(&svc.st).libs[0].books[0].clone();
+    // a book's figure is the files removing it deletes: its stored PDF and its pack
+    let pack = svc.packs_dir(&lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version));
+    let want_book = std::fs::metadata(svc.source_of(&lib, &b)).unwrap().len() + std::fs::metadata(&pack).unwrap().len();
+    assert_eq!(svc.books_q(&lib, "").unwrap()[0]["bytes"].as_u64().unwrap(), want_book);
+    assert!(want_book > b.size, "the pack counts besides the PDF");
+    // a library's figure is everything deleting it removes
+    let want_lib = dir_bytes(&svc.live_dir(&lib))
+        + dir_bytes(&d.0.join("build/work").join(&lib))
+        + dir_bytes(&d.0.join("app/docs/sources").join(&lib))
+        + std::fs::metadata(svc.meta_path(&lib)).unwrap().len();
+    assert_eq!(svc.libraries()[0]["bytes"].as_u64().unwrap(), want_lib);
+    assert!(want_lib >= want_book);
+    // a second book: both figures grow by what the new files weigh
+    let a2 = add(&svc, &lib, "tanks.pdf", &book("tank", 6, Some("Tanks")));
+    drain(&svc);
+    assert_eq!(state(&svc, &a2), S::Done, "{:?}", item(&svc, &a2).error);
+    let listed = svc.books_q(&lib, "").unwrap();
+    let sum: u64 = listed.as_array().unwrap().iter().map(|v| v["bytes"].as_u64().unwrap()).sum();
+    assert!(sum > want_book && listed.as_array().unwrap().len() == 2);
+    assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() >= sum);
+    // after the book is removed the files that were counted are gone, and the emptied library still takes space
+    svc.delete_book(&lib, &b.doc_id).unwrap();
+    assert!(!pack.exists() && !svc.source_of(&lib, &b).exists());
+    let left = svc.books_q(&lib, "").unwrap();
+    assert_eq!(left.as_array().unwrap().len(), 1);
+    assert!(left[0]["bytes"].as_u64().unwrap() < sum, "the figures follow the removal");
+    assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() > 0);
+}
