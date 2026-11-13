@@ -14,6 +14,9 @@ import 'layer_fixtures.dart';
 class TestLayerEngine extends LayerEngine {
   TestLayerEngine({this.published = const [], this.canBind, this.policy, Set<String> held = const {}}) : _held = {...held};
 
+  /// The time a finished download is stamped with (a fixed clock for the guide's pictures).
+  DateTime Function() clock = DateTime.now;
+
   /// Ids of the test catalogue that are not there until [release] (the published catalogue arriving after start).
   final Set<String> _held;
 
@@ -165,7 +168,7 @@ class TestLayerEngine extends LayerEngine {
         ..doneTiles = a.totalTiles
         ..bytes = a.totalTiles * 1000
         ..phase = AreaPhase.done
-        ..fetchedAt = DateTime.now();
+        ..fetchedAt = clock();
       notifyListeners();
     });
   }

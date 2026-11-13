@@ -102,7 +102,7 @@ does the same from the command line and prints the result.
   "eta": {"low_seconds": 32400, "high_seconds": 46800},   // both null when unknown or paused
   "pieces_per_second": 1.4 | null,
   "items": [ {id, library_id, file_name, title, state, size,
-              progress: {pages, pieces, pieces_total, ocr_pages},
+              progress: {pages, pieces, pieces_total, ocr_pages, ocr_done},
               error, note, replace, compression, doc_id, duplicate_of, drop, position, created_at, started_at, finished_at,
               result, division, call_number, decision} ] }
 ```
@@ -111,9 +111,9 @@ does the same from the command line and prints the result.
 "Exact copy of X", "Already have a better copy", "Replaced: the new copy has 312 text pages vs 298" (or the other deciding reason).
 `division` and `call_number` say where a built book was filed.
 
-`state`: `queued` (Waiting), `reading` (Reading the PDF), `building` (Building passages · `pieces` of `pieces_total`),
+`state`: `queued` (Waiting), `reading` (Reading the PDF; while scanned pages are being read by OCR, `progress.ocr_pages` is how many there are and `ocr_done` how many are done: "Reading scanned pages (OCR) · 3 of 8"), `building` (Building passages · `pieces` of `pieces_total`),
 `done`, `skipped_duplicate` (same content already in this library; `duplicate_of` is that book's title), `failed` (`error` is the
-sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all; `error` says so; Retry works once OCR exists). `note` on a done book is
+sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all and OCR could not read it, or this install has no OCR data (lib/tessdata); `error` says so; Retry works once OCR exists). `note` on a done book is
 `"partial: N pages need OCR"`. `position` is the place among the waiting books. `drop` is true for files from the drop folder.
 The ETA is a range from the pieces per second seen since the service started; show it as an estimate. Items are in queue order;
 finished ones stay (up to 1000) so "x of 214 books done" can be counted: `counts.done + skipped + failed + ocr_needed` over

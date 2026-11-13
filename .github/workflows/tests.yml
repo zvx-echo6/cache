@@ -88,6 +88,18 @@ jobs:
           workspaces: packages/cache_search/native -> target
           # A cancelled or failed run still saves what it built, so the next push starts warm.
           cache-on-failure: true
+      # Tesseract's English trained data (pinned, from the Actions cache) for the library builder's OCR tests (server/builder/tests/ocr.rs).
+      - name: Trained data for the OCR tests (pinned)
+        id: tessdata
+        uses: ./.github/actions/pinned-downloads
+        with:
+          names: tessdata-fast-4.1.0-eng.traineddata
+      - name: Trained data folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/tessdata"
+          cp "${{ steps.tessdata.outputs.dir }}/tessdata-fast-4.1.0-eng.traineddata" "$RUNNER_TEMP/tessdata/eng.traineddata"
+          echo "CACHE_TESSDATA_DIR=$RUNNER_TEMP/tessdata" >> "$GITHUB_ENV"
+          echo "CACHE_REQUIRE_OCR_TESTS=1" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
       - name: Windowed ZIM reader regressions (iOS path)

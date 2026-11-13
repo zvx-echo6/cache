@@ -595,7 +595,7 @@ impl BuildService {
             let working = it.state.working();
             files.push(json!({
                 "name": e.name, "folder": "ingest", "state": if working { "working" } else { "queued" }, "position": rank, "size": e.size,
-                "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages},
+                "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages, "ocr_done": it.ocr_done},
                 "item_id": it.id, "reason": null, "can_retry": false,
             }));
         }

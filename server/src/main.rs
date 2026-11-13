@@ -220,6 +220,14 @@ fn serve(argv: &[String]) -> Result<(), String> {
         });
         // The library builder: books from PDFs, one at a time, and the drop folder. Its threads keep going with no browser open.
         let build = cache_server::libbuild::BuildService::new(data.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
+        // OCR for scanned pages when the trained data is in this install (lib/tessdata) or CACHE_TESSDATA_DIR names it.
+        match cache_builder::ocr::OcrSettings::discover() {
+            Some(o) => {
+                eprintln!("OCR is on (trained data in {})", o.datadir.display());
+                build.set_ocr(Some(o));
+            }
+            None => eprintln!("OCR is off: no eng.traineddata found in lib/tessdata"),
+        }
         build.start();
         let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed, llm, build });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;

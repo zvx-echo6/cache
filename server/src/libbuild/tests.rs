@@ -270,6 +270,26 @@ fn pages_that_need_ocr_make_a_partial_book_and_a_scan_only_pdf_is_ocr_needed_not
 }
 
 #[test]
+fn with_ocr_on_a_scan_the_reader_cannot_read_still_ends_as_ocr_needed_with_its_own_reason() {
+    // OCR is on but the trained data is not where it was said to be: the child's OCR job fails, the pages stay unread, and the book
+    // is the same ocr_needed as without OCR (and a clear reason, not "cannot do yet").
+    let d = TempDir::new("b7ocr");
+    let (svc, _) = rig(&d);
+    svc.set_ocr(Some(cache_builder::ocr::OcrSettings::new(d.0.join("no-tessdata"))));
+    let lib = new_lib(&svc, "L");
+    let scan = make_pdf(&[picture_page(), picture_page()], None);
+    let b = add(&svc, &lib, "scan.pdf", &scan);
+    drain(&svc);
+    let ib = item(&svc, &b);
+    assert_eq!(ib.state, S::OcrNeeded);
+    let msg = ib.error.unwrap();
+    assert!(msg.contains("2 page(s) need OCR") && !msg.contains("cannot do yet"), "{msg}");
+    // the progress it showed while OCR was tried is reset for the retry
+    svc.retry(&b).unwrap();
+    assert_eq!((item(&svc, &b).ocr_pages, item(&svc, &b).ocr_done), (0, 0));
+}
+
+#[test]
 fn building_waits_for_the_search_model() {
     let d = TempDir::new("b8");
     let (svc, fake) = rig(&d);
