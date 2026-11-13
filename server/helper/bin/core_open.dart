@@ -143,10 +143,11 @@ class IndexPauseOp implements OpHandler {
   }
 }
 
-/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), and the full path of the Valhalla shim
-/// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library).
+/// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS), the full path of the Valhalla shim
+/// (CACHE_VALHALLA_SHIM; the server sets it to `libvalhalla_shim.so` next to the core library) and the server's data folder
+/// (CACHE_DATA: the sharing host keeps the sync engine's identity and the Bookshelves log there).
 class AppDirs {
-  AppDirs(this.support, this.docs, {this.shim});
+  AppDirs(this.support, this.docs, {this.shim, this.data});
 
   final Directory support;
   final Directory docs;
@@ -154,11 +155,14 @@ class AppDirs {
   /// The shim's full path; null when the server gave none (then the bare name, which the core cannot route with).
   final String? shim;
 
+  /// `<data>`, when the server gave it (without it the helper runs no sharing host).
+  final Directory? data;
+
   /// From the environment; null when either folder is missing.
   static AppDirs? fromEnvironment(Map<String, String> env) {
-    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'], v = env['CACHE_VALHALLA_SHIM'];
+    final s = env['CACHE_APP_SUPPORT'], d = env['CACHE_APP_DOCS'], v = env['CACHE_VALHALLA_SHIM'], data = env['CACHE_DATA'];
     if (s == null || s.isEmpty || d == null || d.isEmpty) return null;
-    return AppDirs(Directory(s), Directory(d), shim: (v == null || v.isEmpty) ? null : v);
+    return AppDirs(Directory(s), Directory(d), shim: (v == null || v.isEmpty) ? null : v, data: (data == null || data.isEmpty) ? null : Directory(data));
   }
 }
 

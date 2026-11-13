@@ -197,6 +197,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     }
     helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
+    helper_cfg.data_dir = Some(data.clone());
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
