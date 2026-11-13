@@ -8,6 +8,7 @@ import 'pdf_meta.dart';
 import '../../platform/app_log.dart';
 
 export 'pdf_meta.dart' show readPdfMeta, openPdfForIndexing;
+export 'pdf_title.dart' show cleanPdfTitle;
 
 /// What reading a PDF's pages gave: each page's text in order (an empty string for a page with none, so page numbers stay
 /// right), or why it could not be read.
@@ -28,18 +29,6 @@ class PdfPagesOutcome {
 
   /// No page has any text (a scanned PDF: text recognition is not in this version).
   bool get noText => !locked && !damaged && pages.every((p) => p.trim().isEmpty);
-}
-
-/// A PDF's metadata Title as cs_pdfindex_add's "title": trimmed, or "" when it is empty or is plainly a file name rather than a
-/// title (an office program's "Microsoft Word - report.doc", or a name ending in a document extension); the core then makes a
-/// readable name from the entry's file name.
-String cleanPdfTitle(String? title) {
-  var t = (title ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (t.isEmpty) return '';
-  if (RegExp(r'^microsoft (word|powerpoint|excel)\s*-', caseSensitive: false).hasMatch(t)) return '';
-  if (RegExp(r'\.(docx?|pptx?|xlsx?|pdf|indd|rtf|odt|txt|qxd|pub|wpd)$', caseSensitive: false).hasMatch(t)) return '';
-  if (!RegExp(r'[A-Za-z]').hasMatch(t)) return '';
-  return t;
 }
 
 /// Waits until the work may go on (the index scheduler's throttle: rests, a warm phone, the person using the app).

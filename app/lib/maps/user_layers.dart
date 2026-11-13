@@ -262,6 +262,25 @@ class UserLayersState extends ChangeNotifier {
     }
     return {'type': 'FeatureCollection', 'features': features};
   }
+
+  /// Where the repeaters of the shown lists are: the points of [mapGeoJson]'s repeater pins, and nothing else of them. For the
+  /// car's map (car_pins.dart); it leaves alone what a tap on the phone's map looks up.
+  Future<List<({double lat, double lon})>> shownRepeaterPositions() async {
+    final out = <({double lat, double lon})>[];
+    for (final l in repeaterLists) {
+      if (!l.visible) continue;
+      try {
+        final g = await _call('get', l.id);
+        for (final r in (g['repeaters'] as List? ?? const [])) {
+          final m = r as Map;
+          final lat = m['lat'], lon = m['lon'];
+          if (lat is! num || lon is! num) continue;
+          out.add((lat: lat.toDouble(), lon: lon.toDouble()));
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
 }
 
 /// The repeater a map feature's properties name (the `list` and `item` [UserLayersState.mapGeoJson] gave it), or null.

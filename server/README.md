@@ -101,6 +101,24 @@ Both need a signed-in session. The loaded model takes about 700 MB and is let go
 the library uses AVX2, FMA and F16C; a CPU without them gets `embed_unavailable`. In Rust, the builder calls
 `EmbedService::embed_batch(&[String])`.
 
+### Model files (the Models screens in the browser)
+
+`src/models.rs` keeps the chat-model files for the browser: the server runs the downloads (one at a time, resumable from
+`<data>/models/.partial/`, SHA-256 checked, no tab needed), so a download goes on with the page closed. It fetches only from
+huggingface.co and its file store (`*.huggingface.co`, `*.hf.co`) and from data.cached.info / cache.echo6.co, https only, and every
+redirect hop is checked against that list. All behind the sign-in:
+
+    GET    /api/models/downloads                       -> {downloads: [{name, state: queued|running|verifying|paused|failed|done, done, total, error?}]}
+    POST   /api/models/downloads {name, repo, revision, path | url, size, sha256?, search?}   -> the same; queues or continues one
+    POST   /api/models/downloads/<name>/pause|resume   -> the same
+    DELETE /api/models/downloads/<name>                -> the same; stops it and throws the part file away
+    DELETE /api/models/files/<name>                    -> deletes a model file (409 in_use for the loaded one)
+    POST   /api/models/upload?name=<x.gguf>            -> streams the body (Content-Length needed) into the models folder
+    GET    /api/system/memory                          -> {total, avail, threshold, low} in bytes, from /proc/meminfo
+
+`search: true` makes the server start the search model (above) when that file is done. The embedder's own download is listed
+in `downloads` as one more entry.
+
 ### The chat model (Ask in the browser)
 
 The browser build of Ask runs the whole loop (prompt, tools, citations) in the page; only the model runs on the server, through the
@@ -235,6 +253,25 @@ Under the data folder (`/var/lib/cache-app` when installed):
 | `app/support/` | the app's support folder (`getApplicationSupportDirectory` on a phone): the core's databases (`user.sqlite`, `live.sqlite`, `notebook/`), `regions/`, `layers/`, `indexes/` |
 | `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
 | `zims/`, `libraries/`, `index/` | the older folders, no longer read |
+
+## Indexing
+
+With no browser open, the helper indexes what the phone indexes (`server/helper/bin/index_driver.dart`): the keyword index of each
+ZIM and library, seals of older indexes, the EPUBs and caption files inside ZIMs (`index_source`), and the PDFs inside ZIMs. The
+PDF text comes from MuPDF, through the hidden `cache pdf-text` command that the helper runs for each PDF (`CACHE_PDF_TEXT_EXE`,
+which the server sets to itself); the chunks and records are the core's own, so the indexes are the phone's format. Work yields to
+the host's heat (thermal zones) and memory (`/proc/meminfo`). Design: `renders/linux-parity/indexing-design.md`.
+
+Pause and Resume (the Catalog's "Pause all" and "Resume", helper op `index.pause`) stop what runs, keeping what it did, and start
+nothing until Resume; like the phone's they are kept in memory, so a restart resumes. Design: `renders/linux-parity/library-rest-design.md`.
+
+## The guide library
+
+The setup guide the app bundles is installed on the server with no browser open, so guide search works in a browser as on a phone.
+The server gives the helper the package from its web build (`<web>/assets/assets/guide/cache-guide.cache-library`, as
+`CACHE_GUIDE_LIBRARY`); after the core opens, `server/helper/bin/guide_install.dart` unpacks it to `app/docs/libraries/cache-guide`
+(the steps of the phone's `LibrariesState.ensureGuide`) and replaces it when the app carries another `version`. Not done when
+`sources.json` gives the sources (that list is the operator's own).
 
 ## The helper
 

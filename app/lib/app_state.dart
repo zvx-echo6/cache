@@ -4,12 +4,13 @@ import 'dart:io';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
 import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
+import 'browse/web/local_files.dart' show UploadCancelled, pickLocalFile, setLeaveWarning;
 import 'models/recommendations.dart' show ModelSettings;
+import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/bench_options.dart';
@@ -67,11 +68,19 @@ const String kPromptPrefixDir = 'prompt-prefix';
 const bool kRepackChatWeightsForMeasurement = false;
 
 class AppState extends ChangeNotifier {
-  AppState({this.settingsDirOverride, this.modelsDirOverride, Future<MemoryReading?> Function()? memory, Future<BenchOptions> Function()? bench, LlamaSession? session, bool Function()? startedWithNoPhoneScreen})
-      : memory = memory ?? readMemory,
+  AppState({
+    this.settingsDirOverride,
+    this.modelsDirOverride,
+    Future<MemoryReading?> Function()? memory,
+    Future<BenchOptions> Function()? bench,
+    LlamaSession? session,
+    bool Function()? startedWithNoPhoneScreen,
+    ServerModels? server,
+  })  : memory = memory ?? readMemory,
         session = session ?? LlamaSession(),
         _bench = bench ?? readBenchOptions,
-        _startedWithNoPhoneScreen = startedWithNoPhoneScreen ?? _never;
+        _startedWithNoPhoneScreen = startedWithNoPhoneScreen ?? _never,
+        _server = server ?? (plat.isWeb ? ServerModels() : null);
 
   static bool _never() => false;
 
@@ -87,6 +96,9 @@ class AppState extends ChangeNotifier {
 
   /// The bench options of the last model load.
   BenchOptions benchOptions = BenchOptions.off;
+
+  /// A browser: the model files are the server's (list, delete, upload); there is no models folder here.
+  final ServerModels? _server;
 
   /// The device's free memory (a test hook; the system's reading by default).
   final Future<MemoryReading?> Function() memory;
@@ -202,20 +214,6 @@ class AppState extends ChangeNotifier {
       // server/docs/llm-protocol.md); a model's id is the "path" LlamaSession.load takes on the web. When the server has none
       // (or cannot be asked) the list stays empty and nothing is wrong.
       await refreshModels();
-      try {
-        final r = await http.get(Uri.parse('/api/llm/models?v=1'));
-        if (r.statusCode == 200) {
-          final list = ((jsonDecode(utf8.decode(r.bodyBytes)) as Map)['result'] as Map)['models'] as List;
-          final found = [
-            for (final m in list.cast<Map>()) ModelEntry(path: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0),
-          ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-          models = found;
-        } else {
-          logInfo('The server lists no chat models (HTTP ${r.statusCode})');
-        }
-      } catch (e) {
-        logInfo('The server\'s chat models could not be read', detail: '$e');
-      }
       started = true;
       notifyListeners();
       return;
@@ -355,6 +353,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshModels() async {
+    if (_server != null) return _refreshServerModels();
     final found = <ModelEntry>[];
     ModelEntry? search;
     if (modelsDir == null) {
@@ -392,9 +391,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A browser: the chat models on the server.
+  Future<void> _refreshServerModels() async {
+    try {
+      final found = [
+        for (final m in await _server!.chatModels()) ModelEntry(path: m.id, size: m.size),
+      ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      models = found;
+      if (failed != null && !found.any((m) => m.path == failed!.path)) {
+        failed = null;
+        failure = null;
+        loadError = null;
+      }
+    } on ServerModelsException catch (e) {
+      logInfo('The server\'s chat models could not be read', detail: e.message);
+    }
+    notifyListeners();
+  }
+
   /// Deletes a model file from the models folder. The model in use (or one being loaded) is kept: false.
   Future<bool> deleteModel(ModelEntry entry) async {
     if (loading != null || active?.path == entry.path) return false;
+    if (_server != null) {
+      try {
+        await _server.deleteFile(entry.fileName);
+      } on ServerModelsException catch (e) {
+        // the server also keeps the model it has loaded, which another tab may have chosen
+        loadError = 'Could not delete the file: ${e.message}';
+        notifyListeners();
+        return false;
+      }
+      await refreshModels();
+      return true;
+    }
     try {
       final f = File(entry.path);
       if (f.existsSync()) f.deleteSync();
@@ -635,6 +664,8 @@ class AppState extends ChangeNotifier {
   /// Lets the user pick a file and copies it into the models folder, reporting progress.
   /// Returns the new entry, or null if cancelled.
   Future<ModelEntry?> pickAndCopy() async {
+    // Straight from the tap: a browser opens its file chooser only then.
+    if (_server != null) return _pickAndUpload(_server);
     final picked = await FilePicker.pickFile();
     if (picked == null || picked.path == null) return null;
     final src = File(picked.path!);
@@ -646,6 +677,37 @@ class AppState extends ChangeNotifier {
         await FilePicker.clearTemporaryFiles();
       } catch (_) {}
     }
+  }
+
+  /// A browser: the chosen file goes to the server's models folder as it is read from the disk, with the same progress line.
+  Future<ModelEntry?> _pickAndUpload(ServerModels server) async {
+    final picked = await pickLocalFile(accept: const ['.gguf']);
+    if (picked == null) return null;
+    copyName = picked.name;
+    copyProgress = 0;
+    loadError = null;
+    notifyListeners();
+    setLeaveWarning(true);
+    try {
+      await server.upload(picked, picked.name, (sent, total) {
+        copyProgress = total == 0 ? 1.0 : sent / total;
+        notifyListeners();
+      });
+    } on ServerModelsException catch (e) {
+      loadError = 'Could not copy the file: ${e.message}';
+    } on UploadCancelled {
+      loadError = null;
+    } finally {
+      setLeaveWarning(false);
+      copyProgress = null;
+      copyName = null;
+    }
+    await refreshModels();
+    notifyListeners();
+    for (final m in models) {
+      if (m.fileName == picked.name) return m;
+    }
+    return null;
   }
 
   Future<ModelEntry?> copyIn(File src, {String? name}) async {
