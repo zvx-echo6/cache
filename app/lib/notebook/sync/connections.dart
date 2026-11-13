@@ -13,8 +13,7 @@ import 'formats.dart';
 import 'sync_engine.dart';
 import '../../platform/app_log.dart';
 
-/// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").
-const String kNotebookShareDir = 'notebook-share';
+export '../../sharing/share_rules.dart' show kNotebookShareDir;
 
 /// One connected folder: an Obsidian vault, a Logseq graph (two-way, or export-only for Logseq 2.x), or notebook sync's own
 /// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private

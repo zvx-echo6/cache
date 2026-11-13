@@ -309,6 +309,19 @@ jobs:
       - name: Build (x86_64)
         if: matrix.arch != 'aarch64'
         run: cargo build -p cache_server -p cache_search --release
+      # The sharing host (server/helper/bin/sharing_host.dart) against two real sync engines on this machine, no relay, DHT, mDNS or
+      # lookup: the host links with a second engine and the two keep a shared folder the same. The helper tests above skip it (they run
+      # before the core is built); here the built core is given, and a missing core fails the job instead of skipping.
+      - name: Sharing host loopback test (real engines)
+        working-directory: server/helper
+        env:
+          CACHE_CORE_LIB: ${{ github.workspace }}/packages/cache_search/native/target/release/libcache_search.so
+          CACHE_REQUIRE_CORE: '1'
+        run: |
+          zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
+          export LD_LIBRARY_PATH="$(dirname "$zimlib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          dart pub get
+          dart test test/sharing_loopback_test.dart
       # The library builder's program, uploaded on its own (below) so a build of a PDF can be run from this exact commit.
       - name: Build (cache-build)
         env:

@@ -73,7 +73,7 @@ void main() {
     keys.set('search.kagi.key', 'KAGI');
     // handleLine, not serveLines: the end of input would close the engine
     Future<List<Map<String, dynamic>>> run(KeyStore k, List<Map<String, dynamic>> reqs) async => [
-          for (final q in reqs) jsonDecode(handleLine(jsonEncode(q), d, handlers: [k], hook: k)) as Map<String, dynamic>,
+          for (final q in reqs) jsonDecode(await handleLine(jsonEncode(q), d, handlers: [k], hook: k)) as Map<String, dynamic>,
         ];
 
     var r = await run(keys, [

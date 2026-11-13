@@ -276,7 +276,16 @@ The server gives the helper the package from its web build (`<web>/assets/assets
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`
-(the two `app/` folders above). It answers three kinds of op over the line protocol:
+(the two `app/` folders above) and `CACHE_DATA` (the data folder). It answers these ops over the line protocol (`sharing.*` only with
+`CACHE_DATA`):
+
+- **`sharing.*`**: the sharing host (`server/helper/bin/sharing_host.dart`), the one owner of the sync engine on the server: it opens the
+  engine on `<data>/sync`, shares the folders of the share table (the phone's share ids on the server's folders), polls the engine's
+  status every 2 s into a cache, and keeps `<data>/sharing.json` (the phone's format). It starts with the helper when `sharing.json`
+  says sharing is set up, and stops when the helper's input ends. A browser asks it through `sharing.state`, `sharing.setup`,
+  `sharing.set_kind`, `sharing.set_item`, `sharing.link_start` and `sharing.call` (only `link_code`, `unlink`, `set_name`,
+  `set_peer_name`, `set_link`, `sync_now`, `share_items`, and `status` from the cache; the keys, `set_secrets` and `take_secrets`,
+  are never reachable from a browser). The network settings are the engine's own defaults, as on the phone; nothing here opens a port.
 
 - **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
   (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the

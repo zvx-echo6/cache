@@ -9,8 +9,9 @@ import '../../../packages/cache_search/lib/src/wire.dart';
 abstract class OpHandler {
   bool handles(String op);
 
-  /// The plain result (Uint8List allowed), or throws a [CacheSearchException].
-  Object? handle(String op, Map<String, dynamic> args);
+  /// The plain result (Uint8List allowed), or throws a [CacheSearchException]. A handler that waits (the sharing host) returns
+  /// a Future; the line protocol still answers one request at a time, so the next line is read after this one's reply.
+  FutureOr<Object?> handle(String op, Map<String, dynamic> args);
 }
 
 /// A look at each op that goes on to the core dispatcher: [before] may change its arguments (the keystore swaps references for
@@ -25,20 +26,27 @@ abstract class CoreHook {
 /// Prints `{"ready":true}` first. A request is `{"id":<int>,"op":<string>,"args":{...}}`; the reply is
 /// `{"id":<int>,"ok":true,"result":<json>}` or `{"id":<int>,"ok":false,"error":{"code","message"}}`. Byte arrays travel as
 /// `{"$bytes": "<base64>"}` (wire.dart). Requests are handled strictly one at a time, in order. When [input] ends, the core
-/// is closed and this returns. [log] gets diagnostics (the real helper writes them to stderr).
+/// is closed and this returns; [onEnd] runs first (the sharing host stops its engine). [log] gets diagnostics (the real helper
+/// writes them to stderr).
 Future<void> serveLines(
   Stream<List<int>> input,
   FutureOr<void> Function(String line) output,
   CoreDispatcher dispatcher, {
   void Function(String message)? log,
   List<OpHandler> handlers = const [],
+  FutureOr<void> Function()? onEnd,
   CoreHook? hook,
 }) async {
   await output(jsonEncode({'ready': true}));
   final lines = input.transform(utf8.decoder).transform(const LineSplitter());
   await for (final line in lines) {
     if (line.trim().isEmpty) continue;
-    await output(handleLine(line, dispatcher, log: log, handlers: handlers, hook: hook));
+    await output(await handleLine(line, dispatcher, log: log, handlers: handlers, hook: hook));
+  }
+  try {
+    await onEnd?.call();
+  } catch (e) {
+    log?.call('stopping at end of input failed: $e');
   }
   try {
     dispatcher.handle('close', const {});
@@ -48,7 +56,7 @@ Future<void> serveLines(
 }
 
 /// One request line in, the reply line out.
-String handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log, List<OpHandler> handlers = const [], CoreHook? hook}) {
+Future<String> handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log, List<OpHandler> handlers = const [], CoreHook? hook}) async {
   Object? id;
   try {
     final req = jsonDecode(line);
@@ -68,7 +76,7 @@ String handleLine(String line, CoreDispatcher dispatcher, {void Function(String 
       }
     }
     if (own != null) {
-      result = own.handle(op, args);
+      result = await own.handle(op, args);
     } else {
       result = dispatcher.handle(op, hook == null ? args : hook.before(op, args));
       hook?.after(op, args);

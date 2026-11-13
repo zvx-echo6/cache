@@ -6,11 +6,11 @@ use cache_sync::{excluded, Config, SyncEngine};
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
-/// The app's patterns (app/lib/sources/libraries_state.dart kLibraryNotShared, app/lib/regions/regions_state.dart
-/// kRegionsNotShared and kMapLayersNotShared); keep them equal.
+/// The app's patterns (app/lib/sharing/share_rules.dart kLibraryNotShared, kRegionsNotShared and kMapLayersNotShared, which the
+/// phone and Cache Server both use); keep them equal.
 fn app_patterns() -> Value {
     json!({
-        "libraries": ["*/index"],
+        "libraries": ["*/index", "*/index-snapshots"],
         "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
         "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
     })
