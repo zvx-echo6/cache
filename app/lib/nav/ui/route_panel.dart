@@ -5,6 +5,7 @@ import '../../maps/ui/map_widgets.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
 import '../units.dart';
+import 'route_steps.dart';
 
 /// The top pill while choosing how to go: where to, and the way back to the map.
 class DirectionsHeader extends StatelessWidget {
@@ -71,10 +72,13 @@ class DirectionsHeader extends StatelessWidget {
 
 /// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onSteps});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// Opens the step card (the route's turns one at a time), from the button beside Start; null leaves the button out.
+  final VoidCallback? onSteps;
 
   /// The chosen route's elevation (RouteElevationSummary), under the routes; null leaves it out.
   final Widget? elevation;
@@ -223,11 +227,28 @@ class RoutePanel extends StatelessWidget {
             const SizedBox(height: 4),
             Padding(
               padding: const EdgeInsets.only(right: 16),
-              child: FilledButton.icon(
-                key: const ValueKey('route-start'),
-                onPressed: nav.route == null || nav.routing ? null : nav.start,
-                icon: const Icon(Icons.navigation),
-                label: const Text('Start'),
+              child: Row(
+                children: [
+                  if (onSteps != null) ...[
+                    Flexible(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('route-steps'),
+                        onPressed: nav.route == null || nav.routing || nav.route!.maneuvers.isEmpty ? null : onSteps,
+                        icon: const Icon(Icons.turn_right),
+                        label: const Text(kStepThroughLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const ValueKey('route-start'),
+                      onPressed: nav.route == null || nav.routing ? null : nav.start,
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Start'),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
